@@ -9,14 +9,17 @@
  * handle through (`heldConfigWriteLock`) so a nested writer does not refuse
  * itself inside the caller's wider section.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import * as promptLock from "../../src/codex/prompt-lock";
+import { atomicWriteFile } from "../../src/config/atomic-write";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   acquireConfigWriteLock,
   CONFIG_WRITE_LOCKED_MESSAGE,
   configWriteLockPath,
+  publishConfigWrite,
   releaseConfigWriteLock,
   withConfigWriteLock,
   withConfigWriteLockHeld,
@@ -527,7 +530,7 @@ test("a successful feature toggle that atomically replaces config advances the h
     require("node:fs").renameSync(replacement, config);
   }, { configPath: config });
   expect(result).toMatchObject({ ok: true, changed: true, threadLimit: 63 });
-  expect(readFileSync(config, "utf8")).toContain("max_threads = 63");
+  expect(Bun.TOML.parse(readFileSync(config, "utf8")).agents).toEqual({ max_concurrent_threads_per_session: 63 });
 });
 
 describe("SQLite order and retained recovery authority", () => {
@@ -1146,4 +1149,80 @@ test("failed standalone toggle restores its exact preimage", async () => {
     })).toThrow("child failed");
     expect(fs.readFileSync(a)).toEqual(original);
   });
+});
+
+
+test("acquisition witnesses the inode after a preceding writer commits and releases", () => {
+  const path = fixtureConfig('model = "before"\n');
+  const lockPath = configWriteLockPath(path);
+  const acquire = promptLock.tryAcquire;
+  let interleaved = false;
+  const spy = spyOn(promptLock, "tryAcquire").mockImplementation((file, deps) => {
+    if (file === lockPath && !interleaved) {
+      interleaved = true;
+      const prior = acquire(file, deps);
+      if (!prior.ok) throw new Error("preceding writer did not acquire");
+      try {
+        writeFileSync(path + ".next", 'model = "preceding"\n');
+        renameSync(path + ".next", path);
+      } finally { promptLock.release(prior.handle); }
+    }
+    return acquire(file, deps);
+  });
+  try {
+    const result = withConfigWriteLock(path, held => {
+      const next = readFileSync(path, "utf8") + "# following writer\n";
+      publishConfigWrite(path, held, (destination, hooks) => atomicWriteFile(destination, next, undefined, hooks));
+      return readFileSync(path, "utf8");
+    });
+    expect(interleaved).toBe(true);
+    expect(result).toEqual({ ok: true, value: 'model = "preceding"\n# following writer\n' });
+    expect(existsSync(lockPath)).toBe(false);
+  } finally { spy.mockRestore(); }
+});
+
+test("acquisition refuses a canonical retarget before entering the write section", () => {
+  const a = fixtureConfig('model = "a"\n'), b = fixtureConfig('model = "b"\n');
+  const parent = mkdtempSync(join(tmpdir(), "ocx-acquire-alias-")); roots.push(parent);
+  const alias = join(parent, "home");
+  const aHome = realpathSync(join(a, "..")), bHome = realpathSync(join(b, ".."));
+  symlinkSync(aHome, alias, "junction");
+  const path = join(alias, "config.toml"), lockPath = configWriteLockPath(path);
+  const acquire = promptLock.tryAcquire;
+  let retargeted = false, entered = false;
+  const spy = spyOn(promptLock, "tryAcquire").mockImplementation((file, deps) => {
+    if (file === lockPath && !retargeted) {
+      retargeted = true;
+      unlinkSync(alias); symlinkSync(bHome, alias, "junction");
+    }
+    return acquire(file, deps);
+  });
+  try {
+    expect(withConfigWriteLock(path, () => { entered = true; })).toEqual({ ok: false, error: "unsafe", detail: lockPath });
+    expect(entered).toBe(false);
+    expect(readFileSync(a, "utf8")).toBe('model = "a"\n');
+    expect(readFileSync(b, "utf8")).toBe('model = "b"\n');
+    expect(existsSync(lockPath)).toBe(false);
+  } finally { spy.mockRestore(); }
+});
+
+
+test("acquisition does not admit a dangling symlink as a preceding writer's deletion", () => {
+  const path = fixtureConfig('model = "a"\n'), lockPath = configWriteLockPath(path);
+  const acquire = promptLock.tryAcquire;
+  let changed = false, entered = false;
+  const spy = spyOn(promptLock, "tryAcquire").mockImplementation((file, deps) => {
+    if (file === lockPath && !changed) {
+      changed = true;
+      renameSync(path, path + ".original");
+      symlinkSync(path + ".missing", path);
+    }
+    return acquire(file, deps);
+  });
+  try {
+    expect(() => withConfigWriteLock(path, () => { entered = true; })).toThrow("destination changed");
+    expect(entered).toBe(false);
+    expect(readFileSync(path + ".original", "utf8")).toBe('model = "a"\n');
+    expect(existsSync(lockPath)).toBe(false);
+  } finally { spy.mockRestore(); }
 });

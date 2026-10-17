@@ -1,6 +1,7 @@
 import { captureAnthropicRejectionPayloads, keepAnthropicReplayBlock } from "./anthropic-rejection-memo";
 import { anthropicDeclaredTools } from "./anthropic-tool-catalog";
 import { anthropicReplayContent, createAnthropicReplayCapture } from "./anthropic-replay";
+import { withAnthropicProgressUpdates } from "./anthropic-progress";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { createAdapterTierMetadata, type AdapterTierMetadata } from "../providers/fastwire";
 import { ANTHROPIC_FAST_MODE_BETA, mergeAnthropicBetaHeader } from "../providers/anthropic-fast";
@@ -34,7 +35,7 @@ import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
-import { rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
+import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
 function toAnthropicContentPart(p: OcxContentPart): unknown {
@@ -315,11 +316,12 @@ function isAnthropicContentFilterStopReason(
 }
 
 /**
- * Anthropic `refusal` / `content_filter` is a permanent sampling decision, not a disconnect.
- * Emitting `done` with that stopReason used to surface as `response.incomplete` without
- * `retryable`, which Codex treats as a dropped stream and retries five times (#4312).
- * The explicit incomplete event is what the bridge already forwards into
- * `incomplete_details.retryable`. Usage is preserved: a filtered turn still consumed tokens.
+ * Anthropic `refusal` / `content_filter` is a permanent sampling decision, not a disconnect
+ * (#4312). Codex does not read `incomplete_details.retryable`: it retries every
+ * `response.incomplete`. The explicit `retryable: false` verdict here is the marker the bridge
+ * uses to deliver the turn to a Responses client as a terminal `response.failed` instead
+ * (`src/bridge/terminal-refusal.ts`); a `done` with that stopReason carries no verdict and
+ * stays a plain incomplete. Usage is preserved: a filtered turn still consumed tokens.
  * `max_tokens` stays a `done` so the client can continue from a legitimate truncation.
  */
 function anthropicContentFilterIncomplete(
@@ -520,6 +522,16 @@ function streamedToolArgumentsParse(assembled: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** A server tool's complete streamed input; undefined when it cannot be recovered. */
+function serverToolInput(json: string): Record<string, unknown> | undefined {
+  try {
+    const input = JSON.parse(json) as unknown;
+    return isAnthropicRecord(input) ? input : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -726,7 +738,16 @@ function orphanToolResultContent(msg: OcxToolResultMessage): string | unknown[] 
 function messagesToAnthropicFormat(
   parsed: OcxParsedRequest,
   toolNames: { toWire: (name: string) => string },
+  serverReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>,
 ): { system: string | undefined; messages: unknown[] } {
+  // The client's server-tool exchanges go back ahead of the block they preceded. Their anchors are
+  // unique in the caller's history (replayedAnthropicServerBlocks drops repeated ones); each is used once.
+  const pendingReplay = new Map(serverReplay);
+  const replayed = (anchor: string) => {
+    const blocks = pendingReplay.get(anchor) ?? [];
+    pendingReplay.delete(anchor);
+    return blocks;
+  };
   // One allocator for the whole request: a tool_result must resolve to the SAME wire id its
   // call got, and two distinct raw ids must never collapse into one. Conforming ids are claimed
   // first so a rewritten id can never squat on an id another call legitimately owns.
@@ -774,23 +795,35 @@ function messagesToAnthropicFormat(
         const preface: unknown[] = [];
 
         const toolUses: unknown[] = [];
+        const originalOrder: unknown[] = [];
+        const appendPreface = (block: unknown) => { preface.push(block); originalOrder.push(block); };
+        let signed = false;
         const toolUseIds: string[] = [];
         for (const part of aMsg.content) {
           if (part.type === "text") {
             const text = (part as OcxTextContent).text;
-            if (text) preface.push({ type: "text", text });
+            for (const b of replayed(`text:${text}`)) appendPreface(b);
+            if (text) appendPreface({ type: "text", text });
           } else if (part.type === "thinking") {
             const t = part as OcxThinkingContent;
+            // Server blocks that preceded this reasoning keep their place, even when it is dropped below.
+            for (const data of t.redacted ?? []) for (const b of replayed(`redacted:${data}`)) appendPreface(b);
+            for (const b of replayed(`thinking:${t.signature}`)) appendPreface(b);
+            // History minted under another serving identity (or already rejected as opaque) is not
+            // this destination's to verify: drop its opaque blocks, as the Responses passthrough does.
+            if (parsed._stripReasoningEncryptedContent === true) continue;
             // Redacted blocks replay verbatim FIRST (they preceded the visible thinking block
             // in the original stream order preserved by the bridge envelope).
             for (const data of t.redacted ?? []) {
-              preface.push({ type: "redacted_thinking", data });
+              appendPreface({ type: "redacted_thinking", data });
             }
             if (isLikelyRealAnthropicThinkingSignature(t.signature)) {
-              preface.push({ type: "thinking", thinking: t.thinking, signature: t.signature });
+              signed = true;
+              appendPreface({ type: "thinking", thinking: t.thinking, signature: t.signature });
             }
           } else if (part.type === "toolCall") {
             const tc = part as OcxToolCall;
+            for (const b of replayed(`call:${tc.id}`)) appendPreface(b);
             const flatName = namespacedToolName(tc.namespace, tc.name);
             // Normalized here, and identically for the matching tool_result above, so a history
             // replayed from another provider path keeps its call/result pairing (#1767).
@@ -798,11 +831,13 @@ function messagesToAnthropicFormat(
             // rejects. An unrepresentable call becomes text instead, and its result follows it there.
             const wireCallId = callIds.allocate(tc.id);
             if (wireCallId === undefined) {
-              preface.push({ type: "text", text: unrepresentableToolCallText(tc, toolNames.toWire(flatName)) });
+              appendPreface({ type: "text", text: unrepresentableToolCallText(tc, toolNames.toWire(flatName)) });
               continue;
             }
             toolUseIds.push(wireCallId);
-            toolUses.push({ type: "tool_use", id: wireCallId, name: toolNames.toWire(flatName), input: tc.arguments });
+            const block = { type: "tool_use", id: wireCallId, name: toolNames.toWire(flatName), input: tc.arguments };
+            toolUses.push(block);
+            originalOrder.push(block);
           }
         }
         // Anthropic treats text/thinking after tool_use as ending the tool turn, which makes
@@ -815,7 +850,7 @@ function messagesToAnthropicFormat(
             throw new Error("Anthropic search replay tool identity changed");
           }
         }
-        const content = (captured ?? [...preface, ...toolUses]).filter(block => keepAnthropicReplayBlock(parsed, block as Record<string, unknown>));
+        const content = (captured ?? (signed ? originalOrder : [...preface, ...toolUses])).filter(block => keepAnthropicReplayBlock(parsed, block as Record<string, unknown>));
         if (content.length === 0) break;
         messages.push({ role: "assistant", content });
         if (toolUseIds.length > 0) {
@@ -894,6 +929,18 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
   return converted;
 }
 
+/**
+ * Appends the Claude client's typed web tools (`parsed._anthropicServerTools`) so Anthropic runs
+ * them server-side. A same-named function tool wins: the web-search sidecar's `web_search` keeps
+ * priority, and Anthropic rejects duplicate tool names.
+ */
+function withAnthropicServerTools(tools: unknown[] | undefined, parsed: OcxParsedRequest): unknown[] | undefined {
+  const serverTools = parsed._anthropicServerTools?.filter(t => !parsed.context.tools?.some(f => f.name === t.name));
+  if (!serverTools?.length) return tools;
+  // The caller's breakpoints are dropped on this lane; applyPromptCaching places its own.
+  return [...(tools ?? []), ...serverTools.map(t => ({ ...t, cache_control: undefined }))];
+}
+
 function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
   const stripped = stripResponsesOnlyEncryptedMarker(schema);
   const obj = stripped && typeof stripped === "object" && !Array.isArray(stripped)
@@ -959,7 +1006,8 @@ function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown>
 export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
   const isOAuth = provider.authMode === "oauth";
   const toolNames = buildToolNameTransforms(provider);
-  return {
+  let progressUpdates = false;
+  return withAnthropicProgressUpdates({
     name: "anthropic",
 
     formatErrorBody: formatAnthropicErrorBody,
@@ -972,7 +1020,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         throw new Error("anthropic provider requires a non-empty apiKey (authMode: key)");
       }
 
-      const { system, messages } = messagesToAnthropicFormat(parsed, toolNames);
+      // Only api.anthropic.com runs Anthropic's server tools, so only it gets their history back.
+      const { system, messages } = messagesToAnthropicFormat(parsed, toolNames,
+        usesNativeAnthropicEndpoint(provider) ? parsed._anthropicServerReplay : undefined);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
@@ -985,7 +1035,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // Anthropic rejects many-image requests (>20 images) carrying any image over
       // 2000px per side; see anthropic-image-guard.ts for the full limit policy.
       enforceAnthropicImageLimits(messages);
-      const tools = toolsToAnthropicFormat(parsed, toolNames);
+      const converted = toolsToAnthropicFormat(parsed, toolNames);
+      // A third-party Anthropic-compatible endpoint may not implement Anthropic's server tools.
+      const tools = usesNativeAnthropicEndpoint(provider) ? withAnthropicServerTools(converted, parsed) : converted;
 
       // Codex never sends `max_output_tokens`, so the omitted-limit default decides how
       // long a Claude answer may run. Honor the provider's configured output budget
@@ -1024,6 +1076,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       // anyway, and thinking shares the caller's `max_tokens` — which truncates a small-budget
       // request before it can emit its stop sequence (#545). Say "disabled" out loud where the
         // model both defaults to thinking and accepts being told not to.
+      const family = claudeFamilyVersion(parsed.modelId);
+      progressUpdates = usesNativeAnthropicEndpoint(provider) && family?.family === "opus" && family.major === 5 && family.minor === 5;
       const effectiveReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
       if (effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
         body.thinking = { type: "disabled" };
@@ -1041,7 +1095,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // default 8192-token request can spend everything on thought and return empty text.
           // Opus 4.7+ defaults `display` to "omitted": the stream then carries signature-only
           // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
-          // during a long think (#5824). Ask for summarized thinking unless the caller hides it.
+          // during a long think (#5824). Opus 5.5 uses the documented updates discriminator;
+          // other models request summarized thinking unless the caller hides it.
           body.thinking = parsed.options.hideThinkingSummary
             ? { type: "adaptive" }
             : { type: "adaptive", display: "summarized" };
@@ -1088,6 +1143,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.temperature;
         delete body.top_p;
       }
+
+      if (progressUpdates) body.thinking = { type: "adaptive", display: "updates" };
 
       if (rejectsSamplingParameters(parsed.modelId)) {
         // Opus 4.7+, Sonnet 5+, Haiku 5.5+ and Fable 400 on non-default sampling, with or without
@@ -1162,7 +1219,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey);
       else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
-      mergeAnthropicBetaHeader(headers, fastSpeed?.betas ?? []);
+      mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : [])]);
 
       // Prompt caching: native Anthropic supports top-level automatic caching, which
       // follows the moving final block across turns. Keep one breakpoint slot free for it.
@@ -1215,6 +1272,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let pendingStopReason: string | undefined;
       let emittedDone = false;
       let sawVisibleText = false;
+      /** The open server-side web_search / web_fetch call, until its result block. */
+      let serverSearch: { id: string; json: string; streaming: boolean } | undefined;
 
       const emitDone = function* (): Generator<AdapterEvent> {
         if (emittedDone) return;
@@ -1232,8 +1291,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           return;
         }
         // Refusal / content_filter must not look like a dropped stream. `done` with that
-        // stopReason becomes `response.incomplete` without `retryable`, and Codex retries
-        // the same refusal five times (#4312).
+        // stopReason carries no verdict, so the bridge could not tell it from a retryable
+        // incomplete and Codex would re-send the same refusal (#4312).
         if (isAnthropicContentFilterStopReason(pendingStopReason)) {
           yield anthropicContentFilterIncomplete(pendingStopReason, usageFromAnthropic(pendingUsage));
           return;
@@ -1288,7 +1347,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 break;
               }
               case "content_block_start": {
-                const block = data.content_block as { type: string; id?: string; name?: unknown; data?: string; thinking?: string } | undefined;
+                const block = data.content_block as { type: string; id?: string; name?: unknown; data?: string; thinking?: string; tool_use_id?: unknown; content?: unknown } | undefined;
                 if (!block) break;
                 // Even an unmodeled server tool or empty block is semantic progress.
                 // Fence replays before a later refusal; unknown blocks must not look like pings.
@@ -1305,6 +1364,36 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   currentToolCallJson = "";
                   budget.openCall(currentToolCallId);
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
+                }
+                if (block.type === "server_tool_use" && (block.name === "web_search" || block.name === "web_fetch") && typeof block.id === "string") {
+                  // Only the input (query / url) is collected here (input_json_delta below). The cell
+                  // opens at its result: a call Anthropic defers beside a client tool_use has
+                  // no result in this response and must not surface as a completed search.
+                  serverSearch = { id: block.id, json: "", streaming: true };
+                }
+                if ((block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result") && typeof block.tool_use_id === "string") {
+                  // The begin/end pair the sidecar emits, plus both blocks verbatim so the Claude client holds a
+                  // replayable copy. Without this response's matching call and complete input, drop the
+                  // exchange instead of inventing a call that could poison the client's next request.
+                  const fetch = block.type === "web_fetch_tool_result";
+                  const input = serverSearch?.id === block.tool_use_id ? serverToolInput(serverSearch.json) : undefined;
+                  if (!input) break;
+                  const hits = Array.isArray(block.content) ? block.content as Array<{ url?: unknown; title?: unknown }> : undefined;
+                  yield { type: "web_search_call_begin", id: block.tool_use_id };
+                  yield {
+                    type: "web_search_call_end",
+                    id: block.tool_use_id,
+                    queries: typeof input.query === "string" && input.query.length > 0 ? [input.query] : [],
+                    // A failed call carries one error object instead of the hit list / fetched page.
+                    status: (fetch ? (block.content as { type?: unknown } | undefined)?.type === "web_fetch_result" : hits) ? "completed" : "failed",
+                    sources: (hits ?? []).flatMap(h => typeof h.url === "string"
+                      ? [{ url: h.url, ...(typeof h.title === "string" ? { title: h.title } : {}) }] : []),
+                    anthropic: {
+                      use: { type: "server_tool_use", id: block.tool_use_id, name: fetch ? "web_fetch" : "web_search", input },
+                      result: block as Record<string, unknown>,
+                    },
+                  };
+                  serverSearch = undefined;
                 }
                 if (block.type === "redacted_thinking" && typeof block.data === "string") {
                   // Opaque redacted block: replay verbatim later or tool-use turns 400.
@@ -1349,10 +1438,15 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                     throw error;
                   }
                   yield { type: "tool_call_delta", arguments: delta.partial_json };
+                } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && serverSearch?.streaming
+                    && serverSearch.json.length < 4096) {
+                  // Capped: input that cannot be recovered drops its exchange instead of inventing a call.
+                  serverSearch.json += delta.partial_json.slice(0, 4096 - serverSearch.json.length);
                 }
                 break;
               }
               case "content_block_stop": {
+                if (serverSearch) serverSearch.streaming = false;
                 if (currentBlockType === "tool_use") {
                   // The non-stream path repairs an unparseable payload in toolUseArguments(); the
                   // stream cannot, because the fragments are already downstream. Fail the turn
@@ -1442,7 +1536,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           }
           // Same rule as emitDone: refusal / content_filter is a permanent decision, not a
           // disconnect. This branch bypasses emitDone, so the check has to be repeated here
-          // or the EOF route still emits `done` and Codex retries the refusal (#4312).
+          // or the EOF route emits a verdict-less `done` the bridge cannot make terminal (#4312).
           if (isAnthropicContentFilterStopReason(pendingStopReason)) {
             emittedDone = true;
             yield anthropicContentFilterIncomplete(pendingStopReason, usageFromAnthropic(pendingUsage));
@@ -1594,5 +1688,5 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
     },
 
-  };
+  }, () => progressUpdates);
 }

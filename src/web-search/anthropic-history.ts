@@ -27,6 +27,11 @@ export function anthropicSearchAssistantContent(events: readonly AdapterEvent[])
         break;
       case "text_delta":
         thinking = undefined;
+        if (event.anthropicThinkingSignature) {
+          text = undefined;
+          content.push({ type: "thinking", thinking: event.text, signature: event.anthropicThinkingSignature });
+          break;
+        }
         if (!text) { text = { type: "text", text: "" }; content.push(text); }
         text.text += event.text;
         break;

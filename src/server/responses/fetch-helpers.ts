@@ -12,6 +12,7 @@ import type { WsData } from "../ws-bridge";
 import {
   requestPacingMaxConcurrentRequests,
   sendTrackingRequestSlot,
+  trackProviderRequestSlotBody,
   waitForProviderRequestSlot,
   type ProviderRequestSlot,
 } from "../../providers/request-pacing";
@@ -49,6 +50,9 @@ const UPSTREAM_REWRITTEN = Symbol.for("opencodex.plugins.upstream-rewritten");
 const PHYSICAL_DISPATCH = Symbol.for("opencodex.physical-dispatch");
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
 const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
+// Replacement admission waits on the client signal, outside the response-header deadline.
+const HEADER_DEADLINE = Symbol("header-deadline");
+type HeaderDeadline = { clientSignal: AbortSignal; pause(): void; resume(): void };
 
 /**
  * Announce once, per provider, that an explicit egress route moved this provider off the
@@ -139,6 +143,7 @@ export function wantsFreshConnection(
 export interface PaceAwareFetch {
   waitForPacing?: (signal?: AbortSignal) => Promise<ProviderRequestSlot | undefined>;
   unpacedFetch?: typeof globalThis.fetch;
+  fetchWithPacingSlot?: (slot: ProviderRequestSlot | undefined, input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => Promise<Response>;
 }
 
 export type ProviderFetch = typeof globalThis.fetch & PaceAwareFetch;
@@ -252,7 +257,8 @@ export interface ProviderFetchOptions {
    */
   preOutputRefusalHold?: CodexWsPreOutputRefusalHold;
   /** Revalidate/rebuild a queued request at its physical send boundary, after pacing. */
-  dispatchOverride?: (input: Parameters<typeof globalThis.fetch>[0], init: RequestInit, execute: typeof globalThis.fetch) => Promise<Response>;
+  dispatchOverride?: (input: Parameters<typeof globalThis.fetch>[0], init: RequestInit, execute: typeof globalThis.fetch,
+    reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => Promise<Response>;
 }
 
 /** Compose provider pacing and transport admission; receipts run only at executor entry. */
@@ -301,7 +307,8 @@ export function providerFetch(
     { preconnect },
   ) as typeof globalThis.fetch);
   const httpFetch = Object.assign(
-    async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
+      reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
       // Refuse before any dispatch side effect where that is sound. `beforeDispatch` commits
       // attempt accounting and consumes admission state, so a refusal firing after it would
       // charge an attempt for a send that never happens, and a throwing hook would mask the
@@ -329,30 +336,33 @@ export function providerFetch(
         } } : {}),
       };
       return options.dispatchOverride
-        ? options.dispatchOverride(input, dispatchInit, dispatch)
+        ? options.dispatchOverride(input, dispatchInit, dispatch, reacquirePacing)
         : dispatch(input, dispatchInit);
     },
     { preconnect },
-  ) as typeof globalThis.fetch;
+  );
   // ChatGPT Codex backend: streaming turns ride the responses_websockets
   // transport (measured ~3s faster TTFT than the SSE POST queue); everything
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
-  const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+  const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
+    reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
     const upstreamWebsocket = provider.upstreamWebsocket;
     if (!options.httpOnly && typeof input === "string" && init
       && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
-      if (options.providerName && requestPacingMaxConcurrentRequests(provider, options.modelId) > 0) {
+      const keyedPacing = provider.requestPacing?.enabled
+        && (provider.requestPacing.keys || provider.requestPacing.keySelection === "round-robin");
+      if (keyedPacing || (options.providerName && requestPacingMaxConcurrentRequests(provider, options.modelId) > 0)) {
         if (!pacingWebsocketDowngradeWarned.has(providerName)
           && pacingWebsocketDowngradeWarned.size < EGRESS_DOWNGRADE_NOTICE_LIMIT) {
           pacingWebsocketDowngradeWarned.add(providerName);
-          console.warn(`[opencodex] provider ${JSON.stringify(redactSecretString(providerName))} has a request concurrency cap; serving over HTTP/SSE.`);
+          console.warn(`[opencodex] provider ${JSON.stringify(redactSecretString(providerName))} requires guarded request pacing; serving over HTTP/SSE.`);
         }
-        return httpFetch(input, init);
+        return httpFetch(input, init, reacquirePacing);
       }
       const egress = egressFor(input);
       if (providerEgressIsExplicit(egress)) {
         warnEgressWebsocketDowngradeOnce(providerName, describeProviderEgressForLog(egress));
-        return httpFetch(input, init);
+        return httpFetch(input, init, reacquirePacing);
       }
       // The fallback has to be the same HTTP fetch the non-WS branch would have
       // used, protocol pin included: a WS turn that falls back is serving the
@@ -365,11 +375,11 @@ export function providerFetch(
         options.onPhysicalDispatch?.();
       };
       const fallback = ((url: Parameters<typeof globalThis.fetch>[0], fallbackInit?: RequestInit) =>
-        httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit)) as typeof globalThis.fetch;
+        httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit, reacquirePacing)) as typeof globalThis.fetch;
       return codexWsUpstreamFetch(input, init, fallback, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
         async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold);
     }
-    return httpFetch(input, init);
+    return httpFetch(input, init, reacquirePacing);
   };
   let pacingSlotAcquired = options.pacingSlotAcquired === true;
   const waitForPacing = async (signal?: AbortSignal): Promise<ProviderRequestSlot | undefined> => {
@@ -392,15 +402,35 @@ export function providerFetch(
       throw new Error("A provider name is required for request concurrency pacing");
     }
   };
-  const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-    return sendTrackingRequestSlot(await waitForPacing(init?.signal ?? undefined), () => unpaced(input, init));
+  const fetchWithPacingSlot = async (slot: ProviderRequestSlot | undefined, input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    const reacquirePacing = async (refreshed: OcxProviderConfig, modelId?: string) => {
+      if (options.turnScopedPacing) throw new Error("Cannot replace a turn-scoped pacing lease during dispatch");
+      if (!options.providerName) throw new Error("Refreshed dispatch requires a named pacing owner");
+      slot?.release();
+      slot = undefined;
+      const deadline = (init as Record<symbol, HeaderDeadline> | undefined)?.[HEADER_DEADLINE];
+      deadline?.pause();
+      try {
+        slot = await waitForProviderRequestSlot(providerName, refreshed, modelId, deadline?.clientSignal ?? init?.signal ?? undefined);
+      } finally { deadline?.resume(); }
+    };
+    try {
+      const response = await unpaced(input, init, reacquirePacing);
+      return trackProviderRequestSlotBody(slot, response);
+    } catch (error) {
+      slot?.release();
+      throw error;
+    }
   };
+  const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
+    fetchWithPacingSlot(await waitForPacing(init?.signal ?? undefined), input, init);
   // The returned wrapper forwards its init down to `dispatch`, which applies the route at the
   // physical send. Adapters that hand this executor back as `provider.fetch` (Cursor does)
   // therefore still carry a per-provider route instead of being refused as opaque.
   const paceAware = Object.assign(wrapped, {
     preconnect,
     waitForPacing,
+    fetchWithPacingSlot,
     unpacedFetch: Object.assign(unpaced, { preconnect }),
   });
   markEgressTransparentExecutor(paceAware as unknown as typeof globalThis.fetch);
@@ -432,6 +462,9 @@ export function storedPoolReplayDispatchNotifier(
     notified = true;
     onDispatch();
   };
+  const notifyWithSlot = (slot: ProviderRequestSlot | undefined): void => {
+    try { notifyOnce(); } catch (error) { slot?.release(); throw error; }
+  };
   const unpacedSource = executor.unpacedFetch ?? executor;
   const unpaced = Object.assign(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
@@ -441,12 +474,21 @@ export function storedPoolReplayDispatchNotifier(
     { preconnect: unpacedSource.preconnect },
   ) as ProviderFetch["unpacedFetch"];
   const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    if (executor.fetchWithPacingSlot) {
+      const slot = await executor.waitForPacing?.(init?.signal ?? undefined);
+      notifyWithSlot(slot);
+      return executor.fetchWithPacingSlot(slot, input, init);
+    }
     return sendTrackingRequestSlot(await executor.waitForPacing?.(init?.signal ?? undefined), () => unpaced!(input, init));
   };
   return Object.assign(wrapped, {
     preconnect: executor.preconnect,
     waitForPacing: executor.waitForPacing,
     unpacedFetch: unpaced,
+    ...(executor.fetchWithPacingSlot ? { fetchWithPacingSlot: (slot: ProviderRequestSlot | undefined, input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+      notifyWithSlot(slot);
+      return executor.fetchWithPacingSlot!(slot, input, init);
+    } } : {}),
   }) as ProviderFetch;
 }
 
@@ -470,24 +512,36 @@ export async function fetchWithHeaderTimeout(
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const timeout = new AbortController();
-    timer = setTimeout(() => {
-      if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
-    }, timeoutMs);
+    const deadline: HeaderDeadline = {
+      clientSignal: abortSignal,
+      pause() { if (timer) clearTimeout(timer); timer = undefined; },
+      resume() {
+        this.pause();
+        timer = setTimeout(() => {
+          if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
+        }, timeoutMs);
+      },
+    };
+    deadline.resume();
     const headers = new Headers(init.headers);
     // Compressed SSE can be held until the decompressor has a complete block. Streaming calls
     // default to identity for low-latency frame delivery, while an explicit caller choice wins.
     if (preferIdentityEncoding && !headers.has("accept-encoding")) {
       headers.set("accept-encoding", "identity");
     }
-    return await sendTrackingRequestSlot(slot, () => fetchExecutor(url, {
+    const dispatchInit = {
       ...init,
       headers,
       // Never replay provider credentials or request bodies to a redirect destination.
       // Preserve the 3xx for the owner's existing response/health policy (#914, #1471).
-      redirect: "manual",
+      redirect: "manual" as const,
       signal: AbortSignal.any([abortSignal, timeout.signal]),
+      [HEADER_DEADLINE]: deadline,
       timeout: 0,
-    }));
+    };
+    return pacing.fetchWithPacingSlot
+      ? await pacing.fetchWithPacingSlot(slot, url, dispatchInit)
+      : await sendTrackingRequestSlot(slot, () => fetchExecutor(url, dispatchInit));
   } finally {
     if (timer) clearTimeout(timer);
     if (!slot?.bodyTracked) slot?.release();

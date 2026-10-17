@@ -16,15 +16,13 @@ Usage: `ocx lab status [--json]`
 
 Read local Lab projection status.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 
@@ -34,7 +32,7 @@ Usage: `ocx lab verdicts [--subject <subject>] [--layer <layer>] [--suite <suite
 
 Read local Lab verdicts.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -50,8 +48,6 @@ Drives no management route.
 | `--cursor` | string | Opaque page cursor. |
 | `--json` | boolean | Emit the local result as JSON. |
 
-JSON mode: `envelope`.
-
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - Read commands do not start probes or scheduler ticks.
 
@@ -61,7 +57,7 @@ Usage: `ocx lab subjects [--kind <kind>] [--limit <n>] [--cursor <cursor>] [--js
 
 Read local Lab subjects.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -72,8 +68,6 @@ Drives no management route.
 | `--cursor` | string | Opaque page cursor. |
 | `--json` | boolean | Emit the local result as JSON. |
 
-JSON mode: `envelope`.
-
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - Read commands do not start probes or scheduler ticks.
 
@@ -83,7 +77,7 @@ Usage: `ocx lab observations [--subject <subject>] [--layer <layer>] [--suite <s
 
 Read local Lab observations.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -101,8 +95,6 @@ Drives no management route.
 | `--cursor` | string | Opaque page cursor. |
 | `--json` | boolean | Emit the local result as JSON. |
 
-JSON mode: `envelope`.
-
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - Read commands do not start probes or scheduler ticks.
 
@@ -112,7 +104,7 @@ Usage: `ocx lab events [--event-kind <event-kind>] [--subject <subject>] [--from
 
 Read local Lab events.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -127,8 +119,6 @@ Drives no management route.
 | `--cursor` | string | Opaque page cursor. |
 | `--json` | boolean | Emit the local result as JSON. |
 
-JSON mode: `envelope`.
-
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - Read commands do not start probes or scheduler ticks.
 
@@ -138,7 +128,7 @@ Usage: `ocx lab artifacts [--status <status>] [--artifact-class <artifact-class>
 
 Read local Lab artifacts.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -150,8 +140,6 @@ Drives no management route.
 | `--cursor` | string | Opaque page cursor. |
 | `--json` | boolean | Emit the local result as JSON. |
 
-JSON mode: `envelope`.
-
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - Read commands do not start probes or scheduler ticks.
 
@@ -161,7 +149,7 @@ Usage: `ocx lab catalog [--layer <layer>] [--suite <suite>] [--json]`
 
 Read local Lab catalog.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -170,8 +158,6 @@ Drives no management route.
 | `--layer` | string | Evidence layer. |
 | `--suite` | string | Suite ID. |
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - Read commands do not start probes or scheduler ticks.
@@ -182,15 +168,13 @@ Usage: `ocx lab subject <subjectId> [--json]`
 
 Inspect one local Lab subject.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 
@@ -200,15 +184,13 @@ Usage: `ocx lab event <eventId> [--json]`
 
 Inspect one local Lab event.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 
@@ -218,15 +200,13 @@ Usage: `ocx lab artifact <digest> [--json]`
 
 Inspect one local Lab artifact.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 
@@ -236,7 +216,7 @@ Usage: `ocx lab production-signals --subject <id> [--limit <n>] [--json]`
 
 Read passive production context for one exact Lab route subject.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -245,8 +225,6 @@ Drives no management route.
 | `--subject` | string | Exact Lab route subject ID. |
 | `--limit` | number | Positive page size. |
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - Passive production context is not verification evidence.
@@ -257,7 +235,7 @@ Usage: `ocx lab public preview --event <eventId> [--event <eventId> ...] [--json
 
 Preview unsigned local public evidence.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -265,8 +243,6 @@ Drives no management route.
 |---|---|---|
 | `--event` | string | Event ID; repeat for multiple records. |
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - No remote publishing occurs. Preview creates no publisher key; export can create local signing identity and bundle files.
@@ -277,7 +253,7 @@ Usage: `ocx lab public export --event <eventId> [--event <eventId> ...] [--json]
 
 Export signed local public evidence.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -285,8 +261,6 @@ Drives no management route.
 |---|---|---|
 | `--event` | string | Event ID; repeat for multiple records. |
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - No remote publishing occurs. Preview creates no publisher key; export can create local signing identity and bundle files.
@@ -297,7 +271,7 @@ Usage: `ocx lab public verify --file <bundle.json> [--json]`
 
 Verify a public evidence file.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -305,8 +279,6 @@ Drives no management route.
 |---|---|---|
 | `--file` | string | Public evidence bundle path. |
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - Signature validity proves integrity/continuity, not local verification.
@@ -318,7 +290,7 @@ Usage: `ocx lab public import --file <bundle.json> [--json]`
 
 Import public evidence as untrusted community context.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -326,8 +298,6 @@ Drives no management route.
 |---|---|---|
 | `--file` | string | Public evidence bundle path. |
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - Signature validity proves integrity/continuity, not local verification.
@@ -339,15 +309,13 @@ Usage: `ocx lab public community [--json]`
 
 List local untrusted community evidence context.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 
@@ -357,15 +325,13 @@ Usage: `ocx lab automation [status] [--json]`
 
 Read local automation policy, queue and run state.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 
@@ -375,7 +341,7 @@ Usage: `ocx lab automation enable [--protocol] [--live] [--json]`
 
 Enable local Lab automation layers.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -384,8 +350,6 @@ Drives no management route.
 | `--protocol` | boolean | Select protocol conformance. |
 | `--live` | boolean | Select live route compatibility; may spend upstream quota. |
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - These flags already exist in the local handler. With neither flag, preserve current layer selection; with either flag, select only requested layers.
@@ -397,15 +361,13 @@ Usage: `ocx lab automation disable [--json]`
 
 Disable local Lab automation.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - Persists disabled policy, reconciles the local queue and stops this process scheduler.
@@ -416,7 +378,7 @@ Usage: `ocx lab automation runs [--limit <n>] [--cursor <c>] [--json]`
 
 List locally persisted automation runs.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -426,8 +388,6 @@ Drives no management route.
 | `--cursor` | string | Opaque page cursor. |
 | `--json` | boolean | Emit the local result as JSON. |
 
-JSON mode: `envelope`.
-
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 
 ### `ocx lab run`
@@ -436,7 +396,7 @@ Usage: `ocx lab run --layer <protocol_conformance|live_route_compatibility|task_
 
 Plan and enqueue an explicit local Lab run.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -447,8 +407,6 @@ Drives no management route.
 | `--provider` | string | Configured provider name. |
 | `--model` | string | Model ID. |
 | `--json` | boolean | Emit the local result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Lab helpers and storage only; no management HTTP. Remote/live-proxy equivalence is not implied.
 - The live-route layer installs a production route executor and can spend upstream quota. Explicit operator authorization is required for probes.

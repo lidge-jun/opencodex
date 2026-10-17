@@ -48,6 +48,10 @@ Aliases are optional short request names. They never change the native model id 
 
 Aliases match case-insensitively. A model alias works as `or/opus` or, when globally unique, bare `opus`; an ambiguous bare alias reports its qualified candidates. Codex model pickers show the qualified alias while preserving the canonical `provider/model` routing id. A provider's `defaultAliases` value overrides `defaultModelAliases`. Built-ins are skipped when multiple models in one provider match the same pattern.
 
+### Native reasoning retention
+
+Native reasoning ciphertext retention on model and account changes has two opt-in settings, both off by default. Configure them on the dashboard overview or see [Native reasoning retention](/reference/configuration/server/#native-reasoning-retention) for the exact scope and experimental account behavior.
+
 ### Cursor effort rows
 
 `cursorEffortRows` is an optional boolean and defaults to `false`. When enabled, the raw OpenAI-style

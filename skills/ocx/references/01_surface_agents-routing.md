@@ -16,7 +16,7 @@ Usage: `ocx agent subagents force <model|-> [--json]`
 
 Force Claude Code subagents onto one exposed model at the next routed launch; - clears.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -26,8 +26,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the saved force setting. |
 
-JSON mode: `payload`.
-
 - Requires Claude Code 2.1.257+. Plain claude, forks, inherit skills, the main model and small-fast sidecars are unaffected.
 
 ### `ocx agent request-user-input`
@@ -36,7 +34,7 @@ Usage: `ocx agent request-user-input [on|off] [--json]`
 
 Show or set whether default mode may ask the operator a question mid-task.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -47,8 +45,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the feature state as JSON. |
 
-JSON mode: `payload`.
-
 - A bare invocation reads and never writes.
 
 ### `ocx agent roles`
@@ -57,7 +53,7 @@ Usage: `ocx agent roles [status] [--json]; ocx agent roles set <role> <model> [-
 
 omo (Codex / LazyCodex): show each Codex agent role's model pin, set one role's model in its TOML and in omo.jsonc, or suggest a model for every role.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -72,8 +68,6 @@ State-changing: yes.
 | `--model` | string | suggest: size the roles with this model instead of the Codex default model. |
 | `--apply` | boolean | suggest: write every proposal through the role model write. |
 
-JSON mode: `payload`.
-
 - A bare invocation reads and never writes.
 - Requires Codex-based omo (LazyCodex): the omo@sisyphuslabs Codex plugin enabled in config.toml and installed; otherwise status lists no roles, and set and suggest are refused.
 - set rewrites only the root model value of $CODEX_HOME/agents/<role>.toml, plus model_reasoning_effort with --effort; omo.jsonc gets the same model and, when LazyCodex has that level, the effort as reasoning; it is skipped when absent or when it contains comments.
@@ -85,7 +79,7 @@ Usage: `ocx agent injection status [--json]; ocx agent injection set [--model <i
 
 Show or set the delegation model and effort, or suggest both for a described piece of delegated work.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -103,8 +97,6 @@ State-changing: yes.
 | `--apply` | boolean | suggest: write the proposed model and effort through the delegation settings write. |
 | `--sync-codex-defaults` | string | set only: enable/disable the existing model-dependent default-sync policy. |
 
-JSON mode: `payload`.
-
 - guidance aliases injection. Bare invocation reads; use explicit status before --json. set requires at least one setting and - clears model, effort or prompt.
 - suggest may spend a model call; it writes no settings unless --apply is explicitly supplied. Preserve unsized/unassigned/already-set outcomes.
 - Default-sync edits return actual normalized model/effort/prompt/guidance/default-sync state; they do not promise a client catalog rewrite. Clearing a model also clears dependent settings under server validation.
@@ -115,7 +107,7 @@ Usage: `ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --de
 
 Run one JEV decision probe through a decision method: TypeSafe, a System One row, or an opencodex model.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -130,8 +122,6 @@ State-changing: yes.
 | `--decision-timeout` | number | Decision deadline in milliseconds (1000-120000). |
 | `--json` | boolean | Emit the probe result. |
 
-JSON mode: `payload`.
-
 - --combo without an explicit decision override reads the saved combo first. The synthetic decision probe may spend a backend call; a failed-open receipt is not an applied decision.
 
 ### `ocx combo discover`
@@ -140,7 +130,7 @@ Usage: `ocx combo discover [--query <text>] [--json]`
 
 List configured System One decision rows and catalog models that look like decision services.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -151,15 +141,13 @@ State-changing: no.
 | `--query` | string | Match catalog rows by this text instead of the built-in decision-model hint. |
 | `--json` | boolean | Emit the discovery payload. |
 
-JSON mode: `payload`.
-
 - Read-only: nothing is probed and no provider row is created.
 
 ### `ocx message sessions`
 
 Discover already-loaded local Codex sessions without reading conversation history.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -167,15 +155,13 @@ Drives no management route.
 |---|---|---|
 | `--json` | boolean | Emit a versioned local session directory. |
 
-JSON mode: `envelope`.
-
 - Linux/macOS Unix socket only. Uses effective CODEX_HOME; starts no daemon and returns no partial directory.
 
 ### `ocx message send`
 
 Submit one correlated peer message to an exact loaded local Codex destination.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -188,8 +174,6 @@ Drives no management route.
 | `--in-reply-to` | string | Request message UUID; required only for a response. |
 | `--json` | boolean | Emit a receipt with not_sent, queued or unknown status. |
 
-JSON mode: `envelope`.
-
 - Requires daemon support for experimental thread/queue/add. Sender context comes from CODEX_THREAD_ID, not an authentication claim.
 - queued means submitted, not processed. unknown must not be replayed; no automatic retry, daemon start or thread resume.
 - Exit 0: queued; 1: not sent; 3: unknown; 64: invalid usage. No remote/Claude transport or skill installation.
@@ -198,23 +182,24 @@ JSON mode: `envelope`.
 
 Inspect and configure the advisor sidecar (expert consultation for routed workers).
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
 | GET | `/api/advisor/settings` |
+| GET | `/api/advisor/activity` |
 | PUT | `/api/advisor/settings` |
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit advisor settings as JSON. |
 
-JSON mode: `payload`.
-
 - `status` (the default) reads the resolved settings; `on`/`off` toggle the sidecar; `consent` records or revokes context-sharing consent; `set` updates model, effort, policy, or timeout.
 - `on` does not grant consent. Without current consent it refuses and prints the disclosure. `on --ack-context-sharing` records consent v1 and enables. `consent --revoke` removes consent and stops task-context transfer.
 - The advisor model may be any routable model string: a bare native model, an explicit `provider/model`, or an account-qualified native model.
 - `policy: preflight` makes OpenCodex attempt one automatic consultation per task with a stable conversation identity once the task shows orientation evidence (an assistant tool call or a tool result after the latest user message). Without a stable identity, each eligible request may trigger another consultation. `policy: manual` consults only when the worker calls the synthetic `advisor` tool. Neither path sends task context without current context-sharing consent.
+- `policy: adaptive` adds evidence-based failed-repair consultation after the same validation fails, a file edit completes, and validation fails again. Automatic calls require a stable conversation identity. `set --max-consultations <1-3>` caps adaptive task attempts, including manual calls, in a durable 24-hour budget. No semantic stuck detection is claimed.
+- `activity` reads up to 100 recent consultation metadata records (trigger, status, models, requested and mapped effort, duration, reported tokens); no task or advice content is retained. Records are process-local and expire after 24 hours. Missing mapped effort means unreported, not successful application.
 
 ### `ocx agent status`
 
@@ -222,7 +207,7 @@ Usage: `ocx agent status [--json]`
 
 Read agent mode, delegation, effort caps, roster, fallback and sidecars.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -237,15 +222,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `envelope`.
-
 ### `ocx agent effort`
 
 Usage: `ocx agent effort status [--json]`
 
 Read or set main and subagent effort caps.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -255,8 +238,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 - set requires at least one cap; a null clears it.
 
 ### `ocx agent effort set`
@@ -265,7 +246,7 @@ Usage: `ocx agent effort set [--main <level|->] [--subagent <level|->] [--json]`
 
 Read or set main and subagent effort caps.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -277,8 +258,6 @@ State-changing: yes.
 | `--subagent` | string | Subagent effort cap; - clears. |
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 - set requires at least one cap; a null clears it.
 
 ### `ocx agent subagents`
@@ -287,7 +266,7 @@ Usage: `ocx agent subagents status [--json]`
 
 Read, replace or clear the ordered featured subagent roster.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -297,8 +276,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 - At most five models; clear sends an empty roster. agent roster is an alias.
 
 ### `ocx agent subagents set`
@@ -307,7 +284,7 @@ Usage: `ocx agent subagents set <model,model...> [--json]`
 
 Read, replace or clear the ordered featured subagent roster.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -316,8 +293,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
-
-JSON mode: `payload`.
 
 - At most five models; clear sends an empty roster. agent roster is an alias.
 
@@ -327,7 +302,7 @@ Usage: `ocx agent subagents clear [--json]`
 
 Clear the saved subagents models.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -337,8 +312,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 - At most five models; clear sends an empty roster. agent roster is an alias.
 
 ### `ocx agent fallback`
@@ -347,7 +320,7 @@ Usage: `ocx agent fallback status [--json]`
 
 Read, replace or clear fallback models and polling interval.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -357,8 +330,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 - set requires models and/or --poll-ms; clear empties the models and may also set --poll-ms.
 
 ### `ocx agent fallback set`
@@ -367,7 +338,7 @@ Usage: `ocx agent fallback set [model,model...] [--poll-ms <5000-600000>] [--jso
 
 Read, replace or clear fallback models and polling interval.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -377,8 +348,6 @@ State-changing: yes.
 |---|---|---|
 | `--poll-ms` | number | Polling interval, 5000-600000 milliseconds. |
 | `--json` | boolean | Emit structured JSON. |
-
-JSON mode: `payload`.
 
 - set requires models and/or --poll-ms; clear empties the models and may also set --poll-ms.
 
@@ -388,7 +357,7 @@ Usage: `ocx agent fallback clear [--poll-ms <5000-600000>] [--json]`
 
 Clear the saved fallback models.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -399,8 +368,6 @@ State-changing: yes.
 | `--poll-ms` | number | Polling interval, 5000-600000 milliseconds. |
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 - set requires models and/or --poll-ms; clear empties the models and may also set --poll-ms.
 
 ### `ocx agent sidecar`
@@ -409,7 +376,7 @@ Usage: `ocx agent sidecar status [--json]`
 
 Read configured sidecars and candidate models.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -419,15 +386,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx agent sidecar web`
 
 Usage: `ocx agent sidecar web (--list | [--model <id|->] [--backend <openai|anthropic|xai|gemini|exa|->] [--reasoning <level>] [--enabled <on|off>] [--stream-routed-output <on|off>]) [--json]`
 
 List web candidates or change the web sidecar.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -444,8 +409,6 @@ State-changing: yes.
 | `--json` | boolean | Emit structured JSON. |
 | `--stream-routed-output` | string | Stream routed web-search model output; web only. |
 
-JSON mode: `payload`.
-
 - Without --list at least one setting is required. Stored settings and Codex application outcomes remain distinct.
 - Web reasoning remains supported even though the mutation reply does not echo it. max-descriptions and timeout belong only to vision. New-option replies project the saved web settings and actual native apply report.
 
@@ -455,7 +418,7 @@ Usage: `ocx agent sidecar vision (--list | [--model <id|->] [--backend <openai|a
 
 List vision candidates or change the vision sidecar.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -473,8 +436,6 @@ State-changing: yes.
 | `--json` | boolean | Emit structured JSON. |
 | `--timeout-ms` | number | Vision request timeout, integer1–2147483647 milliseconds. |
 
-JSON mode: `payload`.
-
 - Without --list at least one setting is required. Stored settings and Codex application outcomes remain distinct.
 - Stream-routed-output belongs only to web. Timeout changes preserve siblings; native apply and saved state are distinct.
 
@@ -484,7 +445,7 @@ Usage: `ocx effort [status|low|medium|high|xhigh|max|ultra|->] [--json]`
 
 Read effort settings or set the main cap with a shorthand level.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -496,8 +457,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `envelope`.
-
 - Uses the live proxy when available, otherwise local config. Once live is selected, errors never fall back to local writes; set reads back live status and can report partial application.
 - The shorthand ocx effort <low|medium|high|xhigh|max|ultra|-> changes only the main cap; unset aliases clear.
 
@@ -507,7 +466,7 @@ Usage: `ocx effort set [--main <level|->] [--subagent <level|->] [--injection <l
 
 Set one or more effort fields.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -523,8 +482,6 @@ State-changing: yes.
 | `--injection` | string | Delegation effort; - clears; also accepts none/minimal. |
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `envelope`.
-
 - Local configuration is used when no live proxy is found; runtime failures are not silent offline success.
 
 ### `ocx effort clear`
@@ -533,7 +490,7 @@ Usage: `ocx effort clear [--json]`
 
 Clear both caps while retaining delegation effort.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -545,8 +502,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `envelope`.
-
 - Local configuration is used when no live proxy is found; runtime failures are not silent offline success.
 
 ### `ocx effort model`
@@ -555,15 +510,13 @@ Usage: `ocx effort model <provider/model|model> [--json]`
 
 Inspect a model effort ladder and wire mappings from local configuration.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
-
-JSON mode: `envelope`.
 
 - Local configuration/catalog derivation; routes is empty because no management API is called.
 
@@ -573,7 +526,7 @@ Usage: `ocx v2 [status] [--live] [--json]`
 
 Report local multi-agent mode and Codex feature settings.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -583,8 +536,6 @@ State-changing: no.
 |---|---|---|
 | `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
 - Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
@@ -596,7 +547,7 @@ Usage: `ocx v2 on [--live] [--json]`
 
 Enable the local Codex multi_agent_v2 feature.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -606,8 +557,6 @@ State-changing: yes.
 |---|---|---|
 | `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
 - Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
@@ -619,7 +568,7 @@ Usage: `ocx v2 off [--live] [--json]`
 
 Disable the local Codex multi_agent_v2 feature.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -629,8 +578,6 @@ State-changing: yes.
 |---|---|---|
 | `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
 - Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
@@ -642,7 +589,7 @@ Usage: `ocx v2 mode <v1|default|v2> [--live] [--json] [--acknowledge-surface-adv
 
 Set local model-catalog multi-agent mode.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -654,8 +601,6 @@ State-changing: yes.
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 | `--acknowledge-surface-advisory` | boolean | Explicit live mode only; never implicitly acknowledged. |
 
-JSON mode: `envelope`.
-
 - Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
 - Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
 - Live writes use actual post-write state and full catalog outcomes; a502 can mean partial native changes. Read back before retrying; no rollback is implied.
@@ -666,7 +611,7 @@ Usage: `ocx v2 keep-native-v1 <on|off> [--live] [--json]`
 
 Keep native ChatGPT on v1 while routed models use v2.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -676,8 +621,6 @@ State-changing: yes.
 |---|---|---|
 | `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
 - Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
@@ -689,7 +632,7 @@ Usage: `ocx v2 threads <n> [--live] [--json]`
 
 Set the local active-mode thread limit (integer at least 1).
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -699,8 +642,6 @@ State-changing: yes.
 |---|---|---|
 | `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
 - Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
@@ -712,7 +653,7 @@ Usage: `ocx v2 mode-hint <text|--clear> [--live] [--json]; ocx v2 mode-hint [--l
 
 Set nonblank local delegation hint text or restore effort-derived policy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -723,8 +664,6 @@ State-changing: yes.
 | `--clear` | boolean | Unset the hint. |
 | `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
 - Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
@@ -737,7 +676,7 @@ Usage: `ocx combo list [--json]`
 
 List saved combos.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -746,8 +685,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
-
-JSON mode: `payload`.
 
 ### `ocx combo show`
 
@@ -755,7 +692,7 @@ Usage: `ocx combo show <id> [--json]`
 
 Read one saved combo from the collection.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -765,15 +702,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--display-name <label|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
 
 Create, update or rename a combo.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -782,6 +717,7 @@ State-changing: yes.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--allow-metered-targets` | string | on grants operator consent to metered targets only on a loopback-only proxy; off clears it. |
 | `--targets` | string | Ordered provider/model[:weight] list; required for creation. |
 | `--strategy` | string | Routing strategy. |
 | `--sticky` | string | Round-robin limit 1-100; - resets. |
@@ -799,8 +735,6 @@ State-changing: yes.
 | `--image-input` | string | auto or disabled; explicit auto clears the previous disabled choice. |
 | `--reasoning-effort-mode` | string | strict or adaptive, distinct from --effort-mode fallback/force. |
 
-JSON mode: `payload`.
-
 - create and update are aliases of set. Existing fields are read before writing; --targets replaces targets.
 - force overrides valid client effort and may increase cost and latency.
 - Only the implemented target grammar is supported; full GUI target metadata and routing-profile writes are separate tasks.
@@ -813,7 +747,7 @@ Usage: `ocx combo remove <id> --yes [--json]`
 
 Remove a saved combo after explicit confirmation.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -824,8 +758,6 @@ State-changing: yes.
 | `--yes` | boolean | Confirm deletion. |
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 - delete is an alias; the ID is encoded in the id query parameter.
 
 ### `ocx route policy list`
@@ -834,7 +766,7 @@ Usage: `ocx route policy list [--json]`
 
 List saved routing profiles and revisions.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -843,8 +775,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
-
-JSON mode: `payload`.
 
 ### `ocx route policy show`
 
@@ -852,7 +782,7 @@ Usage: `ocx route policy show <id> [--json]`
 
 Read one saved routing profile.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -862,15 +792,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx route policy dry-run`
 
 Usage: `ocx route policy dry-run <id> [--model-context <tokens>] [--tools] [--image] [--structured-output] [--json]`
 
 Evaluate a saved profile against explicit requirements without changing it.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -883,8 +811,6 @@ State-changing: yes.
 | `--image` | boolean | Require image input. |
 | `--structured-output` | boolean | Require structured output. |
 | `--json` | boolean | Emit structured JSON. |
-
-JSON mode: `payload`.
 
 - evaluate and dry-run do not save the profile, but their POST can activate Lab and start automation already enabled by local policy. No profile create, update or delete is exposed.
 
@@ -894,7 +820,7 @@ Usage: `ocx route policy evaluate <id> [--model-context <tokens>] [--tools] [--i
 
 Evaluate a saved profile against explicit requirements without changing it.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -908,8 +834,6 @@ State-changing: yes.
 | `--structured-output` | boolean | Require structured output. |
 | `--json` | boolean | Emit structured JSON. |
 
-JSON mode: `payload`.
-
 - evaluate and dry-run do not save the profile, but their POST can activate Lab and start automation already enabled by local policy. No profile create, update or delete is exposed.
 
 ### `ocx route policy create`
@@ -918,7 +842,7 @@ Usage: `ocx route policy create <id> --file <FILE|-> [--json]`
 
 Create a routing profile from an editable-only document.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -928,8 +852,6 @@ State-changing: yes.
 |---|---|---|
 | `--file` | string | Bounded editable profile JSON; omit show DTO id/model/revision fields. |
 | `--json` | boolean | Emit the validated command result as JSON. |
-
-JSON mode: `envelope`.
 
 - The server validates provider/alias/routing relationships and may activate Lab plus automation already enabled on the target. No implicit decision/inference probe follows the save.
 - An existing ID refuses rather than becoming an update.
@@ -941,7 +863,7 @@ Usage: `ocx route policy update <id> --file <FILE|-> --expected-revision <revisi
 
 Update a routing profile from an editable-only document.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -953,8 +875,6 @@ State-changing: yes.
 | `--expected-revision` | string | Exact nonblank revision observed by the caller; never automatically refreshed. |
 | `--json` | boolean | Emit the validated command result as JSON. |
 
-JSON mode: `envelope`.
-
 - The server validates provider/alias/routing relationships and may activate Lab plus automation already enabled on the target. No implicit decision/inference probe follows the save.
 - Stale revision is exit5 with no overwrite/retry; missing profile is exit4.
 - Unknown/readonly/nested unsupported file fields refuse; no raw validator issues or file contents are echoed.
@@ -965,7 +885,7 @@ Usage: `ocx route policy remove <id> --yes [--json]`
 
 Remove one exact routing profile ID.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -976,8 +896,6 @@ State-changing: yes.
 | `--yes` | boolean | Explicitly confirm removal. |
 | `--json` | boolean | Emit the validated command result as JSON. |
 
-JSON mode: `envelope`.
-
 - Uses the internal stored ID, not a public model alias. DELETE has no revision guard. Saved/catalog outcomes remain distinct; no alternate-target retry.
 
 ### `ocx combo stats`
@@ -986,7 +904,7 @@ Usage: `ocx combo stats <id> [--range <7d|30d|all>] [--json]`
 
 Read JEV decision and token coverage for an exact combo ID.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -997,8 +915,6 @@ State-changing: no.
 | `--range` | string | 7d,30d or all; default30d. |
 | `--json` | boolean | Emit the validated command result as JSON. |
 
-JSON mode: `envelope`.
-
 - Uses jev=1,comboId and range. Preserves actual counts, nullable averages, measurement coverage and incomplete/truncated history.
 - No monetary cost or comparative savings baseline exists in this DTO. This is not a decision probe and makes no model inference request.
 
@@ -1008,7 +924,7 @@ Usage: `ocx agent memory-models show [--json]`
 
 Read the memory model override block.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -1017,8 +933,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - An omitted phase keeps its existing/default route; this does not disable extraction, consolidation or the memory pipeline. File{} means no configured overrides, while clear sends null.
 - Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
@@ -1029,7 +943,7 @@ Usage: `ocx agent memory-models set (--file <FILE|-> | [--extract-model <model> 
 
 Replace the memory model override block.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -1044,8 +958,6 @@ State-changing: yes.
 | `--consolidation-effort` | string | Requires a consolidation model. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 
-JSON mode: `envelope`.
-
 - An omitted phase keeps its existing/default route; this does not disable extraction, consolidation or the memory pipeline. File{} means no configured overrides, while clear sends null.
 - Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
 
@@ -1055,7 +967,7 @@ Usage: `ocx agent memory-models clear [--json]`
 
 Clear the memory model override block.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -1064,8 +976,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - An omitted phase keeps its existing/default route; this does not disable extraction, consolidation or the memory pipeline. File{} means no configured overrides, while clear sends null.
 - Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
@@ -1076,7 +986,7 @@ Usage: `ocx agent compaction-routing show [--json]`
 
 Read the compaction routing override block.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -1085,8 +995,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - Clear restores ordinary compaction routing; it does not disable compaction. Omitted triggers/sources retain server defaults.
 - Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
@@ -1097,7 +1005,7 @@ Usage: `ocx agent compaction-routing set (--file <FILE|-> | --model <model> [--e
 
 Replace the compaction routing override block.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -1112,8 +1020,6 @@ State-changing: yes.
 | `--sources` | string | Unique exact selectors or provider/* patterns; omitted means all/default scope. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 
-JSON mode: `envelope`.
-
 - Clear restores ordinary compaction routing; it does not disable compaction. Omitted triggers/sources retain server defaults.
 - Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
 
@@ -1123,7 +1029,7 @@ Usage: `ocx agent compaction-routing clear [--json]`
 
 Clear the compaction routing override block.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -1132,8 +1038,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - Clear restores ordinary compaction routing; it does not disable compaction. Omitted triggers/sources retain server defaults.
 - Set replaces the full block, preserving canonical schema normalization only. No synthetic inference verifies the save. Writes report the actual normalized block and catalogRefreshPending, which is not a full catalog receipt.
@@ -1144,7 +1048,7 @@ Usage: `ocx memory [--limit <n>] [--json]`
 
 Read runtime memory and active-turn diagnostics.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1154,7 +1058,5 @@ State-changing: no.
 |---|---|---|
 | `--limit` | number | Positive limit forwarded to the endpoint. |
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - Alias of observe memory.

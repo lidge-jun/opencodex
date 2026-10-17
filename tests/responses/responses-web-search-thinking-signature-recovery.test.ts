@@ -110,7 +110,7 @@ function transport(answer: (index: number, init?: RequestInit) => Response | Pro
       queries.push(String(init?.body));
       return Response.json({ results: [{ title: "fixture", url: "https://fixture.example.test", text: "retained search result" }] });
     }
-    if (!["https://anthropic.example.test/v1/messages", "https://other-anthropic.example.test/v1/messages"].includes(url)) throw new Error(`Unexpected network target blocked: ${url}`);
+    if (!["https://anthropic.example.test/v1/messages", "https://other-anthropic.example.test/v1/messages", "https://api.anthropic.com/v1/messages"].includes(url)) throw new Error(`Unexpected network target blocked: ${url}`);
     bodies.push(String(init?.body));
     return answer(bodies.length, init);
   }) as typeof fetch;
@@ -139,6 +139,32 @@ function removeThinking(body: string): unknown {
 }
 
 describe("hosted web search Anthropic thinking-signature recovery", () => {
+  for (const rawSse of [false, true]) {
+    test(`signed progress created during search remains eligible for recovery (SSE=${rawSse})`, async () => {
+      const cfg = config();
+      cfg.providers["anthropic-test"]!.baseUrl = "https://api.anthropic.com";
+      cfg.providers["anthropic-test"]!.models = ["claude-opus-5-5"];
+      const input = request(true, "search-progress-recovery", false);
+      const body = await input.json() as Record<string, unknown>;
+      body.model = "anthropic-test/claude-opus-5-5";
+      body.reasoning = { effort: "high" };
+      const req = new Request(input.url, { method: "POST", headers: input.headers, body: JSON.stringify(body) });
+      const { bodies, queries } = transport(index => index === 1 ? search() : index === 2
+        ? rawSse ? streamRejection(frame("ping")) : rejection() : success());
+      const result = await send({}, cfg, req);
+      expect(result.text).toContain("Recovered search answer");
+      expect(result.text).not.toContain("response.failed");
+      expect(bodies).toHaveLength(3);
+      expect(JSON.parse(bodies[0]).thinking.display).toBe("updates");
+      expect(bodies[0]).not.toContain(SIGNATURE);
+      expect(bodies[1]).toContain(SIGNATURE);
+      expect(bodies[2]).not.toContain(SIGNATURE);
+      expect(JSON.parse(bodies[2])).toEqual(removeThinking(bodies[1]));
+      expect(queries).toHaveLength(1);
+      expect(bodies[2]).toContain("retained search result");
+      expect(result.log.activeAttempt?.recoveryKinds).toEqual(["opaque-blob-rejection"]);
+    });
+  }
   for (const stream of [false, true]) {
     test(`HTTP 400 rebuilds current iteration and memoizes final completion (stream=${stream})`, async () => {
       const { bodies, queries } = transport(index => index === 1 ? rejection() : success());

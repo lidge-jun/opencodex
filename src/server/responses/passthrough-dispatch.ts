@@ -1,4 +1,6 @@
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
+import { requestPacingOverloadResponse } from "./pacing-overload";
+import { recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
 import { createSteeringSettingsNormalizer } from "./native-steering-policy";
 import { nativeResponseControlEligible } from "./native-response-control";
 import { NativeInjectionReplay } from "./native-injection-replay";
@@ -141,7 +143,7 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { refreshPoolForwardAuth, refreshNativeMainForwardAuth, withClaudeNativeSession } from "./core-auth";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import type { OAuthAccessSnapshot } from "../../oauth";
-import { OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
+import { OAuthAccountPausedError, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { AnthropicAccountCooldownError } from "../../oauth/anthropic-routing";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
@@ -154,7 +156,7 @@ import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import {
   attemptOpaqueBlobRecovery,
-  isEncryptedFunctionOutputRejection,
+  isEncryptedFunctionOutputRejection, retainedReasoningStreamCandidate, retainedReasoningStreamRejection,
   outboundResponsesBodyCarriesEncryptedFunctionOutput,
   resetStreamedOpaqueBlobLogContext,
   consoleGoUploadRejectionBody,
@@ -742,7 +744,9 @@ export async function preparePassthroughExchange(
       const stage = readCodexWsStage(response);
       if (stage && logCtx.activeAttempt) logCtx.activeAttempt.codexWsStage = stage;
     };
+    let upstreamResponse: Response, lastDistributedResponse: Response | undefined;
     const adoptObservedResponse = <T extends Response>(response: T): T => {
+      if (!isNonReplayableResponse(response)) lastDistributedResponse = response.status === 401 || response.status === 429 ? response : undefined;
       settleObservedHostResponse();
       adoptCodexWsStage(response);
       return response;
@@ -759,7 +763,6 @@ export async function preparePassthroughExchange(
     const upstream = new AbortController();
     const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal ?? req.signal);
     const connectMs = config.connectTimeoutMs ?? 200_000;
-    let upstreamResponse: Response;
     /**
      * This leg's transient-5xx ladder cap, from the provider's own `transientRetryOn5xx`.
      *
@@ -892,7 +895,6 @@ export async function preparePassthroughExchange(
     ): Response | undefined => {
       const result = checkOutboundBodySize(builtRequest.body, config.maxUpstreamBodyBytes);
       if (result.admitted) return undefined;
-
       // This returns before the surrounding fetch/finally owns the observation, so release
       // it here or one refused body holds translator budget for the process lifetime.
       builtRequest.releaseBodyObservation?.();
@@ -930,6 +932,7 @@ export async function preparePassthroughExchange(
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
         return clientCancelledResponse();
       }
+      if (lastDistributedResponse) recordDistributedResponseFailure(lastDistributedResponse, config, route.providerName, options.abortSignal);
       // A budget refusal is a proxy decision, not an upstream fault. Reporting it as
       // 502 upstream_error would blame the provider for a limit this process applied, and
       // would record a fake reachability failure against the account's health.
@@ -945,12 +948,12 @@ export async function preparePassthroughExchange(
         bindRefreshedAdapter(refusal.adapter);
         return handoffToChat(refusal.adapter);
       }
-      const copilotRefusal = copilotRefusalResponse(refusal);
-      if (copilotRefusal) {
+      const dispatchRefusal = requestPacingOverloadResponse(refusal) ?? copilotRefusalResponse(refusal);
+      if (dispatchRefusal) {
         releaseUpstreamHostAdmission(nativeHostState.lease);
         nativeHostState.lease = null;
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
-        return copilotRefusal;
+        return dispatchRefusal;
       }
       // Pacing may outlive the selected account's admission. No fetch occurred, so do
       // not turn an operator pause into a 502 or charge it to host/account health.
@@ -1206,7 +1209,6 @@ export async function preparePassthroughExchange(
 
     // Keep recovery kinds in sync with the generic `recovery:` loop below.
     passthroughRecovery: for (;;) {
-
     if (
       upstreamResponse.status === 401
       && (admissionState.authCtx.kind === "main-pool" || admissionState.authCtx.kind === "pool")
@@ -1358,6 +1360,8 @@ export async function preparePassthroughExchange(
       } catch (err) {
         upstream.abort();
         releaseCodexAuthContextProbeLease(admissionState.authCtx);
+        if (options.abortSignal?.aborted || req.signal.aborted) return clientCancelledResponse();
+        if (err instanceof OAuthTokenRefreshBusyError) return formatErrorResponse(503, "server_error", publicOAuthAuthenticationErrorMessage(err), { retryAfter: "1" });
         return formatErrorResponse(401, "authentication_error", publicOAuthAuthenticationErrorMessage(err));
       }
       if (route.provider.googleMode === "cloud-code-assist" && !refreshed.projectId) {
@@ -1526,7 +1530,6 @@ export async function preparePassthroughExchange(
         )) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
       }
     }
-
     // Same-target 429 wait-and-retry (opt-in `retryOn429`) for key-auth providers on the
     // passthrough wire. This branch returns before the recovery loop below, so Responses-shaped
     // key-auth gateways (e.g. the built-in DeepSeek preset) would otherwise surface 429
@@ -1597,7 +1600,6 @@ export async function preparePassthroughExchange(
         return transportFailureResponse(err);
       }
     }
-
     const captureAffinityResponse = (
       response: Response,
       captureAuthCtx: CodexAuthContext = admissionState.authCtx,
@@ -1619,8 +1621,8 @@ export async function preparePassthroughExchange(
         status: response.status,
       });
     };
+    recordDistributedResponseFailure(lastDistributedResponse ?? upstreamResponse, config, route.providerName, options.abortSignal);
     captureAffinityResponse(upstreamResponse);
-
     if (usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)) {
       let poolRetryOutcome: number | undefined;
       // A success is the freshest evidence there is about this pair, and it outranks any earlier
@@ -1749,7 +1751,7 @@ export async function preparePassthroughExchange(
       && (recoveryContentType.includes("text/event-stream") || (!recoveryContentType && upstreamRequestsStream))
       && !opaqueBlobRecoveryGuard.attempted
       && !configuredTransientSendBudgetExhausted()
-      && outboundResponsesBodyCarriesEncryptedFunctionOutput(request.body);
+      && (outboundResponsesBodyCarriesEncryptedFunctionOutput(request.body) || (!sendBudgetState.ambiguousResendSpent && retainedReasoningStreamCandidate(parsed, request.body)));
     if (streamedFunctionOutputCandidate) {
       const preflightLog: RequestLogContext = { model: logCtx.model, provider: logCtx.provider };
       const preflight = await preflightComboStreamResponse(upstreamResponse, preflightLog,
@@ -1762,7 +1764,7 @@ export async function preparePassthroughExchange(
           // intentionally understands only Responses error/message fields. Preserve only this
           // exact identity so the projected 502 can enter the existing single-shot recovery.
           if (decryptRejection) preflightLog.upstreamError = ENCRYPTED_FUNCTION_OUTPUT_REJECTION;
-          return decryptRejection;
+          return decryptRejection || (!sendBudgetState.ambiguousResendSpent && retainedReasoningStreamRejection(payload, parsed, request.body, preflightLog));
         }, {
           allowMissingContentType: !recoveryContentType && upstreamRequestsStream,
           replayReadErrors: true,

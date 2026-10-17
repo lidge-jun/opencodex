@@ -1,5 +1,5 @@
 import type { ProviderAdapter } from "../adapters/base";
-import type { AdapterEvent } from "../types";
+import type { AdapterEvent, OcxUsage } from "../types";
 import {
   isTranslatorBudgetExceededError,
   TRANSLATOR_MAX_TURN_BYTES,
@@ -40,6 +40,8 @@ export interface ParseStreamWithProgressOptions {
   signal?: AbortSignal;
   /** Kept configurable for focused tests; production callers should use the 5 second default. */
   postTerminalDrainTimeoutMs?: number;
+  /** Receives the usage an adapter `error` event carries before the stream fails on it. */
+  onErrorUsage?: (usage: OcxUsage) => void;
 }
 
 type ParseStream = ProviderAdapter["parseStream"];
@@ -305,6 +307,7 @@ export async function* parseStreamWithProgress(
           );
         }
         if (event.type === "error") {
+          if (event.usage) options.onErrorUsage?.(event.usage);
           fail(event.code === "translation_buffer_limit"
             ? new TranslatorBudgetExceededError("live_transient", TRANSLATOR_MAX_TURN_BYTES)
             : options.preserveAdapterError ? new WebSearchAdapterEventError(event, replaySafe) : new Error(event.message));

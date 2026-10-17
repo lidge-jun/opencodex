@@ -1,3 +1,6 @@
+import { isOpenCodeGoGeminiDestination, OPENCODE_GO_BASE_URL, OPENCODE_GO_MODEL_WIRES, OPENCODE_GO_LEGACY_NAME_PINS, type OpenCodeGoDestination } from "./opencode-go";
+import { openCodeZenBaseUrl, type OpenCodeZenDestination } from "./opencode-zen";
+
 /**
  * Accepted values for the per-provider upstream HTTP-version pin (#1668). Shared by the
  * zod load schema, the management write boundary (POST/PATCH), and the fetch runtime, so
@@ -40,35 +43,16 @@ export const MODEL_ADAPTER_OVERRIDE_ALLOWED: ReadonlySet<string> = new Set([
   "openai-responses",
 ]);
 
-/**
- * Providers whose listed model ids must be driven over the Anthropic wire even when
- * the provider's configured adapter says otherwise — the upstream only speaks
- * Anthropic for these models.
- */
-const ANTHROPIC_WIRE_MODELS: Record<string, ReadonlySet<string>> = {
-  "opencode-go": new Set([
-    "claude-haiku-5-5",
-    "minimax-m2.5",
-    "minimax-m2.7",
-    "minimax-m3",
-    // OpenCode's catalog identifies Union Alpha as @ai-sdk/anthropic while the
-    // provider defaults to OpenAI-compatible; direct Chat returns 500 and direct
-    // Messages reaches the session check (#4847).
-    "union-alpha",
-  ]),
-};
-
-function anthropicWireModelsForProvider(providerName: string): ReadonlySet<string> | undefined {
-  return Object.hasOwn(ANTHROPIC_WIRE_MODELS, providerName)
-    ? ANTHROPIC_WIRE_MODELS[providerName]
-    : undefined;
-}
-
-/** Detached provider-local hard-pin table for pure wire-policy resolution. */
-export function captureWireAdapterHardPins(providerName: string): Readonly<Record<string, string>> {
-  const models = anthropicWireModelsForProvider(providerName);
-  if (!models) return Object.freeze({});
-  return Object.freeze(Object.fromEntries([...models].map(modelId => [modelId, "anthropic"])));
+/** Native Go wire pins share the exact-model table with registry Responses defaults. */
+export function captureWireAdapterHardPins(providerName: string, provider?: WirePinProvider): Readonly<Record<string, string>> {
+  if (providerName !== "opencode-go") return Object.freeze({});
+  // The existing Go preset pins saved URLs to this endpoint before dispatch. Pure policy
+  // captures must use that same destination even when handed an unnormalized config row.
+  const destination = provider && { ...provider, baseUrl: OPENCODE_GO_BASE_URL };
+  return Object.freeze(Object.fromEntries(Object.entries(OPENCODE_GO_MODEL_WIRES).filter(([modelId, wire]) =>
+    (wire === "anthropic" && OPENCODE_GO_LEGACY_NAME_PINS.has(modelId))
+    || (wire !== "openai-responses" && isOpenCodeGoGeminiDestination(destination)),
+  )));
 }
 
 interface WirePinPrefixRule {
@@ -98,9 +82,7 @@ const WIRE_ADAPTER_PIN_PREFIXES: Readonly<Record<string, WirePinPrefixRule>> = O
 });
 
 /** Just enough of a provider config to tell whether it still points at the pinned endpoint. */
-export interface WirePinProvider {
-  readonly baseUrl?: unknown;
-}
+export interface WirePinProvider extends OpenCodeGoDestination, OpenCodeZenDestination {}
 
 function normalizedEndpoint(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -112,7 +94,19 @@ function normalizedEndpoint(value: unknown): string | undefined {
   }
 }
 
+/**
+ * Providers whose adapter is their credential boundary: the adapter alone pins the destination and
+ * the auth header for an account token. No model may switch wires, whatever `baseUrl` or the row's
+ * own `adapter` says, because a generic wire would send that token as a Bearer key to the configured
+ * URL. The empty prefix covers every model id.
+ */
+const CREDENTIAL_PINNED_ADAPTERS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
+  "dsh-account": Object.freeze({ "": "dsh-account" }),
+});
+
 function prefixPinsFor(providerName: string, provider: WirePinProvider | undefined): Readonly<Record<string, string>> | undefined {
+  if (Object.hasOwn(CREDENTIAL_PINNED_ADAPTERS, providerName)) return CREDENTIAL_PINNED_ADAPTERS[providerName];
+  if (providerName === "opencode-zen" && openCodeZenBaseUrl(provider)) return { "gemini-": "google" };
   if (!provider || !Object.hasOwn(WIRE_ADAPTER_PIN_PREFIXES, providerName)) return undefined;
   const rule = WIRE_ADAPTER_PIN_PREFIXES[providerName]!;
   return normalizedEndpoint(provider.baseUrl) === rule.endpoint ? rule.prefixes : undefined;
@@ -148,13 +142,11 @@ function prefixedWireAdapter(providerName: string, modelId: string, provider: Wi
  * adapter" would pass on the first pass and then let the override win on the second.
  */
 export function isWirePinnedModel(providerName: string, modelId: string, provider?: WirePinProvider): boolean {
-  return (anthropicWireModelsForProvider(providerName)?.has(modelId) ?? false)
-    || prefixedWireAdapter(providerName, modelId, provider) !== undefined;
+  return pinnedWireAdapter(providerName, modelId, provider) !== undefined;
 }
 
 /** The wire a pinned model must use, or undefined when the model is not pinned. */
 export function pinnedWireAdapter(providerName: string, modelId: string, provider?: WirePinProvider): string | undefined {
-  return anthropicWireModelsForProvider(providerName)?.has(modelId)
-    ? "anthropic"
-    : prefixedWireAdapter(providerName, modelId, provider);
+  const pins = captureWireAdapterHardPins(providerName, provider);
+  return Object.hasOwn(pins, modelId) ? pins[modelId] : prefixedWireAdapter(providerName, modelId, provider);
 }

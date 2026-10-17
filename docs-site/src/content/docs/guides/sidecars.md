@@ -141,13 +141,23 @@ failures after response headers have started are delivered as `response.failed` 
 Image routing is capability-aware. Before an image-bearing upstream send, opencodex resolves the selected model's effective input modalities from runtime provider evidence, explicit operator declarations, backend/registry metadata, and generated vendor metadata. A target positively known to be text-only goes through the Vision Sidecar first; the image is described **before** the main call and replaced inline with text. A target positively known to support images receives the image directly. Unknown custom models keep the existing compatibility behavior rather than being guessed text-only.
 
 For the canonical ChatGPT Codex route, opencodex uses the `openai-codex` metadata bundle rather than public OpenAI API metadata, so backend-specific modality differences are respected. The native Chat fast path uses the same gate and cannot bypass a known text-only verdict. Without an available sidecar plan, raw images are stripped before a proven text-only backend.
-Combos advertise image input only when every member accepts images, either natively or through a
+With `visionSidecar.enabled: false`, the model catalog does not add sidecar-backed image input to
+text-only models, including custom rows and combo members. Native image support and explicitly
+configured image modalities are preserved. Omitting `enabled` keeps sidecar advertisement on;
+catalog visibility does not establish that sidecar credentials or capacity are available.
+Combos advertise image input only when every member accepts images, either natively or through an enabled
 sidecar, and the combo's `imageInput` setting is not disabled, so clients such as the Codex app
 allow attachments instead of blocking them before the sidecar runs. When
 `visionSidecar.model` is absent or blank, the OpenAI execution path, Dashboard, and management API
 use the `gpt-5.6-luna` fallback. Startup still migrates an explicitly persisted legacy
 `gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not to an absent
 model field.
+Saving a multimodal combo from the dashboard enrolls its non-image members automatically: the
+Combos page sends them as `visionSidecarTargets` on `PUT /api/combos`, which writes the exact
+text-only declaration on the member's provider, so no manual config edit and reload is needed.
+Enrollment never overwrites an existing image-capable declaration, and members whose modalities are
+unknown or have no text input are not enrolled — the dashboard names them and keeps the combo's
+image switch unavailable.
 The first-party DeepSeek `deepseek-flash` model is native multimodal (`text` and `image`) and does
 not use this sidecar by default. Explicit `noVisionModels` or text-only declarations remain
 authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash` remain
@@ -221,6 +231,10 @@ timeout, and limit.
 `PUT /api/sidecar-settings` accepts the same fields. Partial updates leave
 omitted keys unchanged. `timeoutMs` uses the runtime integer bounds
 (1–2147483647 ms).
+
+When the effective Vision switch changes, saving also refreshes the managed Codex catalog and
+model cache. The response reports `catalogRefreshPending: true` if that refresh did not complete;
+the saved switch is retained, and catalog publication does not confirm that a running client has reloaded it.
 
 The web-search sidecar card carries the same control shape: the model picker's first row is
 **Off**. Off does two things, and the second one is the reason the row exists. OpenCodex stops

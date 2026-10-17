@@ -8,7 +8,7 @@ import { MANAGEMENT_ROUTES } from "../../src/server/management/route-registry";
  * dashboard does, and the tests below pin the mapping it must not blur: a clear is `null`, an
  * explicit empty ladder is `[]`, and neither is inferred from a value that merely looks empty.
  */
-async function invoke(args: string[], response?: unknown, status = 200) {
+async function invoke(args: string[], response?: unknown, status = 200, sub = "set") {
   const calls: Array<{ path: string; method: string; body: unknown }> = [];
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -17,7 +17,7 @@ async function invoke(args: string[], response?: unknown, status = 200) {
   console.log = (...values: unknown[]) => { stdout.push(values.map(String).join(" ")); };
   console.error = (...values: unknown[]) => { stderr.push(values.map(String).join(" ")); };
   try {
-    const code = await handleModelsRuntimeCommand("set", args, {
+    const code = await handleModelsRuntimeCommand(sub, args, {
       baseUrl: "http://127.0.0.1:1",
       fetchImpl: async (url, init) => {
         calls.push({
@@ -153,5 +153,77 @@ describe("models per-model settings command", () => {
     expect(capability?.routes).toEqual([{ method: "PUT", path: "/api/model-settings" }]);
     expect(capability?.mutates).toBe(true);
     expect(MANAGEMENT_ROUTES.some(route => route.method === "PUT" && route.path === "/api/model-settings")).toBe(true);
+  });
+});
+
+describe("models auto-review settings command", () => {
+  test("reads the global reviewer settings from the management route", async () => {
+    const result = await invoke(["status", "--json"], { enabled: true, model: "router/reviewer" }, 200, "auto-review");
+    expect(result.code).toBe(0);
+    expect(result.calls).toEqual([{
+      path: "/api/auto-review-settings", method: "GET", body: undefined,
+    }]);
+    expect(JSON.parse(result.stdout)).toEqual({ enabled: true, model: "router/reviewer" });
+  });
+
+  test("writes the model and enabled state and reports a retryable refresh as pending", async () => {
+    const result = await invoke(["set", "router/reviewer", "--enabled", "on"], {
+      ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "skipped", retryable: true },
+    }, 200, "auto-review");
+    expect(result.code).toBe(0);
+    expect(result.calls).toEqual([{
+      path: "/api/auto-review-settings", method: "PUT", body: { enabled: true, model: "router/reviewer" },
+    }]);
+    expect(result.stdout).toContain("catalog refresh is pending");
+  });
+
+  test("reports a failed catalog refresh separately from a non-retryable skip", async () => {
+    const failed = await invoke(["set", "router/reviewer"], {
+      ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "failed", reason: "disk" },
+    }, 200, "auto-review");
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toContain("Auto-review settings updated.");
+    expect(failed.stdout).toContain("catalog refresh failed");
+    expect(failed.stdout).toContain("Resolve the refresh issue");
+    expect(failed.stdout).not.toContain("catalog refresh is pending");
+
+    const failedJson = await invoke(["set", "router/reviewer", "--json"], {
+      ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "failed", reason: "disk" },
+    }, 200, "auto-review");
+    expect(failedJson.code).toBe(1);
+    expect(JSON.parse(failedJson.stdout)).toMatchObject({
+      ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "failed" },
+    });
+
+    const skipped = await invoke(["set", "router/reviewer"], {
+      ok: true, enabled: true, model: "router/reviewer", catalogRefresh: { status: "skipped", retryable: false },
+    }, 200, "auto-review");
+    expect(skipped.code).toBe(0);
+    expect(skipped.stdout).not.toContain("catalog refresh is pending");
+    expect(skipped.stdout).not.toContain("catalog refresh failed");
+    expect(skipped.stdout).not.toContain("ocx sync");
+    expect(skipped.stdout).not.toContain("ocx sync");
+  });
+
+  test("dash clears the saved model and an empty set makes no request", async () => {
+    const clear = await invoke(["set", "-"], {
+      ok: true, enabled: true, model: "", catalogRefresh: { status: "committed" },
+    }, 200, "auto-review");
+    expect(clear.code).toBe(0);
+    expect(clear.calls[0]?.body).toEqual({ model: "" });
+
+    const empty = await invoke(["set"], {}, 200, "auto-review");
+    expect(empty.code).toBe(2);
+    expect(empty.calls).toEqual([]);
+  });
+
+  test("both command capabilities cover the management route", () => {
+    const capabilities = CAPABILITIES.filter(entry => entry.command.slice(0, 2).join(" ") === "models auto-review");
+    expect(capabilities.map(entry => entry.command[2])).toEqual(["status", "set"]);
+    expect(capabilities.flatMap(entry => entry.routes.map(route => route.method + " " + route.path))).toEqual([
+      "GET /api/auto-review-settings", "PUT /api/auto-review-settings",
+    ]);
+    expect(MANAGEMENT_ROUTES.some(route => route.method === "GET" && route.path === "/api/auto-review-settings")).toBe(true);
+    expect(MANAGEMENT_ROUTES.some(route => route.method === "PUT" && route.path === "/api/auto-review-settings")).toBe(true);
   });
 });

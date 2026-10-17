@@ -8,9 +8,12 @@
  *
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
+import { isKeyInCooldown, getKeyCooldownUntil, setKeyCooldown } from "./api-key-cooldowns";
+export { clearKeyCooldowns, getKeyCooldownUntil, sweepExpiredApiKeyCooldowns } from "./api-key-cooldowns";
 import { commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
+import { RequestPacingQueueOverloadError } from "./request-pacing";
 import type { ProviderApiKeySelection } from "../types/provider";
-import { routedProviderConfig } from "../router";
+import { routedProviderConfig } from "./routed-config";
 import { getProviderRegistryEntry } from "./registry";
 import { isCanonicalCommandCodeBaseUrl, normalizedBaseUrl } from "./quota/vendor-probes-key";
 import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, ResetReplayPolicy, TransientRetryPolicy } from "../types";
@@ -23,10 +26,6 @@ import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { cachedApiKeyQuota } from "./quota-key-accounts";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
-
-interface KeyCooldown {
-  cooldownUntil: number;
-}
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
@@ -347,11 +346,6 @@ const DEFAULT_RESET_REPLAY = {
 } as const satisfies Required<ResetReplayPolicy>;
 
 /** Map<`${providerName}\0${keyId}`, KeyCooldown> */
-const keyCooldowns = new Map<string, KeyCooldown>();
-
-function cooldownKey(providerName: string, keyId: string): string {
-  return `${providerName}\0${keyId}`;
-}
 
 /**
  * Parse an upstream `Retry-After` header: numeric seconds (including `0`) or an HTTP-date.
@@ -379,16 +373,6 @@ function parseRetryAfterMs(value: string | null | undefined, now = Date.now()): 
  * True while the given key is inside its 429 cooldown window (lazily evicting the entry once the
  * window expires). Used to skip keys that the upstream just rate-limited during failover.
  */
-function isKeyInCooldown(providerName: string, keyId: string, now = Date.now()): boolean {
-  const entry = keyCooldowns.get(cooldownKey(providerName, keyId));
-  if (!entry) return false;
-  if (entry.cooldownUntil <= now) {
-    keyCooldowns.delete(cooldownKey(providerName, keyId));
-    return false;
-  }
-  return true;
-}
-
 // ---- public API ----
 
 /**
@@ -418,9 +402,11 @@ const keyRotationCursor = new Map<string, string>();
 export function forgetApiKeyRotationCursor(providerName?: string): void {
   if (!providerName) {
     keyRotationCursor.clear();
+    dispatchKeyCursor.clear();
     return;
   }
   keyRotationCursor.delete(providerName);
+  dispatchKeyCursor.delete(providerName);
 }
 
 /** The pool entry shape is inline on OcxProviderConfig; name it once rather than re-spelling it. */
@@ -566,9 +552,31 @@ export function selectProactiveApiKeyTransport(
   promptCacheKey?: string,
   now = Date.now(),
 ): OcxProviderTransport | null {
+  const configured = config.providers[providerName];
+  if (configured?.requestPacing?.enabled && configured.requestPacing.keySelection === "round-robin"
+    && hasKeyPoolFailover(configured)) {
+    return applyRotatedTransport(providerName, routedProvider, allocateDistributedKey(providerName, configured, now), promptCacheKey);
+  }
   const committed = selectProactiveApiKey(config, providerName, now);
   if (!committed) return null;
   return applyRotatedTransport(providerName, routedProvider, committed, promptCacheKey);
+}
+
+const dispatchKeyCursor = new Map<string, string>();
+function allocateDistributedKey(providerName: string, provider: OcxProviderConfig, now: number): OcxProviderConfig {
+  const pool = (provider.apiKeyPool ?? []).filter((entry, index, all) => all.findIndex(other => other.key === entry.key) === index);
+  const previous = dispatchKeyCursor.get(providerName);
+  const start = pool.findIndex(entry => entry.id === previous);
+  for (let offset = 1; offset <= pool.length; offset++) {
+    const entry = pool[(start + offset) % pool.length]!;
+    if (isKeyInCooldown(providerName, entry.id, now)) continue;
+    dispatchKeyCursor.set(providerName, entry.id);
+    return { ...provider, apiKey: entry.key, _apiKeyAttempt: {
+      entryId: entry.id, reference: entry.key, revision: provider.apiKeySelectionRevision, distributed: true,
+    } };
+  }
+  const next = Math.min(...pool.map(entry => getKeyCooldownUntil(providerName, entry.id, now) ?? now + 1000));
+  throw new RequestPacingQueueOverloadError(providerName, "keys_exhausted", Math.max(1, Math.ceil((next - now) / 1000)));
 }
 
 /**
@@ -695,6 +703,24 @@ export function rateLimitRetryDelayMs(
  * rebuilds from this committed row, reapplies registry metadata, and retains only explicit
  * runtime transport state (`fetch` and generated OpenCode session affinity).
  */
+/** Record a request-local key failure without selecting or sending a replacement. */
+export function recordDistributedKeyFailure(
+  config: OcxConfig, providerName: string, selection: ProviderApiKeySelection | undefined,
+  status: 401 | 429 | "billing", now = Date.now(), retryAfter?: string | null, quotaResetAt?: number,
+): boolean {
+  const provider = config.providers[providerName];
+  if (!selection?.distributed || !provider || provider.authMode === "oauth" || provider.authMode === "forward") return false;
+  const failed = provider.apiKeyPool?.find(entry => entry.id === selection.entryId && entry.key === selection.reference);
+  if (!failed || provider.apiKeySelectionRevision !== selection.revision) return false;
+  const delay = status === "billing" ? ANTHROPIC_BILLING_COOLDOWN_MS : status === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
+    ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfter, now) ?? DEFAULT_COOLDOWN_MS;
+  for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) {
+    setKeyCooldown(providerName, entry.id, now + delay);
+  }
+  sweepExpiredOnWrite(now);
+  return true;
+}
+
 function rotateKeyAfterFailure(
   config: OcxConfig,
   providerName: string,
@@ -709,6 +735,13 @@ function rotateKeyAfterFailure(
   const provider = config.providers[providerName];
   if (!provider) return null;
   if (provider.authMode === "oauth" || provider.authMode === "forward") return null;
+
+  if (attemptedSelection?.distributed) {
+    if (acceptsFreshProvider && !acceptsFreshProvider(provider)) return null;
+    if (!recordDistributedKeyFailure(config, providerName, attemptedSelection, failureStatus, now, retryAfterHeader, quotaResetAt)) return null;
+    if (!(provider.apiKeyPool ?? []).some(entry => !isKeyInCooldown(providerName, entry.id, now))) return null;
+    return allocateDistributedKey(providerName, provider, now);
+  }
 
   const failedKey = attemptedSelection?.reference ?? attemptedKey ?? provider.apiKey;
   type Rotation =
@@ -778,7 +811,7 @@ function rotateKeyAfterFailure(
       : quotaResetAt !== undefined
         ? Math.max(quotaResetAt - now, 1)
         : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
-    keyCooldowns.set(cooldownKey(providerName, outcome.value.failedId), { cooldownUntil: now + cooldownMs });
+    setKeyCooldown(providerName, outcome.value.failedId, now + cooldownMs);
     sweepExpiredOnWrite(now);
   }
   if ("exhaustedCount" in outcome.value) {
@@ -829,16 +862,6 @@ export function rotateKeyOn401(
   attemptedSelection?: ProviderApiKeySelection,
 ): OcxProviderConfig | null {
   return rotateKeyAfterFailure(config, providerName, 401, null, now, attemptedKey, attemptedSelection);
-}
-
-export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {
-  let removed = 0;
-  for (const [key, cooldown] of keyCooldowns) {
-    if (cooldown.cooldownUntil > now) continue;
-    keyCooldowns.delete(key);
-    removed += 1;
-  }
-  return removed;
 }
 
 interface RotateProviderTransportOptions {
@@ -933,23 +956,4 @@ function applyRotatedTransport(
       : {}),
   };
   return resolveProviderTransport(providerName, retryProvider, promptCacheKey);
-}
-
-/** Clear cooldown state for a provider (e.g. after manual key management). */
-export function clearKeyCooldowns(providerName?: string): void {
-  if (!providerName) {
-    keyCooldowns.clear();
-    return;
-  }
-  const prefix = `${providerName}\0`;
-  for (const key of keyCooldowns.keys()) {
-    if (key.startsWith(prefix)) keyCooldowns.delete(key);
-  }
-}
-
-/** Visible-for-testing: get the cooldown-until timestamp for a key. */
-export function getKeyCooldownUntil(providerName: string, keyId: string, now = Date.now()): number | null {
-  const entry = keyCooldowns.get(cooldownKey(providerName, keyId));
-  if (!entry) return null;
-  return entry.cooldownUntil > now ? entry.cooldownUntil : null;
 }

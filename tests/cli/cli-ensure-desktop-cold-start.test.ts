@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import {
   acquireDesktopLaunchLease,
   DESKTOP_COLD_START_TIMEOUT_MS,
@@ -15,6 +16,7 @@ import {
   type DesktopOwnershipState,
   type DesktopProcessState,
 } from "../../src/cli/ensure-desktop-cold-start";
+import type { ServiceOwnershipResolution } from "../../src/service/state";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 interface Calls { launches: number; waits: number[]; released: number }
@@ -158,12 +160,203 @@ describe("Desktop process detection by executable identity", () => {
     expect(inspectDesktopProcess({ platform: "win32", env, run: () => { throw new Error("denied"); } })).toBe("unknown");
   });
 
-  test("only macOS launches Desktop, hidden, through its bundle identifier", () => {
+  const owned = {
+    kind: "owned" as const,
+    ownership: { owner: "desktop" as const, installId: "install-a", consentGeneration: 1 },
+    revision: 3,
+  };
+  /** A fake consented install: app-local install-id, a LaunchAgent plist, and a bundle on disk. */
+  function fakeDesktopHome(options: {
+    installId?: string; args?: unknown; bareArgs?: boolean; label?: string; identifier?: string;
+    plist?: "present" | "absent"; executable?: "present" | "absent" | "directory"; bundleName?: string;
+    bundleExecutable?: unknown; program?: unknown; relativeProgram?: boolean;
+  } = {}) {
+    // Keep the bundle on cwd's drive: Windows relative() returns an absolute path across drives.
+    const fixtureRoot = join(process.cwd(), ".tmp");
+    mkdirSync(fixtureRoot, { recursive: true });
+    const home = mkdtempSync(join(fixtureRoot, "ocx-desktop-home-"));
+    const bundle = join(home, "Applications", options.bundleName ?? "OpenCodex.app");
+    const executable = join(bundle, "Contents", "MacOS", "opencodex-desktop");
+    mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
+    if (options.executable === "directory") mkdirSync(executable);
+    else if (options.executable !== "absent") { writeFileSync(executable, ""); chmodSync(executable, 0o755); }
+    const info = { CFBundleIdentifier: options.identifier ?? "com.opencodex.desktop",
+      CFBundleExecutable: "bundleExecutable" in options ? options.bundleExecutable : "opencodex-desktop" };
+    writeFileSync(join(bundle, "Contents", "Info.plist"), JSON.stringify(info));
+    const store = join(home, "Library", "Application Support", "com.opencodex.desktop");
+    mkdirSync(store, { recursive: true });
+    if (options.installId !== undefined) writeFileSync(join(store, "install-id"), `${options.installId}\n`);
+    mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
+    // A root-relative POSIX spelling also reaches this same-drive fixture on Windows.
+    const absoluteProgram = process.platform === "win32" ? executable.slice(2).replaceAll("\\", "/") : executable;
+    const program = options.relativeProgram ? relative(process.cwd(), executable) : absoluteProgram;
+    const registration = { Label: options.label ?? "OpenCodex", RunAtLoad: true,
+      ProgramArguments: options.bareArgs ? [program] : (options.args ?? [program, "--autostart"]),
+      ...("program" in options ? { Program: options.program } : {}) };
+    if (options.plist !== "absent") writeFileSync(join(home, "Library", "LaunchAgents", "OpenCodex.plist"), JSON.stringify(registration));
     const seen: string[][] = [];
-    expect(launchDesktopApp({ platform: "darwin", run: (command, args) => { seen.push([command, ...args]); return ""; } })).toBe(true);
-    expect(seen).toEqual([["/usr/bin/open", "-g", "-b", "com.opencodex.desktop", "--args", "--autostart"]]);
-    expect(launchDesktopApp({ platform: "darwin", run: () => { throw new Error("no app"); } })).toBe(false);
-    expect(launchDesktopApp({ platform: "linux", run: () => { throw new Error("must not run"); } })).toBe(false);
+    const run = (command: string, args: string[]) => {
+      seen.push([command, ...args]);
+      const target = args[args.length - 1] ?? "";
+      if (command !== "/usr/bin/plutil") return "";
+      return readFileSync(target, "utf8");
+    };
+    return { home, bundle, executable, program, seen, run };
+  }
+  const launch = (fixture: ReturnType<typeof fakeDesktopHome>, ownership: () => ServiceOwnershipResolution = () => owned) =>
+    launchDesktopApp({ platform: "darwin", home: fixture.home, ownership, run: fixture.run });
+
+  test("a Desktop claim launches the app its own login registration recorded, never a bundle-id lookup", () => {
+    const fixture = fakeDesktopHome({ installId: "install-a" });
+    try {
+      expect(launch(fixture)).toBe(true);
+      expect(fixture.seen.at(-1)).toEqual(["/usr/bin/open", "-g", realpathSync(fixture.bundle), "--args", "--autostart"]);
+      expect(fixture.seen.flat().includes("-b")).toBe(false);
+    } finally { removeTreeWithRetry(fixture.home); }
+  });
+
+  test("the registration shape auto-launch writes without --autostart is still the consented path", () => {
+    const fixture = fakeDesktopHome({ installId: "install-a", bareArgs: true });
+    try {
+      expect(launch(fixture)).toBe(true);
+      expect(fixture.seen.at(-1)).toEqual(["/usr/bin/open", "-g", realpathSync(fixture.bundle), "--args", "--autostart"]);
+    } finally { removeTreeWithRetry(fixture.home); }
+  });
+
+  test("a non-app directory refuses the launch without reading its Info.plist or waiting for a proxy", async () => {
+    for (const bundleName of ["OpenCodex", "OpenCodex.app.backup"]) {
+      const fixture = fakeDesktopHome({ installId: "install-a", bundleName });
+      try {
+        const calls = fresh();
+        const dependencies = deps({ ownership: "desktop", process: "absent" }, calls);
+        dependencies.launchDesktop = () => launch(fixture);
+        const result = await runDesktopColdStart(dependencies);
+        expect(result.kind === "failed" && result.message).toContain("Open OpenCodex manually");
+        expect(calls.waits).toEqual([]);
+        expect(calls.released).toBe(1);
+        expect(fixture.seen).toHaveLength(1);
+        expect(fixture.seen[0]?.[0]).toBe("/usr/bin/plutil");
+        expect(fixture.seen[0]?.at(-1)).toEndWith("OpenCodex.plist");
+      } finally { removeTreeWithRetry(fixture.home); }
+    }
+  });
+
+  test("an existing relative registration path cannot select a bundle from the caller's working directory", () => {
+    const fixture = fakeDesktopHome({ installId: "install-a", relativeProgram: true });
+    try {
+      expect(isAbsolute(fixture.program)).toBe(false);
+      expect(realpathSync(fixture.program)).toBe(realpathSync(fixture.executable));
+      expect(launch(fixture)).toBe(false);
+      expect(fixture.seen.some(call => call[0] === "/usr/bin/open")).toBe(false);
+    } finally { removeTreeWithRetry(fixture.home); }
+  });
+
+  test("bundle launch requires the declared main executable to match the registered regular file", () => {
+    for (const options of [{ bundleExecutable: "other" }, { bundleExecutable: undefined },
+      { bundleExecutable: "../opencodex-desktop" }, { bundleExecutable: ["opencodex-desktop"] },
+      { executable: "directory" as const }, { executable: "absent" as const }]) {
+      const fixture = fakeDesktopHome({ installId: "install-a", ...options });
+      try {
+        expect(launch(fixture)).toBe(false);
+        expect(fixture.seen.some(call => call[0] === "/usr/bin/open")).toBe(false);
+      } finally { removeTreeWithRetry(fixture.home); }
+    }
+  });
+
+  test("malformed registration arguments and a conflicting Program never launch", () => {
+    for (const options of [{ args: [] }, { args: [123] }, { args: "opencodex-desktop" },
+      { args: ["/some/app", "--other"] }, { args: ["/some/app", "--autostart", "extra"] },
+      { args: ["C:\\OpenCodex.app\\Contents\\MacOS\\opencodex-desktop"] },
+      { args: ["C:OpenCodex.app\\Contents\\MacOS\\opencodex-desktop"] },
+      { program: "/another/app" }, { program: null }]) {
+      const fixture = fakeDesktopHome({ installId: "install-a", ...options });
+      try { expect(launch(fixture)).toBe(false); expect(fixture.seen).toHaveLength(1); }
+      finally { removeTreeWithRetry(fixture.home); }
+    }
+  });
+
+  test("a matching optional Program is accepted, and conversion or open failures refuse", () => {
+    const fixture = fakeDesktopHome({ installId: "install-a" });
+    try {
+      const plist = join(fixture.home, "Library", "LaunchAgents", "OpenCodex.plist");
+      const registration = JSON.parse(readFileSync(plist, "utf8"));
+      writeFileSync(plist, JSON.stringify({ ...registration, Program: fixture.program }));
+      expect(launch(fixture)).toBe(true);
+      for (const failingCommand of ["/usr/bin/plutil", "/usr/bin/open"]) {
+        expect(launchDesktopApp({ platform: "darwin", home: fixture.home, ownership: () => owned,
+          run: (command, args) => { if (command === failingCommand) throw new Error("fixture failure"); return fixture.run(command, args); },
+        })).toBe(false);
+      }
+      writeFileSync(plist, "malformed plist");
+      expect(launch(fixture)).toBe(false);
+    } finally { removeTreeWithRetry(fixture.home); }
+  });
+
+  test.skipIf(process.platform === "win32")("a non-executable registered file refuses launch", () => {
+    const fixture = fakeDesktopHome({ installId: "install-a" });
+    try {
+      chmodSync(fixture.executable, 0o644);
+      expect(launch(fixture)).toBe(false);
+      expect(fixture.seen.some(call => call[0] === "/usr/bin/open")).toBe(false);
+    } finally { removeTreeWithRetry(fixture.home); }
+  });
+
+  test.skipIf(process.platform !== "darwin")("native plutil decodes the producer's XML registration and bundle selector", () => {
+    const fixture = fakeDesktopHome({ installId: "install-a" });
+    try {
+      const plist = join(fixture.home, "Library", "LaunchAgents", "OpenCodex.plist");
+      for (const path of [plist, join(fixture.bundle, "Contents", "Info.plist")]) {
+        execFileSync("/usr/bin/plutil", ["-convert", "xml1", path]);
+      }
+      const seen: string[][] = [];
+      const run = (command: string, args: string[]) => {
+        seen.push([command, ...args]);
+        if (command === "/usr/bin/open") return "";
+        return execFileSync(command, args, { encoding: "utf8" });
+      };
+      expect(launchDesktopApp({ platform: "darwin", home: fixture.home, ownership: () => owned, run })).toBe(true);
+      expect(seen.at(-1)).toEqual(["/usr/bin/open", "-g", realpathSync(fixture.bundle), "--args", "--autostart"]);
+      writeFileSync(join(fixture.bundle, "Contents", "Info.plist"), JSON.stringify({
+        CFBundleIdentifier: "com.opencodex.desktop", CFBundleExecutable: "other",
+      }));
+      seen.length = 0;
+      expect(launchDesktopApp({ platform: "darwin", home: fixture.home, ownership: () => owned, run })).toBe(false);
+      expect(seen.some(call => call[0] === "/usr/bin/open")).toBe(false);
+    } finally { removeTreeWithRetry(fixture.home); }
+  });
+
+  test("a claim without matching install-id, registration or Desktop executable refuses the launch", () => {
+    for (const fixture of [
+      fakeDesktopHome({ installId: "other-install" }),
+      fakeDesktopHome({ installId: "install-a", plist: "absent" }),
+      fakeDesktopHome({ installId: "install-a", label: "OtherApp" }),
+      fakeDesktopHome({ installId: "install-a", args: [join(tmpdir(), "elsewhere", "opencodex-desktop")] }),
+      fakeDesktopHome({ installId: "install-a", args: ["executable-only-name"] }),
+      fakeDesktopHome({ installId: "install-a", identifier: "com.example.fake" }),
+    ]) {
+      try {
+        expect(launch(fixture)).toBe(false);
+        expect(fixture.seen.flat().includes("com.opencodex.desktop")).toBe(false);
+        expect(fixture.seen[0]?.[0]).not.toBe("/usr/bin/open");
+      } finally { removeTreeWithRetry(fixture.home); }
+    }
+    // install-id store absent entirely.
+    const noId = fakeDesktopHome();
+    try { expect(launch(noId)).toBe(false); } finally { removeTreeWithRetry(noId.home); }
+  });
+
+  test("a claim that is not a recorded Desktop owner, or a failing lookup, never launches", () => {
+    const fixture = fakeDesktopHome({ installId: "install-a" });
+    try {
+      expect(launch(fixture, () => ({ kind: "none", revision: 2 }))).toBe(false);
+      expect(launch(fixture, () => ({ kind: "owned", ownership: { owner: "cli", installId: "install-a", consentGeneration: 1 }, revision: 2 }))).toBe(false);
+      expect(fixture.seen).toEqual([]);
+    } finally { removeTreeWithRetry(fixture.home); }
+    for (const platform of ["linux", "win32"] as const) {
+      const commands: string[] = [];
+      expect(launchDesktopApp({ platform, run: command => { commands.push(command); return ""; } })).toBe(false);
+      expect(commands).toEqual([]);
+    }
   });
 });
 

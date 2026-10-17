@@ -271,6 +271,15 @@ not advertise an authoritative per-provider ladder, and the selected provider's
 normal effort normalization still applies. This remains a client-version-specific
 compatibility mechanism.
 
+Gateway apply refuses unreadable or non-regular configuration files, including dangling metadata
+links, before creating a new profile. If the metadata update fails, apply restores the profile's
+previous contents, or removes a profile it had just created, but only while the profile still holds
+what apply wrote; if another program changed it in the meantime, apply keeps that version and
+reports "profile rollback skipped". Apply rechecks the profile before
+backup and replacement; if it detects a concurrent edit, it refuses with `desktop_profile_changed`.
+Review the edit and reapply. If restoring the profile also fails after a metadata error, the
+reported reason includes both failures; reconcile the profile and metadata before retrying.
+
 ### First-party (opt-in)
 
 :::caution[Account risk]
@@ -306,10 +315,15 @@ entries, is kept.
 Claude Desktop first-party routes its Code tab and subagents through OpenCodex. The standalone Claude Code CLI has a separate first-party switch. Both clients read the same `~/.claude/settings.json` proxy and CA settings: if only one switch is on, the other client still transits the local proxy, where TLS terminates, but its Messages requests relay to Anthropic unchanged. Other Anthropic paths relay unchanged and unrelated hosts remain blind tunnels. With the CLI switch on, the standalone `claude` also lists routed models in `/model`; see [Model picker in the CLI](#model-picker-in-the-cli).
 
 :::note[Windows system proxy (Clash, v2rayN, corporate proxies)]
-When a Windows system proxy is on, Claude Desktop hands it to the Code tab as `HTTPS_PROXY`, and
+When picker intent is off at OpenCodex startup, its Windows relay stays unbound. Turning picker
+mode on later starts it within the running service; OpenCodex does not need a restart.
+For picker-off installs or pending installs with no applied picker profile, a Windows system proxy
+is handed to the Code tab as `HTTPS_PROXY`, and
 that value takes precedence over the OpenCodex proxy in `~/.claude/settings.json`. The Code tab
 then goes around OpenCodex and routed models fail there, while the standalone CLI keeps working.
-Add `api.anthropic.com` to your proxy client's system-proxy bypass list (in Clash Verge,
+An applied selected picker profile uses Desktop's fixed egress proxy while it is available, even when
+missing trust leaves the picker pending and `claude.ai` relays blindly. System-proxy bypass advice
+applies when there is no selected available picker profile. Add `api.anthropic.com` to your proxy client's system-proxy bypass list (in Clash Verge,
 `system_proxy_bypass`), then fully quit and reopen Claude Desktop. `ocx doctor` reports this
 under "Claude Desktop first-party vs Windows system proxy". It cannot evaluate a PAC script or
 automatic proxy detection (WPAD, "Automatically detect settings"), so it reports those as unknown;
@@ -340,17 +354,17 @@ hub, so `ocx claude desktop apply` there uses the gateway profile.
 
 ### Picker mode: opencodex models in the first-party Code-tab picker
 
-Picker mode is part of first-party mode. On macOS it is on by default when first-party is selected,
+Picker mode is part of first-party mode. On macOS and Windows it is on by default when first-party is selected,
 unless `claudeCode.intercept.picker: false` is set. It changes the first-party Desktop Code-tab picker
 so it lists available opencodex models by name. The first time it is enabled, macOS may ask you to
-trust a local certificate authority in the login keychain. That authority is constrained to `claude.ai`
+trust a local certificate authority in the login keychain, and Windows may ask you to trust it in the current-user Root store. That authority is constrained to `claude.ai`
 and its subdomains. OpenCodex protects its exportable signing identity in the OS credential store
 and reuses the same validated certificate and key across normal restarts. No plaintext picker signing
 key is stored in the OpenCodex config directory. The full constrained CA validation and OS trust
-verification still apply. With the same approved identity and an available credential store, restarting
-OpenCodex does not add or remove Certificate Trust Settings. Startup restore never installs trust:
+verification still apply, including the exact fingerprint with a verified leaf on Windows. With the same approved identity and an available credential store, restarting
+OpenCodex does not add or remove macOS Certificate Trust Settings. Restart and status never install trust:
 if trust is missing, revoked or unknown, the picker stays pending. Run `ocx claude desktop picker on`
-or `ocx claude desktop picker trust` explicitly to grant trust.
+or `ocx claude desktop picker trust` explicitly to grant trust, including the Windows confirmation when needed.
 Startup also attempts to remove a legacy on-disk picker signing key before checking whether
 interception is enabled. Cleanup is best-effort and does not enable interception or block startup.
 
@@ -358,9 +372,9 @@ One-time migration from an older picker identity may require consent to remove i
 If cleanup cannot finish, the picker stays unavailable and the applied profile uses a blind relay
 until cleanup succeeds; `ocx claude desktop picker status` reports that state. macOS may separately
 ask you to unlock the keychain or approve an application's access to stored credentials. These native
-access prompts can still occur on restart or upgrade.
+access prompts can still occur on restart or upgrade. On Windows, explicit `on` or `trust` may show a confirmation to add the root.
 
-Picker mode remains unsupported on Windows and Linux: OpenCodex starts no picker CA, credential-store
+Picker mode remains unsupported on Linux: OpenCodex starts no picker CA, credential-store
 or proxy work there. The main Claude intercept remains available with ownership, symlink, file-permission
 and Windows ACL checks protecting its local CA files.
 
@@ -418,7 +432,7 @@ next request; Desktop does not need a restart.
 
 Turn on the CLI switch in Connect → Claude, or run `ocx claude config set --first-party on`; use `off` to disable it. The switch is immediate and refuses `{enabled:false, cliFirstParty:true}` before any field is saved; it may also refuse to turn on if the local intercept is unavailable, the CA cannot be prepared, settings cannot be read, or a foreign proxy setting owns the keys. Off persists even when the intercept is unavailable; disabling Claude routing alone leaves an owned settings env untouched. For fully native terminal traffic with only Desktop first-party on, set `NO_PROXY='*'` in the shell. This still carries the first-party account risk stated above.
 Disabling Claude routing leaves the owned settings env untouched. While the bound listener still runs, every Messages request relays unchanged; after it stops, plain `claude` cannot connect until OpenCodex runs or Desktop/CLI first-party is turned off. Native `ocx claude` sets `NO_PROXY=*` only for an owned env without a foreign inherited `HTTPS_PROXY`/`https_proxy`. With a foreign proxy it preserves that value and warns that the settings-owned intercept still applies; turn Desktop/CLI first-party off or unset the setting.
-The UI distinguishes uncertainty about whether settings still point at its proxy (unknown), a token-bearing opencodex proxy with a foreign CA (foreign: fix HTTPS_PROXY / NODE_EXTRA_CA_CERTS manually), and a tokenless loopback proxy beside a foreign CA (local: ownership is unconfirmed; remove HTTPS_PROXY if unused). With matching applied settings and a bound listener but Claude routing off, disabled means requests relay unchanged while it is bound; turn first-party off to remove settings. An owned URL with no listener is stopped; a bound listener with an owned CA but mismatched port or token is broken even when routing is off. With an intent on, stopped or broken plus ineligible interception displays routingOff: Claude routing or the intercept is off, or this machine is a client of another opencodex hub; enable interception on this machine or turn first-party off to remove the settings. When interception is stopped, use **Start interception** or `ocx claude intercept start` to retry within the running OpenCodex service. Saving first-party settings also starts it automatically. A refusal reports disabled routing, client role, an ephemeral public port, an occupied port, or a startup failure. For an occupied port, free it or set `claudeCode.intercept.port`. If a pair is already bound on a different port, the response names both ports; use the bound port or restore the configured value. CLI intent with no proxy is not applied; one intent with a live proxy gets the shared-relay notice; any remaining proxy with neither intent is residual, unless unknown, foreign, or local takes precedence.
+The UI distinguishes uncertainty about whether settings still point at its proxy (unknown), a token-bearing opencodex proxy with a foreign CA (foreign: fix HTTPS_PROXY / NODE_EXTRA_CA_CERTS manually), and a tokenless loopback proxy beside a foreign CA (local: ownership is unconfirmed; remove HTTPS_PROXY if unused). With matching applied settings and a bound listener but Claude routing off, disabled means requests relay unchanged while it is bound; turn first-party off to remove settings. An owned URL with no listener is stopped; a bound listener with an owned CA but mismatched port or token is broken even when routing is off. With an intent on, stopped or broken plus ineligible interception displays routingOff: Claude routing or the intercept is off, or this machine is a client of another opencodex hub; enable interception on this machine or turn first-party off to remove the settings. When interception is stopped, use **Start interception** or `ocx claude intercept start` to retry within the running OpenCodex service. Saving first-party settings also starts it automatically. A refusal reports disabled routing, client role, an ephemeral public port, an occupied port, or a startup failure. For an occupied port, free it or set `claudeCode.intercept.port`. Startup refreshes an existing managed Claude proxy environment only after the intercept proxy binds successfully, using its bound port; an occupied port leaves Claude settings unchanged. If a pair is already bound on a different port, the response names both ports; use the bound port or restore the configured value. CLI intent with no proxy is not applied; one intent with a live proxy gets the shared-relay notice; any remaining proxy with neither intent is residual, unless unknown, foreign, or local takes precedence.
 
 - Gateway discovery (`/model` → "From gateway") is not used, because Claude Code only queries
   `GET /v1/models` on a configured gateway. Routed models reach the picker another way; see
@@ -948,7 +962,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
 | `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result; preserves loaded-tool names without adding declarations or enabling translated server-side deferral |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
-| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
+| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. A search or fetch with a matching call and complete input comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. Orphan results are dropped without synthesizing a call, while the surrounding text is preserved. When the client sends a complete pair back in its history, the next `api.anthropic.com` request carries it in place only if the following block uniquely identifies its original turn. Repeated anchors, unmatched or duplicate call/result ids, malformed call input, or a result appearing before its call drop the exchange. Call input must be an object with a nonempty search query or fetch URL string; other destinations never see the exchange |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |

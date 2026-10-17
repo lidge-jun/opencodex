@@ -37,6 +37,8 @@ preserving a stale one would block every later migration.
 
 ## Model and wire identity
 
+The optional [native reasoning retention policy](../transports/native-reasoning-retention.md#runtime-boundary) can permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT destination. It does not change account selection, entitlement, cache isolation, continuation-id ownership or uploaded-file retention; cross-account acceptance is not guaranteed.
+
 Native Spark membership and its model-specific request/tool exceptions are removed; the shared
 [catalog retirement policy](../catalog.md#shared-catalog) preserves historical user selections.
 
@@ -316,6 +318,11 @@ as the writer. `"opencodex"`, a missing binary, or an older binary keeps the
 guarded writer above. While the test home guard is armed, auto resolution
 never spawns Codex. `ocx doctor` prints the active mode and its reason.
 
+## Preserve signed-in quota
+
+The opt-in preference that spends other pool accounts before the signed-in identity is
+described in [`openai-signed-in-preservation.md`](openai-signed-in-preservation.md).
+
 ## Manual account pause and resume
 
 Manual pause/resume in `src/codex/auth-api/account-pause-group.ts` resolves existing native-main
@@ -534,6 +541,16 @@ false. Exact-account and Direct routes are unchanged.
 ## Main-account policy observations
 
 Opted-in main-account credit renewal follows the [spendable credit contract](openai-tiers.md#spendable-codex-credits). An unpaused, non-quarantined main identity with an exhausted included window keeps discovering credits even when its evidence is missing or unavailable; fresh positive evidence waits until three minutes of age for renewal. Admission remains blocked until fresh spendable evidence arrives, with the consented credit refusal's Retry-After bounded to five minutes. The existing background sweep prepares a token before WHAM, rechecks eligibility, and uses a passive probe that neither sets nor clears needs-reauth, including after identity retries. Other probes keep their existing auth behavior. A non-passive caller joining renewal applies terminal-auth quarantine, or clears it on a successful explicit refresh, only while its credential and configuration fences remain current; shared evidence does not inherit the owner's passive intent.
+
+`src/codex/account-use-remaining.ts` owns the persistent, default-off
+`codexUseRemainingQuotaAccountIds` opt-in. Effective auto-switch thresholds resolve to zero
+for listed accounts; main protection resolves to 100% in both governing windows.
+Underlying thresholds remain stored, and disabling restores their current values.
+Account deletion removes its opt-in. No cooldown, pause, eligibility or credit-spending
+permission is removed. Selected-main and caller-owned Direct materialization use the same policy.
+`src/codex/auth-api/use-remaining-route.ts` exposes authenticated GET/PUT and rolls back
+the live preference when persistence fails; GET never saves. Coverage is in
+`tests/codex-integration/codex-use-remaining-quota.test.ts` and the existing main-auth suite.
 
 The main-account admission policy defaults to 90% for short windows and 98% for long windows;
 `codexMainAccountHardLockThresholds` permits ordered integer thresholds from 80 through 100.

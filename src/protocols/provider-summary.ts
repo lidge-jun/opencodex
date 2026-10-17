@@ -55,12 +55,13 @@ function usableModelId(model: unknown): model is string {
 function candidateModelIds(name: string, provider: Readonly<OcxProviderConfig>): string[] {
   const registry = PROVIDER_REGISTRY.find(entry => entry.id === name);
   const ids = new Set<string>();
+  /** Collect valid candidate IDs without exceeding the protocol-summary scan limit. */
   const add = (model: unknown) => {
     if (ids.size < MODEL_SCAN_LIMIT && usableModelId(model)) ids.add(model);
   };
   for (const model of Object.keys(provider.modelAdapters ?? {})) add(model);
   for (const model of Object.keys(registry?.modelWireDefaults ?? {})) add(model);
-  for (const model of Object.keys(captureWireAdapterHardPins(name))) add(model);
+  for (const model of Object.keys(captureWireAdapterHardPins(name, provider))) add(model);
   add(provider.defaultModel);
   for (const model of provider.models ?? []) add(model);
   return [...ids].sort((left, right) => left.localeCompare(right));

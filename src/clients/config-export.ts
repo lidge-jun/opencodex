@@ -20,6 +20,9 @@
  * targeting it is the caller's explicit act.
  */
 import { homedir } from "node:os";
+import { gentleShellPaths } from "./gentle-shell-path";
+import { absoluteClientPath, ClientPathError, piAgentDir } from "./client-path";
+export { ClientPathError, piAgentDir } from "./client-path";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
@@ -213,21 +216,6 @@ function ompProfileName(env: OpencodeLaunchEnv): string | undefined {
   return profile;
 }
 
-/**
- * Pi resolves its agent directory from `PI_CODING_AGENT_DIR`, falling back to
- * `~/.pi/agent`. `ompAgentDir` below already reads that variable — OMP is a Pi
- * derivative — so Pi's own resolver honoring it is what makes the two agree
- * rather than a new claim about Pi's contract.
- *
- * A relative override is refused for the same reason MCode's and ZCode's are: a
- * background proxy and a foreground client can have different working
- * directories, and would otherwise disagree about which file is named.
- */
-export function piAgentDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  const override = env.PI_CODING_AGENT_DIR?.trim();
-  if (override) return absoluteClientPath(override, home, "PI_CODING_AGENT_DIR");
-  return join(home, ".pi", "agent");
-}
 
 /** Pi's canonical custom-provider catalog. */
 export function piConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
@@ -287,35 +275,6 @@ export function hermesHomeDir(env: OpencodeLaunchEnv = process.env, home: string
 
 export function hermesConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   return join(hermesHomeDir(env, home), "config.yaml");
-}
-
-/**
- * Expand `~` against the effective home; REFUSE anything still relative.
- *
- * A first attempt at this called `resolve()` and claimed the path would "mean
- * the same thing next time". It does not: `resolve()` only anchors the current
- * invocation, so applying from one directory and disabling from another still
- * resolved two different files — the second reported "not applied" and left
- * the managed block behind with nothing claiming it.
- *
- * There is no honest way to recover the other process's cwd, so a relative
- * selector is refused at the boundary instead of being silently anchored to
- * whichever directory we happened to start in. A `~` path IS stable, because
- * it anchors to the effective home rather than the cwd.
- */
-export class ClientPathError extends Error {}
-
-function absoluteClientPath(raw: string, home: string, variable: string): string {
-  const trimmed = raw.trim();
-  if (trimmed === "~") return home;
-  if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) return join(home, trimmed.slice(2));
-  if (!isAbsolute(trimmed)) {
-    throw new ClientPathError(
-      `${variable} must be an absolute path or start with ~; "${trimmed}" depends on the working directory, `
-      + "so opencodex and the client would disagree about which file it names.",
-    );
-  }
-  return trimmed;
 }
 
 /**
@@ -1709,6 +1668,21 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     format: "json",
     summarize: summarizeDroid,
     buildContribution: buildDroidContribution,
+    loopbackOnly: true,
+  },
+  "gentle-shell": {
+    id: "gentle-shell",
+    filename: "gentle-shell-models.json",
+    destination: env => gentleShellPaths(env).configPath,
+    apiKeyEnv: "",
+    exportHint: "Gentle Shell uses its persistent selected home; restart the shell to load the catalog. Link/shared homes use the Pi integration.",
+    build: ctx => buildPiClientConfig(ctx, PI_EXPORT_OPTIONS),
+    format: "json",
+    summarize: summarizePi,
+    buildContribution: ctx => {
+      const doc = buildPiClientConfig(ctx, PI_EXPORT_OPTIONS);
+      return singleFragment("gentle-shell", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+    },
     loopbackOnly: true,
   },
 };

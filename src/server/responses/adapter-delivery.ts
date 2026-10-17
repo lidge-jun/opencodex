@@ -168,6 +168,7 @@ export async function deliverAdapterResponse(
     const advisorStream = parsed._advisorGuard
       ? parsed._advisorGuard({
           parsed,
+          translatorBudget,
           firstEvents: eventStream,
           continuation: fetchTerminalGuardContinuation,
         })
@@ -247,9 +248,10 @@ export async function deliverAdapterResponse(
         declaredToolNames,
         bareCustomToolNames,
         enforceDeclaredToolNames: options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
+        terminalRefusalAsFailed: options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
         toolParameterSchemas,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
-        ...(routedCompaction ? { compaction: true } : {}),
+        ...(routedCompaction ? { compaction: true, compactionRetention: parsed._compactionRetention } : {}),
         // Same grok-surface split as the runTurn branch above.
         ...(logCtx.surface === "grok" ? { heartbeatStyle: "comment" as const } : {}),
         onUsage: usage => {
@@ -312,6 +314,7 @@ export async function deliverAdapterResponse(
         const advisorEvents: AdapterEvent[] = [];
         for await (const event of parsed._advisorGuard({
           parsed,
+          translatorBudget,
           firstEvents: (async function* () { yield* guardedEvents; })(),
           continuation: fetchTerminalGuardContinuation,
         })) advisorEvents.push(event);
@@ -349,7 +352,7 @@ export async function deliverAdapterResponse(
       toolParameterSchemas,
       freeformToolNames,
       toolSearchToolNames,
-      ...(routedCompaction ? { compaction: true } : {}),
+      ...(routedCompaction ? { compaction: true, compactionRetention: parsed._compactionRetention } : {}),
       onProviderState: state => { providerState = state; },
       onUsage: usage => {
         transportState.bindKeyUsageFromBridge(usage);

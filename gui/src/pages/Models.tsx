@@ -62,12 +62,14 @@ import {
   CAP_OPTION_SET,
   CAP_OPTIONS,
   collectDisabledNamespaced,
+  childCountToThreadLimit,
   CUSTOM_OPTION,
   fmtK,
   NATIVE_CAP_OPTIONS,
   NATIVE_CAP_OPTION_SET,
   PAGE,
   readCollapsedProviders,
+  threadLimitToChildCount,
   THREAD_OPTION_SET,
   THREAD_OPTIONS,
   writeCollapsedProviders,
@@ -76,6 +78,9 @@ import {
   freeOnlyInForce,
   modelPricingKnown,
   REASONING_EFFORT_LEVELS,
+  routedModelOptions,
+  parseContextWindowDraft,
+  type ModelPresetView,
   type ModelRow,
   type ProviderContextCapsResponse,
   type ShadowCallData,
@@ -87,8 +92,9 @@ import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory } from "../suba
 import { shadowCallModelOptions } from "./dashboard-shared";
 import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
 import { ModelCatalogDelivery } from "./models-catalog-state";
-import { CustomModelsSummary, InfoHint, ModelsSettingsPanel } from "./models-settings-panel";
+import { CustomModelsSummary, InfoHint, ModelsSettingsPanel, SettingsRow } from "./models-settings-panel";
 import { modelsSettingsSummary } from "./models-settings-summary";
+import { useAutoReviewSettings } from "./use-auto-review-settings";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -108,32 +114,6 @@ const SUBTITLE_TKEY: Record<ModelsTab, TKey> = {
   compatibility: "models.subtitle.compatibility",
 };
 
-/**
- * Parse a context-window field: a number, `null` for "unset", or `undefined` when the text is
- * not usable. Separators are cosmetic, so "64,000" and "64_000" and "64000" are one value.
- *
- * Safe-integer rather than integer: `Number.isInteger(1e100)` is true, the server rejects it,
- * and accepting it here would turn a typo into a round-trip error instead of inline feedback.
- *
- * Module scope because it closes over nothing — rebuilding it every render is wasted work.
- */
-function parseContextWindowDraft(raw: string): number | null | undefined {
-  const normalized = raw.replace(/[_,\s]/g, "");
-  if (!normalized) return null;
-  const value = Number(normalized);
-  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-/** #2465 per-provider model-preset view, as `GET /api/model-presets` returns it. */
-interface ModelPresetView {
-  mode: "preset" | "all" | "custom";
-  appliedVersion?: number;
-  availableVersion: number;
-  presetIds: string[];
-  presetCount: number;
-  totalCount: number;
-  fallback?: string;
-}
 interface ModelDiscoveryView {
   policy: "on" | "off";
   providers: Record<string, "on" | "off" | "inherit">;
@@ -326,6 +306,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     setStatus(message);
     setFeedbackGen(g => g + 1);
   }, []);
+  // Reviewer override settings publish through the same toast channel.
+  const { data: autoReview, saving: autoReviewSaving, load: loadAutoReview, save: saveAutoReview } =
+    useAutoReviewSettings(apiBase, t, publishFeedback);
+  useEffect(() => {
+    if (catalogActive) return;
+    // A hidden mounted panel may still hold the previous server's reviewer settings.
+    void loadAutoReview();
+  }, [apiBase, catalogActive, loadAutoReview]);
   // Transient action feedback as a fixed toast: appearing or auto-clearing it never shifts
   // the workspace below (the old inline Notice pushed the whole model grid down by its
   // height on every apply). The timer itself just clears the status again.
@@ -365,6 +353,11 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const [v2Busy, setV2Busy] = useState(false);
   const [v2Note, setV2Note] = useState("");
   const v2BusyRef = useRef(false);
+  // Freshness for /api/v2 reads: readSeq makes the latest issued GET the only one
+  // allowed to apply; writeSeq bumps on every PUT so a response read in flight
+  // across a completed write is discarded instead of reverting the fresher state.
+  const v2ReadSeqRef = useRef(0);
+  const v2WriteSeqRef = useRef(0);
   const [threadsCustom, setThreadsCustom] = useState("");
   const [showThreadsCustom, setShowThreadsCustom] = useState(false);
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
@@ -474,6 +467,11 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     );
   }, [models, shadowCall?.model, shadowCall?.sourceModels, shadowModelOptions]);
 
+  const autoReviewOptions = useMemo(
+    () => [{ value: "", label: "—" }, ...routedModelOptions(shadowModelOptions, models, autoReview?.model)],
+    [models, shadowModelOptions, autoReview?.model],
+  );
+
   const loadShadowCall = useCallback(async () => {
     const bounded = createBoundedFetch(15_000);
     try {
@@ -487,11 +485,18 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const loadV2 = useCallback(async () => {
     // Never let a toggle in flight be clobbered by the poll (same single-flight rule as models).
     if (v2BusyRef.current) return;
+    const readSeq = ++v2ReadSeqRef.current;
+    const writeSeq = v2WriteSeqRef.current;
+    // Checked before every apply below: a write landing while this GET was in
+    // flight already adopted fresher state, so the stale response is dropped.
+    const fresh = () => readSeq === v2ReadSeqRef.current && writeSeq === v2WriteSeqRef.current;
     const bounded = createBoundedFetch(15_000);
     try {
       const r = await fetch(`${apiBase}/api/v2`, { signal: bounded.signal });
+      if (!fresh()) return;
       if (!(r.headers.get("content-type") ?? "").includes("application/json")) { setV2(null); return; }
       const data = await readJsonIfOk<V2Status>(r);
+      if (!fresh()) return;
       if (!data || typeof data.enabled !== "boolean") { setV2(null); return; }
       setV2({
         enabled: data.enabled,
@@ -501,7 +506,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
       });
     } catch {
-      setV2(null); // old server / network: hide the section instead of guessing
+      if (fresh()) setV2(null); // old server / network: hide the section instead of guessing
     } finally {
       bounded.clear();
       setV2Loading(false);
@@ -722,6 +727,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     if (!catalogActive) return;
     const timeout = window.setTimeout(() => {
       void loadShadowCall();
+      void loadAutoReview();
       void loadV2();
       // Preset previews belong to the same tab. Loaded once rather than polled: the rules are
       // shipped code and the catalog poll above already refreshes the rows they describe.
@@ -747,7 +753,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     // gui/.oxlintrc.json (override) and gui/doctor.config.json (ignore.overrides). An in-file
     // react-doctor-disable comment was tried and removed - it changed nothing, and
     // react/react-compiler penalises a component for carrying suppressions at all.
-  }, [catalogActive, loadShadowCall, loadV2]);
+  }, [catalogActive, loadShadowCall, loadAutoReview, loadV2]);
 
   const groups = useMemo(
     () => buildProviderModelGroups(models, providers),
@@ -1095,6 +1101,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     if (!v2 || v2BusyRef.current) return;
     setV2Busy(true);
     v2BusyRef.current = true;
+    v2WriteSeqRef.current++;
     setV2Note("");
     setStatus("");
     try {
@@ -1223,22 +1230,29 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     await putV2Setting({ keepNativeChatGptOnV1: next });
   };
 
+  // The API reports the limit in the active backend's units; the control edits the
+  // logical child count, so the V2 storage case (total incl. the root slot) converts.
+  const v2ThreadsChildren = v2?.maxConcurrentThreadsPerSession != null
+    ? threadLimitToChildCount(v2.maxConcurrentThreadsPerSession, v2.enabled)
+    : null;
+
   const putV2Threads = async (value: number) => {
     // Same guards as the flag toggle: single-flight + server-side idempotence
     // (setMaxConcurrentThreads no-ops on equal value), so a re-selected current
     // value or a double click can never double-write config.toml.
     if (!v2 || v2BusyRef.current) return;
     if (!Number.isInteger(value) || value < 1) { publishFeedback(false, t("models.v2ThreadsInvalid")); return; }
-    if (v2.maxConcurrentThreadsPerSession === value) return;
+    if (v2ThreadsChildren === value) return;
     setV2Busy(true);
     v2BusyRef.current = true;
+    v2WriteSeqRef.current++;
     setV2Note("");
     setStatus("");
     try {
       const r = await fetch(`${apiBase}/api/v2`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxConcurrentThreadsPerSession: value }),
+        body: JSON.stringify({ maxConcurrentThreadsPerSession: childCountToThreadLimit(value, v2.enabled) }),
       });
       try {
         const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));
@@ -1270,7 +1284,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   };
 
   const onSelectThreads = (raw: string) => {
-    if (raw === CUSTOM_OPTION) { setShowThreadsCustom(true); setThreadsCustom(String(v2?.maxConcurrentThreadsPerSession ?? "")); return; }
+    if (raw === CUSTOM_OPTION) { setShowThreadsCustom(true); setThreadsCustom(String(v2ThreadsChildren ?? "")); return; }
     setShowThreadsCustom(false);
     void putV2Threads(Number(raw));
   };
@@ -1949,27 +1963,31 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     <>
       <div className="models-control-top-row">
         {modelDiscovery && (
-          <div className="models-shadow-row row muted text-control">
-            <span className="models-shadow-label">{t("models.newPolicyGlobal")}</span>
+          <SettingsRow label={t("models.newPolicyGlobal")}>
             <Switch on={modelDiscovery.policy === "off"} onClick={() => void saveModelDiscovery(modelDiscovery.policy === "off" ? "on" : "off")} label={t("models.newPolicyGlobal")} />
-          </div>
+          </SettingsRow>
         )}
-        <div className="row">
+        <SettingsRow label={t("models.useDefaultAliasesGlobal")}>
           <Switch on={aliases.defaults.global} onClick={() => void setDefaultAliases(!aliases.defaults.global)} label={t("models.useDefaultAliasesGlobal")} />
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAliases(value => !value)}>{t("models.aliases")}</button>
-        </div>
-        <div className="models-shadow-row row muted text-control" aria-busy={!shadowCall || undefined}>
-          <span className="models-shadow-label">{t("models.shadowCallIntercept")} <Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip></span>
+        </SettingsRow>
+        <SettingsRow label={t("models.shadowCallIntercept")} hint={<Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip>} busy={!shadowCall}>
           <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowSourceModelBadge(shadowCall?.sourceModels) })}</code>
           <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
           <div className="models-shadow-model-slot">
             <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
           </div>
-        </div>
+        </SettingsRow>
+
+        <SettingsRow label={t("models.autoReviewOverride")} hint={<Tooltip content={t("models.autoReviewOverrideHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.autoReviewOverrideHint")}>ⓘ</span></Tooltip>} busy={!autoReview}>
+          <Switch on={autoReview?.enabled ?? false} onClick={() => void saveAutoReview({ enabled: !autoReview?.enabled })} disabled={!autoReview || autoReviewSaving} label={t("models.autoReviewOverride")} />
+          <div className="models-shadow-model-slot">
+            <Select value={autoReview?.model ?? ""} options={autoReviewOptions} onChange={v => void saveAutoReview({ model: v })} disabled={!autoReview || autoReviewSaving || !autoReview.enabled} label={t("models.autoReviewOverride")} />
+          </div>
+        </SettingsRow>
 
         {(v2Loading || v2) && (
-          <div className="models-v2-mode-row row">
-            <span className="muted text-control">{t("models.v2Label")}</span>
+          <SettingsRow label={t("models.v2Label")}>
             <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
               {(["v1", "default", "v2"] as const).map(mode => (
                 <button
@@ -1997,7 +2015,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             >
               <IconInfo width={14} height={14} aria-hidden="true" />
             </button>
-          </div>
+          </SettingsRow>
         )}
         {v2 && v2.multiAgentMode === "v2" && (
           <div className="models-v2-keep-native-row">
@@ -2030,48 +2048,43 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         )}
       </div>
 
-      {v2 && (v2.enabled || v2.agentsMaxThreadsConflict || v2Note) && (
+      {v2 && (
         <div className="models-v2-detail-row row">
-          {v2.enabled && (
+          <span className="muted text-control">{t("models.v2ThreadsLabel")}</span>
+          <Select
+            value={showThreadsCustom
+              ? CUSTOM_OPTION
+              : (v2ThreadsChildren !== null
+                ? (THREAD_OPTION_SET.has(v2ThreadsChildren) ? String(v2ThreadsChildren) : CUSTOM_OPTION)
+                : "")}
+            options={[
+              ...(v2ThreadsChildren === null
+                ? [{ value: "", label: t("models.v2ThreadsDefault") }] : []),
+              ...(v2ThreadsChildren !== null && !THREAD_OPTION_SET.has(v2ThreadsChildren) && !showThreadsCustom
+                ? [{ value: CUSTOM_OPTION, label: String(v2ThreadsChildren) }] : []),
+              ...THREAD_OPTIONS.map(v => ({ value: String(v), label: String(v) })),
+              { value: CUSTOM_OPTION, label: t("models.custom") },
+            ]}
+            onChange={v => onSelectThreads(v)}
+            disabled={v2Busy}
+            label={t("models.v2ThreadsLabel")}
+          />
+          {showThreadsCustom && (
             <>
-              <span className="muted text-control">{t("models.v2ThreadsLabel")}</span>
-              <Select
-                value={showThreadsCustom
-                  ? CUSTOM_OPTION
-                  : (v2.maxConcurrentThreadsPerSession !== null && v2.maxConcurrentThreadsPerSession !== undefined
-                    ? (THREAD_OPTION_SET.has(v2.maxConcurrentThreadsPerSession) ? String(v2.maxConcurrentThreadsPerSession) : CUSTOM_OPTION)
-                    : "")}
-                options={[
-                  ...(v2.maxConcurrentThreadsPerSession === null || v2.maxConcurrentThreadsPerSession === undefined
-                    ? [{ value: "", label: t("models.v2ThreadsDefault") }] : []),
-                  ...(v2.maxConcurrentThreadsPerSession !== null && v2.maxConcurrentThreadsPerSession !== undefined
-                    && !THREAD_OPTION_SET.has(v2.maxConcurrentThreadsPerSession) && !showThreadsCustom
-                    ? [{ value: CUSTOM_OPTION, label: String(v2.maxConcurrentThreadsPerSession) }] : []),
-                  ...THREAD_OPTIONS.map(v => ({ value: String(v), label: String(v) })),
-                  { value: CUSTOM_OPTION, label: t("models.custom") },
-                ]}
-                onChange={v => onSelectThreads(v)}
+              <input
+                className="input"
+                style={{ width: 100 }}
+                inputMode="numeric"
+                value={threadsCustom}
+                onChange={e => setThreadsCustom(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") void putV2Threads(Number(threadsCustom.replace(/[_,\s]/g, ""))); }}
                 disabled={v2Busy}
-                label={t("models.v2ThreadsLabel")}
+                aria-label={t("models.v2ThreadsLabel")}
               />
-              {showThreadsCustom && (
-                <>
-                  <input
-                    className="input"
-                    style={{ width: 100 }}
-                    inputMode="numeric"
-                    value={threadsCustom}
-                    onChange={e => setThreadsCustom(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") void putV2Threads(Number(threadsCustom.replace(/[_,\s]/g, ""))); }}
-                    disabled={v2Busy}
-                    aria-label={t("models.v2ThreadsLabel")}
-                  />
-                  <button type="button" className="btn btn-sm" disabled={v2Busy}
-                    onClick={() => { void putV2Threads(Number(threadsCustom.replace(/[_,\s]/g, ""))); }}>
-                    {t("models.v2ThreadsApply")}
-                  </button>
-                </>
-              )}
+              <button type="button" className="btn btn-sm" disabled={v2Busy}
+                onClick={() => { void putV2Threads(Number(threadsCustom.replace(/[_,\s]/g, ""))); }}>
+                {t("models.v2ThreadsApply")}
+              </button>
             </>
           )}
           {v2.enabled && v2.agentsMaxThreadsConflict && (
@@ -2550,8 +2563,9 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       </div>}
       <ModelsSettingsPanel title={t("models.settingsPanel.title")} attentionLabel={t("models.settingsPanel.attention")}
         warn={!!(v2?.enabled && v2.agentsMaxThreadsConflict) || v2Note !== "" || pickerResource.state.showError}
-        summary={modelsSettingsSummary(t, { multiAgentMode: v2?.multiAgentMode, v2Threads: v2?.maxConcurrentThreadsPerSession, keepNativeOnV1: v2?.keepNativeChatGptOnV1 === true,
+        summary={modelsSettingsSummary(t, { multiAgentMode: v2?.multiAgentMode, v2Threads: v2ThreadsChildren, keepNativeOnV1: v2?.keepNativeChatGptOnV1 === true,
           shadowEnabled: shadowCall?.enabled === true, shadowModel: shadowCall?.model, windowOn: allCapped, windowValue: contextCapValue, newModelsOff: modelDiscovery?.policy === "off", aliasesOn: aliases.defaults.global,
+          autoReviewEnabled: autoReview?.enabled === true, autoReviewModel: autoReview?.model,
           pickerMode: modelPickerOrderMode(pickerSettings?.pickerAvailable ?? [], pickerSettings?.pickerOrder ?? [], pickerSettings?.pickerOrderMode) })}>
         {controlsBlock}
       </ModelsSettingsPanel>

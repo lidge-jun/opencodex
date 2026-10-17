@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
+import { COLD_SPAWN_BUDGET_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -42,11 +43,15 @@ describe("Codex CLI updater zero-effect boundary", () => {
       }));
       const stateFiles = ["codex-shim.json", "codex-runtime.json", "config.json"].map(name => join(home, name));
       for (const path of stateFiles) writeFileSync(path, "{broken");
+      // This first Node -> Bun inspection also loads the Windows native reader cold.
+      // Dev run 38697651428 exhausted 15s; the next attest took 4.6s (previously 0.5–0.8s).
+      // Keep the real launcher and every zero-effect assertion; use the shared cold budget
+      // only here, leaving 5s for assertions/cleanup before the surrounding test deadline.
       const result = spawnSync("node", [
         repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "attest",
         "--candidate", candidate, "--npm-prefix", prefix, "--npm-cli", npmCli, "--node", node, "--json",
       ], {
-        cwd: repoRoot(), encoding: "utf8", timeout: 15_000, windowsHide: true,
+        cwd: repoRoot(), encoding: "utf8", timeout: COLD_SPAWN_BUDGET_MS - 5_000, windowsHide: true,
         env: {
           ...process.env, OPENCODEX_HOME: home, CODEX_HOME: home, CODEX_CLI_PATH: selectedCandidate,
           npm_config_registry: "http://127.0.0.1:9", npm_config_offline: "true",
@@ -65,7 +70,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
       expect(result.stdout).not.toContain("ocx-codex-attest-zero-effect-");
       for (const path of stateFiles) expect(readFileSync(path, "utf8")).toBe("{broken");
       for (const marker of [candidateMarker, npmMarker, selectedMarker]) expect(existsSync(marker)).toBe(false);
-    },
+    }, COLD_SPAWN_BUDGET_MS,
   );
 
   (process.platform === "win32" && process.arch === "x64" ? test : test.skip)(
@@ -101,7 +106,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
       const result = spawnSync(nodeBin!, [
         repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "attest", "--json",
       ], {
-        cwd: repoRoot(), encoding: "utf8", timeout: 15_000, windowsHide: true,
+        cwd: repoRoot(), encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000, windowsHide: true,
         env: {
           ...process.env, OPENCODEX_HOME: home, CODEX_HOME: home,
           CODEX_CLI_PATH: join(prefix, "codex.cmd"),
@@ -119,7 +124,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
       });
       expect(report.identityDigest).toMatch(/^[a-f0-9]{64}$/);
       expect(result.stdout).not.toContain("ocx-codex-attest-selected-");
-    },
+    }, SPAWN_BUDGET_MS,
   );
 
   test("direct Bun execution of the Node launcher fails before updater inspection", () => {
@@ -163,7 +168,10 @@ describe("Codex CLI updater zero-effect boundary", () => {
     expect(typeof report.reason).toBe("string");
     expect(report.candidateAvailable).toBe(true);
     expect(report.candidateSource).toBe("environment");
-    expect(report.selectionAttested).toBe(false);
+    // The launcher's proof-bound snapshot attests the environment-declared
+    // candidate on POSIX; the win32 inspection still defers selection
+    // attestation, so the flag is platform-dependent by design.
+    expect(report.selectionAttested).toBe(process.platform !== "win32");
     for (const stale of ["selected", "selectedVersion", "selectionSource", "selectionEvidence"]) {
       expect(stale in report).toBe(false);
     }
@@ -195,7 +203,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
     });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("codex-cli-update action must be check");
+    expect(result.stderr).toContain("codex-cli-update action must be check, attest or plan");
     expect(readFileSync(statePath)).toEqual(before);
     expect(existsSync(marker)).toBe(false);
   });

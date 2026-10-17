@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 47.
+Declared capabilities: 49.
 
 ### `ocx models price`
 
@@ -16,7 +16,7 @@ Usage: `ocx models price <provider/model> [--json]`
 
 Read the saved manual price for an exact provider/model selector.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -26,8 +26,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit provider, modelId, and cost (null for automatic pricing). |
 
-JSON mode: `envelope`.
-
 - The provider must be configured; everything after the first slash is the exact upstream model ID.
 
 ### `ocx models set-price`
@@ -36,7 +34,7 @@ Usage: `ocx models set-price <provider/model> (--input <N> --output <N> [--cache
 
 Save four manual USD-per-1M-token rates, or restore automatic pricing for one model.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -51,8 +49,6 @@ State-changing: yes.
 | `--auto` | boolean | Remove this model's override; cannot be combined with rates. |
 | `--json` | boolean | Emit the saved price or reset result as JSON. |
 
-JSON mode: `envelope`.
-
 - Uses the exact upstream model ID after the first slash. Omitted cache rates default to zero; sibling model prices are preserved.
 
 ### `ocx models set`
@@ -61,7 +57,7 @@ Usage: `ocx models set <provider/model> [--context-window <tokens|0|->] [--modal
 
 Save per-model overrides for a routed model, or clear them back to the computed values.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -76,8 +72,6 @@ State-changing: yes.
 | `--reset` | boolean | Clear every override on this model; cannot be combined with the options above. |
 | `--json` | boolean | Emit the saved state as JSON. |
 
-JSON mode: `envelope`.
-
 - Only routed provider/model selectors are supported. At least one option or --reset is required.
 - Context 0 or - and modalities/default effort - clear to null; reasoning efforts - restores inheritance while an empty string stores an empty ladder.
 - --reset clears all four overrides with null and cannot be combined with other settings. A saved-but-catalog-refresh-failed receipt must not be mistaken for an unsaved change.
@@ -88,7 +82,7 @@ Usage: `ocx provider list [--json|--jsonl]`
 
 Configured providers with connectivity and selected models.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -96,8 +90,6 @@ Drives no management route.
 |---|---|---|
 | `--json` | boolean | Emit the provider list as JSON. |
 | `--jsonl` | boolean | Emit one configured provider per JSON line. |
-
-JSON mode: `envelope`.
 
 - Local config and registry read, not GET /api/providers. --json and --jsonl are mutually exclusive.
 
@@ -107,7 +99,7 @@ Usage: `ocx provider resets [--limit <n>] [--json]`
 
 Recently detected quota resets and whether reset notifications are enabled.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -118,15 +110,13 @@ State-changing: no.
 | `--json` | boolean | Emit reset events as JSON. |
 | `--limit` | number | Limit returned events; defaults to 20, capped at 100. |
 
-JSON mode: `payload`.
-
 ### `ocx provider keychain`
 
 Usage: `ocx provider keychain <name> [status|store|restore] [--json]`
 
 Move a provider's API key into the OS keychain, restore it, or report where it lives.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -137,8 +127,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the keychain status or result as JSON. |
 
-JSON mode: `payload`.
-
 - status reads by provider name; store/restore POST {name,action}. These move an existing secret between config and OS keychain; keep credential material out of transcripts.
 
 ### `ocx provider add`
@@ -147,7 +135,7 @@ Usage: `ocx provider add <name> [--adapter <id>] [--base-url <url>] [--responses
 
 Add a provider locally or explicitly to the running proxy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -174,8 +162,6 @@ State-changing: yes.
 | `--responses-path` | string | Relative upstream Responses path; no scheme, query or fragment. |
 | `--auth-mode` | string | Explicit key, forward, oauth or local auth mode. |
 
-JSON mode: `envelope`.
-
 - Without --live, saves local configuration; --sync reports its actual disposition and needsSync, never fabricated client application. --live cannot be combined with --sync.
 - Live add reads the target roster and presets. An observed existing row requires --force; POST remains upsert, so the preflight is not atomic create-only protection.
 - Canonical OpenAI uses the target preset unchanged; transport/auth/model overrides are refused in live add. No local registry fallback when a needed target preset is missing.
@@ -187,15 +173,13 @@ Usage: `ocx provider show <name> [--json]`
 
 Inspect one locally configured provider.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the local provider view. |
-
-JSON mode: `envelope`.
 
 - Reads local config; masks API-key and key-pool fields. This is not a live provider read or a general secret-export interface.
 
@@ -205,7 +189,7 @@ Usage: `ocx provider remove <name> [--json]; ocx provider remove <name> --live -
 
 Remove a local provider or explicitly delete it from the running proxy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -217,8 +201,6 @@ State-changing: yes.
 | `--yes` | boolean | Required with --live for provider and dependent custom-model/account cleanup. |
 | `--json` | boolean | Emit the operation receipt as JSON. |
 
-JSON mode: `envelope`.
-
 - Local removal preserves its existing refusal for the current default and has no --yes option.
 - Live removal uses one server DELETE. The server can choose a replacement default and clean custom models, context caps and OAuth accounts; dependency/last-provider refusals stay authoritative.
 - No local fallback, multi-step deletion or automatic retry. A saved result with failed catalog convergence exits nonzero without claiming rollback.
@@ -229,7 +211,7 @@ Usage: `ocx provider set-default <name> [--live] [--json]`
 
 Select the default provider locally or explicitly on the running proxy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -240,8 +222,6 @@ State-changing: yes.
 | `--live` | boolean | Use the selected running proxy; omission retains local configuration behavior. |
 | `--json` | boolean | Emit the operation receipt as JSON. |
 
-JSON mode: `envelope`.
-
 - Omission of --live retains local save/no-op semantics. Live sends only setDefault:true; disabled/unknown providers are refused by the server. This operation does not claim client synchronization.
 
 ### `ocx provider edit`
@@ -250,7 +230,7 @@ Usage: `ocx provider edit <name> [--adapter <id>] [--base-url <url>] [--default-
 
 Patch an existing provider through the running proxy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -278,8 +258,6 @@ State-changing: yes.
 | `--fast` | string | on or off; false is an explicit edit. |
 | `--context-window` | string | Positive safe integer provider context limit; - clears, zero is invalid. |
 
-JSON mode: `payload`.
-
 - At least one edit is required; only supplied fields are patched. update is an existing alias. Use provider show only for local state, not as proof of the live write.
 - Management errors use safe fixed provider diagnostics; catalog failures retain the saved receipt and a nonzero exit.
 
@@ -289,7 +267,7 @@ Usage: `ocx provider test <name> [--json]`
 
 Probe a provider's live model discovery connectivity.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -299,8 +277,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the probe result. |
 
-JSON mode: `payload`.
-
 - May contact the upstream provider; requires operator intent to probe. Static catalogs can return applicable:false; failed connectivity exits nonzero.
 
 ### `ocx provider quota`
@@ -309,7 +285,7 @@ Usage: `ocx provider quota [--refresh] [--json]`
 
 Read provider quota reports, optionally refreshing them.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -320,8 +296,6 @@ State-changing: no.
 | `--refresh` | boolean | Request refresh=1; may contact providers and update cached observations. |
 | `--json` | boolean | Emit the quota report. |
 
-JSON mode: `payload`.
-
 - Reads quota observations without changing operator settings. Cache misses may probe upstream even without --refresh; --refresh bypasses the cache and updates observations. This GET is not the POST account-refresh operation.
 
 ### `ocx provider presets`
@@ -330,7 +304,7 @@ Usage: `ocx provider presets [--json]`
 
 Read provider presets from the running proxy.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -340,15 +314,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the preset payload. |
 
-JSON mode: `payload`.
-
 ### `ocx provider account-mode`
 
 Usage: `ocx provider account-mode <pool|direct> [--json]`
 
 Set OpenAI Codex account routing to pool or direct.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -358,8 +330,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the management receipt. |
 
-JSON mode: `payload`.
-
 - Patches codexAccountMode on provider openai; this does not switch the physical Codex login.
 
 ### `ocx provider selected`
@@ -368,7 +338,7 @@ Usage: `ocx provider selected <name> [--set <id,id...>|--clear] [--json]`
 
 Read or replace one provider's selected model allowlist.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -381,8 +351,6 @@ State-changing: yes.
 | `--clear` | boolean | Clear the allowlist to show all; exclusive with --set. |
 | `--json` | boolean | Emit the selected view or receipt. |
 
-JSON mode: `envelope`.
-
 - Without a mutation flag this reads only. --clear sends models:[], not a model named -.
 - Read JSON is the CLI projection {provider, selected: string[], available: string[]}, not the API's provider-keyed maps; missing entries become empty arrays. --set/--clear JSON returns the server's write receipt unchanged.
 
@@ -392,7 +360,7 @@ Usage: `ocx models list [--provider <name>] [--json]`
 
 List static configured models locally.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -400,8 +368,6 @@ Drives no management route.
 |---|---|---|
 | `--provider` | string | Limit to a configured provider. |
 | `--json` | boolean | Emit models and the static-catalog note. |
-
-JSON mode: `envelope`.
 
 - A bare models invocation is equivalent. Reads local config, never the live catalog; use models live for runtime discovery.
 
@@ -411,7 +377,7 @@ Usage: `ocx models add <provider> <modelId> [--display-name <name>] [--context-w
 
 Add a custom model locally or explicitly on the running proxy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -427,8 +393,6 @@ State-changing: yes.
 | `--live` | boolean | Use the selected running proxy; omission retains local custom-model behavior. |
 | `--json` | boolean | Emit the validated command result as JSON. |
 
-JSON mode: `envelope`.
-
 - Without --live, saves locally and opportunistically syncs only if a proxy is available. No proxy keeps the save successful with needsSync:true; attempted failure/refusal is nonzero. JSON is one safe save/sync receipt.
 - Live add sends the same metadata to the server and returns its stored custom identity plus catalog outcome. Empty reasoning ladder differs from omitted/inherited metadata. No local fallback.
 
@@ -438,7 +402,7 @@ Usage: `ocx models remove <customId|provider/modelId> [--yes] [--live] [--json]`
 
 Remove an exact custom model locally or on the selected proxy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -451,8 +415,6 @@ State-changing: yes.
 | `--live` | boolean | Use the selected running proxy; omission retains local custom-model behavior. |
 | `--json` | boolean | Emit the validated command result as JSON. |
 
-JSON mode: `envelope`.
-
 - Live selection uses the complete target custom roster and an exact stored ID or unambiguous provider/raw selector. Display labels, ID prefixes and encoded/raw collisions never choose a deletion target.
 - One encoded stored-ID DELETE; no alternative-ID retry, local fallback or revision protection. Local JSON saves/syncs retain the same opportunistic policy as add.
 
@@ -462,15 +424,13 @@ Usage: `ocx models list-custom [--json]`
 
 List locally stored custom model definitions and their IDs.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the local customModels array with full IDs. |
-
-JSON mode: `payload`.
 
 - Reads local configuration, not the management API.
 
@@ -480,7 +440,7 @@ Usage: `ocx models live [--provider <name>] [--free-only] [--json]`
 
 Read the running proxy's model catalog.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -492,15 +452,13 @@ State-changing: no.
 | `--free-only` | boolean | Include only rows explicitly classified free. |
 | `--json` | boolean | Emit the filtered catalog array. |
 
-JSON mode: `payload`.
-
 ### `ocx models edit`
 
 Usage: `ocx models edit <custom-id> [--model-id <id>] [--display-name <name|->] [--context-window <tokens|0>] [--modalities <text,image,audio|->] [--reasoning-efforts <levels|->] [--default-reasoning-effort <level|->] [--json]`
 
 Edit a custom model by its definition ID through the proxy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -516,8 +474,6 @@ State-changing: yes.
 | `--default-reasoning-effort` | string | Default effort; - clears with null. |
 | `--json` | boolean | Emit the management receipt. |
 
-JSON mode: `payload`.
-
 - At least one edit is required. Operand is the custom definition ID from list-custom, not a provider/model selector. Discovered-model display-name overrides are a different resource.
 
 ### `ocx models enable`
@@ -526,7 +482,7 @@ Usage: `ocx models enable <provider/model|native-model> [--native] [--json]`
 
 Enable one routed or native catalog model.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -536,8 +492,6 @@ State-changing: yes.
 |---|---|---|
 | `--native` | boolean | Treat the whole selector as a native OpenAI model ID. |
 | `--json` | boolean | Emit the visibility receipt. |
-
-JSON mode: `payload`.
 
 ### `ocx models disable`
 
@@ -545,7 +499,7 @@ Usage: `ocx models disable <provider/model|native-model> [--native] [--json]`
 
 Disable one routed or native catalog model.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -556,15 +510,13 @@ State-changing: yes.
 | `--native` | boolean | Treat the whole selector as a native OpenAI model ID. |
 | `--json` | boolean | Emit the visibility receipt. |
 
-JSON mode: `payload`.
-
 ### `ocx models provider`
 
 Usage: `ocx models provider <name> <on|off> [--json]`
 
 Enable or disable all catalog rows for a provider.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -575,8 +527,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the visibility receipt. |
 
-JSON mode: `payload`.
-
 - Reads targets from the live catalog first; refuses a provider without available models.
 
 ### `ocx models selected`
@@ -585,7 +535,7 @@ Usage: `ocx models selected <provider> [--set <id,id...>|--clear] [--json]`
 
 Read or replace a provider's selected model allowlist.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -598,8 +548,6 @@ State-changing: yes.
 | `--clear` | boolean | Send an empty list to show all; exclusive with --set. |
 | `--json` | boolean | Emit the selected view or receipt. |
 
-JSON mode: `envelope`.
-
 - Without --set or --clear this only reads. A literal - is not the clear spelling.
 - Read JSON is the CLI projection {provider, selected: string[], available: string[]}, not the API's provider-keyed maps; missing entries become empty arrays. --set/--clear JSON returns the server's write receipt unchanged.
 
@@ -609,7 +557,7 @@ Usage: `ocx models preset show [--provider <name>] [--json]`
 
 Inspect shipped model presets and applied versions.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -620,15 +568,13 @@ State-changing: no.
 | `--provider` | string | Project a single provider's preset. |
 | `--json` | boolean | Emit the preset view. |
 
-JSON mode: `payload`.
-
 ### `ocx models preset apply`
 
 Usage: `ocx models preset apply <provider> [--all] [--json]`
 
 Apply a provider's curated model preset or show all models.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -639,8 +585,6 @@ State-changing: yes.
 | `--all` | boolean | Use mode all instead of preset. |
 | `--json` | boolean | Emit the application receipt. |
 
-JSON mode: `payload`.
-
 - An empty preset match preserves the previous selection and reports fallback; do not interpret it as successful narrowing.
 
 ### `ocx models new-policy`
@@ -649,7 +593,7 @@ Usage: `ocx models new-policy [on|off] [--provider <name>] [--json]`
 
 Read or set the policy for newly discovered models.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -661,8 +605,6 @@ State-changing: yes.
 | `--provider` | string | Scope the read/write to a provider; omitted means global. |
 | `--json` | boolean | Emit the policy view or receipt. |
 
-JSON mode: `payload`.
-
 - No state operand means read only. Only on/off writes exist; no inherit/clear operand is implemented.
 
 ### `ocx models new-arrivals`
@@ -671,7 +613,7 @@ Usage: `ocx models new-arrivals [--json]`
 
 Read recent model discoveries.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -681,15 +623,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit recentArrivals grouped by provider. |
 
-JSON mode: `payload`.
-
 ### `ocx models context status`
 
 Usage: `ocx models context status [--json]`
 
 Read routed-provider context caps.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -699,15 +639,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit context settings. |
 
-JSON mode: `payload`.
-
 ### `ocx models context value`
 
 Usage: `ocx models context value <tokens> [--set-all] [--json]`
 
 Set the default routed-provider context cap value.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -718,8 +656,6 @@ State-changing: yes.
 | `--set-all` | boolean | Also apply the value to every routed provider. |
 | `--json` | boolean | Emit the context receipt. |
 
-JSON mode: `payload`.
-
 - Tokens must be a positive safe integer; separators _ and , are accepted. Without --set-all only the default for future toggles changes.
 
 ### `ocx models context provider`
@@ -728,7 +664,7 @@ Usage: `ocx models context provider <provider> <on|off> [--value <tokens>] [--js
 
 Toggle one provider's context cap, optionally choosing its value.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -739,8 +675,6 @@ State-changing: yes.
 | `--value` | number | Positive integer; only valid with on. |
 | `--json` | boolean | Emit the context receipt. |
 
-JSON mode: `payload`.
-
 - off disables this provider's cap; --value is not a global value change.
 
 ### `ocx models context all`
@@ -749,7 +683,7 @@ Usage: `ocx models context all <on|off> [--json]`
 
 Enable or disable caps for all routed providers.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -759,15 +693,13 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the context receipt. |
 
-JSON mode: `payload`.
-
 ### `ocx models shadow status`
 
 Usage: `ocx models shadow status [--json]`
 
 Read shadow-call settings.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -777,15 +709,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit shadow-call settings. |
 
-JSON mode: `payload`.
-
 ### `ocx models shadow set`
 
 Usage: `ocx models shadow set [model|-] [--enabled <on|off>] [--json]`
 
 Set the shadow-call model or enabled state.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -796,9 +726,42 @@ State-changing: yes.
 | `--enabled` | string | on or off; takes a value. |
 | `--json` | boolean | Emit the settings receipt. |
 
-JSON mode: `payload`.
-
 - At least a model or --enabled is required; - clears the model with an empty string. Enabling shadow calls can cause subsequent inference calls.
+
+### `ocx models auto-review status`
+
+Usage: `ocx models auto-review status [--json]`
+
+Read the global auto-review model and enabled state.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/auto-review-settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit auto-review settings. |
+
+### `ocx models auto-review set`
+
+Usage: `ocx models auto-review set [model|-] [--enabled <on|off>] [--json]`
+
+Set the global auto-review model or enabled state.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/auto-review-settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--enabled` | string | on or off; takes a value. |
+| `--json` | boolean | Emit the settings receipt. |
+
+- At least a model or --enabled is required; - clears the model with an empty string. Human output points to ocx sync when a catalog refresh can be retried and asks operators to resolve a failed refresh before syncing.
 
 ### `ocx alias list`
 
@@ -806,7 +769,7 @@ Usage: `ocx alias list [--json]`
 
 Read provider and model aliases.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -816,15 +779,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit alias maps and provenance. |
 
-JSON mode: `payload`.
-
 ### `ocx alias set`
 
 Usage: `ocx alias set <provider|provider/native-model-id> <alias> [--json]`
 
 Assign a provider or upstream model alias.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -835,8 +796,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the alias receipt. |
 
-JSON mode: `payload`.
-
 - The first slash separates provider from the complete upstream model ID.
 
 ### `ocx alias rm`
@@ -845,7 +804,7 @@ Usage: `ocx alias rm <provider|provider/native-model-id> [--json]`
 
 Clear a provider or model alias.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -856,8 +815,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the alias removal receipt. |
 
-JSON mode: `payload`.
-
 - Provider clear sends alias:null; model clear sends remove:[modelId].
 
 ### `ocx alias defaults`
@@ -866,7 +823,7 @@ Usage: `ocx alias defaults <on|off> [--provider <name>] [--json]`
 
 Toggle built-in model aliases globally or for a provider.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -877,15 +834,13 @@ State-changing: yes.
 | `--provider` | string | Limit the toggle to one provider. |
 | `--json` | boolean | Emit the alias settings receipt. |
 
-JSON mode: `payload`.
-
 ### `ocx provider pacing`
 
 Usage: `ocx provider pacing <name> [--json]; ocx provider pacing <name> [--enabled <on|off>] [--rpm <number>] [--min-interval-ms <integer>] [--max-concurrent <integer>] [--json]; ocx provider pacing <name> --file <FILE|-> [--json]`
 
 Read request pacing rules/status or explicitly replace the configured block.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -902,8 +857,6 @@ State-changing: yes.
 | `--file` | string | Complete rules JSON, or - for bounded non-TTY stdin; exclusive with scalar flags. |
 | `--json` | boolean | Emit the operation receipt as JSON. |
 
-JSON mode: `envelope`.
-
 - Read returns {provider,rules,status}; rules:null means no configured block, not an unavailable target.
 - Scalar edits preserve model rules observed from the pinned config; PATCH replaces the block and can overwrite an intervening edit. Use snapshot/apply for public-baseline CAS.
 - File mode validates a complete non-null rules block and writes without a prior rule read. Pacing limits reject zero.
@@ -914,7 +867,7 @@ Usage: `ocx provider snapshot [--json]`
 
 Read the non-secret provider editor snapshot from the running proxy.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -923,8 +876,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the operation receipt as JSON. |
-
-JSON mode: `envelope`.
 
 - Emits exactly {defaultProvider,providers}, validating the canonical editor DTO after removing only GUI display markers. Unexpected secret/unknown fields fail closed.
 - Save this JSON as the baseline for apply; it is not raw config export and carries no cross-invocation target identity. Use the intended host/context.
@@ -935,7 +886,7 @@ Usage: `ocx provider apply --baseline <FILE|-> --file <FILE|-> [--yes] [--json]`
 
 Apply a provider editor document with the server public-baseline conflict check.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -948,8 +899,6 @@ State-changing: yes.
 | `--yes` | boolean | Required for removals or renames within the submitted provider roster. |
 | `--json` | boolean | Emit the operation receipt as JSON. |
 
-JSON mode: `payload`.
-
 - Both documents must contain exactly defaultProvider and providers, with no credential/derived/unknown fields. At most one source may be stdin; each input and the complete serialized body are bounded to 4 MiB, with a 30-second read deadline.
 - Sends one {baseline,next} PUT. Stale baseline is exit 5; no automatic refresh, rebase, retry or local fallback.
 - Batch removal preserves the server batch contract and does not promise single-provider DELETE OAuth cleanup. Saved-but-unconverged catalog outcomes remain visible and nonzero.
@@ -960,7 +909,7 @@ Usage: `ocx models display-name <provider/raw-model> (--set <text> | --clear) [-
 
 Set or clear one raw upstream model display-name override.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -972,8 +921,6 @@ State-changing: yes.
 | `--clear` | boolean | Send null to clear the override. |
 | `--json` | boolean | Emit the validated command result as JSON. |
 
-JSON mode: `envelope`.
-
 - Split only the first provider slash; the remaining model ID is raw upstream identity, not a guessed public alias or encoded suffix.
 - A recognized saved-but-failed catalog HTTP503 retains its safe receipt and exits1; no retry or rollback claim.
 
@@ -983,7 +930,7 @@ Usage: `ocx models order status [--json]`
 
 Read saved picker order, routed candidates and featured state.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -993,8 +940,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the validated command result as JSON. |
 
-JSON mode: `envelope`.
-
 - Preserves native IDs in saved order. pickerAvailable is routed-only; unknown featured state is not an empty successful roster.
 
 ### `ocx models order set`
@@ -1003,7 +948,7 @@ Usage: `ocx models order set (--models <csv> | --mode <default|alphabetical|prov
 
 Replace the routed picker order with an explicit list or sort mode.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -1018,8 +963,6 @@ State-changing: yes.
 | `--mode` | string | default clears; alphabetical, provider and most-used compute complete routed orders. |
 | `--json` | boolean | Emit the validated command result as JSON. |
 
-JSON mode: `envelope`.
-
 - Manual/preset replacement refuses a native-inclusive saved order until explicit reset/default. It never edits the featured models/force fields.
 - Manual mode rechecks settings and identities before PUT and refuses observed drift; this is not server CAS. Raw/encoded ambiguities and missing identities refuse before writing.
 - Most-used reads all/all usage, uses requested model identities and refuses incomplete evidence. Presets retain unranked candidates. A saved receipt does not prove client convergence.
@@ -1030,7 +973,7 @@ Usage: `ocx models order reset [--json]`
 
 Clear saved picker ordering and its mode.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -1039,7 +982,5 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the validated command result as JSON. |
-
-JSON mode: `envelope`.
 
 - Sends only pickerOrder:null and pickerOrderMode:null. Explicitly clears native-inclusive order as well; does not change featured models or force selection.

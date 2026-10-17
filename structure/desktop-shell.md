@@ -5,8 +5,8 @@ discovers the loopback proxy, lazily retries management authentication, starts
 the bundled `ocx` sidecar only when the configured endpoint is unreachable,
 and owns the tray, autostart, single-instance, and window lifecycle behavior.
 
-The desktop Cargo package requires Rust 1.88 or newer. Its committed lockfile already
-contains dependencies with that minimum; the package declaration must not advertise 1.77.
+The desktop Cargo package requires Rust 1.88 or newer.
+The manual-poll test in `desktop/src-tauri/src/process_spawn.rs` uses `std::task::Waker::noop()` (stable since Rust 1.85).
 The lockfile selects patched `serde_with` and `time` releases, with compatible exact
 `serde` and `serde_json` pins in `desktop/src-tauri/Cargo.toml`. Build and test with the
 committed lockfile (`--locked`); the dependency update does not change app configuration,
@@ -53,8 +53,9 @@ the macOS window has a 360-point minimum width. The same test pins the capabilit
 on the app origin because the bundled bootstrap and update pages draw their own matching strip —
 a page with an overlay title bar and no strip cannot be dragged or zoomed at all. Windows and
 Linux keep the native title bar: the shell ships no min/max/close widgets of its own, and the
-sidebar-top layout applies unchanged beneath it.
+sidebar-top layout applies unchanged beneath it. The main webview disables Tauri’s native drag/drop handler in `desktop/src-tauri/src/lib.rs` so HTML session-pane drops reach the dashboard on Windows.
 
+Process creation shares the Unix guard with executable publication; see [Desktop-owned terminal command](desktop-terminal-command.md).
 ## Startup, quit and the tray
 
 The window is created and shown before anything is registered, resolved, probed or started, and

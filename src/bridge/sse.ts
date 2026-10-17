@@ -1,5 +1,7 @@
+import { anthropicProgressItems } from "../responses/anthropic-progress";
 import type {
   AdapterEvent,
+  AnthropicServerBlocks,
   OcxMessagePhase,
   OcxProviderContinuationState,
   OcxProviderOpaqueToolCallMetadata,
@@ -12,7 +14,7 @@ import {
   classifyError,
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
-  isCyberPolicyCode,
+  isTerminalRefusalCode,
   type OcxErrorPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
@@ -50,6 +52,7 @@ import {
 } from "../lib/translator-budget";
 import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
+import { terminalRefusalFailure } from "./terminal-refusal";
 
 function sseEvent(name: string, data: Record<string, unknown>): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -88,6 +91,7 @@ export function bridgeToResponsesSSE(
      * response.completed — codex-rs collect_compaction_output requires exactly one.
      */
     compaction?: boolean;
+    compactionRetention?: { encode(summary: string): string; commit(): void };
     /** One-shot: first non-empty text/thinking/raw-reasoning/tool-input delta observed. */
     onFirstOutput?: () => void;
     onTerminal?: (status: ResponsesTerminalStatus) => void;
@@ -120,6 +124,12 @@ export function bridgeToResponsesSSE(
      * would reach the client under the invented name instead of the normalized one.
      */
     enforceDeclaredToolNames?: boolean;
+    /**
+     * Deliver a non-retryable upstream refusal as `response.failed` with a terminal-refusal code
+     * instead of `response.incomplete` (see `./terminal-refusal`). Set only for the Responses
+     * inbound wire: the chat and Anthropic encoders read the incomplete to report a filter stop.
+     */
+    terminalRefusalAsFailed?: boolean;
     /** Declared parameter schema per tool name; repairs integral-float integer args (#1611). */
     toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
     /**
@@ -676,12 +686,15 @@ export function bridgeToResponsesSSE(
       // leaves a "Searching the web" spinner spinning forever.
       // `sources` rides on the done item (additive field; codex-rs serde ignores unknown fields) so
       // downstream translators (claude outbound) can fill web_search_tool_result content.
-      const closeCurrentWebSearch = (status: "completed" | "failed", queries: string[], sources?: { url: string; title?: string }[]) => {
+      // `anthropic` (Anthropic's server-side call) rides verbatim as `anthropic_blocks`, for the same
+      // claude outbound translator; a web_fetch makes the cell a page open.
+      const closeCurrentWebSearch = (status: "completed" | "failed", queries: string[], sources?: { url: string; title?: string }[], anthropic?: AnthropicServerBlocks) => {
         if (!currentWebSearch) return;
         const item = {
           type: "web_search_call", id: currentWebSearch.itemId, status,
-          action: webSearchAction(queries),
+          action: webSearchAction(queries, anthropic),
           ...(sources && sources.length > 0 ? { sources } : {}),
+          ...(anthropic ? { anthropic_blocks: anthropic } : {}),
         };
         emit("response.output_item.done", { output_index: currentWebSearch.outputIndex, item });
         retainFinishedItem(item as OutputItem);
@@ -841,6 +854,7 @@ export function bridgeToResponsesSSE(
           // its compaction UI renders nothing mid-turn, so nothing is lost visually.
           if (options?.compaction) {
             if (event.type === "text_delta") {
+              if (event.anthropicThinkingSignature) continue;
               compaction = appendString(
                 compaction,
                 event.text,
@@ -871,6 +885,29 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "text_delta": {
+              if (event.anthropicThinkingSignature) {
+                rawReasoningForNextToolCall = "";
+                closeCurrentMessage("commentary");
+                closeCurrentReasoning();
+                closeCurrentRawReasoning();
+                flushHiddenRawReasoning();
+                flushHiddenReasoningEnvelope();
+                if (currentToolCall) closeCurrentToolCall();
+                for (const item of anthropicProgressItems(event.text, event.anthropicThinkingSignature, budget)) {
+                  emit("response.output_item.added", { output_index: outputIndex, item: { ...item, ...(item.type === "message" ? { status: "in_progress", content: [] } : {}) } });
+                  if (item.type === "message") {
+                    const part = item.content![0];
+                    emit("response.content_part.added", { item_id: item.id, output_index: outputIndex, content_index: 0, part: { ...part, text: "" } });
+                    emit("response.output_text.delta", { item_id: item.id, output_index: outputIndex, content_index: 0, delta: event.text });
+                    emit("response.output_text.done", { item_id: item.id, output_index: outputIndex, content_index: 0, text: event.text });
+                    emit("response.content_part.done", { item_id: item.id, output_index: outputIndex, content_index: 0, part });
+                  }
+                  emit("response.output_item.done", { output_index: outputIndex, item });
+                  retainFinishedItem(item as OutputItem);
+                  outputIndex++;
+                }
+                break;
+              }
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
@@ -1195,7 +1232,7 @@ export function bridgeToResponsesSSE(
                 currentWebSearch = { itemId: wsItemId2, eventId: event.id, outputIndex };
               }
               const safeSources = safeWebSearchSources(event.sources);
-              closeCurrentWebSearch(event.status ?? "completed", event.queries, safeSources);
+              closeCurrentWebSearch(event.status ?? "completed", event.queries, safeSources, event.anthropic);
               // Queue this search's sources for the next assistant message (dedup by URL).
               if (safeSources.length > 0) {
                 for (const source of safeSources) {
@@ -1233,7 +1270,7 @@ export function bridgeToResponsesSSE(
                 // Exactly one compaction item per turn; codex-rs takes the first and fatals on 0.
                 const item = {
                   type: "compaction", id: `cmp_${uuid()}`,
-                  encrypted_content: event.compactionEncryptedContent ?? encodeCompactionSummary(joinChunks(compaction)),
+                  encrypted_content: event.compactionEncryptedContent ?? (options?.compactionRetention?.encode(joinChunks(compaction)) ?? encodeCompactionSummary(joinChunks(compaction))),
                 };
                 emit("response.output_item.done", { output_index: outputIndex, item });
                 retainFinishedItem(item as OutputItem, event.compactionEncryptedContent ? 0 : compaction.bytes);
@@ -1271,6 +1308,7 @@ export function bridgeToResponsesSSE(
                 emit("response.completed", {
                   response,
                 });
+                if (!closed && !terminated && options?.compaction && !event.compactionEncryptedContent) options.compactionRetention?.commit();
                 reportTerminal("completed");
               }
               terminalEvent = true;
@@ -1287,12 +1325,25 @@ export function bridgeToResponsesSSE(
               flushHiddenReasoningEnvelope();
               options?.onUsage?.(event.usage);
               await awaitThoughtSignatureDurability();
+              const refusal = options?.terminalRefusalAsFailed ? terminalRefusalFailure(event) : undefined;
+              if (refusal) {
+                emit("response.failed", {
+                  response: {
+                    ...responseSnapshot("failed", finishedItems, event.endTurn),
+                    usage: responsesUsage(event.usage),
+                    ...refusal,
+                  },
+                });
+                reportTerminal("failed");
+                terminalEvent = true;
+                break;
+              }
               emit("response.incomplete", {
                 response: {
                   ...responseSnapshot("incomplete", finishedItems, event.endTurn),
                   usage: responsesUsage(event.usage),
                   incomplete_details: {
-                    reason: event.reason,
+                    reason: truncationReasonFor(event.reason) ?? event.reason,
                     ...(event.message ? { message: event.message } : {}),
                     ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
                   },
@@ -1325,7 +1376,7 @@ export function bridgeToResponsesSSE(
                   ...(event.usage ? { usage: responsesUsage(event.usage) } : {}),
                   error: failure.error,
                   last_error: failure.error,
-                  ...(isCyberPolicyCode(failure.error.code)
+                  ...(isTerminalRefusalCode(failure.error.code)
                     ? { retryable: false }
                     : event.retryable !== undefined ? { retryable: event.retryable } : {}),
                 },
@@ -1366,7 +1417,7 @@ export function bridgeToResponsesSSE(
               ...responseSnapshot("failed", finishedItems),
               error: failure,
               last_error: failure,
-              ...(isCyberPolicyCode(failure.code) ? { retryable: false } : {}),
+              ...(isTerminalRefusalCode(failure.code) ? { retryable: false } : {}),
             },
           });
           reportTerminal("failed");

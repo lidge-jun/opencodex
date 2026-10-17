@@ -38,11 +38,14 @@ export function writeSettingsOpen(open: boolean, storage?: StorageLike): void {
 
 export interface ModelsSettingsState {
   multiAgentMode?: "v1" | "default" | "v2";
-  /** Explicit per-session thread cap; null/undefined means Codex's default. */
+  /** Configured sub-agent limit as a logical child count; null/undefined means the runtime default. */
   v2Threads?: number | null;
   keepNativeOnV1?: boolean;
   shadowEnabled: boolean;
   shadowModel?: string;
+  /** Global auto-review override; folded whenever enabled, a blank model reading as pending. */
+  autoReviewEnabled?: boolean;
+  autoReviewModel?: string;
   windowOn: boolean;
   windowValue: number;
   /** The SAVED picker mode — an unapplied draft is not the catalog's state. */
@@ -70,7 +73,7 @@ export function modelsSettingsSummary(t: TFn, state: ModelsSettingsState): Setti
   if (state.multiAgentMode) {
     items.push({ id: "subagent", label: t("models.v2Label"), value: t(`models.v2Mode_${state.multiAgentMode}` as TKey) });
   }
-  if (state.multiAgentMode === "v2" && typeof state.v2Threads === "number") {
+  if (typeof state.v2Threads === "number") {
     items.push({ id: "threads", label: t("models.v2ThreadsLabel"), value: String(state.v2Threads) });
   }
   if (state.multiAgentMode === "v2" && state.keepNativeOnV1) {
@@ -81,6 +84,9 @@ export function modelsSettingsSummary(t: TFn, state: ModelsSettingsState): Setti
     label: t("models.shadowCallIntercept"),
     value: state.shadowEnabled && state.shadowModel ? state.shadowModel : off,
   });
+  if (state.autoReviewEnabled) {
+    items.push({ id: "auto-review", label: t("models.autoReviewOverride"), value: state.autoReviewModel || t("models.autoReviewPending") });
+  }
   items.push({ id: "window", label: t("models.contextCapLabel"), value: state.windowOn ? fmtK(state.windowValue) : off });
   const pickerKey = PICKER_MODE_KEYS[state.pickerMode];
   items.push({ id: "order", label: t("models.pickerOrder.label"), value: pickerKey ? t(pickerKey) : state.pickerMode });

@@ -204,7 +204,9 @@ opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex �
 
 ヘッドレス ランタイムの設定、起動、同期、診断、更新を管理します。
 
-`ocx system codex-restart --yes` は `ocx sync --restart-codex` と同じモジュールで Codex app-server を再起動し、デスクトップ アプリも完全に終了して再起動します。プロキシ自体が Codex アプリ内で動いている場合、完了できない引き渡しを約束せず、実行可能な案内とともに拒否します。
+`ocx system codex-restart --yes` は `ocx sync --restart-codex` と同じモジュールで Codex app-server を再起動します。モデル ピッカーは起動時に構築されるため、デスクトップ アプリを完全に終了して再起動するのは、現在のモデル カタログが書き込まれる前にアプリが起動していた場合、またはこのリクエストで `model_catalog_json` の参照先が変わった場合です。それ以外の場合、アプリは開いたまま自身の app-server を再起動し、未送信の下書きや保留中の承認を保持します。アプリまたはカタログの状態を読み取れない場合は完全な再起動を行います。プロキシ自体が Codex アプリ内で動いている場合、デスクトップの再起動は完了できない引き渡しを約束せず、実行可能な案内とともに拒否します。
+
+このリクエストで `model_catalog_json` の参照先が変わった場合も、シェルがカタログファイルの書き込み後に起動していてもデスクトップを再起動します。
 
 ```bash
 ocx system settings --stream-mode eager-relay
@@ -216,7 +218,7 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check` はパッケージレジストリに問い合わせず、設定済みのインストール候補について、秘匿化された実行ファイルの場所や所有権を示す根拠を含む来歴情報を、範囲を限定して検査します。公開ランチャー由来の信頼済みコンテキストが真正性を裏付けるのは候補のスナップショットだけであり、Codex が正常に実行されたことではありません。この単発コマンドは Codex を一切実行しないため、環境または永続化された状態から得た候補は報告対象にとどまります（`managed: false`、通常は `selection_unattested`）。`selectionAttested` は常に `false` です。JSON 出力には `candidateAvailable`、`candidateVersion`、`candidateSource`、`selectionAttested: false` が含まれます。Bun またはソースから直接起動するとランチャーの証明がないため、環境由来および永続化された候補を無視し、POSIX では `candidate_unavailable` を報告することがあります。Windows では、この最初のスライスは候補や構成のパスに対するファイルシステム I/O を一切行いません。信頼済みランチャーが取り込んだ絶対パスの環境候補だけを、アプリ同梱またはバージョンマネージャーとして字句的に報告でき、それ以外の Windows 候補はすべて失敗時閉鎖になります。このスライスは永続化された選択状態を一切読み取らないため、環境候補がキャプチャされていない Windows 実行では `candidate_unavailable` ではなく `windows_inspection_deferred` を報告します。コマンドは Codex CLI が導入されているかどうかを観測できないので、候補が存在しないと断定せず、検査が延期されたことを報告します。このコマンドは Codex やパッケージマネージャーの実行、shim の修復、設定やキャッシュ状態への書き込み、プロセスの停止、インストールを行いません。アプリ同梱、認識済みのバージョンマネージャー、未検証のスタンドアロン、曖昧な shim の各候補は管理対象外または不明として報告され、管理対象と判定されることはありません。
+`check` はレジストリへの問い合わせも Codex の実行も行いません。POSIX では、公開ランチャーが記録した環境候補とランタイムリゾルバーが選ぶ正規パスが一致すると `selectionAttested: true` になり、リンクされた npm-global パッケージのマニフェストで所有権を確認でき、候補バージョンが報告されている場合はそれがマニフェストのバージョンと一致するときに `managed: true` になります。永続化された候補は認証されません。Windows は候補や設定ファイルを読まずに検査を延期します。Bun やソースからの直接実行にはランチャーの証明がありません。`plan` は分離した一時 npm 設定・キャッシュ・ログで公式レジストリに問い合わせ、実行中のセッションや不完全なプロセス観測を拒否します。インストールやプロセスへのシグナル送信は行いません。[コマンドと拒否理由の詳細（英語）](/reference/cli/agents/#read-only-codex-cli-update-plan)を参照してください。
 
 Windows で `CODEX_CLI_PATH=codex` のような単純なコマンド名、リモートパス、デバイスパスが候補としてキャプチャされた場合は、`candidate_path_unavailable` を報告します。候補は取得されていますが、そのパスはこの検査の対象になりません。
 

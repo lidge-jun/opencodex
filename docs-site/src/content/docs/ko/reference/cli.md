@@ -17,7 +17,7 @@ opencodex CLI는 `ocx`입니다. 첫 번째 명령 이름으로 분기하며, `s
 
 관리 명령은 기록된 런타임 포트와 신원 검사를 사용해 살아 있는 프록시의 management API와 왕복 통신하며, 두 번째 설정 경로를 따로 두지 않습니다. 멈췄거나 닿을 수 없는 프록시는 HTTP 503으로 표시되며 CLI는 0이 아닌 종료 코드를 반환합니다. 명시적으로 오프라인 설정 작업으로 문서화된 명령은 라이브 프록시 없이 설정 파일을 검증하고 수정할 수 있습니다.
 
-`ocx system codex-cli-update check`는 실행 중인 프록시가 없어도 되며 패키지 레지스트리를 조회하지 않습니다. 설정된 설치 후보에 대해 전체 경로를 숨긴 실행 파일 위치와 소유권 근거를 포함한 provenance 메타데이터를 제한된 범위에서 검사합니다. 신뢰할 수 있는 배포 런처 컨텍스트가 인증하는 것은 후보 스냅샷뿐이며, Codex가 성공적으로 실행되었다는 사실은 인증하지 않습니다. 이 단발성 명령은 Codex를 전혀 실행하지 않으므로 환경 또는 저장된 상태에서 얻은 후보는 보고 전용입니다(`managed: false`, 일반적으로 `selection_unattested`). `selectionAttested`는 항상 `false`입니다. JSON 출력에는 `candidateAvailable`, `candidateVersion`, `candidateSource`, `selectionAttested: false`가 포함됩니다. Bun이나 소스에서 직접 실행하면 런처 증거가 없으므로 환경 및 저장된 후보를 무시하고 POSIX에서는 `candidate_unavailable`, Windows에서는 `windows_inspection_deferred`을 보고할 수 있습니다. Windows에서는 이 첫 조각이 후보 또는 설정 경로의 파일시스템을 전혀 읽지 않습니다. 배포 런처가 증명한 절대 환경 후보에 한해서 앱 번들 또는 버전 관리자라는 어휘적 표지만 보고하며, 그 밖의 Windows 후보는 모두 실패 닫힘 처리합니다. 이 명령은 소프트웨어를 설치하거나 복구하지 않고, Codex나 npm을 실행하지 않으며, 실행 중인 프로세스를 제어하거나 설정 또는 캐시 상태를 쓰지 않습니다.
+`check`는 레지스트리를 조회하거나 Codex를 실행하지 않습니다. POSIX에서는 배포 런처가 캡처한 환경 후보와 런타임 리졸버가 선택한 정규 경로가 같으면 `selectionAttested: true`가 될 수 있습니다. 연결된 npm-global 패키지 매니페스트가 소유권을 증명하고, 후보 버전이 보고된 경우 그 버전이 매니페스트 버전과 일치하면 `managed: true`가 될 수 있으며 저장된 후보는 인증되지 않습니다. Windows는 후보나 설정 파일을 읽지 않고 검사를 연기합니다. 직접 Bun/소스 실행은 런처 증거가 없어 후보를 신뢰하지 않습니다. `plan`은 격리된 임시 npm 설정·캐시·로그로 공식 레지스트리를 조회하고 활성 세션이나 불완전한 프로세스 관측을 거절합니다. 설치하거나 프로세스에 신호를 보내지 않습니다. [명령과 거절 사유의 전체 설명(영문)](/reference/cli/agents/#read-only-codex-cli-update-plan)을 참고하세요.
 
 Windows x64 설치 관측은 [`attest` 명령](/ko/reference/cli/agents/)을 참조하세요. 명시적 경로 없이 증명에 바인딩된 런처 스냅샷이 식별한 선택 후보를 관측하며, 업데이트 권한이나 런타임 선택을 증명하지 않습니다.
 

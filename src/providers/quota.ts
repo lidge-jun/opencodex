@@ -53,7 +53,6 @@ import {
   hydrateAccountQuotaCache,
   mayCommitAccountQuotaKey,
   mayCommitProviderQuotaKey,
-  normalizeAnthropicQuota,
   supportsPerAccountQuota,
   type AccountQuotaCacheEntry,
   type ProviderAccountQuota,
@@ -367,6 +366,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
     case "kimi": result = await fetchKimiQuota(provider, config, accessToken); break;
     case "command-code": result = await fetchCommandCodeQuota(provider, config, accessToken); break;
     case "devin": result = await (await import("./quota/devin")).fetchDevinQuota(provider, accessToken, credential.apiBaseUrl, config.baseUrl); break;
+    case "dsh-account": result = await (await import("./quota/dsh-account")).fetchDshAccountQuota(provider, accessToken, { accountId, credential }); break;
     default: return null;
   }
   return { result, identity, isCurrent };
@@ -424,7 +424,8 @@ async function fetchAccountQuota(
   providerConfig?: OcxProviderConfig,
   liveConfig?: OcxConfig,
 ): Promise<AccountQuotaCacheEntry> {
-  if (accountQuotaProbeSkip(provider, accountId)) return accountQuotaProbeSkip(provider, accountId)!;
+  const skipped = accountQuotaProbeSkip(provider, accountId);
+  if (skipped) return skipped;
   if (isAnthropicInstanceId(provider)) return fetchAnthropicAccountQuota(provider, accountId, forceRefresh, liveConfig);
   if (explicitAccountReader(provider)) return fetchExplicitAccountQuota(provider, accountId, forceRefresh, providerConfig);
   if (provider === "kiro") hydrateAccountQuotaCache();
@@ -432,7 +433,8 @@ async function fetchAccountQuota(
   const writerGeneration = captureConfigGeneration();
   const kiroIdentity = provider === "kiro" ? kiroProbeIdentity(accountId) : undefined;
   const cachedCandidate = accountQuotaCache.get(key);
-  const cached = provider !== "kiro" || cachedCandidate?.identity === kiroIdentity ? cachedCandidate : undefined;
+  const cached = (provider !== "kiro" || cachedCandidate?.identity === kiroIdentity)
+    && cachedCandidate?.isCurrent?.() !== false ? cachedCandidate : undefined;
   if (!forceRefresh && cached && Date.now() - cached.ts < ACCOUNT_QUOTA_TTL_MS) {
     if (provider === "google-antigravity" && cached.quotaFailure && cached.quotaFailureIsCurrent?.() !== true) return { ...cached, quotaFailure: undefined };
     return cached;
@@ -454,6 +456,7 @@ async function fetchAccountQuota(
       try { return epoch === explicitAccountEpoch && diagnosticIdentity !== undefined && diagnosticIdentity === antigravityQuotaDiagnosticIdentity(accountId); }
       catch { return false; }
     };
+    const antigravityIsCurrent = () => quotaFailureIsCurrent();
     const diagnosticFields = () => quotaFailure && quotaFailureIsCurrent() ? { quotaFailure, quotaFailureIsCurrent } : {};
     const unavailable = (): AccountQuotaCacheEntry => {
       const entry: AccountQuotaCacheEntry = {
@@ -461,9 +464,11 @@ async function fetchAccountQuota(
         quota: cached?.quota ?? null,
         unavailable: true,
         ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
+        ...(provider === "google-antigravity" ? { isCurrent: antigravityIsCurrent } : {}),
         ...diagnosticFields(),
       };
-      if (mayCommitAccountQuotaKey(key, writerGeneration) && (provider !== "kiro" || kiroProbeCurrent(accountId, kiroIdentity))) {
+      if (entry.isCurrent?.() !== false && mayCommitAccountQuotaKey(key, writerGeneration)
+        && (provider !== "kiro" || kiroProbeCurrent(accountId, kiroIdentity))) {
         accountQuotaCache.set(key, entry);
         if (provider === "kiro") persistKiroAccountState();
         sweepExpiredOnWrite(entry.ts);
@@ -493,12 +498,15 @@ async function fetchAccountQuota(
           return { ts: Date.now(), quota: null, unavailable: true };
         }
       }
+      if (provider === "google-antigravity" && !antigravityIsCurrent()) return { ts: Date.now(), quota: null, unavailable: true };
       if (!quota) return unavailable();
       const entry: AccountQuotaCacheEntry = {
         ts: Date.now(), quota,
         ...(provider === "kiro" ? { identity: kiroIdentity } : {}),
+        ...(provider === "google-antigravity" ? { isCurrent: antigravityIsCurrent } : {}),
       };
       if (mayCommitAccountQuotaKey(key, writerGeneration)
+        && entry.isCurrent?.() !== false
         && (provider !== "kiro" || kiroProbeCurrent(accountId, kiroIdentity))) {
         accountQuotaCache.set(key, entry);
         if (provider === "kiro") { commitKiroAccountUsageState(key, kiroSnapshot, kiroIdentity); persistKiroAccountState(); }
@@ -530,21 +538,7 @@ export async function fetchProviderAccountQuotas(
   if (!set) return [];
   return mapQuotaRoster(set.accounts, async account => {
     const entry = await fetchAccountQuota(provider, account.id, forceRefresh, providerConfig, liveConfig);
-    const result: ProviderAccountQuota = {
-      accountId: account.id,
-      quota: isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry.quota, Date.now()) : entry.quota,
-      ...(entry.unavailable ? { unavailable: true as const } : {}),
-      ...(entry.unavailable && entry.quotaFailure && entry.quotaFailureIsCurrent?.() === true ? { quotaFailure: entry.quotaFailure } : {}),
-    };
-    if (entry.quotaFailureIsCurrent) Object.defineProperty(result, "quotaFailureIsCurrent", { value: entry.quotaFailureIsCurrent });
-    if (isAnthropicInstanceId(provider) && entry.isCurrent) Object.defineProperty(result, "isCurrent", { value: entry.isCurrent });
-    if (!explicitAccountReader(provider)) return result;
-    const identity = entry.identity;
-    Object.defineProperty(result, "isCurrent", { value: () => {
-      if (entry.isCurrent) return entry.isCurrent();
-      const credential = getAccountCredential(provider, account.id);
-      return !!credential && (!identity || explicitQuotaIdentity(provider, account.id, providerConfig) === identity);
-    } });
-    return result;
+    const { projectAccountQuotaRow } = await import("./quota/account-row");
+    return projectAccountQuotaRow(provider, account.id, entry, providerConfig);
   });
 }

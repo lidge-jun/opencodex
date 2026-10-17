@@ -18,9 +18,12 @@
  */
 import { resolveEnvValue } from "../config/proxy-env";
 import { loadKeyringBinding } from "../lib/keyring-native";
+import { isGcpCredentialMaterial } from "../lib/gcp-credential-input";
 import type { OcxProviderConfig } from "../types";
 
 export const KEYCHAIN_REFERENCE_PREFIX = "keychain:";
+/** Stored GCP JSON uses the same OS service, but must never be restored as a literal API key. */
+export const GCP_CREDENTIAL_MARKER_PREFIX = "gcp-sa:";
 export const PROVIDER_KEYCHAIN_SERVICE = "opencodex.provider-api-key.v1";
 
 export interface ProviderKeychainEntry {
@@ -87,14 +90,16 @@ export function providerKeychainEntry(account: string): ProviderKeychainEntry {
 function readKeychain(account: string, quiet = false): string | undefined {
   const cached = resolvedCache.get(account);
   if (cached !== undefined) return cached;
+  let value: string | null = null;
   try {
-    const value = providerKeychainEntry(account).getPassword();
-    if (typeof value === "string" && value.trim()) {
-      resolvedCache.set(account, value);
-      return value;
-    }
+    value = providerKeychainEntry(account).getPassword();
   } catch {
     // fall through to the single warning below
+  }
+  if (typeof value === "string" && value.trim()) {
+    if (isGcpCredentialMaterial(value)) throw new Error("GCP credential JSON cannot be used as a literal API key; select a gcp-sa reference");
+    resolvedCache.set(account, value);
+    return value;
   }
   if (!quiet && !warnedAccounts.has(account)) {
     warnedAccounts.add(account);
@@ -125,7 +130,7 @@ export type ProviderKeyStoreKind = "keychain" | "env" | "file" | "none";
 export function providerKeyStoreKind(provider: Pick<OcxProviderConfig, "apiKey"> | undefined): ProviderKeyStoreKind {
   const key = provider?.apiKey;
   if (!key) return "none";
-  if (isKeychainReference(key)) return "keychain";
+  if (key.startsWith(GCP_CREDENTIAL_MARKER_PREFIX) || isKeychainReference(key)) return "keychain";
   if (/^\$\{?\w+\}?$/.test(key)) return "env";
   return "file";
 }

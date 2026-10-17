@@ -3531,7 +3531,7 @@ describe("Codex catalog routed normalization", () => {
       "low", "medium", "high", "xhigh", "max", "ultra",
     ]);
     expect(gpt56?.context_window).toBe(272_000);
-    expect(gpt56?.max_context_window).toBe(272_000);
+    expect(gpt56?.max_context_window).toBe(922_000);
     expect(gpt56?.auto_compact_token_limit).toBe(244_800);
     expect((gpt55?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual([
       "low", "medium", "high", "xhigh", "max", "ultra",
@@ -4321,12 +4321,12 @@ describe("Codex catalog routed normalization", () => {
 
     expect(bare).toMatchObject({
       context_window: 272_000,
-      max_context_window: 272_000,
+      max_context_window: 922_000,
       auto_compact_token_limit: 120_000,
     });
     expect(account).toMatchObject({
       context_window: 272_000,
-      max_context_window: 272_000,
+      max_context_window: 922_000,
       auto_compact_token_limit: 120_000,
       opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
     });

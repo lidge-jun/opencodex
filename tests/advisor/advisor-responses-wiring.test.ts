@@ -11,6 +11,8 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { activateAdvisor } from "../../src/lib/advisor-activation";
+import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
+import type { TranslatorBudget } from "../../src/lib/translator-budget";
 import { handleResponses } from "../../src/server/responses/core";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { collectSse } from "../helpers/responses-conformance";
@@ -18,6 +20,7 @@ import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { internalCallCapability } from "../../src/lib/local-internal-call-capability";
 import type { OcxConfig } from "../../src/types";
+import { advisorActivityStore } from "../../src/advisor/activity";
 
 const originalFetch = globalThis.fetch;
 let releaseSpendHome: (() => void) | undefined;
@@ -145,6 +148,78 @@ function workerRequest(input: unknown, threadId?: string, stream = true, tools?:
 }
 
 describe("advisor responses wiring (end-to-end)", () => {
+  test.each([true, false])("delivery and empty-completion retry pass the same request budget (stream=%s)", async stream => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    let sends = 0;
+    const seen: (TranslatorBudget | undefined)[] = [];
+    const workerFetch = (async () => {
+      const text = sends++ === 0 ? "" : "retry answer";
+      return stream ? sse(plainFrames(text)) : chatCompletion(text);
+    }) as typeof fetch;
+    const config = advisorConfig(undefined, workerFetch);
+    config.emptyCompletionRetry = true;
+    setAdvisorPlanFactory(config, async () => ({
+      tool: { name: "advisor", description: "fixture", parameters: {}, advisor: true },
+      preflightInject: async () => false,
+      attachGuard: parsed => {
+        parsed._advisorGuard = async function* (options) {
+          seen.push(options.translatorBudget);
+          yield* options.firstEvents;
+        };
+      },
+    }));
+    try {
+      const response = await handleResponses(workerRequest("budget wiring", undefined, stream), config, { model: "", provider: "" });
+      const body = await response.text();
+      expect(body).toContain("retry answer");
+      expect(sends).toBe(2);
+      expect(seen).toHaveLength(2);
+      expect(seen[0]).toBeDefined();
+      expect(seen[1]).toBe(seen[0]);
+    } finally { setAdvisorPlanFactory(config, null); }
+  });
+
+  test("adaptive failed-repair advice uses the real routing, authority, effort and task-budget boundaries", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = []; const chatRequests: string[] = []; const expertBodies: Record<string, unknown>[] = [];
+    const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", effort: "high", policy: "adaptive", maxConsultationsPerTask: 2 },
+      workerProviderFetch([plainFrames("Continuing the repair.")], workerBodies));
+    config.providers.expert!.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      expertBodies.push(JSON.parse(String(init?.body)));
+      return chatCompletion(ADVISOR_ADVICE);
+    }) as typeof fetch;
+    loopbackInterceptor(config, { chatRequests });
+    const thread = `adaptive-wiring-${crypto.randomUUID()}`;
+    const run = async (input: unknown) => {
+      const response = await handleResponses(workerRequest(input, thread), config, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      expect(response.headers.has("x-opencodex-advisor-reasoning")).toBe(false);
+      await collectSse(response.body!);
+    };
+    const task = { role: "user", content: "Adaptive wiring: repair the failing validation" };
+    const validation = (id: string) => [
+      { type: "function_call", call_id: id, name: "exec_command", arguments: JSON.stringify({ cmd: "bun test" }) },
+      { type: "function_call_output", call_id: id, output: "Process exit code: 1\nExpected 2, got 1" },
+    ];
+    await run([task, ...validation("first")]);
+    const repaired = [task, ...validation("first"),
+      { type: "function_call", call_id: "edit", name: "apply_patch", arguments: "{}" },
+      { type: "function_call_output", call_id: "edit", output: "Success. Updated files" }, ...validation("retry")];
+    await run(repaired);
+    await run(repaired);
+    expect(chatRequests).toHaveLength(2);
+    expect(chatRequests[1]).toContain("Repeated validation failure");
+    const worker = JSON.parse(workerBodies[1]!);
+    expect(worker.messages.find((message: { content: unknown }) => JSON.stringify(message.content).includes(ADVISOR_ADVICE)).role).toBe("user");
+    const activity = advisorActivityStore(config).snapshot();
+    expect(activity[0]!.trigger).toBe("repair_failure");
+    expect(activity[0]!.effectiveEffort).toBe(expertBodies[1]!.reasoning_effort as string ?? null);
+    await run([task, ...validation("new-first"),
+      { type: "function_call", call_id: "new-edit", name: "apply_patch", arguments: "{}" },
+      { type: "function_call_output", call_id: "new-edit", output: "Success. Updated files" }, ...validation("new-retry")]);
+    expect(chatRequests).toHaveLength(2);
+    expect(advisorActivityStore(config).snapshot()[0]!.status).toBe("blocked");
+  });
   for (const delivery of ["buffered", "bridge", "direct"] as const) {
     for (const retry of [false, true]) for (const catalog of ["empty", "omitted", "partial"] as const) {
       for (const finalTool of [false, true]) {

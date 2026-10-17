@@ -1160,6 +1160,11 @@ async function fetchExposedModelIds(live: LiveProxy, fetchFn: ExposedModelsFetch
       if (id.length === 0) continue;
       if (id.length > EXPOSED_MODEL_ID_MAX_LENGTH) return null;
       ids.add(id);
+      const nativeId = (row as { native_id?: unknown }).native_id;
+      if (nativeId !== undefined) {
+        if (typeof nativeId !== "string" || nativeId.length > EXPOSED_MODEL_ID_MAX_LENGTH) return null;
+        if (nativeId.length > 0) ids.add(nativeId);
+      }
     }
     return ids;
   } catch {
@@ -1467,7 +1472,7 @@ export async function runDoctor(args: string[] = []): Promise<void> {
 
   // Observe-only and warning-level: a bypassed Desktop first-party install still serves the
   // CLI and every non-Desktop client, so this never records a doctor failure.
-  const desktopSystemProxyLines = formatDesktopSystemProxyLines(collectDesktopSystemProxy(doctorConfig));
+  const desktopSystemProxyLines = formatDesktopSystemProxyLines(await collectDesktopSystemProxy(doctorConfig));
   if (desktopSystemProxyLines.length > 0) {
     console.log("\nClaude Desktop first-party vs Windows system proxy");
     for (const line of desktopSystemProxyLines) console.log(line);

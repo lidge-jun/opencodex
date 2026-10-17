@@ -27,10 +27,10 @@ import {
   anthropicRoutingFor,
   AnthropicAccountCooldownError,
   formatAnthropicProviderForLog,
-  anthropicSessionKeyFromParts,
 } from "../../oauth/anthropic-routing";
 import {
   OAuthAccountPausedError,
+  OAuthTokenRefreshBusyError,
   getValidAccessSnapshotForAccount,
   forceRefreshOAuthAccessSnapshot,
   getValidAccessTokenSnapshot,
@@ -49,6 +49,9 @@ import {
   refusalAwareInitialKiroAccount,
   noteGenericPoolSelection,
 } from "../../oauth/generic-account-failover";
+import { admitGenericSessionAccount, bindGenericSessionAccount, genericSessionAccount, genericSessionAccountEligible, genericSessionAffinityEnabled, preferredGenericSessionAccount } from "../../oauth/generic-session-affinity";
+import { oauthSessionKeyFromParts } from "../../oauth/session-affinity-key";
+import { resolveContextPrincipal } from "../auth-cors";
 import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
 import { expandInferenceOAuthSendBudget } from "../inference/context";
@@ -78,6 +81,7 @@ import { bindRouteReasoningReplayScope } from "./core-replay";
 import { sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
+import { distributedKeyPhysicalFetch } from "../../providers/api-key-response-ownership";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerConsumesCallerAuthorization } from "../../providers/caller-authorization";
 import { releaseCodexAuthContextProbeLease, stripCodexRuntimeProviderFields } from "../../codex/auth-context";
@@ -120,6 +124,7 @@ export async function prepareResponsesTransport(
 ) {
   const { config, logCtx, options, req } = requestContext;
   const { route, parsed, inboundWire, translatorBudget } = requestState;
+  const genericAffinityMode = genericSessionAffinityEnabled(config, route.providerName);
   const anthropicInstance = route.provider.authMode === "oauth"
     ? configuredAnthropicInstance(config, route.providerName) : undefined;
   // Refuse custom/orphan B OAuth before any generic resolver can observe its auth row.
@@ -176,6 +181,7 @@ export async function prepareResponsesTransport(
     || route.providerName === "orcarouter-oauth"
     // runTurn transport: the replay runs on the first-event preflight in run-turn-execution.
     || route.providerName === "devin"
+    || route.providerName === "dsh-account"
   ) && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
   // One inference-401 replay belongs to this request, even when Auto changes exchange wire.
@@ -217,6 +223,8 @@ export async function prepareResponsesTransport(
     for (let attempt = 0; attempt < maxSelectionAttempts; attempt++) {
       requireAnthropicAdmission();
       if (candidate.provider !== route.providerName) return null;
+      if (genericAffinityMode && route.provider.googleMode === "cloud-code-assist" && !candidate.projectId)
+        throw new OAuthLoginRequiredError(route.providerName);
       if (anthropicInstance) anthropicRouteDecision = currentAnthropicRouteDecision();
       if (!oauthSelection) return null;
       const proactiveEnabled = anthropicInstance !== undefined
@@ -234,7 +242,9 @@ export async function prepareResponsesTransport(
       if (candidate.provider !== route.providerName) return null;
       if (anthropicInstance) anthropicRouteDecision = currentAnthropicRouteDecision();
       if (anthropicRouteDecision && !routeCandidates(anthropicRouting!.getEligibleAnthropicAccounts(Date.now(), route.modelId), anthropicRouteDecision).includes(candidate.accountId)) return null;
-      const committed = await commitOAuthAccountSelection(route.providerName, candidate.accountId, {
+      const committed = genericAffinityMode
+        ? admitGenericSessionAccount(config, route.providerName, oauthSelection, candidate, route.modelId, genericAffinityMode)
+        : await commitOAuthAccountSelection(route.providerName, candidate.accountId, {
         expectedSelection: oauthSelection,
         expectedCredentialGeneration: candidate.generation,
         requireUsableAccount: true,
@@ -248,14 +258,18 @@ export async function prepareResponsesTransport(
         )) return null;
         oauthSelection = committed;
         servingOAuthSnapshot = candidate;
+        bindGenericSessionAccount(config, route.providerName, genericSessionKey, candidate.accountId, route.modelId);
         if (anthropicInstance) replayOAuthCredentialSnapshot = { accountId: candidate.accountId, generation: candidate.generation };
         forgetGenericFailoverRoster(route.providerName);
         return candidate;
       }
       // A newer manual choice wins over this request's old proposal, including A→B→A.
       // Resolve that choice, not the rejected candidate, before trying admission again.
+      const previousSelection = oauthSelection;
       oauthSelection = captureOAuthAccountSelection(route.providerName);
       if (!oauthSelection) return null;
+      const selectionChanged = oauthSelection.accountId !== previousSelection.accountId
+        || oauthSelection.revision !== previousSelection.revision;
       // A revision also changes on per-account policy edits. Re-evaluate the selector
       // after credential waits even without a model route, rather than reusing stale active.
       const revisedAnthropic = anthropicInstance !== undefined
@@ -263,9 +277,15 @@ export async function prepareResponsesTransport(
       const revisedAnthropicId = revisedAnthropic?.accountId;
       if (anthropicInstance !== undefined && !revisedAnthropicId) return null;
       if (revisedAnthropic) anthropicReason = revisedAnthropic.reason;
+      const genericAccountId = genericAffinityMode && !selectionChanged
+        ? (genericSessionAccountEligible(config, route.providerName, candidate.accountId, route.modelId, Date.now(), true)
+          ? candidate.accountId : (preferredGenericSessionAccount(config, route.providerName, genericSessionKey, route.modelId)
+            ?? oauthSelection.accountId))
+        : oauthSelection.accountId;
+      if (!genericAccountId && !anthropicInstance) return null;
       candidate = anthropicInstance !== undefined
         ? await anthropicRouting!.getAnthropicPoolAccessSnapshot(revisedAnthropicId ?? oauthSelection.accountId)
-        : await getValidAccessSnapshotForAccount(route.providerName, oauthSelection.accountId, { requireUsableAccount: true });
+        : await getValidAccessSnapshotForAccount(route.providerName, genericAccountId!, { requireUsableAccount: true });
       if (route.provider.googleMode === "cloud-code-assist" && !candidate.projectId) return null;
     }
     return null;
@@ -275,7 +295,10 @@ export async function prepareResponsesTransport(
     // Keyed on the account, not the selection revision: a selection that moved away and back
     // (A -> B -> A) before the 401 landed still serves the rejected credential, and skipping
     // the refresh would replay it and spend the one recovery attempt.
-    const candidate = current?.accountId === sent.accountId ? await forceRefreshOAuthAccessSnapshot(sent) : sent;
+    const candidate = (current?.accountId === sent.accountId
+      || (genericAffinityMode && current?.revision === oauthSelection?.revision
+        && current?.accountId === oauthSelection?.accountId && servingOAuthSnapshot?.accountId === sent.accountId))
+      ? await forceRefreshOAuthAccessSnapshot(sent) : sent;
     const admitted = await commitResolvedOAuthSelection(candidate);
     if (!admitted) throw new Error("OAuth selection changed during credential recovery");
     if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== admitted.accountId) {
@@ -519,6 +542,8 @@ export async function prepareResponsesTransport(
     return selected?.accountId === binding.selection.accountId && selected?.revision === binding.selection.revision
       && !!row && !row.paused && !row.needsReauth && row.credential.expires > Date.now()
       && (anthropicInstance === undefined || !anthropicRouting!.getAnthropicAccountHealthSnapshot(binding.snapshot.accountId) && !anthropicRatePolicy!.anthropicRatePauseUntil(binding.snapshot.accountId) && !anthropicQuota!.anthropicFamilyRejected(binding.snapshot.accountId, route.modelId))
+      && (!genericAffinityMode
+        || genericSessionAccountEligible(config, route.providerName, binding.snapshot.accountId, route.modelId, Date.now(), true))
       && credentialGeneration(row.credential) === binding.snapshot.generation;
   };
   /** Bind the negotiated wire adapter and its built requests to the serving credential's authority. */
@@ -592,12 +617,23 @@ export async function prepareResponsesTransport(
         const accountId = await anthropicRouting!.resolveAnthropicDispatchAccountId(config, anthropicSessionKey, anthropicRouteDecision, route.modelId);
         candidate = await anthropicRouting!.getAnthropicPoolAccessSnapshot(accountId);
       }
+      if (genericAffinityMode
+        && (!candidate || !genericSessionAccountEligible(config, route.providerName, candidate.accountId, route.modelId, Date.now(), true))) {
+        const accountId = preferredGenericSessionAccount(config, route.providerName, genericSessionKey, route.modelId)
+          ?? captureOAuthAccountSelection(route.providerName)?.accountId;
+        candidate = accountId ? await getValidAccessSnapshotForAccount(route.providerName, accountId, { requireUsableAccount: true }) : undefined;
+      }
       if (!candidate || !await applyFailoverSnapshot(candidate, requestParsed, true)) {
         if (anthropicInstance !== undefined) await anthropicRouting!.resolveAnthropicDispatchAccountId(config, anthropicSessionKey, anthropicRouteDecision, route.modelId);
         throw new Error("OAuth account selection changed before dispatch");
       }
     } else {
-      const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
+      let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
+      if (!current && (route.provider._apiKeyAttempt?.distributed || (route.provider.requestPacing?.enabled
+        && (route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin")))) {
+        const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...route.provider, _apiKeyAttempt: undefined });
+        if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
+      }
       if (!current) throw new Error("API key selection is unavailable before dispatch");
       route.provider = current;
       await resolveCopilotSelection(requestParsed, true);
@@ -625,7 +661,10 @@ export async function prepareResponsesTransport(
       ? (options.sendBudget as import("../../lib/request-execution-budget").RequestExecutionBudget).beginSpendProducer?.() : undefined;
     try {
     for (let attempt = 0; attempt < 3; attempt++) {
-      if (!selectionIsCurrent(adapterBindings.get(selectedAdapter))) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
+      incoming.abortSignal?.throwIfAborted();
+      const selectionRefreshed = !selectionIsCurrent(adapterBindings.get(selectedAdapter));
+      if (attempt === 0 && selectionRefreshed) releaseProviderRequestSlot(incoming.pacingSlot);
+      if (selectionRefreshed) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
       const binding = adapterBindings.get(selectedAdapter);
       const run = rawRunTurns.get(selectedAdapter);
       if (!run) throw new Error("Selected provider no longer supports this turn transport");
@@ -635,24 +674,39 @@ export async function prepareResponsesTransport(
       // Both main and image-loop callers already acquired the initial pacing slot.
       // Subsequent physical messages retain this adapter/credential and are paced normally.
       try {
-        attemptSlot = attempt === 0
-          ? incoming.pacingSlot ?? await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, incoming.abortSignal)
+        // A pre-acquired lease belongs to the original selection, never its replacement.
+        attemptSlot = attempt === 0 && !selectionRefreshed && incoming.pacingSlot
+          ? incoming.pacingSlot
           : await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, incoming.abortSignal);
+        incoming.abortSignal?.throwIfAborted();
+        // Every admission can queue, including a replacement's. Never enter an
+        // adapter on a lease whose credential changed while it waited.
+        if (!selectionIsCurrent(binding)) {
+          refused = true;
+          throw new Error("Account selection changed before turn admission");
+        }
+        const beforePhysicalSend = (): void => {
+          incoming.abortSignal?.throwIfAborted();
+          if (sent) {
+            if (binding?.kind === "api-key" && binding.provider._apiKeyAttempt?.distributed
+              && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
+            return;
+          }
+          if (!selectionIsCurrent(binding)) {
+            refused = true;
+            throw new Error("Account selection changed before the first turn dispatch");
+          }
+          incoming.beforePhysicalSend?.();
+          commitKeyAttemptSend();
+          sent = true;
+        };
         const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
           pacingSlot: attemptSlot,
           turnScopedPacing: true,
-          beforeDispatch: () => {
-            if (sent) return;
-            if (!selectionIsCurrent(binding)) {
-              refused = true;
-              throw new Error("Account selection changed before the first turn dispatch");
-            }
-            commitKeyAttemptSend();
-            sent = true;
-          },
+          beforeDispatch: beforePhysicalSend,
         });
-        await run(requestParsed, { ...incoming, providerFetch: fetch }, event => { if (!refused) emit(event); });
+        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend }, event => { if (!refused) emit(event); });
       } catch (error) {
         if (!refused) throw error;
       } finally {
@@ -661,7 +715,7 @@ export async function prepareResponsesTransport(
       if (!refused) return;
       // The adapter may map the guard's exception to an error event. Neither that
       // event nor a refused send may escape before retrying the newly selected account.
-      selectedAdapter = await refreshRunTurnAdapter(requestParsed);
+      if (attempt < 2) selectedAdapter = await refreshRunTurnAdapter(requestParsed);
     }
     throw new Error("Account selection changed repeatedly before turn dispatch");
     } finally { producer?.close(); }
@@ -669,10 +723,16 @@ export async function prepareResponsesTransport(
   /** Fence the physical send, with bounded credential/session rebuilds and safe negotiated refusals. */
   const oauthDispatch = (wireRequest: AdapterRequest, requestParsed = parsed, owner: "adapter" | "passthrough" = "adapter"): ProviderFetchOptions["dispatchOverride"] => {
     if (route.provider.authMode === "forward") return undefined;
-    return /** Dispatch with the current binding and session, rebuilding at most three times before returning a safe refusal. */ async (input, init, execute) => {
+    return /** Dispatch with the current binding and session, rebuilding at most three times before returning a safe refusal. */ async (input, init, execute, reacquirePacing) => {
       let destination = input;
       let dispatchInit = init;
+      let pacingChanged = false;
       for (let attempt = 0; attempt < 3; attempt++) {
+        if (pacingChanged) {
+          if (!reacquirePacing) throw new Error("Refreshed dispatch requires pacing readmission");
+          await reacquirePacing(route.provider, route.modelId);
+          pacingChanged = false;
+        }
         if (selectionIsCurrent(requestBindings.get(wireRequest)) && copilotSessionExpiresAt > Date.now() + 1000) {
           const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? execute;
           const binding = requestBindings.get(wireRequest);
@@ -713,7 +773,7 @@ export async function prepareResponsesTransport(
             }
             commitKeyAttemptSend();
             response = await sendWithConnectionPolicy(
-              anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider),
+              distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
               destination,
               { ...dispatchInit, redirect: "manual" },
               { providerName: route.providerName, provider: route.provider },
@@ -775,13 +835,15 @@ export async function prepareResponsesTransport(
         sameTargetToken = transportToken;
         destination = rebuilt.url;
         dispatchInit = { ...dispatchInit, method: rebuilt.method, headers, body: rebuilt.body };
-        // The next iteration validates synchronously and calls fetch in that same turn.
+        pacingChanged = route.provider.requestPacing?.enabled === true
+          && (!!route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin");
+        // A refreshed key must reacquire admission before the next synchronous send guard.
       }
       throw new Error("OAuth account selection changed repeatedly before dispatch");
     };
   };
-  const anthropicSessionKey = anthropicInstance !== undefined && route.provider.authMode === "oauth"
-    ? anthropicSessionKeyFromParts({
+  const oauthSessionKey = route.provider.authMode === "oauth"
+    ? oauthSessionKeyFromParts({
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
       threadIdHeader: req.headers.get("thread-id"),
       promptCacheKey: typeof parsed.options.promptCacheKey === "string" ? parsed.options.promptCacheKey : null,
@@ -789,6 +851,9 @@ export async function prepareResponsesTransport(
       promptCacheKeyIsSharedCohort: options.promptCacheKeyIsSharedCohort === true,
     })
     : null;
+  const anthropicSessionKey = anthropicInstance ? oauthSessionKey : null;
+  const genericSessionKey = genericAffinityMode && oauthSessionKey
+    ? JSON.stringify([resolveContextPrincipal(req, config, options.admission) ?? "loopback", oauthSessionKey]) : null;
   if (route.provider.authMode === "oauth") {
     try {
       if (anthropicInstance !== undefined && anthropicRouting!.isAnthropicAccountPoolEnabled(config)) {
@@ -821,10 +886,17 @@ export async function prepareResponsesTransport(
         // without quota evidence keeps the resolution it has today.
         const refusalAwareId = route.providerName === "kiro" && oauthSelection?.accountId
           ? refusalAwareInitialKiroAccount(config, oauthSelection.accountId, Date.now(), route.modelId) : null;
-        const preferredAccountId = refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
+        const affinityAccountId = genericSessionAccount(config, route.providerName, genericSessionKey, route.modelId);
+        const proposedAccountId = affinityAccountId
+          ?? preferredGenericSessionAccount(config, route.providerName, genericSessionKey, route.modelId)
+          ?? refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
           ? preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)
           : null);
-        let safetyAlternateId: string | null = refusalAwareId;
+        // An unchanged active choice must retain the ordinary resolver's terminal-refresh
+        // recovery (not the speculative-preference fallback that resolves the same dead grant).
+        const preferredAccountId = genericAffinityMode && proposedAccountId === oauthSelection?.accountId
+          ? null : proposedAccountId;
+        let safetyAlternateId: string | null = !affinityAccountId && preferredAccountId === refusalAwareId ? refusalAwareId : null;
         // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
         // rotation site, and rotation sites must apply their credential through
         // applyFailoverSnapshot's pairing rules. This is initial resolution — the code below
@@ -926,7 +998,8 @@ export async function prepareResponsesTransport(
           // Advance the pool cursor only now that this account is actually admitted. The
           // helper returns immediately unless the kernel is on AND the strategy is
           // round-robin, so quota and fill-first pools reach it without being touched.
-          noteGenericPoolSelection(config, route.providerName, resolved.accountId, route.modelId);
+          if (!affinityAccountId || affinityAccountId !== resolved.accountId)
+            noteGenericPoolSelection(config, route.providerName, resolved.accountId, route.modelId);
         }
         // Anthropic is excluded from isGenericFailoverProvider -- its own pool owns affinity and
         // a fail-closed local-cli credential rule -- so without this stamp its identity is
@@ -963,6 +1036,10 @@ export async function prepareResponsesTransport(
           "invalid_request_error",
           `${redactSecretString(err.message)}. Remove or reconfigure provider '${safeProviderName}' in the OpenCodex configuration.`,
         );
+      }
+      if (err instanceof OAuthTokenRefreshBusyError) {
+        return options.abortSignal?.aborted || req.signal.aborted ? clientCancelledResponse()
+          : formatErrorResponse(503, "server_error", err.message, { retryAfter: "1" });
       }
       if (err instanceof OAuthAccountPausedError) {
         return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err));

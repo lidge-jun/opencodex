@@ -152,7 +152,7 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 | 被分类为认证、订阅、配额、速率限制、过载或上游服务器错误 | 即使仅凭状态码不足以判断，也会使该目标进入冷却并跳转。 |
 | 客户端取消（499）、`origin_rejected`、cyber-policy 拒绝、上下文溢出，或其他无效请求 | 停止并返回错误；换其他目标也无法让请求变得有效。 |
 | HTTP 400 明确表示使用 ChatGPT 账户运行 Codex 时不支持该模型 | 在输出提交前尝试下一个已配置目标。完整拒绝句必须位于 `detail`、`error.message` 或纯文本中；同时包含 `detail` 与 `error` 的混合封装仍会终止请求。此原因本身不会将账户标为需要重新登录，也不会让供应商的所有模型进入冷却。 |
-| 结构化 HTTP 400，明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值，或返回模型特定图像输入拒绝（`param: input`） | 在输出开始前跳转到下一个符合条件的目标，且不记录冷却时间；参见下方可选参数兼容性。 |
+| 结构化 HTTP 400，明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`） | 在输出开始前跳转到下一个符合条件的目标，且不记录冷却时间；参见下方可选参数兼容性。 |
 | 由进程内适配器（`runTurn`）执行的 Responses 回合中，当前请求未声明的第一个工具调用（在任何输出和不可重放的副作用之前） | 让该目标进入冷却，并以相同的工具目录跳转到下一个目标。出现可见输出或不可重放的副作用之后，拒绝即为最终结果。Chat Completions 和 Anthropic Messages 请求不受影响。 |
 | 任何其他未分类错误 | 停止并返回错误。 |
 
@@ -214,7 +214,7 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 
 ### Dashboard
 
-打开本地 dashboard 并选择 **Models → Combos**。该工作区可以创建、编辑、重命名和删除 combo，其目标选择器会排除已禁用的模型和嵌套 combo。
+打开本地 dashboard 并选择 **Models → Combos**。该工作区可以创建、编辑、重命名和删除 combo。模型选择器使用包含隐藏模型的完整目录：显示／隐藏设置只影响对外模型列表，不影响 Combo 内部选择，选中隐藏模型也不会将其对外显示。目标选择器仍排除已禁用的提供方、嵌套 combo 和仅用于决策服务的 JEV 提供方。
 
 每个目标还会显示实时额度徽章：**可用**、**额度已用尽**或**额度未知**。只有当每个可用目标均有当前有效的服务器确认，表明其所配置凭据的推理限额已耗尽时，编辑器才会因额度而禁止保存和创建。仅供显示的账户、模型、搜索和 MCP 额度，以及缺失或已过期的路由依据，都不会触发此限制。此限制会在适用的重置时间或数据有效期结束时解除，并在页面变为活动或可见状态时重新检查；刷新会同时重新加载 Combo 数据和额度。dashboard 编辑器目前还不能设置 `cooldownMs` 或 `waitForCooldownMs`；在后续 UI 完成前，请使用配置文件或管理 API。
 
@@ -299,6 +299,6 @@ combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。�
 
 ## 可选参数兼容性
 
-一般 400 错误仍会终止请求，但明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值，或返回模型特定图像输入拒绝（`param: input`）的结构化错误，可让 combo 在输出开始前尝试下一个符合条件的目标，而不记录冷却时间。安全策略拒绝、取消以及已经开始的输出仍不可重放。
+一般 400 错误仍会终止请求，但明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值、返回模型特定图像输入拒绝（`param: input`），或拒绝该路由无法读取的输入媒体（`unsupported_input_modality`）的结构化错误，可让 combo 在输出开始前尝试下一个符合条件的目标，而不记录冷却时间。安全策略拒绝、取消以及已经开始的输出仍不可重放。
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).

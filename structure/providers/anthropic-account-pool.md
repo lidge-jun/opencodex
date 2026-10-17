@@ -25,7 +25,9 @@ existing auth-store write lock. Display identities do not establish a duplicate.
 Refresh intent paths and credential-owner checks retain the actual instance.
 Pool 2 config publication rechecks the latest provider row under the config mutation
 lock; a collision preserves the custom row and reports any already-written orphan
-credential. No default-provider change accompanies that publication.
+credential. No default-provider change accompanies that publication. CLI preflight checks raw
+config ownership before tolerant loading and reports a custom-row collision or unreadable/malformed
+config through the fixed `configuration_error` reporter before prompting.
 
 Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
 `tests/config/config-anthropic-instance-pool.test.ts`,
@@ -298,11 +300,16 @@ only canonical Fable, Opus, or Sonnet labels after removing terminal controls; u
 
 `src/oauth/anthropic-account-refusal.ts` accepts an HTTP 403 only when a complete bounded
 JSON `error` envelope has `permission_error` or `billing_error` and a whole-message
-account subscription/Claude Code entitlement or Anthropic credit-balance refusal.
+account subscription/Claude Code entitlement or Anthropic credit-balance refusal, or when
+the envelope carries the structured `oauth_org_not_allowed` type or code (organization disabled
+Claude subscription access; also matched by its whole message under `permission_error`).
 Generic permission, resource/model access, content policy, quoted diagnostics, conflicting
 error codes and incomplete/malformed bodies remain terminal. The shared physical dispatch
 in `src/server/responses/request-transport.ts` binds the refusal to the stored bearer it sent;
 overridden headers, additional API keys and replaced credentials cannot cool that account.
+Combo 402 credit-balance refusals carry that immutable send proof across bounded error
+normalization in `src/server/responses/core-combo-failure.ts`. The combo rechecks instance,
+account incarnation, credential generation and pause/reauth state before recording entitlement cooldown.
 
 `src/oauth/anthropic-routing.ts` records a process-local cooldown, clears account affinity,
 and applies the existing strategy, pause/reauth exclusions, model route and selection commit.
@@ -311,6 +318,8 @@ A usage probe cannot clear this non-reset-derived cooldown. Plan renewal therefo
 no permanent reauthentication flag, though a renewed account waits for cooldown expiry.
 The main dispatch, pre-output empty-completion retry, web-search and image bridge use the
 same bounded recovery and record the final refusal even when no retry sends remain.
+Each records the rotated send as `oauth-account-403` (cause `credential-rejected`), not the
+quota recovery `anthropic-oauth-429`, as the native Messages path already did.
 A streamed terminal continuation after assistant output and search after live output or a
 published search call cannot rotate on 403. Non-streaming buffered continuations may recover.
 No eligible replacement preserves the upstream 403; generic 401 handling is unchanged.
@@ -450,3 +459,5 @@ updating live state. A confirmed published write followed by bookkeeping failure
 pool and returns a fixed warning; an unpublished failure keeps old state. Unknown outcomes require
 reload and are not represented as a successful save. The GUI checkbox is a saved preference rather
 than a promise that a route is eligible; explicit rollout opt-outs still apply.
+
+The shared conversation-key precedence is implemented by `src/oauth/session-affinity-key.ts` and re-exported as `anthropicSessionKeyFromParts`; Anthropic routing semantics remain owned here. [Generic OAuth affinity](generic-account-pool.md#conversation-affinity) uses independent request-local receipts.

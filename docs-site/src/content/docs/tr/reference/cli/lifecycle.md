@@ -105,7 +105,7 @@ dahildir. Durumu yedekleyin ve yalnızca bu kapsamın tamamını istiyorsanız �
 
 ### `ocx recover-history --ocx-compaction <thread-id> --yes`
 
-Yönlendirilmiş bir sağlayıcı üzerinden sıkıştırılmış bir görevi yerel Codex ile sürdürmeden önce geçmişini onarın. Komut UUID ile yalnızca bir görevi seçer, önce özel ve bayt bayt bir yedek kaydeder, ardından yalnızca OpenCodeX'e ait `ocx1:` sıkıştırma durumunu yerel Codex'in yeniden oynatabileceği düz bir özete dönüştürür. Yerel şifreli içerik ve diğer görevler değişmeden kalır. Komutu çalıştırmadan önce seçili görevi kapatın; işlem sırasında rollout değişirse kurtarma dosyayı değiştirmeden durur.
+Yönlendirilmiş bir sağlayıcı üzerinden sıkıştırılmış bir görevi yerel Codex ile sürdürmeden önce geçmişini onarın. Komut UUID ile yalnızca bir görevi seçer, önce özel ve bayt bayt bir yedek kaydeder, ardından yalnızca OpenCodeX'e ait `ocx1:`/`ocx2:` sıkıştırma durumunu yerel Codex'in yeniden oynatabileceği düz bir özete dönüştürür. Yerel şifreli içerik ve diğer görevler değişmeden kalır. Komutu çalıştırmadan önce seçili görevi kapatın; işlem sırasında rollout değişirse kurtarma dosyayı değiştirmeden durur.
 
 ### `ocx uninstall` · `ocx remove`
 
@@ -237,6 +237,8 @@ Doctor asla kimlik bilgilerini değiştirmez veya onarımlar uygulamaz.
 ## Katalog senkronizasyonu
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
+
+Açıkça istenen yeniden başlatma, katalog ve önbellek baytları değişmese bile `config.toml` değişikliği başarıyla kaydedildikten sonra da çalışır. Yalnızca yapılandırmayı işleyen bir işlem değişiklik yapmadığında, reddedildiğinde, ön kontrolde kaldığında veya yazma geri alındığında yeniden başlatma tetiklenmez. Yeniden başlatma bayrağı olmadan sync, Codex’i otomatik olarak yeniden başlatmaz.
 
 Yapılandırılmış her sağlayıcıdan canlı model listesini alın ve birleştirilmiş
 kataloğu Codex'e yeniden enjekte edin. Bir sağlayıcı ekledikten sonra veya

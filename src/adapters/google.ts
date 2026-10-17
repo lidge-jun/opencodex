@@ -1,6 +1,8 @@
+import { openCodeZenGeminiEndpoint } from "../types/opencode-zen";
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
+import { openCodeGoGeminiEndpoint } from "../types/opencode-go";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
 import type {
   AdapterEvent,
@@ -17,7 +19,7 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
-import { getVertexAccessToken } from "../lib/gcp-adc";
+import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
@@ -42,6 +44,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
+import { geminiProgressLead, trimsGeminiProgressHistory } from "./google-progress-history";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
@@ -174,7 +177,15 @@ function resolveDirectGeminiWireModelId(modelId: string, applyRenames: boolean):
 
 /** Vertex API key: provider.apiKey if it looks real (not a sentinel), else GOOGLE_CLOUD_API_KEY env. */
 function resolveVertexApiKey(optKey?: string): string | undefined {
-  const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A" ? optKey : undefined;
+  // A `gcp-sa:` marker is the keychain-backed credential reference (see gcp-adc): it is not
+  // API-key material, so it must not be sent as x-goog-api-key — the ADC branch below handles it.
+  // AND the marker means the operator named one credential explicitly: the GOOGLE_CLOUD_API_KEY
+  // env fallback must NOT fire (it would silently route this provider's inference through the
+  // ambient env key instead of the configured service account).
+  if (optKey && optKey.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) return undefined;
+  const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A"
+    ? optKey
+    : undefined;
   return realKey || process.env.GOOGLE_CLOUD_API_KEY;
 }
 
@@ -456,11 +467,26 @@ function messagesToGeminiFormat(
         const aMsg = msg as OcxAssistantMessage;
         const parts: unknown[] = [];
         const toolCalls: Array<{ wireCallId: string; wireName: string }> = [];
+        // Progress text before a Gemini tool call replays as its lead sentence, so planning the
+        // model leaked into visible text is not copied forward (google-progress-history.ts).
+        const trimProgress = trimsGeminiProgressHistory(identityModelId)
+          && aMsg.phase !== "final_answer"
+          && aMsg.content.some(part => part.type === "toolCall");
+        let progressLeadKept = false;
+        let afterToolCall = false;
         for (const p of aMsg.content) {
           if (p.type === "text") {
-            const textPart = geminiTextPart((p as OcxTextContent).text);
+            let text: unknown = (p as OcxTextContent).text;
+            if (trimProgress && !afterToolCall) {
+              if (progressLeadKept || typeof text !== "string") continue;
+              text = geminiProgressLead(text);
+              if (text === undefined) continue;
+              progressLeadKept = true;
+            }
+            const textPart = geminiTextPart(text);
             if (textPart) parts.push(textPart);
           } else if (p.type === "toolCall") {
+            afterToolCall = true;
             const tc = p as OcxToolCall;
             // Preserve the thought signature on the function-call part so Antigravity/Gemini-3
             // reasoning continuity survives history-driven (stateless) turns, not just same-process
@@ -864,6 +890,7 @@ function invalidGoogleShapeEvent(
   };
 }
 
+/** Build Gemini transport and response parsing for AI Studio, Vertex, Cloud Code Assist or Go. */
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const toolSchemaPolicy = provider.googleToolSchemaPolicy ?? "compatible";
   const toolSchemaProfile = {
@@ -945,6 +972,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
       : {}),
 
+    /** Compile an admitted request into the selected Gemini endpoint, body and authentication. */
     async buildRequest(parsed: OcxParsedRequest) {
       // Structured-output admission runs FIRST, before messagesToGeminiFormat writes
       // lastInjectedCallIds/lastReasoningReplayScope: a refused request must not leave
@@ -983,7 +1011,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
             provider.baseUrl,
           ).wireModelId
-        : provider.googleMode === "vertex"
+        : provider.googleMode === "vertex" || openCodeZenGeminiEndpoint(provider, parsed.modelId) !== undefined
           ? parsed.modelId
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       returnsThoughtSummaries = provider.googleMode === "cloud-code-assist"
@@ -1197,16 +1225,31 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         if (locationError) throw new Error(locationError);
         const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
         const url = `https://${host}/v1/projects/${project}/locations/${location}/publishers/google/models/${parsed.modelId}:${method}${streamParam}`;
-        const token = await getVertexAccessToken();
+        // The marker account travels per-request as an argument (never process-global state): a
+        // module-level "active marker" written at routing time would race across concurrent
+        // requests for different providers and could resolve one call with another's credential.
+        const markerAccount = gcpCredentialMarkerAccount(provider.apiKey);
+        const token = await getVertexAccessToken({ markerAccount });
         headers["Authorization"] = `Bearer ${token}`;
         return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
       }
 
-      // ai-studio (default): Generative Language API + x-goog-api-key.
-      const url = `${provider.baseUrl}/v1beta/models/${routedModelId}:${method}${streamParam}`;
+      // Go and Zen use separate guarded Gemini endpoints; AI Studio retains /v1beta.
+      const goEndpoint = openCodeGoGeminiEndpoint(provider, routedModelId);
+      const zenEndpoint = openCodeZenGeminiEndpoint(provider, routedModelId);
+      const endpoint = goEndpoint ?? zenEndpoint ?? `${provider.baseUrl}/v1beta/models/${routedModelId}`;
+      const url = `${endpoint}:${method}${streamParam}`;
       const apiKey = provider.apiKey?.trim();
-      if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
-      headers["x-goog-api-key"] = apiKey;
+      if (!apiKey) throw new Error(`${goEndpoint ? "OpenCode Go" : zenEndpoint ? "OpenCode Zen" : "google (AI Studio)"} requires a non-empty API key`);
+      if (goEndpoint) {
+        // Console inference documents Bearer auth. Send only the selected Go key.
+        for (const name of Object.keys(headers)) {
+          if (["authorization", "x-goog-api-key", "x-api-key"].includes(name.toLowerCase())) delete headers[name];
+        }
+        headers["Authorization"] = `Bearer ${apiKey}`;
+      } else {
+        headers["x-goog-api-key"] = apiKey;
+      }
 
       const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
       reportToolSchemaLoss(compiled.toolSchemaLossReport);

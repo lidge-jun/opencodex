@@ -1,4 +1,6 @@
+import { MuseLoginError, museLoginErrorMessage } from "./meta-muse-errors";
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
+import { mapFill } from "../providers/resolved-model-policy-merge";
 import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { getDefaultConfig, initializePersistedConfigIfMissing, loadConfig, mutatePersistedConfig, observeInitialConfigState, saveConfig } from "../config";
@@ -48,6 +50,7 @@ import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
+import { DSH_ACCOUNT_AUTH } from "./dsh";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
 import { ANTIGRAVITY_DISCOVERY_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
@@ -57,9 +60,12 @@ import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../provider
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
+import { MAX_OAUTH_TOKEN_REFRESH_WAITERS, retireSettledOAuthRefreshFlight, tokenRefreshWaiters, type OAuthRefreshFlightEvidence } from "./refresh-flight-retirement";
+export { MAX_OAUTH_TOKEN_REFRESH_WAITERS };
 import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
-import { clearManualCodeSlot, ensureManualCodeSlot, kiroLoginSettling, loginAbort, loginState, waitForManualLoginCode, type OAuthLoginHint } from "./login-flow-state";
-export { reconcileOAuthFlowState, submitManualLoginCode } from "./login-flow-state";
+import { admitLoginFlow, classifyLoginCodeError, clearManualCodeSlot, CodeLoginUnsupportedError, ensureManualCodeSlot, kiroLoginSettling, latestLoginFlowKey, loginAbort, loginFlowProvider, loginState, recordStartedLoginFlow, settleLoginFlow, waitForManualLoginCode, type LoginCodeError, type OAuthLoginHint } from "./login-flow-state";
+export { cancelLoginFlow, clearLoginState, CodeLoginUnsupportedError, isCodeLoginFlow, loginFlowAccountId, reconcileOAuthFlowState, submitLoginCode, submitManualLoginCode, waitForLoginSettled } from "./login-flow-state";
+export type { LoginCodeError, LoginFlowState } from "./login-flow-state";
 import { randomUUID } from "node:crypto";
 export {
   CODEX_HEALTH_AUTH_FAILED_NOTE,
@@ -132,8 +138,7 @@ export type OAuthActiveTokenObservation =
 
 const MAX_OAUTH_TOKEN_REFRESH_FLIGHTS = 32;
 const OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS = 120_000;
-interface OAuthRefreshFlightEvidence { flightId: string; dispatched: boolean }
-interface OAuthTokenRefreshFlight extends OAuthRefreshFlightEvidence { promise: Promise<OAuthAccessSnapshot>; startedAt: number; abort: AbortController }
+interface OAuthTokenRefreshFlight extends OAuthRefreshFlightEvidence { promise: Promise<OAuthAccessSnapshot>; startedAt: number; abort: AbortController; settled?: boolean; retirementDeferredLogged?: boolean }
 const tokenRefreshes = new Map<string, OAuthTokenRefreshFlight>();
 export class OAuthTokenRefreshBusyError extends Error {
   readonly code = "OAUTH_TOKEN_REFRESH_BUSY";
@@ -157,7 +162,8 @@ export function seedOAuthTokenRefreshFlightsForTests(rows: Array<{ key: string; 
     const promise = new Promise<OAuthAccessSnapshot>((_resolve, reject) => {
       abort.signal.addEventListener("abort", () => reject(abort.signal.reason), { once: true });
     });
-    const flight = { promise, startedAt: startedAt ?? Date.now(), abort, flightId: flightId ?? randomUUID(), dispatched: dispatched ?? false };
+    const flight: OAuthTokenRefreshFlight = { promise, startedAt: startedAt ?? Date.now(), abort, flightId: flightId ?? randomUUID(), dispatched: dispatched ?? false };
+    abort.signal.addEventListener("abort", () => { flight.settled = true; }, { once: true });
     tokenRefreshes.set(key, flight);
     inserted.push(flight);
     return promise;
@@ -192,6 +198,8 @@ export interface LoginOpts {
    * listener (#3366). Ignored by every other provider.
    */
   flow?: ChatGPTLoginFlow;
+  /** Code-display login: no callback server; completes from a pasted code (needs `codeRedirectUri`). */
+  codeMode?: boolean;
 }
 
 export interface LoginFlowLifecycle {
@@ -220,6 +228,8 @@ export interface OAuthProviderDef {
    * overrides this. Default when unset here: "lazy-only".
    */
   defaultRefreshPolicy?: RefreshPolicy;
+  /** Provider-hosted page that DISPLAYS the code; its presence enables `codeMode`. */
+  codeRedirectUri?: string;
 }
 
 function oauthConfig(id: string): OcxProviderConfig {
@@ -235,6 +245,11 @@ function oauthDefaultModel(id: string): string {
 }
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
+  "dsh-account": {
+    ...DSH_ACCOUNT_AUTH,
+    providerConfig: oauthConfig("dsh-account"),
+    defaultModel: oauthDefaultModel("dsh-account"),
+  },
   "command-code": {
     // Add-account/reauth must not reimport the current local CLI credential.
     login: (ctrl, opts) => loginCommandCode(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
@@ -383,6 +398,11 @@ export function isPublicOAuthProvider(name: string): boolean {
   return name !== "chatgpt" && isOAuthProvider(name);
 }
 
+/** Providers that can log in from a displayed code, with no inbound port and no browser here. */
+export function supportsCodeLoginMode(name: string): boolean {
+  return OAUTH_PROVIDERS[name]?.codeRedirectUri !== undefined;
+}
+
 function isRefreshPolicy(value: unknown): value is RefreshPolicy {
   return value === "proactive" || value === "lazy-only" || value === "disabled";
 }
@@ -452,6 +472,14 @@ export class OAuthProviderPublicationError extends Error {
   }
 }
 
+/** A local configuration conflict found before any credential is written; its text is fixed. */
+export class OAuthProviderNamespaceCollisionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OAuthProviderNamespaceCollisionError";
+  }
+}
+
 export class OAuthReauthIdentityMismatchError extends Error {
   constructor() {
     super("Signed-in account does not match the selected account. Sign in with the same account.");
@@ -475,6 +503,7 @@ class OAuthLoginSupersededError extends Error {
 
 /** Project arbitrary OAuth failures onto the small, stable public error vocabulary. */
 export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
+  if (error instanceof MuseLoginError) return museLoginErrorMessage(error.kind, error.status);
   if (error instanceof OAuthMutationBusyError) {
     return error.message === "OAuth mutation queue wait timed out"
       ? "OAuth mutation queue wait timed out"
@@ -484,6 +513,7 @@ export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
     (error instanceof OAuthLoginRequiredError && isOAuthProvider(error.provider))
     || error instanceof OAuthAccountPausedError
     || error instanceof OAuthProviderPublicationError
+    || error instanceof OAuthProviderNamespaceCollisionError
     // Reauth identity outcomes carry fixed, account-free remediation text. Dropping them to the
     // generic message hides WHICH failure the user must fix (sign in with the selected account).
     || error instanceof OAuthReauthIdentityMismatchError
@@ -608,45 +638,71 @@ async function resolveAccessSnapshotForAccount(
   const key = `${provider}\u0000${accountId}`;
   let existing = tokenRefreshes.get(key);
   let replacedStaleFlight: OAuthRefreshFlightEvidence | undefined;
-  if (existing && Date.now() - existing.startedAt <= OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS) {
-    logOAuthEvent("OAuth refresh joined existing operation", { provider, accountId });
-    return existing.promise;
-  }
-  if (existing) {
+  if (existing && (existing.abort.signal.reason instanceof OAuthTokenRefreshStaleError
+    || Date.now() - existing.startedAt > OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS)) {
     replacedStaleFlight = { flightId: existing.flightId, dispatched: existing.dispatched };
     existing.abort.abort(new OAuthTokenRefreshStaleError());
-    if (tokenRefreshes.get(key) === existing) tokenRefreshes.delete(key);
-    existing = undefined;
   }
-  if (tokenRefreshes.size >= MAX_OAUTH_TOKEN_REFRESH_FLIGHTS) throw new OAuthTokenRefreshBusyError();
-
-  const abort = new AbortController();
-  const flight: OAuthTokenRefreshFlight = {
-    promise: undefined as unknown as Promise<OAuthAccessSnapshot>,
-    startedAt: Date.now(),
-    abort,
-    flightId: randomUUID(),
-    dispatched: false,
-  };
-  const refresh = (async (): Promise<OAuthAccessSnapshot> => {
-    const accessToken = await refreshAndPersistAccessToken(provider, accountId, def, cred, abort.signal, flight, replacedStaleFlight);
-    const persistedRow = getAccountCredentialWithStatus(provider, accountId);
-    if (!persistedRow) throw new OAuthLoginRequiredError(provider);
-    if (persistedRow.paused === true) throw new OAuthAccountPausedError();
-    const persisted = persistedRow.credential;
-    if (persisted.access !== accessToken) {
-      throw new Error(`OAuth refresh persisted an unexpected access token for ${provider}`);
+  // Count every consumer, including same-flight joins, until its promise settles. Cancelling
+  // a client cannot recycle this permit. Stale-flight abort above still runs under pressure;
+  // no replacement starts until the old consumers have actually released enough capacity.
+  const waiter = tokenRefreshWaiters.tryAcquire();
+  if (!waiter) throw new OAuthTokenRefreshBusyError();
+  try {
+    if (existing && replacedStaleFlight) {
+      // A replacement would wait for this owner's lock anyway. Keep its registry slot
+      // through definitive-result cleanup and durable retirement, even with spare capacity.
+      // In particular, an ignored abort must not mark a late explicit rejection as uncertain.
+      await existing.promise.catch(() => {});
+      if (tokenRefreshes.get(key) === existing && !retireSettledOAuthRefreshFlight(tokenRefreshes, key, existing)) {
+        throw new OAuthTokenRefreshStaleError();
+      }
+      // Other admitted replacements may have resumed first and installed the next flight.
+      existing = tokenRefreshes.get(key);
     }
-    return accessSnapshot(provider, accountId, persisted, oauthProvider);
-  })().catch(error => {
-    if (abort.signal.reason instanceof OAuthTokenRefreshStaleError) throw abort.signal.reason;
-    throw error;
-  }).finally(() => {
-    if (tokenRefreshes.get(key) === flight) tokenRefreshes.delete(key);
-  });
-  flight.promise = refresh;
-  tokenRefreshes.set(key, flight);
-  return refresh;
+    if (existing) {
+      logOAuthEvent("OAuth refresh joined existing operation", { provider, accountId });
+      return await existing.promise;
+    }
+    if (tokenRefreshes.size >= MAX_OAUTH_TOKEN_REFRESH_FLIGHTS) {
+      for (const [staleKey, stale] of tokenRefreshes) {
+        if (stale.abort.signal.reason instanceof OAuthTokenRefreshStaleError) retireSettledOAuthRefreshFlight(tokenRefreshes, staleKey, stale);
+      }
+      if (tokenRefreshes.size >= MAX_OAUTH_TOKEN_REFRESH_FLIGHTS) throw new OAuthTokenRefreshBusyError();
+    }
+
+    const abort = new AbortController();
+    const flight: OAuthTokenRefreshFlight = {
+      promise: undefined as unknown as Promise<OAuthAccessSnapshot>,
+      startedAt: Date.now(),
+      abort,
+      flightId: randomUUID(),
+      dispatched: false,
+    };
+    const refresh = (async (): Promise<OAuthAccessSnapshot> => {
+      const accessToken = await refreshAndPersistAccessToken(provider, accountId, def, cred, abort.signal, flight, replacedStaleFlight);
+      const persistedRow = getAccountCredentialWithStatus(provider, accountId);
+      if (!persistedRow) throw new OAuthLoginRequiredError(provider);
+      if (persistedRow.paused === true) throw new OAuthAccountPausedError();
+      const persisted = persistedRow.credential;
+      if (persisted.access !== accessToken) {
+        throw new Error(`OAuth refresh persisted an unexpected access token for ${provider}`);
+      }
+      return accessSnapshot(provider, accountId, persisted, oauthProvider);
+    })().catch(error => {
+      if (abort.signal.reason instanceof OAuthTokenRefreshStaleError) throw abort.signal.reason;
+      throw error;
+    }).finally(() => {
+      flight.settled = true;
+      if (tokenRefreshes.get(key) !== flight) return;
+      if (abort.signal.reason instanceof OAuthTokenRefreshStaleError) {
+        retireSettledOAuthRefreshFlight(tokenRefreshes, key, flight);
+      } else tokenRefreshes.delete(key);
+    });
+    flight.promise = refresh;
+    tokenRefreshes.set(key, flight);
+    return await refresh;
+  } finally { waiter.release(); }
 }
 
 export async function getValidAccessTokenSnapshot(
@@ -666,6 +722,7 @@ const FORCE_REFRESH_PROVIDERS = new Set([
   "google-antigravity",
   "orcarouter-oauth",
   "devin",
+  "dsh-account",
 ]);
 
 export async function forceRefreshOAuthAccessSnapshot(
@@ -1239,26 +1296,21 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
 // preserves explicit saved values.
 
 /**
- * Output-budget fields an OAuth preset may refresh but must never erase.
- *
- * These stay on the reconcile list so a preset that does declare a budget still
- * refreshes the saved row. What changes is the other branch: when the preset
- * declares nothing, the operator's value survives instead of being deleted.
- *
- * Without that, the fields behaved as if they could not be configured at all.
- * No OAuth preset seeds either one, so the delete branch was the only branch
- * these two ever took, and a hand-edited `defaultMaxOutputTokens` was gone
- * before the first turn of the next startup — leaving the adapter's own
- * fallback as the only reachable output cap (#5190).
- *
- * Scoped to the output budget on purpose. The input side (`contextWindow`,
- * `modelContextWindows`) describes what the account's models are, which the
- * preset and live discovery do own; an output budget is a spend decision the
- * operator makes.
+ * Saved limits and per-model declarations are operator input, including Copilot's
+ * long-context evidence. Presets supply missing defaults, not replacements for
+ * configured entries. Catalog rosters, capability lists and seeded reasoning
+ * ladders still refresh below; unseeded tiers remain operator input.
+ * Without provenance, a saved seed cannot be distinguished from an operator edit.
  */
+const OAUTH_OPERATOR_MAP_FIELDS: ReadonlySet<keyof OcxProviderConfig> = new Set([
+  "modelContextWindows", "modelMaxOutputTokens", "modelInputModalities",
+  "modelReasoningEffortMap", "reasoningEffortMap",
+]);
+const OAUTH_OPERATOR_LIMIT_FIELDS: ReadonlySet<keyof OcxProviderConfig> = new Set([
+  "contextWindow", "defaultMaxOutputTokens",
+]);
 const OAUTH_PRESERVE_WHEN_PRESET_UNSET: ReadonlySet<keyof OcxProviderConfig> = new Set([
-  "defaultMaxOutputTokens",
-  "modelMaxOutputTokens",
+  "reasoningEfforts",
 ]);
 
 const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
@@ -1298,7 +1350,23 @@ function applyOAuthPresetCatalog(
 ): void {
   for (const field of OAUTH_RECONCILE_FIELDS) {
     if (JSON.stringify(provider[field]) === JSON.stringify(preset[field])) continue;
-    if (preset[field] !== undefined) {
+    if (field === "modelReasoningEfforts") {
+      // Known unmarked ladders are saved catalog seeds, not evidence of an
+      // operator override. Preserve unseeded rows and explicit authoritative
+      // overrides; refresh the preset-owned rows (e.g. xAI's effort ladder).
+      const authoritative = provider.modelReasoningEffortsAuthoritative === true;
+      provider.modelReasoningEfforts = mapFill(
+        authoritative ? preset.modelReasoningEfforts : provider.modelReasoningEfforts,
+        authoritative ? provider.modelReasoningEfforts : preset.modelReasoningEfforts,
+      )[0];
+    } else if (OAUTH_OPERATOR_MAP_FIELDS.has(field)) {
+      provider[field] = mapFill<unknown>(
+        preset[field] as Record<string, unknown> | undefined,
+        provider[field] as Record<string, unknown> | undefined,
+      )[0] as never;
+    } else if (OAUTH_OPERATOR_LIMIT_FIELDS.has(field) && provider[field] !== undefined) {
+      continue;
+    } else if (preset[field] !== undefined) {
       provider[field] = cloneProviderField(preset[field]) as never;
     } else if (!OAUTH_PRESERVE_WHEN_PRESET_UNSET.has(field)) {
       delete provider[field];
@@ -1494,7 +1562,7 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (!def) return;
   if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) migrateLegacyAntigravityStaticCatalog(config);
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
-  if (namespaceCollision) throw new Error(namespaceCollision);
+  if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
   const existing = config.providers[provider];
   const providerConfig = def.resolveProviderConfig?.(config) ?? def.providerConfig;
   // Clone operator state, including xAI wire choices and their migration version.
@@ -1561,6 +1629,8 @@ interface RunLoginDeps {
   settleKiroLoginTransaction?: typeof settleKiroLoginTransaction;
   rollbackCredentialWrite?: typeof rollbackCredentialWriteIfMatch;
   assertCurrentOwner?: () => void;
+  /** Told which account row the credential write landed in (an id, never the credential). */
+  onAccountPersisted?: (accountId: string) => void;
 }
 
 /** Run the login flow, persist the credential + upsert the provider entry to disk, return cred. */
@@ -1591,7 +1661,7 @@ export async function runLogin(
       preflightConfig.codexAccountNamespaces,
       provider,
     );
-    if (namespaceCollision) throw new Error(namespaceCollision);
+    if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
   }
   if (provider === "anthropic2" && observeInitialConfigState() !== "exists") {
     throw new OAuthProviderPublicationError(provider, false);
@@ -1640,10 +1710,12 @@ export async function runLogin(
       // Proven same account: a reauth whose tier read failed keeps the stored label.
       const reauthPlan = mergeOAuthPlan(cred, existing);
       const reauthCred = reauthPlan === undefined ? cred : { ...cred, plan: reauthPlan };
-      await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
+      const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,
         rotateLoginId: true,
       });
+      // A reauth whose account was deleted meanwhile wrote nothing and owns no row to report.
+      if (written) deps.onAccountPersisted?.(opts.reauthAccountId);
     } else {
       const saveOptions = {
         preserveIdentityless: opts?.forceLogin === true || (provider === "anthropic" && cred.source === "local-cli"),
@@ -1655,8 +1727,11 @@ export async function runLogin(
           cred,
           saveOptions,
         );
+        if (kiroCredentialWrite) deps.onAccountPersisted?.(kiroCredentialWrite.accountId);
       } else {
-        await (deps.saveCredential ?? saveCredential)(provider, cred, saveOptions);
+        // The receipt names the row written; a stubbed save may return none.
+        const receipt = await (deps.saveCredential ?? saveCredential)(provider, cred, saveOptions);
+        if (receipt) deps.onAccountPersisted?.(receipt.accountId);
       }
     }
     if (provider !== "chatgpt") {
@@ -1711,7 +1786,7 @@ export async function runLogin(
   if (provider !== "chatgpt") {
     try {
       const { clearModelCache } = await import("../codex/model-cache");
-      const { clearGatherRoutedModelsInflight } = await import("../codex/catalog");
+      const { clearGatherRoutedModelsInflight } = await import("../codex/catalog/routed-gather");
       clearModelCache(provider);
       clearGatherRoutedModelsInflight();
       const { clearAccountQuotaCache, clearProviderQuotaCache } = await import("../providers/quota");
@@ -1766,9 +1841,12 @@ export interface OAuthAccountSummary {
  * the config at its request boundary and resolves the policy there with `emailMaskingEnabled`.
  * The default masks, so every existing caller keeps today's behaviour.
  */
-export function getLoginStatus(provider: string, maskEmails = true): { loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; done: boolean; hint?: OAuthLoginHint; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
+export function getLoginStatus(provider: string, maskEmails = true, flowId?: string): { loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; errorCode?: LoginCodeError; done: boolean; status: "idle" | "pending" | "complete" | "error"; mode?: "callback" | "code"; flowId?: string; expiresAt?: number; hint?: OAuthLoginHint; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
   const cred = getCredential(provider);
-  const st = loginState.get(provider);
+  // `flowId` reads one of several concurrent flows; without it, the provider's newest flow.
+  const flowKey = flowId ?? latestLoginFlowKey(provider);
+  // An explicit flow id from another provider must not leak that flow's lifecycle or hint.
+  const st = flowKey === undefined || loginFlowProvider(flowKey) !== provider ? undefined : loginState.get(flowKey);
   const set = getAccountSet(provider);
   const accounts: OAuthAccountSummary[] | undefined = set?.accounts.map(a => ({
     id: a.id,
@@ -1794,7 +1872,14 @@ export function getLoginStatus(provider: string, maskEmails = true): { loggedIn:
     email: projectEmail(cred?.email, maskEmails) ?? undefined,
     source: cred?.source,
     error: st?.error,
+    ...(st?.errorCode ? { errorCode: st.errorCode } : {}),
     done: st?.done ?? false,
+    // The flow's own lifecycle, which `done` alone cannot express: a finished flow that failed
+    // and one that succeeded both report done:true. Callers poll this.
+    status: !st ? "idle" : !st.done ? "pending" : st.error ? "error" : "complete",
+    ...(st?.mode ? { mode: st.mode } : {}),
+    ...(st?.flowId ? { flowId: st.flowId } : {}),
+    ...(st?.expiresAt !== undefined ? { expiresAt: st.expiresAt } : {}),
     ...(st?.hint && !st.done ? { hint: { url: st.hint.url, instructions: st.hint.instructions, deviceCode: st.hint.deviceCode } } : {}),
     ...(set ? { activeAccountId: set.activeAccountId, accounts } : {}),
   };
@@ -1811,65 +1896,53 @@ export function oauthLoginSummary(maskEmails = true): Array<{ provider: string; 
   });
 }
 
-export function clearLoginState(provider: string): void {
-  loginAbort.get(provider)?.controller.abort("cleared");
-  loginAbort.delete(provider);
-  clearManualCodeSlot(provider);
-  loginState.delete(provider);
-}
-
-export function cancelLoginFlow(provider: string, flowId?: string): boolean {
-  const active = loginAbort.get(provider);
-  const existing = loginState.get(provider);
-  if (flowId !== undefined && active?.flowId !== flowId) return false;
-  if (!active && (!existing || existing.done)) return false;
-  active?.controller.abort("cancelled");
-  loginAbort.delete(provider);
-  clearManualCodeSlot(provider);
-  loginState.set(provider, { done: true, error: "Login cancelled" });
-  return true;
-}
-
 export async function startLoginFlow(
   provider: string,
   opts?: LoginOpts,
   lifecycle?: LoginFlowLifecycle,
-): Promise<{ url: string; instructions?: string; deviceCode?: string }> {
+): Promise<{ url: string; instructions?: string; deviceCode?: string; expiresAt?: number }> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
-  const existing = loginState.get(provider);
-  if ((existing && !existing.done) || (provider === "kiro" && kiroLoginSettling.has(provider))) {
-    throw new Error(`A login for ${provider} is already in progress`);
-  }
-  clearManualCodeSlot(provider);
-  loginState.set(provider, { done: false });
+  // Never silently downgrade to the localhost redirect: the caller asked for code mode
+  // precisely because it cannot reach a localhost page.
+  if (opts?.codeMode && !supportsCodeLoginMode(provider)) throw new CodeLoginUnsupportedError(provider);
+  admitLoginFlow(provider, opts?.codeMode === true);
+  // The flow id is the key of every map below. Callers that own one (the management route, the
+  // codex auth API) supply it so a later paste can be pinned to this exact attempt.
+  const flowId = lifecycle?.flowId ?? randomUUID();
+  const expiresAt = recordStartedLoginFlow(provider, flowId, opts?.codeMode === true);
   const abort = new AbortController();
-  loginAbort.set(provider, { controller: abort, flowId: lifecycle?.flowId });
+  loginAbort.set(flowId, { controller: abort, provider });
   if (provider === "kiro") kiroLoginSettling.add(provider);
   return new Promise((resolve, reject) => {
     let urlResolved = false;
     const ctrl: OAuthController = {
       onAuth: ({ url, instructions, deviceCode }) => {
-        if (abort.signal.aborted || loginAbort.get(provider)?.controller !== abort) return;
+        if (abort.signal.aborted || loginAbort.get(flowId)?.controller !== abort) return;
         // Device approval can fall back to manual input. Replace, never merge: the
         // previous device code must disappear when the provider changes the next step.
         const hint = { url, instructions, deviceCode };
-        loginState.set(provider, { done: false, hint });
+        // Merged, not replaced: the flow's own identity (mode/flowId/expiresAt) was recorded
+        // before the provider produced a URL and must survive every hint update.
+        loginState.set(flowId, { ...loginState.get(flowId), done: false, hint });
         if (!urlResolved) {
           urlResolved = true;
-          resolve({ ...hint });
+          resolve({ ...hint, ...(expiresAt !== undefined ? { expiresAt } : {}) });
         }
       },
       onProgress: () => {},
       // GUI fallback when the browser cannot hit the loopback callback server.
-      onManualCodeInput: (expectedState?: string) => waitForManualLoginCode(provider, abort.signal, expectedState),
+      onManualCodeInput: (expectedState?: string) => waitForManualLoginCode(flowId, abort.signal, expectedState),
       signal: abort.signal,
     };
     const abandonIfNotOwner = (error?: unknown): boolean => {
-      if (loginAbort.get(provider)?.controller === abort) return false;
+      if (loginAbort.get(flowId)?.controller === abort) return false;
       if (!urlResolved) reject(error ?? new Error("OAuth login was superseded"));
       return true;
     };
+    // The row this flow's own credential write landed in, from the store's receipt. A token match
+    // after the fact would miss it once a concurrent login for the same account rotates the token.
+    let persistedAccountId: string | undefined;
     const settle = async (error?: unknown): Promise<void> => {
       // Cancellation deletes this controller and records its own terminal result. A late provider
       // rejection (or an older flow settling after a replacement starts) must not overwrite that
@@ -1885,9 +1958,10 @@ export async function startLoginFlow(
       }
       if (abandonIfNotOwner(finalError)) return;
       if (finalError === undefined) {
-        loginAbort.delete(provider);
-        clearManualCodeSlot(provider);
-        loginState.set(provider, { done: true });
+        loginAbort.delete(flowId);
+        clearManualCodeSlot(flowId);
+        // Answer this flow's caller with the account it wrote, not whichever one is active now.
+        settleLoginFlow(flowId, persistedAccountId ? { accountId: persistedAccountId } : {});
         // Local-token import (grok-cli / Claude Code keychain) completes WITHOUT firing onAuth —
         // resolve so the GUI call returns instead of hanging.
         if (!urlResolved) resolve({ url: "", instructions: "Logged in via an existing local CLI/keychain token — no browser needed." });
@@ -1895,27 +1969,28 @@ export async function startLoginFlow(
       }
 
       const e = finalError;
-      loginAbort.delete(provider);
-      clearManualCodeSlot(provider);
+      loginAbort.delete(flowId);
+      clearManualCodeSlot(flowId);
       const msg = publicOAuthAuthenticationErrorMessage(e);
-      loginState.set(provider, { done: true, error: msg });
+      settleLoginFlow(flowId, { error: msg, errorCode: classifyLoginCodeError(e) });
       if (!urlResolved) reject(e);
     };
     // Background: runLogin persists the credential + provider entry to disk. The lifecycle hook
     // lets a long-lived server config adopt that settled state before clients observe done=true.
     const assertCurrentOwner = (): void => {
-      if (loginAbort.get(provider)?.controller !== abort) throw new OAuthLoginSupersededError();
+      if (loginAbort.get(flowId)?.controller !== abort) throw new OAuthLoginSupersededError();
     };
-    void runLogin(provider, ctrl, opts, { assertCurrentOwner }).then(
+    const onAccountPersisted = (accountId: string): void => { persistedAccountId = accountId; };
+    void runLogin(provider, ctrl, opts, { assertCurrentOwner, onAccountPersisted }).then(
       () => settle(),
       (e: unknown) => settle(e),
     ).catch((e: unknown) => {
       // settle catches lifecycle failures, so this is only a defensive promise-boundary guard.
       if (abandonIfNotOwner(e)) return;
-      loginAbort.delete(provider);
-      clearManualCodeSlot(provider);
+      loginAbort.delete(flowId);
+      clearManualCodeSlot(flowId);
       const msg = publicOAuthAuthenticationErrorMessage(e);
-      loginState.set(provider, { done: true, error: msg });
+      settleLoginFlow(flowId, { error: msg, errorCode: classifyLoginCodeError(e) });
       if (!urlResolved) reject(e);
     }).finally(() => {
       if (provider === "kiro") kiroLoginSettling.delete(provider);

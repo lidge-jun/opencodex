@@ -15,6 +15,7 @@ import type { InboundWire } from "../../providers/registry";
 import type { ExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
 import type { CallerDirectAuth } from "../../providers/caller-authorization";
 import type { CompactionRoutingOverride } from "./compaction-routing";
+import type { MainHardLockFallbackOverride } from "./main-hard-lock-routing";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { NativeReasoningOwner } from "../../responses/reasoning-replay-cache";
 import type { TransientSendBudget } from "../../lib/upstream-retry";
@@ -174,6 +175,10 @@ export interface HandleResponsesOptions {
   clientDeclaredEmptyToolCatalog?: boolean;
   nativeReasoningReplay?: ReadonlyMap<string, string>;
   nativeReasoningMint?: { owner?: NativeReasoningOwner };
+  /** The Claude client's typed `web_search_*` / `web_fetch_*` declarations; kept only for `inboundWire: "anthropic"`. */
+  anthropicServerTools?: readonly Record<string, unknown>[];
+  /** The Claude client's replayable server-tool exchanges (`replayedAnthropicServerBlocks`); same scope. */
+  anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
   /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
   droidDefaultEffort?: string;
   /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */
@@ -207,6 +212,8 @@ export interface HandleResponsesOptions {
   /** Internal handoff: the memory phase this turn belongs to, so combo children keep its routing. */
   memoryModelPhase?: "extract" | "consolidation";
   compactionRoutingOverride?: CompactionRoutingOverride | null;
+  /** Internal handoff: the hard-lock fallback rewrote this turn; the log shows `sourceModel`. */
+  mainHardLockFallbackOverride?: MainHardLockFallbackOverride | null;
   /** Internal combo handoff for one parent-validated continuation snapshot. */
   comboReplaySnapshot?: {
     sourceBody: unknown;

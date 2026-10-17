@@ -1,9 +1,12 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
+import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
+import { nativeReasoningRetentionSchema } from "./native-reasoning-retention";
 import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
+import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -29,7 +32,9 @@ import {
   CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
+  autoReviewOverrideSchema,
   compactionRoutingSchema,
+  reasoningRetentionSchema,
   memoryModelSettingSchema,
   memoryModelsSchema,
   modelPreferHostedToolsConfigError,
@@ -49,6 +54,7 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  credentialPinnedProviderConfigError,
 } from "../provider-validation";
 import {
   CODEX_ACCOUNT_NAMESPACE_COMBO_ALIAS_COLLISION_ERROR,
@@ -190,9 +196,15 @@ export const configSchema = z.object({
     z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535).optional() }),
   ]).optional().catch(undefined),
   providers: z.record(z.string(), providerConfigSchema),
+  // Models settings panel writes the global reviewer override; an invalid hand edit is
+  // stripped by load degradation so it cannot reject the providers that carry it.
+  autoReviewOverride: autoReviewOverrideSchema.optional(),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
   compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   compactionRecovery: compactionRecoverySchema.optional().catch(undefined),
+  // A bad hand edit disables only this block; writes validate the catch-free leaf first.
+  reasoningRetention: reasoningRetentionSchema.optional().catch(undefined),
+  nativeReasoningRetention: nativeReasoningRetentionSchema.optional().catch(undefined),
   desktopCompatibility: desktopCompatibilitySchema.optional().catch(undefined),
   // A hand-edited malformed phase disables only that phase instead of rejecting
   // providers/apiKeys, matching the load-time degradation notice; the management write
@@ -207,6 +219,7 @@ export const configSchema = z.object({
     .catch(undefined),
   defaultProvider: z.string().min(1).default("openai"),
   defaultModelAliases: z.boolean().optional(),
+  preferModelAliasIds: z.boolean().optional().catch(false),
   // Malformed hand edits disable this opt-in projection without rejecting providers.
   cursorEffortRows: z.boolean().optional().catch(false),
   // Fast selectors default on; malformed hand edits disable them without rejecting providers.
@@ -221,6 +234,9 @@ export const configSchema = z.object({
     short: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
     long: z.number().int().min(MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT).max(100).optional().catch(undefined),
   }).optional().catch(undefined),
+  // A malformed fallback section disables only the reroute, never the lock's refusal
+  // behavior; the management write boundary still rejects the bad value.
+  codexMainAccountHardLockFallback: mainAccountHardLockFallbackSchema.optional().catch(undefined),
   // #2999: a malformed hand edit falls back to auto detection rather than rejecting the config.
   nativeMainRefresh: z.enum(["codex", "opencodex"]).optional().catch(undefined),
   // Future versions remain opaque through passthrough-compatible whole-config saves.
@@ -292,6 +308,7 @@ export const configSchema = z.object({
   // so a hand-edited typo cannot trip the backup-and-defaults repair path; the write path rejects
   // it (creditCodexAccountIdsError in diagnostics).
   creditCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional().catch(undefined),
+  codexUseRemainingQuotaAccountIds: z.custom<string[]>(validRemainingQuotaAccountIds).optional().catch(undefined),
   // A malformed policy degrades to "no policy" rather than failing the parse, so a hand-edited
   // typo cannot trip the backup-and-defaults repair path and wipe providers or pool accounts.
   // Silently ignoring it would be its own trap, so the write path rejects it and loadConfig warns.
@@ -307,6 +324,7 @@ export const configSchema = z.object({
   codexAccountAutoSwitchThresholds: z.unknown().optional().transform(salvageCodexAccountAutoSwitchThresholds),
   // An invalid optional preference must not discard providers or credential rows.
   codexAccountPriorityFailback: z.boolean().optional().catch(false),
+  codexPreserveSignedInAccount: z.boolean().optional().catch(false),
   // Absent or invalid keeps the sliding window on. Explicit false restores consecutive-only steering.
   codexFailureWindow: z.boolean().optional().catch(undefined),
   codexPinnedTransientPolicy: z.enum(["hold", "detour-new-threads"]).optional().catch("hold"),
@@ -593,6 +611,10 @@ export const configSchema = z.object({
         path: ["providers", redactSecretString(name), "modelAdapters"],
         message: modelAdaptersError,
       });
+    }
+    const credentialPinError = credentialPinnedProviderConfigError(name, provider);
+    if (credentialPinError) {
+      ctx.addIssue({ code: "custom", path: ["providers", redactSecretString(name)], message: credentialPinError });
     }
     const preferHostedToolsError = modelPreferHostedToolsConfigError(
       (provider as { modelPreferHostedTools?: unknown }).modelPreferHostedTools,

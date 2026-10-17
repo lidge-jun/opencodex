@@ -1,5 +1,58 @@
 # Google Provider
 
+## Vertex credential markers
+
+`src/lib/gcp-adc.ts` resolves an explicit `gcp-sa:<account>` through the OS credential store.
+An empty or whitespace-only account is rejected before token resolution; it never selects host ADC.
+Marker payload readability is checked before returning a cached token; removing or locking the stored
+credential fails closed. Errors omit the marker account. Wrapped or malformed credential-shaped input
+is refused at ingestion and keychain restore, so it cannot become a literal config value.
+The leaf classifier in `src/lib/gcp-credential-input.ts` rejects structured JSON carriers (objects,
+arrays and quoted strings) and malformed GCP text reached through
+`keychain:` aliases before normal or quiet API-key resolution can return wire-header material.
+Post-commit cleanup skips empty or whitespace-only GCP marker accounts in both persisted references and captured removal candidates, so one malformed marker cannot block valid-account retention or cleanup. Request-time marker validation remains strict.
+`src/providers/api-keys.ts` stores pasted credential JSON as markers, including multiple JSON objects
+in one atomic pool update. Verified OS writes and marker persistence share the cleanup mutation
+lock. Rebased callbacks repeat idempotent writes before committing; failed batches remove only
+newly created, unreferenced secrets.
+The dedicated key-pool endpoint owns JSON ingestion. Provider POST/create/overwrite and CLI add
+reject raw JSON in active keys or submitted pool entries before saving; mixed JSON/literal-key
+bulk pastes are rejected before any store writes. OS-store failures return a fixed error without
+credential material. `src/server/management/provider-gcp-credential-routes.ts` and `src/cli/provider.ts` enforce
+this admission through `providerCredentialInputError` in `src/providers/api-keys.ts`; CLI registry input is checked before forward/OAuth branches can discard `--api-key`.
+The management helper also owns the locked provider-deletion callback, preserving fallback-default
+selection, custom-model/context-cap removal, persistence and subsequent marker cleanup order.
+`src/providers/gcp-credential-cleanup.ts` cleans removed markers after config persistence, including CLI `provider add --force` overwrites, under the
+  config mutation lock, retaining credentials still referenced by any persisted provider. CLI overwrite captures both live and latest durable rows under that lock. Management overwrite reuses `snapshotProviderGcpCredentialMarkers`; CLI and management deletion use `commitProviderGcpCredentialRemoval` to capture live and valid durable markers and persist removal without releasing the lock. Failed saves and refused CLI additions do not clean credentials.
+Reference retention compares OS account identities across both `gcp-sa:` and `keychain:`
+spellings. `src/providers/key-store.ts` leaves GCP markers stored during ordinary keychain
+store/restore and refuses to restore GCP JSON through a keychain alias; the shared classification
+in `src/providers/api-key-resolve.ts` reports those markers as OS-stored credentials.
+
+## OpenCode Go Gemini transport
+
+`src/types/opencode-go.ts` declares the shared exact-model Go protocol table and scopes its Google pins to fixed-key
+HTTPS OpenCode Go destinations (`/zen/go/v1` or `/inference/go/v1`), excluding userinfo,
+query, fragment, nonstandard ports and Google OAuth/Vertex modes. `src/types/wire.ts`
+selects `google` for the table's Gemini model on the `opencode-go` row; runtime, static policy, Fast
+policy and protocol summaries share the pin. User-configurable adapter overrides stay
+limited to the two OpenAI wires. The existing `opencode-go` preset keeps historical name-based
+ownership and pins saved custom or inference URLs to `/zen/go/v1` before dispatch. Pure policy
+captures apply the same canonical destination. A differently named custom Chat provider keeps
+its configured URL and does not acquire the Google pin. The registry recognizes `/inference/go/v1`
+as a destination alias for metadata and affinity on differently named rows.
+
+`src/adapters/google.ts` sends the compiled Gemini body to
+`https://opencode.ai/inference/go/v1/models/gemini-4-argon-contributor`, with
+`:generateContent` or `:streamGenerateContent?alt=sse`, using the selected key as Bearer
+authorization. The existing Go session helper adds affinity for the settled Google wire.
+An empty key fails locally with an OpenCode Go diagnostic; AI Studio keeps its own diagnostic.
+The preset declares Gemini's `low`/`medium`/`high` thinking-level ladder; higher requested
+Codex efforts clamp to `high` through the existing effort resolver.
+AI Studio, Vertex and Antigravity retain their own transport contracts. Mocked dispatch
+and thought-signature continuation coverage lives in `tests/providers/opencode-go-gemini-wire.test.ts`;
+these fixtures do not attest live upstream availability.
+
 ## Google thought-text visibility boundary
 
 Google-family parts with `thought: true` stay separate from assistant output. After a CCA
@@ -10,6 +63,14 @@ adapters retain `reasoning_raw_delta`. Model provenance is refreshed on every bu
 explicit wire summary none win. Eligible CCA Gemini requests use `includeThoughts: true` only
 when provider opt-in and per-request display both allow it. Thought signatures remain attached
 to their tool calls independently; they never become Anthropic thinking signatures.
+
+The visibility marker is the boolean `thought: true`, not the presence of a `thoughtSignature`
+or the wording of the text. An unmarked signed text part remains ordinary assistant output;
+a signature-only part produces no text. Responses keeps summaries in reasoning items, Chat in
+`reasoning_content`, and Messages in thinking blocks. The handler-level synthetic matrix in
+`tests/responses/protocol-argon-thought-boundary.test.ts` checks Argon across buffered/SSE
+clients, coalesced/split upstream frames, direct/bridge lanes, explicit display suppression and
+tool calls. It verifies protocol separation, not live model behavior or another client's UI.
 
 > Decision record: [ADR-0055](../decisions/ADR-0055-google-thought-text-visibility-boundary.md)
 
@@ -36,6 +97,14 @@ first-user-message derivation for clients that omit it; only the fixed hash is r
 Both streaming and non-streaming responses feed the store; request compilation happens before replay
 so matching uses the provider-visible tool name.
 
+`src/adapters/openai-responses/passthrough.ts` removes item-level `extra_content` through
+`stripProviderInputItemMetadata` in `src/adapters/openai-responses/request-strips.ts` only for
+OpenAI-operated Responses destinations (canonical ChatGPT Codex and the official OpenAI API).
+This outbound projection is shared by HTTP and WebSocket creates, including concrete combo/fallback
+children, and the direct native compact send in `src/server/responses/compact.ts`.
+It preserves caller-owned history for Google thought-signature replay and leaves arbitrary
+gateway extensions intact; it does not allowlist item fields or traverse tool arguments/results.
+
 > Decision record: [ADR-0057](../decisions/ADR-0057-google-tool-call-thought-signature-replay.md)
 
 ## Google tool-result adjacency repair
@@ -61,6 +130,29 @@ alone: no upstream rule against it is demonstrated, so repairing it would inject
 valid requests.
 
 > Decision record: [ADR-5008](../decisions/ADR-5008-google-opening-functioncall-repair.md)
+
+## Gemini progress-text history
+
+Gemini sometimes skips its thinking channel on a tool-calling turn and plans in visible text
+instead: a progress line followed by unmarked planning such as "Let's read google.ts next."
+Replayed whole, that tail is copied by every later turn of the session. When
+`messagesToGeminiFormat` serializes an assistant turn that contains a tool call for a model id
+containing `gemini`, the text before the turn's first tool call is replayed as the lead sentence
+of its first non-empty text part; the other text parts before the call are dropped. Text after a
+tool call and turns with Responses `phase: "final_answer"` are replayed whole.
+`src/adapters/google-progress-history.ts` owns the split: ASCII `.`, `!` or `?` followed by
+whitespace, a script's own sentence terminator (CJK, Devanagari, Arabic, Armenian, Ethiopic,
+Myanmar), or a line break, with trailing closing quotes,
+brackets and Markdown emphasis kept. Boundaries that only close a leading list marker or
+`e.g.`/`i.e.`/`etc.`/`vs.` are skipped. It never matches wording.
+
+Final answers (assistant turns without tool calls), non-Gemini models such as Claude on
+Antigravity, tool calls, their signatures and client-visible output are unchanged. A leak in the
+current response is still delivered as ordinary text; the trim keeps it from propagating.
+The trade-off is that facts a model states only in pre-call text, beyond its first sentence, are
+not replayed; the call, its result and any final answer still are.
+`tests/adapters/google/gemini-progress-history.test.ts` covers CCA and AI Studio Gemini, the
+`final_answer` and Claude exemptions, text after a call and the split.
 
 ## Structured output on generateContent
 

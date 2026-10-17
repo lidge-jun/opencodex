@@ -1028,8 +1028,8 @@ export async function saveCredential(
   provider: string,
   cred: OAuthCredentials,
   opts: { preserveIdentityless?: boolean; assertBeforePersist?: () => void } = {},
-): Promise<void> {
-  await saveCredentialWithReceipt(provider, cred, opts);
+): Promise<OAuthCredentialWriteReceipt | null> {
+  return await saveCredentialWithReceipt(provider, cred, opts);
 }
 
 /**
@@ -1234,23 +1234,29 @@ export function getAccountCredentialWithStatus(
   };
 }
 
-/** Persist an explicit login/reauth credential for one account; runtime rotations use mergeAccountCredential. */
+/**
+ * Persist an explicit login/reauth credential for one account; runtime rotations use
+ * mergeAccountCredential. Resolves false when nothing was written (the account is gone).
+ */
 export async function saveAccountCredential(
   provider: string,
   accountId: string,
   cred: OAuthCredentials,
   opts: { assertBeforePersist?: () => void; rotateLoginId?: boolean } = {},
-): Promise<void> {
+): Promise<boolean> {
   if (isAnthropicInstanceId(provider)) assertAnthropicCredentialSource(provider, cred);
   const safe = normalizeCredential(cred);
-  if (!safe) return;
+  if (!safe) return false;
+  let written = false;
   await mutateStore(store => {
+    written = false;
     if (provider === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), provider);
     if (isAnthropicInstanceId(provider)) assertNoCrossAnthropicRegistration(store, provider, safe);
     const set = store[provider];
     const account = set?.accounts.find(a => a.id === accountId);
     if (!set || !account) return;
     account.credential = safe;
+    written = true;
     if (opts.rotateLoginId) account.loginId = randomUUID();
     delete account.needsReauth;
     delete account.needsReauthReason;
@@ -1263,6 +1269,7 @@ export async function saveAccountCredential(
       set.selectionRevision = randomUUID();
     }
   }, [provider, accountId, safe], { assertBeforePersist: registrationPersistGuard(provider, opts.assertBeforePersist) });
+  return written;
 }
 
 function accountSelection(set: ProviderAccountSet): OAuthAccountSelection {

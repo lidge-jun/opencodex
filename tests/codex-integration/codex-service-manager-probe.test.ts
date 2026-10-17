@@ -18,7 +18,7 @@ import {
   type RawProbeRunner,
 } from "../../src/service-manager-probe";
 import { buildWindowsServiceScript, buildWindowsTaskXml } from "../../src/service/windows-taskxml";
-import { windowsWscript } from "../../src/service/windows-scheduler";
+import { windowsWscript } from "../../src/service/windows-wscript";
 import { inspectNativeCodexOwnership } from "../../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/windows-elevation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";

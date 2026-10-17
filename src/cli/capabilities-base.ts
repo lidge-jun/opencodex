@@ -20,6 +20,15 @@ export const HEAD_CAPABILITIES: readonly HeadCapability[] = [
  */
 export const CAPABILITIES: readonly Capability[] = [
   {
+    command: ["codex-provider"],
+    bannerLines: ["ocx codex-provider <sub>    Confirm custom Codex provider routing: status|allow|revoke"],
+    summary: "Inspect, allow or revoke custom Codex provider routing consent.",
+    routes: [], flags: [{ name: "--yes", value: "boolean", summary: "Explicitly approve the named provider without an interactive prompt." }],
+    mutates: true, json: "none",
+    usage: "ocx codex-provider <status|allow <id> [--yes]|revoke <id>>",
+    details: ["Only local loopback routing for Responses providers using OpenAI authentication is supported. No custom credentials/headers, authless mode or client compaction. Unapproved providers are never changed."],
+  },
+  {
     command: ["chatgpt"],
     summary: "Experimental ChatGPT app-server shim: launch, restore or status (macOS only).",
     routes: [], flags: [], mutates: true, json: "none",
@@ -326,7 +335,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--range","value":"string","summary":"today | 1d | 7d | 30d | all; default 30d."},{"name":"--surface","value":"string","summary":"all | codex | claude | grok; default all."},{"name":"--since","value":"string","summary":"Inclusive epoch milliseconds or ISO datetime with timezone; requires --until."},{"name":"--until","value":"string","summary":"Inclusive end; requires --since. Custom bounds override --range."},{"name":"--provider","value":"string","summary":"Filter provider."},{"name":"--model","value":"string","summary":"Filter model."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."},{"name":"--api-key-id","value":"string","summary":"Exact nonblank management key scope; connected clients refuse this before reading their enrolled key."},{"name":"--search","value":"string","summary":"Model-row substring view over model/provider/resolvedModel; top100 by tokens. Whole-report totals stay unchanged."}],
     mutates: false,
     json: "payload",
-    details: ["Alias of observe usage. Connected clients read only their enrolled-key Hub report through /v1/usage; caller --api-key-id is refused before key read/transport and never grants management authority.","Nonclient --api-key-id uses /api/usage and requires matching filter acknowledgment. An unknown acknowledged key is empty/matched:false, not404. Custom-window acknowledgment remains required.","--search filters only returned model rows after scope acknowledgment. Blank search selects the top100 model rows; modelView reports match/return counts without recomputing totals."],
+    details: ["Alias of observe usage. Connected clients read only their enrolled-key Hub report through /v1/usage; caller --api-key-id is refused before key read/transport and never grants management authority.","Nonclient --api-key-id uses /api/usage and requires matching filter acknowledgment. An unknown acknowledged key is empty/matched:false, not404. Custom-window acknowledgment remains required.","--search filters only returned model rows after scope acknowledgment. Blank search selects the top100 model rows; modelView reports match/return counts without recomputing totals.","Nested compare reads the named range and the previous equal window; --range all is refused."],
     usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]",
   },
   {
@@ -406,7 +415,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--provider","value":"string","summary":"Filter provider, including failover attempts."},{"name":"--model","value":"string","summary":"Filter model, including failover attempts."},{"name":"--status","value":"string","summary":"Filter status code."},{"name":"--conversation","value":"string","summary":"Filter conversation ID."},{"name":"--conversationId","value":"string","summary":"Alias of --conversation."},{"name":"--account","value":"string","summary":"Filter stable account log label."},{"name":"--limit","value":"number","summary":"Positive row limit; default 200."},{"name":"--follow","value":"boolean","summary":"Poll for new rows; add --jsonl to emit JSONL."},{"name":"-f","value":"boolean","summary":"Alias of --follow."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."},{"name":"--jsonl","value":"boolean","summary":"Emit one row per JSON line; exclusive with --json."},{"name":"--events","value":"boolean","summary":"Versioned snapshot/append JSONL; requires --follow, conflicts with --json. Redundant --jsonl is accepted."}],
     mutates: false,
     json: "payload",
-    details: ["Follow uses the server cursor and a bounded ordered window, preserving same-ID amendments and repeated row occurrences. It never enables logging.","--events emits version1 snapshots/appends with cursor and limit for observed-window reconstruction. Legacy row JSONL cannot express removals or resets exactly; neither mode promises lossless history between polls.","Follow limit is1–2000, default200. Polling is serial and cancellable; SIGINT exits130 and SIGTERM143. Malformed/oversized/unavailable responses stop without a fabricated empty snapshot or retry.","Nested explain reads recorded decisions; rebuild-index and index-status touch the local derived index and retain separate declarations."],
+    details: ["Follow uses the server cursor and a bounded ordered window, preserving same-ID amendments and repeated row occurrences. It never enables logging.","--events emits version1 snapshots/appends with cursor and limit for observed-window reconstruction. Legacy row JSONL cannot express removals or resets exactly; neither mode promises lossless history between polls.","Follow limit is1–2000, default200. Polling is serial and cancellable; SIGINT exits130 and SIGTERM143. Malformed/oversized/unavailable responses stop without a fabricated empty snapshot or retry.","Nested history pages the derived index and get reads one canonical row; explain reads recorded decisions; rebuild-index and index-status touch the local derived index and retain separate declarations."],
     usage: "ocx logs [--provider <name>] [--model <id>] [--status <code>] [--conversation <id>] [--account <label>] [--limit <n>] [--follow] [--json|--jsonl]; ocx logs --follow --events [--limit <1-2000>]",
   },
   {
@@ -556,7 +565,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the redacted provenance report as JSON."}],
     mutates: false,
     json: "envelope",
-    details: ["Proof-bound published-launcher context authenticates the configured candidate snapshot, not successful Codex execution; this check does not attest or admit a selected runtime.","On Windows this first slice performs no candidate or configuration filesystem I/O: only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels; every other Windows candidate fails closed.","Makes no package-registry request.","Does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state."],
+    details: ["Proof-bound published-launcher context authenticates the configured candidate snapshot, not successful Codex execution; the selection is attested only when the runtime resolver picks the same canonical path, and even then this check reports rather than admits a runtime.","On Windows this first slice performs no candidate or configuration filesystem I/O: only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels; every other Windows candidate fails closed.","Makes no package-registry request.","Does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state."],
     usage: "ocx system codex-cli-update check [--json]",
   },
   {
@@ -570,13 +579,32 @@ export const CAPABILITIES: readonly Capability[] = [
     usage: "ocx system codex-cli-update attest [--candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path>] [--json]",
   },
   {
+    command: ["system", "codex-cli-update", "plan"],
+    summary: "Dry-run a Codex CLI update and print the plan id binding the decision's evidence.",
+    routes: [],
+    flags: [
+      { name: "--channel", value: "string", summary: "Registry channel to resolve. Only the stable latest channel is offered." },
+      { name: "--json", value: "boolean", summary: "Emit the plan as JSON." },
+    ],
+    mutates: false,
+    json: "envelope",
+    details: [
+      "Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.",
+      "The registry evidence is pinned to the official npm registry with project/user npm configuration isolated, so a redirected .npmrc cannot supply the answer.",
+      "Installs nothing and mutates no application state; registry evidence is gathered under an isolated temporary npm root (npmrc, cwd, cache and logs) removed best-effort afterwards. A refusal is a normal dry-run answer and still exits 0.",
+      "The plan id is a digest of the evidence the decision rests on — ownership, the installed version, a digest of the canonical install root, the resolved target — not a stored job. There is no plan state on disk to expire, collide or clean up.",
+      "An unreadable process table refuses rather than reading as no live session.",
+    ],
+    usage: "ocx system codex-cli-update plan [--channel latest] [--json]",
+  },
+  {
     command: ["system","codex-restart"],
-    summary: "Restart the Codex desktop app and app-servers.",
+    summary: "Restart the Codex app-servers, and the desktop app when its model picker predates the catalog.",
     routes: [{"method":"POST","path":"/api/system/codex-restart"}],
-    flags: [{"name":"--yes","value":"boolean","summary":"Required: fully quits and relaunches the operator's Codex desktop app, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts; also restarts its app-servers."},{"name":"--json","value":"boolean","summary":"Emit the restart result as JSON."}],
+    flags: [{"name":"--yes","value":"boolean","summary":"Required: restarts the Codex app-servers, interrupting running turns, and fully quits and relaunches the operator's Codex desktop app when its model picker predates the current catalog or that cannot be determined, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts."},{"name":"--json","value":"boolean","summary":"Emit the restart result as JSON."}],
     mutates: true,
     json: "payload",
-    details: ["`sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.","Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.","--yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand."],
+    details: ["`sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog, cache, or changed configuration write, so it cannot restart a healthy install on request.","Restarts the app-servers through the same module the CLI uses. The desktop app is quit and relaunched when its model picker predates the current catalog or this request changes the `model_catalog_json` binding, because the picker is built at launch; otherwise it is left running and respawns its own app-server, keeping unsaved client state. An unreadable desktop or catalog state falls back to the full restart. When the proxy itself runs inside the Codex app the desktop restart is refused, because restarting the app would kill the request.","--yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand."],
     usage: "ocx system codex-restart --yes [--json]",
   },
   {
@@ -646,7 +674,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [],
     mutates: true,
     json: "none",
-    details: ["Needs a running proxy, first-party mode and macOS. The first time, macOS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.","Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards."],
+    details: ["Needs a running proxy, first-party mode and macOS or Windows. The first time, the OS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.","Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards."],
     usage: "ocx claude desktop picker on",
   },
   {
@@ -661,7 +689,7 @@ export const CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["claude","desktop","picker","trust"],
-    summary: "Run the macOS keychain step for picker mode in this terminal, then ask the server to finish enabling it.",
+    summary: "Run the OS certificate trust step for picker mode in this terminal, then ask the server to finish enabling it.",
     routes: [{"method":"GET","path":"/api/claude-desktop/picker"},{"method":"PUT","path":"/api/claude-desktop/picker"}],
     flags: [],
     mutates: true,
@@ -683,7 +711,7 @@ export const CAPABILITIES: readonly Capability[] = [
     command: ["integration","client"],
     summary: "Inspect and toggle file integrations and Aside profiles, read journals, and restore selected operations.",
     routes: [{"method":"GET","path":"/api/client-integrations"},{"method":"GET","path":"/api/client-integrations/{clientId}"},{"method":"GET","path":"/api/client-integrations/aside/profiles"},{"method":"GET","path":"/api/client-integrations/aside/profiles/{profileId}"},{"method":"GET","path":"/api/client-integrations/journal"},{"method":"GET","path":"/api/client-integrations/aside/profiles/journal"},{"method":"GET","path":"/api/client-integrations/aside/profiles/{profileId}/journal"},{"method":"PUT","path":"/api/client-integrations/{clientId}"},{"method":"PUT","path":"/api/client-integrations/aside/profiles"},{"method":"PUT","path":"/api/client-integrations/aside/profiles/{profileId}"},{"method":"POST","path":"/api/client-integrations/restore"},{"method":"POST","path":"/api/client-integrations/aside/profiles/{profileId}/restore"}],
-    flags: [{"name":"--client","value":"string","summary":"File integration ID; aside selects profiles."},{"name":"--profile","value":"number","summary":"Aside nonnegative integer account ID; requires --client aside."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."},{"name":"--overwrite-conflict","value":"boolean","summary":"Explicitly permit replacing a conflicting block."},{"name":"--op","value":"string","summary":"Operation ID; --op-id is an alias."},{"name":"--confirm-drift","value":"boolean","summary":"Explicitly allow replacing edits made after the snapshot."}],
+    flags: [{"name":"--client","value":"string","summary":"File integration ID, including gentle-shell; aside selects profiles."},{"name":"--profile","value":"number","summary":"Aside nonnegative integer account ID; requires --client aside."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."},{"name":"--overwrite-conflict","value":"boolean","summary":"Explicitly permit replacing a conflicting block."},{"name":"--op","value":"string","summary":"Operation ID; --op-id is an alias."},{"name":"--confirm-drift","value":"boolean","summary":"Explicitly allow replacing edits made after the snapshot."}],
     mutates: true,
     json: "payload",
     details: ["status/show/list reads all clients, one client or Aside profiles. history/journal reads rollback records; expired snapshots stay visible.","enable/disable requires --client; an omitted Aside --profile toggles all profiles. --overwrite-conflict applies only to enable.","restore requires --op (alias --op-id); --client requires --profile and only Aside supports that profile selector. --confirm-drift is an explicit user waiver, never auto-retried. Use client preview or restore --preview to inspect a change, history remove --op ID --yes to retire a journal row, and sync --client aside to refresh managed profiles."],
@@ -694,7 +722,7 @@ export const CAPABILITIES: readonly Capability[] = [
     summary: "Synchronize client catalogs, including Aside profiles through the running server's mutation owner.",
     routes: [{ method: "POST", path: "/api/client-integrations/aside/sync" }],
     flags: [
-      { name: "--restart-codex", value: "boolean", summary: "Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog or cache write, on macOS, Linux and Windows." },
+      { name: "--restart-codex", value: "boolean", summary: "Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog, cache, or changed configuration write, on macOS, Linux and Windows." },
       { name: "--restart-app-server-only", value: "boolean", summary: "Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given." },
       { name: "--restart-desktop-app", value: "boolean", summary: "Deprecated alias of --restart-codex." },
     ],

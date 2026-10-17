@@ -33,7 +33,6 @@ export {
 } from "./auth-api/pool-mode-gate";
 export { createResetCreditWhamClient } from "./auth-api/reset-credit-service";
 export type { CodexAuthCatalogConvergence } from "./auth-api/login-flow";
-export { handleCodexAuthAPI } from "./auth-api/routes";
 import { getEffectiveActiveCodexAccountId } from "./routing";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import type { OcxConfig } from "../types";

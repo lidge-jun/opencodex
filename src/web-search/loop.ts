@@ -11,7 +11,9 @@ import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaqu
 import type { AttemptRecoveryKind } from "../usage/log";
 import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
+import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
+import { mergeUsage } from "../server/responses/empty-completion-guard";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
@@ -149,6 +151,18 @@ async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const e of events) yield e;
 }
 
+function terminalUsage(events: AdapterEvent[]): OcxUsage | undefined {
+  for (const e of events) if (e.type === "done" || e.type === "incomplete") return e.usage;
+  return undefined;
+}
+
+/** Hidden iterations add counters only: their checkpoint and raw wire usage are not the final terminal's. */
+function countersOnly(usage: OcxUsage | undefined): OcxUsage | undefined {
+  if (!usage) return undefined;
+  const { contextTotalTokens: _context, rawUsage: _raw, ...counters } = usage;
+  return counters;
+}
+
 /**
  * Collect the thinking block that preceded a web_search call in this iteration's events, so the
  * replayed assistant turn can carry it. Anthropic extended thinking REQUIRES the assistant
@@ -198,7 +212,11 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
     // Match the bridge: consecutive signature snapshots update one block. The next
     // semantic event (including an empty thinking-block start) closes that block.
     if (signature !== undefined && e.type !== "thinking_signature" && e.type !== "heartbeat") flushVisible();
-    if (e.type === "thinking_delta") {
+    if (e.type === "text_delta" && e.anthropicThinkingSignature) {
+      flushVisible();
+      flushRaw();
+      parts.push({ type: "thinking", thinking: e.text, signature: e.anthropicThinkingSignature });
+    } else if (e.type === "thinking_delta") {
       flushRaw();
       thinking += e.thinking;
     } else if (e.type === "reasoning_raw_delta") {
@@ -304,6 +322,8 @@ export interface WebSearchLoopDeps {
   settings: SidecarSettings;
   maxSearches: number;
   forceEmptyResponseId?: boolean;
+  /** Responses inbound only: deliver a non-retryable upstream refusal as `response.failed`. */
+  terminalRefusalAsFailed?: boolean;
   abortSignal?: AbortSignal;
   recordSidecarOutcome?: SidecarOutcomeRecorder;
   beforeSidecarDispatch?: () => void;
@@ -327,6 +347,12 @@ export interface WebSearchLoopDeps {
   onFirstOutput?: () => void;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
+  /**
+   * After an `on429` rotation, offered the usage of the hidden iterations the left credential
+   * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
+   * report it again.
+   */
+  onRotatedUsage?: (usage: OcxUsage) => boolean;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Request-scoped executor retains the core's selection binding across loop retries. */
@@ -418,6 +444,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // One iteration beyond the forced answer is reserved for its empty-answer recovery below.
   const HARD_CAP = maxSearches + 3;
   let emptyAnswerRetries = 0;
+  // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
+  // Search-calling passes and the discarded empty forced answer are summed here and added to what
+  // onUsage reports, so the request log meters what was actually sent. The client-facing terminal
+  // keeps the last iteration's usage: Codex and Claude Code size the context window from it, and
+  // a sum would read as a context several times larger and trigger early auto-compaction.
+  let hiddenUsage: OcxUsage | undefined;
   let accountRefusalOutputStarted = false;
   const connectTimeoutMs = deps.connectTimeoutMs ?? 200_000;
   const routedModelStallTimeoutMs = deps.routedModelStallTimeoutMs ?? 200_000;
@@ -662,6 +694,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);
         if (!rotated) break;
+        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) hiddenUsage = undefined;
         const retainRefusal = prepared.response.status === 403
           && deps.incomingMeta?.providerName === "google-antigravity" && rotated.recoveryKind === "oauth-account-403";
         // Keep the bounded refusal readable until the sibling actually returns headers.
@@ -747,6 +780,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         inactivityTimeoutMs: routedModelStallTimeoutMs,
         translatorBudget,
         preserveAdapterError: deps.thinkingRecovery !== undefined,
+        // A pass that fails was still billed; the error path reports it with the hidden passes.
+        onErrorUsage: usage => { hiddenUsage = mergeUsage(hiddenUsage, usage); },
       })) {
         if (event.type === "done") {
           anthropicReplay = takeAnthropicReplay(event);
@@ -759,7 +794,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // Codex show only `Working` until both Kiro attempts had finished (often 30-40 seconds).
         // Tool events remain buffered below, so the decision to invoke the hosted sidecar is still
         // atomic and no search call can escape before its stream has validated successfully.
-        else if (event.type === "text_delta" && event.phase === "commentary") { accountRefusalOutputStarted = true; yield event; }
+        else if (event.type === "text_delta" && event.phase === "commentary" && !event.anthropicThinkingSignature) { accountRefusalOutputStarted = true; yield event; }
         else if (liveWindowOpen && LIVE_STREAMABLE.has(event.type)) {
           // Live events are ALSO buffered: the scanner still needs them for thinking extraction
           // and the forced-answer output check; only the terminal replay skips them (by count).
@@ -996,7 +1031,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // limit-reached result instead of failing the turn (#6464: stripping
           // the declaration makes some models emit the raw call as visible
           // text).
-          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall;
+          // A refused iteration ends the turn even when it carried a search call: running the
+          // search would send the refused context back to the model (#7148).
+          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall
+            && !split.passthrough.some(isTerminalRefusalIncomplete);
           if (!shouldLoop) {
             // #1001: a forced-answer pass that ends `done` must have produced
             // usable output — never a malformed tool call, and never silence.
@@ -1026,6 +1064,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                   stopReason: terminalEvent.stopReason,
                   eventTypes: [...new Set(split.passthrough.map(event => event.type))],
                 }));
+                hiddenUsage = mergeUsage(hiddenUsage, terminalEvent.usage);
                 if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries === 0) {
                   emptyAnswerRetries++;
                   console.warn("[web-search-loop] empty forced answer — retrying once with tool calls disabled");
@@ -1048,7 +1087,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             yield* replay(split.passthrough.slice(split.streamedPassthroughCount));
             return;
           }
+          hiddenUsage = mergeUsage(hiddenUsage, terminalUsage(split.passthrough));
           // The thinking that led to the search belongs to the FIRST call's assistant replay turn.
+          for (const event of split.passthrough.slice(split.streamedPassthroughCount)) {
+            if (event.type === "text_delta" && event.anthropicThinkingSignature) yield event;
+          }
           const preserveAnthropicHistory = prepared.responseAdapter.name === "anthropic";
           if (preserveAnthropicHistory) {
             if (!split.anthropicReplay) throw new LoopError(502, "Anthropic search history cannot be replayed losslessly");
@@ -1081,6 +1124,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             yield* runSearchCall(call, callIndex === 0 ? iterationThinking : [], !preserveAnthropicHistory);
           }
         } catch (e) {
+          // The bridge reports no usage for either error; the iterations already sent still count.
+          if (hiddenUsage) deps.onUsage?.(hiddenUsage);
           if (isTranslatorBudgetExceededError(e)) {
             yield {
               type: "error",
@@ -1100,6 +1145,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           return;
         }
       }
+      if (hiddenUsage) deps.onUsage?.(hiddenUsage);
       yield { type: "error", message: "web-search loop exceeded its iteration cap" };
     } finally {
       for (const snapshot of replaySnapshots) snapshot.release();
@@ -1121,11 +1167,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       replayCacheScope: parsed._reasoningReplayScope,
       ...(deps.clientToolCatalogRestriction ? { ...deps.clientToolCatalogRestriction, enforceDeclaredToolNames: false } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
+      ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       hideRawReasoning: parsed.options.hideRawReasoning,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
-      ...(deps.onUsage ? { onUsage: deps.onUsage } : {}),
+      ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(countersOnly(hiddenUsage), usage)) } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },
   );

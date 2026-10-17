@@ -54,6 +54,7 @@ import {
 } from "./request-log";
 import { createFinalRequestLog } from "./inference/final-log";
 import { clientWireLogOf, clientWireOf } from "./inference/client-wire";
+import { attachAdvisorReasoning } from "./inference/advisor-diagnostics";
 import { directEncodersApply } from "./inference/client-encoder-delivery";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
@@ -114,8 +115,10 @@ export async function handleChatCompletions(
 ): Promise<Response> {
   const translatorBudget = createTranslatorBudget();
   try {
+    let response = await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds);
+    if (isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER))) response = attachAdvisorReasoning(response, logCtx);
     return finalizeTranslatorBudgetResponse(
-      await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds),
+      response,
       translatorBudget,
       req.signal,
     );
@@ -601,6 +604,9 @@ async function handleChatCompletionsWithBudget(
       // below could never restore this one -- the translated client was told the provider
       // throttled the turn, and handed a two-second wait to send it again.
       classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+    } else if (upstreamCode === "claude_subscription_cooldown") {
+      classified.code = "claude_subscription_cooldown";
+      classified.type = "rate_limit_error";
     } else if (upstreamCode === "model_not_found") {
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";

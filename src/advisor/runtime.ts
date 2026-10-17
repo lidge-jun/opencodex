@@ -22,8 +22,8 @@
  */
 import type { OcxConfig, OcxParsedRequest } from "../types";
 import type { AdvisorPlan, AdvisorConsultOutcome } from "../server/responses/advisor-slot";
-import { createAdvisorGuard } from "../server/responses/advisor-slot";
-import { resolveAdvisorSettings } from "./settings";
+import { createAdvisorGuard, MAX_ADVISOR_CONSULTATIONS_PER_REQUEST } from "../server/responses/advisor-slot";
+import { resolveAdvisorSettings, type AdvisorPolicy } from "./settings";
 import { consultAdvisor } from "./consult";
 import { buildAdvisorTool } from "./synthetic-tool";
 import { sanitizeLogMetadataString } from "../lib/redact";
@@ -35,6 +35,9 @@ import {
   type AdvisorPreflightLedger,
 } from "./state";
 import { formatAdvisorAdvice, advisorPreflightMessages, formatAdvisorUnavailable } from "./context";
+import { advisorActivityStore, type AdvisorActivityStore, type AdvisorTrigger } from "./activity";
+import { createAdvisorTaskBudget, type AdvisorTaskBudget } from "./budget";
+import { collectAdvisorRepairEvidence, type AdvisorRepairEvidence } from "./evidence";
 
 /**
  * Process-local task ledger. Bounded (entries + per-state TTL) in src/advisor/state.ts; one
@@ -55,6 +58,8 @@ export interface AdvisorRuntimeDeps {
   baseUrlOverride?: string;
   /** Test seam; production uses the process-wide ledger. */
   ledger?: AdvisorPreflightLedger;
+  budget?: AdvisorTaskBudget;
+  activities?: AdvisorActivityStore;
   /** Deterministic clock seam for the ledger's TTL/cooldown arithmetic (tests only). */
   now?: () => number;
   /**
@@ -65,7 +70,7 @@ export interface AdvisorRuntimeDeps {
 }
 
 export interface AdvisorRuntimePlan extends AdvisorPlan {
-  readonly policy: "manual" | "preflight";
+  readonly policy: AdvisorPolicy;
   readonly toolEnabled: boolean;
   readonly tool: import("../types").OcxTool;
   /**
@@ -86,6 +91,8 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   if (!initial.enabled || initial.model.trim() === "") return null;
   const ledger = deps.ledger ?? sharedPreflightLedger;
   const now = deps.now ?? (() => Date.now());
+  const budget = deps.budget ?? createAdvisorTaskBudget();
+  const activities = deps.activities ?? advisorActivityStore(deps.config);
   // Management PUT mutates this same config object (`config.advisor = ...`). Re-resolving
   // at dispatch is what makes a mid-request consent revocation stop outbound transfer.
   const liveSettings = () => resolveAdvisorSettings(deps.config);
@@ -93,12 +100,20 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   // Request-scoped state: born here, dies with the request. Never global.
   const fingerprints = new Set<string>();
   let preflightUsed = false;
+  let consultations = 0;
+  // Capture before automatic user-role advisory injection. Continuations belong to this
+  // original task; an injected advisory must never mint another spending allowance.
+  let identity: { preflight?: string; budget?: string } | undefined;
+  const identify = (parsed: OcxParsedRequest) => identity ??= {
+    preflight: advisorLedgerKey(parsed, deps.workerModelId),
+    budget: advisorLedgerKey(parsed, ""),
+  };
 
   const taskKey = (parsed: OcxParsedRequest): string | undefined =>
-    advisorLedgerKey(parsed, deps.workerModelId);
+    identify(parsed).preflight;
 
   const logConsultation = (
-    trigger: "manual" | "preflight",
+    trigger: AdvisorTrigger,
     outcome: { ok: boolean; cancelled?: boolean; durationMs: number; error?: string; usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } },
     advisorModel: string,
   ): void => {
@@ -119,8 +134,9 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
 
   const runConsultation = async (
     parsed: OcxParsedRequest,
-    reason: "manual" | "preflight",
+    reason: AdvisorTrigger,
     question: string | undefined,
+    evidence?: AdvisorRepairEvidence,
   ): Promise<AdvisorConsultOutcome> => {
     const current = liveSettings();
     if (!current.enabled || current.model.trim() === "") {
@@ -129,7 +145,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
         isError: true,
         blocked: "settings",
         content: formatAdvisorUnavailable(
-          reason === "preflight" ? "preflight" : "manual",
+          reason === "manual" ? "manual" : "preflight",
           "advisor is not configured",
         ),
       };
@@ -153,7 +169,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     }
     // Same-consultation dedup within this request: identical trigger + focus returns a
     // non-advice outcome instead of a second expert call.
-    const fingerprint = `${reason}|${question ?? ""}`;
+    const fingerprint = `${reason}|${question ?? ""}|${evidence?.id ?? ""}`;
     let result;
     if (fingerprints.has(fingerprint)) {
       result = {
@@ -166,24 +182,50 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
       return {
         ok: false,
         isError: true,
-        content: formatAdvisorUnavailable(reason === "preflight" ? "preflight" : "manual", result.error),
+        content: formatAdvisorUnavailable(reason === "manual" ? "manual" : "preflight", result.error),
       };
     }
+    if (deps.abortSignal?.aborted) return { ok: false, isError: true, cancelled: true, content: "" };
+    const budgetKey = identify(parsed).budget;
+    const requestCapped = consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST;
+    if (requestCapped
+      || (current.policy === "adaptive" && budgetKey && !budget.reserve(budgetKey, current.maxConsultationsPerTask, now()).ok)) {
+      const id = activities.start({ trigger: reason, workerModel: deps.workerModelId, advisorModel: current.model, requestedEffort: current.effort }, now());
+      const blocked = requestCapped ? "limit" : "budget";
+      activities.finish(id, { status: "blocked", durationMs: 0, blockReason: blocked });
+      return { ok: false, isError: true, blocked, content: formatAdvisorUnavailable(blocked, requestCapped
+        ? "per-request consultation limit reached; no consultation sent"
+        : "task budget exhausted or unavailable; no consultation sent") };
+    }
+    consultations += 1;
     fingerprints.add(fingerprint);
-    result = await consultAdvisor(
-      {
-        parsed,
-        workerIdentity: deps.workerIdentity,
-        advisorModel: current.model,
-        reason,
-        ...(question !== undefined ? { question } : {}),
-      },
-      deps.config,
-      current.effort,
-      current.timeoutMs,
-      deps.abortSignal,
-      deps.baseUrlOverride,
-    );
+    const startedAt = now();
+    const activityId = activities.start({ trigger: reason, workerModel: deps.workerModelId, advisorModel: current.model, requestedEffort: current.effort }, startedAt);
+    try {
+      result = await consultAdvisor(
+        {
+          parsed,
+          workerIdentity: deps.workerIdentity,
+          advisorModel: current.model,
+          reason,
+          ...(evidence ? { evidence } : {}),
+          ...(question !== undefined ? { question } : {}),
+        },
+        deps.config,
+        current.effort,
+        current.timeoutMs,
+        deps.abortSignal,
+        deps.baseUrlOverride,
+      );
+    } catch (error) {
+      activities.finish(activityId, { status: "failed", durationMs: Math.max(0, now() - startedAt) });
+      throw error;
+    }
+    activities.finish(activityId, {
+      status: result.ok ? "ok" : result.cancelled ? "cancelled" : "failed",
+      durationMs: result.durationMs, effectiveEffort: result.effectiveEffort ?? null,
+      ...(result.usage ? { usage: result.usage } : {}),
+    });
     logConsultation(reason, result, current.model);
 
     if (result.ok) {
@@ -202,7 +244,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
           advisorModel: result.advisorModel,
           reason,
           advice: result.advice,
-          channel: reason === "preflight" ? "preflight" : "manual",
+          channel: reason === "manual" ? "manual" : "preflight",
         }),
       };
     }
@@ -210,19 +252,24 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
       ok: false,
       isError: true,
       ...(result.cancelled ? { cancelled: true } : {}),
-      content: formatAdvisorUnavailable(reason === "preflight" ? "preflight" : "manual", result.error ?? "unavailable"),
+      content: formatAdvisorUnavailable(reason === "manual" ? "manual" : "preflight", result.error ?? "unavailable"),
     };
   };
 
   const preflightInject = async (parsed: OcxParsedRequest): Promise<boolean> => {
+    const task = identify(parsed);
     const current = liveSettings();
-    if (current.policy !== "preflight" || preflightUsed) return false;
+    if (current.policy === "manual" || preflightUsed || deps.abortSignal?.aborted) return false;
     // No consent, disabled, or no model: do not claim, do not inject, do not send task context.
     if (!current.enabled || current.model.trim() === "" || current.contextSharingConsent === null) return false;
     // A genuine MANUAL consultation already advised this task (verifiable tool-result
     // provenance), or the task has no orientation evidence yet: skip.
-    if (historyHasManualAdvisorResult(parsed)) return false;
-    if (!hasOrientationEvidence(parsed)) return false;
+    // Adaptive automation needs a stable identity for its durable task budget. Legacy
+    // preflight keeps its documented identity-less, request-scoped behavior.
+    if (current.policy === "adaptive" && !task.budget) return false;
+    const evidence = current.policy === "adaptive" ? collectAdvisorRepairEvidence(parsed) : undefined;
+    const reason = evidence ? "repair_failure" : "preflight";
+    if (!evidence && (historyHasManualAdvisorResult(parsed) || !hasOrientationEvidence(parsed))) return false;
 
     // Atomic claim. A client with a stable conversation identity participates in the
     // process-global ledger, so concurrent requests for one task consult at most once and a
@@ -230,7 +277,8 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     // ledger on purpose: request-scoped dedup plus genuine in-history provenance are the only
     // suppression it gets — fail-open, so two independent identity-less conversations can never
     // suppress each other through a shared guess.
-    const key = taskKey(parsed);
+    const baseKey = taskKey(parsed);
+    const key = evidence && baseKey ? `${baseKey}:repair:${evidence.id}` : baseKey;
     let claimToken: string | undefined;
     if (key) {
       const claim = ledger.claim(key, now());
@@ -242,10 +290,10 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
 
     let outcome: AdvisorConsultOutcome;
     try {
-      outcome = await runConsultation(parsed, "preflight", undefined);
+      outcome = await runConsultation(parsed, reason, undefined, evidence);
     } catch (error) {
       if (key && claimToken) ledger.fail(key, claimToken, now());
-      console.warn(`[advisor] consultation failed trigger=preflight worker=${deps.workerModelId} error=plan_threw`);
+      console.warn(`[advisor] consultation failed trigger=${reason} worker=${deps.workerModelId} error=plan_threw`);
       parsed.context.messages = [
         ...parsed.context.messages,
         {

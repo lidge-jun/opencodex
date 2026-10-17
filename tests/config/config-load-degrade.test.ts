@@ -186,6 +186,24 @@ test("load preserves valid auto-review selectors and trims boundary whitespace",
   expect(loaded.providers.xai.autoReviewModelOverrides).toEqual({ "glm-5.2": "gpt-test" });
 });
 
+test("load drops a malformed global auto-review override and keeps a valid one", () => {
+  const defaults = getDefaultConfig();
+  const write = (autoReviewOverride: unknown) => writeFileSync(getConfigPath(), JSON.stringify({
+    ...defaults,
+    defaultProvider: "xai",
+    providers: { xai: { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1", note: "keep me" } },
+    autoReviewOverride,
+  }), "utf8");
+
+  write({ enabled: "yes", model: "bad selector" });
+  const dropped = loadConfig();
+  expect(dropped.autoReviewOverride).toBeUndefined();
+  expect(dropped.providers.xai.note).toBe("keep me");
+
+  write({ enabled: true, model: "9router/ocg-muse-spark-1.3-contributor" });
+  expect(loadConfig().autoReviewOverride).toEqual({ enabled: true, model: "9router/ocg-muse-spark-1.3-contributor" });
+});
+
 test("Fast rows default on for fresh and omitted config; explicit false and malformed values disable", () => {
   expect(getDefaultConfig().fastRows).toBe(true);
   for (const [value, expected] of [[undefined, true], [true, true], [false, false], ["invalid", false]] as const) {

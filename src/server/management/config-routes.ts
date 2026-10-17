@@ -2,8 +2,9 @@ import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import { resolveMainAccountHardLockThresholds } from "../../codex/main-account-hard-lock";
 import { getMainAccountExternalUsageWarning } from "../../codex/main-account-external-usage";
 import { getObservedMainQuotaIdentityKey } from "../../codex/main-account-cache";
-import { compactionRoutingSchema, memoryModelsSchema } from "../../config/schema/leaf-validators";
+import { compactionRoutingSchema, memoryModelsSchema, reasoningRetentionSchema } from "../../config/schema/leaf-validators";
 import { compactionRecoverySchema } from "../../config/schema/compaction-recovery";
+import { mainAccountHardLockFallbackSchema } from "../../config/schema/main-account-hard-lock-fallback";
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
 import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
@@ -121,6 +122,8 @@ import {
 } from "../../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { shadowCallTargetError } from "./shadow-call-validation";
+import { autoReviewOverrideConfigError } from "../../config/provider-validation";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -268,7 +271,6 @@ export async function syncEnabledClientIntegrations(
     try {
       const { writeDesktop3pConfig } = await import("../../claude/desktop-3p");
       const { desktopVisibleNativeSlugs, filterCatalogVisibleModels } = await import("../../codex/catalog");
-      const { fetchAllModels } = await import("../management-api");
       const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
       // Serialized with Desktop mode transitions (picker lock): a first-party switch cannot interleave.
       const { runPickerTransition } = await import("./claude-desktop-picker-routes");
@@ -353,6 +355,7 @@ function publicVisionSidecarSettings(
   };
 }
 
+/** Serve validated settings and publish catalog-affecting changes after persistence. */
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
@@ -424,6 +427,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // Absent means on by default: the GUI renders a switch enabled unless explicit false.
       fastRows: config.fastRows !== false,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
+      // Absent means off: the fallback is an extension of the lock, so the GUI renders
+      // the extended fields empty unless an explicit section exists.
+      codexMainAccountHardLockFallback: config.codexMainAccountHardLockFallback ?? null,
       mainAccountHardLock: { ...getMainAccountHardLockStatus(config),
         externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       // Absent means the historical auto-open, so the GUI can render the toggle
@@ -437,6 +443,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopSwitches: describeCodexDesktopSwitches(config, await observedCodexDesktopSwitchApply()),
       compactionRouting: config.compactionRouting ?? null,
       compactionRecovery: config.compactionRecovery ?? null,
+      reasoningRetention: config.reasoningRetention ?? null,
       // Absent means both phases keep their existing routes; the GUI renders that as "Off".
       memoryModels: config.memoryModels ?? null,
       startupHealth: await readStartupHealthSnapshot(config),
@@ -530,11 +537,13 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       fastRows?: unknown;
       codexMainAccountHardLock?: unknown;
       codexMainAccountHardLockThresholds?: unknown;
+      codexMainAccountHardLockFallback?: unknown;
       codexDesktopAuthless?: unknown;
       codexClientCompaction?: unknown;
       compactionRouting?: unknown;
       compactionRecovery?: unknown;
       memoryModels?: unknown;
+      reasoningRetention?: unknown;
     };
     if (body.codexAutoStart === undefined
       && body.streamMode === undefined
@@ -547,12 +556,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.fastRows === undefined
       && body.codexMainAccountHardLock === undefined
       && body.codexMainAccountHardLockThresholds === undefined
+      && body.codexMainAccountHardLockFallback === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined
       && body.compactionRouting === undefined
       && body.compactionRecovery === undefined
+      && body.reasoningRetention === undefined
       && body.memoryModels === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, or memoryModels" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, showCodexCredits, ultraFastTier, fastRows, codexMainAccountHardLock, codexMainAccountHardLockThresholds, codexMainAccountHardLockFallback, codexDesktopAuthless, codexClientCompaction, compactionRouting, compactionRecovery, reasoningRetention, or memoryModels" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -597,6 +608,13 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         return jsonResponse({ error: "codexMainAccountHardLockThresholds short must not exceed long" }, 400);
       }
     }
+    // null clears the section, like compactionRouting; a present section must fully parse.
+    const hardLockFallback = body.codexMainAccountHardLockFallback == null
+      ? body.codexMainAccountHardLockFallback
+      : mainAccountHardLockFallbackSchema.safeParse(body.codexMainAccountHardLockFallback);
+    if (hardLockFallback != null && !hardLockFallback.success) {
+      return jsonResponse({ error: "codexMainAccountHardLockFallback requires a nonblank model selector and an optional declared reasoningEffort" }, 400);
+    }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
     }
@@ -614,6 +632,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     const memoryModels = body.memoryModels == null
       ? body.memoryModels
       : memoryModelsSchema.safeParse(body.memoryModels);
+    const reasoningRetention = body.reasoningRetention == null ? body.reasoningRetention : reasoningRetentionSchema.safeParse(body.reasoningRetention);
+    if (reasoningRetention != null && !reasoningRetention.success) return jsonResponse({ error: "reasoningRetention requires optional boolean enabled, maxContextPercent greater than 0 and at most 100 and/or positive integer maxTokens; no other fields are allowed" }, 400);
     if (memoryModels != null && !memoryModels.success) {
       return jsonResponse({ error: "memoryModels requires a nonblank model and an optional declared reasoningEffort per configured phase, and no other fields" }, 400);
     }
@@ -646,7 +666,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     )) {
       return jsonResponse({ error: `appOwnedMemoryBudgetMb must be an integer from ${MIN_APP_OWNED_MEMORY_BUDGET_MB} to ${MAX_APP_OWNED_MEMORY_BUDGET_MB}` }, 400);
     }
-    const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery", "memoryModels"]);
+    const restoreCompactionRouting = captureConfigTopLevelRollback(config, ["compactionRouting", "compactionRecovery", "memoryModels", "reasoningRetention"]);
     const previousSettings = {
       codexAutoStart: config.codexAutoStart,
       hasCodexAutoStart: Object.hasOwn(config, "codexAutoStart"),
@@ -672,6 +692,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexMainAccountHardLockThresholds: Object.hasOwn(config, "codexMainAccountHardLockThresholds"),
       codexMainAccountHardLock: config.codexMainAccountHardLock,
       hasCodexMainAccountHardLock: Object.hasOwn(config, "codexMainAccountHardLock"),
+      codexMainAccountHardLockFallback: config.codexMainAccountHardLockFallback,
+      hasCodexMainAccountHardLockFallback: Object.hasOwn(config, "codexMainAccountHardLockFallback"),
       codexDesktopAuthless: config.codexDesktopAuthless,
       hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
       codexClientCompaction: config.codexClientCompaction,
@@ -717,6 +739,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (hardLockThresholds !== undefined) config.codexMainAccountHardLockThresholds = { ...hardLockThresholds };
       if (body.codexMainAccountHardLock === false) config.codexMainAccountHardLock = false;
       else if (body.codexMainAccountHardLock === true) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
+      if (hardLockFallback === null) deleteConfigTopLevelKey(config, "codexMainAccountHardLockFallback");
+      else if (hardLockFallback?.success) config.codexMainAccountHardLockFallback = hardLockFallback.data;
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
       if (body.codexClientCompaction === true) config.codexClientCompaction = true;
@@ -725,6 +749,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (compactionRouting?.success) config.compactionRouting = compactionRouting.data;
       if (compactionRecovery === null) deleteConfigTopLevelKey(config, "compactionRecovery");
       else if (compactionRecovery?.success) config.compactionRecovery = compactionRecovery.data;
+      if (reasoningRetention === null) deleteConfigTopLevelKey(config, "reasoningRetention");
+      else if (reasoningRetention?.success) config.reasoningRetention = reasoningRetention.data;
       // Null clears both phases; the GUI sends that when neither row names a model.
       if (memoryModels === null) deleteConfigTopLevelKey(config, "memoryModels");
       else if (memoryModels?.success) config.memoryModels = memoryModels.data;
@@ -775,6 +801,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexMainAccountHardLock) {
         config.codexMainAccountHardLock = previousSettings.codexMainAccountHardLock;
       } else deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
+      if (previousSettings.hasCodexMainAccountHardLockFallback) {
+        config.codexMainAccountHardLockFallback = previousSettings.codexMainAccountHardLockFallback;
+      } else deleteConfigTopLevelKey(config, "codexMainAccountHardLockFallback");
       if (previousSettings.hasCodexDesktopAuthless) {
         config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
       } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");
@@ -836,10 +865,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopSwitches,
       compactionRouting: config.compactionRouting ?? null,
       compactionRecovery: config.compactionRecovery ?? null,
+      reasoningRetention: config.reasoningRetention ?? null,
       // The panel re-reads its own save response, so a missing block would render both
       // phases as "Off" while the server kept them.
       memoryModels: config.memoryModels ?? null,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
+      codexMainAccountHardLockFallback: config.codexMainAccountHardLockFallback ?? null,
       mainAccountHardLock: { ...getMainAccountHardLockStatus(config),
         externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       startupHealth: await readStartupHealthSnapshot(config),
@@ -1058,6 +1089,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // Read BEFORE the mutation below: the Codex-side key follows the switch, and a flip is the
     // only case that owes a config.toml rewrite.
     const webSearchEnabledBefore = config.webSearchSidecar?.enabled !== false;
+    const visionEnabledBefore = config.visionSidecar?.enabled !== false;
     if (body.webSearch) {
       const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined || body.webSearch.anthropicInstance !== undefined;
       // Validate against the backend the caller SUBMITTED, across the whole
@@ -1193,6 +1225,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
     }
     saveConfigPreservingClaudeCode(config);
+    // Publish the changed attachment affordance to both the managed catalog and Codex cache.
+    // Use the existing bounded catalog-only path after persistence, outside the config lock.
+    const catalogRefresh = visionEnabledBefore !== (config.visionSidecar?.enabled !== false)
+      ? await convergeCodexCatalog()
+      : undefined;
     // The sidecar's own switch is only half of what "off" means: Codex keeps declaring its native
     // hosted `web_search` tool until its own mode says otherwise, and the tool a client advertises
     // is the one the model reaches for — which is why an MCP search server needs the client-side
@@ -1218,6 +1255,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
       codexWebSearch,
+      catalogRefreshPending: catalogRefresh ? catalogRefreshIsPending(catalogRefresh) : false,
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
       // Echoed for the same reason GET always carries it: the dashboard rebuilds
@@ -1268,6 +1306,39 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       model: sci.model ?? "",
       sourceModels: shadowSourceModels(sci.sourceModels),
     });
+  }
+
+  if (url.pathname === "/api/auto-review-settings" && req.method === "GET") {
+    const override = config.autoReviewOverride ?? {};
+    return jsonResponse({ enabled: override.enabled === true, model: override.model?.trim() ?? "" });
+  }
+
+  if (url.pathname === "/api/auto-review-settings" && req.method === "PUT") {
+    let raw: unknown;
+    try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
+    const body = raw as { enabled?: unknown; model?: unknown };
+    const shapeError = autoReviewOverrideConfigError(body, "body");
+    if (shapeError) return jsonResponse({ error: shapeError }, 400);
+    const rollback = captureConfigTopLevelRollback(config, ["autoReviewOverride"]);
+    try {
+      config.autoReviewOverride = { ...config.autoReviewOverride };
+      if (typeof body.enabled === "boolean") config.autoReviewOverride.enabled = body.enabled;
+      if (typeof body.model === "string") {
+        const trimmed = body.model.trim();
+        if (trimmed === "") delete config.autoReviewOverride.model;
+        else config.autoReviewOverride.model = trimmed;
+      }
+      (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
+    } catch (error) {
+      if (!(error instanceof ConfigWritePublishedError)) rollback();
+      throw error;
+    }
+    // The catalog carries the reviewer stamps, so the new selector has to reach it now; the
+    // disposition travels in the body like every other catalog-affecting route.
+    const catalogRefresh = await convergeCodexCatalog();
+    const override = config.autoReviewOverride;
+    return jsonResponse({ ok: true, enabled: override.enabled === true, model: override.model ?? "", catalogRefresh });
   }
   return null;
 }

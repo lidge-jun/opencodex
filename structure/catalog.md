@@ -7,8 +7,7 @@ Explicit Codex CLI installation observation supplies no selected-runtime proof t
 
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
-Catalog discovery remains separate from the Responses final-route
-[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+Catalog discovery remains separate from the Responses final-route [core module ownership](transports/responses.md#core-module-ownership).
 
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
@@ -23,6 +22,7 @@ Accounts added through the [Orca import](codex-home.md#orca-source-owned-account
 validation-pending. Import alone supplies no entitlement evidence for the model catalog.
 
 ## Shared catalog
+Vision-sidecar attachment metadata is projected after provider discovery/cache reads in `src/codex/catalog/routed-gather.ts`. The gather captures `visionSidecar.enabled !== false` before awaiting discovery, and `src/codex/catalog/gather-capture.ts` includes that effective flag in the flight key. Provider TTL/stale rows exclude synthetic sidecar image input; custom rows and synthesized combo members use the same captured switch. Explicit/native image modalities remain intact, and enabled advertisement retains the existing config-based consumer predicate without probing credential availability. An effective Vision switch change through `src/server/management/config-routes.ts` invokes the catalog-only management funnel after persistence to publish both catalog and cache; incomplete work is exposed as `catalogRefreshPending` without claiming client reload. Coverage: `tests/codex-integration/catalog-vision-sidecar-disabled.test.ts` and `tests/vision/sidecar-settings-vision-catalog.test.ts`.
 Custom-provider missing windows use [source-labelled vendor estimates](catalog-vendor-context.md) only when the provider opts in with `inferContextWindow: true`; these remain distinct from asserted routing capacity.
 Static policy and observed catalog evidence are separate authorities. Antigravity grouping and selection projection follow the [discovered effort-family contract](providers-and-adapters.md#antigravity-effort-families).
 `src/providers/resolved-model-policy.ts` resolves and freezes only registry/operator static facts,
@@ -112,7 +112,7 @@ to the native default singleton. A default must belong to the projected list. Fu
 is still not inferred from a GPT name. Stored configuration and native capability maps are
 unchanged. Request-time native effort clamps remain canonical-forward only.
 
-The shared merge uses `src/codex/catalog/configured-tiers.ts` to project Ultra Fast into Codex's native speed picker only for an eligible captured service-tier wire explicitly mapping `ultrafast` to `ultrafast`. Both writers pass current exact routed slugs; templates, native/account rows and combos cannot grant the capability. Generated choices carry an exact-slug ownership marker so removing the declaration also removes stale generated tiers, even with operator retention enabled; publication leaves the default unchanged. Coverage: `tests/codex-integration/configured-ultrafast-picker.test.ts`.
+The public builder in `src/codex/catalog/build-entries.ts` and shared merge use `src/codex/catalog/configured-tiers.ts` to project Ultra Fast only for an eligible captured service-tier wire explicitly mapping `ultrafast` to `ultrafast`. Live `/v1/models?client_version=...` discovery and both writers use current exact routed slugs; conflicting duplicates, templates, native/account rows and combos cannot grant capability. Live rows import no persisted operator tiers. Generated choices carry an exact-slug ownership marker so declaration withdrawal removes stale generated tiers even with operator retention enabled; publication leaves the default unchanged. Coverage: `tests/codex-integration/configured-ultrafast-picker.test.ts` and `tests/codex-integration/ultrafast-live-catalog.test.ts`.
 Separately, `src/codex/catalog/operator-tiers.ts` preserves a hand-supplied Ultra Fast tier from the exact persisted routed row only when `ultraFastTier` is enabled. Baselines and native templates cannot supply it. Current configured capability takes precedence; previously generated tiers cannot become operator evidence. Both overlays run after admission, preserve Fast policy and never create rows. Disabling `ultraFastTier` removes only independently supplied operator tiers; disabling the wire declaration removes generated ones. Operator defaults are retained only alongside an independently supplied tier declaration. Coverage: `tests/codex-integration/ultrafast-tier-honesty.test.ts`.
 Native rows are the one place the `ultraFastTier` flag itself adds a tier. `src/codex/catalog/native-ultrafast.ts` appends the documented `{ id: "ultrafast", name: "Ultrafast" }` descriptor to `service_tiers` and `"ultrafast"` to `additional_speed_tiers` on bare and trusted account-bound `gpt-6-astra` and `gpt-6.1-sol` rows, after the existing Fast tier and only when no Ultrafast entry is present. Codex reads the picker from `model_catalog_json` instead of ChatGPT's plan-aware live list, so without it Desktop never offers the choice. Each field it fills is recorded in the row's `opencodex_generated_service_tiers` marker, and disabling withdraws only marked fields (and only the unedited descriptor), so an operator-written native entry survives even when its text matches. Aliases, combos, reserve projections and other models are untouched, and the default tier never changes. Coverage: `tests/codex-integration/native-ultrafast-picker.test.ts`.
 
@@ -226,7 +226,7 @@ A Devin live row spreads its measured `inputModalities` before
 value survives only when none of them applies. Devin live rows collapse by catalog family (so `swe-1-6-fast` stays its own row), read their ladder from the family effort axis (including `minimal`), and carry the effective enabled default member's effort as `defaultReasoningEffort` when the family marks a default; `swe-1-6` is marked text-only because it drops images without an error.
 
 For `liveModels: false`, a static provider publishes the ordered union of `models` and `retainModels`. When `models` is absent or empty, its configured `defaultModel` seeds that
-union before retained ids; a nonempty explicit list does not import a different default.
+union before retained ids; a nonempty explicit list does not import a different default. The existing `opencode-go` preset retains name-based registry ownership: saved custom URLs are pinned to its canonical endpoint at routing, and omitted/empty models inherit its default unless explicitly overridden (`tests/codex-integration/catalog-opencode-go-static.test.ts`).
 Kiro keeps this static union as its floor and merges cached account model IDs and input limits; gathering neither refreshes tokens nor calls management, and runtime `/models` discovery remains disabled.
 Without any default or configured/retained ids, the static result stays empty. The existing
 forward-auth native path remains separate. Static gathering does not refresh OAuth or call
@@ -295,7 +295,7 @@ a label edit refresh Codex output.
 
 Raw `/v1/models` rows advertise positive safe capacity values in both Cursor's nested
 `capabilities` object and top-level discovery fields used by other clients. A model with a larger
-opt-in context tier uses that effective long window in both shapes; invalid values are omitted. For `github-copilot`, `modelContextTiers` raises a selected long-context window only when an exact `modelContextWindows` value supplies per-model evidence; that value wins before the provider cap, while unknown models retain observed metadata. The gather fingerprint includes the map.
+opt-in context tier uses that effective long window in both shapes; invalid values are omitted. For `github-copilot`, `modelContextTiers` raises a selected long-context window only when an exact `modelContextWindows` value supplies per-model evidence; that value wins before the provider cap, while unknown models retain observed metadata. The gather fingerprint includes the map. `src/server/index/model-alias-id.ts` applies opt-in `preferModelAliasIds` to `/v1/models` only: short aliases are promoted only when a read-only route preview identifies the same upstream by `model-alias`; ambiguous or shadowed aliases and aliases with unparseable synthetic Fast siblings retain qualified IDs; Cursor Fast remaps also keep their advertised identity. Promoted rows keep their original ID in `native_id` and retain `alias_of`. Codex catalog gathering is unchanged. `src/cli/doctor.ts` includes retained `native_id` values in model-exposure checks.
 
 Supported bare native GPT rows also consume `providers.openai.modelDisplayNames`. Retained sync
 and convergence pass the same map to the observed-state merge. After native normalization and
@@ -313,7 +313,7 @@ it does not relabel HTTP model listings or virtual `*-pro` rows.
 
 Astra has its own pinned native row: 272,000 default context, 872,000 opt-in ceiling,
 low-through-ultra effort, low default, and native multi-agent effort `xhigh`. The native-alias
-fallback passes the same configured limits to context, max input and compaction. Unrelated routed
+fallback passes configured limits to context, max input and compaction; [maximum windows](catalog-vendor-context.md#native-maximum-windows) remain separate. Unrelated routed
 templates clear the native multi-agent effort; canonical Astra-forward custom rows retain it and
 the pinned Fast speed description. Sync repairs only the exact old built-in Astra Fast description,
 preserving custom descriptions and other stored row fields.
@@ -569,11 +569,11 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 
 ## Provider-scoped approval reviewer
 
-`src/codex/catalog/auto-review.ts` resolves exact case-preserving provider/model reviewer selectors against the final catalog in both retained sync and `src/codex/convergence.ts`. Valid per-model selection wins over valid provider-wide selection, then the root selector supplies fallback. Native root stamps retain the observed original value and applied selector bound to their slug; removal restores the original only while the applied value is unchanged. The native provenance remains after restoration so an equal provider reviewer cannot trigger legacy reclassification on the next sync. Ambiguous legacy unmarked catalogs retain their existing heuristic cleanup. Provider stamps do not change routing or credentials.
+`src/codex/catalog/auto-review.ts` resolves exact case-preserving provider/model reviewer selectors against the final catalog in both retained sync and `src/codex/convergence.ts`. Valid per-model selection wins over valid provider-wide selection, then an enabled and nonblank `autoReviewOverride` takes precedence over the root selector read from Codex config. An enabled but blank global block leaves that root fallback active. Native root stamps retain the observed original value and applied selector bound to their slug; removal restores the original only while the applied value is unchanged. The native provenance remains after restoration so an equal provider reviewer cannot trigger legacy reclassification on the next sync. Ambiguous legacy unmarked catalogs retain their existing heuristic cleanup. Provider stamps do not change routing or credentials.
 
 The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
-Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send.
+Exact [model input declarations](config.md#explicit-per-model-capability-declarations) now feed text-only eligibility and catalog hints; existing image-description/omission handling consumes them before the main upstream send. Combo saves can create those declarations through the `PUT /api/combos` `visionSidecarTargets` request field, which commits the combo and its declarations in one transaction, skips members the sidecar already covers, and converges the catalog in the same save.
 
 ## Renamed destination reasoning metadata
 

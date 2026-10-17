@@ -1,5 +1,6 @@
 import type {
   AdapterEvent,
+  AnthropicServerBlocks,
   OcxMessagePhase,
   OcxProviderContinuationState,
   OcxProviderOpaqueToolCallMetadata,
@@ -186,7 +187,12 @@ export function adapterFailureFromEvent(event: Extract<AdapterEvent, { type: "er
  * This fixes items created from here on. History recorded before it is repaired at the
  * replay boundary by `backfillWebSearchQueries()` in the Responses adapter.
  */
-export function webSearchAction(queries: string[]): Record<string, unknown> {
+export function webSearchAction(queries: string[], anthropic?: AnthropicServerBlocks): Record<string, unknown> {
+  // Anthropic's server-side web_fetch opens one page instead of searching.
+  if (anthropic?.use.name === "web_fetch") {
+    const url = (anthropic.result.content as { url?: unknown } | undefined)?.url ?? (anthropic.use.input as { url?: unknown }).url;
+    return { type: "open_page", url: typeof url === "string" ? url : "" };
+  }
   const first = queries[0] ?? "";
   return { type: "search", query: first, queries: queries.length > 0 ? queries : [first] };
 }

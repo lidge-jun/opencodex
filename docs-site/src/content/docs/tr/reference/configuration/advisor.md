@@ -1,6 +1,6 @@
 ---
 title: Danışman
-description: OpenCodex'in sahibi olduğu uzman danışma sidecar'ı — yapılandırılan uzman model yönlendirilen worker'lara tavsiye döndürür; manual ve preflight politikaları.
+description: manual, preflight ve kanıta dayalı adaptive politikalarıyla bağımsız uzman danışması.
 ---
 
 Danışman, worker'ın görevini inceleyen ve tavsiye döndüren bağımsız bir uzman modeldir. Danışmayı uçtan uca OpenCodex sahiplenir: proxy, worker'ın turuna sentetik `advisor` aracını enjekte eder, danışmayı normal yönlendirme otoritesi aracılığıyla kendisi yürütür ve tavsiyeyi geri enjekte ederek özgün worker'ın devam etmesini sağlar. Worker'ın bir şey devretmesine, spawn etmesine veya sağlayıcı kimlik bilgisi taşımasına gerek yoktur.
@@ -8,6 +8,8 @@ Danışman, worker'ın görevini inceleyen ve tavsiye döndüren bağımsız bir
 Bu, alt ajan yüzeyinden farklıdır (bkz. [Ajan yapılandırması](/tr/reference/configuration/agents/)): alt ajanlar, Codex'in işbirliği araçları üzerinden worker tarafından başlatılan delegasyondur. Danışman, istemcinin hiç görmediği proxy tarafı bir sidecar'dır — hiçbir şey spawn etmeyen bir worker bile tavsiye alabilir.
 
 ## Yapılandırma
+
+Kontrol panelindeki **Advisor** sayfasında katalogdan model seçin. Yerel, sağlayıcı, hesap, özel model ve combo tanımlayıcıları aynen kaydedilir. Devre dışı veya ilk seçimi bekleyen modeller yeni seçenek olarak sunulmaz. Listede bulunmayan kayıtlı tanımlayıcı, değiştirilene veya temizlenene kadar uyarıyla korunur. Yükleme hatası seçimi korur ve yeniden deneme sunar. Metin önerisi verebilen bir model seçin; katalog danışma uyumluluğunu garanti etmez. CLI ve API, yönlendiricinin desteklediği model dizelerini kabul etmeye devam eder.
 
 ```json
 {
@@ -26,11 +28,12 @@ Bu, alt ajan yüzeyinden farklıdır (bkz. [Ajan yapılandırması](/tr/referenc
 | `enabled?` | `boolean` | `false` | Ana anahtar. Kapalıyken istek yolunda hiçbir danışman davranışı olmaz. |
 | `model?` | `string` | — | Uzman model. Yönlendiricinin kabul ettiği herhangi bir model dizisi: çıplak yerel model (`gpt-6-astra`), açık `provider/model` (`anthropic/claude-sonnet-4-6`, `xai/grok-...`) veya hesap nitelemeli yerel model. Sağlayıcılar arası tam desteklenir. |
 | `effort?` | `string` | `"max"` | Danışman çağrısının muhakeme düzeyi (`low`–`ultra`). |
-| `policy?` | `"manual" \| "preflight"` | `"manual"` | Ne zaman danışılır. |
+| `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | Ne zaman danışılır. |
+| `maxConsultationsPerTask?` | `integer` | `3` | Uyarlanabilir görev bütçesi: manuel çağrılar dahil 1–3 deneme. |
 | `timeoutMs?` | `number` | `120000` | Loopback danışma zaman aşımı. |
 | `contextSharingConsent?` | `"v1"` | yok | Yapılandırılmış danışman sağlayıcısına görev bağlamını gönderme onayı. Güncel değer yalnızca `"v1"`. Yok, eskimiş veya başka bir değer görev içeriğinin gönderilmemesi demektir. `enabled: true` bu onay değildir. |
 
-Panodaki **Advisor** sayfası veya `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight>` ile yönetin.
+Panodaki **Advisor** sayfası veya `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` ile yönetin.
 
 Güncel onay yokken `ocx advisor on` sağlayıcılar arası gönderimi açmaz: açıklamayı basar ve durur. `ocx advisor on --ack-context-sharing` ile `ocx advisor consent` `v1` kaydeder. `ocx advisor consent --revoke` onayı kaldırır ve gönderimi hemen durdurur. `ocx advisor set` onay vermez. Panodaki onay kutusu önceden işaretli değildir.
 
@@ -78,5 +81,13 @@ Danışman fail-open davranır: gönderilmiş bir danışma başarısız olursa 
 ## PR1 sınırlamaları
 
 - Yerel OpenAI passthrough turları (ChatGPT havuzu worker'ları) sentetik aracı almaz; danışman desteği yönlendirilen (çevrilen) sağlayıcıları kapsar. Preflight danışması run-turn bağdaştırıcılarına uygulanır; araç uygulanmaz.
-- Uyarlanabilir tetikleyici yok: takılma algılama, tekrarlayan başarısızlık analizi, yükseltme katmanları, çoklu danışman veya oylama yok. Yalnızca `manual` ve `preflight`.
+- Anlamsal takılma algılama, tamamlanma incelemesi, yükseltme katmanları, çoklu danışman veya oylama yoktur.
 - Preflight tekilleştirme defteri süreç içindedir; proxy yeniden başlatıldıktan sonra devam eden bir görev bir preflight danışması daha alabilir.
+
+## Kanıta dayalı uyarlanabilir danışma ve etkinlik
+
+`adaptive`, ilk danışmaya ek olarak aynı çalışma dizinindeki aynı doğrulama başarısız olduğunda, sonraki dosya düzenlemesi tamamlandığında ve yeni doğrulama tekrar başarısız olduğunda danışır. Başarı hata durumunu temizler; düzenleme öncesinde başlayan kontrol onarım sonrası deneme sayılmaz. İlk danışma ve başarısız onarım ayrı ayrı tekilleştirilir. Otomasyon sabit bir konuşma kimliği gerektirir. Eşleşen araç çağrıları/sonuçları ve açık çıkış kodu gerekir. Karmaşık betikler, toplu çağrılar, shell düzenlemeleri ve belirsiz çıktılar tetiklemez.
+
+`ocx advisor set --policy adaptive --max-consultations 2` ile ayarlayın. Manuel ve otomatik denemeler görev başına 1–3 bütçesini paylaşır. Sunucu göndermeden önce `OPENCODEX_HOME/advisor-budget.sqlite` dosyasına rezervasyon yazar; yeniden başlatma veya worker değişimi sayacı sıfırlamaz. Yalnızca görev özetleri, sayaçlar ve süreler tutulur: ilk denemeden itibaren 24 saat, en fazla 512 görev. Bütçe kullanılamıyorsa worker devam eder. Gönderilen başarısız veya iptal edilen çağrılar ücretlenmiş olabileceğinden rezervasyon iade edilmez. Sabit kimlik yoksa yalnızca istek düzeyinde sınırlı manuel çağrılar kullanılabilir.
+
+Advisor sayfası ve `ocx advisor activity --json` (`GET /api/advisor/activity`), bu işlemin son 24 saatinden en fazla 100 meta veri kaydını gösterir. Görünür sayfa beş saniyede bir yenilenir. Neden, durum, modeller, süre, bildirilen girdi/çıktı tokenları, istenen ve adaptörün eşlediği akıl yürütme düzeyi gösterilir. Görev metni, komutlar, tavsiye veya konuşma kimliği tutulmaz; yeniden başlatmada kayıtlar silinir. Eşleme gönderilen parametreyi gösterir, sağlayıcının iç akıl yürütmesini garanti etmez. Eksik veriler bilinmiyor olarak kalır; tavsiye benimsenmesi ve kesin maliyet çıkarılmaz.

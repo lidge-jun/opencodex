@@ -25,6 +25,8 @@ import {
   refreshUserCostOverlays,
   userCostOverlayVersion,
 } from "../../src/usage/user-cost-overlays";
+import { summarizeUsage } from "../../src/usage/summary";
+import type { PersistedUsageAttempt } from "../../src/usage/log";
 import type { OcxConfig } from "../../src/types";
 
 const RATE = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
@@ -762,6 +764,74 @@ describe("estimateRequestCost", () => {
     const est = estimateRequestCost({ provider: "p", model: "m", usageStatus: "estimated", usage: { inputTokens: 10, outputTokens: 5, estimated: true } }, overlays);
     expect(est?.estimated).toBe(true);
     expect(estimateRequestCost({ provider: "p", model: "m", usageStatus: "unreported" }, overlays)).toBeNull();
+  });
+
+  test("usage that was only partly measured gets no confident price", () => {
+    const overlays: ExpectedPriceOverlay[] = [
+      { provider: "p", modelId: "m", cost4: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, source: "s", verifiedAt: "2026-07-20", status: "verified" },
+    ];
+    // A combo row whose first leg failed without usage is `unreported` while still carrying the
+    // second leg's tokens; pricing those tokens reports an understated cost as if complete.
+    const usage = { inputTokens: 10, outputTokens: 5 };
+    for (const usageStatus of ["unreported", "unsupported"] as const) {
+      expect(estimateRequestCost({ provider: "p", model: "m", usageStatus, usage }, overlays)).toBeNull();
+      expect(estimateAttemptCost({ ordinal: 1, provider: "p", model: "m", usageStatus, usage }, overlays)).toBeNull();
+    }
+  });
+});
+
+describe("summary price coverage on partly measured requests", () => {
+  const attempt = (ordinal: number, usage?: { inputTokens: number; outputTokens: number }, sendCount = 1) => ({
+    ordinal, provider: "openai", model: "gpt-5.5", adapter: "openai-responses",
+    status: usage ? 200 : 429, durationMs: 10, sendCount, recoveryKinds: [],
+    usageStatus: usage ? "reported" as const : "unreported" as const,
+    ...(usage ? { usage } : {}),
+  });
+  const row = (requestId: string, attempts: PersistedUsageAttempt[]) => ({
+    requestId, timestamp: Date.UTC(2026, 5, 28), provider: "openai", model: "gpt-5.5",
+    status: 200, durationMs: 20, usageStatus: "unreported" as const, attempts,
+  });
+  const gpt = (entries: ReturnType<typeof row>[]) =>
+    summarizeUsage(entries, "30d", Date.UTC(2026, 5, 28, 12)).models.find(model => model.model === "gpt-5.5")!;
+
+  test("a request with an unpriceable part counts unpriced, never both", () => {
+    const partial = { ...attempt(2, { inputTokens: 100, outputTokens: 10 }), usageStatus: "unreported" as const };
+    expect(gpt([row("mixed", [attempt(1, { inputTokens: 100, outputTokens: 10 }), partial])]))
+      .toMatchObject({ requests: 1, pricedRequests: 0, unpricedRequests: 1 });
+  });
+
+  test("a leg that cost nothing is a known zero and does not unprice the request", () => {
+    const served = attempt(2, { inputTokens: 100, outputTokens: 10 });
+    const priced = { requests: 1, pricedRequests: 1, unpricedRequests: 0 };
+    expect(gpt([row("no-send", [{ ...attempt(1, undefined, 0), status: 0 }, served])])).toMatchObject(priced);
+    expect(gpt([row("local", [{ ...attempt(1), status: 200, locallyAnswered: true }, served])])).toMatchObject(priced);
+    // Sent, refused with an HTTP error before any output: providers do not bill it.
+    expect(gpt([row("refused", [attempt(1), served])])).toMatchObject(priced);
+  });
+
+  test("a leg that may have generated tokens without reporting usage unprices the request", () => {
+    const served = attempt(2, { inputTokens: 100, outputTokens: 10 });
+    const unpriced = { requests: 1, pricedRequests: 0, unpricedRequests: 1 };
+    // Mid-stream failure after the 200 head, a stream that began before its error, and a 200 that
+    // simply never carried a usage frame.
+    expect(gpt([row("aborted", [{ ...attempt(1), status: 502, streamAborted: true }, served])])).toMatchObject(unpriced);
+    expect(gpt([row("began", [{ ...attempt(1), status: 503, firstOutputMs: 40 }, served])])).toMatchObject(unpriced);
+    expect(gpt([row("silent", [{ ...attempt(1), status: 200 }, served])])).toMatchObject(unpriced);
+  });
+
+  test("a retry row reported from its last leg does not total a cost an earlier leg may have added", () => {
+    // Non-combo retry: the row's status and usage come from the served leg alone, so the row reads
+    // `reported` while an earlier leg died mid-stream without usage.
+    const usage = { inputTokens: 100, outputTokens: 10 };
+    const entry = {
+      ...row("retry", [{ ...attempt(1), status: 502, streamAborted: true }, attempt(2, usage)]),
+      usageStatus: "reported" as const, usage,
+    };
+    expect(summarizeUsage([entry], "30d", Date.UTC(2026, 5, 28, 12)).summary)
+      .toMatchObject({ requests: 1, pricedRequests: 0, unpricedRequests: 1, estimatedCostUsd: 0 });
+    const refused = { ...entry, attempts: [attempt(1), attempt(2, usage)] };
+    expect(summarizeUsage([refused], "30d", Date.UTC(2026, 5, 28, 12)).summary)
+      .toMatchObject({ requests: 1, pricedRequests: 1, unpricedRequests: 0 });
   });
 });
 

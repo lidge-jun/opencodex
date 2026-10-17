@@ -247,6 +247,60 @@ describe("health-aware scoring (RI-06)", () => {
     expect(finalTarget.successRate).toBe(1);
   });
 
+  test("a stream that dies after its 200 head is a failure for the attempt that dropped it", () => {
+    for (let index = 0; index < 5; index++) appendUsageEntry(row(`ok-${index}`, 200, 800));
+    // b/m2 failed over to a/m1, whose 200 stream was then cut mid-flight.
+    appendUsageEntry({
+      ...row("combo-abort", 200, 1500, {
+        provider: "combo",
+        model: "c1",
+        terminalStatus: "incomplete",
+        timestamp: Date.now() - 1_000,
+      }),
+      attempts: [
+        { ordinal: 1, provider: "b", model: "m2", adapter: "openai-chat", status: 503, durationMs: 400, sendCount: 1, recoveryKinds: [], usageStatus: "reported" },
+        { ordinal: 2, provider: "a", model: "m1", adapter: "openai-chat", status: 200, durationMs: 1100, streamAborted: true, sendCount: 1, recoveryKinds: [], usageStatus: "unreported" },
+      ],
+    });
+    const evidence = healthEvidenceForCandidate({ provider: "a", model: "m1" });
+    expect(evidence.sampleCount).toBe(6);
+    expect(evidence.failures).toBe(1);
+    expect(evidence.incompleteStreamRate).toBeCloseTo(1 / 6, 5);
+  });
+
+  test("a request with no physical send to a target is not health evidence for it", () => {
+    for (let index = 0; index < 5; index++) appendUsageEntry(row(`ok-${index}`, 200, 800));
+    // Answered locally: the row names a/m1 but nothing left the proxy.
+    appendUsageEntry({
+      ...row("local", 200, 5, { localTerminalReason: "local-answer" }),
+      attempts: [
+        { ordinal: 1, provider: "a", model: "m1", adapter: "openai-chat", status: 200, durationMs: 5, locallyAnswered: true, sendCount: 0, recoveryKinds: [], usageStatus: "reported" },
+      ],
+    });
+    // Refused before send for a/m1, then served by b/m2.
+    appendUsageEntry({
+      ...row("refused", 200, 900, { provider: "b", model: "m2", timestamp: Date.now() - 1_000 }),
+      attempts: [
+        { ordinal: 1, provider: "a", model: "m1", adapter: "openai-chat", status: 503, durationMs: 1, sendCount: 0, recoveryKinds: [], usageStatus: "unreported" },
+        { ordinal: 2, provider: "b", model: "m2", adapter: "openai-chat", status: 200, durationMs: 900, sendCount: 1, recoveryKinds: [], usageStatus: "reported" },
+      ],
+    });
+    const evidence = healthEvidenceForCandidate({ provider: "a", model: "m1" });
+    expect(evidence.sampleCount).toBe(5);
+    expect(evidence.failures).toBeUndefined();
+    expect(healthEvidenceForCandidate({ provider: "b", model: "m2" }).sampleCount).toBe(1);
+  });
+
+  test("a local refusal logged before any attempt began is not health evidence", () => {
+    for (let index = 0; index < 5; index++) appendUsageEntry(row(`ok-${index}`, 200, 800));
+    // Refused by the proxy itself (e.g. server_busy admission): no attempts array, and the
+    // persisted row carries only the derived `local-refusal` cause, not `localTerminalReason`.
+    appendUsageEntry(row("busy", 503, 2, { failureCause: "local-refusal", timestamp: Date.now() - 1_000 }));
+    const evidence = healthEvidenceForCandidate({ provider: "a", model: "m1" });
+    expect(evidence.sampleCount).toBe(5);
+    expect(evidence.failures).toBeUndefined();
+  });
+
   test("execution path applies live codex account cooldown to openai candidates", async () => {
     const { clearCodexUpstreamHealth, recordCodexUpstreamOutcome } = await import("../../src/codex/routing");
     clearCodexUpstreamHealth();

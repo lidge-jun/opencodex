@@ -81,6 +81,8 @@ order on the wire. Parallel calls stay in one assistant turn; their results keep
 search budgets and duplicate-query suppression. Tool-name/id rewrites must agree with the raw
 snapshot or serialization fails closed. This is request-local search fidelity, not a durable
 cross-request transcript format or a guarantee for unsupported provider block types.
+Signed progress commentary remains signed thinking in the loop's internal history, so a later
+binding refusal can identify and remove that payload while preserving completed search results.
 
 Anthropic forced-answer nudges are appended once to request-local history and remain in their
 original sent positions. An empty-answer retry retains the same declared tool catalog and changes

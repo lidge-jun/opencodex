@@ -15,6 +15,11 @@ the translator budget, which is why so many documents link here rather than rest
 
 ## Request-copy accounting
 
+The optional Advisor protocol guard follows the [Advisor retention contract](../advisor.md#optional-subsystem-boundary).
+Its raw leg, reconstruction and appended replay history use independent local counters, also
+charged to the request translator budget when supplied by delivery or empty-completion retry.
+These charges do not borrow the bridge's WeakMap event leases or the parser's call leases.
+
 Native Ollama late-output attribution uses `src/lib/json-byte-size.ts` to count the
 parts as one JSON string before constructing its caption. The exact count includes
 one pair of quotes, escaping, UTF-8 and surrogate pairs spanning parts, without a
@@ -83,7 +88,7 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
-HTTP owners in `src/server/responses/core.ts`, `src/server/chat-completions.ts` and `src/server/claude-messages.ts` pass the request abort signal to `src/lib/translator-budget.ts`. An aborted request releases its owned translator budget even when its response body is never consumed. Abort finalization changes accounting only; the transport keeps ownership of producer cancellation and response terminal precedence. Explicit body cancellation also releases the budget before awaiting upstream reader cancellation. EOF and read errors share the same idempotent finalizer, which removes its abort listener. Responses lifetime wrapping in `src/server/responses/core-lifetime.ts` preserves native, eager-relay and preinspected-response markers. `tests/adapters/translator-budget-lifetime.test.ts` holds cancellation pending and covers abort before wrapping, abort after wrapping, explicit cancellation and successful EOF.
+HTTP owners in `src/server/responses/core.ts`, `src/server/chat-completions.ts` and `src/server/claude-messages.ts` pass the request abort signal to `src/lib/translator-budget.ts`. An aborted request releases its owned translator budget even when its response body is never consumed. Abort finalization changes accounting only; the transport keeps ownership of producer cancellation and response terminal precedence. Explicit body cancellation also releases the budget before awaiting upstream reader cancellation. EOF and read errors share the same idempotent finalizer, which removes its abort listener. Responses lifetime wrapping in `src/server/responses/core-lifetime.ts` preserves native, eager-relay, preinspected-response, run-turn and nonreplayable markers, including through an outer serving-account lease. `tests/adapters/translator-budget-lifetime.test.ts` holds cancellation pending and covers abort before wrapping, abort after wrapping, explicit cancellation, marker preservation and successful EOF.
 
 Disposed budgets ignore late call, reservation, charge and observation work; reservations created before disposal cannot resurrect per-turn or aggregate counters. The same Bun contract checks both accounting scopes before any producer cancellation and while an explicit cancellation is pending. Every producer must honor its transport abort link; disposed accounting does not provide a byte cap to work that outlives its request.
 
@@ -275,6 +280,20 @@ Schema size still determines traversal work and the cost of copying a changed br
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
-The [compaction routing override](responses-failover.md#compaction-routing-overrides) changes model and effort scalars on the already-read request body, before parsing, within the existing body-reader budget.
+The [compaction routing override](responses-failover.md#compaction-routing-overrides) changes model and effort scalars on the already-read request body, before parsing, within the existing body-reader budget. `src/server/responses/compaction-retention.ts` charges locally retained v2 reasoning as retained collectors before dispatch and releases it on response completion, error, cancellation or abort; bridge output remains subject to the same response budget.
 
 `src/lib/sse-decoder.ts` recognizes CR, LF and CRLF line endings, including CRLF split between fetch chunks. Delimiters are consumed before field retention; event/comment ordering, EOF dispatch and translator-budget release remain shared across all three forms. The delimiter search keeps native `indexOf` cursors for the next CR and LF in each decoded chunk, so scanning stays linear for every framing.
+
+Native Chat's optional reasoning capture (`src/server/chat-native-reasoning.ts`) charges retained
+reasoning and tool ids before concatenation and reserves the previous string during replacement.
+Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay.
+Terminal, error and cancellation paths release collector retention; the shared replay cache owns
+its own bounded text after insertion. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior.
+
+The Opus 5.5 progress normalizer in `src/adapters/anthropic-progress.ts` reserves its one-block
+thinking/signature buffer before concatenation, replaces signatures rather than appending, and
+releases reservations on completion, overflow and cancellation. Buffered response transformation
+charges each replacement event while its source batch remains retained; the bridge then owns
+the signed envelope and visible commentary pair through its existing output accounting.
+
+Explicitly selected canonical Codex Lite ordinary unreferenced history notes reuse `src/adapters/openai-responses/compaction-search-history.ts` and its 65,536-byte projection cap, included in final passthrough serialization accounting; original raw history and all non-hosted input remain untouched. The budget counts only actually projected cells; same-input referenced hosted cells do not consume the ordinary notes budget. Top-level and action sources share the existing per-field/list allowlists and total bound.

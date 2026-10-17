@@ -306,6 +306,7 @@ export interface ProviderQuotaWindowDto {
   label: string;
   percent: number;
   resetAt?: number;
+  modelId?: string;
 }
 
 export interface ProviderQuotaDto extends CodexQuotaDto {

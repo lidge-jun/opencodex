@@ -22,6 +22,7 @@ import { isAnthropicInstanceId } from "../providers/anthropic-instance-id";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
+import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, SendBudgetExhaustedError } from "../lib/upstream-retry";
@@ -244,7 +245,11 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
   };
 
   for (const e of events) {
-    if (e.type === "thinking_delta") {
+    if (e.type === "text_delta" && e.anthropicThinkingSignature) {
+      flushVisible();
+      flushRaw();
+      parts.push({ type: "thinking", thinking: e.text, signature: e.anthropicThinkingSignature });
+    } else if (e.type === "thinking_delta") {
       flushRaw();
       thinking += e.thinking;
     } else if (e.type === "reasoning_raw_delta") {
@@ -326,6 +331,12 @@ export interface ImageBridgeDeps {
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   /**
+   * After an `on429` rotation, offered the usage of the hidden iterations the left credential
+   * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
+   * report it again; the client terminal still includes it.
+   */
+  onRotatedUsage?: (usage: OcxUsage) => boolean;
+  /**
    * Optional 429 failover for the routed (non-xAI) model. Return a rebuilt adapter for the
    * rotated credential, or null when the pool is exhausted. Async hooks support OAuth refresh;
    * existing synchronous key-pool hooks remain valid.
@@ -359,6 +370,8 @@ export interface ImageBridgeDeps {
   onCompletedResponse?: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => void;
   /** WebSocket Responses path only — leave response id empty for protocol compatibility. */
   forceEmptyResponseId?: boolean;
+  /** Responses inbound only: deliver a non-retryable upstream refusal as `response.failed`. */
+  terminalRefusalAsFailed?: boolean;
 }
 
 /**
@@ -383,6 +396,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   let paidImageCalls = 0;
   let paidVideoCalls = 0;
   let hiddenUsage: OcxUsage | undefined;
+  // Hidden usage already billed through onRotatedUsage: still on the client terminal, not in
+  // ledgerUsage, which is what onUsage reports once a rotation has moved some.
+  let rotatedUsage: OcxUsage | undefined;
+  let ledgerUsage: OcxUsage | undefined;
   let activeProducers = 0;
 
   const addUsage = (a: OcxUsage | undefined, b: OcxUsage | undefined): OcxUsage | undefined => {
@@ -577,6 +594,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       // runTurn adapters signal errors via {type:"error"} events, not HTTP status codes.
       const errorEvent = events.find(e => e.type === "error");
       if (errorEvent && errorEvent.type === "error") {
+        hiddenUsage = addUsage(hiddenUsage, errorEvent.usage);
         if (errorEvent.code === "translation_buffer_limit") {
           throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
         }
@@ -718,6 +736,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);
         if (!rotated) break;
+        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) {
+          rotatedUsage = addUsage(rotatedUsage, hiddenUsage);
+          hiddenUsage = undefined;
+        }
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
         adapter = rotated.adapter;
         yield { type: "heartbeat" };
@@ -804,6 +826,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             yield* parseStreamWithProgress(current.response, current.responseAdapter.parseStream.bind(current.responseAdapter), {
               signal, inactivityTimeoutMs: stallTimeoutMs, translatorBudget,
               preserveAdapterError: deps.thinkingRecovery !== undefined,
+              onErrorUsage: usage => { hiddenUsage = addUsage(hiddenUsage, usage); },
             });
           } catch (error) {
             if (!(error instanceof WebSearchAdapterEventError)) throw error;
@@ -915,13 +938,17 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           // Loop (fulfill + re-ask) ONLY when the model's actionable output is purely image_gen. A
           // real tool call means this turn is terminal for Codex — finalize so those calls reach
           // Codex. forceFinal also finalizes.
-          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceFinal;
+          // A refused iteration also finalizes: fulfilling its media call would re-ask the model
+          // with the refused context (#7148).
+          const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceFinal
+            && !split.passthrough.some(isTerminalRefusalIncomplete);
           if (!shouldLoop) {
-            if (hiddenUsage) {
+            if (hiddenUsage || rotatedUsage) {
               for (let i = split.passthrough.length - 1; i >= 0; i--) {
                 const e = split.passthrough[i];
                 if (e?.type === "done" || e?.type === "incomplete") {
-                  split.passthrough[i] = { ...e, usage: addUsage(hiddenUsage, e.usage) };
+                  ledgerUsage = addUsage(hiddenUsage, e.usage);
+                  split.passthrough[i] = { ...e, usage: addUsage(rotatedUsage, ledgerUsage) };
                   break;
                 }
               }
@@ -932,6 +959,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
 
           // Discarded iteration still contributed tokens — accumulate for the final onUsage.
           takeUsageFrom(split.passthrough);
+
+          for (const event of split.passthrough) {
+            if (event.type === "text_delta" && event.anthropicThinkingSignature) yield event;
+          }
 
           // Fulfill each image/video call, then inject ONE assistant turn (thinking once + all tool
           // calls) so Anthropic extended-thinking continuations stay valid across parallel calls.
@@ -1104,6 +1135,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             });
           }
         } catch (e) {
+          ledgerUsage = hiddenUsage;
+          const usage = addUsage(rotatedUsage, hiddenUsage);
           if (isTranslatorBudgetExceededError(e)) {
             yield {
               type: "error",
@@ -1111,14 +1144,14 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               errorType: "upstream_error",
               code: e.code,
               message: "upstream translation buffer exceeded the safe limit",
-              ...(hiddenUsage ? { usage: hiddenUsage } : {}),
+              ...(usage ? { usage } : {}),
             };
           } else {
             yield {
               type: "error",
               message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
               ...(e instanceof LoopError ? { status: e.status, ...(e.event ?? {}) } : {}),
-              ...(hiddenUsage ? { usage: hiddenUsage } : {}),
+              ...(usage ? { usage } : {}),
             };
           }
           return;
@@ -1139,6 +1172,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       replayCacheScope: parsed._reasoningReplayScope,
       ...(deps.clientToolCatalogRestriction ? { ...deps.clientToolCatalogRestriction, enforceDeclaredToolNames: false } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
+      ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       hideRawReasoning: parsed.options.hideRawReasoning,
       stallTimeoutSec: deps.stallTimeoutSec,
@@ -1146,7 +1180,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       ...(deps.onUsage ? {
         // Terminal done/incomplete already includes hiddenUsage (merged above). Do not
         // add it again here or request logs double-count multi-iteration image turns.
-        onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(usage),
+        onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(rotatedUsage ? ledgerUsage : usage),
       } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },

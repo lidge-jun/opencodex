@@ -69,9 +69,12 @@ ocx models provider openrouter on
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`ollama-native`、`azure-openai`（或別名 `azure`）之一。 |
 | `baseUrl` | `string` | 上游 API base URL。多數內建固定端點忽略不符；碰撞安全的金鑰預設保留較舊的同名自訂目的地。 |
-| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models? }` | 選用的用戶端出站請求啟動節流，與上游用量、計費及限流指標彼此獨立。`maxConcurrentRequests` 是限制進行中請求數的正整數，供應商或模型規則都可單獨設定此項。供應商限制適用於所有模型，`models` 依上游模型精確 ID 比對，並可增加延遲或收緊並發限制。排隊等待不計入回應標頭逾時。涵蓋 HTTP 及明確的適配器 `fetchResponse`/`runTurn` 呼叫。設定並行上限時，標準 Responses WebSocket 請求改用 HTTP/SSE，以便在回應本文完成、出錯或取消時釋放並行名額。 對包含 Cursor 的 `runTurn` 適配器，並行上限計算進行中的回合數，而非實體傳送數：同一回合內的 RunSSE 與 BidiAppend 可重疊，其他回合仍須等待。後續傳送仍遵守啟動間隔。 |
+| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models?, keySelection?, keys? }` | 選用的用戶端出站請求啟動節流，與上游用量、計費及限流指標彼此獨立。`maxConcurrentRequests` 是限制進行中請求數的正整數，供應商或模型規則都可單獨設定此項。供應商限制適用於所有模型，`models` 依上游模型精確 ID 比對，並可增加延遲或收緊並發限制。排隊等待不計入回應標頭逾時。涵蓋 HTTP 及明確的適配器 `fetchResponse`/`runTurn` 呼叫。設定並行上限時，標準 Responses WebSocket 請求改用 HTTP/SSE，以便在回應本文完成、出錯或取消時釋放並行名額。 對包含 Cursor 的 `runTurn` 適配器，並行上限計算進行中的回合數，而非實體傳送數：同一回合內的 RunSSE 與 BidiAppend 可重疊，其他回合仍須等待。後續傳送仍遵守啟動間隔。 |
+| `requestPacing.keySelection?` | `"active"`, `"round-robin"` | 正常請求的金鑰選擇：預設 `active` 保留已儲存金鑰及既有錯誤切換；`round-robin` 依序分配可用池金鑰，不修改已儲存選擇。均衡的是分配次數，而非權杖或費用。 |
+| `requestPacing.keys?` | `{ requestsPerMinute?, minIntervalMs?, maxConcurrentRequests? }` | 依金鑰參照設定統一 RPM、最小啟動間隔及並行上限，跨模型共享，並同時受供應商及模型上限約束。相同參照共享容量；同一上游專案的不同參照不代表獨立配額。不管理 TPM 或每日配額。 |
 | `responsesPath?` | `string` | Key-auth `openai-responses` 請求的相對資源路徑。必須以 `/` 開頭且不含 scheme、query 或 fragment。 |
 | `chatCompletionsPath?` | `string` | `openai-chat` 請求的相對資源路徑，為 `responsesPath` 的對應項，適用相同的路徑規則。當同一上游以不同前綴提供 Chat Completions 與 Responses 時需要此設定：按模型的 wire override 只更換適配器而不改動 `baseUrl`，否則已啟用的 Chat 請求會送往 Responses base。隨附範例為 Z.AI。 |
+| `projectResponsesLiteHostedSearchHistory?` | `boolean` | 預設關閉。僅實際布林值 `true` 可為此供應商明確啟用有損 hosted-search 歷史投影，且只作用於最終目的地精確為標準 ChatGPT Codex `/responses`、明確選擇 Responses Lite 的一般請求。省略或設為 `false` 時保留結構化歷史；字串和數字無效。不會啟用 Lite、變更傳輸，也不影響 native compact、公開 OpenAI API／其他目的地或既有 portable/routed compaction 投影。詳見[Lite 搜尋歷史](/zh-tw/reference/proxy-formats/#codex-原生一般-lite-請求的搜尋歷史)。 |
 | `upstreamWebsocket?` | `boolean` | 為 `openai-responses` 請求選用上游 Responses WebSocket 傳輸（預設 `false`）。僅對第一方 `https://api.openai.com/v1` 上游生效；自訂供應商端點一律使用有界 HTTP/SSE，因為 Bun 無法在配置完整訊息之前對傳入 WebSocket 訊息套用大小限制。對於規範 ChatGPT `openai` 供應商，省略此欄位會在符合條件的回合使用上游 WebSocket，`false` 會以 HTTP/SSE 傳送串流回合，`true` 會被拒絕；設為 `false` 時，原生回合中操控與注入無法使用。此欄位獨立於用戶端 `websockets` 設定，且不會變更端點或認證資料。一般 HTTP 仍使用 SSE；非 Responses 路徑與 `openai-chat` 請求仍使用 HTTP。 |
 | `disabled?` | `boolean` | 將供應商保留在磁碟上但排除於路由與模型／目錄清單。 |
 | `apiKey?` | `string` | API 金鑰，或在請求時解析的 `${ENV_VAR}` / `$ENV_VAR` 參考。 |
@@ -510,3 +513,8 @@ Vercel AI Gateway 可在多個底層推論供應商之間路由一個模型。`v
 ### `anthropicAccountPool.routes`
 
 `anthropicAccountPool.routes` 將模型綁定至已儲存的 Anthropic OAuth 帳戶 ID。啟用帳戶池後，區分大小寫的 `match` 萬用模式依順序採用第一個符合的規則，限制首次選擇與 429 重試。僅當該規則沒有可用帳戶時，`fallback: true` 才會回退到一般帳戶池。
+
+
+### `promptLengthPricing`
+
+選用欄位 `promptLengthPricing` 擴充四項基礎費率。`mode: "automatic"`（或省略欄位）保留目錄的上下文計價規則；`mode: "flat"` 停用這些規則。`mode: "custom"` 使用正安全整數 `thresholdTokens`、值為 `"gt"`（>）或 `"gte"`（≥）的 `comparison`，以及含四項絕對替代費率的 `rates`。門檻計算所有提示詞 token，包括快取讀取與寫入，不包括輸出。所選費率適用於包含輸出的整個請求，並在門檻兩側皆取代目錄上下文規則。Fast/Priority 調整在選定費率後只套用一次，並遵循目錄為該模型公布的 Priority 關係；僅當目錄將該關係宣告為 `lower-bound`（目前為 xAI Grok）時，估算才會標示為下限；沒有目錄規則的模型只套用一次 Priority 倍率。可在 **Models → Price** 中設定。**Reset to automatic** 刪除包含基礎費率與規則的整個覆寫設定。舊設定保持相容；這些設定僅涉及顯示的費用估算。

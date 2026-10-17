@@ -564,6 +564,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
   };
 }
 
+/** Coalesce only gathers with the same model inventory and effective sidecar visibility policy. */
 export function gatherFlightKey(config: OcxConfig): string {
   const providers = Object.entries(config.providers)
     .filter(([, prov]) => prov.disabled !== true)
@@ -571,6 +572,7 @@ export function gatherFlightKey(config: OcxConfig): string {
     .sort((a, b) => String(a.n).localeCompare(String(b.n)));
   const assembly = stableJson({
     providers,
+    visionSidecarEnabled: config.visionSidecar?.enabled !== false,
     disabledModels: [...(config.disabledModels ?? [])].sort(),
     combos: config.combos ?? {},
     customModels: (config.customModels ?? []).map((cm) => ({

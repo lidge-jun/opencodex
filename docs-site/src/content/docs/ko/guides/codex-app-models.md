@@ -198,11 +198,19 @@ opencodex의 Fast 모드를 **Auto**로 유지하세요(`fastMode` 생략). Fast
 목록이 남아 있다면 Codex 데스크톱을 다시 시작한 뒤 라우팅 모델의 속도 메뉴에서 **Ultra Fast**를
 선택하세요. 기본 속도는 Standard로 유지됩니다.
 
-사용 가능한 `service-tier` 전송 경로와 명시적인 `ultrafast → ultrafast` 매핑이 있어야 합니다.
-일반 Fast 지원, GPT와 비슷한 이름, 네이티브·계정별 항목, combo 별칭만으로는 추가되지 않습니다.
-매핑을 제거하거나 모델의 service-tier 지원을 끄면 다음 동기화 성공 시 카탈로그와 캐시에서
-자동 생성된 선택지도 제거됩니다. 별도의 `ultraFastTier` 설정은 기존처럼 사용자가 직접 넣은
-카탈로그 tier를 보존하는 용도입니다.
+이 선택지를 라우팅 항목에 자동 생성하려면 사용 가능한 `service-tier` 전송 경로와 명시적인
+`ultrafast → ultrafast` 매핑이 있어야 합니다. 일반 Fast 지원이나 GPT와 비슷한 이름만으로는
+추가되지 않습니다. 이 라우팅 매핑은 네이티브·계정별 네이티브 항목이나 combo 별칭에는
+적용되지 않습니다. 매핑을 제거하거나 모델의 service-tier 지원을 끄면 다음 동기화 성공 시
+카탈로그와 캐시에서 자동 생성된 라우팅 선택지도 제거됩니다.
+Codex가 HTTP로 모델 목록을 불러올 때도 현재 적용 중인 설정의 동일한 선언이 Ultra Fast 선택지를 결정합니다.
+
+라우팅 항목에서는 `ultraFastTier`가 `provider/model` 식별자가 정확히 일치하는 저장된 항목에 사용자가
+별도로 넣은 Ultra Fast tier를 보존합니다. 자동 생성된 라우팅 tier는 사용자 제공 tier로
+취급하지 않습니다. bare native `gpt-6-astra` / `gpt-6.1-sol` 항목과 신뢰된 계정별 복제
+항목에서는 `ultraFastTier`를 켜면 네이티브 기본 tier를 바꾸지 않고 누락된 Ultrafast 선택지도
+생성합니다. 끄면 자동 생성한 것으로 추적되는 네이티브 tier 메타데이터만 제거하며,
+사용자가 별도로 넣거나 수정한 네이티브 tier 항목은 보존합니다.
 
 [OpenAI API 문서](https://developers.openai.com/api/docs/guides/ultrafast-mode)는 GPT-6 Astra와
 GPT-6.1 Sol의 Ultrafast 지원을 안내합니다. API 사용 권한과

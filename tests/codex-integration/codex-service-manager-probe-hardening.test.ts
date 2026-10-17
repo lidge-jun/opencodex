@@ -11,7 +11,7 @@ import {
 } from "../../src/service-manager-probe";
 import { inspectNativeCodexOwnership } from "../../src/integrations/native/ownership-preflight";
 import { setTrustedWindowsSystemDirectoryResolverForTests } from "../../src/lib/windows-elevation";
-import { windowsWscript } from "../../src/service/windows-scheduler";
+import { windowsWscript } from "../../src/service/windows-wscript";
 import { getDefaultConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -230,7 +230,7 @@ describe("Windows ownership probe hardening regressions", () => {
       ...getDefaultConfig(),
       port: 0,
       hostname: "127.0.0.1",
-      clientIntegrations: { codex: false },
+      clientIntegrations: { codex: true },
       subagentModels: [],
     }, null, 2));
 
@@ -278,7 +278,10 @@ describe("Windows ownership probe hardening regressions", () => {
           winswStatus: () => "nonexistent",
         });
         ownerships.push(answer.ownership);
-        return answer;
+        // Exercise enabled startup's two real inspections without taking the unrelated
+        // user-scoped catalog lock (which resolves Windows identity through PowerShell).
+        // Preserve each raw verdict above so a stale second listing still fails this test.
+        return ownerships.length === 1 ? { ownership: "unknown", reason: "cache writes outside this fixture" } : answer;
         } finally {
           setTrustedWindowsSystemDirectoryResolverForTests(null);
         }

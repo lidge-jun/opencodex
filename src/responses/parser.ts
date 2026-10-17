@@ -1,3 +1,4 @@
+import { anthropicProgressEnvelope, isAnthropicProgressMirror } from "./anthropic-progress";
 import type {
   OcxAssistantMessage,
   OcxContentPart,
@@ -15,7 +16,8 @@ import { createToolChoiceResolver, namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
-import { CHECKPOINT_CONTINUATION_NOTE, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "./compaction";
+import { decodeRetainedCompaction, RETAINED_COMPACTION_PREFIX } from "./retained-compaction";
+import { CHECKPOINT_CONTINUATION_NOTE, compactionItemToText, decodeCompactionSummary, isCompactionItemType, SUMMARY_PREFIX } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { hasRoutedIdentity, nameRoutedIdentity } from "../adapters/identity";
@@ -28,6 +30,7 @@ import { mapToolChoice, buildTools, customToolNamespaces } from "./parser-tools"
 import { parseTextFormat } from "./parser-text-format";
 import { externalTaskInputContent } from "./task-input";
 import { normalizeVisualizationContext } from "./visualization-directives";
+import { frameCompactionHistory } from "./compaction-history-framing";
 
 /**
  * Wrap a remembered proxy-side signature as provider metadata for a replayed tool call.
@@ -67,9 +70,34 @@ function repairJsonObjectEnvelope(text: string): Record<string, unknown> | undef
 }
 
 /**
+ * Repair the observed MiMo tool-call corruption: the model emits its proprietary
+ * `</function></tool_call>` closing tags INSIDE the JSON string value of the
+ * function arguments, and drops the JSON object's closing brace. Strip the
+ * suffix, restore the brace, and only accept the repair when the result parses
+ * into an object.
+ */
+function repairMimoToolCallEnvelope(text: string): Record<string, unknown> | undefined {
+  const suffix = "</function></tool_call>";
+  if (!text.endsWith(suffix)) return undefined;
+  const stripped = text.slice(0, -suffix.length);
+  if (!stripped.startsWith("{")) return undefined;
+  // A trailing brace or quote can itself belong to the unterminated string.
+  // Try only the three observed envelope endings, accepting an object parse.
+  for (const candidate of [stripped, `${stripped}}`, `${stripped}"}`]) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (isObj(parsed)) return parsed;
+    } catch {
+      /* try the next bounded envelope ending */
+    }
+  }
+  return undefined;
+}
+
+/**
  * Decode a function call's serialized arguments the way history replay tolerates them: empty
- * or non-JSON text becomes `{}` instead of failing every later turn, and the one bounded
- * lost-brace corruption above is repaired. Shared with the direct Chat decoder
+ * or non-JSON text becomes `{}` instead of failing every later turn, and the bounded
+ * lost-brace and MiMo closing-tag corruptions above are repaired. Shared with the direct Chat decoder
  * (`src/protocols/codecs/chat-ir.ts`) so both decode the same call to the same object.
  */
 export function functionCallArgumentsFromText(callId: string, rawArguments: string | undefined): Record<string, unknown> {
@@ -80,6 +108,15 @@ export function functionCallArgumentsFromText(callId: string, rawArguments: stri
       const parsed: unknown = JSON.parse(rawArgs);
       if (isObj(parsed)) args = parsed;
     } catch {
+      // Corruptions observed on Xiaomi MiMo routed requests, each with a bounded
+      // repair so a serialized call the model can still see is restored instead
+      // of replaying {} forever.
+      const mimoRepaired = repairMimoToolCallEnvelope(rawArgs);
+      if (mimoRepaired !== undefined) {
+        args = mimoRepaired;
+        console.warn(`[parser] function_call ${callId} repaired MiMo tool-call envelope (tags inside string)`);
+        return args;
+      }
       // One observed serialization corruption loses exactly the JSON object's opening
       // brace; the closed envelope is tight enough to repair back into a call the
       // routed model can still see and retry, instead of replaying {} forever.
@@ -189,7 +226,7 @@ export function parseRequest(
   if (!parsed.success) {
     throw new Error(`responses parse error: ${parsed.error.message}`);
   }
-  const data = parsed.data;
+  const data = frameCompactionHistory(parsed.data);
   const now = Date.now();
   const messages: OcxMessage[] = [];
   // Built before the item loop: a custom_tool_call echoed back in `input` needs the
@@ -239,6 +276,7 @@ export function parseRequest(
   } else if (data.input) {
     for (let inputIndex = 0; inputIndex < data.input.length; inputIndex++) {
       const item = data.input[inputIndex];
+      if (inputIndex > 0 && isAnthropicProgressMirror(item, anthropicProgressEnvelope(data.input[inputIndex - 1]))) continue;
       const effectiveType = (item as { type?: string }).type ?? ("role" in item ? "message" : undefined);
       const itemRole = (item as { role?: string }).role;
       const externalTaskInput = effectiveType === "function_call_output" ? externalTaskInputContent(item) : undefined;
@@ -281,7 +319,7 @@ export function parseRequest(
       }
 
       if (isCompactionItemType(effectiveType)) {
-        // A stored summary from a previous compaction. Decode our ocx1 envelope into plain text so
+        // A stored summary from a previous compaction. Decode our ocx1/ocx2 envelopes into plain text so
         // the routed model keeps the compacted context; real OpenAI-encrypted blobs degrade to a note.
         // `context_compaction` (encrypted_content optional) is codex-rs's local-compaction marker;
         // with no payload it is a pure marker (the summary follows as its own user message), so it
@@ -293,6 +331,13 @@ export function parseRequest(
         if (effectiveType === "context_compaction" && typeof encrypted !== "string") continue;
         if (typeof encrypted === "string" && decodeCompactionSummary(encrypted) !== null) decodedCheckpoint = true;
         pendingReasoning.length = 0;
+        if (typeof encrypted === "string" && encrypted.startsWith(RETAINED_COMPACTION_PREFIX)) {
+          const retained = decodeRetainedCompaction(encrypted);
+          if (!retained) throw new Error("Invalid OpenCodex retained compaction envelope");
+          messages.push({ role: "user", content: `${SUMMARY_PREFIX}\n\n${retained.summary}`, timestamp: now });
+          messages.push(...retained.reasoning.map(content => ({ role: "user" as const, content, timestamp: now })));
+          continue;
+        }
         messages.push({
           role: "user",
           content: compactionItemToText(typeof encrypted === "string" ? encrypted : undefined),

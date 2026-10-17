@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { findAvailablePort } from "../../src/server/ports";
+import { startConnectProxy } from "../../src/claude/intercept/connect-proxy";
 import { claudeInterceptCaCertPath } from "../../src/claude/intercept/local-ca";
 import { getClaudeInterceptState } from "../../src/claude/intercept/runtime";
 import { ensureClaudeInterceptProxyToken, readClaudeInterceptProxyToken } from "../../src/claude/intercept/proxy-auth";
@@ -49,6 +49,15 @@ afterEach(() => {
 // these tests speak as the standalone CLI with claudeCode.cliFirstParty set. Every request carries the agent,
 // because an unknown one is relayed to the real Anthropic host instead of the configured upstream.
 const CLI_UA = { "user-agent": "claude-cli/2.1.282 (external, cli)" };
+const ephemeralIntercept = {
+  startClaudeInterceptProxy: (_port: number, options: Parameters<typeof startConnectProxy>[1]) => startConnectProxy(0, options),
+};
+
+// These cases exercise local request routing. Installed service ownership is covered
+// separately; querying the real Windows service manager can outlast the server watchdog.
+function startInterceptServer(port: number, options?: Parameters<typeof startServer>[1]) {
+  return startServer(port, { ...options, inspectNativeCodexOwnership: () => ({ ownership: "owned", reason: "isolated test home" }) });
+}
 
 async function waitForIntercept(): Promise<NonNullable<ReturnType<typeof getClaudeInterceptState>>> {
   for (let i = 0; i < 100; i++) {
@@ -69,10 +78,9 @@ test("Messages through CONNECT reach the router; other paths relay to the config
       return Response.json({ upstream: true });
     },
   });
-  const interceptPort = await findAvailablePort(0, "127.0.0.1");
-  const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: interceptPort });
+  const interceptPort = 10200;
   saveConfig({
-    port: publicPort,
+    port: 10100,
     hostname: "127.0.0.1",
     defaultProvider: "chatgpt",
     providers: {
@@ -84,10 +92,10 @@ test("Messages through CONNECT reach the router; other paths relay to the config
       intercept: { port: interceptPort },
     },
   } as unknown as OcxConfig);
-  const server = startServer(publicPort);
+  const server = startInterceptServer(0, ephemeralIntercept);
   try {
     const state = await waitForIntercept();
-    expect(state.proxyPort).toBe(interceptPort);
+    expect(state.proxyPort).toBeGreaterThan(0);
     expect(state.caCertPath).toBe(claudeInterceptCaCertPath(testDir));
     const ca = readFileSync(state.caCertPath, "utf8");
     const proxyToken = ensureClaudeInterceptProxyToken(testDir);
@@ -148,10 +156,9 @@ test("a first-party binding routes a picker id on the intercept only; the public
       return Response.json({ id: "c1", object: "chat.completion", created: 1, model: "fake-model", choices: [{ index: 0, message: { role: "assistant", content: "bound" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
     },
   });
-  const interceptPort = await findAvailablePort(0, "127.0.0.1");
-  const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: interceptPort });
+  const interceptPort = 10200;
   saveConfig({
-    port: publicPort,
+    port: 10100,
     hostname: "127.0.0.1",
     defaultProvider: "bindtarget",
     providers: {
@@ -163,7 +170,7 @@ test("a first-party binding routes a picker id on the intercept only; the public
       intercept: { port: interceptPort, modelMap: { "claude-sonnet-4-6": "bindtarget/fake-model" } },
     },
   } as unknown as OcxConfig);
-  const server = startServer(publicPort);
+  const server = startInterceptServer(0, ephemeralIntercept);
   try {
     const state = await waitForIntercept();
     const ca = readFileSync(state.caCertPath, "utf8");
@@ -183,7 +190,7 @@ test("a first-party binding routes a picker id on the intercept only; the public
     expect(upstreamHits).toEqual([]);
 
     // The same id on the public listener is not a first-party request: native passthrough as before.
-    const direct = await fetch(`http://127.0.0.1:${publicPort}/v1/messages`, {
+    const direct = await fetch(`http://127.0.0.1:${server.port}/v1/messages`, {
       method: "POST",
       headers: { ...anthropicHeaders, "x-opencodex-api-key": "public-secret" },
       body: JSON.stringify(request),
@@ -198,27 +205,28 @@ test("a first-party binding routes a picker id on the intercept only; the public
   }
 }, SERVER_BUDGET_MS);
 
-test("an owned legacy unauthenticated env is migrated on start; nothing else is written", async () => {
+test("an occupied configured port cannot steal an ephemeral bind; migration publishes the bound port", async () => {
   // Upgrade path: a pre-auth apply wrote a bare loopback URL. A service-style `ocx start`
   // must refresh it before the authenticated proxy answers 407 to every CONNECT.
   const caCertPath = claudeInterceptCaCertPath(testDir);
   writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({
     env: { HTTPS_PROXY: "http://127.0.0.1:10200", NODE_EXTRA_CA_CERTS: caCertPath },
   }));
-  const interceptPort = await findAvailablePort(0, "127.0.0.1");
-  const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: interceptPort });
+  const blocker = await startConnectProxy(0, { interceptPort: 1 });
   saveConfig({
-    port: publicPort,
+    port: 10100,
     hostname: "127.0.0.1",
     defaultProvider: "chatgpt",
     providers: {
       chatgpt: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
     },
-    claudeCode: { intercept: { port: interceptPort } },
+    claudeCode: { intercept: { port: blocker.port } },
   } as unknown as OcxConfig);
-  const server = startServer(publicPort);
+  const server = startInterceptServer(0, ephemeralIntercept);
   try {
     const state = await waitForIntercept();
+    expect(state.proxyPort).toBeGreaterThan(0);
+    expect(state.proxyPort).not.toBe(blocker.port);
     const token = readClaudeInterceptProxyToken(testDir);
     expect(token).not.toBeNull();
     const written = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8")) as { env: Record<string, string> };
@@ -226,6 +234,7 @@ test("an owned legacy unauthenticated env is migrated on start; nothing else is 
     expect(written.env.NODE_EXTRA_CA_CERTS).toBe(caCertPath);
   } finally {
     await server.stop(true);
+    await blocker.close();
   }
 }, SERVER_BUDGET_MS);
 
@@ -238,7 +247,7 @@ test("an ephemeral public port starts no proxy unless intercept.port is explicit
     },
   };
   saveConfig({ ...base, port: 10100 } as unknown as OcxConfig);
-  const implicit = startServer(0);
+  const implicit = startInterceptServer(0);
   try {
     await Bun.sleep(100);
     expect(getClaudeInterceptState()).toBeNull();
@@ -246,21 +255,20 @@ test("an ephemeral public port starts no proxy unless intercept.port is explicit
     await implicit.stop(true);
   }
 
-  const proxyPort = await findAvailablePort(0, "127.0.0.1");
+  const proxyPort = 10200;
   saveConfig({ ...base, port: 10100, claudeCode: { intercept: { port: proxyPort } } } as unknown as OcxConfig);
-  const explicit = startServer(0);
+  const explicit = startInterceptServer(0, ephemeralIntercept);
   try {
     const state = await waitForIntercept();
-    expect(state.proxyPort).toBe(proxyPort);
+    expect(state.proxyPort).toBeGreaterThan(0);
   } finally {
     await explicit.stop(true);
   }
 }, SERVER_BUDGET_MS);
 
 test("intercept.enabled=false starts no proxy", async () => {
-  const publicPort = await findAvailablePort(0, "127.0.0.1");
   saveConfig({
-    port: publicPort,
+    port: 10100,
     hostname: "127.0.0.1",
     defaultProvider: "chatgpt",
     providers: {
@@ -268,7 +276,7 @@ test("intercept.enabled=false starts no proxy", async () => {
     },
     claudeCode: { intercept: { enabled: false } },
   } as unknown as OcxConfig);
-  const server = startServer(publicPort);
+  const server = startInterceptServer(0, ephemeralIntercept);
   try {
     await Bun.sleep(100);
     expect(getClaudeInterceptState()).toBeNull();

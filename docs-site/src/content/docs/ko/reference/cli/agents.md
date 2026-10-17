@@ -88,6 +88,8 @@ ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 
 ## 관측성과 디버그
 
+`ocx usage --top 25` (`ocx observe usage --top 25`도 동일)는 사람이 읽는 모델 표의 행 수를 1~1000 정수로 지정합니다. 기본값은 10이며 `--search` 사용 시 100입니다. 검색 필터링 후 로컬 표시에만 적용되며 합계, 제공자/계정 행, API 매개변수는 바뀌지 않습니다. `--json`은 유효한 `--top`을 무시하고 기존 전체 보고서 또는 100행 검색 뷰를 유지합니다. 잘못된 값은 요청 전에 종료 코드 2를 반환합니다.
+
 `ocx logs filter --json`은 최근 로그 한 구간을 읽고 조건에 맞는 행을 고릅니다. `--scan-limit`은 읽을 행 수, `--limit`은 출력할 행 수입니다. 결과가 비어 있어도 전체 기록에 일치 항목이 없다는 뜻은 아닙니다. `ocx usage --search <text>`는 모델 행만 검색하고 보고서의 총계와 조회 권한 범위는 유지합니다.
 
 `ocx companion usage --json`은 저장된 모델·공급자 표시 설정으로 오늘과 30일 사용량을 읽습니다. 한 구간이 실패하면 다른 구간은 남기고 `partial: true`와 종료 코드 1을 반환합니다. 설정 기본값을 사용했다면 `settingsFallback`, 손상된 설정의 기본값이라면 `settingsCorrupt`도 확인하세요. 자세한 옵션과 응답은 [영문 CLI 기준 문서](/reference/cli/agents/#filter-a-bounded-log-snapshot)를 참고하세요.
@@ -99,7 +101,7 @@ ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 | 별칭 | 대응 리소스 |
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl]` | `ocx observe logs` |
-| `ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--json]` | `ocx observe usage` |
+| `ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--search <text>] [--top <1-1000>] [--json]` | `ocx observe usage` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
@@ -235,9 +237,14 @@ opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 
 헤드리스 런타임 설정, 시작, 동기화, 진단, 업데이트를 관리합니다.
 
 `ocx system codex-restart --yes`는 `ocx sync --restart-codex`와 같은 모듈로 Codex
-app-server를 재시작하고 데스크톱 앱도 완전히 종료한 뒤 다시 띄웁니다. 프록시 자체가
-Codex 앱 안에서 실행 중이면 넘길 수 없는 handoff를 약속하지 않고, 대신 실행 가능한
-안내와 함께 거절합니다.
+app-server를 재시작합니다. 모델 선택기는 앱 실행 시점에 만들어지므로, 데스크톱 앱은 현재
+모델 카탈로그가 기록되기 전에 실행된 경우나 이 요청으로 `model_catalog_json` 경로가 바뀐 경우 완전히 종료한 뒤 다시 띄웁니다. 그렇지 않으면
+앱은 열린 채로 자체 app-server를 다시 띄우고, 보내지 않은 초안과 대기 중인 승인을 유지합니다.
+앱이나 카탈로그 상태를 읽을 수 없으면 전체 재시작을 수행합니다. 프록시 자체가 Codex 앱 안에서
+실행 중이면 데스크톱 재시작은 넘길 수 없는 handoff를 약속하지 않고, 대신 실행 가능한 안내와
+함께 거절합니다.
+
+이 요청으로 `model_catalog_json` 경로가 바뀌면 셸이 카탈로그 파일 작성 후 시작되었어도 데스크톱을 재시작합니다.
 
 ```bash
 ocx system settings --stream-mode eager-relay
@@ -249,7 +256,7 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check`는 패키지 레지스트리를 조회하지 않고, 설정된 설치 후보에 대해 전체 경로를 숨긴 실행 파일 위치와 소유권 근거를 포함한 provenance 정보를 제한된 범위에서 검사합니다. 신뢰할 수 있는 배포 런처 컨텍스트가 인증하는 것은 후보 스냅샷뿐이며, Codex가 성공적으로 실행되었다는 사실은 인증하지 않습니다. 이 단발성 명령은 Codex를 전혀 실행하지 않으므로 환경 또는 저장된 상태에서 얻은 후보는 보고 전용입니다(`managed: false`, 일반적으로 `selection_unattested`). `selectionAttested`는 항상 `false`입니다. JSON 출력에는 `candidateAvailable`, `candidateVersion`, `candidateSource`, `selectionAttested: false`가 포함됩니다. Bun이나 소스에서 직접 실행하면 런처 증거가 없으므로 환경 및 저장된 후보를 무시하고 POSIX에서는 `candidate_unavailable`을 보고할 수 있습니다. Windows에서는 이 첫 조각이 후보 또는 설정 경로의 파일시스템을 전혀 읽지 않습니다. 배포 런처가 증명한 절대 환경 후보에 한해서 앱 번들 또는 버전 관리자라는 어휘적 표지만 보고하며, 그 밖의 Windows 후보는 모두 실패 닫힘 처리합니다. 이 조각은 저장된 선택 상태를 전혀 읽지 않으므로, 환경 후보가 캡처되지 않은 Windows 실행은 `candidate_unavailable`이 아니라 `windows_inspection_deferred`를 보고합니다. 명령이 Codex CLI 설치 여부를 관측할 수 없으므로, 후보가 없다고 단정하는 대신 검사가 연기되었음을 보고합니다. 이 명령은 Codex나 패키지 관리자를 실행하거나 shim을 복구하지 않고, 설정 또는 캐시 상태를 쓰거나 프로세스를 중지하거나 어떤 것도 설치하지 않습니다. 앱에 포함된 후보, 인식된 버전 관리자의 후보, 검증되지 않은 독립 실행형 후보, shim 상태가 모호한 후보는 관리 대상이 아니거나 알 수 없는 것으로 보고되며, 관리 대상으로 분류되지 않습니다.
+`check`는 레지스트리를 조회하거나 Codex를 실행하지 않습니다. POSIX에서는 배포 런처가 캡처한 환경 후보와 런타임 리졸버가 선택한 정규 경로가 같으면 `selectionAttested: true`가 될 수 있습니다. 연결된 npm-global 패키지 매니페스트가 소유권을 증명하고, 후보 버전이 보고된 경우 그 버전이 매니페스트 버전과 일치하면 `managed: true`가 될 수 있으며 저장된 후보는 인증되지 않습니다. Windows는 후보나 설정 파일을 읽지 않고 검사를 연기합니다. 직접 Bun/소스 실행은 런처 증거가 없어 후보를 신뢰하지 않습니다. `plan`은 격리된 임시 npm 설정·캐시·로그로 공식 레지스트리를 조회하고 활성 세션이나 불완전한 프로세스 관측을 거절합니다. 설치하거나 프로세스에 신호를 보내지 않습니다. [명령과 거절 사유의 전체 설명(영문)](/reference/cli/agents/#read-only-codex-cli-update-plan)을 참고하세요.
 
 Windows에서 `CODEX_CLI_PATH=codex` 같은 단순 명령 이름이나 원격 경로·장치 경로가 후보로 캡처되면 `candidate_path_unavailable`을 보고합니다. 후보는 캡처됐지만 해당 경로가 이 검사 대상에 적합하지 않은 경우입니다.
 

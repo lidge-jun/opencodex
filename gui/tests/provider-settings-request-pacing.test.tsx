@@ -90,6 +90,21 @@ test("settings saves provider pacing and a slower model override", async () => {
   await act(async () => { container.unmount(); });
 });
 
+test("key allocation and per-key limits save through the existing provider settings action", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  const container = await renderSettings({ name: "fixture", adapter: "openai-chat", baseUrl: "https://example.test", authMode: "key" },
+    async (_name, patch) => { patches.push(patch); return { ok: true }; });
+  await act(async () => { container.querySelector<HTMLInputElement>(".pwi-pacing-toggle input")!.click(); });
+  const select = [...container.querySelectorAll<HTMLSelectElement>("select")].find(el => el.querySelector('option[value="round-robin"]'))!;
+  await act(async () => { select.value = "round-robin"; select.dispatchEvent(new testWindow.Event("change", { bubbles: true })); });
+  const numbers = container.querySelectorAll<HTMLInputElement>(".pwi-key-limits input");
+  await setInput(numbers[0]!, "15"); await setInput(numbers[2]!, "1");
+  await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click(); });
+  expect(patches[0]?.requestPacing).toMatchObject({ enabled: true, keySelection: "round-robin", keys: { requestsPerMinute: 15, maxConcurrentRequests: 1 } });
+  expect(container.textContent).toContain("Keys in the same project may share quotas");
+  container.unmount();
+});
+
 test("a concurrency-only pacing rule saves without the rule-required error", async () => {
   const item: WorkspaceItem = {
     name: "nvidia",
@@ -134,6 +149,21 @@ test("discard reverts an unsaved concurrency draft to the stored cap", async () 
   expect(patches).toEqual([]);
   await act(async () => { container.unmount(); });
  });
+
+test("invalid key limits block save and discard restores the stored distribution policy", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  const container = await renderSettings({ name: "fixture", adapter: "openai-chat", baseUrl: "https://example.test", authMode: "key",
+    requestPacing: { enabled: true, keySelection: "round-robin", keys: { requestsPerMinute: 15, maxConcurrentRequests: 1 } } },
+    async (_name, patch) => { patches.push(patch); return { ok: true }; });
+  const numbers = container.querySelectorAll<HTMLInputElement>(".pwi-key-limits input");
+  await setInput(numbers[2]!, "0");
+  await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click(); });
+  expect(patches).toEqual([]);
+  expect(container.textContent).toContain("Per-key limits must be positive");
+  await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-ghost")!.click(); });
+  expect(numbers[2]!.value).toBe("1"); expect(numbers[0]!.value).toBe("15");
+  await act(async () => { container.unmount(); });
+});
 
 test("pacing grids keep every field and the add button on one row", async () => {
   const css = await Bun.file(new URL("../src/styles/provider-workspace-settings.css", import.meta.url)).text();

@@ -16,7 +16,7 @@ Usage: `ocx claude config status [--json]; ocx claude config set [--enabled <on|
 
 Read or update Claude Code settings, including independent CLI first-party routing.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -43,8 +43,6 @@ State-changing: yes.
 | `--first-party` | string | on or off; must be the only setting. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - At least one setting is required. --first-party must be set alone and writes Claude settings immediately.
 - Clear both helper model and backend with - to restore inheritance. Preserve shared_proxy_retained warnings.
 
@@ -54,7 +52,7 @@ Usage: `ocx claude intercept start [--json]`
 
 Start the local Claude interception pair on demand.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -64,15 +62,13 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the management response as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx claude desktop status`
 
 Usage: `ocx claude desktop status [--json]`
 
 Applied-vs-desired Claude Desktop state, including staleness, drift, and health.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -82,8 +78,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the live status as JSON. |
 
-JSON mode: `payload`.
-
 - Distinct from `claude desktop show`, which reports what this machine WOULD write; this reports what is actually in effect, which only the running proxy knows.
 
 ### `ocx claude desktop bind`
@@ -92,13 +86,11 @@ Usage: `ocx claude desktop bind <picker-model-id> <provider/model|native/slug>`
 
 First-party: serve a Claude Desktop Code tab picker model with an opencodex route.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/claude-desktop/first-party-bindings` |
-
-JSON mode: `none`.
 
 - Takes a picker model id (claude-sonnet-4-6) and a route in the Desktop route vocabulary (provider/model or native/<slug>); the route must be one the Desktop profile can offer.
 - Only Claude Code traffic that reaches the proxy through the first-party intercept (Desktop's Code tab, the claude CLI) honours it; ocx claude and the public Messages endpoint are unaffected.
@@ -110,13 +102,11 @@ Usage: `ocx claude desktop unbind <picker-model-id>`
 
 Remove a first-party Claude Desktop Code tab picker binding.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/claude-desktop/first-party-bindings` |
-
-JSON mode: `none`.
 
 - Removing an id that is not bound is a no-op; the remaining bindings are printed.
 
@@ -126,7 +116,7 @@ Usage: `ocx claude desktop picker status [--json]`
 
 First-party picker mode: whether Claude Desktop's Code tab lists opencodex models, and what is missing if not.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -136,8 +126,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Reads the live picker when available; otherwise reports local offline picker state. JSON emits the picker DTO, not the enclosing API response. No trust mutation.
 
 ### `ocx claude desktop picker on`
@@ -146,15 +134,13 @@ Usage: `ocx claude desktop picker on`
 
 Turn first-party picker mode on and remember the choice.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/claude-desktop/picker` |
 
-JSON mode: `none`.
-
-- Needs a running proxy, first-party mode and macOS. The first time, macOS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.
+- Needs a running proxy, first-party mode and macOS or Windows. The first time, the OS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.
 - Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards.
 
 ### `ocx claude desktop picker off`
@@ -163,13 +149,11 @@ Usage: `ocx claude desktop picker off`
 
 Turn first-party picker mode off, remove its Desktop egress profile and certificate trust, and remember the choice.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/claude-desktop/picker` |
-
-JSON mode: `none`.
 
 - Works without a running proxy: the preference is saved and the picker profile and trust are removed locally.
 
@@ -177,16 +161,14 @@ JSON mode: `none`.
 
 Usage: `ocx claude desktop picker trust`
 
-Run the macOS keychain step for picker mode in this terminal, then ask the server to finish enabling it.
+Run the OS certificate trust step for picker mode in this terminal, then ask the server to finish enabling it.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | GET | `/api/claude-desktop/picker` |
 | PUT | `/api/claude-desktop/picker` |
-
-JSON mode: `none`.
 
 - The server removes trust this command added if the enable is refused; if the request is lost, trust is left alone and picker status tells what happened.
 
@@ -196,7 +178,7 @@ Usage: `ocx integration native [list] [--json]; ocx integration native <claude|c
 
 Read native integration state or toggle Claude, Claude Desktop, Codex and Grok.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -210,8 +192,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the client rows or toggle result as JSON. |
 
-JSON mode: `payload`.
-
 - Each toggle writes the selected client configuration through its runtime owner. Refused disables remain failures. Cursor status and local-installer are separate read-only subcommands; they do not toggle or install Cursor.
 
 ### `ocx integration client`
@@ -220,7 +200,7 @@ Usage: `ocx integration client status [--client <id>] [--profile <id>] [--json];
 
 Inspect and toggle file integrations and Aside profiles, read journals, and restore selected operations.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -239,14 +219,12 @@ State-changing: yes.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--client` | string | File integration ID; aside selects profiles. |
+| `--client` | string | File integration ID, including gentle-shell; aside selects profiles. |
 | `--profile` | number | Aside nonnegative integer account ID; requires --client aside. |
 | `--json` | boolean | Emit the result as JSON. |
 | `--overwrite-conflict` | boolean | Explicitly permit replacing a conflicting block. |
 | `--op` | string | Operation ID; --op-id is an alias. |
 | `--confirm-drift` | boolean | Explicitly allow replacing edits made after the snapshot. |
-
-JSON mode: `payload`.
 
 - status/show/list reads all clients, one client or Aside profiles. history/journal reads rollback records; expired snapshots stay visible.
 - enable/disable requires --client; an omitted Aside --profile toggles all profiles. --overwrite-conflict applies only to enable.
@@ -258,7 +236,7 @@ Usage: `ocx grok status [--json]`
 
 Read Grok model fence state and catalog.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -267,8 +245,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - integration grok is an alias of grok; show aliases status. Saving selection and applying the saved fence are separate actions.
 - Apply receipts can report changed or skippedReason; success is not a guarantee of a changed client file.
@@ -279,7 +255,7 @@ Usage: `ocx grok set <model,model...> [--json]`
 
 Replace the excluded Grok model list.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -288,8 +264,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - integration grok is an alias of grok; show aliases status. Saving selection and applying the saved fence are separate actions.
 - Apply receipts can report changed or skippedReason; success is not a guarantee of a changed client file.
@@ -300,7 +274,7 @@ Usage: `ocx grok exclude <model,model...> [--json]`
 
 Add models to the Grok exclusion list.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -310,8 +284,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - integration grok is an alias of grok; show aliases status. Saving selection and applying the saved fence are separate actions.
 - Apply receipts can report changed or skippedReason; success is not a guarantee of a changed client file.
@@ -322,7 +294,7 @@ Usage: `ocx grok include <model,model...> [--json]`
 
 Remove models from the Grok exclusion list.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -333,8 +305,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - integration grok is an alias of grok; show aliases status. Saving selection and applying the saved fence are separate actions.
 - Apply receipts can report changed or skippedReason; success is not a guarantee of a changed client file.
 
@@ -344,7 +314,7 @@ Usage: `ocx grok clear [--json]`
 
 Clear Grok exclusions.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -353,8 +323,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - integration grok is an alias of grok; show aliases status. Saving selection and applying the saved fence are separate actions.
 - Apply receipts can report changed or skippedReason; success is not a guarantee of a changed client file.
@@ -365,7 +333,7 @@ Usage: `ocx grok apply [--json]`
 
 Apply the saved Grok model fence.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -374,8 +342,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - integration grok is an alias of grok; show aliases status. Saving selection and applying the saved fence are separate actions.
 - Apply receipts can report changed or skippedReason; success is not a guarantee of a changed client file.
@@ -386,7 +352,7 @@ Usage: `ocx integration client status [--client <id>] [--profile <id>] [--json]`
 
 Read all file integrations, one client or an Aside profile.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -401,8 +367,6 @@ State-changing: no.
 | `--profile` | number | Aside nonnegative integer account ID; requires --client aside. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - show and list alias status; omitted Aside profile means the aggregate profile collection.
 
 ### `ocx integration client history`
@@ -411,7 +375,7 @@ Usage: `ocx integration client history [--client <id>] [--profile <id>] [--json]
 
 Read integration rollback history and snapshot availability.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -425,8 +389,6 @@ State-changing: no.
 | `--profile` | number | Aside nonnegative integer account ID; requires --client aside. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - journal is an alias. Ordinary client filtering uses ?client=; expired snapshots remain visibly expired.
 
 ### `ocx integration client enable`
@@ -435,7 +397,7 @@ Usage: `ocx integration client enable --client <id> [--profile <id>] [--overwrit
 
 Apply the selected managed file integration.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -453,8 +415,6 @@ State-changing: yes.
 | `--reasoning-default` | string | Repeat MODEL=EFFORT to replace the full Droid defaults map; exact model IDs, duplicate keys refused. |
 | `--clear-reasoning-defaults` | boolean | Droid apply/overwrite only: send an empty map, distinct from omitted inherited defaults. |
 
-JSON mode: `payload`.
-
 - An omitted Aside profile toggles all Aside profiles. Ownership, snapshots, journal and conflict refusals remain server-owned.
 - Partial Aside failures remain failures after emitting the per-profile result. Never infer permission to overwrite from a refusal.
 - Bound Aside mutations require one explicit profile. Repeat the exact preview action/profile/options. The token is concurrency evidence, not authorization; stale state requires a new explicit preview.
@@ -466,7 +426,7 @@ Usage: `ocx integration client disable --client <id> [--profile <id>] [--plan-fi
 
 Disable the selected managed file integration.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -481,8 +441,6 @@ State-changing: yes.
 | `--json` | boolean | Emit the result as JSON. |
 | `--plan-fingerprint` | string | Optional versioned token from a matching preview; stale intent is refused without retry. |
 
-JSON mode: `payload`.
-
 - An omitted Aside profile toggles all Aside profiles. Ownership, snapshots, journal and conflict refusals remain server-owned.
 - Partial Aside failures remain failures after emitting the per-profile result. Never infer permission to overwrite from a refusal.
 - Bound Aside mutations require one explicit profile. Repeat the exact preview action/profile/options. The token is concurrency evidence, not authorization; stale state requires a new explicit preview.
@@ -493,7 +451,7 @@ Usage: `ocx integration client restore --op <opId> [--client aside --profile <id
 
 Restore a selected rollback operation, retaining drift refusal.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -512,8 +470,6 @@ State-changing: yes.
 | `--preview` | boolean | Inspect restoration without mutating; exclusive with a commit fingerprint. |
 | `--plan-fingerprint` | string | Optional versioned token from a matching preview; stale intent is refused without retry. |
 
-JSON mode: `payload`.
-
 - With --client, restore requires --profile; only Aside profiles accept that selector. No automatic drift confirmation or retry.
 - Preview preserves exact opId/profile/confirm-drift intent. Generic restore derives the client on the server; the returned plan does not embed opId or complete command input.
 - A refused or no-op preview is completed inspection, not applied work. A stale bound mutation exits5 with a fixed re-preview hint; no replacement token is automatically adopted.
@@ -524,7 +480,7 @@ Usage: `ocx commandcode restore --op <opId> [--confirm-drift] [--preview | --pla
 
 Restore a Command Code rollback operation, retaining client ownership and drift checks.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -539,8 +495,6 @@ State-changing: yes.
 | `--plan-fingerprint` | string | Optional versioned token from a matching preview; stale intent is refused without retry. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - cmd restore is an alias. --client and --profile are rejected; the dedicated route binds the operation to Command Code.
 - Older proxies without the dedicated route fail without a generic restore fallback. Redirects are refused.
 - Preview preserves the operation and drift intent. A stale bound mutation requires a new explicit preview.
@@ -551,7 +505,7 @@ Usage: `ocx claude config status [--json]`
 
 Read effective Claude Code configuration.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -561,8 +515,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - show is an alias; integration claude forwards to the same handler.
 
 ### `ocx claude config set`
@@ -571,7 +523,7 @@ Usage: `ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subs
 
 Change Claude Code settings through the runtime owner.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -597,8 +549,6 @@ State-changing: yes.
 | `--first-party` | string | on or off; must be the only setting. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - At least one setting is required. --first-party must be set alone and writes Claude settings immediately.
 - Clear both helper model and backend with - to restore inheritance. Preserve shared_proxy_retained warnings.
 
@@ -608,15 +558,13 @@ Usage: `ocx claude desktop show [--json]`
 
 Inspect the desired profile derived on this machine.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local config/catalog derivation, not GET of the remote desired profile. On a connected client scope is local; apply uses the hub profile. Catalog derivation may discover upstream models.
 
@@ -626,15 +574,13 @@ Usage: `ocx claude desktop move <provider/model> <opus|fable|sonnet|haiku> [--de
 
 Move an available route to a local Desktop family.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--default` | boolean | Make this route the family default. |
-
-JSON mode: `none`.
 
 - Local profile persistence only; no management HTTP or --json. On connected clients this does not change the hub profile.
 
@@ -644,11 +590,9 @@ Usage: `ocx claude desktop default <opus|fable|sonnet|haiku> <provider/model|non
 
 Set or clear a local Desktop family default.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local profile persistence only; none clears the default. Connected Desktop apply uses the hub profile.
 
@@ -658,11 +602,9 @@ Usage: `ocx claude desktop export <path|->`
 
 Export the persisted local Desktop profile.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local file output; - writes JSON to stdout. There is no --json flag. A file destination is overwritten; this is not a GUI draft export.
 
@@ -672,7 +614,7 @@ Usage: `ocx claude desktop import <path> [--apply]`
 
 Import a local Desktop profile, optionally applying it as a static gateway.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
@@ -681,8 +623,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--apply` | boolean | After saving, apply as a static gateway. |
-
-JSON mode: `none`.
 
 - Without --apply this only persists locally. With a live local proxy, gateway apply is delegated by HTTP; otherwise local helpers apply it.
 - Connected clients refuse import --apply. A saved profile can remain saved after application fails; no --json mode.
@@ -693,7 +633,7 @@ Usage: `ocx claude desktop [apply] [--first-party | --gateway [--static|--hybrid
 
 Apply Claude Desktop first-party interception or gateway profile.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
@@ -707,8 +647,6 @@ State-changing: yes.
 | `--hybrid` | boolean | Hybrid gateway catalog. |
 | `--discovery-only` | boolean | Discovery-only gateway catalog. |
 
-JSON mode: `none`.
-
 - Uses local helpers or the live local apply route; connected gateway clients use the hub profile download path. No --json mode.
 - First-party requires a local hub with interception enabled. Preserve account-risk warnings, trust prompts and ownership refusals; metadata grants no consent.
 - Application and committed-marker persistence can diverge; inspect status after application and preserve warnings.
@@ -719,7 +657,7 @@ Usage: `ocx integration client preview --client <id> --operation <apply|overwrit
 
 Inspect a managed client change before choosing whether to apply it.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -735,8 +673,6 @@ State-changing: no.
 | `--clear-reasoning-defaults` | boolean | Droid apply/overwrite only: send an empty map, distinct from omitted inherited defaults. |
 | `--json` | boolean | Emit one validated task result as JSON. |
 
-JSON mode: `payload`.
-
 - Uses an existing passive model snapshot; an unavailable preview never secretly refreshes providers or changes client files.
 - A valid refused plan, including an unbound refusal, is readable inspection. Only an applicable bound token can accompany a later write; repeat the original command intent.
 - Shows structural paths and consequences, not secret values or a client-file diff.
@@ -747,7 +683,7 @@ Usage: `ocx integration client history remove --op <opId> --yes [--client aside 
 
 Retire a selected rollback-history entry and its retained snapshot.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -763,8 +699,6 @@ State-changing: yes.
 | `--profile` | number | One Aside nonnegative integer profile ID. |
 | `--json` | boolean | Emit one validated task result as JSON. |
 
-JSON mode: `payload`.
-
 - journal remove is an alias. Omitting --client addresses the global journal; --client aside selects Aside history and optional --profile narrows it. Other clients are rejected for deletion scope.
 - The server protects the latest row and validates ownership. snapshotRemoved:false reports committed retirement with incomplete cleanup and exits1; never retry blindly or claim rollback.
 
@@ -774,7 +708,7 @@ Usage: `ocx integration client sync --client aside [--json]`
 
 Refresh the managed Aside profiles through their existing owner.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -785,8 +719,6 @@ State-changing: yes.
 | `--client` | string | Explicit client; profile selectors require aside. |
 | `--json` | boolean | Emit one validated task result as JSON. |
 
-JSON mode: `envelope`.
-
 - Uses the existing local attested synchronization exchange; no new public target/auth option, profile override or broad sync fallback.
 - Empty results mean no eligible profiles. Partial or malformed outcomes stay nonzero with safe per-profile recovery facts.
 
@@ -796,7 +728,7 @@ Usage: `ocx claude desktop profile show [--json]`
 
 Read the selected running proxy’s Desktop profile and available models.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -806,8 +738,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit one validated task result as JSON. |
 
-JSON mode: `payload`.
-
 - The existing claude desktop show remains local. Runtime profile observation can gather model inventory; it is not guaranteed offline.
 
 ### `ocx claude desktop profile import`
@@ -816,7 +746,7 @@ Usage: `ocx claude desktop profile import <file|-> [--json]`
 
 Validate and save a Desktop profile on the selected running proxy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -825,8 +755,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit one validated task result as JSON. |
-
-JSON mode: `payload`.
 
 - Bounded JSON file or explicit stdin; canonical DesktopProfile validation and the management owner retain availability, concurrent-save and applied-marker rules.
 - Save only: --apply and native-mode flags are refused, and failed management writes never save a local fallback. Apply separately through the existing Desktop workflow.
@@ -837,7 +765,7 @@ Usage: `ocx integration native cursor status [--json]`
 
 Read Cursor installation, gateway requirements and model capabilities.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -847,8 +775,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit one validated task result as JSON. |
 
-JSON mode: `payload`.
-
 - Status can gather model inventory but does not install or toggle Cursor. A displayed placeholder does not authorize a credential-required listener.
 
 ### `ocx integration native cursor local-installer`
@@ -857,7 +783,7 @@ Usage: `ocx integration native cursor local-installer [--json]`
 
 Read the available Cursor installer link without downloading or installing it.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -867,8 +793,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit one validated task result as JSON. |
 
-JSON mode: `payload`.
-
 - May fetch the public update manifest. available:false and nullable reason are valid observations; no installation or trust change is performed.
 
 ### `ocx codex-shim install`
@@ -877,11 +801,9 @@ Usage: `ocx codex-shim install`
 
 Local Codex launcher shim install.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.
 - On macOS/Linux, installs the private PATH overlay and explicitly migrates legacy in-place shims; automatic repair does not migrate them.
@@ -894,11 +816,9 @@ Usage: `ocx codex-shim status`
 
 Local Codex launcher shim status.
 
-State-changing: no.
+State-changing: no. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.
 - Reports wrapper health, Unix overlay PATH activation, and explicit legacy migration guidance.
@@ -910,11 +830,9 @@ Usage: `ocx codex-shim uninstall`
 
 Local Codex launcher shim uninstall.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local launcher/PATH wrapper operation on macOS, Linux and Windows; no management API or JSON mode.
 - remove aliases uninstall.

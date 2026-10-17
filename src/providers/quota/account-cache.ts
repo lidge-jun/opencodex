@@ -200,7 +200,7 @@ export function supportsPerAccountQuota(provider: string): boolean {
 
 export function explicitAccountReader(provider: string): boolean {
   return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code"
-    || provider === "devin";
+    || provider === "devin" || provider === "dsh-account";
 }
 
 export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
@@ -499,9 +499,9 @@ export async function getTokenForAccountQuotaProbe(provider: string, accountId: 
   const row = getAccountCredentialWithStatus(provider, accountId);
   if (!row) throw new Error("account credential missing");
   // An operator-paused account is excluded from every automatic upstream use, quota reads included.
-  // Anthropic instances also skip a needs-reauth row; other providers keep their probe behavior.
+  // Anthropic instances and DSH (whose grant never refreshes) also skip a needs-reauth row.
   if (row.paused) throw new Error("account is paused; quota probe skipped");
-  if (row.needsReauth && isAnthropicInstanceId(provider)) throw new Error("account needs sign-in; quota probe skipped");
+  if (row.needsReauth && (isAnthropicInstanceId(provider) || provider === "dsh-account")) throw new Error("account needs sign-in; quota probe skipped");
   const stored = row.credential;
   if (stored.expires > Date.now() + ACCOUNT_TOKEN_SKEW_MS) return stored.access;
   const activeId = getAccountSet(provider)?.activeAccountId;
@@ -519,7 +519,8 @@ export async function getTokenForAccountQuotaProbe(provider: string, accountId: 
 export function accountQuotaProbeSkip(provider: string, accountId: string): AccountQuotaCacheEntry | undefined {
   if (!supportsPerAccountQuota(provider)) return { ts: Date.now(), quota: null, unavailable: true };
   if (getAccountCredentialWithStatus(provider, accountId)?.paused !== true) return undefined;
-  return accountQuotaCache.get(accountCacheKey(provider, accountId)) ?? { ts: Date.now(), quota: null, unavailable: true };
+  const cached = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  return cached && cached.isCurrent?.() !== false ? cached : { ts: Date.now(), quota: null, unavailable: true };
 }
 
 export function explicitQuotaConfig(provider: string, configured?: OcxProviderConfig): OcxProviderConfig | undefined {
@@ -552,5 +553,5 @@ export function explicitQuotaDestination(provider: string, config: OcxProviderCo
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
   // These readers use fixed canonical billing origins, never config.baseUrl. Devin reads
   // the credential's own allowlisted api-server host instead (fetchDevinQuota revalidates it).
-  return provider === "xai" || provider === "cursor" || provider === "devin";
+  return provider === "xai" || provider === "cursor" || provider === "devin" || provider === "dsh-account";
 }

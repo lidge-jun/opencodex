@@ -12,11 +12,10 @@
  * - Windows reuses ids quickly, so the sentinel opens a handle on its parent at startup, accepts it
  *   only if that process was created before the sentinel, and terminates through the handle
  *   (health-sentinel-windows.ts). While the handle is open the id cannot be reused.
- * - POSIX allocates ids sequentially, and the sentinel's live `process.ppid` changes the moment
- *   its parent exits, before the exited parent can be reaped and its id freed. It is the last check
- *   before `kill`. Reuse inside that window needs the parent to exit, be reaped, and the id space to
- *   wrap completely (99,999 ids on macOS, `pid_max` on Linux) between two adjacent syscalls; that
- *   residual is accepted and documented in structure/ops/service-health-recovery.md.
+ * - Linux holds a pidfd after rechecking the live parent relationship, and signals that fd.
+ *   Only unsupported kernels/architectures retain the live-ppid fallback used by macOS.
+ * - macOS checks the live parent id immediately before SIGKILL; PID reuse between those two
+ *   syscalls remains a documented residual (structure/ops/service-health-recovery.md).
  *
  * SIGKILL rather than SIGTERM: a proxy whose event loop is stuck cannot run its own SIGTERM
  * handler, and systemd counts a SIGTERM death as a clean exit that `Restart=on-failure` does not
@@ -80,6 +79,8 @@ export type HealthSentinelDeps = {
   isTargetGone(): boolean;
   /** Bind to the target once at startup; a failure stands the sentinel down. */
   bindTarget(): { ok: true } | { ok: false; reason: string };
+  /** Release the process owner on every exit, refusal, cancellation or exception. */
+  closeTarget(): void;
   /** Terminate the bound target, re-proving it is still the target at the last moment. */
   terminateTarget(): TerminateResult;
   /** Run under the ownership mutation lease, released on return; "busy" when it could not be taken promptly. */
@@ -149,6 +150,11 @@ function matchesProbeTarget(runtime: SentinelRuntimeRecord | null, pid: number, 
 }
 
 export async function runHealthSentinel(deps: HealthSentinelDeps): Promise<HealthSentinelResult> {
+  try { return await observeHealthSentinel(deps); }
+  finally { deps.closeTarget(); }
+}
+
+async function observeHealthSentinel(deps: HealthSentinelDeps): Promise<HealthSentinelResult> {
   const timing: HealthSentinelTiming = { ...DEFAULT_HEALTH_SENTINEL_TIMING, ...deps.timing };
   const standDown = (reason: string): HealthSentinelResult => {
     deps.log(`standing down: ${reason} (pid ${deps.targetPid})`);
@@ -407,59 +413,72 @@ export async function runHealthSentinelProcess(env: NodeJS.ProcessEnv = process.
     if (opened.ok) windowsHandle = opened.handle;
     else windowsBindFailure = opened.reason;
   }
+  let linuxHandle: import("./health-sentinel-linux").ParentPidfd | null = null;
+  let linuxBindFailure: string | null = null;
+  if (process.platform === "linux") {
+    const { openParentPidfd } = await import("./health-sentinel-linux");
+    const opened = openParentPidfd(targetPid, () => !gone && process.ppid === targetPid);
+    if (opened.kind === "bound") linuxHandle = opened.handle;
+    else if (opened.kind === "refused") linuxBindFailure = opened.reason;
+    else appendBoundedLog(logPath, `pidfd unavailable: ${opened.reason}; using live parent PID check`);
+  }
   const lag = startLagMonitor();
-  const result = await runHealthSentinel({
-    targetPid,
-    now: Date.now,
-    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
-    probe: async (target, timeoutMs) => {
-      lag.reset();
-      const outcome = await probeHealth(target, timeoutMs);
-      return outcome.kind === "timeout" ? { ...outcome, sentinelLagMs: lag.read() } : outcome;
-    },
-    readRuntime: () => readSentinelRuntime(runtimePath),
-    targetExited,
-    isTargetGone: () => gone || (windowsHandle?.exited() ?? false),
-    bindTarget: () => {
-      // POSIX: Bun reads the parent id live, and it stops naming the proxy once the proxy exits.
-      // Windows: it is the creating parent's id, so the handle below carries the identity.
-      if (process.ppid !== targetPid) return { ok: false, reason: "the sentinel is not the watched process's child" };
-      if (process.platform !== "win32") return { ok: true };
-      return windowsHandle ? { ok: true } : { ok: false, reason: windowsBindFailure ?? "the parent process cannot be opened" };
-    },
-    terminateTarget: () => {
-      if (process.platform === "win32") {
-        if (!windowsHandle) return "failed";
-        return windowsHandle.terminate(1) ? "terminated" : "failed";
-      }
-      if (gone || process.ppid !== targetPid) return "not_target";
-      try {
-        process.kill(targetPid, "SIGKILL");
-        return "terminated";
-      } catch {
-        return "failed";
-      }
-    },
-    withOwnershipLease: run => {
-      let lease: { release(): void };
-      try {
-        lease = acquireOwnershipMutationLease(statePaths, { waitMs: LEASE_WAIT_MS, processImage: () => null });
-      } catch {
-        return "busy";
-      }
-      try { return run(); } finally { lease.release(); }
-    },
-    readHistory: () => {
-      const entries = readRecoveryEntries(historyPath);
-      return entries === null ? null : countedRecoveryTimes(entries);
-    },
-    writeHistory: entry => writeRecoveryEntry(historyPath, entry),
-    log: line => appendBoundedLog(logPath, line),
-    timing: parseTimingOverride(env[HEALTH_SENTINEL_ENV.timing]),
-  });
-  lag.stop();
-  windowsHandle?.close();
-  void result;
+  try {
+    await runHealthSentinel({
+      targetPid,
+      now: Date.now,
+      sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      probe: async (target, timeoutMs) => {
+        lag.reset();
+        const outcome = await probeHealth(target, timeoutMs);
+        return outcome.kind === "timeout" ? { ...outcome, sentinelLagMs: lag.read() } : outcome;
+      },
+      readRuntime: () => readSentinelRuntime(runtimePath),
+      targetExited,
+      closeTarget: () => { linuxHandle?.close(); windowsHandle?.close(); },
+      isTargetGone: () => gone || (windowsHandle?.exited() ?? false),
+      bindTarget: () => {
+        // POSIX: Bun reads the parent id live, and it stops naming the proxy once the proxy exits.
+        // Windows: it is the creating parent's id, so the handle below carries the identity.
+        if (process.ppid !== targetPid) return { ok: false, reason: "the sentinel is not the watched process's child" };
+        if (linuxBindFailure) return { ok: false, reason: linuxBindFailure };
+        if (process.platform !== "win32") return { ok: true };
+        return windowsHandle ? { ok: true } : { ok: false, reason: windowsBindFailure ?? "the parent process cannot be opened" };
+      },
+      terminateTarget: () => {
+        if (process.platform === "win32") {
+          if (!windowsHandle) return "failed";
+          return windowsHandle.terminate(1) ? "terminated" : "failed";
+        }
+        if (gone || process.ppid !== targetPid) return "not_target";
+        if (linuxHandle) return linuxHandle.terminate();
+        try {
+          process.kill(targetPid, "SIGKILL");
+          return "terminated";
+        } catch {
+          return "failed";
+        }
+      },
+      withOwnershipLease: run => {
+        let lease: { release(): void };
+        try {
+          lease = acquireOwnershipMutationLease(statePaths, { waitMs: LEASE_WAIT_MS, processImage: () => null });
+        } catch {
+          return "busy";
+        }
+        try { return run(); } finally { lease.release(); }
+      },
+      readHistory: () => {
+        const entries = readRecoveryEntries(historyPath);
+        return entries === null ? null : countedRecoveryTimes(entries);
+      },
+      writeHistory: entry => writeRecoveryEntry(historyPath, entry),
+      log: line => appendBoundedLog(logPath, linuxHandle && line.startsWith("watching pid ") ? `${line} (pidfd)` : line),
+      timing: parseTimingOverride(env[HEALTH_SENTINEL_ENV.timing]),
+    });
+  } finally {
+    lag.stop();
+  }
   return 0;
 }
 

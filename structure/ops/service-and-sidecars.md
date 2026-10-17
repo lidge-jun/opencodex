@@ -194,7 +194,7 @@ carried through; `bin/ocx.mjs` rediscovers bundled or validated PATH Bun, stampi
 `process` via `src/lib/bun-path-runtime.mjs`. The API-auth token remains file-backed and is loaded only by
 the service shell at start. On macOS, `start` and detailed `status` compare the live launchd job
 against `expectedLaunchdCommand`, which still follows a `launcherPath` recorded by a pre-pinning
-install rather than re-walking PATH, so such a job is never misreported as an older plist (#3464).
+install rather than re-walking PATH, so such a job is never misreported as an older plist (#3464). On macOS, `src/service/launchd.ts` waits up to 125 probes at 200 ms intervals for an evicted job to disappear before repair bootstraps its replacement. The bounded 25-second window accommodates the proxy drain and launchd shutdown; exhausted or unreadable registration retains the existing diagnostic failure path (`tests/service/launchd-repair.test.ts`).
 
 > Decision record: [ADR-0030](../decisions/ADR-0030-stable-service-launcher-launchd-and-systemd.md)
 > Decision record: [ADR-0100](../decisions/ADR-0100-stable-service-launcher-launchd-and-systemd.md)
@@ -454,16 +454,16 @@ mutating the port, because a claim could have landed during the now-unleased ref
 lease that stays claimed fails closed: nothing is started, and the job is marked failed, since
 the refresh before it produced no serving proxy; an ownership veto still ends as succeeded.
 
-On Windows, `src/update/npm-invocation.mjs` admits only the exact
-`%USERPROFILE%\scoop\apps\nodejs{,-lts}\current` and `current\bin` PATH entries
-from outside that Node installation. It resolves the home, junction, PATH entry, npm candidate,
-and cwd to physical paths; `current` must remain within its Scoop app directory and
-the npm candidate within the admitted entry. `current\bin` may point to the default
-`%USERPROFILE%\scoop\persist\nodejs{,-lts}\bin`; cwd inside that persistent bin
-is excluded too. The fixed persist suffix is appended to the physical home, accepting 8.3 home
-aliases without trusting a redirected persist subtree. Unreadable paths fail closed. Other Scoop apps, version-directory
-PATH entries (`NO_JUNCTION`), custom home-root Scoop installs, arbitrary descendants,
-and cwd inside the resolved Node installation are not admitted.
+On Windows, `src/update/npm-invocation.mjs` reads copied shell-location keys case-insensitively,
+with exact-key precedence, no ambiguous alias selection, and the same absolute-path checks.
+Scoop admits only `%USERPROFILE%\scoop\apps\nodejs{,-lts}\current` and `current\bin` PATH entries
+from outside the installation. Home, junction, PATH entry, npm candidate and cwd resolve to
+physical paths: `current` stays inside its Scoop app and npm inside the admitted entry.
+`current\bin` may resolve to `%USERPROFILE%\scoop\persist\nodejs{,-lts}\bin`; cwd inside that
+persistent bin is excluded too. The fixed persist suffix uses the physical home, accepting 8.3
+home aliases without trusting a redirected persist subtree. Unreadable paths fail closed.
+Other Scoop apps, version-directory entries (`NO_JUNCTION`), custom home-root Scoop installs,
+arbitrary descendants and cwd inside the resolved Node installation are not admitted.
 
 The npm transaction creates each staging directory exclusively and may clean that fresh path
 while the creating process still owns it. On POSIX it also creates the stage's `lib` directory,

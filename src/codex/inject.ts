@@ -1,3 +1,4 @@
+import { injectApprovedCodexProvider } from "./provider-routing";
 import { beginCodexWriteSection, cleanExternalProviderJournal, publishCodexArtifact } from "./inject/config-write-section";
 import { closeSync, existsSync, openSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
@@ -46,8 +47,8 @@ import {
   writeJournal,
 } from "./journal";
 import { HISTORY_RELABEL_STANDS_DOWN } from "./history-provider";
+import { formatApplyHistoryFailure } from "./inject/history-failure";
 import {
-  describeHistoryJobFailure,
   deriveCodexHistoryOperation,
   resolveCodexHistoryJobTarget,
   runCodexHistoryJob,
@@ -142,6 +143,8 @@ export interface CodexInjectResult {
   message: string;
   /** False when injection intentionally preserves configuration owned by another provider. */
   configApplied?: false;
+  /** True only after a successful configuration transaction changes config.toml bytes. */
+  configChanged?: boolean;
   /**
    * Structured read-only history preflight refusal; never parsed from display text.
    *
@@ -240,6 +243,10 @@ async function injectCodexConfigImpl(
   const rawContent = missingConfig ? "" : readFileSync(CODEX_CONFIG_PATH, "utf-8");
   const activeProvider = externalCodexModelProvider(rawContent);
   if (activeProvider) {
+    const approved = injectApprovedCodexProvider(activeProvider, routingTarget, options.beforeClientWrite ? () => runClientWriteGuard(options.beforeClientWrite) : undefined, options.validateOnly);
+    if (approved) {
+      return { success: true, configChanged: approved.configChanged, ...(options.validateOnly ? { configApplied: false as const } : {}), message: `Approved Codex provider ${tomlString(activeProvider)} routes through OpenCodex; provider identity and transport settings preserved.` };
+    }
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
     // replay that stale snapshot over externally managed config.
     if (!options.validateOnly) {
@@ -258,7 +265,7 @@ async function injectCodexConfigImpl(
         : {}),
       message:
         `⚠️ Codex routing NOT injected: config.toml selects the external model_provider ${tomlString(activeProvider)}.\n` +
-        `  OpenCodex preserves external provider configuration so existing ${tomlString(activeProvider)} session history stays visible.\n` +
+        `  OpenCodex preserves external provider configuration so existing ${tomlString(activeProvider)} session history stays visible.\n  To authorize URL-only management, run ocx codex-provider allow ${tomlString(activeProvider)} and confirm.\n` +
         `  Configure that provider for Responses passthrough at ${routingTarget.baseUrl}` +
         `${routingTarget.requiresAdmissionToken ? ` with x-opencodex-api-key from ${routingTarget.tokenEnv}` : ""}.\n` +
         `  For direct injection, switch to the built-in openai provider, remove any user-owned root openai_base_url, and rerun 'ocx start'.`,
@@ -717,6 +724,11 @@ async function injectCodexConfigImpl(
     releaseConfigWriteLock(configLock.handle);
     heldConfigWriteLock = undefined;
   }
+  // Both write paths have committed, including the coordinator's post-callback checks.
+  // Compare against the admitted original, not post-v1-reconcile input: the native
+  // feature transition is part of this transaction too. Refusals/rollbacks return
+  // above and must never publish this receipt. No filesystem reread after unlock.
+  const configChanged = Boolean(missingConfig) || effectivePlan.content !== rawContent;
   // Legacy mode still forward-tags history so re-tagged threads stay listable. Design B needs
   // the opposite: a one-time migration of previously re-tagged threads BACK to openai (restore
   // machinery; cheap no-op when there is nothing to migrate). The client-compaction opt-in keeps
@@ -799,6 +811,7 @@ async function injectCodexConfigImpl(
   if (effectivePlan.keptUserBaseUrl && effectivePlan.keepRootOverrideAlongsideTable) {
     return {
       success: true,
+      configChanged,
       ...(effectivePlan.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: effectivePlan.nativeSubagentDefaultsWarning } : {}),
       ...(effectivePlan.historyRelabelRefusal ? { historyPreflightFailureReason: effectivePlan.historyRelabelRefusal } : {}),
       message:
@@ -817,6 +830,7 @@ async function injectCodexConfigImpl(
   if (effectivePlan.keptUserBaseUrl) {
     return {
       success: true,
+      configChanged,
       ...(effectivePlan.nativeSubagentDefaultsWarning
         ? { nativeSubagentDefaultsWarning: effectivePlan.nativeSubagentDefaultsWarning }
         : {}),
@@ -839,6 +853,7 @@ async function injectCodexConfigImpl(
       : `Pointed Codex's built-in openai provider at the opencodex proxy (openai_base_url + realtime sideband override).\n`;
   return {
     success: true,
+    configChanged,
     ...(effectivePlan.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: effectivePlan.nativeSubagentDefaultsWarning } : {}),
     ...(effectivePlan.historyRelabelRefusal ? { historyPreflightFailureReason: effectivePlan.historyRelabelRefusal } : {}),
     message:
@@ -860,31 +875,7 @@ export function getCodexConfigPath(): string {
   return CODEX_CONFIG_PATH;
 }
 
-/**
- * Frame one failed apply history job honestly.
- *
- * A genuine lock keeps the established deferred/SKIPPED wording; any other
- * reason names itself instead of blaming the Codex app/IDE.
- */
-export function formatApplyHistoryFailure(outcome: CodexHistoryJobOutcome, legacyMode: boolean): string {
-  // A busy database is a deferral no matter which half observed it: the lock
-  // contended (blocked/busy), or the worker acquired the lock and then found
-  // SQLite busy (failed with a busy history reason). Only those keep the
-  // deferred headline; every other failure is a real "NOT changed".
-  const busy =
-    (outcome.kind === "blocked" && outcome.reason === "busy") ||
-    (outcome.kind === "failed" && outcome.historyFailureReason === "busy");
-  const partiallyChanged = outcome.kind === "failed"
-    && ((outcome.rows ?? 0) > 0 || (outcome.files ?? 0) > 0);
-  const headline = partiallyChanged
-    ? "Codex resume history changed but did not converge"
-    : legacyMode
-      ? "Codex resume history sync SKIPPED"
-      : busy
-      ? "Codex resume history metadata restore deferred"
-      : "Codex resume history NOT changed";
-  return `  ⚠️ ${headline}: ${describeHistoryJobFailure(outcome, "apply", legacyMode)}\n`;
-}
+export { formatApplyHistoryFailure };
 
 export {
   providerBaseHost,

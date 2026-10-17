@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Notice } from "../ui";
 import { useDataSurface } from "../data-surface";
 import { useT, type TKey } from "../i18n/shared";
+import { AdvisorModelSelect } from "../components/AdvisorModelSelect";
+import AdvisorActivity from "./advisor/AdvisorActivity";
+import "./advisor/advisor.css";
 
 /**
  * Advisor sidecar configuration (PR1: minimal but real). Reads and writes the RESOLVED
@@ -14,7 +17,8 @@ export interface AdvisorSettings {
   enabled: boolean;
   model: string;
   effort: string;
-  policy: "manual" | "preflight";
+  policy: "manual" | "preflight" | "adaptive";
+  maxConsultationsPerTask?: number;
   timeoutMs: number;
   contextSharingConsent: "v1" | null;
 }
@@ -26,8 +30,6 @@ export interface AdvisorDto {
 }
 
 const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
-const ROW_STYLE = { display: "flex", alignItems: "center", gap: "0.75rem", margin: "0.6rem 0" } as const;
-const LABEL_STYLE = { minWidth: "11rem" } as const;
 
 export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: AdvisorSettings }) {
   const t = useT();
@@ -70,6 +72,7 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
           model: submitted.model,
           effort: submitted.effort,
           policy: submitted.policy,
+          ...(submitted.maxConsultationsPerTask !== undefined ? { maxConsultationsPerTask: submitted.maxConsultationsPerTask } : {}),
           timeoutMs: submitted.timeoutMs,
           contextSharingConsent: submitted.contextSharingConsent,
         }),
@@ -111,8 +114,8 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
   return (
     <>
       <div style={{ marginTop: "0.75rem" }}>
-        <div style={ROW_STYLE}>
-          <span style={LABEL_STYLE}>{t("advisor.enabled")}</span>
+        <div className="advisor-editor-row">
+          <span className="advisor-editor-label">{t("advisor.enabled")}</span>
           <label className="toggle">
             <input
               type="checkbox"
@@ -124,19 +127,17 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
             <span className="slider" aria-hidden="true" />
           </label>
         </div>
-        <div style={ROW_STYLE}>
-          <label htmlFor="advisor-model" style={LABEL_STYLE}>{t("advisor.model")}</label>
-          <input
-            id="advisor-model"
-            type="text"
+        <div className="advisor-editor-row">
+          <label htmlFor="advisor-model" className="advisor-editor-label">{t("advisor.model")}</label>
+          <AdvisorModelSelect
+            apiBase={apiBase}
             value={draft.model}
             disabled={saving}
-            placeholder={t("advisor.modelPlaceholder")}
-            onChange={event => edit({ model: event.target.value })}
+            onChange={model => edit({ model })}
           />
         </div>
-        <div style={ROW_STYLE}>
-          <label htmlFor="advisor-effort" style={LABEL_STYLE}>{t("advisor.effort")}</label>
+        <div className="advisor-editor-row">
+          <label htmlFor="advisor-effort" className="advisor-editor-label">{t("advisor.effort")}</label>
           <select
             id="advisor-effort"
             value={draft.effort}
@@ -148,18 +149,27 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
             ))}
           </select>
         </div>
-        <div style={ROW_STYLE}>
-          <label htmlFor="advisor-policy" style={LABEL_STYLE}>{t("advisor.policy")}</label>
+        <div className="advisor-editor-row">
+          <label htmlFor="advisor-policy" className="advisor-editor-label">{t("advisor.policy")}</label>
           <select
             id="advisor-policy"
             value={draft.policy}
             disabled={saving}
-            onChange={event => edit({ policy: event.target.value === "preflight" ? "preflight" : "manual" })}
+            onChange={event => edit({ policy: event.target.value as AdvisorSettings["policy"] })}
           >
             <option value="manual">{t("advisor.policy.manual")}</option>
             <option value="preflight">{t("advisor.policy.preflight")}</option>
+            <option value="adaptive">{t("advisor.policy.adaptive")}</option>
           </select>
         </div>
+        {draft.policy === "adaptive" && <div className="advisor-editor-row">
+          <label htmlFor="advisor-task-limit" className="advisor-editor-label">{t("advisor.taskLimit")}</label>
+          <select id="advisor-task-limit" value={draft.maxConsultationsPerTask ?? 3} disabled={saving}
+            onChange={event => edit({ maxConsultationsPerTask: Number(event.target.value) })}>
+            {[1, 2, 3].map(limit => <option key={limit} value={limit}>{limit}</option>)}
+          </select>
+        </div>}
+        {draft.policy === "adaptive" && <p className="muted">{t("advisor.adaptiveNote")}</p>}
         <div style={{ margin: "0.8rem 0" }}>
           <label style={{ display: "flex", alignItems: "flex-start", gap: "0.6rem" }}>
             <input
@@ -172,8 +182,8 @@ export function AdvisorEditor({ apiBase, initial }: { apiBase: string; initial: 
             <span>{t("advisor.consent.label")}</span>
           </label>
         </div>
-        <div style={ROW_STYLE}>
-          <label htmlFor="advisor-timeout" style={LABEL_STYLE}>{t("advisor.timeout")}</label>
+        <div className="advisor-editor-row">
+          <label htmlFor="advisor-timeout" className="advisor-editor-label">{t("advisor.timeout")}</label>
           <input
             id="advisor-timeout"
             type="number"
@@ -222,9 +232,14 @@ export default function Advisor({ apiBase }: { apiBase: string }) {
     <section className="panel">
       {heading}
       <p className="muted">{t("advisor.description")}</p>
-      <Notice tone="warn">{t("advisor.costNote")}</Notice>
-      <Notice tone="warn">{t("advisor.privacyNote")}</Notice>
-      <Notice tone="warn">{t("advisor.disclosure")}</Notice>
+      {/* Collapsed by default: three stacked warnings buried the settings below them. The
+          consent checkbox and its required notice stay visible, so folding them hides no gate. */}
+      <details className="advisor-notices" style={{ margin: "0.5rem 0" }}>
+        <summary className="muted text-label" style={{ cursor: "pointer", padding: "2px 2px" }}>{t("advisor.notices")}</summary>
+        <Notice tone="warn">{t("advisor.costNote")}</Notice>
+        <Notice tone="warn">{t("advisor.privacyNote")}</Notice>
+        <Notice tone="warn">{t("advisor.disclosure")}</Notice>
+      </details>
       {state.showSkeleton && <Notice tone="warn">{t("common.loading")}</Notice>}
       {state.showError && !state.showSkeleton && (
         <Notice tone="err">
@@ -239,6 +254,7 @@ export default function Advisor({ apiBase }: { apiBase: string }) {
           initial={state.data.settings}
         />
       )}
+      <AdvisorActivity apiBase={apiBase} />
     </section>
   );
 }
