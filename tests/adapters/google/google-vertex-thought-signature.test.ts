@@ -147,6 +147,43 @@ describe("Vertex thought-signature continuation (#1254)", () => {
     expect(replayedFunctionCall(followup.body as string).thoughtSignature).toBe(SIGNATURE);
   });
 
+  test("ambient Vertex environment changes do not move an express API key's replay namespace", async () => {
+    const saved = process.env.GOOGLE_CLOUD_PROJECT;
+    try {
+      delete process.env.GOOGLE_CLOUD_PROJECT;
+      const firstAdapter = createGoogleAdapter(provider);
+      await firstAdapter.buildRequest(firstTurn(false));
+      await firstAdapter.parseResponse!(new Response(JSON.stringify(vertexResponseBody())));
+      process.env.GOOGLE_CLOUD_PROJECT = "unrelated-gcloud-default";
+      const followup = await createGoogleAdapter(provider).buildRequest(continuation());
+      expect(followup.url).toContain("/v1/publishers/google/models/");
+      expect(replayedFunctionCall(followup.body as string).thoughtSignature).toBe(SIGNATURE);
+    } finally {
+      if (saved === undefined) delete process.env.GOOGLE_CLOUD_PROJECT; else process.env.GOOGLE_CLOUD_PROJECT = saved;
+    }
+  });
+
+  test("distinct API-key project endpoints keep separate replay namespaces", async () => {
+    const firstAdapter = createGoogleAdapter({ ...provider, project: "project-a" });
+    await firstAdapter.buildRequest(firstTurn(false));
+    await firstAdapter.parseResponse!(new Response(JSON.stringify(vertexResponseBody())));
+
+    const otherProject = await createGoogleAdapter({ ...provider, project: "project-b" }).buildRequest(continuation());
+    expect(replayedFunctionCall(otherProject.body as string).thoughtSignature).toBe("skip_thought_signature_validator");
+    const sameProject = await createGoogleAdapter({ ...provider, project: "project-a" }).buildRequest(continuation());
+    expect(replayedFunctionCall(sameProject.body as string).thoughtSignature).toBe(SIGNATURE);
+  });
+
+  test("express mode and a project literally named api-key keep separate replay namespaces", async () => {
+    const firstAdapter = createGoogleAdapter(provider);
+    await firstAdapter.buildRequest(firstTurn(false));
+    await firstAdapter.parseResponse!(new Response(JSON.stringify(vertexResponseBody())));
+
+    const projectEndpoint = await createGoogleAdapter({ ...provider, project: "api-key", location: "global" }).buildRequest(continuation());
+    expect(projectEndpoint.url).toContain("/v1/projects/api-key/locations/global/");
+    expect(replayedFunctionCall(projectEndpoint.body as string).thoughtSignature).toBe("skip_thought_signature_validator");
+  });
+
   test("Vertex signatures cannot enter the Antigravity replay namespace", async () => {
     const first = firstTurn(false);
     const adapter = createGoogleAdapter(provider);

@@ -3,6 +3,8 @@ title: Provider Configuration
 description: Provider entries, authentication, endpoints, model catalogs, quotas, context caps, and provider-specific options.
 ---
 
+<!-- Created: 2026-10-16; Updated: 2026-10-18; Version: 1.1 (Vertex endpoint note) -->
+
 A provider tells opencodex where a model lives, which wire adapter it speaks, and how requests are
 authenticated.
 
@@ -364,10 +366,11 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google transport/auth mode. Default `ai-studio`. |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google only. Omitted/`compatible` preserves the compatible tool schema and existing non-direct 400 repair. `reject-lossy` rejects initial schema loss or an indeterminate bounded comparison before dispatch and withholds a Vertex or Cloud Code Assist repair that would open constraints. Direct AI Studio never performs that repair. |
 | `directGeminiWireRenames?` | `boolean` | Google only. Applies in AI Studio mode, including custom Google-compatible URLs. Omitted or `true` keeps the `-tiered` wire rename for Gemini Flash ids (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`); `false` sends the requested bare ids to the wire unchanged. Vertex and canonical keyed OpenCode Zen routes preserve the requested model ID regardless of this setting; Cloud Code Assist routing is unchanged. Set `false` when the configured upstream still serves the bare ids. |
-| `project?` | `string` | Vertex or Antigravity Cloud Code Assist project id. |
+| `project?` | `string` | Vertex or Antigravity Cloud Code Assist project id. Vertex API keys use this project endpoint when set; without it they use express mode, even if `GOOGLE_CLOUD_PROJECT` is set. ADC falls back to `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`. |
 | — | — | Antigravity account quota probes (`retrieveUserQuota` and `retrieveUserQuotaSummary`) always go to Google's own Cloud Code host through the pinned outbound transport, regardless of a configured `baseUrl`; the account bearer is never sent to an operator-configured endpoint and a redirect aborts the probe. Only the model-list fallback still honors `baseUrl`. |
 | — | — | If Antigravity quota summary returns 403 for a valid OAuth account, OpenCodex retries that endpoint once with the legacy `antigravity/1.0` User-Agent and the same token and project. A 401 is not retried. Inference and model discovery retain the IDE User-Agent. |
-| `location?` | `string` | Vertex location; environment fallback is `GOOGLE_CLOUD_LOCATION`. |
+| — | — | Antigravity quota shows Gemini 4 Argon as separate `Argon` / `Argon (Weekly)` windows next to Gem and Cla. They are display-only: account ranking, quota exhaustion, reset ordering and reset notifications keep using the Gemini and Claude windows, and Argon requests are still judged by the Gemini window. |
+| `location?` | `string` | Vertex location. API-key project endpoints default to `global` and ignore `GOOGLE_CLOUD_LOCATION`; ADC requires this field or the `GOOGLE_CLOUD_LOCATION` fallback. Gemini 4 Argon supports `global`, `us`, and `eu`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor only: stdio or Streamable HTTP MCP servers. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor only: external computer-use and record-screen commands. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |

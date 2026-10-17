@@ -9,7 +9,7 @@ const FIXTURE_ID = "openai-codex-forward-gpt56-sol-v1";
 export const OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST = defineCompatibilityManifest({
   schemaVersion: 1,
   id: "openai.codex-forward.gpt-5-6-sol.responses",
-  version: "1.3.0",
+  version: "1.4.0",
   subject: {
     providerId: "openai",
     baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -116,6 +116,13 @@ export const OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST = defineCompatibilityManife
       summary: "The ChatGPT Codex forward route does not receive public prompt cache options.",
       limitation: "The field is removed only for the canonical forward destination; public and custom Responses providers keep it.",
       evidence: [{ kind: "fixture", id: FIXTURE_ID, assertionIds: ["prompt-cache-options-removed"] }],
+    },
+    {
+      id: "custom-tool-grammar",
+      feature: "request.custom_tools.grammar",
+      disposition: "passthrough",
+      summary: "A custom tool's grammar format, including its definition, reaches the backend unchanged.",
+      evidence: [{ kind: "fixture", id: FIXTURE_ID, assertionIds: ["custom-tool-grammar-preserved"] }],
     },
   ],
 } as const);

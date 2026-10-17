@@ -1,5 +1,24 @@
 # Google Provider
 
+Created: 2026-10-16 | Updated: 2026-10-18 | Version: 1.1 (Vertex endpoint selection)
+
+## Vertex API-key endpoint selection
+
+`src/adapters/google-vertex-endpoint.ts` selects the Vertex endpoint once per request and the
+same selection feeds the thought-signature replay namespace. API keys follow explicit provider
+configuration only: `provider.project` selects
+`/v1/projects/{project}/locations/{location}/...` with `provider.location` or `global`, which
+keeps models such as Gemini 4 Argon reachable when express mode would pick a region without
+them. Without `provider.project`, API keys keep the projectless express endpoint even when
+`GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT` or `GOOGLE_CLOUD_LOCATION` are set, so an unrelated
+gcloud default cannot move an express key onto another project. Those environment fallbacks
+apply to ADC only, which still requires a project and a location and resolves service-account
+markers per request. Every branch validates the location and rejects a model id that is not a
+single path segment before any credential is attached; keys stay in `x-goog-api-key`.
+`tests/adapters/google/gcp-adc.test.ts` and
+`tests/adapters/google/google-vertex-thought-signature.test.ts` cover the selection, ambient
+environment isolation, ADC fallbacks, model-path rejection, and replay isolation.
+
 ## Vertex credential markers
 
 `src/lib/gcp-adc.ts` resolves an explicit `gcp-sa:<account>` through the OS credential store.
