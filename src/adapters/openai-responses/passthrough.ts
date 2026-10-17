@@ -495,10 +495,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // here, on the serialized body, not on the parsed selector. One place covers both the
       // HTTP and the WebSocket outbound, because the WS path transports this same request
       // instead of rebuilding it.
-      // Opt-in Codex Lite history policy: replay remaining hosted actions as untrusted metadata,
-      // after bridge restoration/tool validation. Tool declarations and other input stay intact.
+      // 显式启用的 Lite 历史转换同时覆盖续聊和原生 v2 压缩：托管搜索历史在无搜索工具的
+      // Lite 请求中会触发上游错误。只转换历史搜索项，保留压缩触发标记、工具及原生压缩结果；
+      // portable 压缩仍由前面的摘要构建器处理，不在这里重复转换。
       if (provider.projectResponsesLiteHostedSearchHistory === true && url === `${CODEX_FORWARD_BASE_URL}/responses`
-        && !parsed._compactionRequest && !parsed._portableCompaction
+        && !parsed._portableCompaction
         && codexResponsesLiteSelected(headers, finalBody)
         && isPlainObject(finalBody) && Array.isArray(finalBody.input)
         && finalBody.input.some(item => isPlainObject(item) && item.type === "web_search_call")) {
