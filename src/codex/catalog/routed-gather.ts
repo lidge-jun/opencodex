@@ -102,7 +102,7 @@ import type {
   CatalogTrustedOpenAiApiPolicySnapshot,
 } from "../convergence-types";
 import type { CatalogGatherProviderAuthOutcome, CatalogGatherProviderModelOutcome, GatherFlightCapture, ModelsAuthResolverFactory } from "./gather-capture";
-import { applyProviderConfigHints, configuredAutoCompactTokenLimit, configuredMaxInputTokens, configuredReasoningSummarySupport, modelInputModalities, routedMaxOutputTokens, withVisionSidecarInput } from "./model-hints";
+import { applyProviderConfigHints, configuredAutoCompactTokenLimit, configuredMaxInputTokens, configuredModelDisplayName, configuredReasoningSummarySupport, modelInputModalities, routedMaxOutputTokens, withVisionSidecarInput } from "./model-hints";
 import { resolveComboCatalogMember } from "./combo-member";
 import { captureGatherFlight, captureTrustedOpenAiApiPolicy, gatherFlightKey, keyedGatherBytesIdentity, withCanonicalOpenAiForwardAuthDefault } from "./gather-capture";
 import { fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "./provider-models";
@@ -886,10 +886,12 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
       undefined,
       metadataConfigDir,
     );
+    const displayName = configuredModelDisplayName(configured, id);
     return {
       provider: OPENAI_API_PROVIDER_ID,
       id,
       owned_by: OPENAI_API_PROVIDER_ID,
+      ...(displayName ? { displayName } : {}),
       ...(contextWindow ? { contextWindow } : {}),
       ...(maxInputTokens ? { maxInputTokens } : {}),
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),

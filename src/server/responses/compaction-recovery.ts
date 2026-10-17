@@ -1,4 +1,5 @@
 import type { AdapterEvent, OcxConfig } from "../../types";
+import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { routeConcreteModel, type RouteResult } from "../../router";
 import { copyPlainData } from "../../lib/plain-data";
 import { jsonUtf8Bytes } from "../../lib/json-byte-size";
@@ -78,6 +79,7 @@ async function bufferedJson(response: Response, signal: AbortSignal): Promise<{ 
   headers.delete("content-length");
   headers.delete("content-encoding");
   const replacement = new Response(bytes.bytes, { status: response.status, statusText: response.statusText, headers });
+  carryResponseToolOwnership(response, replacement);
   if (isNonReplayableResponse(response)) markResponseNonReplayable(replacement);
   try {
     const json: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.bytes));
