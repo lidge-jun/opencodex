@@ -630,6 +630,17 @@
       ]
     },
     {
+      "path": "provider-completion-diagnostic.md",
+      "tier": 5,
+      "title": "Provider Completion Diagnostic",
+      "scope": "Explicit single-model completion test: consent, applicability gate, send-time authority fingerprint, bounded streaming and metadata comparison.",
+      "documents": [
+        "gui/",
+        "src/cli/",
+        "src/server/"
+      ]
+    },
+    {
       "path": "dashboard-and-usage.md",
       "tier": 5,
       "title": "Dashboard Surfaces And Usage",

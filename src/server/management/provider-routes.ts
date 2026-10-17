@@ -1602,6 +1602,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     });
   }
 
+  if (url.pathname === "/api/providers/test-completion" && req.method === "POST") return (await import("./provider-completion-test")).handleProviderCompletionTestRoute(ctx);
+
   // Lightweight connectivity probe: perform the provider's live /models fetch DIRECTLY and
   // report only real upstream evidence. The catalog aggregate (fetchAllModels) deliberately
   // hides fetch failures behind stale/static fallbacks, so a catalog-presence check would

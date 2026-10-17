@@ -49,10 +49,11 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
     details: ["At least one edit is required; only supplied fields are patched. update is an existing alias. Use provider show only for local state, not as proof of the live write.","Management errors use safe fixed provider diagnostics; catalog failures retain the saved receipt and a nonzero exit."],
   },
   {
-    command: ["provider", "test"], summary: "Probe a provider's live model discovery connectivity.",
-    usage: "ocx provider test <name> [--json]", routes: [{ method: "POST", path: "/api/providers/test" }], mutates: true, json: "payload",
-    flags: [{ name: "--json", value: "boolean", summary: "Emit the probe result." }],
-    details: ["May contact the upstream provider; requires operator intent to probe. Static catalogs can return applicable:false; failed connectivity exits nonzero."],
+    command: ["provider", "test"], summary: "Probe discovery connectivity or explicitly test one model completion.",
+    usage: "ocx provider test <name> [--model <id> [--yes]] [--json]",
+    routes: [{ method: "POST", path: "/api/providers/test" }, { method: "POST", path: "/api/providers/test-completion" }], mutates: true, json: "payload",
+    flags: [{ name: "--model", value: "string", summary: "Run one bounded completion for this model instead of discovery." }, { name: "--yes", value: "boolean", summary: "Confirm completion quota/cost; requires --model. Mandatory with --json or non-interactive input." }, { name: "--json", value: "boolean", summary: "Emit the probe result; completion warnings go to stderr." }],
+    details: ["Without --model, discovery behavior is unchanged; static catalogs can return applicable:false. Completion tests print a quota/cost warning and require a default-No terminal confirmation or --yes; cancellation exits 1 without a request.", "Completion output includes TTFT, total latency, upstream/wire model metadata and comparison. Metadata is not proof of model identity; mismatch still exits 0. Failed tests exit 1; non-applicable results exit 0."],
   },
   {
     command: ["provider", "quota"], summary: "Read provider quota reports, optionally refreshing them.",
