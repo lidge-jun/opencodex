@@ -333,13 +333,20 @@ function geminiToolResultParts(
   msg: OcxToolResultMessage,
   wireName: string,
   wireCallId: string,
+  nestToolResultImages: boolean,
 ): unknown[] {
   const functionResponse: Record<string, unknown> = {
     name: wireName,
     response: { result: geminiToolResultText(msg.content) },
     id: wireCallId,
   };
-  return [{ functionResponse }, ...toolResultImageParts(msg.content)];
+  const images = toolResultImageParts(msg.content);
+  // Vertex Argon rejects image siblings beside a functionResponse as an unsupported model tail.
+  if (nestToolResultImages && images.length > 0) {
+    functionResponse.parts = images;
+    return [{ functionResponse }];
+  }
+  return [{ functionResponse }, ...images];
 }
 
 function geminiMissingToolResultPart(wireName: string, wireCallId: string): unknown {
@@ -370,6 +377,7 @@ function messagesToGeminiFormat(
   identityModelId: string,
   stripRejectedClaudeSdkParagraph = false,
   isCloudCodeAssist = false,
+  nestToolResultImages = false,
 ): { systemInstruction?: unknown; contents: unknown[]; replayedCallIds: string[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -551,13 +559,17 @@ function messagesToGeminiFormat(
           const responseParts: unknown[] = [];
           for (const call of toolCalls) {
             const result = resultsById.get(call.wireCallId);
-            if (result) responseParts.push(...geminiToolResultParts(result, call.wireName, call.wireCallId));
+            if (result) responseParts.push(...geminiToolResultParts(result, call.wireName, call.wireCallId, nestToolResultImages));
             else responseParts.push(geminiMissingToolResultPart(call.wireName, call.wireCallId));
           }
-          for (const orphan of orphanResults) {
-            responseParts.push(...geminiOrphanToolResultParts(orphan));
-          }
+          const orphanParts = orphanResults.flatMap(geminiOrphanToolResultParts);
           contents.push({ role: "user", parts: responseParts });
+          // Orphan images cannot share Argon's response batch or claim another call's ownership.
+          if (nestToolResultImages && orphanParts.some(part => typeof part === "object" && part !== null && "inline_data" in part)) {
+            contents.push({ role: "user", parts: orphanParts });
+          } else {
+            responseParts.push(...orphanParts);
+          }
           i = j - 1;
         }
         break;
@@ -1026,6 +1038,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         identityModelId,
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
+        provider.googleMode === "vertex" && parsed.modelId === "gemini-4-argon",
       );
       lastInjectedCallIds = [...replayedCallIds];
       lastReasoningReplayScope = parsed._reasoningReplayScope;
