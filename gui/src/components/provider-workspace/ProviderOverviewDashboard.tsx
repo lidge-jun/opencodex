@@ -26,6 +26,7 @@ import { ProviderIcon } from "./ProviderRail";
 import { formatProviderDisplayName } from "../../provider-icons";
 import QuotaBars from "../QuotaBars";
 import { ProviderCapacityQuota } from "./ProviderCapacityQuota";
+import QoderCreditQuota from "./QoderCreditQuota";
 
 export default function ProviderOverviewDashboard({
   sections,
@@ -222,7 +223,11 @@ export default function ProviderOverviewDashboard({
                   </div>
                   <IconChevron className="pws-dashboard-row-chevron" aria-hidden="true" />
                   <div className="pws-dashboard-row-bars">
-                    <ProviderCapacityQuota report={report} pending={quotasLoading && !report.quota} />
+                    {item.name === "qoder" && accountQuotaFromReport(report)?.creditBuckets?.length ? (
+                      <QoderCreditQuota quotaMode="probe" quota={accountQuotaFromReport(report)} />
+                    ) : (
+                      <ProviderCapacityQuota report={report} pending={quotasLoading && !report.quota} />
+                    )}
                   </div>
                 </button>
               ))}

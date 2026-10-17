@@ -14,7 +14,7 @@ import {
   type ProviderQuotaReport,
 } from "./report-cache";
 import { getTokenForAccountQuotaProbe } from "./account-cache";
-import type { AccountQuotaMode, ProviderQuota, ProviderQuotaCreditsUsd } from "../quota-types";
+import type { AccountQuotaMode, ProviderCreditBucket, ProviderQuota, ProviderQuotaCreditsUsd } from "../quota-types";
 import type { OcxProviderConfig } from "../../types";
 
 // A quota probe must use the provider's inference route so it neither reports a false healthy path nor leaks a key through another exit.
@@ -47,6 +47,9 @@ const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
 const SYNTHETIC_BASE_URL = "https://api.synthetic.new/v2";
 const DEEPINFRA_BASE_URL = "https://api.deepinfra.com";
 const NEURALWATT_BASE_URL = "https://api.neuralwatt.com/v1";
+const QODER_BASE_URL = "https://qoder.com";
+const QODER_EXCHANGE_URL = "https://openapi.qoder.sh/api/v1/jobToken/exchange";
+const QODER_USAGE_URL = "https://openapi.qoder.sh/api/v2/quota/usage";
 
 
 function isCanonicalA6apiBaseUrl(baseUrl: string): boolean {
@@ -1068,6 +1071,10 @@ export function isCanonicalCommandCodeBaseUrl(baseUrl: string): boolean {
   return normalized === COMMAND_CODE_BASE_URL || normalized === `${COMMAND_CODE_BASE_URL}/provider/v1`;
 }
 
+export function isCanonicalQoderBaseUrl(baseUrl?: string): boolean {
+  return baseUrl ? normalizedBaseUrl(baseUrl) === QODER_BASE_URL : false;
+}
+
 /** Prefer the nested `data` shell when the outer object is only an envelope. */
 function unwrapKimiQuotaPayload(value: unknown): Record<string, unknown> | null {
   const body = asRecord(value);
@@ -1337,6 +1344,113 @@ export async function fetchCommandCodeQuota(provider: string, config: OcxProvide
 }
 
 
+export async function fetchQoderQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  const effectiveBaseUrl = config.baseUrl ?? getProviderRegistryEntry(provider)?.baseUrl ?? "";
+  if (!isCanonicalQoderBaseUrl(effectiveBaseUrl)) return null;
+  const pat = resolveProviderApiKey(config.apiKey)?.trim();
+  if (!pat) return null;
+
+  let exchangeResponse: Response;
+  try {
+    exchangeResponse = await quotaFetch(provider, config, QODER_EXCHANGE_URL, {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ personal_token: pat }),
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    return null;
+  }
+
+  if (!exchangeResponse.ok) {
+    return exchangeResponse.status >= 400 && exchangeResponse.status < 500 && exchangeResponse.status !== 408 && exchangeResponse.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+
+  const exchangeRaw = await readQuotaJson(exchangeResponse);
+  if (exchangeRaw === QUOTA_JSON_READ_FAILURE) return null;
+  const exchangeBody = asRecord(exchangeRaw);
+  const exchangeData = asRecord(exchangeBody?.data) ?? exchangeBody;
+  const token = typeof exchangeData?.token === "string" && exchangeData.token.trim()
+    ? exchangeData.token.trim()
+    : typeof exchangeData?.access_token === "string" && exchangeData.access_token.trim()
+      ? exchangeData.access_token.trim()
+      : null;
+  if (!token) return null;
+
+  let usageResponse: Response;
+  try {
+    usageResponse = await quotaFetch(provider, config, QODER_USAGE_URL, {
+      headers: {
+        "Accept": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch {
+    return null;
+  }
+
+  if (!usageResponse.ok) {
+    return usageResponse.status >= 400 && usageResponse.status < 500 && usageResponse.status !== 408 && usageResponse.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+
+  const usageRaw = await readQuotaJson(usageResponse);
+  if (usageRaw === QUOTA_JSON_READ_FAILURE) return null;
+  const usageBody = asRecord(usageRaw);
+  const usageData = asRecord(usageBody?.data) ?? usageBody;
+  if (!usageData) return null;
+
+  const parseBucket = (kind: string, raw: unknown): ProviderCreditBucket | null => {
+    const rec = asRecord(raw);
+    if (!rec) return null;
+    let used = toFiniteNumber(rec.used);
+    let total = toFiniteNumber(rec.total ?? rec.limit);
+    const remaining = toFiniteNumber(rec.remaining);
+    if (used === undefined && total !== undefined && remaining !== undefined && total >= remaining) {
+      used = total - remaining;
+    }
+    if (total === undefined && used !== undefined && remaining !== undefined) {
+      total = used + remaining;
+    }
+    if (used === undefined || total === undefined) return null;
+    // Qoder can return a fractional "percentage" value (e.g. 0.24 for 24%).
+    // The used/total pair is unambiguous and keeps the bar and totals consistent.
+    const percent = total > 0
+      ? normalizePercent(Math.round((used / total) * 10_000) / 100)
+      : used === 0 && total === 0 ? 0 : undefined;
+    return {
+      kind,
+      used,
+      limit: total,
+      ...(remaining !== undefined ? { remaining } : {}),
+      ...(percent !== undefined ? { percent } : {}),
+    };
+  };
+
+  const userBucket = parseBucket("userQuota", usageData.userQuota);
+  const addOnBucket = parseBucket("addOnQuota", usageData.addOnQuota);
+  const creditBuckets: ProviderCreditBucket[] = [
+    ...(userBucket ? [userBucket] : []),
+    ...(addOnBucket ? [addOnBucket] : []),
+  ];
+  if (creditBuckets.length === 0) return null;
+
+  const quota: ProviderQuota = {
+    creditBuckets,
+    updatedAt: Date.now(),
+  };
+  return keyReport(provider, "qoder:quota", quota, config, pat);
+}
+
 type KeyQuotaReader = (name: string, provider: OcxProviderConfig) => Promise<ProviderQuotaProbeResult>;
 
 /** Same selector drives cheap capabilities and uncached reads; never resolves credentials. */
@@ -1371,6 +1485,7 @@ export function keyQuotaReaderForProvider(name: string, provider: OcxProviderCon
   if (name === "synthetic" && isCanonicalSyntheticBaseUrl(provider.baseUrl)) return fetchSyntheticQuota;
   if (name === "deepinfra" && isCanonicalDeepInfraBaseUrl(provider.baseUrl)) return fetchDeepInfraQuota;
   if (name === "neuralwatt" && isCanonicalNeuralwattBaseUrl(provider.baseUrl)) return fetchNeuralwattQuota;
+  if (name === "qoder" && isCanonicalQoderBaseUrl(provider.baseUrl ?? getProviderRegistryEntry(name)?.baseUrl)) return fetchQoderQuota;
   return null;
 }
 

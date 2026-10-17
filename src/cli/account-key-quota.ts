@@ -1,5 +1,5 @@
 /** Public API-key quota projection; private probe identity stays on the server. */
-import { parseQuotaFailureCode, type AccountQuotaFields, type ProviderQuota, type ProviderQuotaWindow, type ProviderQuotaCreditsUsd } from "../providers/quota-types";
+import { parseQuotaFailureCode, type AccountQuotaFields, type ProviderQuota, type ProviderQuotaWindow, type ProviderQuotaCreditsUsd, type ProviderCreditBucket } from "../providers/quota-types";
 import { terminalSafeText } from "./runtime-api";
 import type { AccountRow, FamilyRows } from "./account-api";
 
@@ -48,6 +48,21 @@ function creditsProjection(value: unknown): ProviderQuotaCreditsUsd {
   if (unlimited !== undefined) result.unlimited = unlimited;
   return result;
 }
+function creditBucketProjection(value: unknown): ProviderCreditBucket {
+  const row = record(value);
+  const kind = optionalString(row, "kind");
+  if (!kind) throw new Error("Malformed API-key quota response.");
+  const result: ProviderCreditBucket = {
+    kind,
+    used: finite(row.used),
+    limit: finite(row.limit),
+  };
+  if (row.remaining !== undefined) result.remaining = finite(row.remaining);
+  if (row.percent !== undefined) result.percent = finite(row.percent);
+  const label = optionalString(row, "label");
+  if (label !== undefined) result.label = label;
+  return result;
+}
 function quotaProjection(value: unknown): ProviderQuota | null {
   if (value === null) return null;
   const row = record(value);
@@ -60,6 +75,10 @@ function quotaProjection(value: unknown): ProviderQuota | null {
     result.customWindows = row.customWindows.map(windowProjection);
   }
   if (row.creditsUsd !== undefined) result.creditsUsd = creditsProjection(row.creditsUsd);
+  if (row.creditBuckets !== undefined) {
+    if (!Array.isArray(row.creditBuckets)) throw new Error("Malformed API-key quota response.");
+    result.creditBuckets = row.creditBuckets.map(creditBucketProjection);
+  }
   return result;
 }
 
@@ -93,6 +112,14 @@ export function projectApiKeyQuotaRows(value: unknown, provider: string): Family
   return { rows, activeId, status: 200 };
 }
 
+export function creditBucketText(bucket: ProviderCreditBucket): string {
+  const rawLabel = bucket.label || (bucket.kind === "userQuota" ? "Plan Credits" : bucket.kind === "addOnQuota" ? "Add-on Pack" : bucket.kind);
+  const label = terminalSafeText(rawLabel);
+  const remainingPart = bucket.remaining !== undefined ? `; ${bucket.remaining} remaining` : "";
+  const percentPart = bucket.percent !== undefined ? ` (${bucket.percent}%)` : "";
+  return `${label} ${bucket.used}/${bucket.limit} used${remainingPart}${percentPart}`;
+}
+
 export function apiKeyQuotaText(row: AccountRow): string {
   const mode = row.quotaMode;
   if (!mode) return "unverified";
@@ -113,6 +140,7 @@ export function apiKeyQuotaText(row: AccountRow): string {
     const c = quota.creditsUsd;
     parts.push(`USD ${c.used}/${c.unlimited ? "unlimited" : c.limit} used; ${c.remaining} remaining (${c.percent}%)`);
   }
+  parts.push(...(quota.creditBuckets ?? []).map(creditBucketText));
   if (quota.kiroCreditsUsed !== undefined || quota.kiroCreditsLimit !== undefined) parts.push(`credits ${quota.kiroCreditsUsed ?? "?"}/${quota.kiroCreditsLimit ?? "?"}`);
   return `${mode}: ${parts.join("; ") || "not measured"}`;
 }

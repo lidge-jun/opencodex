@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  barFillStyle,
   barWidth,
   buildQuotaRows,
+  creditBarWidth,
   formatResetFuture,
   isCustomQuotaWindowIncomplete,
   isQuotaExhausted,
@@ -96,6 +98,45 @@ describe("buildQuotaRows (WP070)", () => {
     expect(rows[0]?.customLabel).toBe("Total subscription credits");
     expect(rows[0]?.percent).toBe(0);
     expect(rows[0]?.resetAt).toBeUndefined();
+    expect(maxQuotaUtilisation(reported)).toBe(0);
+  });
+
+  test("creditBuckets convert to ranked rows and resolve localized labels", () => {
+    const reported = quota({
+      creditBuckets: [
+        { kind: "userQuota", used: 100, limit: 1000, remaining: 900, percent: 10 },
+        { kind: "addOnQuota", used: 300, limit: 1000, remaining: 700, percent: 30 },
+      ],
+    });
+    const rows = buildQuotaRows(reported, null, t);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.label).toBe("quota.userQuota");
+    expect(rows[0]?.percent).toBe(10);
+    expect(rows[0]?.used).toBe(100);
+    expect(rows[0]?.limit).toBe(1000);
+    expect(rows[1]?.label).toBe("quota.addOnQuota");
+    expect(rows[1]?.percent).toBe(30);
+    expect(maxQuotaUtilisation(reported)).toBe(30);
+  });
+
+  test("creditBuckets support percent absent and 0/0 boundary conditions", () => {
+    const reported = quota({
+      creditBuckets: [
+        { kind: "userQuota", used: 0, limit: 0, remaining: 0, percent: 0 },
+        { kind: "addOnQuota", used: 250, limit: 1000, remaining: 750 },
+      ],
+    });
+    const rows = buildQuotaRows(reported, null, t);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.percent).toBe(0);
+    expect(rows[0]?.used).toBe(0);
+    expect(rows[0]?.limit).toBe(0);
+
+    expect(rows[0]?.isCreditBucket).toBe(true);
+    expect(rows[1]?.isCreditBucket).toBe(true);
+    expect(rows[1]?.percent).toBeUndefined();
+    expect(rows[1]?.used).toBe(250);
+    expect(rows[1]?.limit).toBe(1000);
     expect(maxQuotaUtilisation(reported)).toBe(0);
   });
 
@@ -249,6 +290,24 @@ describe("barWidth", () => {
     expect(barWidth(3.4)).toBe(4);
     expect(barWidth(50)).toBe(50);
     expect(barWidth(120)).toBe(100);
+  });
+});
+
+describe("creditBarWidth and barFillStyle", () => {
+  test("creditBarWidth scales faithfully without 4% visibility floor", () => {
+    expect(creditBarWidth(0)).toBe(0);
+    expect(creditBarWidth(-5)).toBe(0);
+    expect(creditBarWidth(0.2)).toBe(0.2);
+    expect(creditBarWidth(1)).toBe(1);
+    expect(creditBarWidth(50)).toBe(50);
+    expect(creditBarWidth(120)).toBe(100);
+  });
+
+  test("barFillStyle differentiates regular quota vs credit buckets", () => {
+    expect(barFillStyle(0.2, true)).toEqual({ "--bar-scale": "0.002" });
+    expect(barFillStyle(0.2, false)).toEqual({ "--bar-scale": "0.04" });
+    expect(barFillStyle(0, true)).toEqual({ "--bar-scale": "0" });
+    expect(barFillStyle(50, true)).toEqual({ "--bar-scale": "0.5" });
   });
 });
 

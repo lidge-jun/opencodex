@@ -3,7 +3,7 @@
  * panels (WP090): quota-report → AccountQuota adaptation, quota source labels,
  * and the models-tab filter. No React, no fetch.
  */
-import type { AccountQuota } from "../codex-quota-utils";
+import type { AccountCreditBucket, AccountQuota } from "../codex-quota-utils";
 
 /** Wire shape of one /api/provider-quotas report row as the workspace consumes it. */
 export interface ProviderQuotaReportView {
@@ -173,6 +173,26 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
         ...(typeof creditsRaw?.unlimited === "boolean" ? { unlimited: creditsRaw.unlimited } : {}),
       }
     : undefined;
+  const buckets: AccountCreditBucket[] = Array.isArray(q.creditBuckets)
+    ? (q.creditBuckets as unknown[]).flatMap(b => {
+        if (!b || typeof b !== "object") return [];
+        const row = b as Record<string, unknown>;
+        const used = finite(row.used);
+        const limit = finite(row.limit);
+        if (typeof row.kind !== "string" || used === undefined || limit === undefined) return [];
+        const remaining = finite(row.remaining);
+        const percent = finite(row.percent);
+        const label = typeof row.label === "string" && row.label.trim() ? row.label.trim() : undefined;
+        return [{
+          kind: row.kind,
+          used,
+          limit,
+          ...(remaining !== undefined ? { remaining } : {}),
+          ...(percent !== undefined ? { percent } : {}),
+          ...(label !== undefined ? { label } : {}),
+        }];
+      })
+    : [];
   const out: AccountQuota = {
     ...(finite(q.fiveHourPercent) !== undefined ? { fiveHourPercent: q.fiveHourPercent as number } : {}),
     ...(finite(q.fiveHourResetAt) !== undefined ? { fiveHourResetAt: q.fiveHourResetAt as number } : {}),
@@ -182,6 +202,7 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
     ...(finite(q.monthlyResetAt) !== undefined ? { monthlyResetAt: q.monthlyResetAt as number } : {}),
     ...(windows.length > 0 ? { customWindows: windows } : {}),
     ...(creditsUsd ? { creditsUsd } : {}),
+    ...(buckets.length > 0 ? { creditBuckets: buckets } : {}),
     updatedAt: finite(q.updatedAt) ?? fallbackUpdatedAt ?? Date.now(),
   };
   return out.fiveHourPercent !== undefined
@@ -189,6 +210,7 @@ function quotaFromUnknown(quota: unknown, fallbackUpdatedAt?: number): AccountQu
     || out.monthlyPercent !== undefined
     || (out.customWindows?.length ?? 0) > 0
     || out.creditsUsd !== undefined
+    || (out.creditBuckets?.length ?? 0) > 0
     ? out
     : null;
 }

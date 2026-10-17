@@ -12,7 +12,7 @@ import {
   type CapacityWindowView,
   type ProviderQuotaReportView,
 } from "../../provider-workspace/report";
-import { type QuotaWindowKey } from "../QuotaBars";
+import { type QuotaWindowKey, resolveCreditBucketLabel } from "../QuotaBars";
 import QuotaBars from "../QuotaBars";
 
 function bcp47(locale: Locale): string {
@@ -51,6 +51,7 @@ export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuo
   // Only a passively observed row carries this; see ProviderUsage for the same rule.
   const observedAt = observedAtFromReport(report);
   const credits = primaryQuota?.creditsUsd;
+  const hasCreditRemaining = primaryQuota?.creditBuckets?.some(b => b.remaining !== undefined) ?? false;
   const showsAggregate = aggregation?.presentation === "aggregate";
   const incompleteWindowKeys = new Set<QuotaWindowKey>();
   const incompleteCustomWindowLabels = new Set<string>();
@@ -102,7 +103,7 @@ export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuo
           incompleteCustomWindowLabels={showsAggregate ? incompleteCustomWindowLabels : undefined}
         />
       )}
-      {(credits || aggregation) && (
+      {(credits || aggregation || hasCreditRemaining) && (
         <div className="pws-capacity-details">
           {credits && (
             <div className="pws-capacity-recovery">
@@ -115,6 +116,17 @@ export function ProviderCapacityQuota({ report, pending }: { report: ProviderQuo
               <span>{t("quota.creditsPeriodEnds", { date: periodEnd })}</span>
             </div>
           )}
+          {primaryQuota?.creditBuckets?.flatMap((bucket, index) => {
+            if (bucket.remaining === undefined) return [];
+            const label = resolveCreditBucketLabel(bucket, t);
+            const formattedRemaining = new Intl.NumberFormat(localeTag).format(bucket.remaining);
+            return [
+              <div className="pws-capacity-recovery" key={bucket.kind || index}>
+                <span>{label}</span>
+                <strong>{`${t("codexAuth.creditsRemaining")} ${formattedRemaining}`}</strong>
+              </div>
+            ];
+          })}
           {recoveryRows.flatMap(({ key, label, window }) => {
             const recoveryAt = window.nextRecoveryAt === undefined ? null : formatRecoveryAt(window.nextRecoveryAt);
             return recoveryAt !== null && window.nextRecoveryPercent !== undefined

@@ -1438,6 +1438,7 @@
     "proxy-liveness-package-tree-fence.test.ts": "server",
     "proxy-liveness.test.ts": "server",
     "qoder-adapter.test.ts": "providers", "qoder-live-models.test.ts": "providers", "qoder-mcp-server.test.ts": "providers",
+    "qoder-quota.test.ts": "providers",
     "qoder-scaffold-guard.test.ts": "providers",
     "quota-401-recovery-runtime.test.ts": "usage",
     "quota-401-recovery.test.ts": "usage",

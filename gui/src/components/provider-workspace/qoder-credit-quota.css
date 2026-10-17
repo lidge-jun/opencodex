@@ -1,0 +1,54 @@
+/* Match the Codex selected-card border without shifting Qoder card layout. */
+.pwi-auth-acct--qoder.pwi-auth-acct--active {
+  outline: 1px solid var(--accent-ring);
+  outline-offset: -1px;
+}
+
+/* Qoder-only alignment: independent compact bars share the same label/value columns. */
+.qoder-credit-quota .quota-row--credits {
+  grid-template-columns: minmax(0, min(132px, 34%)) minmax(0, 1fr) 56px;
+}
+
+.qoder-credit-quota .quota-row--credits .quota-reset-label,
+.qoder-credit-quota .quota-row--credits .quota-reset-day,
+.qoder-credit-quota .quota-row--credits .quota-reset-time {
+  display: none;
+}
+
+.qoder-credit-quota .quota-row--credits .quota-label {
+  grid-column: 1;
+  grid-row: 1;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.qoder-credit-quota .quota-row--credits .bar {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.qoder-credit-quota .quota-row--credits .quota-val {
+  grid-column: 3;
+  grid-row: 1;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Exhaustion text needs the full row; ordinary percentages keep their column. */
+.qoder-credit-quota .quota-row--exhausted .quota-val {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  justify-self: end;
+  max-width: 100%;
+}
+
+/* Compact bars have 16px inline padding; align the usage/balance line to it. */
+.qoder-credit-quota .pws-capacity-recovery {
+  display: flex;
+  padding-inline: 16px;
+}
+
+.qoder-credit-quota .pws-capacity-recovery strong {
+  margin-left: auto;
+  white-space: nowrap;
+}

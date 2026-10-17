@@ -313,6 +313,7 @@ export interface ProviderQuotaDto extends CodexQuotaDto {
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
   customWindows?: ProviderQuotaWindowDto[];
+  creditBuckets?: ProviderQuota["creditBuckets"];
   updatedAt?: number;
 }
 

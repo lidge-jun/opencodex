@@ -49,3 +49,49 @@ test("credits with an unrepresentable expiry still render the balance", () => {
   expect(markup).toContain("US$37.50");
   expect(markup).not.toContain("Billing period ends");
 });
+
+test("pure credit buckets render capacity details without currency symbol", () => {
+  const markup = renderToStaticMarkup(
+    <LanguageProvider>
+      <ProviderCapacityQuota
+        pending={false}
+        report={{
+          updatedAt: 123,
+          quota: {
+            creditBuckets: [
+              { kind: "userQuota", used: 0, limit: 1000, remaining: 1000, percent: 0 },
+              { kind: "addOnQuota", used: 323, limit: 1800, remaining: 1477, percent: 17.94 },
+            ],
+          },
+        }}
+      />
+    </LanguageProvider>,
+  );
+  expect(markup).toContain("pws-capacity-details");
+  expect(markup).toContain("Plan Credits");
+  expect(markup).toContain("Add-on Pack");
+  expect(markup).toContain("1,000");
+  expect(markup).toContain("1,477");
+  expect(markup).toContain("remaining");
+  expect(markup).not.toContain("$");
+  expect(markup).not.toContain("USD");
+});
+
+test("pure credit buckets omit remaining line when remaining is undefined", () => {
+  const markup = renderToStaticMarkup(
+    <LanguageProvider>
+      <ProviderCapacityQuota
+        pending={false}
+        report={{
+          updatedAt: 123,
+          quota: {
+            creditBuckets: [
+              { kind: "userQuota", used: 50, limit: 100 },
+            ],
+          },
+        }}
+      />
+    </LanguageProvider>,
+  );
+  expect(markup).not.toContain("pws-capacity-details");
+});

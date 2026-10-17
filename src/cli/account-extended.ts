@@ -1,3 +1,4 @@
+import { creditBucketText } from "./account-key-quota";
 import { isAnthropicOAuthInstance } from "../providers/anthropic-instance";
 import { loadConfig } from "../config";
 import { anthropicProviderIdentityError, cmdAnthropicAccountThreshold } from "./account-anthropic-threshold";
@@ -285,6 +286,7 @@ function quotaParts(quota: ProviderQuotaDto): string[] {
   add("weekly", quota.weeklyPercent, quota.weeklyResetAt);
   add("monthly", quota.monthlyPercent, quota.monthlyResetAt);
   for (const window of quota.customWindows ?? []) add(window.label, window.percent, window.resetAt);
+  parts.push(...(quota.creditBuckets ?? []).map(creditBucketText));
   return parts;
 }
 

@@ -1,3 +1,5 @@
+import { handleProviderRuntimeCommand } from "../../src/cli/provider-runtime";
+import { providerQuotaLine } from "../../src/cli/account-extended";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -113,6 +115,10 @@ test("malformed consumed envelopes and quota fields fail without printing arbitr
       { label: "x", percent: 0, passiveObservedAt: "bad" }].map(w => body([row({ quota: { updatedAt: 0, customWindows: [w] } })])),
     body([row({ quota: { updatedAt: 0, creditsUsd: { used: 0, limit: 0, remaining: 0 } } })]),
     body([row({ quota: { updatedAt: 0, creditsUsd: { used: 0, limit: 0, remaining: 0, percent: 0, unlimited: "false" } } })]),
+    body([row({ quota: { updatedAt: 0, creditBuckets: {} } })]),
+    ...[{ kind: 4, used: 0, limit: 0 }, { kind: "", used: 0, limit: 0 }, { kind: "x", used: "0", limit: 0 },
+      { kind: "x", used: 0, limit: "0" }, { kind: "x", used: 0, limit: 0, remaining: "bad" },
+      { kind: "x", used: 0, limit: 0, percent: "bad" }, { kind: "x", used: 0, limit: 0, label: 4 }].map(b => body([row({ quota: { updatedAt: 0, creditBuckets: [b] } })])),
   ];
   for (const reply of malformed) for (const target of [["openrouter"], []]) {
     logs.length = 0; errors.length = 0;
@@ -125,7 +131,28 @@ test("malformed consumed envelopes and quota fields fail without printing arbitr
     expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: value } })]), "openrouter")).toThrow("Malformed");
     expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 0, creditsUsd: { used: value, limit: 0, remaining: 0, percent: 0 } } })]), "openrouter")).toThrow("Malformed");
     expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 0, customWindows: [{ label: "x", percent: value }] } })]), "openrouter")).toThrow("Malformed");
+    expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 0, creditBuckets: [{ kind: "x", used: value, limit: 0 }] } })]), "openrouter")).toThrow("Malformed");
+    expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 0, creditBuckets: [{ kind: "x", used: 0, limit: value }] } })]), "openrouter")).toThrow("Malformed");
+    expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 0, creditBuckets: [{ kind: "x", used: 0, limit: 0, remaining: value }] } })]), "openrouter")).toThrow("Malformed");
+    expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 0, creditBuckets: [{ kind: "x", used: 0, limit: 0, percent: value }] } })]), "openrouter")).toThrow("Malformed");
   }
+});
+
+test("projects creditBuckets in JSON with zero boundary and strips private fields", async () => {
+  const buckets = [
+    { kind: "userQuota", used: 0, limit: 0, remaining: 0, percent: 0 },
+    { kind: "addOnQuota", used: 100, limit: 500, remaining: 400 },
+    { kind: "customPack", used: 10, limit: 20, label: "Custom" },
+  ];
+  const polluted = [
+    { ...buckets[0], secretKey: "PRIVATE-CANARY", epoch: 1 },
+    { ...buckets[1], privateToken: "PRIVATE-CANARY" },
+    { ...buckets[2], internalId: "PRIVATE-CANARY" },
+  ];
+  expect(await cmdAccount(["list", "openrouter", "--quota", "--json"], depsFor(body([row({ quota: { updatedAt: 0, creditBuckets: polluted } })])))).toBe(0);
+  const output = JSON.parse(logs.join("\n"));
+  expect(output.accounts[0].quota.creditBuckets).toEqual(buckets);
+  expect(logs.join("\n")).not.toContain("PRIVATE-CANARY");
 });
 
 test("human quota distinguishes unsupported, unmeasured, unavailable, passive and real zero", () => {
@@ -135,9 +162,22 @@ test("human quota distinguishes unsupported, unmeasured, unavailable, passive an
     row({ quotaMode: "passive" }), row({ quotaMode: "passive", quota: { updatedAt: 0, weeklyPercent: 0 } }),
     row({ quota: { updatedAt: 0, monthlyPercent: 0, kiroCreditsUsed: 0, kiroCreditsLimit: 100,
       customWindows: [{ label: "budget\nline", percent: 0 }], creditsUsd: { used: 0, limit: 10, remaining: 10, percent: 0 } } }),
+    row({ quota: { updatedAt: 0, creditBuckets: [
+      { kind: "userQuota", used: 100, limit: 1000, remaining: 900, percent: 10 },
+      { kind: "addOnQuota", used: 0, limit: 500, remaining: 500 },
+      { kind: "customPack", used: 50, limit: 100, label: "Custom Pack\nSafe" },
+      { kind: "emptyPack", used: 0, limit: 0, remaining: 0, percent: 0 },
+    ] } }),
   ]), "openrouter").rows;
   const text = formatAccountTable(rows, true);
-  for (const expected of ["unsupported", "probe: not measured", "probe: unavailable (timeout)", "passive: not measured", "passive: wk 0%", "mo 0%", "USD 0/10 used; 10 remaining (0%)", "credits 0/100"]) expect(text).toContain(expected);
+  for (const expected of [
+    "unsupported", "probe: not measured", "probe: unavailable (timeout)", "passive: not measured", "passive: wk 0%", "mo 0%",
+    "USD 0/10 used; 10 remaining (0%)", "credits 0/100",
+    "Plan Credits 100/1000 used; 900 remaining (10%)",
+    "Add-on Pack 0/500 used; 500 remaining",
+    "Custom Pack\\x0aSafe 50/100 used",
+    "emptyPack 0/0 used; 0 remaining (0%)",
+  ]) expect(text).toContain(expected);
   expect(text.split("\n")).toHaveLength(rows.length + 1);
   expect(formatAccountTable(rows)).not.toContain("QUOTA");
 });
@@ -222,3 +262,34 @@ test("absence, explicit null and unavailable last-good remain distinct in JSON",
   expect(accounts[2].quotaUnavailable).toBe(true);
   expect(formatAccountTable(projectApiKeyQuotaRows(body(keys), "openrouter").rows, true)).toContain("probe: unavailable");
 });
+
+for (const entry of ["account refresh", "provider quota"] as const) {
+  test(`${entry} preserves Credits in text and JSON without changing other reports`, async () => {
+    const creditBuckets = [
+      { kind: "userQuota", used: 200, limit: 1000, remaining: 800, percent: 20 },
+      { kind: "addOnQuota", used: 0, limit: 0, remaining: 0, percent: 0 },
+      { kind: "custom", label: "custom\u001b[31m", used: 3, limit: 10 },
+    ];
+    const report = { provider: "qoder", quota: { updatedAt: 1, creditBuckets } };
+    const ordinary = { provider: "plain", quota: { fiveHourPercent: 12, weeklyPercent: 0 } };
+    const deps = { ...depsFor({ reports: [report, ordinary] }), loadConfigImpl: () => config("qoder") };
+    const run = (json: boolean) => entry === "account refresh"
+      ? cmdAccount(["refresh", "qoder", ...(json ? ["--json"] : [])], deps)
+      : handleProviderRuntimeCommand("quota", ["--refresh", ...(json ? ["--json"] : [])], deps);
+    expect(await run(false)).toBe(0);
+    const text = logs.join("\n");
+    expect(text).toContain("Plan Credits 200/1000 used; 800 remaining (20%)");
+    expect(text).toContain("Add-on Pack 0/0 used; 0 remaining (0%)");
+    expect(text).toContain("3/10 used");
+    expect(text).not.toContain("\u001b");
+    expect(text).not.toContain("undefined");
+    expect(text).not.toContain("USD");
+    if (entry === "provider quota") expect(text).toContain("plain 5h 12% weekly 0%");
+    logs.length = 0;
+    expect(await run(true)).toBe(0);
+    const json = JSON.parse(logs.join("\n"));
+    expect((entry === "account refresh" ? json.report : json.reports[0]).quota.creditBuckets).toEqual(creditBuckets);
+    expect(providerQuotaLine("plain", ordinary)).toBe("plain 5h 12% weekly 0%");
+    expect(providerQuotaLine("qoder", { provider: "qoder", quota: {} })).toBe("qoder");
+  });
+}

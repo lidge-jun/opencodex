@@ -47,6 +47,15 @@ export interface ProviderQuotaCreditsUsd {
   unlimited?: boolean;
 }
 
+export interface ProviderCreditBucket {
+  kind: string;
+  used: number;
+  limit: number;
+  remaining?: number;
+  percent?: number;
+  label?: string;
+}
+
 export interface ProviderQuota {
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
@@ -59,6 +68,7 @@ export interface ProviderQuota {
   kiroCreditsLimit?: number;
   customWindows?: ProviderQuotaWindow[];
   creditsUsd?: ProviderQuotaCreditsUsd;
+  creditBuckets?: ProviderCreditBucket[];
   updatedAt: number;
 }
 

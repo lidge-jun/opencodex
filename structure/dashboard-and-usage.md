@@ -232,9 +232,9 @@ Account quota discovery is capability-based. Cheap OAuth and provider-key lists 
 OAuth readers use the named stored account; key readers use isolated per-key configuration,
 never active-key mutation or the provider-wide cache. Response projection rechecks key identity
 and exposes only quota/availability fields, not its internal identity guard. Passive observations
-retain their original timestamp and never trigger inference or token renewal. Unsupported,
-unobserved, failed and measured-zero readings remain distinct; multiple keys are not summed
-because they may share one upstream balance.
+retain their original timestamp and never trigger inference or token renewal. Unsupported, unobserved, failed and measured-zero readings remain distinct; multiple keys are not summed because they may share one upstream balance.
+Qoder plan/add-on `creditBuckets` are Credits, not `creditsUsd`: missing is unknown, `0/0` is no allowance and `0/N` is measured zero usage. Per-PAT cache identity includes the resolved credential; transient failures retain the original last-good timestamp with an unavailable state, while terminal failures clear it. These observations do not authorize routing or PAT recovery.
+`src/cli/account-key-quota.ts` and `src/cli/account-extended.ts` preserve bucket amounts in account-list and provider-report text, including zero and absent optional fields. Qoder compact cards wrap exhaustion text without changing other providers' layouts.
 
 Provider details use one account-quota reading renderer for Overview, Usage and Accounts/API
 keys. Current-account usage sits below usage statistics; a known-mode active row is authoritative

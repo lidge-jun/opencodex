@@ -75,6 +75,50 @@ test("provider quota reports reject malformed required credits and drop malforme
   });
 });
 
+test("provider quota reports preserve pure credit buckets without USD or percentage windows", () => {
+  expect(accountQuotaFromReport({
+    updatedAt: 456,
+    quota: {
+      creditBuckets: [
+        { kind: "userQuota", used: 0, limit: 0, remaining: 0, percent: 0 },
+        { kind: "addOnQuota", used: 323, limit: 1800, remaining: 1477, percent: 17.94 },
+      ],
+    },
+  })).toEqual({
+    creditBuckets: [
+      { kind: "userQuota", used: 0, limit: 0, remaining: 0, percent: 0 },
+      { kind: "addOnQuota", used: 323, limit: 1800, remaining: 1477, percent: 17.94 },
+    ],
+    updatedAt: 456,
+  });
+});
+
+test("provider quota reports reject malformed credit buckets and drop unusable rows", () => {
+  expect(accountQuotaFromReport({
+    updatedAt: 789,
+    quota: {
+      creditBuckets: [
+        { kind: "invalid", used: Number.NaN, limit: 100 },
+        { kind: "addOnQuota", used: 50, limit: 200, remaining: 150 },
+      ],
+    },
+  })).toEqual({
+    creditBuckets: [
+      { kind: "addOnQuota", used: 50, limit: 200, remaining: 150 },
+    ],
+    updatedAt: 789,
+  });
+
+  expect(accountQuotaFromReport({
+    updatedAt: 789,
+    quota: {
+      creditBuckets: [
+        { kind: "invalid", used: Number.NaN, limit: 100 },
+      ],
+    },
+  })).toBeNull();
+});
+
 test("capacity metadata preserves estimate, raw current quota, recovery percent, and incomplete coverage", () => {
   const aggregation = capacityAggregationFromReport({
     quota: { weeklyPercent: 30.769230769, updatedAt: 123 },

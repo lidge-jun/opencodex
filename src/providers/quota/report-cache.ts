@@ -251,7 +251,8 @@ export function hasQuotaRows(quota: ProviderQuota | null | undefined): quota is 
     || typeof quota.monthlyPercent === "number"
     || quota.creditsUsd?.unlimited === true
     || typeof quota.creditsUsd?.percent === "number"
-    || !!quota.customWindows?.some(window => typeof window.percent === "number");
+    || !!quota.customWindows?.some(window => typeof window.percent === "number")
+    || (quota.creditBuckets?.length ?? 0) > 0;
 }
 
 export function providerLabel(providerId: string): string {

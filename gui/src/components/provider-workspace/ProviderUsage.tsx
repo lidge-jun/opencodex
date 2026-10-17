@@ -9,6 +9,7 @@ import { formatRequestCount, formatTokenCount, formatCostUsd } from "../../provi
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountQuotaReading, ProviderUsageTotals, ProviderModelUsageRow } from "./types";
 import ProviderCurrentQuota from "./ProviderCurrentQuota";
+import QoderCreditQuota from "./QoderCreditQuota";
 
 export default function ProviderUsage({ item, usageTotals, quotaReport, currentQuotaReading, quotaIdentity, modelUsage, onRefreshQuota }: {
   item: WorkspaceItem;
@@ -138,7 +139,7 @@ export default function ProviderUsage({ item, usageTotals, quotaReport, currentQ
         </div>
       )}
 
-      <ProviderCurrentQuota key={`${item.name}:${quotaIdentity ?? ""}`} report={quotaReport} reading={currentQuotaReading} onRefreshQuota={onRefreshQuota} />
+      <ProviderCurrentQuota key={`${item.name}:${quotaIdentity ?? ""}`} report={quotaReport} reading={currentQuotaReading} quotaComponent={item.name === "qoder" ? QoderCreditQuota : undefined} onRefreshQuota={onRefreshQuota} />
     </div>
   );
 }

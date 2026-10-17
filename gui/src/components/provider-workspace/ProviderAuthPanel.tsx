@@ -23,6 +23,7 @@ import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
+import QoderCreditQuota from "./QoderCreditQuota";
 import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
 import { AnthropicGrantBadge, AnthropicResetGrantModal } from "./AnthropicResetGrants";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
@@ -718,7 +719,7 @@ export default function ProviderAuthPanel({
             {keys.length > 0 && (
               <ul className="pwi-auth-list">
                 {keys.map(entry => (
-                  <li key={entry.id} className={`pwi-auth-acct${entry.active ? " pwi-auth-acct--active" : ""}`}>
+                  <li key={entry.id} className={`pwi-auth-acct${entry.active ? " pwi-auth-acct--active" : ""}${item.name === "qoder" ? " pwi-auth-acct--qoder" : ""}`}>
                     <div className={`pwi-auth-row${entry.active ? " pwi-auth-row--active" : ""}`}>
                     <button type="button" className="pwi-auth-row-main"
                       onClick={() => void authHandlers.onSwitchApiKey(item.name, entry)}
@@ -742,8 +743,13 @@ export default function ProviderAuthPanel({
                     </button>
                     </div>
                     <div className="pwi-auth-acct-quota">
-                      <ProviderAccountQuota quotaMode={entry.quotaMode} quota={entry.quota}
-                        quotaUnavailable={entry.quotaUnavailable} quotaPending={entry.quotaPending} quotaFailure={entry.quotaFailure} />
+                      {item.name === "qoder" ? (
+                        <QoderCreditQuota quotaMode={entry.quotaMode} quota={entry.quota}
+                          quotaUnavailable={entry.quotaUnavailable} quotaPending={entry.quotaPending} quotaFailure={entry.quotaFailure} />
+                      ) : (
+                        <ProviderAccountQuota quotaMode={entry.quotaMode} quota={entry.quota}
+                          quotaUnavailable={entry.quotaUnavailable} quotaPending={entry.quotaPending} quotaFailure={entry.quotaFailure} />
+                      )}
                     </div>
                   </li>
                 ))}

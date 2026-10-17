@@ -1,5 +1,14 @@
 import { isTerminalShortWindow } from "../../src/codex/quota-types";
 
+export interface AccountCreditBucket {
+  kind: string;
+  used: number;
+  limit: number;
+  remaining?: number;
+  percent?: number;
+  label?: string;
+}
+
 export interface AccountQuota {
   weeklyPercent?: number;
   fiveHourPercent?: number;
@@ -22,6 +31,7 @@ export interface AccountQuota {
     expiresAt?: number;
     unlimited?: boolean;
   };
+  creditBuckets?: AccountCreditBucket[];
   resetCredits?: number;
   updatedAt: number;
 }
@@ -53,6 +63,7 @@ export function normalizeQuotaForPlan(quota: AccountQuota | null, plan: string |
     ...(normalized.monthlyPercent !== undefined ? { monthlyPercent: normalized.monthlyPercent } : {}),
     ...(normalized.monthlyResetAt !== undefined ? { monthlyResetAt: normalized.monthlyResetAt } : {}),
     ...(normalized.creditsUsd !== undefined ? { creditsUsd: normalized.creditsUsd } : {}),
+    ...(normalized.creditBuckets !== undefined ? { creditBuckets: normalized.creditBuckets } : {}),
     ...(normalized.resetCredits !== undefined ? { resetCredits: normalized.resetCredits } : {}),
     updatedAt: normalized.updatedAt,
   };

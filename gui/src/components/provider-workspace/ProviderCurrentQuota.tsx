@@ -6,10 +6,11 @@ import { formatRelativeTime, relativeTimeLabelsFromT } from "../../provider-work
 import ProviderAccountQuota from "./ProviderAccountQuota";
 import type { AccountQuotaReading } from "./types";
 
-export default function ProviderCurrentQuota({ report, reading, onRefreshQuota }: {
+export default function ProviderCurrentQuota({ report, reading, onRefreshQuota, quotaComponent: QuotaComponent = ProviderAccountQuota }: {
   report?: ProviderQuotaReportView;
   reading?: AccountQuotaReading;
   onRefreshQuota?: () => Promise<boolean>;
+  quotaComponent?: typeof ProviderAccountQuota;
 }) {
   const t = useT();
   const current = currentAccountQuotaReport(report);
@@ -45,7 +46,7 @@ export default function ProviderCurrentQuota({ report, reading, onRefreshQuota }
         </button>
       </div>}
     </div>
-    <ProviderAccountQuota {...effective} />
+    <QuotaComponent {...effective} />
     {quota && !effective.quotaUnavailable && effective.quotaMode !== "unsupported" && <dl className="pws-kv pws-usage-meta">
       {!rowOwnsReading && current?.source?.trim() && <div className="pws-kv-row">
         <dt>{t("pws.stats.source")}</dt><dd>{formatQuotaSourceLabel(current.source)}</dd>
