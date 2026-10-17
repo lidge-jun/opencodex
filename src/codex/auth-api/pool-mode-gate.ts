@@ -1,4 +1,4 @@
-import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "../account-credit-use";
+import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt, needsCodexCreditRefresh } from "../account-credit-use";
 import { nextCodexUsageQueryAt, nextQuotaQueryDelay, pruneRemovedCodexPoolUsageAccounts } from "../quota-query-backoff";
 import { CODEX_PRIORITY_FAILBACK_REFRESH_MS } from "../account-priority";
 import { codexQuotaHasFreshUsage } from "../quota-observation-freshness";
@@ -191,6 +191,8 @@ export function registerCodexCooldownRecoveryProbeWorker(config: OcxConfig): voi
 }
 
 export interface PrimeCodexPoolQuotasOptions {
+  /** An exact-account credit refresh must not inspect siblings or native main. */
+  creditAccountId?: string;
   /** Test seams for proving fenced/recovery priming performs no native-main work. */
   reconcileMainAccount?: typeof reconcileMainCodexAccountRuntimeState;
   readMainTokens?: typeof readCodexTokens;
@@ -265,7 +267,15 @@ export async function primeCodexPoolQuotas(
   primeInFlight = trackBackgroundWork(`codex-pool-quota-prime:${reason}`, (async () => {
     const pool = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
     const stale = pool.filter(a => {
+      if (reason === "credits-refresh" && options.creditAccountId !== undefined && a.id !== options.creditAccountId) return false;
       const q = getAccountQuota(a.id);
+      const creditStale = needsCodexCreditRefresh(runtimeConfig, a.id, q, a.plan);
+      if (creditStale) {
+        const last = poolQuotaPrimeAttemptedAt.get(a.id);
+        return !last || last.generation !== readCodexAccountRecord(a.id)?.generation
+          || Date.now() - last.at >= 60_000;
+      }
+      if (reason === "credits-refresh") return false;
       const observationStale = reason === "priority-failback" && q
         && !codexQuotaHasFreshUsage(q, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS);
       if (q && !observationStale) return Date.now() - q.updatedAt >= POOL_CACHE_TTL;
@@ -308,14 +318,15 @@ export async function primeCodexPoolQuotas(
     };
     try {
       await Promise.allSettled([
-        primeMain(),
+        reason === "credits-refresh" ? Promise.resolve() : primeMain(),
         mapWithConcurrency(stale, POOL_QUOTA_REFRESH_CONCURRENCY, async a => {
           if (!getCodexAccountCredential(a.id)) return;
           let result: PoolQuotaResult;
           try {
             const quota = getAccountQuota(a.id);
-            const bypassCachedQuota = reason === "priority-failback" && quota !== null
-              && !codexQuotaHasFreshUsage(quota, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS);
+            const bypassCachedQuota = needsCodexCreditRefresh(runtimeConfig, a.id, quota, a.plan)
+              || (reason === "priority-failback" && quota !== null
+                && !codexQuotaHasFreshUsage(quota, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS));
             result = await fetchPoolAccountQuota(a.id, bypassCachedQuota, a.plan, getValidPoolTokenForPrime);
           } catch (error) {
             // Local quota-flight saturation proves no WHAM request existed for this account.

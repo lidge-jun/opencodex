@@ -23,6 +23,17 @@ waiting visible: those items can contaminate history or imply work happened.
 Do not shorten the provider delay or provoke an extra request to advance the
 client's retry counter.
 
+## Credits after the included limit
+
+An account at its included usage limit can continue only when **Use credits** is enabled for
+that account and its spendable balance has a fresh observation. Usage headers and balance
+observations have separate clocks. Before Pool selection, OpenCodex refreshes expired or missing
+balance evidence for opted-in exhausted accounts, even if ordinary usage was just updated.
+The refresh reads usage metadata; it does not run inference or redeem reset credits. Failed
+observations stay blocked and are paced, rather than extending old balance evidence. A paused
+main account is not a Pool fallback for its own forwarded credential. Enabling the main account's
+credits is not required to refresh another account's balance.
+
 ## Triage: `exceeded retry limit, last status: 429 Too Many Requests`
 
 The message is the client's retry budget summary, not a diagnosis. One refusal

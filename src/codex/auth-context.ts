@@ -1,4 +1,5 @@
 import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt } from "./pool-credit-policy";
+import { needsCodexCreditRefresh } from "./account-credit-use";
 import { hasSpendableCodexCredits } from "./quota-types";
 import { nextQuotaQueryDelay } from "./quota-query-backoff";
 import { noteMainAccountActivity } from "./main-account-external-usage";
@@ -1027,7 +1028,7 @@ export interface ResolveCodexAuthContextOptions {
   signal?: AbortSignal;
   /** Test seam: overrides the bounded startup policy-binding wait before the hard-lock fence. */
   mainAccountPolicyBindingWaitMs?: number;
-  primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void>;
+  primeCodexPoolQuotas?: (config: OcxConfig, reason: string, options?: { creditAccountId?: string }) => Promise<void>;
   /** Test seam for account-gated native model discovery. */
   resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
   /** Direct requests admitted with a proxy bearer substitute the stored native-main credential. */
@@ -1259,6 +1260,16 @@ async function resolveCodexAuthContextUnannotated(
     || (requestScopedMainCredential && fixedAccountId === MAIN_CODEX_ACCOUNT_ID)) {
     return resolveCallerOwnedMainContext();
   }
+  // Usage headers cannot renew the balance clock. Observe expired credit evidence before
+  // selecting an account, rather than falling back to caller main while the pool is funded.
+  if ((config.codexAccounts ?? []).some(a => !a.isMain
+    && (fixedAccountId === undefined || fixedAccountId === a.id)
+    && needsCodexCreditRefresh(policy, a.id, getAccountQuota(a.id), a.plan))) {
+    options.signal?.throwIfAborted();
+    const prime = options.primeCodexPoolQuotas ?? (await import("./auth-api")).primeCodexPoolQuotas;
+    await prime(config, "credits-refresh", { creditAccountId: fixedAccountId }).catch(() => {});
+    options.signal?.throwIfAborted();
+  }
   // A caller bearer can still accompany a request that selects a configured Pool account. Do not
   // let that request read, delete, or create a file-main affinity binding while deciding whether a
   // stored account is available; only the stored credential selected below may own Pool state.
@@ -1427,6 +1438,7 @@ async function resolveCodexAuthContextUnannotated(
       if (
         requestScopedMainCredential
         && fixedAccountId === undefined
+        && !(callerMatchesObservedMain(headers) && policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID))
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
       ) {
         return await resolveCallerOwnedMainContext();
@@ -1585,6 +1597,7 @@ async function resolveCodexAuthContextUnannotated(
       // alternate is eligible. A validated caller may still serve this request,
       // just as it can after an upstream rejection, without changing Pool state.
       if (requestScopedMainCredential && fixedAccountId === undefined
+        && !(callerMatchesObservedMain(headers) && policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID))
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
         && !callerIsCooledPoolAccount(headers, config, accountId)) {
         return await resolveCallerOwnedMainContext();

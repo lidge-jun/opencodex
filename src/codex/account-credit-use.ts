@@ -6,6 +6,7 @@ import {
   TERMINAL_SHORT_WINDOW_FRESHNESS_MS,
   isTerminalShortWindow,
   hasSpendableCodexCredits,
+  hasFreshCodexCreditObservation,
   resetAtToMs,
   type StoredAccountQuota,
 } from "./quota-types";
@@ -104,4 +105,18 @@ export function isCodexAccountHeldForCredits(
 ): boolean {
   return !(codexAccountUsesCreditsAfterLimit(config, accountId) && hasSpendableCodexCredits(quota, now))
     && isCodexUsageLimitReached(quota, plan, now);
+}
+
+/** Only opted-in, exhausted accounts need a balance observation before selection. */
+export function needsCodexCreditRefresh(
+  config: Pick<OcxConfig, "creditCodexAccountIds" | "pausedCodexAccountIds">,
+  accountId: string,
+  quota: StoredAccountQuota | null,
+  plan: unknown,
+  now = Date.now(),
+): boolean {
+  return codexAccountUsesCreditsAfterLimit(config, accountId)
+    && !config.pausedCodexAccountIds?.includes(accountId)
+    && isCodexUsageLimitReached(quota, plan, now)
+    && !hasFreshCodexCreditObservation(quota, now);
 }

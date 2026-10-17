@@ -35,15 +35,23 @@ export interface CodexSpendableCredits {
   observedAt: number;
 }
 
+/** Freshness is independent of a positive/negative balance verdict and of usage headers. */
+export function hasFreshCodexCreditObservation(
+  quota: Pick<StoredAccountQuota, "credits"> | null,
+  now = Date.now(),
+): boolean {
+  const observedAt = quota?.credits?.observedAt;
+  return typeof observedAt === "number" && Number.isFinite(observedAt)
+    && now >= observedAt && now - observedAt <= CODEX_CREDITS_FRESHNESS_MS;
+}
+
 export function hasSpendableCodexCredits(
   quota: Pick<StoredAccountQuota, "credits"> | null,
   now = Date.now(),
 ): boolean {
   const credits = quota?.credits;
-  if (!credits || !Number.isFinite(credits.observedAt)) return false;
-  const age = now - credits.observedAt;
-  if (age < 0 || age > CODEX_CREDITS_FRESHNESS_MS
-    || credits.allowed === false || credits.overageLimitReached === true || credits.hasCredits === false) return false;
+  if (!credits || !hasFreshCodexCreditObservation(quota, now)) return false;
+  if (credits.allowed === false || credits.overageLimitReached === true || credits.hasCredits === false) return false;
   return credits.unlimited === true || (credits.hasCredits === true
     && typeof credits.balance === "number" && Number.isFinite(credits.balance) && credits.balance > 0);
 }

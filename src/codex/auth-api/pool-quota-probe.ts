@@ -1,3 +1,4 @@
+import { hasFreshCodexCreditObservation } from "../quota-types";
 import { parseCodexCredits, rememberCodexCredits } from "../credits";
 import { fetchCodexUsage } from "../quota-query-backoff";
 import type { CodexUsageOwner } from "../quota-query-backoff";
@@ -498,7 +499,8 @@ export async function fetchPoolAccountQuota(
   explicitRefresh = false,
 ): Promise<PoolQuotaResult> {
   const existing = getAccountQuota(accountId);
-  if (afterDispatchSequence === undefined && !forceRefresh && existing && Date.now() - existing.updatedAt < POOL_CACHE_TTL) {
+  if (afterDispatchSequence === undefined && !forceRefresh && existing && Date.now() - existing.updatedAt < POOL_CACHE_TTL
+    && (!existing.credits || hasFreshCodexCreditObservation(existing))) {
     return {
       quota: existing,
       needsReauth: false,

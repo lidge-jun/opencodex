@@ -21,6 +21,8 @@ import {
   readCodexAccountRecord,
   saveCodexAccountCredential,
 } from "../../src/codex/account-store";
+import { resolveCodexAuthContext } from "../../src/codex/auth-context";
+import { fetchPoolAccountQuota } from "../../src/codex/auth-api/pool-quota-probe";
 import { resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
 import {
@@ -140,6 +142,89 @@ describe("primeCodexPoolQuotas", () => {
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = previousCodexHome;
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  });
+
+  test.each(["prime", "selection", "listing", "exact"])(
+    "%s refreshes expired credits even when usage was just observed", async path => {
+      const cfg = makeConfig({ creditCodexAccountIds: ["spender"], pausedCodexAccountIds: [MAIN_CODEX_ACCOUNT_ID],
+        autoSwitchThreshold: 0, activeCodexAccountId: "spender" });
+      seedPoolAccount(cfg, "spender", "pro");
+      const reset = Date.now() + 86_400_000;
+      setAccountQuotaFromParsed("spender", { weeklyPercent: 100, weeklyResetAt: reset,
+        credits: { hasCredits: true, balance: 20, observedAt: Date.now() - 300_001 } });
+      updateAccountQuota("spender", 100, reset);
+      let reads = 0;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        expect(String(input)).toContain("/wham/usage");
+        reads += 1;
+        return Response.json({ rate_limit: { secondary_window: {
+          used_percent: 100, limit_window_seconds: 604_800, reset_at: Math.floor(reset / 1000),
+        } }, credits: { has_credits: true, balance: "20" } });
+      }) as typeof fetch;
+      try {
+        if (path === "selection" || path === "exact") {
+          expect(await resolveCodexAuthContext(new Headers(), cfg, "pool", {
+            modelId: "gpt-5.5", ...(path === "exact" ? { accountId: "spender" } : {}),
+          }))
+            .toMatchObject({ kind: "pool", accountId: "spender" });
+        } else if (path === "listing") await fetchPoolAccountQuota("spender");
+        else await primeCodexPoolQuotas(cfg, "credits-refresh");
+        expect(reads).toBe(1);
+        expect(getAccountQuota("spender")?.credits?.observedAt).toBeGreaterThan(Date.now() - 5_000);
+        await primeCodexPoolQuotas(cfg, "credits-refresh");
+        expect(reads).toBe(1);
+      } finally { globalThis.fetch = originalFetch; }
+    },
+  );
+
+  test("fresh zero balances, paused accounts and credit opt-outs do not trigger credit discovery", async () => {
+    const cfg = makeConfig({ creditCodexAccountIds: ["empty", "paused"], pausedCodexAccountIds: ["paused"] });
+    for (const id of ["empty", "paused", "optout"]) {
+      seedPoolAccount(cfg, id, "pro");
+      setAccountQuotaFromParsed(id, { weeklyPercent: 100, weeklyResetAt: Date.now() + 86_400_000,
+        credits: { hasCredits: id !== "empty", balance: id === "empty" ? 0 : 20,
+          observedAt: Date.now() - (id === "empty" ? 0 : 300_001) } });
+    }
+    const originalFetch = globalThis.fetch;
+    let reads = 0;
+    globalThis.fetch = (async () => { reads += 1; throw new Error("credit discovery must not run"); }) as typeof fetch;
+    try {
+      await primeCodexPoolQuotas(cfg, "credits-refresh");
+      expect(reads).toBe(0);
+      expect(previewCodexAccountForRequest("no-permission", cfg)).toBeNull();
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
+  test("cancelled selection performs no credit observation", async () => {
+    const cfg = makeConfig({ creditCodexAccountIds: ["spender"] });
+    seedPoolAccount(cfg, "spender", "pro");
+    setAccountQuotaFromParsed("spender", { weeklyPercent: 100, weeklyResetAt: Date.now() + 86_400_000 });
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled-before-observation"));
+    let primes = 0;
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      signal: controller.signal, primeCodexPoolQuotas: async () => { primes += 1; },
+    })).rejects.toThrow("cancelled-before-observation");
+    expect(primes).toBe(0);
+  });
+
+  test("failed credit observations are paced and never make stale funds spendable", async () => {
+    const cfg = makeConfig({ creditCodexAccountIds: ["spender"], pausedCodexAccountIds: [MAIN_CODEX_ACCOUNT_ID] });
+    seedPoolAccount(cfg, "spender", "pro");
+    setAccountQuotaFromParsed("spender", { weeklyPercent: 100, weeklyResetAt: Date.now() + 86_400_000,
+      credits: { hasCredits: true, balance: 20, observedAt: Date.now() - 300_001 } });
+    const oldClock = getAccountQuota("spender")!.credits!.observedAt;
+    const originalFetch = globalThis.fetch;
+    let reads = 0;
+    globalThis.fetch = (async () => { reads += 1; return new Response("unavailable", { status: 503 }); }) as typeof fetch;
+    try {
+      await primeCodexPoolQuotas(cfg, "credits-refresh");
+      await primeCodexPoolQuotas(cfg, "credits-refresh");
+      expect(reads).toBe(1);
+      expect(getAccountQuota("spender")?.credits?.observedAt).toBe(oldClock);
+      expect(previewCodexAccountForRequest("still-held", cfg)).toBeNull();
+    } finally { globalThis.fetch = originalFetch; }
   });
 
   test("startup may observe pending account quota without inference or validation", async () => {

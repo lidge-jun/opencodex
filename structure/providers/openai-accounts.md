@@ -534,8 +534,9 @@ owns the five-minute cadence; `auth-api/pool-mode-gate.ts` bounds request-trigge
 including failures, while preserving main-owner claims and per-credential WHAM dispatch backoff.
 No requests means no new polling. For this reason only, stale observation proof bypasses aggregate
 quota-cache freshness after the existing attempt backoff. Main refresh keeps its owned lease and
-passive intent: cache bypass does not clear an inference reauthentication mark. Other prime reasons
-retain their existing cache rules. The split config schema degrades malformed optional values to
+passive intent: cache bypass does not clear an inference reauthentication mark. Credit-expiry priming follows the independent balance clock described in the
+[spendable credit contract](openai-tiers.md#spendable-codex-credits), bypasses fresh usage-only
+caches, and performs no native-main discovery. Other prime reasons retain their existing cache rules. The split config schema degrades malformed optional values to
 false. Exact-account and Direct routes are unchanged.
 
 ## Main-account policy observations

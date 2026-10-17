@@ -298,6 +298,15 @@ refusal, so the two predicates can never both hold.
 
 ### Spendable Codex credits
 
+Pool selection awaits a paced metadata refresh when an opted-in, unpaused account has an
+exhausted included window and its balance observation is absent or older than five minutes.
+Fresh usage headers do not renew that balance clock or suppress the refresh. Concurrent refreshes
+share the existing prime flight; a dispatched unsuccessful observation waits at least one minute
+before another request-triggered attempt for the same credential generation. No inference or reset
+redemption is performed, and stale funds remain inadmissible if observation fails. Pool fallback
+never uses an observed native-main caller credential while that main account is paused; unrelated
+caller-owned Direct credentials retain their existing contract.
+
 WHAM `credits` is spendable usage capacity, separate from manually redeemed
 `rate_limit_reset_credits`. The quota store keeps normalized flags, a finite nonnegative balance,
 and a separate observation clock. Explicit zero/null replaces earlier evidence; partial usage
