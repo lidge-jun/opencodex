@@ -63,8 +63,9 @@ notifier keep the alert `logged`. `delivered` means the OS notifier accepted the
 see whether the system's notification settings then hide it. A failed or timed-out notifier is
 recorded as `failed`; an eligible observation at least five minutes later can retry it, without
 repeating the log line. Turning `desktop` on or off
-applies to the next observation without a restart. A notice still in flight is cancelled when its
-episode ends (reset boundary, recovery, account removal, policy change or shutdown).
+applies to the next observation without a restart. A notice still in flight is cancelled at shutdown, and
+when the next quota observation detects that its episode ended (reset boundary, recovery,
+account removal or policy change); until then the notifier is bounded by a five-second timeout.
 
 ## Model resolution order
 
