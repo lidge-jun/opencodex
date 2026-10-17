@@ -790,7 +790,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         } finally { headerDeadline.clear(); deps.onIterationEnd?.(); }
       } };
     } catch (error) {
-      if (isTranslatorBudgetExceededError(error) || error instanceof SendBudgetExhaustedError) throw error;
+      if (isTranslatorBudgetExceededError(error)) throw error;
+      if (error instanceof SendBudgetExhaustedError) throw new LoopError(429, error.message,
+        { type: "error", status: 429, errorType: "rate_limit_error", code: error.code, message: error.message, retryable: false });
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
       }

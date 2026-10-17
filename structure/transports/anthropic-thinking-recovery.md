@@ -74,6 +74,9 @@ bytes incrementally, and releases unclaimed attempts on cancellation and claimed
 the loop exits. Unknown blocks/deltas, dropped malformed frames and incomplete histories make
 continuation fail before any hosted search executes. Every block start fences signature retries,
 including server tools that have no public adapter-event representation.
+Capture budget pressure invalidates and releases only that capture, preserving ordinary parsing
+and healthy final answers. A further hosted search still requires a complete lossless snapshot;
+unavailable capture never authorizes a lossy continuation or another physical search.
 
 `src/web-search/anthropic-history.ts` supplies canonical tool identities while the raw snapshot
 preserves text-block boundaries, citations, original input objects, opaque thinking and block
@@ -105,6 +108,8 @@ only the current model send. Completed media calls and their tool results remain
 recovery cannot repeat a media fulfillment. The loop keeps its pacing slot and fresh replacement
 header deadline. Replacement failures retain status/type/code and release unused permits.
 As in search, enforced spend without authoritative earlier-send receipts withholds recovery.
+Send-budget refusals in later iterations retain the same non-retryable 429 identity as initial
+admission refusals, including after a completed media call.
 
 `tests/responses/responses-anthropic-thinking-signature-recovery.test.ts` covers media repair,
 completed tool retention, progress fences, and empty-completion recovery. Legal oldest-thinking

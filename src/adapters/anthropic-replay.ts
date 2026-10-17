@@ -1,6 +1,6 @@
 import { isConformingToolCallId } from "./tool-call-id";
 import type { AdapterEvent, OcxAssistantMessage } from "../types";
-import type { TranslatorBudget } from "../lib/translator-budget";
+import { isTranslatorBudgetExceededError, type TranslatorBudget, type TranslatorTransientReservation } from "../lib/translator-budget";
 import { jsonUtf8Bytes } from "../lib/json-byte-size";
 
 type Block = Record<string, unknown>;
@@ -43,8 +43,15 @@ export function createAnthropicReplayCapture(response: Response, budget: Transla
   const retain = (value: unknown) => {
     // Charge each frame once, before retaining its values. This conservative linear bound also
     // covers array/object overhead and replacement signatures without serializing a growing block.
-    const size = jsonUtf8Bytes(value) * 4 + 64;
-    budget.chargeRetained(size, { kind: "retained_collectors" }); bytes += size;
+    try {
+      const size = jsonUtf8Bytes(value) * 4 + 64;
+      budget.chargeRetained(size, { kind: "retained_collectors" }); bytes += size;
+      return true;
+    } catch (error) {
+      if (!isTranslatorBudgetExceededError(error)) throw error;
+      invalidate();
+      return false;
+    }
   };
   return {
     invalidate,
@@ -73,7 +80,7 @@ export function createAnthropicReplayCapture(response: Response, budget: Transla
           if (!isConformingToolCallId(id) || toolIds.has(id)) { invalidate(); return; }
           toolIds.add(id);
         }
-        retain(block);
+        if (!retain(block)) return;
         active = blocks.length;
         blocks.push({ value: { ...block, ...(Array.isArray(block.citations) ? { citations: [...block.citations] } : {}) }, text: typeof block.text === "string" ? [block.text] : [],
           thinking: typeof block.thinking === "string" ? [block.thinking] : [], args: [] });
@@ -81,7 +88,7 @@ export function createAnthropicReplayCapture(response: Response, budget: Transla
         const delta = data.delta as Block | undefined;
         if (active === undefined || data.index !== active || !delta) { invalidate(); return; }
         const block = blocks[active]!;
-        retain(delta);
+        if (!retain(delta)) return;
         if (delta.type === "text_delta" && block.value.type === "text" && typeof delta.text === "string") block.text.push(delta.text);
         else if (delta.type === "thinking_delta" && block.value.type === "thinking" && typeof delta.thinking === "string") block.thinking.push(delta.thinking);
         else if (delta.type === "signature_delta" && block.value.type === "thinking" && typeof delta.signature === "string") block.value.signature = delta.signature;
@@ -99,8 +106,9 @@ export function createAnthropicReplayCapture(response: Response, budget: Transla
     },
     finish(event: AdapterEvent): void {
       if (!valid || !stopped || active !== undefined || event.type !== "done") { invalidate(); return; }
-      const reservation = budget.reserveTransient(bytes * 2, { kind: "retained_collectors" });
+      let reservation: TranslatorTransientReservation | undefined;
       try {
+        reservation = budget.reserveTransient(bytes * 2, { kind: "retained_collectors" });
         const content = blocks.map(block => {
           const value = block.value;
           if (value.type === "text") value.text = block.text.join("");
@@ -120,7 +128,7 @@ export function createAnthropicReplayCapture(response: Response, budget: Transla
         blocks.length = 0; toolIds.clear();
         transferred = true;
       } catch { invalidate(); }
-      finally { reservation.release(); }
+      finally { reservation?.release(); }
     },
     discard(): void { if (!transferred) invalidate(); },
   };

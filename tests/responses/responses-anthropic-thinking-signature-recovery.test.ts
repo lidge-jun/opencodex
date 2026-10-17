@@ -476,6 +476,33 @@ for (const rawSse of [false, true]) {
   });
 }
 
+test("a later media iteration preserves a structured send-budget refusal after tool execution", async () => {
+  let imageCalls = 0;
+  let inferenceCalls = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === "https://api.x.ai/v1/images/generations") {
+      imageCalls++;
+      return Response.json({ error: { message: "Synthetic image refusal" } }, { status: 400 });
+    }
+    if (url !== "https://anthropic.example.test/v1/messages") throw new Error("Unexpected test network target");
+    if (++inferenceCalls > 1) throw new SendBudgetExhaustedError("synthetic-later-media-send");
+    return sse(frame("message_start", { message: { usage: { input_tokens: 2 } } }),
+      frame("content_block_start", { index: 0, content_block: { type: "tool_use", id: "image_fixture", name: "image_gen", input: {} } }),
+      frame("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: '{"prompt":"fixture"}' } }),
+      frame("content_block_stop", { index: 0 }),
+      frame("message_delta", { delta: { stop_reason: "tool_use" } }), frame("message_stop"));
+  }) as typeof fetch;
+  const result = await mediaRequest();
+  const failure = streamedFailure(result.text);
+  expect(failure.error.type).toBe("rate_limit_error");
+  expect(failure.error.code).toBe("request_send_budget_exhausted");
+  expect(httpStatusFromTerminalError(failure.error)).toBe(429);
+  expect(failure.retryable).toBe(false);
+  expect(imageCalls).toBe(1);
+  expect(inferenceCalls).toBe(2);
+});
+
 test("media repair never repeats an already executed image tool", async () => {
   const bodies: string[] = [];
   let imageCalls = 0;

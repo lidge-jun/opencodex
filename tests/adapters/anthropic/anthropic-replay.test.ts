@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { createTranslatorBudget } from "../../../src/lib/translator-budget";
+import { createAnthropicAdapter } from "../../../src/adapters/anthropic";
 import {
   enableAnthropicReplayCapture, createAnthropicReplayCapture, takeAnthropicReplay,
   bindAnthropicReplay, anthropicReplayContent,
@@ -57,10 +58,53 @@ test("claim transfers ownership until release; external and expired snapshots ar
   expect(() => bindAnthropicReplay(mutableMessage, snapshot)).toThrow();
   expect(() => anthropicReplayContent(mutableMessage)).toThrow();
 });
-test("budget overflow releases previously retained frames on discard", () => {
+test("budget overflow invalidates optional capture without throwing or refunding other owners", () => {
   const { budget, capture, cleanup } = start(1_000);
+  budget.chargeRetained(100, { kind: "retained_collectors" });
   expect(() => capture.accept({ type: "content_block_delta", index: 0,
-    delta: { type: "text_delta", text: "x".repeat(2_000) } })).toThrow();
+    delta: { type: "text_delta", text: "x".repeat(2_000) } })).not.toThrow();
+  expect(takeAnthropicReplay(complete(capture))).toBeUndefined();
+  expect(budget.snapshot().currentBytes).toBe(100);
   capture.discard(); cleanup();
+  expect(budget.snapshot().currentBytes).toBe(100);
+  budget.releaseRetained(100, { kind: "retained_collectors" });
   expect(budget.snapshot().currentBytes).toBe(0);
+  budget.dispose();
+});
+
+test("finish reservation pressure invalidates capture and preserves foreign retained bytes", () => {
+  const { budget, capture, cleanup } = start(1_000);
+  budget.chargeRetained(500, { kind: "retained_collectors" });
+  let done: ReturnType<typeof complete> | undefined;
+  expect(() => { done = complete(capture); }).not.toThrow();
+  expect(takeAnthropicReplay(done!)).toBeUndefined();
+  expect(budget.snapshot().currentBytes).toBe(500);
+  cleanup();
+  budget.releaseRetained(500, { kind: "retained_collectors" });
+  expect(budget.snapshot().currentBytes).toBe(0);
+  budget.dispose();
+});
+
+test("optional capture pressure does not replace a healthy adapter terminal", async () => {
+  const budget = createTranslatorBudget({ maxTurnBytes: 6_000 });
+  const adapter = createAnthropicAdapter({ adapter: "anthropic", baseUrl: "https://synthetic.invalid", apiKey: "synthetic" });
+  const text = "x".repeat(1_000);
+  const response = new Response([
+    { type: "message_start", message: { content: [] } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_stop" },
+  ].map(data => `event: ${data.type}\ndata: ${JSON.stringify(data)}\n\n`).join(""));
+  const cleanup = enableAnthropicReplayCapture(response);
+  try {
+    const events = [];
+    for await (const event of adapter.parseStream(response, budget)) events.push(event);
+    expect(events.filter(event => event.type === "error")).toEqual([]);
+    expect(events.some(event => event.type === "text_delta" && event.text === text)).toBe(true);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(takeAnthropicReplay(events.at(-1)!)).toBeUndefined();
+    expect(budget.snapshot().overflows).toBeGreaterThan(0);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  } finally { cleanup(); budget.dispose(); }
 });
