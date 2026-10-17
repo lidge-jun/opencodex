@@ -21,7 +21,7 @@ import { applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuot
 import type { CodexAccount } from "../../src/types/accounts";
 import type { CodexLowQuotaProtectionConfig, OcxConfig } from "../../src/types/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import type { LowQuotaNotice, LowQuotaNoticeSink } from "../../src/codex/low-quota-desktop-notifier";
+import { resolveLowQuotaDesktopSink, type LowQuotaNotice, type LowQuotaNoticeSink } from "../../src/codex/low-quota-desktop-notifier";
 import { fallbackCodexAccountLogLabel } from "../../src/codex/account-label";
 
 const ACCOUNT_A = "low-quota-a";
@@ -787,5 +787,75 @@ describe("low quota desktop delivery", () => {
     }
     const typo = { ...protection(), actions: { pause: true, notify: true, desktop: "yes" } };
     expect(validateConfigCandidate({ ...configWith(), codexPool: { lowQuotaProtection: typo } } as unknown as OcxConfig).ok).toBe(false);
+  });
+});
+
+describe("low quota desktop delivery through the platform adapter", () => {
+  type Child = { killed: number; exit(code: number): void };
+  function adapter(timeoutMs = 60_000) {
+    const children: Child[] = [];
+    const sink = resolveLowQuotaDesktopSink({
+      platform: "darwin", exists: () => true, timeoutMs,
+      spawn: () => {
+        let done!: (code: number) => void;
+        const exited = new Promise<number>(resolve => { done = resolve; });
+        const child: Child = { killed: 0, exit: code => done(code) };
+        children.push(child);
+        return { exited, kill: () => { child.killed++; } };
+      },
+    })!;
+    return { sink: () => sink, children };
+  }
+
+  test("a timed-out notifier is recorded as failed", async () => {
+    const config = configWith(desktopPolicy(true));
+    const host = adapter(5);
+    const registration = register(config, { desktopSink: host.sink });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(host.children[0]!.killed).toBe(1);
+    expect(noticeStatuses(registration)).toEqual(["pending", "failed"]);
+  });
+
+  test("a reset boundary kills the old child once and the replacement is delivered", async () => {
+    const config = configWith(desktopPolicy(true));
+    const host = adapter();
+    const registration = register(config, { desktopSink: host.sink });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85, weeklyResetAt: Date.now() + 60_000 });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 86, weeklyResetAt: Date.now() + 120_000 });
+    expect(host.children.map(child => child.killed)).toEqual([1, 0]);
+    host.children[0]!.exit(0);
+    host.children[1]!.exit(0);
+    await settle();
+    expect(noticeStatuses(registration)).toEqual(["pending", "cancelled", "pending", "delivered"]);
+  });
+
+  test("shutdown kills an in-flight child once and records no late delivery", async () => {
+    const config = configWith(desktopPolicy(true));
+    const host = adapter();
+    const registration = register(config, { desktopSink: host.sink });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    await registration.flush();
+    expect(host.children[0]!.killed).toBe(1);
+    host.children[0]!.exit(0);
+    await settle();
+    expect(noticeStatuses(registration)).toEqual(["pending", "cancelled"]);
+  });
+
+  test("an injected notify sink takes precedence over desktop delivery", async () => {
+    const config = configWith(desktopPolicy(true));
+    const host = adapter();
+    let resolved = 0;
+    const notices: Notice[] = [];
+    const registration = register(config, {
+      notify: notice => { notices.push(notice); },
+      desktopSink: () => { resolved++; return host.sink(); },
+    });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    await settle();
+    expect(notices).toHaveLength(1);
+    expect(resolved).toBe(0);
+    expect(host.children).toHaveLength(0);
+    expect(noticeStatuses(registration)).toEqual(["pending", "delivered"]);
   });
 });

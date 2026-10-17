@@ -136,3 +136,26 @@ describe("low-quota desktop notifier", () => {
     expect(children).toHaveLength(1);
   });
 });
+
+describe("low-quota desktop notifier cleanup", () => {
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  for (const outcome of ["exit 0", "exit 1", "spawn error", "abort"] as const) {
+    test("after " + outcome + " no timer or abort listener can kill the child again", async () => {
+      const { io, children } = fakeSpawn();
+      const sink = resolveLowQuotaDesktopSink({ ...io, platform: "darwin", exists: always, timeoutMs: 10 })!;
+      const controller = new AbortController();
+      const pending = sink(NOTICE, controller.signal).then(() => "resolved", () => "rejected");
+      const child = children[0]!;
+      if (outcome === "exit 0") child.exit(0);
+      else if (outcome === "exit 1") child.exit(1);
+      else if (outcome === "spawn error") child.fail(new Error("EPIPE"));
+      else controller.abort();
+      expect(await pending).toBe(outcome === "exit 0" ? "resolved" : "rejected");
+      const killsAtSettle = child.killed;
+      expect(killsAtSettle).toBe(outcome === "abort" ? 1 : 0);
+      controller.abort();
+      await sleep(25);
+      expect(child.killed).toBe(killsAtSettle);
+    });
+  }
+});
