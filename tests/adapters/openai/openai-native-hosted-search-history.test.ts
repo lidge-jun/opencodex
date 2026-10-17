@@ -94,12 +94,13 @@ test.each([
   }
 });
 
-test("model changes still project explicitly selected ordinary Codex Lite history; native triggers and portable compact keep their existing builder contracts", () => {
+test("model changes and native Lite triggers project opted-in hosted history while portable compact keeps its builder contract", () => {
   const mismatchParsed = build(fixture(), canonical, parsed => { parsed.modelId = "gpt-6-luna"; }).body;
   const mismatchWire = build(fixture("gpt-6-luna"), canonical, parsed => { parsed.modelId = "gpt-6.1-sol"; }).body;
   const native = build(fixture(), canonical, parsed => { parsed._compactionRequest = true; }).body;
   for (const body of [mismatchParsed, mismatchWire])expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(0);
-  expect(native.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(4);
+  expect(native.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(0);
+  expect(notes(native)).toHaveLength(4);
   const portable = build(fixture(), canonical, parsed => { parsed._compactionRequest = true; parsed._portableCompaction = true; }).body;
   expect(portable.tools).toBeUndefined(); expect(portable.tool_choice).toBeUndefined(); expect(notes(portable)).toHaveLength(4);
 });
@@ -245,11 +246,30 @@ test("configured final Lite signal is honored without inventing a caller header"
   expect(notes(body)).toHaveLength(4); expect(new Headers(request.headers).get(CODEX_RESPONSES_LITE_HEADER)).toBe("true");
 });
 
-test.each(["true", "false"])("native compaction flags preserve hosted history for explicit Lite=%s", lite => {
+test.each(["true", "false"])("native compaction flags follow the hosted-history opt-in for explicit Lite=%s", lite => {
   for (const metadata of [undefined, { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true" }]) {
     const raw=fixture(); if (metadata) raw.client_metadata=metadata;
     const {body}=build(raw,canonical,parsed=>{parsed._compactionRequest=true;},new Headers({[CODEX_RESPONSES_LITE_HEADER]:lite}));
-    expect(notes(body)).toHaveLength(0); expect(body.input.filter((x:any)=>x.type==="web_search_call")).toHaveLength(4);
+    expect(notes(body)).toHaveLength(lite === "true" ? 4 : 0);
+    expect(body.input.filter((x:any)=>x.type==="web_search_call")).toHaveLength(lite === "true" ? 0 : 4);
+  }
+});
+
+// 压缩与普通续聊走同一套 Lite 历史转换；保留原生触发标记和密文，避免退化成文字摘要。
+test.each([true, false])("native Lite compaction trigger preserves the native wire contract with projection=%s", enabled => {
+  for (const signal of ["http", "ws"] as const) {
+    const raw = fixture();
+    raw.tools = [];
+    raw.input.push({ type: "compaction_trigger" });
+    if (signal === "ws") raw.client_metadata = { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true" };
+    const { body } = build(raw, { ...canonical, projectResponsesLiteHostedSearchHistory: enabled }, undefined,
+      signal === "http" ? new Headers({ [CODEX_RESPONSES_LITE_HEADER]: "true" }) : new Headers());
+    expect(body.input.at(-1)).toEqual({ type: "compaction_trigger" });
+    expect(body.input[1]).toEqual(raw.input[1]);
+    expect(body.tools).toEqual([]);
+    expect(notes(body)).toHaveLength(enabled ? 4 : 0);
+    expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(enabled ? 0 : 4);
+    expect(body.input.filter((item: any) => item.call_id !== undefined)).toEqual(raw.input.filter((item: any) => item.call_id !== undefined));
   }
 });
 
