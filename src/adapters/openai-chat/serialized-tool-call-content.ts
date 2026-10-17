@@ -8,6 +8,7 @@ const FUNCTION_TAG = "<function=";
 const FUNCTION_CALLS_CLOSE = "</function_calls>";
 const FUNCTION_NAME_CLOSE = "</function_name>";
 const CONST_INPUT_OPEN = "<const input>";
+const CONST_OPEN_RE = /^<const\s+[A-Za-z_$][\w$]*\s*=?\s*>?/;
 /**
  * Streaming bounds (ingestStreaming only; buffered reconciliation already knows its structured calls).
  * MAX_HELD_BYTES is a runaway guard on held text plus queued events, far below the translator budget,
@@ -70,11 +71,12 @@ export function recoverStandaloneBareBlocks(
     if (!freeformTools.has(call.name)) return [];
     const wrappedBody = freeformBody(call.body);
     const hasParameterOpener = wrappedBody.startsWith("<parameter=");
-    const hasConstInputOpener = wrappedBody.startsWith(CONST_INPUT_OPEN);
+    const constOpenMatch = CONST_OPEN_RE.exec(wrappedBody);
+    const hasConstInputOpener = constOpenMatch !== null;
     const body = hasParameterOpener
       ? freeformBody(wrappedBody.slice("<parameter=".length)) : wrappedBody;
     const unwrappedBody = hasConstInputOpener
-      ? freeformBody(wrappedBody.slice(CONST_INPUT_OPEN.length)) : (hasParameterOpener ? body : wrappedBody);
+      ? freeformBody(wrappedBody.slice(constOpenMatch![0].length)) : (hasParameterOpener ? body : wrappedBody);
     if (body.trim() === ""
         || (hasParameterOpener && /^<parameter=[A-Za-z_$][\w$.-]*>/.test(wrappedBody))
         || body.includes("<parameter=") || body.includes("</parameter>")) return [];
@@ -593,7 +595,8 @@ function duplicatedSerializedToolCallRanges(
     let body = freeformBody(call.body);
     // MiMo can wrap the body in a stray <const input> opener (the same family as the
     // malformed <parameter= opener); strip it before comparing with the structured input.
-    if (body.startsWith(CONST_INPUT_OPEN)) body = freeformBody(body.slice(CONST_INPUT_OPEN.length));
+    const constMatch = CONST_OPEN_RE.exec(body);
+    if (constMatch) body = freeformBody(body.slice(constMatch[0].length));
     return structuredCalls.some(structured => {
       const input = structured.names.has(call.name) ? inputFromArguments(structured.argumentsText, structured.freeformTool) : undefined;
       // MiMo can send a function tool's arguments as raw JS text instead of JSON and echo

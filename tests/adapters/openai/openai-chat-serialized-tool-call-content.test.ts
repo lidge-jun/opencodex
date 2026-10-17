@@ -1084,3 +1084,24 @@ test("a standalone bare block with a <const input> wrapper is recovered as a cal
     { type: "tool_call_delta", arguments: JSON.stringify({ input: script }) },
   ]);
 });
+
+test.each([
+  { label: "variable with = (live <const r=await... shape)", wrapper: "<const r=>" },
+  { label: "input name (live <const input> shape)", wrapper: "<const input>" },
+] as const)("a bare block wrapped in $label suppresses the markup", async ({ wrapper }) => {
+  const script = "const r = await tools.exec_command({cmd:'node -v'}); text(r.output);";
+  const block = `<tool_call><function=exec>${wrapper}${script}</parameter></function></tool_call>`;
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "check", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: `Running.\n${block}`, tool_calls: [
+      { id: "call_exec", function: { name: "exec", arguments: script } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+  expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe("Running.\n");
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: script },
+  ]);
+});
