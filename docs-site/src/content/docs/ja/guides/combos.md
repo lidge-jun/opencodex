@@ -201,9 +201,9 @@ ocx combo remove <id> --yes
 ```
 
 `set` は、`--strategy`、`--sticky`、`--effort`、`--alias`、`--native-alias`、
-`--display-name`、および `--rename-from` も受け入れます。`--native-alias` には現在
+`--display-name`、`--description`、および `--rename-from` も受け入れます。`--native-alias` には現在
 サポートされている bare native alias と空でない display name が必要です。`--effort`、`--alias`、
-`--display-name` に `-` を指定すると、その値をクリアできます。`create` および `update` は `set` の
+`--display-name`、`--description` に `-` を指定すると、その値をクリアできます。`create` および `update` は `set` の
 エイリアス、`delete` は `remove` のエイリアスです。すべてのコンボ サブコマンドは `ocx route combo ...` からも利用できます。
 
 ### 管理 API
@@ -248,6 +248,7 @@ ocx combo remove <id> --yes
 | `alias` |いいえ |なし |オプションのトリミングされたパブリック モデル ID。上記のエイリアス ルールを使用します。空の値はエイリアスなしで保存されます。 |
 | `nativeAlias` |いいえ | `false` | 現在サポートされている bare native alias に routing/catalog の優先権を明示的に与えます。 |
 | `displayName` |いいえ |なし | catalog 表示専用ラベル。`nativeAlias` が true の場合は必須です。 |
+| `description` |いいえ |なし | catalog 行の表示専用の説明。制限は `displayName` と同じです。未設定の場合は生成された `Routed via opencodex → combo (combo).` が使われます。 |
 
 ## トラブルシューティング
 

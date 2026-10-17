@@ -32,6 +32,7 @@ Persisted config, the Codex home it writes into, and the model catalog it publis
 | [`catalog.md`](catalog.md) | Shared Codex catalog assembly, account namespaces, pool rotation, and effort ladders. |
 | [`catalog-vendor-context.md`](catalog-vendor-context.md) | Bundled model-ID window fallback, ambiguity handling, and inferred-capacity provenance. |
 | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) | Persisted effort-clamp observation identity and idempotent sync notices. |
+| [`catalog-routed-ownership.md`](catalog-routed-ownership.md) | Generated routed-row ownership signals and combo catalog description overrides. |
 | [`subagents.md`](subagents.md) | Multi-agent surface mode and subagent roster ordering. |
 | [`subagent-capacity.md`](subagent-capacity.md) | Surface mode, hybrid global flag, concurrent child limits and canonical Codex setting ownership. |
 | [`advisor.md`](advisor.md) | The optional expert consultation sidecar: manual/preflight/adaptive policies, evidence, durable task allowance, metadata activity, and loopback routing. |
@@ -179,6 +180,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/auth-api/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
 | `src/codex/catalog/effort.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/catalog/model-hints.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
+| `src/codex/catalog/ownership.ts` | [`catalog-routed-ownership.md`](catalog-routed-ownership.md) |
 | `src/codex/catalog/parsing.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/routed-gather.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/vendor-context.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |

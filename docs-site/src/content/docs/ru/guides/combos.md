@@ -251,7 +251,7 @@ ocx combo remove <id> --yes
 ```
 
 `set` также принимает `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
-`--display-name` и `--rename-from`. Значение `-` у `--effort`, `--alias` или `--display-name`
+`--display-name`, `--description` и `--rename-from`. Значение `-` у `--effort`, `--alias`, `--display-name` или `--description`
 очищает соответствующее поле. Для `--native-alias` нужны поддерживаемый сейчас bare native
 alias и непустой display name. `create` и `update` — alias для `set`, а `delete` — alias для `remove`;
 те же подкоманды доступны через `ocx route combo`.
@@ -301,6 +301,7 @@ Combo хранятся в объекте верхнего уровня `combos`,
 | `alias` | No | none | Необязательный обрезанный публичный id модели; используйте правила alias выше. Пустое значение хранится как отсутствие alias. |
 | `nativeAlias` | No | `false` | Явно разрешает поддерживаемому сейчас bare native alias перехватить приоритет routing/catalog только для неквалифицированного id. Bare `gpt-5.6-*` использует учётные данные Codex Pool/Direct; маршруты с квалификатором аккаунта сохраняют свою идентичность, а provider-qualified `openai-apikey/gpt-5.6-*` использует API-ключ и никогда не переходит на native alias. |
 | `displayName` | No | none | Метка только для отображения в catalog; обязательна при `nativeAlias: true`. |
+| `description` | No | none | Описание строки catalog только для отображения, с теми же ограничениями, что и `displayName`. Без него остаётся сгенерированный текст `Routed via opencodex → combo (combo).`. |
 
 ## Устранение неполадок
 

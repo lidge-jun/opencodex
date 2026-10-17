@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, afterAll, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, afterAll, describe, expect, test } from "bun:test";
 import { Buffer } from "node:buffer";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -58,15 +58,25 @@ afterAll(() => {
 
 afterEach(() => {
   __resetVertexTokenCache();
-  for (const k of ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_API_KEY", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "CLOUDSDK_CONFIG"]) {
+  for (const k of VERTEX_ENV_KEYS) {
     if (prevEnv[k] === undefined) delete process.env[k]; else process.env[k] = prevEnv[k];
   }
   prevEnv = {};
   oauthCalls = 0;
 });
 
+const VERTEX_ENV_KEYS = ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_API_KEY", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "CLOUDSDK_CONFIG"];
+
+// Start every case from a clean Vertex environment; afterEach restores the caller's values.
+beforeEach(() => {
+  for (const k of VERTEX_ENV_KEYS) {
+    if (!(k in prevEnv)) prevEnv[k] = process.env[k];
+    delete process.env[k];
+  }
+});
+
 function setEnv(k: string, v: string): void {
-  prevEnv[k] = process.env[k];
+  if (!(k in prevEnv)) prevEnv[k] = process.env[k];
   process.env[k] = v;
 }
 
@@ -136,12 +146,119 @@ describe("google adapter vertex mode", () => {
     expect(oauthCalls).toBe(0);
   });
 
+  test("vertex API key honors an explicit project and global location without ADC", async () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", apiKey: "fixture-key", project: "fixture-project", location: "global" } as OcxProviderConfig;
+    const req = await createGoogleAdapter(provider).buildRequest(parsed("gemini-4-argon"));
+    expect(req.url).toBe("https://aiplatform.googleapis.com/v1/projects/fixture-project/locations/global/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse");
+    expect(req.headers["x-goog-api-key"]).toBe("fixture-key");
+    expect(req.headers.Authorization).toBeUndefined();
+    expect(oauthCalls).toBe(0);
+  });
+
+  test("ambient project and location leave a projectless API key on express mode", async () => {
+    setEnv("GOOGLE_CLOUD_PROJECT", "unrelated-gcloud-default");
+    setEnv("GCLOUD_PROJECT", "unrelated-gcloud-default");
+    setEnv("GOOGLE_CLOUD_LOCATION", "eu");
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", apiKey: "fixture-key" } as OcxProviderConfig;
+    const req = await createGoogleAdapter(provider).buildRequest(parsed("gemini-4-argon"));
+    expect(req.url).toBe("https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse");
+    expect(req.headers["x-goog-api-key"]).toBe("fixture-key");
+    expect(oauthCalls).toBe(0);
+  });
+
+  test("a blank provider project is unset for API keys and ADC", async () => {
+    const keyed = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", apiKey: "fixture-key", project: "   " } as OcxProviderConfig;
+    const req = await createGoogleAdapter(keyed).buildRequest(parsed("gemini-4-argon"));
+    expect(req.url).toBe("https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse");
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    setEnv("GOOGLE_CLOUD_PROJECT", "env-proj");
+    const adc = { adapter: "google", baseUrl: "https://x", googleMode: "vertex", project: " ", location: "global" } as OcxProviderConfig;
+    const adcReq = await createGoogleAdapter(adc).buildRequest(parsed());
+    expect(adcReq.url).toBe("https://aiplatform.googleapis.com/v1/projects/env-proj/locations/global/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse");
+  });
+
+  test("vertex API key project endpoint defaults to global and ignores ambient location", async () => {
+    setEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", apiKey: "fixture-key", project: "fixture-project" } as OcxProviderConfig;
+    const req = await createGoogleAdapter(provider).buildRequest(parsed("gemini-4-argon"));
+    expect(req.url).toBe("https://aiplatform.googleapis.com/v1/projects/fixture-project/locations/global/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse");
+  });
+
+  test("vertex API key honors an explicit regional location and non-streaming method", async () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", apiKey: "fixture-key", project: "fixture project", location: "us-central1" } as OcxProviderConfig;
+    const req = await createGoogleAdapter(provider).buildRequest({ ...parsed("gemini-2.5-pro"), stream: false } as OcxParsedRequest);
+    expect(req.url).toBe("https://us-central1-aiplatform.googleapis.com/v1/projects/fixture%20project/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent");
+    expect(req.headers["x-goog-api-key"]).toBe("fixture-key");
+    expect(req.headers.Authorization).toBeUndefined();
+  });
+
+  test("environment API key uses the configured provider project", async () => {
+    setEnv("GOOGLE_CLOUD_API_KEY", "env-key");
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", project: "fixture-project", location: "eu" } as OcxProviderConfig;
+    const req = await createGoogleAdapter(provider).buildRequest(parsed("gemini-4-argon"));
+    expect(req.url).toBe("https://eu-aiplatform.googleapis.com/v1/projects/fixture-project/locations/eu/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse");
+    expect(req.headers["x-goog-api-key"]).toBe("env-key");
+    expect(oauthCalls).toBe(0);
+  });
+
+  test("vertex accepts dotted and versioned model ids unchanged", async () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", apiKey: "fixture-key" } as OcxProviderConfig;
+    for (const id of ["gemini-2.5-flash-lite", "gemini-3.6-flash", "gemini-x@001"]) {
+      const req = await createGoogleAdapter(provider).buildRequest(parsed(id));
+      expect(req.url).toBe("https://aiplatform.googleapis.com/v1/publishers/google/models/" + id + ":streamGenerateContent?alt=sse");
+    }
+  });
+
+  test("vertex rejects model ids that escape the model path segment before any credential", async () => {
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const providers = [
+      { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", apiKey: "fixture-key" },
+      { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", apiKey: "fixture-key", project: "fixture-project" },
+      { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", project: "fixture-project", location: "global" },
+    ] as OcxProviderConfig[];
+    for (const provider of providers) {
+      for (const id of ["a/b", "a?b", "a#b", "a\\b", "a%2Fb", "..", "gemini..x", ""]) {
+        await expect(createGoogleAdapter(provider).buildRequest(parsed(id))).rejects.toThrow("Vertex AI model id must be a single path segment");
+      }
+    }
+    expect(oauthCalls).toBe(0);
+  });
+
+  test("vertex API key validates project endpoint locations before sending credentials", async () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", apiKey: "fixture-key", project: "fixture-project", location: "attacker.example/capture" } as OcxProviderConfig;
+    await expect(createGoogleAdapter(provider).buildRequest(parsed())).rejects.toThrow("Vertex AI location must be a single lowercase Google Cloud location label");
+    expect(oauthCalls).toBe(0);
+  });
+
   test("vertex + ADC -> regional host + Authorization Bearer", async () => {
     setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
     const provider = { adapter: "google", baseUrl: "https://x", googleMode: "vertex", project: "proj-1", location: "us-central1" } as OcxProviderConfig;
     const req = await createGoogleAdapter(provider).buildRequest(parsed());
     expect(req.url).toBe("https://us-central1-aiplatform.googleapis.com/v1/projects/proj-1/locations/us-central1/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse");
     expect(req.headers["Authorization"]).toBe("Bearer vertex-tok");
+  });
+
+  test("vertex + ADC keeps the environment project aliases and location fallback", async () => {
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    setEnv("GOOGLE_CLOUD_LOCATION", "europe-west4");
+    const provider = { adapter: "google", baseUrl: "https://x", googleMode: "vertex" } as OcxProviderConfig;
+    setEnv("GOOGLE_CLOUD_PROJECT", "env-proj");
+    let req = await createGoogleAdapter(provider).buildRequest(parsed());
+    expect(req.url).toBe("https://europe-west4-aiplatform.googleapis.com/v1/projects/env-proj/locations/europe-west4/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse");
+    expect(req.headers["Authorization"]).toBe("Bearer vertex-tok");
+    delete process.env.GOOGLE_CLOUD_PROJECT;
+    setEnv("GCLOUD_PROJECT", "alias-proj");
+    req = await createGoogleAdapter(provider).buildRequest(parsed());
+    expect(req.url).toBe("https://europe-west4-aiplatform.googleapis.com/v1/projects/alias-proj/locations/europe-west4/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse");
+  });
+
+  test("vertex + ADC still requires a project and a location", async () => {
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const noProject = { adapter: "google", baseUrl: "https://x", googleMode: "vertex", location: "global" } as OcxProviderConfig;
+    await expect(createGoogleAdapter(noProject).buildRequest(parsed())).rejects.toThrow("Vertex AI requires a project id");
+    const noLocation = { adapter: "google", baseUrl: "https://x", googleMode: "vertex", project: "proj-1" } as OcxProviderConfig;
+    await expect(createGoogleAdapter(noLocation).buildRequest(parsed())).rejects.toThrow("Vertex AI requires a location");
+    expect(oauthCalls).toBe(0);
   });
 
   test("vertex + ADC + location global -> global aiplatform host", async () => {

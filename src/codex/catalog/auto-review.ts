@@ -5,6 +5,7 @@ import { encodeRoutedModelId } from "../../providers/slug-codec";
 import { canonicalAutoReviewModelKey, isValidAutoReviewModel as isValidAutoReviewTarget } from "../../config/provider-validation";
 import { readConfiguredAutoReviewModel } from "./parsing";
 import type { RawEntry } from "./parsing";
+import { hasOcxRoutedAuthorship } from "./ownership";
 import { configuredCatalogEntry } from "./subagent-roster";
 
 const AUTO_REVIEW_ROOT_MARKER = "opencodex_auto_review_root";
@@ -38,7 +39,7 @@ function isRoutedCatalogEntry(entry: RawEntry): boolean {
   if (isCodexControlPlaneModel(entry.slug)) return false;
   const slug = typeof entry.slug === "string" ? entry.slug : "";
   return slug.includes("/")
-    || (typeof entry.description === "string" && entry.description.startsWith("Routed via opencodex → "));
+    || hasOcxRoutedAuthorship(entry);
 }
 
 /** Restore an owned native value, retaining provenance to avoid legacy reclassification. */
