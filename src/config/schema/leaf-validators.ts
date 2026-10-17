@@ -1020,12 +1020,16 @@ export const codexPoolSchema = z.object({
     actions: z.object({
       pause: z.boolean(),
       notify: z.boolean(),
+      desktop: z.boolean().optional(),
     }).strict(),
     windows: z.object({
       short: z.boolean(),
       weekly: z.boolean(),
     }).strict(),
   }).strict().superRefine((policy, ctx) => {
+    if (policy.actions.desktop === true && !policy.actions.notify) {
+      ctx.addIssue({ code: "custom", path: ["actions", "desktop"], message: "desktop low-quota notification requires notify" });
+    }
     if (!policy.enabled) return;
     if (!policy.actions.pause && !policy.actions.notify) {
       ctx.addIssue({ code: "custom", path: ["actions"], message: "enabled low-quota protection needs an action" });

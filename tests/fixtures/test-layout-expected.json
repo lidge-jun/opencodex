@@ -166,7 +166,7 @@
   "dsh-account-adapter.test.ts": "adapters",
   "project-config-warning-snapshot.test.ts": "codex-integration",
   "codex-quota-auto-refresh-generation.test.ts": "codex-integration",
-  "low-quota-protection.test.ts": "codex-integration", "provider-antigravity-quota-retry.test.ts": "providers",
+  "low-quota-desktop-notifier.test.ts": "codex-integration", "low-quota-protection.test.ts": "codex-integration", "provider-antigravity-quota-retry.test.ts": "providers",
   "responses-compaction-recovery.test.ts": "responses", "responses-canonical-nonstream.test.ts": "responses",
   "compaction-recovery-settings.test.ts": "config", "responses-compaction-recovery-policy.test.ts": "responses",
   "bun-runtime-preflight.test.ts": "lib",

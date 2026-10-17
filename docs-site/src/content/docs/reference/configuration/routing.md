@@ -29,7 +29,7 @@ alias would produce an unparseable synthetic Fast selector. Codex's own model ca
 account keeps its separate 98% hard lock. The optional shape is:
 
 ```json
-{"codexPool":{"lowQuotaProtection":{"enabled":true,"threshold":80,"actions":{"pause":true,"notify":true},"windows":{"short":true,"weekly":true}}}}
+{"codexPool":{"lowQuotaProtection":{"enabled":true,"threshold":80,"actions":{"pause":true,"notify":true,"desktop":true},"windows":{"short":true,"weekly":true}}}}
 ```
 
 Absence or `enabled: false` disables it. `threshold` is a finite inclusive percentage from 1
@@ -52,9 +52,18 @@ With `notify`, the server writes a local log line with window and percentage but
 and records a bounded event. Authenticated `GET /api/codex-auth/low-quota-events` exposes only
 that server’s events, including account id, window, usage percentage, known reset time, timestamp,
 and status. The default status is `logged`: the alert reached the log and event history only.
-There is no desktop or OS notification. Each account/window logs once per server-local episode.
-If an injected notification sink fails, its failure is recorded and a later eligible observation
-can retry it; only a successful sink is marked `delivered`.
+Each account/window logs once per server-local episode.
+
+Optional `actions.desktop: true` (it requires `notify: true`) also hands each notice to the
+operating-system notifier of the machine running the proxy: `/usr/bin/osascript` on macOS, or
+`notify-send` from `/usr/bin`, `/usr/local/bin` or `/bin` on Linux. The notification names the account
+only by its pseudonymous log label (for example `p1a2b3c`), never its email, alias or id, and
+includes the window, usage, threshold and known reset time. Windows and hosts without a supported
+notifier keep the alert `logged`. `delivered` means the OS notifier accepted the notice; it cannot
+see whether the system's notification settings then hide it. A failed or timed-out notifier is
+recorded as `failed` and a later eligible observation can retry it. Turning `desktop` on or off
+applies to the next observation without a restart. A notice still in flight is cancelled when its
+episode ends (reset boundary, recovery, account removal, policy change or shutdown).
 
 ## Model resolution order
 
