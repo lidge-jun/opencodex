@@ -448,8 +448,8 @@ export interface OcxProviderConfig {
    */
   preserveResponsesMessageMetadata?: boolean;
   /**
-   * Opt in to lossy hosted-search history notes on ordinary canonical Codex Lite requests.
-   * Default off; only literal true enables it, and non-Lite/native compact stay unchanged.
+   * 显式启用 canonical Codex Lite 续聊及原生 v2 压缩请求的有损搜索历史备注。
+   * 默认关闭；仅布尔值 true 启用。非 Lite 请求与 v1 /responses/compact 保持原契约。
    */
   projectResponsesLiteHostedSearchHistory?: boolean;
   /**
