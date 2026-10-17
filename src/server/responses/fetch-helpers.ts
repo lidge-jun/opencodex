@@ -48,6 +48,17 @@ const EGRESS_DECIDED = Symbol.for("opencodex.provider-egress.decided");
 const UPSTREAM_REWRITTEN = Symbol.for("opencodex.plugins.upstream-rewritten");
 // Survives queued credential rebuilds and executor replacement without importing budget owners.
 const PHYSICAL_DISPATCH = Symbol.for("opencodex.physical-dispatch");
+// Final destination and headers after plugin rewrites and queued rebuilds, for observers that
+// must attribute a response to the credential that actually reached the wire.
+const PHYSICAL_SEND_OBSERVER = Symbol.for("opencodex.physical-send-observer");
+export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
+  physical?: (sameDestination: boolean, headers: Headers) => void;
+};
+/** Init fragment that reports the final send of the observer's attempt; empty when nothing observes. */
+export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string): Record<symbol, unknown> {
+  const physical = observer?.physical;
+  return physical ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => physical(destination === target, headers) } : {};
+}
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
 const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
 // Replacement admission waits on the client signal, outside the response-header deadline.
@@ -212,6 +223,7 @@ export function sendWithConnectionPolicy(
     && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
   (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
+  (init as Record<symbol, ((destination: string, headers: Headers) => void) | undefined> | undefined)?.[PHYSICAL_SEND_OBSERVER]?.(target, headers);
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
   // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
   outboundCredentials().remember(headers);
@@ -228,7 +240,7 @@ export function sendWithConnectionPolicy(
 }
 
 export interface ProviderFetchOptions {
-  accountAutoPause?: (name: string, provider: OcxProviderConfig, headers: Headers) => ((response: Response) => Promise<Response>) | undefined;
+  accountAutoPause?: (name: string, provider: OcxProviderConfig, headers: Headers) => AccountAutoPauseObserver | undefined;
   /**
    * Keep this send on HTTP even where the WebSocket upstream would normally be selected.
    *
@@ -386,7 +398,9 @@ export function providerFetch(
     reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>) => {
     const observe = options.accountAutoPause?.(providerName, provider,
       new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)));
-    const response = await unobserved(input, init, reacquirePacing);
+    const observedInit = observe?.physical
+      ? { ...init, ...physicalSendObserverInit(observe, input instanceof Request ? input.url : String(input)) } : init;
+    const response = await unobserved(input, observedInit, reacquirePacing);
     return observe ? observe(response) : response;
   };
   let pacingSlotAcquired = options.pacingSlotAcquired === true;

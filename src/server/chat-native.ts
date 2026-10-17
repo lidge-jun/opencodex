@@ -69,7 +69,7 @@ import { enrichOpenCodeZenFreeTierMessage } from "../providers/opencode-zen-rate
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
+import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
 import { isLocalUpstream } from "../lib/local-upstream";
 import { linkAbortSignal } from "./responses";
 import {
@@ -540,6 +540,7 @@ export async function runNativeChatAttempt(
                   request.url,
                   applyUpstreamRecoveryInit({
                     ...init, method: request.method, headers, body: request.body,
+                    ...physicalSendObserverInit(observeAutoPause, request.url),
                   }, transportRecovery),
                   // Reselection can replace the provider transport and the wire shape, so the
                   // egress route is bound to the provider this send actually uses. Omitting it

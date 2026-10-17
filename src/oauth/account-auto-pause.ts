@@ -15,6 +15,7 @@ import { setProviderApiKeyPaused } from "../providers/api-key-pause";
 import { AccountRefusalStreaks, autoPauseThreshold, permanentAccountRefusal } from "./account-auto-pause-policy";
 import { clearThreadAccountMapForAccount, reconcileCodexActiveAfterExclusion } from "../codex/routing";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
+import { hasUpstreamRewriters } from "../plugins/upstream-hooks";
 
 const streaks = new WeakMap<OcxConfig, AccountRefusalStreaks>();
 export { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../lib/account-auto-pause-response";
@@ -26,8 +27,13 @@ export interface AccountAutoPauseBinding {
 }
 
 /** Capture before transport. A later response cannot acquire authority over a newer login/resume. */
+export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
+  /** Final-send report: only a response whose wire credential and destination match is counted. */
+  physical: (sameDestination: boolean, headers: Headers) => void;
+};
+const CREDENTIAL_HEADERS = ["authorization", "x-api-key", "x-goog-api-key", "api-key"] as const;
 export function captureAccountAutoPauseAttempt(name: string, provider: OcxProviderConfig, binding?: AccountAutoPauseBinding, headers?: Headers):
-  ((response: Response) => Promise<Response>) | undefined {
+  AccountAutoPauseObserver | undefined {
   if (!binding) return;
   const { config, oauth, codex } = binding;
   const threshold = autoPauseThreshold(config.providers[name]?.accountAutoPause);
@@ -40,13 +46,14 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   const policyCurrent = () => accountAutoPauseFenceIsLocal(name, fence) && !config.providers[name]?.disabled
     && autoPauseThreshold(config.providers[name]?.accountAutoPause) === threshold
     && JSON.stringify([config.providers[name]?.baseUrl, config.providers[name]?.adapter, config.providers[name]?.authMode]) === route;
-  let key: string, incarnation: string, current: () => boolean;
+  let key: string, incarnation: string, current: () => boolean, owns: (wire: Headers) => boolean;
   let pause: (reason: AccountPauseReason) => Promise<boolean>;
   if (provider.authMode === "oauth") {
     if (!oauth || oauth.provider !== name || headers?.get("authorization") !== `Bearer ${oauth.accessToken}` || headers.has("x-api-key")) return;
     const row = getAccountSet(name)?.accounts.find(a => a.id === oauth.accountId);
     if (!row || row.paused || credentialGeneration(row.credential) !== oauth.generation) return;
     const revision = row.pauseRevision;
+    owns = wire => wire.get("authorization") === `Bearer ${oauth.accessToken}` && !wire.has("x-api-key");
     key = `${name}\0oauth\0${oauth.accountId}`;
     incarnation = `${row.loginId ?? row.addedAt ?? oauth.accountId}\0${revision ?? ""}`;
     current = () => {
@@ -61,6 +68,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     if (!codex || codex.kind !== "pool" && codex.kind !== "main-pool") return;
     const { accountId } = codex;
     if (headers?.get("authorization") !== `Bearer ${codex.accessToken}`) return;
+    owns = wire => wire.get("authorization") === `Bearer ${codex.accessToken}`;
     const revision = config.codexAccountPauseState?.[accountId]?.revision;
     const mainDispatch = codex.kind === "main-pool" ? captureMainQuotaDispatch(codex.accessToken, codex.chatgptAccountId, codex.writerGeneration) : undefined;
     const credentialCurrent = () => codex.kind === "pool"
@@ -96,6 +104,10 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     const { id, key: reference, pauseRevision } = entry;
     key = `${name}\0key\0${id}`;
     const resolvedKey = provider.apiKey;
+    owns = wire => {
+      const sent = CREDENTIAL_HEADERS.map(header => wire.get(header)).filter((value): value is string => value !== null);
+      return sent.length > 0 && sent.every(value => value === resolvedKey || value === `Bearer ${resolvedKey}`);
+    };
     incarnation = `${createHash("sha256").update(resolvedKey).digest("hex")}\0${pauseRevision ?? ""}`;
     current = () => {
       const configured = config.providers[name];
@@ -110,9 +122,13 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   let tracker = streaks.get(config);
   if (!tracker) { tracker = new AccountRefusalStreaks(); streaks.set(config, tracker); }
   const observed = new WeakSet<Response>();
-  return async response => {
+  // undefined: no HTTP final-send report (Codex WebSocket). Such a send is attributable only while
+  // no plugin can rewrite credentials or destination at the dial.
+  let wireOwned: boolean | undefined;
+  const observer = (async (response: Response) => {
     if (observed.has(response) || isNonReplayableResponse(response)) return response;
     observed.add(response);
+    if (!(wireOwned ?? !hasUpstreamRewriters())) return response;
     try {
       const verdict = permanentAccountRefusal(response).then(reason => {
         if (reason) markPermanentAccountRefusal(response);
@@ -130,5 +146,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
       console.warn("[account-auto-pause] could not persist account pause; upstream response preserved");
     }
     return response;
-  };
+  }) as AccountAutoPauseObserver;
+  observer.physical = (sameDestination, wire) => { wireOwned = sameDestination && owns(wire); };
+  return observer;
 }

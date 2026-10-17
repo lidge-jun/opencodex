@@ -11,7 +11,11 @@ Codex/runTurn response observation; the transport leaf imports no account or OAu
 boundaries. `src/oauth/account-auto-pause.ts` is dormant unless the named provider explicitly
 enables the policy, writes only fixed pause metadata, and preserves upstream responses if
 optional persistence fails. Counters and asynchronous decisions belong to the runtime
-config object; completed pauses belong to the existing durable account stores.
+config object; completed pauses belong to the existing durable account stores. A response is counted only when the final destination and credential
+headers, reported by `sendWithConnectionPolicy` after plugin rewrites and queued rebuilds, match the
+captured attempt; a Codex WebSocket send has no HTTP final-send report and counts only while no
+plugin upstream rewriter is registered. Regression coverage:
+`tests/responses/responses-account-auto-pause-wire-owner.test.ts`.
 
 ## Permanent account refusal policy
 
