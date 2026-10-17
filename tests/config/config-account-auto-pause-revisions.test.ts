@@ -5,8 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, initializePersistedConfigIfMissing, loadConfig, saveConfig } from "../../src/config";
 import { configSchema } from "../../src/config/schema/config-schema";
-import { captureAccountAutoPauseFence, accountAutoPauseFenceIsLocal, observeAccountAutoPauseRevisions } from "../../src/config/account-auto-pause-revisions";
+import { captureAccountAutoPauseFence, accountAutoPauseFenceIsLocal, observeAccountAutoPauseRevisions, accountAutoPauseObservedSizeForTests } from "../../src/config/account-auto-pause-revisions";
 import { armClaudeCodeBaseline, reconcileLiveConfigFromDisk, saveConfigPreservingClaudeCode } from "../../src/config/live-reconcile";
+import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../../src/oauth/account-auto-pause";
+import { routedProviderConfig } from "../../src/router";
+import { setPreservedDiskOnlyProviders } from "../../src/usage/user-cost-overlays";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const previousHome = process.env.OPENCODEX_HOME;
@@ -56,7 +59,7 @@ test("invalid-map recovery does not enroll never-configured providers", () => {
   expect(bytes()).not.toContain("accountAutoPausePolicyRevisions");
 });
 
-test("caller epochs are ignored, unrelated edits preserve UUIDs and removed policies retain entries", () => {
+test("caller epochs are ignored; removed policies retain revisions only while the provider exists", () => {
   const config = fixture();
   saveConfig(config);
   const first = revision();
@@ -70,10 +73,15 @@ test("caller epochs are ignored, unrelated edits preserve UUIDs and removed poli
   saveConfig(config);
   expect(revision()).not.toBe(first);
   const removedPolicy = revision();
+  expect(removedPolicy).toMatch(/^[a-f0-9-]{36}$/);
+  config.port++;
+  saveConfig(config);
+  expect(revision()).toBe(removedPolicy);
   delete config.providers.fixture;
   saveConfig(config);
-  expect(revision()).not.toBe(removedPolicy);
-  expect(revision()).toBeDefined();
+  expect(revision()).toBeUndefined();
+  expect(bytes()).not.toContain("accountAutoPausePolicyRevisions");
+  expect(accountAutoPauseObservedSizeForTests()).toBe(0);
 });
 
 test("all full-fingerprint fields rotate policy epochs and wall-clock rollback cannot restore one", () => {
@@ -195,3 +203,164 @@ test("an observed external policy change and restore invalidates an older attemp
   expect(raw().accountAutoPausePolicyRevisions.fixture).toBe(fence!.diskRevision);
   expect(accountAutoPauseFenceIsLocal("fixture", fence!)).toBe(false);
 });
+
+test("50 provider create/delete cycles retain only live disk revisions and observed entries", () => {
+  const config = fixture();
+  saveConfig(config);
+  const survivor = revision();
+  for (let cycle = 0; cycle < 50; cycle++) {
+    const name = `temporary-${cycle}`;
+    config.providers[name] = structuredClone(config.providers.fixture!);
+    saveConfig(config);
+    expect(Object.keys(raw().accountAutoPausePolicyRevisions).sort()).toEqual(["fixture", name]);
+    expect(accountAutoPauseObservedSizeForTests()).toBe(2);
+    delete config.providers[name];
+    saveConfig(config);
+    expect(Object.keys(raw().providers)).toEqual(["fixture"]);
+    expect(Object.keys(raw().accountAutoPausePolicyRevisions)).toEqual(["fixture"]);
+    expect(bytes()).not.toContain(`"${name}"`);
+    expect(accountAutoPauseObservedSizeForTests()).toBe(1);
+    expect(revision()).toBe(survivor);
+  }
+});
+
+test("an unrelated save preserves every live provider UUID", () => {
+  const config = fixture();
+  config.providers.other = structuredClone(config.providers.fixture!);
+  saveConfig(config);
+  const first = raw().accountAutoPausePolicyRevisions;
+  expect(Object.keys(first).sort()).toEqual(["fixture", "other"]);
+  expect(first.fixture).not.toBe(first.other);
+  config.port++;
+  saveConfig(config);
+  expect(raw().accountAutoPausePolicyRevisions).toEqual(first);
+  saveConfig(loadConfig());
+  expect(raw().accountAutoPausePolicyRevisions).toEqual(first);
+});
+
+test("a disk-only preserved provider retains its policy revision on an unrelated live save", () => {
+  const config = fixture();
+  saveConfig(config);
+  const first = revision();
+  const disk = raw();
+  const diskOnlyRevision = randomUUID();
+  disk.providers.external = structuredClone(disk.providers.fixture);
+  disk.accountAutoPausePolicyRevisions.external = diskOnlyRevision;
+  writeFileSync(join(home, "config.json"), JSON.stringify(disk));
+  expect(config.providers.external).toBeUndefined();
+  // The overlay reconciler publishes disk-only rows into this serialization registry.
+  setPreservedDiskOnlyProviders({ external: disk.providers.external });
+  try {
+    config.port++;
+    saveConfig(config);
+    expect(config.providers.external).toBeUndefined();
+    expect(raw().providers.external).toEqual(disk.providers.external);
+    expect(raw().accountAutoPausePolicyRevisions).toEqual({ fixture: first, external: diskOnlyRevision });
+    expect(accountAutoPauseObservedSizeForTests()).toBe(2);
+  } finally { setPreservedDiskOnlyProviders(null); }
+});
+
+function captureKeyAttempt(config: ReturnType<typeof fixture>) {
+  const route = routedProviderConfig("fixture", config.providers.fixture!);
+  const observer = captureAccountAutoPauseAttempt("fixture", route, { config }, new Headers({ authorization: `Bearer ${route.apiKey}` }));
+  expect(observer).toBeDefined();
+  return observer!;
+}
+const refusal = () => Response.json({ error: { type: "permission_error", message: "Your subscription has expired." } }, { status: 403 });
+async function expectStaleAttemptRejected(config: ReturnType<typeof fixture>, attempt: ReturnType<typeof captureKeyAttempt>) {
+  const response = refusal();
+  expect(await attempt(response)).toBe(response);
+  expect(wasAccountAutoPaused(response)).toBe(false);
+  expect(config.providers.fixture!.apiKeyPool?.some(row => row.disabled === true) ?? false).toBe(false);
+  expect(loadConfig().providers.fixture!.apiKeyPool?.some(row => row.disabled === true) ?? false).toBe(false);
+  // A fresh attempt must still be able to pause the same credential after recreation.
+  const current = refusal();
+  await captureKeyAttempt(config)(current);
+  expect(wasAccountAutoPaused(current)).toBe(true);
+  expect(config.providers.fixture!.apiKeyPool?.[0]?.disabled).toBe(true);
+  expect(loadConfig().providers.fixture!.apiKeyPool?.[0]?.disabled).toBe(true);
+}
+
+test("saveConfig delete/recreate mints a new UUID and rejects the pre-deletion attempt", async () => {
+  const config = fixture();
+  config.providers.fixture!.accountAutoPause!.consecutiveFailures = 1;
+  saveConfig(config);
+  const fence = captureAccountAutoPauseFence(config, "fixture")!;
+  expect(fence).toBeDefined();
+  const attempt = captureKeyAttempt(config);
+  const row = structuredClone(config.providers.fixture!);
+  delete config.providers.fixture;
+  saveConfig(config);
+  expect(raw().accountAutoPausePolicyRevisions).toBeUndefined();
+  expect(accountAutoPauseFenceIsLocal("fixture", fence)).toBe(false);
+  expect(accountAutoPauseObservedSizeForTests()).toBe(0);
+  config.providers.fixture = row;
+  saveConfig(config);
+  expect(revision()).toMatch(/^[a-f0-9-]{36}$/);
+  expect(revision()).not.toBe(fence.diskRevision);
+  expect(accountAutoPauseFenceIsLocal("fixture", fence)).toBe(false);
+  expect(accountAutoPauseObservedSizeForTests()).toBe(1);
+  await expectStaleAttemptRejected(config, attempt);
+});
+
+test("legacy no-map observations delete/recreate without reviving a pre-deletion attempt", async () => {
+  const config = fixture();
+  config.providers.fixture!.accountAutoPause!.consecutiveFailures = 1;
+  writeFileSync(join(home, "config.json"), JSON.stringify(config));
+  observeAccountAutoPauseRevisions(config);
+  const fence = captureAccountAutoPauseFence(config, "fixture")!;
+  expect(fence.diskRevision).toBe("legacy");
+  const attempt = captureKeyAttempt(config);
+  const original = bytes();
+  const row = structuredClone(config.providers.fixture!);
+  delete config.providers.fixture;
+  writeFileSync(join(home, "config.json"), JSON.stringify(config));
+  observeAccountAutoPauseRevisions(config);
+  expect(accountAutoPauseObservedSizeForTests()).toBe(0);
+  config.providers.fixture = row;
+  writeFileSync(join(home, "config.json"), original);
+  observeAccountAutoPauseRevisions(config);
+  const recreated = captureAccountAutoPauseFence(config, "fixture")!;
+  expect(recreated.diskRevision).toBe("legacy");
+  expect(recreated.localGen).not.toBe(fence.localGen);
+  expect(accountAutoPauseFenceIsLocal("fixture", fence)).toBe(false);
+  expect(accountAutoPauseObservedSizeForTests()).toBe(1);
+  await expectStaleAttemptRejected(config, attempt);
+});
+
+for (const epoch of ["persisted UUID", "legacy no-map"] as const) {
+  test(`load-only ${epoch}: identical raw restore after observed deletion rejects the old fence and attempt`, async () => {
+    const initial = fixture();
+    initial.providers.fixture!.accountAutoPause!.consecutiveFailures = 1;
+    initial.providers.keeper = { adapter: "openai-chat", baseUrl: "https://keeper.test/v1", authMode: "key" };
+    initial.defaultProvider = "keeper";
+    saveConfig(initial);
+    if (epoch === "legacy no-map") {
+      const disk = raw();
+      delete disk.accountAutoPausePolicyRevisions;
+      writeFileSync(join(home, "config.json"), JSON.stringify(disk));
+    }
+    const config = loadConfig();
+    const original = bytes();
+    const fence = captureAccountAutoPauseFence(config, "fixture")!;
+    expect(fence).toBeDefined();
+    expect(fence.diskRevision).toBe(epoch === "legacy no-map" ? "legacy" : revision());
+    const attempt = captureKeyAttempt(config);
+    const deleted = raw();
+    delete deleted.providers.fixture;
+    // A raw editor may leave the old UUID behind; absent providers must still be reclaimed.
+    writeFileSync(join(home, "config.json"), JSON.stringify(deleted));
+    expect(loadConfig().providers.fixture).toBeUndefined();
+    expect(accountAutoPauseObservedSizeForTests()).toBe(1);
+    expect(accountAutoPauseFenceIsLocal("fixture", fence)).toBe(false);
+    writeFileSync(join(home, "config.json"), original);
+    const restored = loadConfig();
+    expect(bytes()).toBe(original);
+    const recreated = captureAccountAutoPauseFence(restored, "fixture")!;
+    expect(recreated.diskRevision).toBe(fence.diskRevision);
+    expect(recreated.localGen).not.toBe(fence.localGen);
+    expect(accountAutoPauseFenceIsLocal("fixture", fence)).toBe(false);
+    expect(accountAutoPauseObservedSizeForTests()).toBe(2);
+    await expectStaleAttemptRejected(config, attempt);
+  });
+}

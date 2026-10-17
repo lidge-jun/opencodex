@@ -32,6 +32,7 @@ export type AccountAutoPauseObserver = ((response: Response) => Promise<Response
   physical: (sameDestination: boolean, headers: Headers) => void;
 };
 const CREDENTIAL_HEADERS = ["authorization", "x-api-key", "x-goog-api-key", "api-key"] as const;
+const CODEX_SELECTOR_HEADERS = ["openai-organization", "openai-project"] as const;
 // Nested capture sites (a providerFetch observer around a dispatchOverride's own observer) see the
 // same physical response. It counts once per account, and a response whose final send was reported
 // to any observer is never attributed by an observer that received no report.
@@ -72,8 +73,14 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   } else if (provider.authMode === "forward") {
     if (!codex || codex.kind !== "pool" && codex.kind !== "main-pool") return;
     const { accountId } = codex;
-    if (headers?.get("authorization") !== `Bearer ${codex.accessToken}`) return;
-    owns = wire => wire.get("authorization") === `Bearer ${codex.accessToken}`;
+    // The bearer and the workspace together name the Codex account; organization/project selectors
+    // must stay as captured, so a rewrite that keeps the bearer cannot redirect the refusal.
+    const selectors = CODEX_SELECTOR_HEADERS.map(header => headers?.get(header) ?? null);
+    const codexOwns = (wire: Headers) => wire.get("authorization") === `Bearer ${codex.accessToken}`
+      && wire.get("chatgpt-account-id") === codex.chatgptAccountId
+      && CODEX_SELECTOR_HEADERS.every((header, index) => wire.get(header) === selectors[index]);
+    if (!headers || !codexOwns(headers)) return;
+    owns = codexOwns;
     const revision = config.codexAccountPauseState?.[accountId]?.revision;
     const mainDispatch = codex.kind === "main-pool" ? captureMainQuotaDispatch(codex.accessToken, codex.chatgptAccountId, codex.writerGeneration) : undefined;
     const credentialCurrent = () => codex.kind === "pool"

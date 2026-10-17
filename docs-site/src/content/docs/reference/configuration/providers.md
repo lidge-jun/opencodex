@@ -1926,7 +1926,8 @@ proxy processes maintain independent counters. Changing, disabling or re-enablin
 or changing its endpoint discards in-flight refusal observations, so a refusal from a request
 sent under the earlier policy can never pause an account afterwards. A refusal counts only for the credential that actually
 reached the upstream: when a local plugin rewrites the credential or destination of a send, that
-send never counts toward a pause.
+send never counts toward a pause. For Codex pool accounts this includes the workspace
+(`chatgpt-account-id`) the request was sent for.
 
 At the threshold, OpenCodex excludes the account using its existing pause mechanism and
 attempts an eligible sibling for the current request within the existing retry/send budget.

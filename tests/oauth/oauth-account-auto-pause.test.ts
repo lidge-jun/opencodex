@@ -161,7 +161,7 @@ test("Codex pool uses persistent pause ids, generation fence and resume metadata
   const generation = saveCodexAccountCredential("fixture", { accessToken: "synthetic-access", refreshToken: "synthetic-refresh", expiresAt: Date.now() + 3_600_000, chatgptAccountId: "synthetic" });
   saveConfig(config);
   const codex = { kind: "pool" as const, accountId: "fixture", generation, writerGeneration: 0, accessToken: "synthetic-access", chatgptAccountId: "synthetic" };
-  const capture = () => captureAccountAutoPauseAttempt("openai", config.providers.openai!, { config, codex }, new Headers({ authorization: "Bearer synthetic-access" }))!;
+  const capture = () => captureAccountAutoPauseAttempt("openai", config.providers.openai!, { config, codex }, new Headers({ authorization: "Bearer synthetic-access", "chatgpt-account-id": "synthetic" }))!;
   await capture()(refusal());
   await capture()(refusal());
   expect(config.pausedCodexAccountIds).toContain("fixture");
@@ -215,7 +215,7 @@ test("same-identity main credential replacement fences a delayed refusal", async
   saveConfig(config);
   const observe = captureAccountAutoPauseAttempt("openai", config.providers.openai!, { config,
     codex: { kind: "main-pool", accountId: "__main__", writerGeneration: captureConfigGeneration(), mainQuotaWriter: writer, accessToken: "synthetic-old", chatgptAccountId: "synthetic-main" },
-  }, new Headers({ authorization: "Bearer synthetic-old" }))!;
+  }, new Headers({ authorization: "Bearer synthetic-old", "chatgpt-account-id": "synthetic-main" }))!;
   observeMainQuotaCredential("synthetic-new", "synthetic-main");
   await observe(refusal());
   expect(config.pausedCodexAccountIds).toBeUndefined();

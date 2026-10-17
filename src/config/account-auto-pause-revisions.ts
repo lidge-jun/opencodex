@@ -10,6 +10,14 @@ type PolicyConfig = { providers?: unknown; accountAutoPausePolicyRevisions?: unk
 type Observed = { diskRevision: string; localGen: number; unknown: boolean; fingerprint: string; diskFingerprint: string };
 export type AccountAutoPauseFence = { configPath: string; diskRevision: string; localGen: number; threshold: number; route: string };
 const observed = new Map<string, Map<string, Observed>>();
+// One process-wide allocator for every new entry and every advance: a deleted and recreated name
+// can never reproduce an old {diskRevision, localGen} pair, even when both read "legacy".
+let nextGeneration = 0;
+const allocateGeneration = (): number => ++nextGeneration;
+function hasProvider(config: PolicyConfig | undefined, name: string): boolean {
+  const providers = record(config?.providers);
+  return !!providers && Object.hasOwn(providers, name);
+}
 const UUID = z.uuid();
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -46,7 +54,9 @@ export function normalizeAccountAutoPauseRevisions(before: PolicyConfig | undefi
       if (record(row)?.accountAutoPause !== undefined) names.add(name);
     }
   }
-  const entries = [...names].map(name => [name, revisionFor(old, name)
+  // Records follow the providers that exist after disk-only preservation; a deleted provider's
+  // record is reclaimed and a recreated one is minted a fresh UUID.
+  const entries = [...names].filter(name => hasProvider(persisted, name)).map(name => [name, revisionFor(old, name)
     && accountAutoPauseFingerprint(provider(before ?? {}, name)) === accountAutoPauseFingerprint(provider(persisted, name))
     ? revisionFor(old, name)! : randomUUID()]);
   if (entries.length) persisted.accountAutoPausePolicyRevisions = Object.fromEntries(entries);
@@ -60,12 +70,13 @@ export function observeAccountAutoPauseRevisions(config: PolicyConfig, disk: Pol
   const map = revisions(disk);
   const names = new Set([...entries.keys(), ...Object.keys(record(config.providers) ?? {}), ...Object.keys(map ?? {})]);
   for (const name of names) {
+    if (!hasProvider(config, name) && !hasProvider(disk, name)) { entries.delete(name); continue; }
     const fingerprint = accountAutoPauseFingerprint(provider(config, name));
     const old = entries.get(name);
     const prior = previous?.get(name) ?? old?.fingerprint ?? fingerprint;
     entries.set(name, { fingerprint, diskRevision: revisionFor(map, name) ?? "legacy", unknown: map === null,
       diskFingerprint: accountAutoPauseFingerprint(provider(disk, name)),
-      localGen: (old?.localGen ?? 0) + (prior !== fingerprint ? 1 : 0) });
+      localGen: !old || prior !== fingerprint ? allocateGeneration() : old.localGen });
   }
 }
 /**
@@ -79,13 +90,18 @@ function adoptDiskAutoPauseRevisions(config: PolicyConfig): void {
   if (!entries) { entries = new Map(); observed.set(path, entries); }
   const map = revisions(config);
   for (const name of new Set([...entries.keys(), ...Object.keys(record(config.providers) ?? {}), ...Object.keys(map ?? {})])) {
+    if (!hasProvider(config, name)) { entries.delete(name); continue; }
     const old = entries.get(name);
     const diskRevision = revisionFor(map, name) ?? "legacy";
     const diskFingerprint = accountAutoPauseFingerprint(provider(config, name));
     entries.set(name, old
-      ? { ...old, diskRevision, unknown: map === null, diskFingerprint, localGen: old.localGen + (old.diskFingerprint !== diskFingerprint ? 1 : 0) }
-      : { fingerprint: diskFingerprint, diskFingerprint, diskRevision, unknown: map === null, localGen: 0 });
+      ? { ...old, diskRevision, unknown: map === null, diskFingerprint, localGen: old.diskFingerprint !== diskFingerprint ? allocateGeneration() : old.localGen }
+      : { fingerprint: diskFingerprint, diskFingerprint, diskRevision, unknown: map === null, localGen: allocateGeneration() });
   }
+}
+/** Test inspection only: observed records for the current config path. */
+export function accountAutoPauseObservedSizeForTests(): number {
+  return observed.get(getConfigPath())?.size ?? 0;
 }
 /** Initial load is an observation, never a persistence operation. */
 export function observeLoadedAutoPauseConfig(config: OcxConfig): OcxConfig {

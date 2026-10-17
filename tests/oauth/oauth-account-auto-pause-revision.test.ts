@@ -37,7 +37,8 @@ async function fixture(mode: "key" | "oauth" | "forward" = "key", threshold = 1)
   saveConfig(config);
   const capture = () => {
     const provider = mode === "key" ? routedProviderConfig(name, config.providers[name]!) : config.providers[name]!;
-    return captureAccountAutoPauseAttempt(name, provider, { config, oauth, codex }, new Headers({ authorization: `Bearer ${mode === "key" ? provider.apiKey : "synthetic-access"}` }))!;
+    return captureAccountAutoPauseAttempt(name, provider, { config, oauth, codex }, new Headers({ authorization: `Bearer ${mode === "key" ? provider.apiKey : "synthetic-access"}`,
+      ...(codex ? { "chatgpt-account-id": codex.chatgptAccountId } : {}) }))!;
   };
   const paused = () => mode === "key" ? config.providers[name]!.apiKeyPool?.[0]?.disabled === true
     : mode === "oauth" ? getAccountSet(name)!.accounts[0]!.paused === true : config.pausedCodexAccountIds?.includes("fixture") === true;

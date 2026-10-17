@@ -3,6 +3,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, loadConfig, saveConfig } from "../../src/config";
+import { observeMainQuotaCredential, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
+import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
+import type { CodexAuthContext } from "../../src/codex/auth-context";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../../src/oauth/account-auto-pause";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
@@ -270,7 +273,7 @@ describe("Codex pool WebSocket observer without a physical report", () => {
       const observer = captureAccountAutoPauseAttempt("openai", config.providers.openai!, { config,
         codex: { kind: "pool", accountId: "fixture-a", generation, writerGeneration: 0,
           accessToken: "synthetic-access", chatgptAccountId: "synthetic-account" },
-      }, new Headers({ authorization: "Bearer synthetic-access" }));
+      }, new Headers({ authorization: "Bearer synthetic-access", "chatgpt-account-id": "synthetic-account" }));
       expect(observer).toBeDefined();
       if (plugin === "registered after capture then removed") install();
       const dial = rewriteWebSocketDial("wss://chatgpt.com/backend-api/codex/responses", {
@@ -335,3 +338,85 @@ describe("nested auto-pause observers on one physical response", () => {
   });
 });
 
+function codexFixture(kind: "pool" | "main-pool") {
+  const config = getDefaultConfig();
+  config.defaultProvider = "openai";
+  config.providers = { openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "pool",
+    baseUrl: "https://chatgpt.com/backend-api/codex", accountAutoPause: { enabled: true, consecutiveFailures: 1 } } };
+  const accountId = kind === "pool" ? "fixture-a" : "__main__";
+  config.codexAccounts = [{ id: accountId, email: "", isMain: kind === "main-pool" }, { id: "fixture-b", email: "", isMain: false }];
+  config.activeCodexAccountId = accountId;
+  let codex: CodexAuthContext;
+  if (kind === "pool") {
+    const generation = saveCodexAccountCredential(accountId, { accessToken: "synthetic-access", refreshToken: "synthetic-refresh",
+      expiresAt: Date.now() + 3_600_000, chatgptAccountId: "synthetic-account" });
+    codex = { kind, accountId, generation, writerGeneration: 0, accessToken: "synthetic-access", chatgptAccountId: "synthetic-account" };
+  } else {
+    observeMainQuotaIdentity("synthetic-account");
+    const mainQuotaWriter = observeMainQuotaCredential("synthetic-access", "synthetic-account")!;
+    codex = { kind, accountId, writerGeneration: captureConfigGeneration(), mainQuotaWriter,
+      accessToken: "synthetic-access", chatgptAccountId: "synthetic-account" };
+  }
+  saveConfig(config);
+  const headers = new Headers({ authorization: "Bearer synthetic-access", "chatgpt-account-id": "synthetic-account" });
+  const capture = (sent = headers) => captureAccountAutoPauseAttempt("openai", config.providers.openai!, { config, codex }, sent);
+  const expectPause = (paused: boolean) => {
+    for (const live of [config, loadConfig()]) {
+      expect(live.pausedCodexAccountIds?.includes(accountId) ?? false).toBe(paused);
+      expect(live.pausedCodexAccountIds?.includes("fixture-b") ?? false).toBe(false);
+      if (paused) expect(live.codexAccountPauseState?.[accountId]?.details?.reason).toBe("subscription_expired");
+      else expect(live.codexAccountPauseState?.[accountId]).toBeUndefined();
+    }
+  };
+  return { headers, capture, expectPause };
+}
+
+for (const kind of ["pool", "main-pool"] as const) {
+  for (const change of ["workspace replaced", "workspace deleted", "organization added", "organization changed", "organization deleted",
+    "project added", "project changed", "project deleted", "matching headers", "matching selectors"] as const) {
+    test(`Codex ${kind} physical report: ${change}`, async () => {
+      const f = codexFixture(kind);
+      if (change === "organization changed" || change === "organization deleted" || change === "matching selectors") f.headers.set("openai-organization", "synthetic-org");
+      if (change === "project changed" || change === "project deleted" || change === "matching selectors") f.headers.set("openai-project", "synthetic-project");
+      const observer = f.capture();
+      expect(observer).toBeDefined();
+      const sent = new Headers(f.headers);
+      if (change === "workspace replaced") sent.set("chatgpt-account-id", "synthetic-other-account");
+      if (change === "workspace deleted") sent.delete("chatgpt-account-id");
+      if (change === "organization added" || change === "organization changed") sent.set("openai-organization", "synthetic-other-org");
+      if (change === "organization deleted") sent.delete("openai-organization");
+      if (change === "project added" || change === "project changed") sent.set("openai-project", "synthetic-other-project");
+      if (change === "project deleted") sent.delete("openai-project");
+      expect(sent.get("authorization")).toBe("Bearer synthetic-access");
+      observer!.physical(true, sent);
+      const response = refusal();
+      expect(await observer!(response)).toBe(response);
+      expect(response.status).toBe(403);
+      const shouldPause = change === "matching headers" || change === "matching selectors";
+      expect(wasAccountAutoPaused(response)).toBe(shouldPause);
+      f.expectPause(shouldPause);
+    });
+  }
+  for (const workspace of ["missing", "different"] as const) {
+    test(`Codex ${kind} capture: ${workspace} workspace grants no observer`, () => {
+      const f = codexFixture(kind);
+      if (workspace === "missing") f.headers.delete("chatgpt-account-id");
+      else f.headers.set("chatgpt-account-id", "synthetic-other-account");
+      expect(f.capture()).toBeUndefined();
+      f.expectPause(false);
+    });
+  }
+  for (const registered of [false, true]) {
+    test(`Codex ${kind} no physical report with workspace: ${registered ? "rewriter blocks pause" : "no rewriter permits pause"}`, async () => {
+      const f = codexFixture(kind);
+      expect(f.headers.get("chatgpt-account-id")).toBe("synthetic-account");
+      const observer = f.capture();
+      expect(observer).toBeDefined();
+      if (registered) rewrite(() => {});
+      const response = refusal();
+      expect(await observer!(response)).toBe(response);
+      expect(wasAccountAutoPaused(response)).toBe(!registered);
+      f.expectPause(!registered);
+    });
+  }
+}
