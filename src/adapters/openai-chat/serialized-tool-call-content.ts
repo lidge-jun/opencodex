@@ -530,11 +530,14 @@ function duplicatedSerializedToolCallRanges(
       // the block body is the strongest possible agreement between the two representations,
       // so it authorizes suppression exactly like a parsed `input` match.
       let normalized: string | undefined = input !== undefined ? freeformBody(input) : undefined;
-      if (normalized === undefined && structured.freeformTool !== undefined && structured.argumentsText !== "") {
+      if (normalized === undefined && structured.argumentsText !== "") {
         // JSON-parsable arguments keep the original bridge-unwrap contract; only a non-JSON
         // payload whose entire text equals the block body authorizes the raw-text match.
+        // A text that merely looks like JSON (starts with { or [) stays protected: it may
+        // be a truncated JSON payload, not the raw-text shape MiMo sends.
+        const looksLikeJson = /^\s*[[{]/.test(structured.argumentsText);
         try { JSON.parse(structured.argumentsText); } catch {
-          if (freeformBody(structured.argumentsText) === body) normalized = body;
+          if (!looksLikeJson && freeformBody(structured.argumentsText) === body) normalized = body;
         }
       }
       if (normalized === undefined) return false;

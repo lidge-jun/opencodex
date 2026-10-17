@@ -372,7 +372,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         event: Extract<AdapterEvent, { type: "error" }>,
       ): Generator<AdapterEvent, "terminate"> {
         closeToolCalls();
-        yield* heldText(); // Pending tools are not dispatched, so held text stays visible.
+        // Pending tools are not dispatched, so held text stays visible — but a MiMo echo
+        // block that exactly matches one of those undelivered calls is still duplicate
+        // markup, not answer text. Reconcile against the closed calls before releasing.
+        const closedCalls = [...pendingToolCalls];
+        const references = reconcileStructuredToolCalls(closedCalls.map(call => ({ wireName: call.name, restoredName: toolNames.restore(call.name), argumentsText: call.args, freeformTool: freeformTools.get(call.name) })), toolCallContent.current(), false);
+        yield* toolCallContent.drain(references);
         yield event;
         return "terminate";
       };
