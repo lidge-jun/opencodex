@@ -110,7 +110,11 @@ interface ConversationLock {
  */
 const conversationLocks = new Map<string, ConversationLock>();
 
-async function withConversationLock<T>(handle: string, task: () => Promise<T>): Promise<T> {
+/**
+ * Exported for its regression test: the queue cap is the only path in this adapter that refuses
+ * rather than degrades, and it has to be observable to be trusted.
+ */
+export async function withConversationLock<T>(handle: string, task: () => Promise<T>): Promise<T> {
   const existing = conversationLocks.get(handle);
   if (existing && existing.waiters >= MAX_QUEUED_TURNS + 1) {
     throw new Error(
@@ -383,8 +387,9 @@ function refusal(
   status: number,
   code: string,
   errorType = "invalid_request_error",
+  retryable = false,
 ): AdapterEvent {
-  return { type: "error", message, status, errorType, code, retryable: false };
+  return { type: "error", message, status, errorType, code, retryable };
 }
 
 /**
@@ -718,16 +723,32 @@ export function createStepCliAdapter(
 
       // From here on this turn owns the conversation's process and its turn state, so anything else
       // arriving for the same conversation waits rather than corrupting it.
-      await withConversationLock(ref.handle, () =>
-        driveTurn(parsed, incoming, emit, {
-          sessions,
-          session,
-          ref,
-          tools,
-          setTimer: deps.setTimeout ?? setTimeout,
-          clearTimer: deps.clearTimeout ?? clearTimeout,
-        }),
-      );
+      try {
+        await withConversationLock(ref.handle, () =>
+          driveTurn(parsed, incoming, emit, {
+            sessions,
+            session,
+            ref,
+            tools,
+            setTimer: deps.setTimeout ?? setTimeout,
+            clearTimer: deps.clearTimeout ?? clearTimeout,
+          }),
+        );
+      } catch (error) {
+        // The queue cap is a refusal, not a crash: every other failure on this route becomes an error
+        // event, and letting this one escape as a rejected promise would hand the caller a generic
+        // failure instead of a retryable, explained refusal.
+        emit(
+          refusal(
+            error instanceof Error ? error.message : String(error),
+            409,
+            "step_cli_conversation_busy",
+            "rate_limit_error",
+            true,
+          ),
+        );
+        await session.close();
+      }
     },
   };
 }

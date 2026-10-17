@@ -6,6 +6,7 @@ import {
   handleRuntimeEvent,
   latestToolResult,
   projectToolResultContent,
+  withConversationLock,
 } from "../../src/adapters/step-cli/adapter";
 import type {
   StepConversationHost,
@@ -636,5 +637,59 @@ describe("StepCode tool-result content projection", () => {
     expect(projectToolResultContent([])).toEqual([
       { type: "text", text: "the tool returned no readable content" },
     ]);
+  });
+});
+
+describe("StepCode conversation queue", () => {
+  test("turns on one conversation run in arrival order", async () => {
+    const order: number[] = [];
+    const slow = async (label: number, ms: number) => {
+      await Bun.sleep(ms);
+      order.push(label);
+      return label;
+    };
+    const first = withConversationLock("c", () => slow(1, 20));
+    const second = withConversationLock("c", () => slow(2, 1));
+    const third = withConversationLock("c", () => slow(3, 1));
+    await Promise.all([first, second, third]);
+    expect(order).toEqual([1, 2, 3]);
+  });
+
+  test("different conversations do not wait on each other", async () => {
+    let running = 0;
+    let peak = 0;
+    const body = async () => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await Bun.sleep(10);
+      running -= 1;
+    };
+    await Promise.all([withConversationLock("a", body), withConversationLock("b", body)]);
+    expect(peak).toBe(2);
+  });
+
+  test("a pile-up past the cap is refused instead of queued forever", async () => {
+    // The refusal is the only thing standing between a retry storm and an unbounded wait, so it has to
+    // be a refusal rather than another queue slot: the holder plus MAX_QUEUED_TURNS waiters are
+    // admitted, and the next caller is turned away.
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const held = withConversationLock("busy", () => gate);
+    await Bun.sleep(5); // let the holder register
+
+    const accepted = [
+      withConversationLock("busy", async () => undefined),
+      withConversationLock("busy", async () => undefined),
+    ];
+    const refused = withConversationLock("busy", async () => undefined).catch(error => error);
+
+    const outcome = await refused;
+    expect(outcome).toBeInstanceOf(Error);
+    expect(String((outcome as Error).message)).toMatch(/one turn per conversation at a time/);
+
+    release();
+    await Promise.all([held, ...accepted]);
   });
 });
