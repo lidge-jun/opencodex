@@ -6,6 +6,7 @@ const OPEN_TAG = "<tool_call>";
 const CLOSE_TAG = "</tool_call>";
 const FUNCTION_TAG = "<function=";
 const FUNCTION_CALLS_CLOSE = "</function_calls>";
+const FUNCTION_NAME_CLOSE = "</function_name>";
 const CONST_INPUT_OPEN = "<const input>";
 /**
  * Streaming bounds (ingestStreaming only; buffered reconciliation already knows its structured calls).
@@ -140,10 +141,12 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
       const inner = trimmedEnd(text, bodyStart, closeIndex);
       const hasFn = endsWithAt(text, bodyStart, inner, FUNCTION_CLOSE);
       const hasInvoke = endsWithAt(text, bodyStart, inner, INVOKE_CLOSE);
-      if (!hasFn && !hasInvoke) continue;
+      const hasFnName = endsWithAt(text, bodyStart, inner, FUNCTION_NAME_CLOSE);
+      if (!hasFn && !hasInvoke && !hasFnName) continue;
       let altEnd = inner;
       if (hasFn) altEnd = trimmedEnd(text, bodyStart, altEnd - FUNCTION_CLOSE.length);
       else if (hasInvoke) altEnd = trimmedEnd(text, bodyStart, altEnd - INVOKE_CLOSE.length);
+      else if (hasFnName) altEnd = trimmedEnd(text, bodyStart, altEnd - FUNCTION_NAME_CLOSE.length);
       if (endsWithAt(text, bodyStart, altEnd, PARAMETER_CLOSE)) altEnd -= PARAMETER_CLOSE.length;
       return {
         name: header[1]!.trim(),
@@ -176,8 +179,14 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
 function nextBlockClose(text: string, from: number): { index: number; end: number; tag: string } {
   const a = text.indexOf(CLOSE_TAG, from);
   const b = text.indexOf(FUNCTION_CALLS_CLOSE, from);
-  if (b >= 0 && (a < 0 || b < a)) return { index: b, end: b + FUNCTION_CALLS_CLOSE.length, tag: FUNCTION_CALLS_CLOSE };
-  return { index: a, end: a >= 0 ? a + CLOSE_TAG.length : -1, tag: CLOSE_TAG };
+  const c = text.indexOf(FUNCTION_NAME_CLOSE, from);
+  const candidates = [
+    a >= 0 ? { index: a, end: a + CLOSE_TAG.length, tag: CLOSE_TAG } : undefined,
+    b >= 0 ? { index: b, end: b + FUNCTION_CALLS_CLOSE.length, tag: FUNCTION_CALLS_CLOSE } : undefined,
+    c >= 0 ? { index: c, end: c + FUNCTION_NAME_CLOSE.length, tag: FUNCTION_NAME_CLOSE } : undefined,
+  ].filter((x): x is { index: number; end: number; tag: string } => x !== undefined)
+   .sort((x, y) => x.index - y.index);
+  return candidates[0] ?? { index: -1, end: -1, tag: CLOSE_TAG };
 }
 
 /** Finds complete bare blocks outside literal Markdown; ambiguous outer blocks stop the scan. */
