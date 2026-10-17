@@ -264,6 +264,13 @@ opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as 
 this combo or any JEV combo. Omitting both uses TypeSafe. `--decision-timeout <ms|->` sets the
 decision deadline (1000–120000, default 4000); `-` clears any of the three.
 
+`ocx combo set <id> --decision-quota-signals on|off|-` controls per-Combo advisory evidence.
+`--decision-quota-tiers '{"limited":80}'` sets partial threshold overrides; `-` clears them.
+Both are JEV-only. Omitted policy survives `--targets-file` replacement, `--targets` with `--strategy jev`, and rename (`--targets` alone keeps the existing failover default). Off retains thresholds;
+switching away from JEV removes both settings. This adds quota data to the selected decision
+backend, not probes, new account selection or hard exclusions. See
+[quota defaults, freshness and privacy](/guides/combos/#advisory-quota-signals-for-jev).
+
 `ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
 [--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an
 unsaved selection and reports the gate, backend, and latency; it may spend one decision call.

@@ -1,6 +1,7 @@
 import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { JevModelInvokeError, type JevModelInvoke, type JevModelInvokeResult } from "../../combos/jev-model-backend";
 import { JEV_MAX_REQUEST_BYTES, JEV_MAX_RESPONSE_BYTES } from "../../combos/jev";
+import { serializeJevModelRequest } from "../../combos/jev-model-request";
 import type { OcxConfig } from "../../types";
 import { codexEffortRank, isCodexReasoningEffort } from "../../reasoning-effort";
 import { routeConcreteModel } from "../../router";
@@ -92,7 +93,7 @@ function decodeSse(bytes: Uint8Array): JevModelInvokeResult {
  * bounds billed output (including reasoning) and gives the spend reservation a nonzero ceiling;
  * a truncated answer is malformed and fails open like any other bad reply.
  */
-export const JEV_MODEL_MAX_OUTPUT_TOKENS = 1024;
+export { JEV_MODEL_MAX_OUTPUT_TOKENS } from "../../combos/jev-model-request";
 
 /**
  * The cheapest reasoning effort the decision model declares, so a reasoning model cannot spend
@@ -121,19 +122,17 @@ export function jevDecisionReasoningEffort(config: OcxConfig, model: string): st
  * or conversation header. It therefore runs on credentials configured on provider rows only.
  */
 export function createJevModelInvoker(context: JevModelInvokerContext): JevModelInvoke {
-  return async ({ model, instructions, input, signal }) => {
+  return async ({ model, instructions, input, signal, withoutQuota }) => {
     const effort = jevDecisionReasoningEffort(context.config, model);
-    const body = JSON.stringify({
-      model,
-      stream: true,
-      store: false,
-      instructions,
-      input: [{ role: "user", content: [{ type: "input_text", text: input }] }],
-      tools: [],
-      max_output_tokens: JEV_MODEL_MAX_OUTPUT_TOKENS,
-      ...(effort ? { reasoning: { effort } } : {}),
-    });
-    if (new TextEncoder().encode(body).byteLength > JEV_MAX_REQUEST_BYTES) {
+    let body = serializeJevModelRequest({ model, instructions, input }, effort);
+    /** True when the serialized decision request exceeds the request byte limit. */
+    const oversized = () => new TextEncoder().encode(body).byteLength > JEV_MAX_REQUEST_BYTES;
+    let quotaOmitted = false;
+    if (oversized() && withoutQuota) {
+      body = serializeJevModelRequest({ model, ...withoutQuota }, effort);
+      quotaOmitted = true;
+    }
+    if (oversized()) {
       throw new JevModelInvokeError("malformed", "decision request too large");
     }
     const lease = tryAdmitTurn(undefined, signal);
@@ -178,7 +177,7 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
           return terminalResult(parsed, "");
         })();
       usage = result.usage;
-      return result;
+      return quotaOmitted ? { ...result, quotaOmitted: true } : result;
     } finally {
       // No final log row is written for this detached context, so settle its spend here.
       childLog.spendTracker?.settle(childLog.usage ?? (usage

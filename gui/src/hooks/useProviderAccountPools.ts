@@ -23,6 +23,7 @@ export interface OAuthAccount extends AccountQuotaReading {
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
+  pauseDetails?: { reason: string; pausedAt: number };
   autoSwitchThresholdOverride?: number | null;
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
@@ -33,7 +34,7 @@ export interface OAuthAccount extends AccountQuotaReading {
   healthSummary?: string;
   healthAction?: string;
 }
-export interface ApiKeyEntry extends AccountQuotaReading { id: string; label?: string; masked: string; active: boolean }
+export interface ApiKeyEntry extends AccountQuotaReading { id: string; label?: string; masked: string; active: boolean; disabled?: boolean; pauseDetails?: { reason: string; pausedAt: number } }
 export interface AccountSelectionTarget { provider: string; kind: "oauth" | "api-key" }
 
 function selectionRows<T extends { id: string; active: boolean }>(rows: T[], id: string | null | undefined): T[] {
@@ -549,17 +550,24 @@ export function useProviderAccountPools(deps: {
   };
 
   const switchApiKey = async (provider: string, entry: ApiKeyEntry) => {
-    if (entry.active || selectionMutationsRef.current.has(`key:${provider}`)) return;
+    if (entry.active && !entry.disabled || selectionMutationsRef.current.has(`key:${provider}`)) return;
     const key = invalidateSelectionReads(provider, "api-key");
     const mutation = Symbol();
     selectionMutationsRef.current.set(key, mutation);
     const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && selectionMutationsRef.current.get(key) === mutation;
+    let resumed = false;
     try {
+      if (entry.disabled) {
+        const resumeResponse = await fetch(`${apiBase}/api/providers/keys/pause`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id, paused: false }) });
+        if (!currentMutation()) return;
+        if (!resumeResponse.ok) { notify(t("prov.keySwitchFail"), false); return; }
+        resumed = true;
+      }
       const res = await fetch(`${apiBase}/api/providers/keys/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id }) });
       if (!currentMutation()) return;
       if (!res.ok) {
         const failure = await res.json().catch(() => ({})) as { error?: string };
-        if (currentMutation()) notify(failure.error || t("prov.keySwitchFail"), false);
+        if (currentMutation()) notify(resumed ? t("prov.keyResumedSwitchFailed") : failure.error || t("prov.keySwitchFail"), false);
         return;
       }
       const data = await res.json().catch(() => ({})) as { activeId?: string | null };
@@ -570,7 +578,7 @@ export function useProviderAccountPools(deps: {
       notify(t("prov.keySwitched", { key: entry.label ?? entry.masked }), true);
       void fetchProviderQuotas(true);
     } catch {
-      if (currentMutation()) notify(t("prov.keySwitchFail"), false);
+      if (currentMutation()) notify(t(resumed ? "prov.keyResumedSwitchFailed" : "prov.keySwitchFail"), false);
     } finally {
       if (currentMutation()) {
         invalidateSelectionReads(provider, "api-key");

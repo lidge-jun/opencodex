@@ -168,7 +168,7 @@ their own files. `src/grok/inject.ts` holds the shared canonical config-write lo
 Cross-home discovery in `src/cli/cross-home-owner.ts` checks concrete loopback address availability through `src/cli/loopback-family.ts` before probing each family. A synchronous ephemeral bind is immediately closed; only address/family-unavailable errors exclude that address. This prevents a disabled IPv6 loopback's off-host `::1` connect timeout from blocking startup. Other bind errors retain discovery, and a timeout on an available or unknown family still produces an indeterminate owner verdict. Live owners on either available family retain identity and attestation checks.
 
 Startup catalog sync and native restore apply the [retired-native policy](catalog.md#shared-catalog). Foreground exit cleanup in `src/cli/index.ts` delegates restoration through the existing sibling/recycle teardown gates; approved external URLs follow [custom-provider consent](codex-provider-routing.md), while unapproved provider configuration and history remain unchanged. Guarded tests isolate the owner registry used by cross-home discovery beneath their selected home, including children without a registry override; production retains the shared locator. See [test state isolation](ops/test-sandbox-cleanup.md).
-`src/server/background-lifecycle.ts` registers low-quota protection for each live server, flushes pending saves before releasing its owner, binds its own event ledger to management requests, and unregisters it on failed startup or stop; with no pending save, owner release remains synchronous. The protection writer loads config persistence only when a threshold schedules a save; see [configuration](config.md#codex-pool-low-quota-protection). Codex quota processing has shared and Reserve scopes; retired model evidence is suppressed as
+`src/server/background-lifecycle.ts` registers low-quota protection for each live server with the OS desktop sink resolver, flushes pending saves before releasing its owner, binds its own event ledger to management requests, and unregisters it on failed startup or stop; with no pending save, owner release remains synchronous. The protection writer loads config persistence only when a threshold schedules a save; see [configuration](config.md#codex-pool-low-quota-protection). Codex quota processing has shared and Reserve scopes; retired model evidence is suppressed as
 described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-contract).
 
 `ocx start` refuses a duplicate PID, starts the proxy, writes `~/.opencodex/ocx.pid` and
@@ -408,7 +408,7 @@ the old binding; restoring the same configuration may reuse still-fresh evidence
 cooldowns and response-driven retry remain authoritative.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota).
+see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota). JEV separately reads bounded loaded-only advisory snapshots, never this credential-resolving getter; publication, opt-in and privacy follow [loaded advisory quota](providers/jev-decision.md#loaded-advisory-quota).
 
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](transports/responses.md).
 

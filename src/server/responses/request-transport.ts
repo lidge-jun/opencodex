@@ -71,7 +71,7 @@ import {
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
@@ -80,6 +80,7 @@ import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import { sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
+import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
 import { distributedKeyPhysicalFetch } from "../../providers/api-key-response-ownership";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -612,6 +613,10 @@ export async function prepareResponsesTransport(
       // Pacing may outlive admission. Preserve local pause/cooldown reasons even when
       // a strict route rejects the old proposal before another bearer can be resolved.
       let candidate = servingOAuthSnapshot;
+      if (anthropicInstance === undefined && candidate && getAccountSet(route.providerName)?.accounts.find(row => row.id === candidate!.accountId)?.paused) {
+        oauthSelection = captureOAuthAccountSelection(route.providerName);
+        candidate = oauthSelection ? await getValidAccessSnapshotForAccount(route.providerName, oauthSelection.accountId, { requireUsableAccount: true }) : undefined;
+      }
       if (anthropicInstance !== undefined) {
         oauthSelection = captureOAuthAccountSelection(route.providerName);
         const accountId = await anthropicRouting!.resolveAnthropicDispatchAccountId(config, anthropicSessionKey, anthropicRouteDecision, route.modelId);
@@ -643,6 +648,24 @@ export async function prepareResponsesTransport(
     );
     invalidateSameTargetRequest();
     return adapter;
+  };
+  const recoverAutoPausedSelection = async (requestParsed: OcxParsedRequest): Promise<boolean> => {
+    if (route.provider.authMode === "forward") return false;
+    const available = route.provider.authMode === "oauth"
+      ? getAccountSet(route.providerName)?.accounts.some(row => !row.paused && !row.needsReauth)
+      : !!config.providers[route.providerName]?.apiKey;
+    if (!available) return false;
+    await refreshDispatchAdapter(requestParsed);
+    // Bind before the recovery caller rebuilds. A terminal retry can be a clone;
+    // the outer request also owns continuation persistence and replay publication.
+    for (const replayParsed of new Set([parsed, requestParsed])) {
+      bindRouteReasoningReplayScope({
+        parsed: replayParsed, providerName: route.providerName, provider: route.provider,
+        adapterName: activeAdapter.name, oauthCredentialSnapshot: replayOAuthCredentialSnapshot,
+        forwardHeaders: requestState.selectedForwardHeaders,
+      });
+    }
+    return true;
   };
   const refreshRunTurnAdapter = async (requestParsed: OcxParsedRequest): Promise<ProviderAdapter> => {
     requestParsed._cursorIdentityScope = undefined;
@@ -704,6 +727,7 @@ export async function prepareResponsesTransport(
           providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
           pacingSlot: attemptSlot,
           turnScopedPacing: true,
+          accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, oauth: binding?.kind === "oauth" ? binding.snapshot : undefined }, headers),
           beforeDispatch: beforePhysicalSend,
         });
         await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch, beforePhysicalSend }, event => { if (!refused) emit(event); });
@@ -756,6 +780,8 @@ export async function prepareResponsesTransport(
           // apply a host-scoped decision to a different host.
           const releaseFamily = snapshot ? anthropicQuota!.claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
           if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
+          const observeAutoPause = captureAccountAutoPauseAttempt(route.providerName, binding?.kind === "api-key" ? binding.provider : route.provider,
+            { config, oauth: binding?.kind === "oauth" ? binding.snapshot : undefined }, new Headers(dispatchInit.headers));
           let response: Response;
           let physicalOwner: AnthropicPhysicalSendOwnership | null = null;
           try {
@@ -775,7 +801,8 @@ export async function prepareResponsesTransport(
             response = await sendWithConnectionPolicy(
               distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
               destination,
-              { ...dispatchInit, redirect: "manual" },
+              { ...dispatchInit, redirect: "manual",
+                ...physicalSendObserverInit(observeAutoPause, destination instanceof Request ? destination.url : String(destination)) },
               { providerName: route.providerName, provider: route.provider },
             );
           } finally { releaseFamily(); }
@@ -790,11 +817,12 @@ export async function prepareResponsesTransport(
                 && current.credential.access === snapshot.accessToken
                 && credentialGeneration(current.credential) === snapshot.generation) {
                 bindAnthropicRefusalCredentialForSend(response, physicalOwner);
-                recordAnthropicAccountQuotaFromHeadersForInstance(anthropicInstance!, snapshot.accountId, response.headers, writerGeneration, response.status, route.modelId);
+                recordAnthropicAccountQuotaFromHeadersForInstance(anthropicInstance!, snapshot.accountId, response.headers, writerGeneration, response.status, route.modelId, snapshot.generation);
               }
             } catch { /* best-effort observation cannot fail the response */ }
           }
           if (!response.ok) await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
+          if (observeAutoPause) response = await observeAutoPause(response);
           return response;
         }
         let nextAdapter: ProviderAdapter;
@@ -1280,6 +1308,7 @@ export async function prepareResponsesTransport(
     oauthDispatch,
     noteRoutedAttemptSend,
     commitKeyAttemptSend,
+    recoverAutoPausedSelection,
     bindKeyUsageFromBridge,
     anthropicSessionKey,
     isPassthrough,

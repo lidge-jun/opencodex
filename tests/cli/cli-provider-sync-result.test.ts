@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import { handleProviderCommand, type ProviderCommandDeps } from "../../src/cli/provider";
 import { syncModelsToCodex, type CodexSyncResult } from "../../src/codex/sync";
 import { refreshCodexModelCatalog } from "../../src/codex/refresh";
@@ -267,5 +268,151 @@ describe("provider add keeps requested local sync independent of JSON output", (
     expect(process.exitCode).toBe(1);
     expect(readFileSync(home.path("config.json"), "utf8")).toBe(before);
     expect(printed()).toBe("");
+  });
+});
+
+
+type ProbeCall = { path: string; method: string; body: unknown };
+function probeDeps(payload: unknown, calls: ProbeCall[], tty = false): ProviderCommandDeps {
+  return {
+    baseUrl: "http://127.0.0.1:19223",
+    stdinImpl: Object.assign(new PassThrough(), { isTTY: tty }),
+    fetchImpl: (async (input, init) => {
+      const url = new URL(String(input));
+      calls.push({ path: url.pathname + url.search, method: init?.method ?? "GET",
+        body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) });
+      return Response.json(payload);
+    }) as typeof fetch,
+  };
+}
+const completed = {
+  applicable: true, ok: true, provider: "example", requestedModel: "model[fast]", wireModel: "model",
+  wire: "openai-chat", upstreamModel: "model", modelComparison: "match", identityVerified: false,
+  ttftMs: 12, totalLatencyMs: 34, outputTokenCap: 32, termination: "completed", error: null,
+};
+const completionArgs = ["test", "example", "--model", "model[fast]"];
+const warnings = () => stderr.mock.calls.flat().join("\n");
+
+describe("provider single-model completion consent and result", () => {
+  test.each([
+    { payload: { ok: true, message: "discovered", latencyMs: 4 }, code: 0 },
+    { payload: { ok: false, error: "discovery failed", latencyMs: 5 }, code: 1 },
+    { payload: { applicable: false }, code: 0 },
+  ])("unflagged discovery retains request and human output", async ({ payload, code }) => {
+    const calls: ProbeCall[] = [];
+    await handleProviderCommand(["test", "example"], probeDeps(payload, calls));
+    expect(process.exitCode).toBe(code);
+    expect(calls).toEqual([{ path: "/api/providers/test?name=example", method: "POST", body: undefined }]);
+    expect(printed()).toContain(payload.applicable === false ? "Static catalog" : payload.ok ? "connected" : "failed");
+    expect(printed()).not.toContain("quota");
+    expect(warnings()).toBe("");
+  });
+
+  test.each([
+    { args: completionArgs, tty: false },
+    { args: [...completionArgs, "--json"], tty: false },
+    { args: [...completionArgs, "--json"], tty: true },
+    { args: ["test", "example", "--yes"], tty: true },
+    { args: ["test", "example", "--yes", "--json"], tty: false },
+    { args: ["test", "example", "--model"], tty: true },
+    { args: ["test", "example", "--model", "   ", "--yes"], tty: false },
+    { args: ["test", "example", "--model", "x".repeat(257), "--yes"], tty: false },
+    { args: ["test", "example", "--model", "a\x00b", "--yes"], tty: false },
+    { args: ["test", "example", "--model", "a\u0085b", "--yes"], tty: false },
+    { args: [...completionArgs, "--yes", "--yes"], tty: false },
+  ])("invalid/unconfirmed invocation refuses before all requests", async ({ args, tty }) => {
+    const calls: ProbeCall[] = [];
+    await handleProviderCommand(args, probeDeps(completed, calls, tty));
+    expect(process.exitCode).toBe(2);
+    expect(calls).toEqual([]);
+    expect(printed()).toBe("");
+  });
+
+  test.each(["n\n", "\n", "no\n", "anything else\n", "yes\n", "y\n"])("TTY answer %j controls dispatch", async answer => {
+    const calls: ProbeCall[] = [];
+    const deps = probeDeps(completed, calls, true);
+    const terminal = spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const pending = handleProviderCommand(completionArgs, deps);
+      // The existing confirm helper accepts an injected stream without changing global stdin.
+      // Wait for its question rather than racing the provider dispatch's dynamic import.
+      for (let i = 0; i < 100 && terminal.mock.calls.length === 0; i++) await Bun.sleep(1);
+      expect(terminal.mock.calls.flat().join("")).toContain("[y/N]");
+      expect(printed()).toContain("example");
+      expect(printed()).toContain("model[fast]");
+      expect(printed()).toContain("quota");
+      expect(printed()).toContain("cost");
+      expect(calls).toEqual([]);
+      (deps.stdinImpl as PassThrough).write(answer);
+      await pending;
+      const yes = answer === "yes\n" || answer === "y\n";
+      expect(process.exitCode).toBe(yes ? 0 : 1);
+      expect(calls).toHaveLength(yes ? 1 : 0);
+      expect(printed()).toContain(yes ? "connected" : "cancelled");
+    } finally { terminal.mockRestore(); (deps.stdinImpl as PassThrough).destroy(); }
+  });
+
+  test.each([false, true])("--yes emits warning before its single request (json=%s)", async json => {
+    const calls: ProbeCall[] = [];
+    const deps = probeDeps(completed, calls);
+    const fetchImpl = deps.fetchImpl!;
+    deps.fetchImpl = (async (input, init) => {
+      const warning = json ? warnings() : printed();
+      expect(warning).toContain("example"); expect(warning).toContain("model[fast]");
+      expect(warning).toContain("quota"); expect(warning).toContain("cost");
+      return fetchImpl(input, init);
+    }) as typeof fetch;
+    await handleProviderCommand([...completionArgs, "--yes", ...(json ? ["--json"] : [])], deps);
+    expect(process.exitCode).toBe(0);
+    expect(calls).toEqual([{ path: "/api/providers/test-completion?name=example", method: "POST", body: { model: "model[fast]", confirm: true } }]);
+    if (json) { expect(JSON.parse(printed())).toEqual(completed); expect(stdout.mock.calls).toHaveLength(1); }
+    else {
+      expect(warnings()).toBe("");
+      for (const text of ["connected", "TTFT: 12 ms", "Total latency: 34 ms", "Upstream reported model for model — match", "metadata only — not proof of model identity"]) expect(printed()).toContain(text);
+    }
+  });
+
+  test.each([
+    { upstreamModel: "other-model", modelComparison: "mismatch" },
+    { upstreamModel: null, modelComparison: "unknown", comparisonNote: "missing_metadata" },
+    { upstreamModel: null, modelComparison: "unknown", comparisonNote: "conflicting_metadata" },
+  ])("reports $modelComparison without claiming model identity", async metadata => {
+    const calls: ProbeCall[] = [];
+    await handleProviderCommand([...completionArgs, "--yes"], probeDeps({ ...completed, ...metadata }, calls));
+    expect(process.exitCode).toBe(0);
+    expect(printed()).toContain(`Upstream reported ${metadata.upstreamModel ?? "unknown"} for model — ${metadata.modelComparison}`);
+    if (metadata.comparisonNote) expect(printed()).toContain(metadata.comparisonNote);
+    expect(printed()).toContain("metadata only — not proof of model identity");
+  });
+
+  test.each([
+    { applicable: false, reason: "disabled" },
+    { applicable: false, reason: "forward_auth" },
+    { applicable: false, reason: "oauth_auth" },
+    { applicable: false, reason: "unsupported_adapter", adapter: "anthropic" },
+    { applicable: false, reason: "unsupported_transport", detail: "tls_profile" },
+  ])("non-applicable result renders $reason and exits zero", async payload => {
+    await handleProviderCommand([...completionArgs, "--yes"], probeDeps(payload, []));
+    expect(process.exitCode).toBe(0);
+    expect(printed()).toContain(payload.reason);
+    if (payload.adapter) expect(printed()).toContain(payload.adapter);
+    if (payload.detail) expect(printed()).toContain(payload.detail);
+    expect(printed()).not.toContain("connected");
+  });
+
+  test.each([false, true])("failed DTO is nonzero with code/message/status (json=%s)", async json => {
+    const payload = { ...completed, ok: false, termination: "failed", error: { code: "http_status", message: "Upstream request failed", status: 401 } };
+    await handleProviderCommand([...completionArgs, "--yes", ...(json ? ["--json"] : [])], probeDeps(payload, []));
+    expect(process.exitCode).toBe(1);
+    if (json) expect(JSON.parse(printed())).toEqual(payload);
+    else for (const text of ["http_status", "Upstream request failed", "401"]) expect(printed()).toContain(text);
+  });
+
+  test("failed DTO without status prints fixed diagnostic and no HTTP placeholder", async () => {
+    await handleProviderCommand([...completionArgs, "--yes"], probeDeps({ ...completed, ok: false,
+      error: { code: "timeout", message: "Completion test timed out" } }, []));
+    expect(process.exitCode).toBe(1);
+    expect(printed()).toContain("timeout: Completion test timed out");
+    expect(printed()).not.toContain("HTTP");
   });
 });

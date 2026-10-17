@@ -185,7 +185,7 @@ State-changing: yes. JSON mode: `payload`.
 
 Usage: `ocx account pause <provider> <account-id|alias|main> [--json]`
 
-Exclude one account in a Codex, Anthropic or supported generic OAuth pool from automatic selection.
+Exclude one account in a Codex, Anthropic, generic OAuth or API-key pool from automatic selection.
 
 State-changing: yes. JSON mode: `envelope`.
 
@@ -195,18 +195,20 @@ State-changing: yes. JSON mode: `envelope`.
 | PUT | `/api/codex-auth/accounts/pause` |
 | GET | `/api/oauth/accounts` |
 | PUT | `/api/oauth/accounts/pause` |
+| GET | `/api/providers/keys` |
+| PUT | `/api/providers/keys/pause` |
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the pause result as JSON. |
 
-- Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Anthropic and generic OAuth pause exclude the account from new requests, failover and refresh, and an all-paused pool answers 403. Credentials and health are preserved; already-sent turns are not cancelled.
+- Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, the paused account cannot dispatch until resumed. Anthropic and generic OAuth pause exclude the account from new requests, failover and refresh, and an all-paused pool answers 403. Credentials and health are preserved; already-sent turns are not cancelled.
 
 ### `ocx account resume`
 
 Usage: `ocx account resume <provider> <account-id|alias|main> [--json]`
 
-Return a paused account to a Codex, Anthropic or supported generic OAuth pool.
+Return a paused account to a Codex, Anthropic, generic OAuth or API-key pool.
 
 State-changing: yes. JSON mode: `envelope`.
 
@@ -216,6 +218,8 @@ State-changing: yes. JSON mode: `envelope`.
 | PUT | `/api/codex-auth/accounts/pause` |
 | GET | `/api/oauth/accounts` |
 | PUT | `/api/oauth/accounts/pause` |
+| GET | `/api/providers/keys` |
+| PUT | `/api/providers/keys/pause` |
 
 | Flag | Value | Meaning |
 |---|---|---|
