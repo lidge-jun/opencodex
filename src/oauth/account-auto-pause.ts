@@ -1,3 +1,4 @@
+import { captureAccountAutoPauseFence, accountAutoPauseFenceIsLocal, accountAutoPauseFenceMatchesDisk } from "../config/account-auto-pause-revisions";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { OAuthAccessSnapshot } from "./index";
 import type { CodexAuthContext } from "../codex/auth-context";
@@ -33,8 +34,11 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   if (!threshold) return;
   const configured = config.providers[name];
   if (!configured || configured.disabled) return;
+  const fence = captureAccountAutoPauseFence(config, name);
+  if (!fence) return;
   const route = JSON.stringify([configured.baseUrl, configured.adapter, configured.authMode]);
-  const policyCurrent = () => autoPauseThreshold(config.providers[name]?.accountAutoPause) === threshold
+  const policyCurrent = () => accountAutoPauseFenceIsLocal(name, fence) && !config.providers[name]?.disabled
+    && autoPauseThreshold(config.providers[name]?.accountAutoPause) === threshold
     && JSON.stringify([config.providers[name]?.baseUrl, config.providers[name]?.adapter, config.providers[name]?.authMode]) === route;
   let key: string, incarnation: string, current: () => boolean;
   let pause: (reason: AccountPauseReason) => Promise<boolean>;
@@ -50,7 +54,8 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
       return !!live && !live.paused && live.pauseRevision === revision && credentialGeneration(live.credential) === oauth.generation;
     };
     pause = async reason => (await setAccountPaused(name, oauth.accountId, true, {
-      generation: oauth.generation, pauseRevision: revision, isCurrent: policyCurrent, details: { reason, pausedAt: Date.now() },
+      generation: oauth.generation, pauseRevision: revision, isCurrent: policyCurrent,
+      assertPolicyBeforePersist: () => { if (!accountAutoPauseFenceMatchesDisk(name, fence)) throw new Error("Account auto-pause policy changed before persistence"); }, details: { reason, pausedAt: Date.now() },
     })).status === "updated";
   } else if (provider.authMode === "forward") {
     if (!codex || codex.kind !== "pool" && codex.kind !== "main-pool") return;
@@ -68,7 +73,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     pause = async reason => {
       let pauseState: OcxConfig["codexAccountPauseState"];
       const outcome = mutatePersistedConfig(fresh => {
-        if (!credentialCurrent() || isCodexAccountPaused(fresh, accountId)
+        if (!policyCurrent() || !accountAutoPauseFenceMatchesDisk(name, fence, fresh) || !credentialCurrent() || isCodexAccountPaused(fresh, accountId)
           || fresh.codexAccountPauseState?.[accountId]?.revision !== revision
           || autoPauseThreshold(fresh.providers[name]?.accountAutoPause) !== threshold) return { changed: false, value: false };
         setCodexAccountPaused(fresh, accountId, true, { reason, pausedAt: Date.now() });
@@ -98,9 +103,10 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
       return !!live && !live.disabled && live.key === reference && live.pauseRevision === pauseRevision && resolveProviderApiKey(reference) === resolvedKey;
     };
     pause = async reason => setProviderApiKeyPaused(config, name, id, true, {
-      selection, pauseRevision, resolvedKey, details: { reason, pausedAt: Date.now() },
+      selection, pauseRevision, resolvedKey, fence, details: { reason, pausedAt: Date.now() },
     });
   }
+  incarnation += `\0${fence.diskRevision}\0${fence.localGen}`;
   let tracker = streaks.get(config);
   if (!tracker) { tracker = new AccountRefusalStreaks(); streaks.set(config, tracker); }
   const observed = new WeakSet<Response>();

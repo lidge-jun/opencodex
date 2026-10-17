@@ -47,6 +47,25 @@ API-key selectors and reactive/proactive failover exclude disabled pool entries,
 Regression coverage: `tests/oauth/oauth-account-auto-pause.test.ts` and
 `tests/responses/responses-account-auto-pause.test.ts` and `tests/providers/api-key-auto-pause-distribution.test.ts`.
 
+## Policy-change fence
+
+`src/config/account-auto-pause-revisions.ts` keeps `accountAutoPausePolicyRevisions`, a per-provider
+UUID that changes whenever a tracked provider's effective policy fingerprint changes (policy enabled,
+threshold, provider disabled, base URL, adapter, auth mode). A provider is tracked once it has ever
+configured `accountAutoPause`; providers that never opted in leave no map in the file. Only
+`persistConfigUnlocked` mints values, from the literal pre-write file, so caller-supplied revisions never
+authorize anything. Each process also keeps an observed map with a local generation, bumped on
+fingerprint changes adopted by load, reload and save-time reconciliation. A capture records
+the revision, generation, threshold and route. A pause commits only while all of these are still
+equal, both in memory and in the fresh persisted file inside the config mutation lock. The OAuth
+automatic commit runs its final check and auth publication under that lock, and contention means
+no pause. API-key commits use the same disk check in their selection mutation, and Codex commits
+check it beside `src/codex/account-pause.ts` state. A malformed map suppresses automatic pause
+until the next valid write mints fresh revisions. A raw editor that bypasses the lock and finishes a
+disable/re-enable between two observations stays undetectable.
+Regression coverage: `tests/oauth/oauth-account-auto-pause-revision.test.ts` and
+`tests/config/config-account-auto-pause-revisions.test.ts`.
+
 ## Auto-paused account recovery
 
 OAuth and Codex account-list DTOs project optional `pauseDetails` (fixed reason plus epoch
@@ -54,7 +73,8 @@ ms timestamp) beside the existing pause flag. The CLI preserves those fields and
 the reason in account listings. `src/server/management/oauth-account-routes.ts` also serves
 `PUT /api/providers/keys/pause` with provider `name`, key `id` and boolean `paused`, through
 the existing management authorization boundary. Key listings expose `disabled` and pause
-details. Dashboard key Resume clears the pause through that endpoint before activating
+details. OAuth upserts for dual-auth providers keep validated key pause fields through
+`src/oauth/api-key-pool-preserve.ts` and never promote a paused key to the active key. Dashboard key Resume clears the pause through that endpoint before activating
 the key; OAuth/Codex keep their existing resume actions.
 `src/server/management/route-registry.ts` declares key pause as an ordinary management mutation,
 covered by the existing account pause/resume CLI capabilities. Responses recovery and passthrough
@@ -65,7 +85,8 @@ inventory coverage, physical line limits, and acyclic dependencies including typ
 
 `gui/src/components/provider-workspace/ProviderAuthPanel.tsx` and
 `gui/src/components/codex-account-pool-cards.tsx` expose fixed auto-pause reason and timestamp
-on Paused badges. Disabled key rows offer Resume through their existing selection action;
+on Paused badges; `gui/src/account-pause-display.ts` translates the reason and formats the
+timestamp with the app locale. Disabled key rows offer Resume through their existing selection action;
 `gui/src/hooks/useProviderAccountPools.ts` resumes before activation, then refreshes the
 roster under its existing selection-mutation fence. No upstream error body is displayed.
 

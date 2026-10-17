@@ -1,3 +1,4 @@
+import { accountAutoPauseFenceMatchesDisk, type AccountAutoPauseFence } from "../config/account-auto-pause-revisions";
 import { randomUUID } from "node:crypto";
 import type { OcxConfig } from "../types";
 import type { ProviderApiKeySelection } from "../types/provider";
@@ -7,8 +8,9 @@ import { resolveProviderApiKey } from "./api-key-resolve";
 import { commitProviderApiKeySelection } from "./api-key-selection";
 
 export function setProviderApiKeyPaused(config: OcxConfig, name: string, id: string, paused: boolean,
-  automatic?: { selection: ProviderApiKeySelection; pauseRevision?: string; resolvedKey?: string; details: AccountPauseDetails }): boolean {
+  automatic?: { fence: AccountAutoPauseFence; selection: ProviderApiKeySelection; pauseRevision?: string; resolvedKey?: string; details: AccountPauseDetails }): boolean {
   const result = commitProviderApiKeySelection(config, name, provider => {
+    if (automatic && !accountAutoPauseFenceMatchesDisk(name, automatic.fence)) return { changed: false, value: false };
     const pool = provider.apiKeyPool?.length ? provider.apiKeyPool
       : provider.apiKey ? [{ id: apiKeyPoolEntryId(provider.apiKey), key: provider.apiKey }] : [];
     const entry = pool.find(e => e.id === id);

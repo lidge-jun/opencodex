@@ -1922,7 +1922,9 @@ The counter is process-local, serialized per account, and resets on a successful
 response, explicit resume or a new login. Token refresh alone does not reset an OAuth
 account's streak. Transient errors leave the counter unchanged. Restarting the proxy clears
 counters; completed pauses, their fixed reason codes and timestamps persist. Independent
-proxy processes maintain independent counters.
+proxy processes maintain independent counters. Changing, disabling or re-enabling the policy, disabling the provider,
+or changing its endpoint discards in-flight refusal observations, so a refusal from a request
+sent under the earlier policy can never pause an account afterwards.
 
 At the threshold, OpenCodex excludes the account using its existing pause mechanism and
 attempts an eligible sibling for the current request within the existing retry/send budget.

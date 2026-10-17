@@ -130,7 +130,7 @@ Native account-gated model selection maps no grant to 400, temporary capable-acc
 429/402 carrying only `x-codex-*-reset-at` may advance to the later model on the same account. The
 failed physical combo target still enters its normal target cooldown. An explicit `Retry-After`
 remains an account-wide instruction and blocks the later target; a quota response with neither an
-explicit retry delay nor a usable reset timestamp keeps the conservative default account cooldown. See [permanent refusal auto-pause](../account-auto-pause.md).
+explicit retry delay nor a usable reset timestamp keeps the conservative default account cooldown.
 This exception is request-scoped and is not applied to direct requests, round-robin combos, or a
 combo whose remaining eligible targets use other providers.
 

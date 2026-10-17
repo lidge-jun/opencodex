@@ -304,7 +304,17 @@ export const configSchema = z.object({
   // and the default label is emitted, rather than failing the parse or writing a config Codex
   // would refuse to load — the provider id routing depends on is never derived from it.
   codexProviderDisplayName: z.string().trim().min(1).max(128).optional().catch(undefined),
-  codexAccountPauseState: accountPauseStateSchema.optional(),
+  // Preserve an invalid marker: silently treating corrupt epochs as legacy would grant stale attempts authority.
+  accountAutoPausePolicyRevisions: z.record(z.string(), z.uuid()).nullable().optional().catch(null),
+  // Details are display-only; keep each usable resume revision and the separate paused-id authority.
+  codexAccountPauseState: z.preprocess(value => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    return Object.fromEntries(Object.entries(value).flatMap(([id, row]) => {
+      if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.revision !== "string") return [];
+      const parsed = accountPauseStateSchema.safeParse({ [id]: row });
+      return [[id, parsed.success ? parsed.data[id] : { revision: row.revision }]];
+    }));
+  }, accountPauseStateSchema.optional()),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
   // A malformed allow-list degrades to "no account spends credits" rather than failing the parse,
   // so a hand-edited typo cannot trip the backup-and-defaults repair path; the write path rejects

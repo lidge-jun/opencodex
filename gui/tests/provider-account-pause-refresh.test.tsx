@@ -230,3 +230,20 @@ test("a failed key resume never attempts activation", async () => {
   expect(writes).toEqual(["/pause-hook/api/providers/keys/pause"]);
   expect(notices).toContainEqual({ key: "prov.keySwitchFail", ok: false });
 });
+
+test.each(["http", "transport"])("a resumed key reports partial success when activation fails via %s", async failure => {
+  const entry = { id: "key-fixture", masked: "****", active: false, disabled: true };
+  respond = async (url, init) => {
+    if (init?.method === "PUT" && url.endsWith("/active")) {
+      if (failure === "transport") throw new Error("fixture offline");
+      return Response.json({ error: "fixture activation refused" }, { status: 503 });
+    }
+    if (init?.method === "PUT") return Response.json({ ok: true });
+    return Response.json({ keys: [{ ...entry, disabled: false }] });
+  };
+  await act(async () => { pools.setKeyPools({ fixture: [entry] }); });
+  await act(async () => { await pools.switchApiKey("fixture", entry); });
+  expect(notices).toContainEqual({ key: "prov.keyResumedSwitchFailed", ok: false });
+  expect(notices.some(notice => notice.key === "prov.keySwitchFail")).toBe(false);
+  expect(pools.keyPools.fixture[0]?.disabled).toBe(false);
+});

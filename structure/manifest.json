@@ -912,7 +912,15 @@
         "src/oauth/account-auto-pause-policy.ts",
         "src/providers/api-key-pause.ts",
         "src/types/account-auto-pause.ts",
-        "src/lib/account-auto-pause-response.ts"
+        "src/lib/account-auto-pause-response.ts",
+        "src/server/responses/request-transport.ts",
+        "src/server/responses/account-auto-pause-recovery.ts",
+        "src/codex/account-pause.ts",
+        "src/config/schema/account-auto-pause.ts",
+        "gui/src/hooks/useProviderAccountPools.ts",
+        "src/config/account-auto-pause-revisions.ts",
+        "src/oauth/api-key-pool-preserve.ts",
+        "gui/src/account-pause-display.ts"
       ]
     }
   ],

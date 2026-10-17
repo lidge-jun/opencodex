@@ -152,7 +152,9 @@ A source area can be described by more than one doc, because these docs are orga
 | `desktop/ui/cli.js` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `docs-site/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `gui/` | [`overview.md`](overview.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`design-methodology.md`](design-methodology.md)<br>[`companion.md`](companion.md) |
+| `gui/src/account-pause-display.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `gui/src/components/ModelPriceDialog.tsx` | [`pricing.md`](pricing.md) |
+| `gui/src/hooks/useProviderAccountPools.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `scripts/` | [`overview.md`](overview.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
 | `skills/ocx/` | [`cli-management.md`](cli-management.md) |
@@ -175,6 +177,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
 | `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md) |
 | `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`subagent-capacity.md`](subagent-capacity.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `src/codex/account-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/codex/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
 | `src/codex/app-server-processes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/auth-api/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
@@ -192,8 +195,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/compatibility/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) |
 | `src/config.ts` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md) |
 | `src/config/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md) |
+| `src/config/account-auto-pause-revisions.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/config/live-reconcile.ts` | [`pricing.md`](pricing.md) |
 | `src/config/persisted-mutation.ts` | [`runtime.md`](runtime.md) |
+| `src/config/schema/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/config/schema/leaf-validators.ts` | [`pricing.md`](pricing.md) |
 | `src/generated/` | [`runtime.md`](runtime.md) |
 | `src/github/` | [`runtime.md`](runtime.md) |
@@ -212,6 +217,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/oauth/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md)<br>[`providers/oauth-reconciliation.md`](providers/oauth-reconciliation.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/oauth/account-auto-pause-policy.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `src/oauth/api-key-pool-preserve.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/oauth/dsh.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/oauth/login-cli.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/oauth/meta-muse-errors.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
@@ -245,9 +251,11 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
+| `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/server/responses/advisor-plan-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/anthropic-thinking-recovery.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
+| `src/server/responses/request-transport.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/service-manager-probe.ts` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/service.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/service/` | [`runtime.md`](runtime.md) |

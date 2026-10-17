@@ -807,7 +807,7 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
   drainOAuthMutations();
   return result;
 }
-export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[]; finalizeResult?: (result: T, store: AuthStore) => void; afterPersist?: (result: T) => void }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[]; finalizeResult?: (result: T, store: AuthStore) => void; afterPersist?: (result: T) => void; withConfigLock?: boolean }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
     const selections = new Map(Object.entries(store).map(([provider, set]) => [provider, {
@@ -820,7 +820,7 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
     // Only providers whose credentials this mutation actually removed leave the downgrade
     // backup; a no-op removal names none. The result decides, so it is read here.
     const scrubbedProviders = options?.scrubLegacyBackup?.(result) ?? [];
-    options?.assertBeforePersist?.();
+    if (!options?.withConfigLock) options?.assertBeforePersist?.();
     const changedProviders: string[] = [];
     for (const provider of new Set([...selections.keys(), ...Object.keys(store)])) {
       const before = selections.get(provider);
@@ -843,7 +843,8 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
     // Receipt-producing mutations need the revision assigned by the bookkeeping above, not the
     // provisional value visible inside their callback. Finalization cannot await or mutate disk.
     options?.finalizeResult?.(result, store);
-    persist(store);
+    const publish = () => { if (options?.withConfigLock) options.assertBeforePersist?.(); persist(store); };
+    if (options?.withConfigLock) withConfigMutationLockSync(publish); else publish();
     if (scrubbedProviders.length > 0) scrubLegacyBackup(scrubbedProviders);
     // A committed observer may establish ordering before the generic selection
     // publication, but its failure can never turn a durable write into a reported failure.
@@ -1394,7 +1395,7 @@ export async function setAccountPaused(
   provider: string,
   accountId: string,
   paused: boolean,
-  automatic?: { generation: string; pauseRevision?: string; details: import("../types/account-auto-pause").AccountPauseDetails; isCurrent?: () => boolean },
+  automatic?: { generation: string; pauseRevision?: string; details: import("../types/account-auto-pause").AccountPauseDetails; isCurrent?: () => boolean; assertPolicyBeforePersist?: () => void },
 ): Promise<SetAccountPausedResult> {
   const result = await mutateStore(store => {
     const set = store[provider];
@@ -1444,7 +1445,8 @@ export async function setAccountPaused(
       activeAccountId: set.activeAccountId,
       activeAccountChanged,
     } as const;
-  }, [provider, accountId, paused], { assertBeforePersist: () => {
+  }, [provider, accountId, paused], { withConfigLock: !!automatic, assertBeforePersist: () => {
+    automatic?.assertPolicyBeforePersist?.();
     if (automatic?.isCurrent?.() === false) throw new Error("Account auto-pause policy changed before persistence");
   } });
   if (result.status === "updated") publishOAuthAccountPauseChange(provider);

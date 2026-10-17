@@ -418,6 +418,7 @@ export async function fetchCodexRows(
       ? a.autoSwitchThresholdOverride
       : null,
     paused: a.paused === true,
+    // Unknown display details are dropped defensively; the pause state above is retained.
     pauseDetails: accountPauseDetailsSchema.safeParse(a.pauseDetails).data,
     ...(includeQuota ? {
       quota: projectQuota(a.quota),
@@ -480,6 +481,7 @@ async function fetchOAuthRows(
     active: a.active ?? a.id === activeId,
     needsReauth: a.needsReauth,
     ...projectAccountHealth(a, name, a.id),
+    // Unknown display details are dropped defensively; paused remains authoritative.
     ...(a.paused === true ? { paused: true, pauseDetails: accountPauseDetailsSchema.safeParse(a.pauseDetails).data } : {}),
     ...(isAnthropicOAuthInstance(name) && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
     ...(a.needsReauthReason === "verify_account" ? { needsReauthReason: a.needsReauthReason } : {}),
@@ -531,6 +533,7 @@ async function fetchKeyRows(deps: AccountDeps, baseUrl: string, name: string, qu
     masked: k.masked,
     active: k.active ?? k.id === activeId,
     paused: k.disabled === true,
+    // Unknown display details are dropped defensively; disabled still keeps the key paused.
     pauseDetails: accountPauseDetailsSchema.safeParse(k.pauseDetails).data,
   }));
   return { rows, activeId, status: 200 };

@@ -9,7 +9,7 @@
   "codex-preserve-signed-in.test.ts": "codex-integration", "cli-account-preservation.test.ts": "cli",
   "catalog-native-max-context.test.ts": "codex-integration",
   "protocol-argon-thought-boundary.test.ts": "responses",
-  "responses-auto-pause-replay-owner.test.ts": "responses", "responses-account-auto-pause.test.ts": "responses", "oauth-account-auto-pause.test.ts": "oauth",
+  "responses-auto-pause-replay-owner.test.ts": "responses", "responses-account-auto-pause.test.ts": "responses", "oauth-account-auto-pause.test.ts": "oauth", "oauth-upsert-paused-api-key.test.ts": "oauth", "management-account-auto-pause.test.ts": "server", "cli-account-key-pause.test.ts": "cli", "oauth-account-auto-pause-revision.test.ts": "oauth", "config-account-auto-pause-revisions.test.ts": "config",
   "codex-provider-routing.test.ts": "codex-integration",
   "claude-picker-trust-windows.test.ts": "claude-integration", "claude-picker-windows.test.ts": "claude-integration", "config-native-reasoning-retention.test.ts": "config", "server-native-reasoning-retention-merge.test.ts": "server", "server-native-reasoning-retention.test.ts": "server", "responses-retained-reasoning-stream-recovery.test.ts": "responses",
   "advisor-retention.test.ts": "advisor", "responses-native-key-cooldown.test.ts": "responses", "responses-run-turn-key-readmission.test.ts": "responses", "qoder-spawn-readmission.test.ts": "adapters",

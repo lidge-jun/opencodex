@@ -555,17 +555,19 @@ export function useProviderAccountPools(deps: {
     const mutation = Symbol();
     selectionMutationsRef.current.set(key, mutation);
     const currentMutation = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase && selectionMutationsRef.current.get(key) === mutation;
+    let resumed = false;
     try {
       if (entry.disabled) {
-        const resumed = await fetch(`${apiBase}/api/providers/keys/pause`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id, paused: false }) });
+        const resumeResponse = await fetch(`${apiBase}/api/providers/keys/pause`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id, paused: false }) });
         if (!currentMutation()) return;
-        if (!resumed.ok) { notify(t("prov.keySwitchFail"), false); return; }
+        if (!resumeResponse.ok) { notify(t("prov.keySwitchFail"), false); return; }
+        resumed = true;
       }
       const res = await fetch(`${apiBase}/api/providers/keys/active`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: provider, id: entry.id }) });
       if (!currentMutation()) return;
       if (!res.ok) {
         const failure = await res.json().catch(() => ({})) as { error?: string };
-        if (currentMutation()) notify(failure.error || t("prov.keySwitchFail"), false);
+        if (currentMutation()) notify(resumed ? t("prov.keyResumedSwitchFailed") : failure.error || t("prov.keySwitchFail"), false);
         return;
       }
       const data = await res.json().catch(() => ({})) as { activeId?: string | null };
@@ -576,7 +578,7 @@ export function useProviderAccountPools(deps: {
       notify(t("prov.keySwitched", { key: entry.label ?? entry.masked }), true);
       void fetchProviderQuotas(true);
     } catch {
-      if (currentMutation()) notify(t("prov.keySwitchFail"), false);
+      if (currentMutation()) notify(t(resumed ? "prov.keyResumedSwitchFailed" : "prov.keySwitchFail"), false);
     } finally {
       if (currentMutation()) {
         invalidateSelectionReads(provider, "api-key");
