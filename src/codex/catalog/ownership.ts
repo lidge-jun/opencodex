@@ -51,3 +51,21 @@ export function applyRoutedDescription(entry: RawEntry, generated: string, model
   if (override !== undefined) entry[ROUTED_ORIGIN_FIELD] = COMBO_ROUTED_ORIGIN;
   else delete entry[ROUTED_ORIGIN_FIELD];
 }
+
+/**
+ * A combo row retained from the previous catalog (its fresh derivation failed, e.g. a member
+ * provider is temporarily unavailable) bypasses deriveEntry. Re-project the combo's CURRENT
+ * description onto it so clearing or changing the description in config still reaches the
+ * picker. A cleared override returns the row to the generated combo text without the marker;
+ * an unmarked row without a current override is left exactly as it was.
+ */
+export function reapplyRetainedComboDescription(entry: RawEntry, current: string | undefined): void {
+  const description = current?.trim();
+  if (description) {
+    entry.description = description;
+    entry[ROUTED_ORIGIN_FIELD] = COMBO_ROUTED_ORIGIN;
+  } else if (hasComboRoutedOriginMarker(entry)) {
+    entry.description = `${ROUTED_DESCRIPTION_PREFIX}${COMBO_NAMESPACE} (${COMBO_NAMESPACE}).`;
+    delete entry[ROUTED_ORIGIN_FIELD];
+  }
+}

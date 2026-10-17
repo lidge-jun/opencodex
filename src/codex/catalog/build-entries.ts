@@ -4,7 +4,7 @@ import { CODEX_REASONING_LEVELS, type CodexReasoningLevel } from "../../reasonin
 import { clearModelCache } from "../model-cache";
 import { routedSlug, slugEquivalenceKey } from "../../providers/slug-codec";
 import { COMBO_NAMESPACE } from "../../combos";
-import { hasOcxComboAuthorship, hasOcxRoutedAuthorship, ROUTED_DESCRIPTION_PREFIX } from "./ownership";
+import { hasOcxComboAuthorship, hasOcxRoutedAuthorship, reapplyRetainedComboDescription, ROUTED_DESCRIPTION_PREFIX } from "./ownership";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
@@ -504,6 +504,11 @@ export interface ObservedCatalogMergeInput {
   readonly multiAgentV2Enabled: boolean;
   readonly keepNativeChatGptOnV1?: boolean;
   readonly exactComboSlugs: ReadonlySet<string>;
+  /**
+   * Current combo row descriptions by public slug (#7229). When supplied, retained combo rows
+   * are re-projected onto it; absent means the caller has no config and leaves them unchanged.
+   */
+  readonly comboDescriptions?: ReadonlyMap<string, string>;
   readonly hasPhysicalComboProvider: boolean;
   readonly includeNativeOpenAi: boolean;
   readonly accountBoundEntries: readonly RawEntry[];
@@ -546,6 +551,7 @@ export function mergeCatalogEntriesFromObservedState({
   multiAgentV2Enabled,
   keepNativeChatGptOnV1,
   exactComboSlugs,
+  comboDescriptions,
   hasPhysicalComboProvider,
   includeNativeOpenAi,
   accountBoundEntries,
@@ -802,6 +808,10 @@ export function mergeCatalogEntriesFromObservedState({
       delete entry[SPAWN_PRIORITY_FIELD];
     }
     const slug = String(entry.slug);
+    if (comboDescriptions !== undefined && exactComboSlugs.has(slug)
+      && (isNativeAliasCatalogEntry(entry) || (entry.owned_by === COMBO_NAMESPACE && hasOcxComboAuthorship(entry)))) {
+      reapplyRetainedComboDescription(entry, comboDescriptions.get(slug));
+    }
     if (!isOcxAuthoredRoutedEntry(entry)) continue;
     // The builder no longer copies a template's comp_hash onto routed rows (#5796), but a row
     // kept from disk may still carry one. Custom rows, Codex-forward aliases included, never

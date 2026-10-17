@@ -402,6 +402,20 @@ export function exactComboCatalogSlugs(
   }));
 }
 
+/** Current combo row descriptions by public catalog slug, for retained-row re-projection (#7229). */
+export function comboCatalogDescriptions(
+  config: Pick<OcxConfig, "combos" | "disabledModels">,
+): Map<string, string> {
+  const current = exactComboCatalogSlugs(config);
+  return new Map(listComboIds(config).flatMap(id => {
+    const raw = config.combos?.[id];
+    const alias = typeof raw?.alias === "string" ? raw.alias.trim() : "";
+    const publicSlug = alias || comboModelId(id);
+    const description = typeof raw?.description === "string" ? raw.description.trim() : "";
+    return description && current.has(publicSlug) ? [[publicSlug, description] as const] : [];
+  }));
+}
+
 export function normalizedOpenAiApiSignature(model: CatalogModel): string {
   const normalized = {
     provider: model.provider,

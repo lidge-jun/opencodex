@@ -5,7 +5,7 @@ import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { normalizeComboConfig } from "../../src/combos";
 import { saveConfig } from "../../src/config";
 import { SUBAGENT_MODELS_VERSION } from "../../src/config/subagent-models";
-import { deriveComboCatalogModel } from "../../src/codex/catalog/aggregation";
+import { comboCatalogDescriptions, deriveComboCatalogModel } from "../../src/codex/catalog/aggregation";
 import { applyAutoReviewModelOverride } from "../../src/codex/catalog/auto-review";
 import {
   buildCatalogEntriesFromObservedState, CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
@@ -76,6 +76,65 @@ function merge(input: Pick<ObservedCatalogMergeInput, "catalogModels" | "routedE
     policy: { ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY, warningPolicy: "silent" }, ...input,
   });
 }
+function retain(row: RawEntry, comboDescriptions?: ReadonlyMap<string, string>): RawEntry[] {
+  return merge({ catalogModels: [row], routedEntries: [], comboDescriptions,
+    exactComboSlugs: new Set([String(row.slug)]), hasPhysicalComboProvider: true,
+    gatheredProviderNames: new Set(["vendor"]), degradedProviderNames: new Set(["vendor"]) });
+}
+
+describe("retained combo descriptions (#7229)", () => {
+  const oldNativeAlias = () => build(comboModel({ alias: "gpt-5.6-sol", nativeAlias: true, description: "Old" }))
+    .find(row => row.slug === "gpt-5.6-sol")!;
+
+  test("retained native alias replaces its stale marked description with the current override", () => {
+    const old = oldNativeAlias();
+    expect(old).toMatchObject({ description: "Old", ...marker });
+    const rows = retain(old, new Map([["gpt-5.6-sol", "New"]]));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ slug: "gpt-5.6-sol", description: "New", ...marker });
+    expect(old.description).toBe("Old");
+  });
+
+  test("clearing a retained native alias description restores generated text and removes its marker", () => {
+    const rows = retain(oldNativeAlias(), new Map());
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ slug: "gpt-5.6-sol", description: generated });
+    expect(rows[0]).not.toHaveProperty("opencodex_routed_origin");
+  });
+
+  test("legacy merges without comboDescriptions preserve the retained description and marker", () => {
+    const old = oldNativeAlias();
+    expect(retain(old)).toEqual([old]);
+  });
+
+  test("a retained slash alias with generated combo authorship gains the current description", () => {
+    const old = build(comboModel({ alias: "vendor/custom" })).find(row => row.slug === "vendor/custom")!;
+    expect(old).toMatchObject({ owned_by: "combo", description: generated });
+    expect(old).not.toHaveProperty("opencodex_routed_origin");
+    const rows = retain(old, new Map([["vendor/custom", "New"]]));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ slug: "vendor/custom", description: "New", ...marker });
+  });
+
+  test("an exact combo slug and owned_by alone cannot rewrite a foreign retained row", () => {
+    const foreign = { slug: "vendor/custom", owned_by: "combo", description: "Another tool's description",
+      priority: 5, visibility: "list", input_modalities: ["text"] };
+    expect(hasOcxComboAuthorship(foreign)).toBe(false);
+    const rows = retain(foreign, new Map([["vendor/custom", "New"]]));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject(foreign);
+    expect(rows[0]).not.toHaveProperty("opencodex_routed_origin");
+  });
+
+  test("config descriptions use public aliases, exclude disabled combos, and omit empty overrides", () => {
+    expect(comboCatalogDescriptions({ disabledModels: ["combo/disabled"], combos: {
+      saved: { targets, description: " Canonical " },
+      aliased: { targets, alias: " vendor/custom ", description: " Alias " },
+      disabled: { targets, alias: "vendor/disabled", description: "Hidden" },
+      empty: { targets, description: "" }, blank: { targets, description: "   " }, absent: { targets },
+    } })).toEqual(new Map([["combo/saved", "Canonical"], ["vendor/custom", "Alias"]]));
+  });
+});
 
 describe("described combo catalog rows (#7229)", () => {
   for (const [label, identity] of [
@@ -221,9 +280,8 @@ function installCodexFixture(): string {
   return path;
 }
 
-test("real sync is byte-idempotent with a description and after clearing it matches an absent field", async () => {
-  const path = installCodexFixture();
-  const cfg: OcxConfig = {
+function fixtureConfig(): OcxConfig {
+  return {
     port: 10100, defaultProvider: "fixture", subagentModels: [], subagentModelsVersion: SUBAGENT_MODELS_VERSION,
     providers: { openai: { adapter: "openai-responses", baseUrl: CODEX_FORWARD_BASE_URL, authMode: "forward" },
       fixture: { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", liveModels: false,
@@ -231,6 +289,11 @@ test("real sync is byte-idempotent with a description and after clearing it matc
       modelReasoningEfforts: { model: ["high"] } } },
     combos: { saved: { targets } },
   };
+}
+
+test("real sync is byte-idempotent with a description and after clearing it matches an absent field", async () => {
+  const path = installCodexFixture();
+  const cfg = fixtureConfig();
   const sync = async () => {
     saveConfig(cfg);
     const result = await syncCatalogModels(cfg, { allowWhenDesiredDisabled: true });
@@ -252,4 +315,29 @@ test("real sync is byte-idempotent with a description and after clearing it matc
   expect(JSON.parse(cleared).models.find((row: RawEntry) => row.slug === "combo/saved"))
     .not.toHaveProperty("opencodex_routed_origin");
   expect(await sync()).toBe(cleared);
+}, 30_000);
+
+test("real sync reprojects current config descriptions onto a native alias retained while its provider is disabled", async () => {
+  const path = installCodexFixture();
+  const cfg = fixtureConfig();
+  cfg.combos!.saved = { targets, alias: "gpt-5.6-sol", nativeAlias: true,
+    displayName: "Retained Sol combo", description: "Old" };
+  const sync = async () => {
+    saveConfig(cfg);
+    const result = await syncCatalogModels(cfg, { allowWhenDesiredDisabled: true });
+    expect(result.refreshOutcome).toBe("committed");
+    expect(result.path).toBe(path);
+    return (JSON.parse(readFileSync(path, "utf8")).models as RawEntry[])
+      .find(row => row.slug === "gpt-5.6-sol");
+  };
+  expect(await sync()).toMatchObject({ description: "Old", ...marker });
+  cfg.providers.fixture!.disabled = true;
+  cfg.combos!.saved!.description = "New";
+  expect(comboCatalogDescriptions(cfg)).toEqual(new Map([["gpt-5.6-sol", "New"]]));
+  expect(await sync()).toMatchObject({ description: "New", ...marker });
+  delete cfg.combos!.saved!.description;
+  expect(comboCatalogDescriptions(cfg).size).toBe(0);
+  const cleared = await sync();
+  expect(cleared).toMatchObject({ description: generated });
+  expect(cleared).not.toHaveProperty("opencodex_routed_origin");
 }, 30_000);
