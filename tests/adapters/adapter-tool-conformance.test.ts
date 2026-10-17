@@ -433,7 +433,14 @@ describe("registry-derived routed tool conformance", () => {
   // Zed is not tool-less: it forwards client tools through the Anthropic, Google, Responses and
   // Chat builders, which this suite covers under their own ids. It is skipped because its
   // envelope needs a live account catalog, so read its entry as "not covered here".
-  const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder", "claude-cli", "zed"]);
+  // step-cli joins its CLI-backed siblings: the StepCode adapter is runTurn-only over the CLI's own
+  // length-prefixed `step-agent-sdk` transport, so buildRequest returns a placeholder and the client's
+  // tools travel as inline-schema `sdkTools` over stdio rather than through an outbound body. Its tool
+  // surface is covered where it actually lives — tests/adapters/step-cli-tool-bridge.test.ts exercises
+  // the shared catalog builder's namespacing, tool_choice: none and required-choice behaviour through
+  // the SDK projection, and step-cli-provider.test.ts pins the refusals — so read this entry as "not
+  // covered by this suite", not as unchecked.
+  const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder", "claude-cli", "step-cli", "zed"]);
   // The Devin adapter is runTurn-only: it streams Connect-RPC from runTurn, so
   // buildRequest returns a placeholder and tools never travel the wire path.
   // Both Devin provider rows share it and differ only in where the credential

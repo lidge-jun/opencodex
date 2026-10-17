@@ -80,6 +80,8 @@ name/namespace components and wire names over 512 UTF-8 bytes before staging. It
 projection. Duplicate and ambiguous wire identities remain the Responses parser's responsibility. Qoder appends the
 folded system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or `QODERCN_APPEND_SYSTEM_PROMPT` child environment, never through command-line arguments or inherited vendor variables. `src/adapters/qoder/adapter.ts` sets the region's usage switch (`QODER_EXPOSE_TOKEN_USAGE` or `QODERCN_EXPOSE_TOKEN_USAGE`; each CLI build reads only its own prefix) to `true` only in Qoder's child environment, so the shared usage parser receives the CLI's token counts instead of zeros.
 
+StepCode (阶跃星辰) as a Step Plan transport, its own framed wire, one process per conversation, inline SDK tools in place of the capture-only MCP catalog, and the bounded tool-result window, follow [StepCode CLI transport](providers/step-cli-transport.md).
+
 Coding-agent stdout is framed as bounded JSONL directly from decoded stream segments. The framer
 tracks the current line's UTF-8 byte count incrementally, searches each decoded segment once, and
 joins only when a newline or EOF completes the frame. This preserves split UTF-8, BOM, CRLF,

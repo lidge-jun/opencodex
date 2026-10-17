@@ -445,6 +445,15 @@
       ]
     },
     {
+      "path": "providers/step-cli-transport.md",
+      "tier": 4,
+      "title": "StepCode CLI Transport",
+      "scope": "StepCode as a Step Plan transport: its own framed stdio wire, one process per conversation, inline SDK tools instead of an MCP catalog, and the bounded tool-result window.",
+      "documents": [
+        "src/adapters/step-cli/"
+      ]
+    },
+    {
       "path": "providers/jev-decision.md",
       "tier": 4,
       "title": "JEV Decision Routing",
