@@ -23,18 +23,22 @@ export function remoteMessagingPair(handler?: (call: LocalCall) => unknown | Pro
     outgoing: reply.capability, port: bState.port, ssh: null, hostKey: null, fingerprint: null, allowInbound: false }); });
   return { a, b, aStore, bStore,
     async owners(destinationHome = b.codexHome) {
-      const aOwner = await startRemoteOwner(aStore, a.codexHome, []), bOwner = await startRemoteOwner(bStore, destinationHome, []);
-      const budget = new MessageBudget();
+      let aOwner: Awaited<ReturnType<typeof startRemoteOwner>> | undefined, bOwner: typeof aOwner;
+      let budget: MessageBudget | undefined;
       const aGeneration = crypto.randomUUID(), bGeneration = crypto.randomUUID();
       try {
+        aOwner = await startRemoteOwner(aStore, a.codexHome, []);
+        bOwner = await startRemoteOwner(bStore, destinationHome, []);
+        budget = new MessageBudget();
         // Offline lease fixture: TCP paths substitute for SSH forwarding; real SSH is a separate opt-in test.
         await remoteControl(aStore.requireEnabled(), peerEndpoint(aStore.peer("worker"), bOwner.port), "message/lease",
           { port: aOwner.port, generation: aGeneration }, budget);
         await remoteControl(bStore.requireEnabled(), peerEndpoint(bStore.peer(aState.machine.id), aOwner.port), "message/lease",
           { port: bOwner.port, generation: bGeneration }, budget);
-      } catch (error) { await Promise.all([aOwner.close(), bOwner.close()]); throw error; }
-      finally { budget.dispose(); }
-      return { aOwner, bOwner, aGeneration, bGeneration, close: () => Promise.all([aOwner.close(), bOwner.close()]) };
+        const owners = [aOwner, bOwner];
+        return { aOwner, bOwner, aGeneration, bGeneration, close: () => Promise.all(owners.map(owner => owner.close())) };
+      } catch (error) { await Promise.allSettled([aOwner?.close(), bOwner?.close()]); throw error; }
+      finally { budget?.dispose(); }
     },
     close: () => Promise.all([a.close(), b.close()]), LOCAL_OTHER, LOCAL_TARGET,
   };
