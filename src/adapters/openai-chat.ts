@@ -47,7 +47,7 @@ import { messagesToChatFormat } from "./openai-chat/messages";
 import { withOpenAIChatToolNames } from "./openai-chat/tool-name-registry";
 import { openAIChatTransport, stripBracketedModelSuffix } from "./openai-chat/wire";
 import { toolChoiceToChatFormat, toolsToChatFormatForProvider } from "./openai-chat/tool-schema";
-import { freeformToolsByWireName, type FreeformToolIdentity, reconcileSerializedToolCallEvents, reconcileStructuredToolCall, reconcileStructuredToolCalls, recoverStandaloneBareBlocks, SerializedToolCallContentBuffer, stripStandaloneBareBlocks } from "./openai-chat/serialized-tool-call-content";
+import { containsSerializedToolCallBlock, freeformToolsByWireName, type FreeformToolIdentity, reconcileSerializedToolCallEvents, reconcileStructuredToolCall, reconcileStructuredToolCalls, recoverStandaloneBareBlocks, SerializedToolCallContentBuffer, stripStandaloneBareBlocks } from "./openai-chat/serialized-tool-call-content";
 
 export { stripBracketedModelSuffix } from "./openai-chat/wire";
 export { buildOpenAIChatPassthroughRequest } from "./openai-chat/passthrough";
@@ -301,6 +301,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       const pendingToolCalls: PendingToolCall[] = [];
       const toolCallContent = new SerializedToolCallContentBuffer(budget);
+    toolCallContent.holdMidLine = /(?:^|[/-])mimo-v2\.6-pro(?:\.|$)/i.test(lastRequestedModelId ?? "");
       const heldText = (): AdapterEvent[] => toolCallContent.drain([]);
       let toolCallSeq = 0;
       const closeToolCalls = (): PendingToolCall[] => {
@@ -361,9 +362,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           // Codex Desktop harness sessions declare no tools and send no structured
           // payload; the client-side harness executes these blocks. The proxy's job is
           // only to keep the markup out of the visible answer text.
-          if (freeformTools.size === 0) {
-            const stripped = stripStandaloneBareBlocks(toolCallContent.current());
-            if (stripped !== toolCallContent.current()) {
+          // Also covers the one-declared-tool case: MiMo declares exec as freeform but
+          // sends the whole call only in the visible text, mid-line.
+          {
+            const heldText = toolCallContent.current();
+            const stripped = stripStandaloneBareBlocks(heldText);
+            if (stripped !== heldText) {
               const events = toolCallContent.drain([]);
               for (const event of events) {
                 if (event.type === "text_delta") {

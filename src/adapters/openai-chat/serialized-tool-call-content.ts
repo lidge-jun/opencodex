@@ -113,6 +113,61 @@ export function stripStandaloneBareBlocks(
   return result + text.slice(cursor);
 }
 
+/** True when text carries a serialized tool-call block (used as an emission gate). */
+export function containsSerializedToolCallBlock(text: string): boolean {
+  return /<tool_call>\s*<function=/.test(text);
+}
+
+/**
+ * A streaming splitter that also holds mid-line serialized blocks. MiMo emits the
+ * block directly after a prose sentence; the plain splitter releases those as text
+ * because only line-start markup qualifies (#7260). This variant additionally holds
+ * from a mid-line `<tool_call><function=` header when it sits outside fences/inline
+ * code, so the drain path can reconcile or strip the whole block at stream end.
+ */
+export function splitAtPossibleSerializedToolCallIncludingMidLine(
+  text: string,
+  initialContext: TextContext = { fence: null, lineStart: true },
+  final = false,
+): ReturnType<typeof splitAtPossibleSerializedToolCall> {
+  const split = splitAtPossibleSerializedToolCall(text, initialContext, final);
+  if (split.hasOpenTag) return split;
+  // Find the first mid-line header; skip when the text carries an open fence/code span.
+  const MID_LINE_HEADER = /<tool_call>\s*<function=[^>\r\n]+>/g;
+  for (let m = MID_LINE_HEADER.exec(text); m !== null; m = MID_LINE_HEADER.exec(text)) {
+    const at = m.index;
+    // Hold from the header unless the prose before it leaves a fence or inline-code span
+    // open (fenced examples are user-visible, not control markup).
+    const fenceCheck = splitAtPossibleSerializedToolCall(text.slice(0, at).replaceAll(OPEN_TAG, "<tool-call>"), { fence: initialContext.fence, lineStart: initialContext.lineStart, inlineTicks: initialContext.inlineTicks }, true);
+    if (fenceCheck.context.fence !== null || fenceCheck.context.inlineTicks !== undefined) continue;
+    return { emit: text.slice(0, at), defer: text.slice(at), hasOpenTag: true, context: { fence: null, lineStart: false } };
+  }
+  // A partial `<tool_call>` prefix at the end of the chunk must also be held so the
+  // complete header can be recognized when the next delta arrives.
+  if (!final) {
+    for (let cut = Math.min(text.length, OPEN_TAG.length); cut > 0; cut--) {
+      if (text.endsWith(OPEN_TAG.slice(0, cut))) {
+        // Only hold the partial when the preceding text is not inside a fence.
+        const before = text.slice(0, text.length - cut);
+        const fenceCheck = splitAtPossibleSerializedToolCall(before, initialContext, true);
+        if (fenceCheck.context.fence !== null || fenceCheck.context.inlineTicks !== undefined) break;
+        return { emit: text.slice(0, text.length - cut), defer: OPEN_TAG.slice(0, cut), hasOpenTag: false, context: fenceCheck.context };
+      }
+    }
+    // Same for a partial header after a complete `<tool_call>` opener.
+    const lastOpen = text.lastIndexOf(OPEN_TAG);
+    if (lastOpen >= 0) {
+      const afterOpen = text.slice(lastOpen + OPEN_TAG.length);
+      if (afterOpen.length > 0 && !afterOpen.includes("\n")
+          && (FUNCTION_TAG.startsWith(afterOpen.trimStart())
+              || (afterOpen.trimStart().startsWith(FUNCTION_TAG) && !/[>\r\n]/.test(afterOpen.trimStart().slice(FUNCTION_TAG.length))))) {
+        return { emit: text.slice(0, lastOpen), defer: text.slice(lastOpen), hasOpenTag: false, context: { fence: null, lineStart: false } };
+      }
+    }
+  }
+  return split;
+}
+
 export interface StructuredToolCallReference {
   names: ReadonlySet<string>;
   argumentsText: string;
@@ -355,6 +410,9 @@ export class SerializedToolCallContentBuffer {
   private context: TextContext = { fence: null, lineStart: true };
   private queued: { offset: number; event: AdapterEvent }[] = [];
 
+  /** When true, ingest also holds mid-line serialized blocks (MiMo emission shape). */
+  holdMidLine = false;
+
   constructor(private readonly budget: TranslatorBudget) {}
 
   /** Remembers visible text released before a later structured call can be reconciled. */
@@ -432,7 +490,9 @@ export class SerializedToolCallContentBuffer {
       this.append(delta);
       return "";
     }
-    const split = splitAtPossibleSerializedToolCall(this.text + delta, this.context);
+    const split = this.holdMidLine
+      ? splitAtPossibleSerializedToolCallIncludingMidLine(this.text + delta, this.context)
+      : splitAtPossibleSerializedToolCall(this.text + delta, this.context);
     this.replace(split.defer, split.hasOpenTag);
     this.context = split.context;
     if (!split.hasOpenTag) this.continuationBreak = deferredContinuationBreak(split.defer, split.context);

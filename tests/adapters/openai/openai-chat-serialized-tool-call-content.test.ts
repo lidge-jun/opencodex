@@ -415,6 +415,30 @@ test("a mid-line bare block in a no-tools session is hidden from visible text", 
   expect(visible).not.toContain("<tool_call>");
 });
 
+test("streamed mid-line block after prose is held and stripped for MiMo (the Codex Desktop harness shape)", async () => {
+  const script = "const results=await Promise.allSettled([tools.exec_command({cmd:'ls'})]); text('ok');";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const adapter = withTestTranslatorBudget(createOpenAIChatAdapter(provider));
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: true, options: {}, context: {
+    messages: [{ role: "user", content: "run", timestamp: 0 }], tools: [execTool],
+  } });
+  // Mid-line: prose directly followed by the block (the live screenshot shape), streamed in random chunks.
+  const full = `I will run the commands now.${block}`;
+  const frames = [
+    { choices: [{ delta: { content: full.slice(0, 20) } }] },
+    { choices: [{ delta: { content: full.slice(20, 45) } }] },
+    { choices: [{ delta: { content: full.slice(45) } }] },
+    { choices: [{ delta: {}, finish_reason: "stop" }] },
+  ];
+  const body = frames.map(f => `data: ${JSON.stringify(f)}\n\n`).join("") + "data: [DONE]\n\n";
+  const events: AdapterEvent[] = [];
+  for await (const event of adapter.parseStream(new Response(body))) if (event.type !== "heartbeat") events.push(event);
+  const visible = events.filter(e => e.type === "text_delta").map(e => e.text).join("");
+  expect(visible).toBe("I will run the commands now.");
+  expect(visible).not.toContain("<tool_call>");
+  expect(visible).not.toContain("exec_command");
+});
+
 test("buffered Chat responses preserve repeated markup when two structured calls match", async () => {
   const script = "text('ok');";
   const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
