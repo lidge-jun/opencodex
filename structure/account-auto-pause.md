@@ -72,7 +72,9 @@ check it beside `src/codex/account-pause.ts` state. Revision records exist only 
 preservation: deleting a provider reclaims its record, and both the persisted and the observed
 maps stay bounded by the provider list. Every new observed record and every generation advance draws
 from one process-wide counter, so a deleted and recreated provider can never reproduce an older
-attempt's fence. A raw legacy delete and identical recreate that no load observes stays undetectable.
+attempt's fence. Once a config path has been observed, a capture never seeds a missing name from
+the caller's config object: only load, reload or save adoption can enroll it, so a stale live config
+cannot re-enroll a provider an observation deleted. A raw legacy delete and identical recreate that no load observes stays undetectable.
 Codex pool ownership binds the bearer, the `chatgpt-account-id` workspace and any organization or
 project selector at capture and in the final-send report. A malformed map suppresses automatic pause
 until the next valid write mints fresh revisions. A raw editor that bypasses the lock and finishes a

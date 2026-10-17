@@ -364,3 +364,33 @@ for (const epoch of ["persisted UUID", "legacy no-map"] as const) {
     await expectStaleAttemptRejected(config, attempt);
   });
 }
+
+for (const legacy of [false, true]) {
+  test(`${legacy ? "legacy no-map" : "persisted UUID"}: a stale live config cannot re-enroll a provider observed as deleted`, async () => {
+    const config = fixture();
+    config.providers.fixture!.accountAutoPause!.consecutiveFailures = 1;
+    config.providers.other = { adapter: "openai-chat", baseUrl: "https://other.test/v1", authMode: "key", apiKey: "synthetic-other" };
+    if (legacy) writeFileSync(join(home, "config.json"), JSON.stringify(config)); else saveConfig(config);
+    loadConfig();
+    const original = bytes();
+    const deleted = raw();
+    delete deleted.providers.fixture;
+    deleted.defaultProvider = "other";
+    writeFileSync(join(home, "config.json"), JSON.stringify(deleted));
+    loadConfig();
+    expect(accountAutoPauseObservedSizeForTests()).toBe(1);
+    // The live object still holds the provider; capturing from it while it is deleted must not
+    // re-enroll an observation or produce a fence that survives an identical restore.
+    const route = routedProviderConfig("fixture", config.providers.fixture!);
+    expect(captureAccountAutoPauseFence(config, "fixture")).toBeUndefined();
+    expect(captureAccountAutoPauseAttempt("fixture", route, { config }, new Headers({ authorization: `Bearer ${route.apiKey}` }))).toBeUndefined();
+    expect(accountAutoPauseObservedSizeForTests()).toBe(1);
+    writeFileSync(join(home, "config.json"), original);
+    loadConfig();
+    expect(accountAutoPauseObservedSizeForTests()).toBe(2);
+    const current = refusal();
+    await captureKeyAttempt(config)(current);
+    expect(wasAccountAutoPaused(current)).toBe(true);
+  });
+}
+

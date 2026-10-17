@@ -109,8 +109,11 @@ export function observeLoadedAutoPauseConfig(config: OcxConfig): OcxConfig {
   return config;
 }
 export function captureAccountAutoPauseFence(config: OcxConfig, name: string): AccountAutoPauseFence | undefined {
-  if (!observed.get(getConfigPath())?.has(name)) observeAccountAutoPauseRevisions(config);
-  const state = observed.get(getConfigPath())!.get(name);
+  // Only a config path no load or save has observed may be seeded from the caller's object. Once a
+  // path is observed, a missing name means an authoritative observation removed it, and a stale
+  // live snapshot must not re-enroll it; adoption by load, reload or save is required.
+  if (!observed.has(getConfigPath())) observeAccountAutoPauseRevisions(config);
+  const state = observed.get(getConfigPath())?.get(name);
   const p = provider(config, name), policy = record(p?.accountAutoPause);
   const threshold = policy?.consecutiveFailures ?? 2;
   if (!state || state.unknown || !p || p.disabled === true || policy?.enabled !== true || typeof threshold !== "number" || !Number.isInteger(threshold) || threshold < 1 || threshold > 100) return;
