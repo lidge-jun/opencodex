@@ -51,7 +51,7 @@
             "type": "custom",
             "name": "apply_patch",
             "description": "Apply a patch",
-            "format": { "type": "grammar", "syntax": "lark" }
+            "format": { "type": "grammar", "syntax": "lark", "definition": "start: PATCH\nPATCH: /[\\s\\S]+/" }
           }
         ]
       },
@@ -71,8 +71,14 @@
             "type": "custom",
             "name": "apply_patch",
             "description": "Apply a patch",
-            "format": { "type": "grammar", "syntax": "lark" }
+            "format": { "type": "grammar", "syntax": "lark", "definition": "start: PATCH\nPATCH: /[\\s\\S]+/" }
           }
+        },
+        {
+          "id": "custom-tool-grammar-preserved",
+          "operator": "equals",
+          "path": "/body/tools/0/format",
+          "expected": { "type": "grammar", "syntax": "lark", "definition": "start: PATCH\nPATCH: /[\\s\\S]+/" }
         },
         { "id": "max-output-tokens-removed", "operator": "absent", "path": "/body/max_output_tokens" },
         { "id": "metadata-removed", "operator": "absent", "path": "/body/metadata" },
