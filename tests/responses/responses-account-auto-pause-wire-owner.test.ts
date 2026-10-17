@@ -295,3 +295,43 @@ describe("Codex pool WebSocket observer without a physical report", () => {
     });
   }
 });
+
+describe("nested auto-pause observers on one physical response", () => {
+  test("count a refusal once per account when both observers see it", async () => {
+    const config = fixture();
+    config.providers.fixture!.accountAutoPause = { enabled: true, consecutiveFailures: 2 };
+    saveConfig(config);
+    const route = routedProviderConfig("fixture", config.providers.fixture!);
+    const headers = () => new Headers({ authorization: "Bearer synthetic-A" });
+    const outer = captureAccountAutoPauseAttempt("fixture", route, { config }, headers())!;
+    const inner = captureAccountAutoPauseAttempt("fixture", route, { config }, headers())!;
+    inner.physical(true, headers());
+    const first = refusal();
+    await inner(first);
+    await outer(first);
+    expect(wasAccountAutoPaused(first)).toBe(false);
+    expectUnpaused(config);
+    // The streak still holds one refusal: the next owned refusal reaches the threshold of two.
+    const next = captureAccountAutoPauseAttempt("fixture", route, { config }, headers())!;
+    next.physical(true, headers());
+    const second = refusal();
+    await next(second);
+    expect(wasAccountAutoPaused(second)).toBe(true);
+    expectPaused(config);
+  });
+
+  test("an unreported observer never attributes a response reported as sent with another credential", async () => {
+    const config = fixture();
+    const route = routedProviderConfig("fixture", config.providers.fixture!);
+    const headers = new Headers({ authorization: "Bearer synthetic-A" });
+    const outer = captureAccountAutoPauseAttempt("fixture", route, { config }, headers)!;
+    const inner = captureAccountAutoPauseAttempt("fixture", route, { config }, headers)!;
+    inner.physical(true, new Headers({ authorization: "Bearer synthetic-third" }));
+    const response = refusal();
+    await inner(response);
+    await outer(response);
+    expect(wasAccountAutoPaused(response)).toBe(false);
+    expectUnpaused(config);
+  });
+});
+

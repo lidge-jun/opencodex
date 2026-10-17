@@ -15,7 +15,9 @@ config object; completed pauses belong to the existing durable account stores. A
 headers, reported by `sendWithConnectionPolicy` after plugin rewrites and queued rebuilds, match the
 captured attempt; a Codex WebSocket send has no HTTP final-send report and counts only when no
 plugin upstream rewriter was registered at capture and the registration epoch in
-`src/plugins/upstream-hooks.ts` is unchanged when the response arrives. Regression coverage:
+`src/plugins/upstream-hooks.ts` is unchanged when the response arrives. Nested capture sites that see the same physical response count it once
+per account, and an observer without a final-send report never attributes a response another
+observer had reported. Regression coverage:
 `tests/responses/responses-account-auto-pause-wire-owner.test.ts`.
 
 ## Permanent account refusal policy

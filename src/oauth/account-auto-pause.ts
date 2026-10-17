@@ -32,6 +32,11 @@ export type AccountAutoPauseObserver = ((response: Response) => Promise<Response
   physical: (sameDestination: boolean, headers: Headers) => void;
 };
 const CREDENTIAL_HEADERS = ["authorization", "x-api-key", "x-goog-api-key", "api-key"] as const;
+// Nested capture sites (a providerFetch observer around a dispatchOverride's own observer) see the
+// same physical response. It counts once per account, and a response whose final send was reported
+// to any observer is never attributed by an observer that received no report.
+const countedResponses = new WeakMap<Response, Set<string>>();
+const reportedResponses = new WeakSet<Response>();
 export function captureAccountAutoPauseAttempt(name: string, provider: OcxProviderConfig, binding?: AccountAutoPauseBinding, headers?: Headers):
   AccountAutoPauseObserver | undefined {
   if (!binding) return;
@@ -130,7 +135,12 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   const observer = (async (response: Response) => {
     if (observed.has(response) || isNonReplayableResponse(response)) return response;
     observed.add(response);
+    if (wireOwned !== undefined) reportedResponses.add(response);
+    else if (reportedResponses.has(response)) return response;
     if (!(wireOwned ?? (rewriterEpoch !== undefined && upstreamRewriterEpoch() === rewriterEpoch))) return response;
+    const counted = countedResponses.get(response) ?? new Set<string>();
+    if (counted.has(key)) return response;
+    countedResponses.set(response, counted.add(key));
     try {
       const verdict = permanentAccountRefusal(response).then(reason => {
         if (reason) markPermanentAccountRefusal(response);
