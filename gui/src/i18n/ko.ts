@@ -2131,6 +2131,10 @@ export const ko: Record<TKey, string> = {
 
   "accountPool.strategy": "로테이션 전략",
   "accountPool.strategyDesc": "OpenCodex가 새 작업/바인딩 없는 작업에 계정을 배정하는 방식입니다.",
+  "accountPool.strategyQuotaWeighted": "잔여 할당량·초기화 가중",
+  "accountPool.strategyHintQuotaWeighted": "새 작업은 잔여 할당량이 가장 많은 계정으로 배정되며 동률은 순환합니다. 초기화가 가까우면 동점 해소용 소폭 가산만 적용합니다. 모든 기간의 한도를 함께 적용하며 정상 연결은 유지합니다. 독립 모델 할당량은 할당량 모드를 사용합니다.",
+  "accountPool.weightedBelowThreshold": "{threshold}% 미만에서 가중 배분",
+  "accountPool.weightedThresholdOff": "할당량 임계값 필터 꺼짐",
   "accountPool.strategyResetFirst": "가장 가까운 초기화 우선",
   "accountPool.strategyHintResetFirst": "사용량 임계값 미만인 계정 중 다음 5시간·주간 초기화가 가장 가까운 계정을 고릅니다. 연결된 작업은 설정된 어피니티 정책을 따릅니다. 독립 모델 한도에는 사용량 순서를 적용합니다.",
   "accountPool.strategyQuota": "할당량",

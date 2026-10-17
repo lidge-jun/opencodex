@@ -110,7 +110,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+strategy <provider> [<quota|round-robin|fill-first|reset-first|quota-weighted>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -411,3 +411,11 @@ ocx models remove deepseek/deepseek-v4 --yes
 enum и отвергает *весь* каталог, если встречает любое другое значение, поэтому `add`, `edit` и
 management API запрещают такие значения ещё до записи, а не сохраняют то, что catalog writer
 потом был бы вынужден вырезать (#759).
+
+### `quota-weighted`
+
+Новые непривязанные задачи назначаются аккаунту с наибольшим остатком квоты; близкий сброс лишь добавляет своему окну небольшую надбавку при близком равенстве (не более +10 %, в широкой полосе +5 %) и влияет на порядок кандидатов с близким остатком. Равные остатки чередуются, а аккаунт с неизвестной квотой сохраняет небольшую пропорциональную пробную долю, пока не будет наблюден. Каждое окно ограничивает вес; исправные привязки сохраняются. При достижении порога новые задачи не назначаются; если порог достигнут всеми, возврата к активному аккаунту нет. Независимые квоты используют quota. Только Codex.
+
+```sh
+ocx account pool openai --strategy quota-weighted
+```

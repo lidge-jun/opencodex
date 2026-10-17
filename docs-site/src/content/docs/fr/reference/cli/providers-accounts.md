@@ -121,7 +121,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Stratégie du pool ; least-loaded est réservé à Kiro.
+strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first|quota-weighted>]  Stratégie du pool ; least-loaded est réservé à Kiro.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -455,3 +455,11 @@ un identifiant qui semblerait autrement routé.
 et rejette un catalogue entier contenant toute autre valeur, donc `add`, `edit`, et la gestion API
 tous refusent la mauvaise valeur plutôt que de stocker quelque chose que le rédacteur du catalogue devrait retirer plus tard
 (#759).
+
+### `quota-weighted`
+
+Attribue les nouvelles tâches non associées au compte au reste le plus élevé ; une réinitialisation proche n'ajoute à sa fenêtre qu'une petite bonification de départage (au plus +10 %, +5 % dans la bande large), qui départage les scores proches. Les restes égaux tournent ; un compte au quota inconnu garde une petite part de sondage proportionnelle. Chaque fenêtre limite le poids ; les associations saines restent. Aucun nouveau placement au seuil, sans repli sur le compte actif si tous atteignent leur seuil. Les quotas indépendants utilisent quota. Réservé à Codex.
+
+```sh
+ocx account pool openai --strategy quota-weighted
+```

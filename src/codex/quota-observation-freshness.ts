@@ -2,7 +2,7 @@ import { isThirtyDayOnlyCodexPlan } from "./plan";
 import type { StoredAccountQuota } from "./quota-types";
 
 type Window = "weeklyPercent" | "monthlyPercent" | "shortPercent";
-// Failback needs observations, not a recent cache write. Keep this request-policy evidence
+// Request policy needs observations, not a recent cache write. Keep this evidence
 // process-local: hydrated display bars do not prove a fresh observation in this process.
 const observed = new WeakMap<StoredAccountQuota, Partial<Record<Window, number>>>();
 const windows: Window[] = ["weeklyPercent", "monthlyPercent", "shortPercent"];
@@ -22,6 +22,11 @@ export function stampCodexQuotaUsageObservation(
   }
   observed.set(next, timestamps);
   return next;
+}
+
+/** Per-window measurement clock; carried or hydrated values cannot acquire a new observation. */
+export function codexQuotaUsageObservedAt(quota: StoredAccountQuota, window: Window): number | undefined {
+  return observed.get(quota)?.[window];
 }
 
 export function codexQuotaHasFreshUsage(quota: StoredAccountQuota, plan: unknown, now: number, maxAgeMs: number): boolean {

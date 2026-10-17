@@ -2649,6 +2649,10 @@ export const tr: Record<TKey, string> = {
 
   "accountPool.strategy": "Rotasyon stratejisi",
   "accountPool.strategyDesc": "OpenCodex'in yeni bir göreve nasıl hesap atayacağı.",
+  "accountPool.strategyQuotaWeighted": "Kota ve sıfırlama ağırlığı",
+  "accountPool.strategyHintQuotaWeighted": "Yeni görevler kalan kotası en yüksek hesaba gider; eşitlikler sırayla döner. Yakın sıfırlama yalnızca küçük bir eşitlik bozma eklemesi yapar. Her pencere ağırlığı sınırlar; sağlıklı bağlantılar korunur. Bağımsız model kotaları kota modunu kullanır.",
+  "accountPool.weightedBelowThreshold": "{threshold}% altında ağırlıklı dağıtım",
+  "accountPool.weightedThresholdOff": "Kota eşik filtresi kapalı",
   "accountPool.strategyResetFirst": "En yakın sıfırlama önce",
   "accountPool.strategyHintResetFirst": "Eşiğin altındaki hesaplar arasından sonraki 5 saatlik veya haftalık sıfırlaması en yakın olanı seçer. Bağlı görevler yapılandırılmış bağlılık politikasını izler. Bağımsız model kotaları kullanıma göre sıralanır.",
   "accountPool.strategyQuota": "Kota",

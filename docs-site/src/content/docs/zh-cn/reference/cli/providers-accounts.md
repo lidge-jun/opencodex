@@ -107,7 +107,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+strategy <provider> [<quota|round-robin|fill-first|reset-first|quota-weighted>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -385,3 +385,11 @@ native 的 OpenAI 模型，因此只有当某个 id 本来会被看成 routed �
 `--modalities` 只接受 `text`、`image` 和 `audio`。Codex 会把该字段解析为封闭枚举，
 并拒绝任何包含其他值的完整目录，因此 `add`、`edit` 和管理 API 都会直接拒绝这个
 错误值，而不会存下一个目录写入器之后还得再剥离的内容（#759）。
+
+### `quota-weighted`
+
+新建/未绑定任务分配给剩余额度最多的账号；临近重置只为本窗口加少量平分决胜权重（最多 +10%，较宽档 +5%），只影响剩余份额接近的候选比较。剩余相同则均匀轮转；额度未知的账号在被观测到之前保留少量比例探测份额。各窗口共同限制权重，健康会话保持绑定。达到账号有效阈值停止分配新任务；所有账号均达到阈值时不回退到当前账号。未知额度仅获小份额。独立模型额度使用原配额模式。该模式仅适用于 Codex。
+
+```sh
+ocx account pool openai --strategy quota-weighted
+```

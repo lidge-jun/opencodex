@@ -17,6 +17,9 @@ export function genericPoolKey(providerName: string): string {
 interface SelectionState {
   activeKey?: string;
   successes: number;
+  weighted?: boolean;
+  manualSeed?: boolean;
+  effectiveWeights?: ReadonlyMap<string, number>;
   currentWeights: Map<string, number>;
 }
 
@@ -43,11 +46,11 @@ export function parseAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationSt
 }
 
 /** Codex alone supports ordering by the next shared quota reset. */
-export function parseCodexAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | "reset-first" | null {
-  return raw === "reset-first" ? raw : parseAccountPoolStrategy(raw);
+export function parseCodexAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | "reset-first" | "quota-weighted" | null {
+  return raw === "reset-first" || raw === "quota-weighted" ? raw : parseAccountPoolStrategy(raw);
 }
 
-export function normalizeCodexAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | "reset-first" {
+export function normalizeCodexAccountPoolStrategy(raw: unknown): OcxAccountPoolRotationStrategy | "reset-first" | "quota-weighted" {
   return parseCodexAccountPoolStrategy(raw) ?? DEFAULT_STRATEGY;
 }
 
@@ -145,17 +148,21 @@ function cloneSelectionState(state: SelectionState): SelectionState {
   return {
     activeKey: state.activeKey,
     successes: state.successes,
+    weighted: state.weighted,
+    manualSeed: state.manualSeed,
+    effectiveWeights: state.effectiveWeights && new Map(state.effectiveWeights),
     currentWeights: new Map(state.currentWeights),
   };
 }
 
-function smoothWeightedIndex(ids: readonly string[], state: SelectionState): number {
+function smoothWeightedIndex(ids: readonly string[], state: SelectionState, weights?: ReadonlyMap<string, number>): number {
   let best = -1;
   let bestScore = Number.NEGATIVE_INFINITY;
   let total = 0;
-  const weight = 1;
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i]!;
+    const weight = weights?.get(id) ?? 1;
+    if (!Number.isFinite(weight) || weight <= 0) continue;
     const score = (state.currentWeights.get(id) ?? 0) + weight;
     state.currentWeights.set(id, score);
     total += weight;
@@ -180,21 +187,47 @@ function pickRoundRobinFromState(
   stickyLimit: number,
   state: SelectionState,
   commitSticky: boolean,
+  weights?: ReadonlyMap<string, number>,
 ): string | null {
+  const limit = normalizeAccountPoolStickyLimit(stickyLimit);
+  const weighted = weights !== undefined;
+  const effectiveWeights = weights && new Map(eligibleIds.map(id => [id, weights.get(id) ?? 1]));
+  const supportChanged = effectiveWeights !== undefined && (
+    state.effectiveWeights?.size !== effectiveWeights.size
+    || [...effectiveWeights].some(([id, weight]) => !state.effectiveWeights?.has(id)
+      || (state.effectiveWeights.get(id)! > 0) !== (weight > 0))
+  );
+  if ((state.weighted !== undefined && state.weighted !== weighted) || supportChanged) {
+    // Membership and zero/positive transitions retire the old allocation. Preserve only an
+    // operator's next-account seed; previews reconcile their clone rather than live state.
+    if (!state.manualSeed) delete state.activeKey;
+    state.successes = 0;
+    state.currentWeights.clear();
+  } else if (effectiveWeights && state.effectiveWeights) {
+    const total = (values: ReadonlyMap<string, number>) => [...values.values()].reduce((sum, value) => sum + value, 0);
+    const scale = total(effectiveWeights) / total(state.effectiveWeights);
+    // Retain normalized progress when positive weights change, so continuously arriving quota
+    // updates cannot starve an unknown account of its probe share. Normalized scores sum to zero.
+    if (Number.isFinite(scale) && scale > 0) {
+      for (const [id, score] of state.currentWeights) state.currentWeights.set(id, score * scale);
+    } else state.currentWeights.clear();
+  }
+  state.weighted = weighted;
+  state.effectiveWeights = effectiveWeights;
   if (eligibleIds.length === 0) return null;
 
-  const limit = normalizeAccountPoolStickyLimit(stickyLimit);
-
   if (state.activeKey && eligibleIds.includes(state.activeKey)) {
+    delete state.manualSeed;
     return state.activeKey;
   }
 
   if (state.activeKey) {
     delete state.activeKey;
+    delete state.manualSeed;
     state.successes = 0;
   }
 
-  const index = smoothWeightedIndex(eligibleIds, state);
+  const index = smoothWeightedIndex(eligibleIds, state, weights);
   if (index < 0) return null;
 
   const picked = eligibleIds[index]!;
@@ -209,8 +242,9 @@ export function pickRoundRobinAccount(
   poolKey: string,
   eligibleIds: readonly string[],
   stickyLimit: number,
+  weights?: ReadonlyMap<string, number>,
 ): string | null {
-  return pickRoundRobinFromState(eligibleIds, stickyLimit, getOrCreateState(poolKey), true);
+  return pickRoundRobinFromState(eligibleIds, stickyLimit, getOrCreateState(poolKey), true, weights);
 }
 
 /**
@@ -221,12 +255,13 @@ export function peekRoundRobinAccount(
   poolKey: string,
   eligibleIds: readonly string[],
   stickyLimit: number,
+  weights?: ReadonlyMap<string, number>,
 ): string | null {
   const live = selectionState.get(poolKey);
   const scratch = live
     ? cloneSelectionState(live)
     : { successes: 0, currentWeights: new Map<string, number>() };
-  return pickRoundRobinFromState(eligibleIds, stickyLimit, scratch, false);
+  return pickRoundRobinFromState(eligibleIds, stickyLimit, scratch, false, weights);
 }
 
 export function notePoolRotationSuccess(
@@ -239,11 +274,13 @@ export function notePoolRotationSuccess(
   if (!state) return;
   if (state.activeKey !== accountId) {
     state.activeKey = accountId;
+    delete state.manualSeed;
     state.successes = 0;
   }
   state.successes += 1;
   if (state.successes >= limit) {
     delete state.activeKey;
+    delete state.manualSeed;
     state.successes = 0;
   }
 }
@@ -252,6 +289,7 @@ export function notePoolRotationFailure(poolKey: string, accountId: string): voi
   const state = selectionState.get(poolKey);
   if (state?.activeKey === accountId) {
     delete state.activeKey;
+    delete state.manualSeed;
     state.successes = 0;
   }
 }
@@ -264,6 +302,7 @@ export function notePoolRotationFailure(poolKey: string, accountId: string): voi
 export function seedPoolRotationAccount(poolKey: string, accountId: string): void {
   const state = getOrCreateState(poolKey);
   state.activeKey = accountId;
+  state.manualSeed = true;
   state.successes = 0;
   state.currentWeights.clear();
 }
@@ -319,6 +358,7 @@ export function reconcilePoolRotationState(context: GenerationContext): number {
     }
     if (state.activeKey && !valid.has(state.activeKey)) {
       delete state.activeKey;
+      delete state.manualSeed;
       state.successes = 0;
       removed += 1;
     }

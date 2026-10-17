@@ -44,7 +44,7 @@ ocx models provider openrouter on
 | `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool 各账号的选择顺序：账号 ID → `-100` 到 `100` 的整数，**数值越大越先使用**，未设置即为 `0`。这是顺序边界而非资格边界：选择会把已经合格的账号收窄到仍有 quota 余量的最高 tier，再由 `accountPoolStrategy` 在该 tier 内挑选。只有当某个 tier 的所有成员都达到各自非零的有效阈值（账号覆盖值，未设置则使用全局值）、处于 cooldown、被 soft-avoid、已暂停或需要重新认证时，该 tier 才会被跳过；usage 未知不会让 tier 耗尽。顺序不会让不合格的账号变得可选，也不会重新绑定已经绑定账号的 thread。主账号 `__main__` 同样参与排序，因此可以让 Codex Desktop 登录账号最后才被用到。没有任何条目时，行为与以往完全一致。映射格式非法时会打印警告并关闭排序（不会触发 config 修复）。可通过 `ocx account priority` 和 Codex Auth 页面管理。 |
 | `autoSwitchThreshold?` | `number` | `80` | 基于用量的主动切换阈值。`quota` 可在下一次请求中重新评估未绑定任务。已绑定任务默认（`pool.cacheAffinity`）在越过阈值后仍保留账号，直到该账号耗尽或无法继续服务，并且只改绑到确有额度余量且 usage 严格更低的账号。将 `pool.cacheAffinity` 设为 `false` 才会在该阈值重新评估已绑定任务。`fill-first` 仅把它用作未绑定分配的耗尽点；正常 `round-robin` 不使用它。分数取已知 5 小时、周或 30 天 quota window 的最高值。`0` 只关闭基于用量的主动切换，不关闭未绑定任务分配或故障恢复。 |
 | `codexAccountAutoSwitchThresholds?` | `Record<string,number>` | — | 各账号对 `autoSwitchThreshold` 的覆盖：账号 ID → `0`–`100` 的整数。没有条目时继承全局值；`0` 只关闭从该账号发起的基于用量的切换。支持主账号 `__main__`。可在 Codex Auth 的账号卡片中管理。 启用覆盖时，会将当前全局阈值复制为固定的账号值。覆盖值（包括 `0`）在之后修改全局阈值时仍优先。禁用时发送 `threshold: null`，删除条目，并恢复继承当前全局阈值及其未来的更改。 |
-| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | 新建/未绑定 Codex 请求的分配策略。没有 live `(parent thread id, quota scope)` affinity 的请求属于未绑定；代理重启或 affinity 重置后，已有可见任务也可能未绑定。`quota` 在没有活跃账号时选择已知 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求切换到 usage 更低的合格账号。已绑定任务默认会保留到账号耗尽（已知 usage 为 100%）或无法继续服务，改绑时只前往确有额度余量且 usage 严格更低的账号。关闭该标志后，也可在该阈值把已绑定任务的下一次请求改绑到确有额度余量且 usage 严格更低的账号。`round-robin` 均匀分配未绑定请求；`fill-first` 在 cooldown、不可用或耗尽阈值前持续分配给活跃账号。  `reset-first`: 在低于用量阈值的账号中，优先选择下次5小时或周额度重置最早的账号。已绑定任务遵循配置的亲和策略。独立模型额度按用量排序。 此排序不使用月额度重置时间。 |
+| `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first" \| "quota-weighted"` | `"quota"` | 新建/未绑定 Codex 请求的分配策略。没有 live `(parent thread id, quota scope)` affinity 的请求属于未绑定；代理重启或 affinity 重置后，已有可见任务也可能未绑定。`quota` 在没有活跃账号时选择已知 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求切换到 usage 更低的合格账号。已绑定任务默认会保留到账号耗尽（已知 usage 为 100%）或无法继续服务，改绑时只前往确有额度余量且 usage 严格更低的账号。关闭该标志后，也可在该阈值把已绑定任务的下一次请求改绑到确有额度余量且 usage 严格更低的账号。`round-robin` 均匀分配未绑定请求；`fill-first` 在 cooldown、不可用或耗尽阈值前持续分配给活跃账号。  `reset-first`: 在低于用量阈值的账号中，优先选择下次5小时或周额度重置最早的账号。已绑定任务遵循配置的亲和策略。独立模型额度按用量排序。 此排序不使用月额度重置时间。 |
 | `pool.cacheAffinity?` | `boolean` | `true` | 已绑定 Codex 线程的 cache-affinity 排序，独立于 `pool.kernel`。默认开启；省略该键或设为 `true` 即为开启，非法值视为开启。live 绑定优先于 quota 余量：`quota` 不会仅因用量越过 `autoSwitchThreshold` 就移动线程。账号暂停、不可用或真正耗尽（已知 usage 为 100%）时仍会离开，且只改绑到确有额度余量且 usage 严格更低的账号。用量未知的账号不会作为已绑定任务的改绑目标。设为 `false` 可恢复按阈值改绑。affinity 是重排而非钉死。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的新建/未绑定任务分配数。计数在任务绑定时增加，而不是在上游成功后增加。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
 | `upstreamFailoverThreshold?` | `number` | `3` | 连续发生多少次瞬态故障后，后续新会话会切换到备用上游。设为 `0` 可禁用。对于常规 Responses 和原生 compact 发送，已证明的连接前 DNS/TCP 不可达故障按 provider-host 粒度记录，不影响账户健康、账户冷却、线程/会话亲和性、活动账户选择或 Pool 路由，也不会计入此阈值。 |
@@ -595,3 +595,11 @@ Vercel AI Gateway 可以在多个底层推理提供者之间路由一个模型�
 ### `promptLengthPricing`
 
 可选字段 `promptLengthPricing` 扩展四项基础费率。`mode: "automatic"`（或省略该字段）保留目录的上下文计价规则；`mode: "flat"` 禁用这些规则。`mode: "custom"` 使用正安全整数 `thresholdTokens`、值为 `"gt"`（>）或 `"gte"`（≥）的 `comparison`，以及包含四项绝对替代费率的 `rates`。阈值统计所有提示词 token，包括缓存读取和写入，不包括输出。选中的费率适用于包括输出在内的整个请求，并在阈值两侧都取代目录上下文规则。Fast/Priority 调整在选定费率后只应用一次，并遵循目录为该模型公布的 Priority 关系；仅当目录将该关系声明为 `lower-bound`（目前为 xAI Grok）时，估算才会标记为下限；没有目录规则的模型只应用一次 Priority 倍率。可在 **Models → Price** 中配置。**Reset to automatic** 删除包括基础费率和规则在内的整个覆盖配置。旧配置保持兼容；这些设置只涉及显示的费用估算。
+
+### `quota-weighted`
+
+新建/未绑定任务分配给剩余额度最多的账号；临近重置只为本窗口加少量平分决胜权重（最多 +10%，较宽档 +5%），只影响剩余份额接近的候选比较。剩余相同则均匀轮转；额度未知的账号在被观测到之前保留少量比例探测份额。各窗口共同限制权重，健康会话保持绑定。达到账号有效阈值停止分配新任务；所有账号均达到阈值时不回退到当前账号。未知额度仅获小份额。独立模型额度使用原配额模式。该模式仅适用于 Codex。
+
+```sh
+ocx account pool openai --strategy quota-weighted
+```

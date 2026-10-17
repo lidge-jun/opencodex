@@ -2709,6 +2709,10 @@ export const en = {
 
   "accountPool.strategy": "Rotation strategy",
   "accountPool.strategyDesc": "How OpenCodex assigns an account to a new/unbound task.",
+  "accountPool.strategyQuotaWeighted": "Quota & reset weighted",
+  "accountPool.strategyHintQuotaWeighted": "New tasks go to the account with the largest remaining share; ties rotate. A near reset adds only a small tie-break lift. Every window limits the weight; healthy bindings stay. Independent model quotas use quota mode.",
+  "accountPool.weightedBelowThreshold": "Weighted below {threshold}%",
+  "accountPool.weightedThresholdOff": "Quota threshold filter off",
   "accountPool.strategyResetFirst": "Soonest reset first",
   "accountPool.strategyHintResetFirst": "Prefer the nearest future 5-hour or weekly reset among accounts below the usage threshold. Bound tasks follow the configured affinity policy. Independent model quotas use quota ordering.",
   "accountPool.strategyQuota": "Quota",

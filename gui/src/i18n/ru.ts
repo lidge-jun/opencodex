@@ -2622,6 +2622,10 @@ export const ru: Record<TKey, string> = {
 
   "accountPool.strategy": "Стратегия ротации",
   "accountPool.strategyDesc": "Как OpenCodex назначает аккаунт новой/непривязанной задаче.",
+  "accountPool.strategyQuotaWeighted": "Вес по квоте и сбросу",
+  "accountPool.strategyHintQuotaWeighted": "Новые задачи назначаются аккаунту с наибольшим остатком квоты; равные чередуются. Близкий сброс даёт лишь небольшую надбавку при равенстве. Каждое окно ограничивает вес; исправные привязки сохраняются. Независимые квоты используют режим quota.",
+  "accountPool.weightedBelowThreshold": "Взвешенное распределение ниже {threshold}%",
+  "accountPool.weightedThresholdOff": "Фильтр порога квоты отключён",
   "accountPool.strategyResetFirst": "Ближайший сброс первым",
   "accountPool.strategyHintResetFirst": "Среди аккаунтов ниже порога выбирается ближайший сброс 5-часовой или недельной квоты. Привязанные задачи следуют настроенной политике привязки. Независимые квоты моделей упорядочиваются по использованию.",
   "accountPool.strategyQuota": "Квота",

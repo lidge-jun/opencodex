@@ -106,7 +106,7 @@ describe("account policy argument and identity boundaries", () => {
     ["quota-activation", ["openai", "a", "--window", "five-hour", "on"]],
     ["quota-activation", ["openai", "a", "--window", "weekly", "on", "--window", "weekly"]],
     ["pool", ["openai", "--sticky", "0"]], ["pool", ["openai", "--strategy", "least-loaded"]],
-    ["pool", ["anthropic", "--strategy", "reset-first"]], ["pool", ["kiro", "--quota-window", "weekly"]],
+    ["pool", ["anthropic", "--strategy", "reset-first"]], ["pool", ["anthropic", "--strategy", "quota-weighted"]], ["pool", ["kiro", "--quota-window", "weekly"]],
     ["pool", ["anthropic", "--quota-window", "fiveHour"]], ["pool", ["kiro", "--enabled", "on", "--enabled", "off"]],
     ["anthropic-reset-grants", ["id", "--consume"]], ["anthropic-reset-grants", ["--all"]],
   ];
