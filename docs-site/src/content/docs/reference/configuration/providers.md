@@ -367,6 +367,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `project?` | `string` | Vertex or Antigravity Cloud Code Assist project id. |
 | — | — | Antigravity account quota probes (`retrieveUserQuota` and `retrieveUserQuotaSummary`) always go to Google's own Cloud Code host through the pinned outbound transport, regardless of a configured `baseUrl`; the account bearer is never sent to an operator-configured endpoint and a redirect aborts the probe. Only the model-list fallback still honors `baseUrl`. |
 | — | — | If Antigravity quota summary returns 403 for a valid OAuth account, OpenCodex retries that endpoint once with the legacy `antigravity/1.0` User-Agent and the same token and project. A 401 is not retried. Inference and model discovery retain the IDE User-Agent. |
+| — | — | Antigravity quota shows Gemini 4 Argon as separate `Argon` / `Argon (Weekly)` windows next to Gem and Cla. They are display-only: account ranking, quota exhaustion, reset ordering and reset notifications keep using the Gemini and Claude windows, and Argon requests are still judged by the Gemini window. |
 | `location?` | `string` | Vertex location; environment fallback is `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor only: stdio or Streamable HTTP MCP servers. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor only: external computer-use and record-screen commands. |
