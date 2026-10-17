@@ -1454,6 +1454,8 @@ export interface OcxComboConfig {
   nativeAlias?: boolean;
   /** Display-only label for the public catalog row. Required for native aliases. */
   displayName?: string;
+  /** Display-only description for the public catalog row; unset keeps the generated text (#7229). */
+  description?: string;
   /**
    * `strategy: "jev"` only: provider id of the decision service. Omitted or `"jev"` uses the
    * canonical TypeSafe endpoint; any other id must name a configured `adapter: "jev-decision"`

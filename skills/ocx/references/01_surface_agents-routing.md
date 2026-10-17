@@ -704,7 +704,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
 
 Create, update or rename a combo.
 
@@ -725,6 +725,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--effort-mode` | string | fallback or force; - resets to fallback. |
 | `--alias` | string | Alias; - clears. |
 | `--display-name` | string | Label; - clears. |
+| `--description` | string | Catalog row description; - clears. |
 | `--decision-provider` | string | JEV provider; - clears. |
 | `--decision-model` | string | JEV route; - clears; exclusive with provider. |
 | `--decision-timeout` | string | JEV deadline 1000-120000 ms; - clears. |

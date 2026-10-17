@@ -324,8 +324,8 @@ ocx combo remove <kimlik> --yes
 ```
 
 `set` ayrıca `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
-`--display-name` ve `--rename-from` kabul eder. Bu alanı temizlemek için
-`--effort`, `--alias` veya `--display-name` değeri olarak `-` kullanın.
+`--display-name`, `--description` ve `--rename-from` kabul eder. Bu alanı temizlemek için
+`--effort`, `--alias`, `--display-name` veya `--description` değeri olarak `-` kullanın.
 `--native-alias`, şu anda desteklenen yalın bir yerel model takma adı ve boş
 olmayan bir görüntüleme adı gerektirir. `create` ve `update`, `set`'in takma
 adlarıdır; `delete`, `remove`'un takma adıdır; ve aynı alt komutlar `ocx route
@@ -375,6 +375,7 @@ saklanır:
 | `alias` | Hayır | yok | İsteğe bağlı kırpılmış genel model kimliği; yukarıdaki takma ad kurallarını kullanın. Boş bir değer takma ad yok olarak saklanır. |
 | `nativeAlias` | Hayır | `false` | Şu anda desteklenen yalın bir yerel `alias`'ın yönlendirme ve katalog önceliği almasına açıkça izin verin. Asla takma addan çıkarılmaz. |
 | `displayName` | Hayır | yok | Sınırlı salt görüntüleme katalog etiketi. `nativeAlias` true olduğunda gerekli ve boş değildir. |
+| `description` | Hayır | yok | Salt görüntüleme katalog satırı açıklaması; `displayName` ile aynı sınırlar geçerlidir. Ayarlanmazsa üretilen `Routed via opencodex → combo (combo).` metni korunur. |
 
 ## Sorun Giderme
 

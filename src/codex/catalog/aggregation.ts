@@ -195,6 +195,7 @@ export function deriveComboCatalogModel(
     ...(combo.alias ? { alias: combo.alias } : {}),
     ...(combo.nativeAlias ? { nativeAlias: true } : {}),
     ...(combo.displayName ? { displayName: combo.displayName } : {}),
+    ...(combo.description ? { description: combo.description } : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(members.every(member => member.parallelToolCalls === true)
       ? { parallelToolCalls: true }

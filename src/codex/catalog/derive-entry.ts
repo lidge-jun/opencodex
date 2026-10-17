@@ -26,6 +26,7 @@ import {
   isGpt56NativeSlug,
 } from "./effort";
 import { CATALOG_INACTIVE_REASON_FIELD, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
+import { applyRoutedDescription } from "./ownership";
 
 export function finishUpstreamNativeEntry(clone: RawEntry, priority: number, contextCap?: NativeContextLimitsInput): RawEntry {
   if (priority !== 9) clone.priority = priority;
@@ -128,7 +129,7 @@ export function deriveEntry(
     delete e[SPAWN_PRIORITY_FIELD];
     e.slug = slug;
     e.display_name = routedDisplayName(slug, model);
-    e.description = desc;
+    applyRoutedDescription(e, desc, model);
     e.priority = priority;
     e.visibility = "list";
     if ("upgrade" in e) e.upgrade = null;
@@ -212,6 +213,7 @@ export function deriveEntry(
         : { web_search_tool_type: "text_and_image", supports_search_tool: true }
       : {}),
   };
+  applyRoutedDescription(entry, desc, model);
   if (isRouted) {
     applyRoutedCodexToolMode(entry, model?.codexToolMode);
     applyReasoningLevels(

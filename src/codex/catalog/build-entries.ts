@@ -4,6 +4,7 @@ import { CODEX_REASONING_LEVELS, type CodexReasoningLevel } from "../../reasonin
 import { clearModelCache } from "../model-cache";
 import { routedSlug, slugEquivalenceKey } from "../../providers/slug-codec";
 import { COMBO_NAMESPACE } from "../../combos";
+import { hasOcxComboAuthorship, hasOcxRoutedAuthorship, ROUTED_DESCRIPTION_PREFIX } from "./ownership";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
@@ -218,7 +219,7 @@ export function buildCatalogEntriesFromObservedState({
     const routed = deriveEntry(
       template,
       slug,
-      `Routed via opencodex → ${nativeAlias.provider} (${nativeAlias.owned_by ?? nativeAlias.provider}).`,
+      `${ROUTED_DESCRIPTION_PREFIX}${nativeAlias.provider} (${nativeAlias.owned_by ?? nativeAlias.provider}).`,
       5,
       nativeAlias,
       exactComboSlugs,
@@ -276,7 +277,7 @@ export function buildCatalogEntriesFromObservedState({
     const e = deriveEntry(
       template,
       slug,
-      `Routed via opencodex → ${m.provider} (${m.owned_by ?? m.provider}).`,
+      `${ROUTED_DESCRIPTION_PREFIX}${m.provider} (${m.owned_by ?? m.provider}).`,
       5,
       m,
       exactComboSlugs,
@@ -380,15 +381,15 @@ export function orderForModelPicker(
  * True when an existing catalog row was authored by OpenCodex routing (#855).
  * Every generated routed row — current full-slug form, the June–July 2026
  * provider-name form, and legacy combo aliases — carries the stable
- * description prefix `Routed via opencodex → `; foreign rows from Cursor or
+ * description prefix `Routed via opencodex → `, or — when a combo overrides its description
+ * (#7229) — the `opencodex_routed_origin` marker (./ownership); foreign rows from Cursor or
  * user tooling do not. `owned_by` describes upstream ownership, and `comp_hash`
  * describes history compatibility; neither is an authorship signal.
  */
 export function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
   if (isNativeAliasCatalogEntry(entry)) return true;
-  const desc = typeof entry.description === "string" ? entry.description : "";
   const slug = typeof entry.slug === "string" ? entry.slug : "";
-  return slug.includes("/") && desc.startsWith("Routed via opencodex → ");
+  return slug.includes("/") && hasOcxRoutedAuthorship(entry);
 }
 
 function recoverableNativeSlug(entry: RawEntry): string | null {
@@ -639,8 +640,7 @@ export function mergeCatalogEntriesFromObservedState({
   }
   const freshExactComboEntries = new Set(admittedRoutedEntries.filter(entry => (
     isExactComboCatalogEntry(entry, exactComboSlugs)
-    && typeof entry.description === "string"
-    && entry.description.startsWith(`Routed via opencodex → ${COMBO_NAMESPACE} (`)
+    && hasOcxComboAuthorship(entry)
   )));
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const freshEquivalentKeys = new Set(admittedRoutedEntries.flatMap(entry => (
