@@ -6,12 +6,10 @@ import { atomicWriteFile, getConfigDir, loadConfig } from "../config";
 import { readPid, readRuntimePort, removePid, removeRuntimePort, verifyPidIdentity } from "../config/process-state";
 import { isProcessAlive, killProxy } from "../lib/process-control";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
-import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
 import {
   buildWindowsElevatedArgumentList,
   resolveTrustedWindowsPowerShellExe,
 } from "../lib/windows-elevation";
-import { stopWinswService } from "../lib/winsw";
 import { listListenPids, reclaimListenPort, scanListenPids, type ListenPidScan } from "../server/port-reclaim";
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
 import {
@@ -21,7 +19,9 @@ import {
   proxyIdentityAt,
   type HealthzIdentity,
 } from "../server/proxy-liveness";
-import { isServiceInstalled, isServiceViable, readServiceBackend, stopWindows } from "../service";
+import { isServiceInstalled, isServiceViable } from "../service";
+import { stopWindowsServiceWrappersBestEffort } from "./job-windows-restart";
+import { createUpdateServiceHomePolicy, inspectUpdateServiceHome, type UpdateServiceHomeInspector } from "./service-home-authority";
 import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from "./restart-ownership";
 import { restartServiceManagerAfterUpdate, unsettledManagerRestartFailure, unsupervisedRestartFailure, type ManagerRestartFn } from "./job-supervised-restart";
 import {
@@ -52,6 +52,7 @@ import {
   type NpmCachePreflightReason,
 } from "./npm-cache-preflight.mjs";
 import { guiUpdateWorkerCommand } from "./worker-launch";
+import { prepareWorkerUpdateHome, packageOnlyUpdateSucceeded } from "./job-update-home";
 import { withoutSiblingMarker } from "../codex/sibling-start";
 import type { WorkerLaunchContext } from "./worker-launch";
 
@@ -887,8 +888,9 @@ function preparePortForPinnedStart(
   listPids: (port: number) => number[],
   aliveFn: (pid: number) => boolean,
   verifyOcx: (pid: number) => number | null = verifyPidIdentity,
+  stopServiceWrappers: () => void = () => {},
 ): void {
-  stopWindowsServiceWrappersBestEffort();
+  stopServiceWrappers();
   const pid = readPid();
   if (pid) {
     updateJob(job, {}, `Clearing pre-start proxy PID ${pid} before pinned start.`);
@@ -983,6 +985,9 @@ export interface RestartIo {
   waitForGhostListenClearFn?: typeof waitForGhostListenClear;
   killProxyFn?: typeof killProxy;
   serviceInstalledFn?: () => boolean;
+  serviceHomeAuthorityFn?: UpdateServiceHomeInspector;
+  stopServiceWrappersFn?: () => void;
+  readPidFn?: typeof readPid;
   /**
    * After a service reinstall exits 0, only trust the service path when this is true.
    * Defaults to {@link isServiceViable} — installed-but-stale assets must fall through
@@ -1091,7 +1096,10 @@ async function restartAfterUpdate(
   captured?: { port: number; hostname: string; oldPid?: number },
   io: RestartIo = {},
 ): Promise<false | void | "unsupervised"> {
-  const serviceInstalled = (io.serviceInstalledFn ?? isServiceInstalled)();
+  const homePolicy = createUpdateServiceHomePolicy(io.serviceHomeAuthorityFn ?? inspectUpdateServiceHome,
+    refusal => { updateJob(job, { status: "failed", restarted: false, error: refusal }, refusal); });
+  if (!homePolicy.check(homePolicy.initial)) return false;
+  const serviceInstalled = homePolicy.initial.kind === "same" && (io.serviceInstalledFn ?? isServiceInstalled)();
   const config = loadConfig();
   // Stop-first update already cleared pid/runtime state, so the pre-update capture is
   // the authoritative port to wait on; config is only the cold-start fallback.
@@ -1141,7 +1149,7 @@ async function restartAfterUpdate(
     // respawns `ocx start` a few seconds later and races port reclaim, so end the
     // task again and kill those wrappers before touching the socket, then reclaim it
     // for wrappers that bake `--port`.
-    stopWindowsServiceWrappersBestEffort();
+    (io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort)();
     const preServiceAllow = reclaimKillAllowlist();
     const freed = await waitFn(port, hostname, reclaimOptsFor(preServiceAllow));
     let skipServiceInstall = false;
@@ -1181,6 +1189,7 @@ async function restartAfterUpdate(
       // process descendant and cannot join this lease; held through its serving
       // wait, the lease makes that child die at the acquire deadline (#5760).
       io.releaseForServiceManagerFn?.();
+      if (!homePolicy.check()) return false;
       const prevBake = process.env.OCX_BAKE_PORT;
       process.env.OCX_BAKE_PORT = String(Math.trunc(port));
       let serviceOk = false;
@@ -1189,9 +1198,9 @@ async function restartAfterUpdate(
           ? WINDOWS_SERVICE_REPAIR_TIMEOUT_MS
           : RESTART_TIMEOUT_MS;
         const run = io.runService ?? ((j, bin, args, timeoutMs) => runLoggedCommand(j, bin, args, timeoutMs));
-        const result = run(job, cmd.bin, cmd.args, repairTimeoutMs);
-        serviceOk = result.status === 0;
-        if (!serviceOk) {
+        const result = homePolicy.serviceAllowed ? run(job, cmd.bin, cmd.args, repairTimeoutMs) : { status: 0, timedOut: false };
+        serviceOk = homePolicy.serviceAllowed && result.status === 0;
+        if (!serviceOk && homePolicy.serviceAllowed) {
           if (result.timedOut) {
             // UAC and scheduler mutation can outlive a fixed child deadline. Once the
             // worker kills that child, ownership is ambiguous: launching a foreground
@@ -1216,7 +1225,8 @@ async function restartAfterUpdate(
         if (prevBake === undefined) delete process.env.OCX_BAKE_PORT;
         else process.env.OCX_BAKE_PORT = prevBake;
       }
-      if (serviceOk) {
+      if (!homePolicy.check()) return false;
+      if (serviceOk && homePolicy.serviceAllowed) {
         // Registration state cannot distinguish a serving supervisor from one that
         // registered and bound nothing — `launchctl list` reports both, `schtasks`
         // reports a task whose child exited immediately, a flapping supervisor can
@@ -1243,9 +1253,11 @@ async function restartAfterUpdate(
   }
 
   // #7043: a managed install asks launchd/systemd first; only the manager's own job counts as recovered.
-  const managed = !serviceInstalled ? "failed" : await (io.restartServiceManagerFn ?? restartServiceManagerAfterUpdate)(
+  if (!homePolicy.check()) return false;
+  const managed = !serviceInstalled || !homePolicy.serviceAllowed ? "failed" : await (io.restartServiceManagerFn ?? restartServiceManagerAfterUpdate)(
     { port, hostname, release: io.releaseForServiceManagerFn }, line => updateJob(job, {}, line));
   if (managed === "supervised") return;
+  if (managed === "refused") { updateJob(job, { status: "failed", restarted: false, error: "Automatic service restart was refused; check 'ocx service status' before restarting manually." }); return false; }
   if (managed === "unsettled") { updateJob(job, ...unsettledManagerRestartFailure(port)); return false; }
   const fallback = serviceInstalled ? "unsupervised" as const : undefined; // every exit below is unproven ownership
   // The service refresh ran outside the lease; take it back so the veto and the kills/start below stay serialized.
@@ -1254,18 +1266,19 @@ async function restartAfterUpdate(
     updateJob(job, restartVeto.failed ? { status: "failed", restarted: false, error: restartVeto.notice } : { status: "succeeded", restarted: false }, restartVeto.notice);
     return false;
   }
+  if (!homePolicy.check()) return false;
 
-  const pid = readPid();
+  const pid = (io.readPidFn ?? readPid)();
   if (pid) {
     updateJob(job, {}, `Stopping current proxy PID ${pid}.`);
     try {
-      killProxy(pid);
+      (io.killProxyFn ?? killProxy)(pid);
     } catch {
       // A PID that resists taskkill must not abort recovery: reclaim + pinned start
       // below are the path that repairs stuck Windows listeners.
     }
   }
-  if (serviceInstalled) stopWindowsServiceWrappersBestEffort();
+  if (serviceInstalled && homePolicy.serviceAllowed) (io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort)();
   // Reclaim before the pinned start: spawning `--port` while the old socket is busy
   // is how updates used to fail health checks or hop ports.
   const directAllow = reclaimKillAllowlist();
@@ -1361,7 +1374,8 @@ async function restartAfterUpdate(
       killSpawnAttempt(lastChild);
       lastChild = null;
     }
-    preparePort(job, port, listPids, aliveFn, verifyOcx);
+    if (!homePolicy.check()) return false;
+    preparePort(job, port, listPids, aliveFn, verifyOcx, serviceInstalled && homePolicy.serviceAllowed ? (io.stopServiceWrappersFn ?? stopWindowsServiceWrappersBestEffort) : undefined);
     const ready = await waitForGhost(
       port,
       hostname,
@@ -1378,6 +1392,7 @@ async function restartAfterUpdate(
       );
       continue;
     }
+    if (!homePolicy.check()) return false;
     const child = spawnPinnedStart(job, job.installer, port, launcher);
     lastChild = child;
     const retireChild = () => {
@@ -1417,35 +1432,6 @@ function formatPortHolders(
     return `${pid}(${tags.join(",")})`;
   });
   return `holders=[${holders.join(", ") || "none"}] allow=[${allow.join(", ") || "none"}]`;
-}
-
-/** Stop the installed Windows backend and best-effort kill surviving :loop wrappers. */
-function stopWindowsServiceWrappersBestEffort(): void {
-  if (process.platform !== "win32") return;
-  try {
-    if (readServiceBackend() === "native") {
-      stopWinswService();
-      return;
-    }
-    stopWindows();
-  } catch { /* already stopped */ }
-  killWindowsServiceWrapperProcesses();
-}
-
-/**
- * Best-effort termination of surviving Windows scheduler launcher/wrapper processes.
- * `schtasks /end` ends the task instance but often leaves wscript/cmd running the
- * `:loop` batch, which brings the proxy back during post-update reclaim.
- *
- * This used to match the bare filenames with -like '*name*', which could stop a
- * wrapper belonging to a DIFFERENT OpenCodex home under the same account. The
- * shared killer scopes to this home's canonical paths as complete tokens.
- */
-function killWindowsServiceWrapperProcesses(): void {
-  killWindowsSchedulerWrappers({
-    scriptPath: join(getConfigDir(), "opencodex-service.cmd"),
-    launcherPath: join(getConfigDir(), "opencodex-service-launcher.vbs"),
-  });
 }
 
 /** Exposed for tests: drives the non-service restart path with injected io. */
@@ -1805,8 +1791,9 @@ export interface GuiUpdateWorkerIo {
   resolvePnpmActiveLauncherFn?: (owner: PnpmGlobalOwner) => string | null;
   /** Restart seams used by focused worker tests; the verified launcher is always injected. */
   restartIo?: RestartIo;
-  /** Resolves who owns the runtime; defaults to the shared service install state. */
-  resolveOwnershipFn?: () => ServiceOwnershipResolution;
+  resolveOwnershipFn?: () => ServiceOwnershipResolution; // Defaults to the shared service install state.
+  serviceHomeAuthorityFn?: UpdateServiceHomeInspector;
+  launcherSupportsUpdateHomeFn?: (launcher: string, node: string) => boolean;
   runCommandFn?: (
     job: UpdateJobState,
     bin: string,
@@ -1906,7 +1893,12 @@ export async function runGuiUpdateWorker(
       }
     }
 
-    if (process.platform === "win32") {
+    let homeRefusal: string | undefined;
+    const homePolicy = prepareWorkerUpdateHome(cmd, check.installer, activeLauncher, nodeBin(), channel,
+      message => { homeRefusal = message; job = updateJob(job!, {}, message); }, io.serviceHomeAuthorityFn, io.launcherSupportsUpdateHomeFn);
+    if (!homePolicy) { updateJob(job, { status: "failed", restarted: false, error: homeRefusal }); return; }
+    job = updateJob(job, { command: cmd.display });
+    if (!homePolicy.packageOnly && process.platform === "win32") {
       try {
         const { getWindowsTrayStatus, startWindowsTray, stopWindowsTray } = await import("../tray/windows");
         const tray = getWindowsTrayStatus();
@@ -1934,6 +1926,11 @@ export async function runGuiUpdateWorker(
     - 선택 근거: 현재 CLI의 package-manager self-update 우회를 재사용하면서도 GUI 서버 요청 생명주기와 설치 작업을 분리할 수 있어 가장 안정적이다.
     */
     const result = (io.runCommandFn ?? runLoggedCommand)(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);
+    if (packageOnlyUpdateSucceeded(cmd, result.status, homePolicy.packageOnly)) {
+      homePolicy.check({ kind: "unknown" }); updateJob(job, { status: "succeeded", restarted: false },
+        "Update installed. Restart the proxy manually after checking 'ocx service status'.");
+      return;
+    }
     if (result.status !== 0) {
       if (check.installer === "pnpm") {
         const verifiedLauncher = pnpmOwner
@@ -1968,7 +1965,7 @@ export async function runGuiUpdateWorker(
         if (trayWasRunning) runLoggedCommand(job, process.execPath, [activeLauncher, "tray", "start"], 15_000);
       }
     }
-
+    if (!homePolicy.check()) { updateJob(job, { status: "failed", restarted: false }); return; }
     if (restart) {
       const outcome = await runUpdateRestartWithOwnershipLease(io.resolveOwnershipFn, async lease => {
         job = updateJob(job!, { status: "restarting" }, "Update installed. Restarting proxy...");

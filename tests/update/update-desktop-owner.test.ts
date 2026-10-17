@@ -172,7 +172,7 @@ describe("both updaters consult the shared rule", () => {
 
   test("the Bun updater gates its stop, its refresh and its restart hint", () => {
     expect(bunPath).toContain("from \"./runtime-ownership.mjs\"");
-    expect(bunPath).toContain("if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
+    expect(bunPath).toContain("if (!homePolicy.packageOnly && runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
     expect(bunPath).toContain("if (!runtimePlan.mayReplacePackage)");
     expect(bunPath).toContain("if (postInstallPlan.mayRestoreService) {");
   });
@@ -342,9 +342,9 @@ describe("live Desktop update authority", () => {
   }
 });
 
-async function exercisePreStop(lane: "Bun" | "Node", evidence: SupervisionEvidence, runtimeTrusted = true): Promise<number[]> {
+async function exercisePreStop(lane: "Bun" | "Node", evidence: SupervisionEvidence, runtimeTrusted = true, homeAllowed = true): Promise<number[]> {
   const source = readFileSync(repoPath(lane === "Bun" ? "src/update/index.ts" : "bin/ocx.mjs"), "utf8");
-  const start = source.indexOf(lane === "Bun" ? "  if (runtimePlan.mayStopRuntime &&" : "    if (stopNeeded) {");
+  const start = source.indexOf(lane === "Bun" ? "  if (!homePolicy.packageOnly && runtimePlan.mayStopRuntime &&" : "    if (stopNeeded) {");
   const end = source.indexOf(lane === "Bun" ? '    if (stopStdio === "pipe")' : "      const stillHasRuntimeState", start);
   expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start);
   const counts = [0, 0, 0];
@@ -366,6 +366,7 @@ async function exercisePreStop(lane: "Bun" | "Node", evidence: SupervisionEviden
   try {
     await run({
       runtimePlan, serviceWasInstalled: true, readPid: () => 321, readRuntimePort: () => ({}),
+      homePolicy: { check: () => homeAllowed, serviceAllowed: true, packageOnly: false },
       pendingTeardownOutstanding: () => false, stopNeeded: true,
       resolvedRuntimeOwnership: async () => owner, readOwnership: () => owner,
       planUpdateRuntimeHandling, supervisionLatch: latch, inspectDesktopSupervision: inspect,
@@ -387,11 +388,15 @@ test("Bun pre-stop uses inspector correlation when runtime identity is untrusted
   expect(await exercisePreStop("Bun", { kind: "none" }, false)).toEqual([1, 1, 1]);
 });
 
+test("Bun newly uncertain home refuses before stop and package replacement", async () => {
+  expect(await exercisePreStop("Bun", { kind: "none" }, true, false)).toEqual([0, 0, 0]);
+});
+
 describe("Node service refresh mutation boundaries", () => {
   // The same function handles normal restoration and stopped-runtime failure recovery.
   const source = readFileSync(repoPath("bin/ocx.mjs"), "utf8");
   const start = source.indexOf("  function refreshBackgroundServiceOrStartDirect() {");
-  const end = source.indexOf("  const updateLease =", start);
+  const end = source.indexOf("  let updateLease =", start);
   const run = new Function("deps", `with (deps) {
     ${source.slice(start, end)}
     return refreshBackgroundServiceOrStartDirect();
@@ -410,6 +415,7 @@ describe("Node service refresh mutation boundaries", () => {
     const warnings: string[] = [];
     const result = run({
       observeSupervision: () => latch.observe(evidence.shift() ?? { kind: "none" }),
+      homePolicy: { check: () => true, serviceAllowed: true }, authorityLauncher: "fixture",
       planUpdateRuntimeHandling, readOwnership: () => ({ ownership: null }),
       process: { env: {}, execPath: "fixture" }, bakePort: 12345, postUpdateLauncher: "fixture",
       console: { log() {}, warn(line: string) { warnings.push(line); } }, mutationChildEnvironment: () => ({}),
@@ -450,7 +456,7 @@ describe("Node service refresh mutation boundaries", () => {
     expect(outcome.managerRestarts).toBe(1);
     expect(outcome.result).toBe("unsupervised");
     expect(outcome.warnings).toContain("UNSUPERVISED 12345");
-    expect(source).toContain('if (refreshed === "unsupervised" || refreshed === "unsettled") process.exit(1);');
+    expect(source).toContain('if (refreshed === "unsupervised" || refreshed === "unsettled" || refreshed === "refused") process.exit(1);');
   });
   test("#7043: a restart the manager may still finish starts no competing proxy and is reported", () => {
     const outcome = refreshWithResult([{ kind: "none" }], undefined, "unsettled");
@@ -497,6 +503,7 @@ test("Bun refresh gate vetoes retained Desktop and activates only after positive
   ] as const) {
     expect(await run({
       resolvedRuntimeOwnership: async () => ({ ownership: null }),
+      homePolicy: { check: () => true, serviceAllowed: true },
       observeSupervision: () => latch.observe(evidence), planUpdateRuntimeHandling,
       console: { warn() {} },
     })).toBe(allowed);

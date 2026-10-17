@@ -19,7 +19,7 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     const start = source.indexOf("function resolveBun(");
     const end = source.indexOf("// `ocx update --help`", start);
     const resolver = source.slice(start, end);
-    expect(resolver.indexOf("bunDir = bunBinDir()")).toBeGreaterThan(resolver.indexOf('source: "override"'));
+    expect(resolver.indexOf("bunDir = bunBinDir(launcherPath)")).toBeGreaterThan(resolver.indexOf('source: "override"'));
     expect(resolver.indexOf("findPathBun(")).toBeGreaterThan(resolver.indexOf("spawnSync(process.execPath, [installJs]"));
     expect(resolver.indexOf("fail(bunDir ?")).toBeGreaterThan(resolver.indexOf("findPathBun("));
     expect(resolver).toContain('source: "process"');
@@ -28,7 +28,7 @@ describe("ocx.mjs package launcher (source invariants)", () => {
 
   test("fallback derives its compatibility floor from the package dependency", () => {
     expect(source).toContain('typeof pkg.dependencies?.bun === "string" ? pkg.dependencies.bun : ""');
-    expect(source).toContain("pinnedVersion: pinnedBunVersion(), deadlineMs: PATH_BUN_PROBE_BUDGET_MS");
+    expect(source).toContain("pinnedVersion: pinnedBunVersion(launcherPath), deadlineMs: PATH_BUN_PROBE_BUDGET_MS");
     // Bounded, but sized for a cold first run of a scanned bun.exe on Windows.
     expect(source).toContain("const PATH_BUN_PROBE_BUDGET_MS = 5_000;");
     expect(source).not.toContain('pinnedVersion: "1.4.2"');
@@ -173,10 +173,10 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     expect(source).toContain("const overridePath = resolve(override);");
     expect(source).toContain('if (isRealBunBinary(overridePath)) return { path: overridePath, source: "override" };');
 
-    const resolveStart = source.indexOf("function resolveBun({ allowInstall = true } = {}) {");
+    const resolveStart = source.indexOf("function resolveBun({ allowInstall = true, launcherPath, allowMissing = false } = {}) {");
     const overrideCheck = source.indexOf("process.env[BUN_OVERRIDE_ENV]?.trim()", resolveStart);
     const overrideResolve = source.indexOf("resolve(override)", overrideCheck);
-    const bundledLookup = source.indexOf("bunDir = bunBinDir()", resolveStart);
+    const bundledLookup = source.indexOf("bunDir = bunBinDir(launcherPath)", resolveStart);
     expect(resolveStart).toBeGreaterThanOrEqual(0);
     expect(overrideCheck).toBeGreaterThan(resolveStart);
     expect(overrideResolve).toBeGreaterThan(overrideCheck);

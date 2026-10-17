@@ -1,5 +1,6 @@
 import { readRuntimePort } from "../config/process-state";
 import { proxyIdentityAt } from "../server/proxy-liveness";
+import { inspectUpdateServiceHome, updateServiceHomeRefusal, type UpdateServiceHomeInspector } from "./service-home-authority";
 import {
   freshServingPid, hasRestartableServiceManager, readParentPid, readServiceManagerPid, restartServiceManagerJob,
   supervisionVerdict, unsettledManagerWarning, unsupervisedRuntimeWarning,
@@ -12,9 +13,10 @@ import {
  * detached `ocx start`, and counts it only when the serving proxy is that job. It lives beside the
  * worker because `src/update/job.ts` sits at the repository's size cap.
  */
-export type ManagerRestartOutcome = "supervised" | "failed" | "unsettled";
+export type ManagerRestartOutcome = "supervised" | "failed" | "unsettled" | "refused";
 
 export interface ManagerRestartDeps {
+  serviceHomeAuthorityFn?: UpdateServiceHomeInspector;
   hasManager?: () => boolean;
   restartJob?: () => { ok: true } | { ok: false; reason: string; unsettled?: true };
   managerPid?: () => number | null;
@@ -43,6 +45,10 @@ export async function restartServiceManagerAfterUpdate(
 ): Promise<ManagerRestartOutcome> {
   if (!(deps.hasManager ?? hasRestartableServiceManager)()) return "failed";
   target.release?.();
+  const home = (deps.serviceHomeAuthorityFn ?? inspectUpdateServiceHome)();
+  const refusal = updateServiceHomeRefusal(home);
+  if (refusal) { log(refusal); return "refused"; }
+  if (home.kind === "absent") return "failed";
   log("Asking the service manager to restart the background service...");
   const readRecord = deps.readRecord ?? (() => readRuntimePort());
   const probe = deps.probeServing ?? (async (port: number, hostname: string, pid: number, deadlineAt: number) => (
