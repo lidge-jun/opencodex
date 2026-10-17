@@ -21,6 +21,10 @@ type Episode = {
   pausedByUs: boolean;
   noticeBase?: EventBase;
   noticeAbort?: AbortController;
+  /** A failed notice may retry only after this time, so a broken notifier is not respawned per request. */
+  noticeRetryAt?: number;
+  /** The episode's log line was written; retries do not repeat it. */
+  warned?: boolean;
 };
 export type LowQuotaRegistration = (() => void) & {
   hasPendingSave(): boolean;
@@ -29,6 +33,7 @@ export type LowQuotaRegistration = (() => void) & {
 };
 
 const RETRY_DELAYS_MS = [100, 250];
+const NOTICE_RETRY_MS = 5 * 60_000;
 const FLUSH_DEADLINE_MS = 500;
 
 /** Each server owns its own policy, episode state and deferred writer. */
@@ -246,8 +251,12 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
         scheduleSave();
       }
       // A manual resume leaves pausedByUs set until recovery or a new reset episode.
-      if (policy.actions.notify && episode.notice !== "in-flight" && episode.notice !== "logged" && episode.notice !== "delivered") {
-        console.warn(`[codex-low-quota] ${window === "short" ? "5-hour" : "weekly"} quota reached ${percentUsed}% used (threshold ${policy.threshold}%)`);
+      if (policy.actions.notify && episode.notice !== "in-flight" && episode.notice !== "logged" && episode.notice !== "delivered"
+        && !(episode.notice === "failed" && (episode.noticeRetryAt ?? 0) > Date.now())) {
+        if (!episode.warned) {
+          episode.warned = true;
+          console.warn(`[codex-low-quota] ${window === "short" ? "5-hour" : "weekly"} quota reached ${percentUsed}% used (threshold ${policy.threshold}%)`);
+        }
         const sink = deps.notify ?? (policy.actions.desktop === true ? deps.desktopSink?.() : undefined);
         if (!sink) {
           event(base, "notice", "logged");
@@ -269,6 +278,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
           if (closed || abort.signal.aborted || episodes.get(key) !== current) return;
           event(base, "notice", status);
           current.notice = status;
+          current.noticeRetryAt = status === "failed" ? Date.now() + NOTICE_RETRY_MS : undefined;
           current.noticeBase = undefined;
           current.noticeAbort = undefined;
         };

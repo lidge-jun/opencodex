@@ -488,13 +488,19 @@ describe("low quota protection", () => {
     await registration.flush();
   });
 
-  test("notice failure retries on a later observation and only then reports delivery", async () => {
+  test("notice failure retries on an observation after the backoff and only then reports delivery", async () => {
     const config = configWith(protection({ actions: { pause: false, notify: true } }));
     let calls = 0;
     const registration = register(config, { notify: async () => { if (++calls === 1) throw new Error("sink failed"); } });
+    const start = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(start);
+    cleanups.push(() => clock.mockRestore());
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 80 });
     await Promise.resolve();
     expect(registration.listEvents(1)[0]?.status).toBe("failed");
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 81 });
+    expect(calls).toBe(1);
+    clock.mockReturnValue(start + 5 * 60_000 + 1);
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 82 });
     await Promise.resolve();
     expect(registration.listEvents(1)[0]?.status).toBe("delivered");
@@ -698,19 +704,31 @@ describe("low quota desktop delivery", () => {
     expect(desktop.calls[0]!.notice.accountLabel).toBe(fallbackCodexAccountLogLabel(ACCOUNT_B));
   });
 
-  test("a failed desktop notice is recorded and a later observation retries it", async () => {
+  test("a failed desktop notice is recorded, logged once, and retried only after the backoff", async () => {
     const config = configWith(desktopPolicy(true));
     const desktop = deferredDesktop();
     const registration = register(config, { desktopSink: desktop.sink });
+    const start = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(start);
+    cleanups.push(() => clock.mockRestore());
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    cleanups.push(() => warn.mockRestore());
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
     desktop.calls[0]!.reject(new Error("notifier exited 1"));
     await settle();
     expect(noticeStatuses(registration)).toEqual(["pending", "failed"]);
-    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 86 });
+    for (const percent of [86, 87, 88]) observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: percent });
+    expect(desktop.calls).toHaveLength(1);
+    clock.mockReturnValue(start + 5 * 60_000 - 1);
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 89 });
+    expect(desktop.calls).toHaveLength(1);
+    clock.mockReturnValue(start + 5 * 60_000 + 1);
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
     expect(desktop.calls).toHaveLength(2);
     desktop.calls[1]!.resolve();
     await settle();
     expect(noticeStatuses(registration)).toEqual(["pending", "failed", "pending", "delivered"]);
+    expect(warn.mock.calls.filter(call => String(call[0]).startsWith("[codex-low-quota] weekly quota reached"))).toHaveLength(1);
   });
 
   test("an unsupported host keeps the opted-in alert logged", () => {

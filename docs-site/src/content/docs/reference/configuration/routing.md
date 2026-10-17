@@ -61,7 +61,8 @@ only by its pseudonymous log label (for example `p1a2b3c`), never its email, ali
 includes the window, usage, threshold and known reset time. Windows and hosts without a supported
 notifier keep the alert `logged`. `delivered` means the OS notifier accepted the notice; it cannot
 see whether the system's notification settings then hide it. A failed or timed-out notifier is
-recorded as `failed` and a later eligible observation can retry it. Turning `desktop` on or off
+recorded as `failed`; an eligible observation at least five minutes later can retry it, without
+repeating the log line. Turning `desktop` on or off
 applies to the next observation without a restart. A notice still in flight is cancelled when its
 episode ends (reset boundary, recovery, account removal, policy change or shutdown).
 
