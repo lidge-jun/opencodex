@@ -608,6 +608,10 @@ function doubledInputReduction(
 ): string | undefined {
   if (!functionNames.has(repeated.name)) return undefined;
   const body = freeformBody(repeated.body);
+  // Raw-text doubled arguments (no JSON wrapper) reduce to the single body.
+  if (body !== "" && (argumentsText === body + body || argumentsText === body + "\n" + body)) {
+    return body;
+  }
   try {
     const parsed = JSON.parse(argumentsText) as unknown;
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
@@ -620,6 +624,23 @@ function doubledInputReduction(
     // A malformed concatenation is handled by the prefix repair instead.
   }
   return undefined;
+}
+
+/**
+ * The raw-text counterpart of the doubled-input reduction: MiMo can send a plain
+ * function tool's arguments as `body + body` raw text (no JSON wrapper). When the
+ * first half equals a bare block's body exactly, the call meant that body once.
+ */
+function rawTextDoubledReduction(
+  argumentsText: string,
+  functionNames: ReadonlySet<string>,
+  repeated: SerializedToolCall,
+): string | undefined {
+  if (!functionNames.has(repeated.name)) return undefined;
+  const body = freeformBody(repeated.body);
+  if (body === "" || argumentsText === body) return undefined;
+  return argumentsText === body + body || argumentsText === body + "\n" + body
+    ? body : undefined;
 }
 
 /** Removes a malformed argument prefix only when a bare block and the JSON suffix prove identical input. */
