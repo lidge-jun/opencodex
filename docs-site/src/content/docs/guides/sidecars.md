@@ -141,9 +141,14 @@ failures after response headers have started are delivered as `response.failed` 
 Mistral's `zai-glm-5-3` is enrolled by the provider preset as text-only. With the
 vision sidecar enabled and available, OpenCodex describes attached images and
 sends their text descriptions to GLM. The Codex catalog advertises image
-attachments for this route. Refresh the managed catalog and reload the Codex
-client after an update to receive this declaration. No model modality override
-is needed. Mistral documents the model's native input in its
+attachments for this route. After an update, run `ocx sync`, then fully quit and
+relaunch the Codex desktop app or reload the VS Code window. Sync without a
+restart flag does not restart an existing Codex app-server, which can retain
+the old model list. Alternatively, use `ocx sync --restart-codex` to sync and
+restart matching Codex processes and the desktop app. Finish active work first:
+this restart ends live conversations. See the [sync and restart reference](/reference/cli/lifecycle/#ocx-sync---restart-codex---restart-app-server-only).
+After relaunch, select `mistral/zai-glm-5-3` and verify that image attachments
+are available. No model modality override is needed. Mistral documents native input in its
 [GLM 5.3 reference](https://docs.mistral.ai/models/zai-glm-5-3).
 
 Image routing is capability-aware. Before an image-bearing upstream send, opencodex resolves the selected model's effective input modalities from runtime provider evidence, explicit operator declarations, backend/registry metadata, and generated vendor metadata. A target positively known to be text-only goes through the Vision Sidecar first; the image is described **before** the main call and replaced inline with text. A target positively known to support images receives the image directly. Unknown custom models keep the existing compatibility behavior rather than being guessed text-only.
