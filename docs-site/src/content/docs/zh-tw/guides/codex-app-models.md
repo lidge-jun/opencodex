@@ -170,6 +170,45 @@ Codex Desktop 的 remote-server 模式會以用戶端自己的 `available_models
 allowlist 上的項目。opencodex 無法介入該清單；上游錯誤追蹤於
 [openai/codex#19694](https://github.com/openai/codex/issues/19694)。
 
+### 使用 native-alias 槽位無縫切換模型
+
+若要在 Codex Desktop 遠端下拉選單中直接切換第三方供應商（如 Cursor、Claude、Gemini、DeepSeek、Grok），免去每次手動在伺服器修改設定檔的困擾，可使用 native-alias 遠端預設指令：
+
+```bash
+# 自動偵測現有已配置供應商並綁定至允許的 gpt-5.6-* 槽位：
+ocx combo desktop-remote apply
+
+# 或明確指定各槽位目標：
+ocx combo desktop-remote apply \
+  --sol cursor/auto \
+  --terra google/gemini-2.5-flash \
+  --luna cursor/claude-opus-5-5
+```
+
+此指令會把官方硬編碼允許的槽位（`gpt-5.6-sol`、`gpt-5.6-terra` 與 `gpt-5.6-luna`）啟用 `--native-alias` 映射至你指定的目標模型，完美騙過 Desktop 前端過濾器。
+
+#### 遠端 SSH 隧道設定
+
+1. 在本機的 `~/.ssh/config` 中加入 OpenCodex 端口轉發：
+   ```ssh
+   Host your-remote-server
+       RemoteForward 10100 127.0.0.1:10100
+   ```
+2. 在遠端伺服器的 `~/.codex/config.toml` 中將基底網址指向轉發端口：
+   ```toml
+   openai_base_url = "http://127.0.0.1:10100/v1"
+   ```
+3. 重啟遠端 `codex app-server` 或重新以 Codex Desktop / Cursor SSH 連線。現在直接在遠端下拉選單點選 GPT-5.6 Sol、Terra 或 Luna 即可直接路由至相應模型！
+
+隨時檢視目前遠端槽位配置：
+```bash
+ocx combo desktop-remote show
+```
+若要還原原生 OpenAI 槽位：
+```bash
+ocx combo desktop-remote clear --yes
+```
+
 在 Desktop 公開 allowlist 控制選項之前：
 
 - 直接在遠端機器的 `~/.codex/config.toml` 設定模型，例如 `model = "input/grok-4.5"`。選擇器

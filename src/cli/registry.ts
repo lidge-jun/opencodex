@@ -412,9 +412,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "combo",
-    usage: "ocx combo <list|show|set|remove> ...",
+    usage: "ocx combo <list|show|set|remove|desktop-remote> ...",
     summary: "Manage combo virtual models and routing strategies.",
-    details: ["Alias hierarchy: ocx route combo ...", "Use --targets provider/model[:weight],provider/model[:weight]."],
+    details: [
+      "Alias hierarchy: ocx route combo ...",
+      "Use --targets provider/model[:weight],provider/model[:weight].",
+      "Use desktop-remote to configure Codex Desktop remote allowlist slots.",
+    ],
   },
   {
     name: "route",

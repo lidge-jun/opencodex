@@ -102,6 +102,16 @@ context 上限或覆寫已宣告的能力。它會改變精確路由的優先順
 移除 combo 會在下次 sync 時恢復正常原生路由與目錄身份。
 :::
 
+:::tip[一鍵配置遠端桌面槽位]
+若要一鍵為標準 Codex Desktop 遠端 allowlist 槽位（`gpt-5.6-sol`、`gpt-5.6-terra` 與 `gpt-5.6-luna`）完成配置，可使用：
+
+```bash
+ocx combo desktop-remote apply [--sol <target>] [--terra <target>] [--luna <target>]
+```
+
+端到端 SSH 轉發與遠端伺服器設定說明請見 [Desktop remote 伺服器](/zh-tw/guides/codex-app-models/#desktop-remote-伺服器)。
+:::
+
 ## 選擇策略
 
 ### Failover：有序的主與後備

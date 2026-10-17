@@ -34,11 +34,13 @@ const USAGE = `Usage:
   ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
       [--decision-timeout <ms>] [--json]
       (one synthetic decision probe through the decision method; may spend a decision call)
-  ocx combo discover [--query <text>] [--json]`;
+  ocx combo discover [--query <text>] [--json]
+  ocx combo desktop-remote [show|apply|clear]
+      [--sol <target>] [--terra <target>] [--luna <target>] [--yes] [--json]`;
 
 type ComboRow = Record<string, unknown> & { id?: string; model?: string; strategy?: string };
 
-function parseTargets(value: string): Array<{ provider: string; model: string; weight?: number }> {
+export function parseTargets(value: string, usage = USAGE): Array<{ provider: string; model: string; weight?: number }> {
   const targets = value.split(",").map(part => part.trim()).filter(Boolean).map(part => {
     const colon = part.lastIndexOf(":");
     let selector = part;
@@ -276,6 +278,10 @@ export async function handleComboCommand(argv: string[], deps: RuntimeApiDeps = 
   if (subcommand === "stats") {
     const { handleComboStatsCommand } = await import("./combo-stats");
     return handleComboStatsCommand(writeArgs, deps);
+  }
+  if (subcommand === "desktop-remote" || subcommand === "remote-desktop" || subcommand === "preset") {
+    const { handleDesktopRemoteCommand } = await import("./combo-desktop-remote");
+    return handleDesktopRemoteCommand(writeArgs, deps);
   }
   return runCliAction(async () => {
     const [sub = "list", ...rest] = argv;
