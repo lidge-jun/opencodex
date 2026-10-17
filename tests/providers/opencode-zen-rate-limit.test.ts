@@ -86,11 +86,22 @@ describe("opencode-zen rate-limit guidance (#1145)", () => {
     expect(resolveClientRetryAfter({ status: 429, message: enriched })).toBe("15");
   });
 
+  test("rate limits mentioning a plan or load balancer still receive guidance", () => {
+    for (const message of ["Rate limit exceeded for credit-based plan", "load balancer rate limit", "balanced throughput"]) {
+      expect(enrichOpenCodeZenUpstreamMessage(message, {
+        status: 429, providerName: "opencode-zen", upstreamErrorType: "rate_limit_error",
+      })).toContain("Try again in 15s");
+    }
+  });
+
   test("quota errors never receive short-window pacing guidance", () => {
     for (const [upstreamErrorType, message] of [
       ["insufficient_quota", "Rate limit exceeded"],
       ["rate_limit_error", "Monthly quota exceeded; rate limit exceeded"],
       ["insufficient_quota", "Too Many Requests"],
+      ["rate_limit_error", "Rate limit exceeded: insufficient credit"],
+      ["rate_limit_error", "Rate limit exceeded: balance exhausted"],
+      ["billing_error", "Too Many Requests"],
     ]) {
       expect(enrichOpenCodeZenUpstreamMessage(message!, {
         status: 429, providerName: "opencode-zen", upstreamErrorType,
