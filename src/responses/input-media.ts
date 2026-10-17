@@ -13,19 +13,21 @@ function isRecord(value: unknown): value is RecordValue {
 /**
  * Whether the position being scanned has a converter that builds a lossless media part.
  *
- * User content carries documents and inline audio; tool output now carries inline audio through
- * the Chat adapter's follow-up user message. A system or assistant message and a Chat `developer`
- * message are flattened to text, so exempting an attachment there would turn today's explicit
- * refusal into the silent drop this scanner exists to prevent.
+ * User content carries documents and inline audio; developer content carries documents only.
+ * Tool output carries inline audio through the Chat adapter's follow-up user message. System and
+ * assistant content have no lossless translated media carrier, so exempting an attachment there
+ * would turn today's explicit refusal into the silent drop this scanner exists to prevent.
  */
-type CarrierPosition = "user-content" | "tool-output" | "flattened";
+type CarrierPosition = "user-content" | "developer-content" | "tool-output" | "flattened";
 
 function mediaKind(value: unknown, position: CarrierPosition, allowAudio: boolean): UntranslatedInputMedia | undefined {
   if (!isRecord(value)) return undefined;
   if (value.type === "input_audio" || value.type === "audio") {
     // A Chat content part has a nested input_audio object, while Codex's Responses
-    // block uses audio_url. Only the latter is carried by the translated Chat adapter.
-    return allowAudio
+    // block uses audio_url. Only the latter is carried by the translated Chat adapter; the
+    // Chat-shaped `audio` spelling has no parser path and must never pass the guard.
+    return value.type === "input_audio"
+      && allowAudio
       && (position === "user-content" || position === "tool-output")
       && audioContentFromRaw(value.audio_url, value.format)
       ? undefined
@@ -36,7 +38,8 @@ function mediaKind(value: unknown, position: CarrierPosition, allowAudio: boolea
     // it there would reject the very request #5212 exists to preserve. A reference with no
     // payload has none anywhere: translated adapters cannot dereference a file_id or a remote
     // source.
-    return position === "user-content" && carriesInlineDocumentBytes(value) ? undefined : "file";
+    return (position === "user-content" || position === "developer-content")
+      && carriesInlineDocumentBytes(value) ? undefined : "file";
   }
   // A file-id-only image is not pixels: translated adapters cannot dereference it.
   if (value.type === "input_image" && typeof value.file_id === "string" && value.file_id.length > 0
@@ -88,7 +91,9 @@ export function untranslatedResponsesInputMedia(
       const role = item.role;
       const kind = contentMedia(
         item.content,
-        role === "user" || role === "developer" ? "user-content" : "flattened",
+        role === "user" ? "user-content"
+          : role === "developer" ? "developer-content"
+          : "flattened",
         options.allowAudio === true,
       );
       if (kind) return kind;

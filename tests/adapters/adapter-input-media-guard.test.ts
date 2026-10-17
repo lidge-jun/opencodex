@@ -118,6 +118,26 @@ describe("typed input media inspection", () => {
       { input: [{ role: "user", content: [{ type: "input_audio", audio_url: "data:audio/opus;base64,AAAA" }] }] },
       { allowAudio: true },
     )).toBe("audio");
+
+    // The Chat-shaped `audio` spelling has no parser path, and developer audio cannot keep
+    // its role on the Chat wire. Both must stay refused rather than pass and disappear.
+    expect(untranslatedResponsesInputMedia(
+      { input: [{ role: "user", content: [{ type: "audio", audio_url: "data:audio/wav;base64,YWJj" }] }] },
+      { allowAudio: true },
+    )).toBe("audio");
+    expect(untranslatedResponsesInputMedia(
+      { input: [{ type: "function_call_output", call_id: "call1", output: [{ type: "audio", audio_url: "data:audio/wav;base64,YWJj" }] }] },
+      { allowAudio: true },
+    )).toBe("audio");
+    expect(untranslatedResponsesInputMedia(
+      { input: [{ type: "message", role: "developer", content: [AUDIO] }] },
+      { allowAudio: true },
+    )).toBe("audio");
+    // Developer documents keep their existing lossless carrier.
+    expect(untranslatedResponsesInputMedia(
+      { input: [{ type: "message", role: "developer", content: [INLINE_FILE] }] },
+      { allowAudio: true },
+    )).toBeUndefined();
   });
 });
 
