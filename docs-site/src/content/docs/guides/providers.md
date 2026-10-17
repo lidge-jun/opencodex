@@ -736,6 +736,16 @@ Create a key in the [OpenGateway dashboard](https://opengateway.ai/api-keys), th
 use the configured Bearer key; the public model list does not validate that key.
 On the Responses wire OpenGateway rejects replayed native custom tool calls, so the preset
 lowers Codex custom tools such as code-mode `exec` to function tools before sending them.
+Tool-result content arrays are sent as text with images preserved in adjacent messages.
+Image detail `original` maps to `high`, which the gateway accepts; image bytes remain unchanged.
+The native Responses route also checks text-only empty completions before exposing them as success.
+Exhausted output budgets produce `incomplete` with `max_output_tokens`; the proxy does not increase
+the requested budget. A replay-safe empty completion with budget remaining may retry once, within
+the existing send limit. Explicit `emptyCompletionRetry: false` or `OCX_EMPTY_COMPLETION_RETRY=0`
+disables that retry. Text, refusals, tool activity, and unknown stream events prevent replay and
+retain the original stream. The protection does not change other providers or their retry defaults.
+Replay requires explicit `store: false`, complete input, and client-executed tools only; a hosted
+tool such as `web_search` prevents automatic replay even if no tool event was observed.
 
 **TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
 OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),

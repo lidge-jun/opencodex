@@ -278,6 +278,16 @@ Chat Completions 모델(그리고 Responses 전용이라 Responses로 보내는 
 [OpenGateway 대시보드](https://opengateway.ai/api-keys)에서 키를 발급한 뒤
 `ocx provider add opengateway`를 실행하거나 대시보드에서 **OpenGateway**를 선택하세요.
 Chat 요청은 설정한 Bearer 키를 사용하며 공개 모델 목록은 키의 유효성을 검증하지 않습니다.
+Responses 도구 결과 배열은 텍스트로 변환하고 이미지는 인접 메시지에 보존합니다.
+이미지의 `original` 상세도는 게이트웨이가 지원하는 `high`로 바꾸며 이미지 바이트는 그대로 유지합니다.
+네이티브 Responses 경로는 텍스트가 없는 완료 응답도 검사합니다. 출력 예산이 소진됐으면
+`incomplete / max_output_tokens`로 알리며 요청한 예산을 임의로 늘리지 않습니다.
+예산이 남고 안전하게 재전송할 수 있는 빈 완료는 기존 호출 한도 안에서 한 번만 재시도합니다.
+`emptyCompletionRetry: false` 또는 `OCX_EMPTY_COMPLETION_RETRY=0`이면 이 재시도를 끕니다.
+텍스트·거절·도구 동작·알 수 없는 스트림 이벤트가 관측되면 재전송하지 않고 원본을 유지합니다.
+다른 제공자의 동작과 재시도 기본값에는 적용하지 않습니다.
+재전송은 명시적인 `store: false`, 완전한 입력, 클라이언트 실행 도구만 있는 요청에 한정합니다.
+`web_search` 같은 서버 실행 도구가 선언돼 있으면 도구 이벤트가 없어도 자동 재전송하지 않습니다.
 
 **OpenCode Zen**(`opencode-zen`)과 키 없는 **OpenCode Free** 프리셋은
 `https://opencode.ai/zen/v1`을 공유합니다. 그 게이트웨이의 무료 모델은 종종 분당 약 15–20회 요청의 짧은 창 속도 제한에 걸립니다(커뮤니티 측정; OpenCode는 RPM을 공개하지 않음). Zen은 `Retry-After` / `X-RateLimit-*` 헤더 없는 일반 429를 반환할 수 있습니다. 이는 키 없는 데스크톱 할당량(`opencode-free`에서 약 5시간당 Big Pickle/무료 모델 200회)과 별개입니다. Zen이 그런 429에서 `Retry-After`를 생략하면 opencodex는 클라이언트 오류에 안내를 더하고 합성 `Retry-After`를 붙입니다(업스트림 `Retry-After`가 있으면 그것이 우선). 동일 키 대기 재시도는 [`retryOn429`](/ko/reference/configuration/)로 선택합니다.

@@ -55,6 +55,7 @@ import { observeOutbound } from "../../usage/cache-diagnostic";
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
 import { renderCompactionSearchHistoryItems } from "./compaction-search-history";
 import { stripKimiEmptyAssistantMessages } from "./empty-assistant";
+import { normalizeOpenGatewayResponsesInput } from "./opengateway-input";
 
 /**
  * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
@@ -503,6 +504,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           && item.type === "item_reference" && typeof item.id === "string" ? [item.id] : []));
         finalBody = { ...finalBody, input: renderCompactionSearchHistoryItems(finalBody.input, referencedIds) };
       }
+      finalBody = normalizeOpenGatewayResponsesInput(finalBody, url);
       observeOutbound(parsed._rawBody, finalBody, headers);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);

@@ -502,3 +502,158 @@ describe("empty-completion core integration", () => {
     expect(body.match(/event: response\.completed/g)).toHaveLength(1);
   });
 });
+
+describe("OpenGateway native empty completion", () => {
+  const endpoint = "https://apis.opengateway.ai/v1/responses";
+  const empty = (tokens = 1) => ({
+    id: "resp_empty", object: "response", status: "completed",
+    output: [{ id: "msg_1", type: "message", role: "assistant", status: "completed",
+      content: [{ type: "output_text", text: "", annotations: [] }] }],
+    usage: { input_tokens: 3, output_tokens: tokens, output_tokens_details: { reasoning_tokens: tokens } },
+  });
+  const answer = () => ({ ...empty(2), id: "resp_answer", output: [
+    { id: "msg_1", type: "message", role: "assistant", status: "completed",
+      content: [{ type: "output_text", text: "정상 답변", annotations: [] }] },
+  ] });
+  const sse = (snapshot: unknown, prefix: unknown[] = []) => new Response(
+    [...prefix, { type: "response.completed", response: snapshot }]
+      .map(event => `data: ${JSON.stringify(event)}\n\n`).join(""),
+    { headers: { "content-type": "text/event-stream" } },
+  );
+  function fixture(replies: (() => Response)[], url = endpoint, providerExtra: Partial<OcxProviderConfig> = {}) {
+    const sends: { url: string; body: unknown }[] = [];
+    const provider: OcxProviderConfig & { fetch?: typeof globalThis.fetch } = {
+      adapter: "openai-responses", baseUrl: url.replace(/\/responses$/, ""),
+      apiKey: "fixture-key", authMode: "key", models: ["model"], ...providerExtra,
+      fetch: async (input, init) => {
+        sends.push({ url: String(input), body: init?.body });
+        return replies[Math.min(sends.length - 1, replies.length - 1)]?.() ?? Response.error();
+      },
+    };
+    const cfg = { port: 0, defaultProvider: "fixture", providers: { fixture: provider } } satisfies OcxConfig;
+    return { cfg, sends };
+  }
+
+  for (const streaming of [false, true]) {
+    test(`native ${streaming ? "SSE" : "JSON"} exhausted reasoning becomes incomplete without replay`, async () => {
+      const f = fixture([() => streaming ? sse(empty(16)) : Response.json(empty(16))]);
+      takeSpendHome();
+      const response = await handleResponses(request(streaming, "질문", { store: false, max_output_tokens: 16 }), f.cfg, { model: "", provider: "" });
+      const text = await response.text();
+      expect(text).toContain('"status":"incomplete"');
+      expect(text).toContain('"reason":"max_output_tokens"');
+      expect(text).not.toContain('"type":"response.completed"');
+      expect(f.sends).toHaveLength(1);
+    });
+
+    test(`native ${streaming ? "SSE" : "JSON"} safe empty retries once and preserves first usage`, async () => {
+      const f = fixture([
+        () => streaming ? sse(empty(), [
+          { type: "response.created", response: { id: "resp_empty", status: "in_progress", output: [] } },
+          { type: "response.output_item.added", output_index: 0, item: { id: "msg_1", type: "message", role: "assistant", content: [] } },
+          { type: "response.content_part.added", output_index: 0, content_index: 0, item_id: "msg_1", part: { type: "output_text", text: "", annotations: [] } },
+          { type: "response.output_text.done", output_index: 0, content_index: 0, item_id: "msg_1", text: "" },
+          { type: "response.content_part.done", output_index: 0, content_index: 0, item_id: "msg_1", part: { type: "output_text", text: "", annotations: [] } },
+          { type: "response.output_item.done", output_index: 0, item: empty().output[0] },
+        ]) : Response.json(empty()),
+        () => streaming ? sse(answer()) : Response.json(answer()),
+      ]);
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      takeSpendHome();
+      const response = await handleResponses(request(streaming, "질문", { store: false, max_output_tokens: 1024 }), f.cfg, logCtx);
+      expect(await response.text()).toContain("정상 답변");
+      expect(f.sends).toHaveLength(2);
+      expect(f.sends[1]).toEqual(f.sends[0]);
+      expect(logCtx.activeAttempt).toMatchObject({ sendCount: 2, recoveryKinds: ["empty-completion"],
+        usage: { inputTokens: 6, outputTokens: 3 } });
+    });
+
+    test(`native ${streaming ? "SSE" : "JSON"} second empty is an explicit failure`, async () => {
+      const f = fixture([() => streaming ? sse(empty()) : Response.json(empty())]);
+      takeSpendHome();
+      const response = await handleResponses(request(streaming, "질문", { store: false }), f.cfg, { model: "", provider: "" });
+      const text = await response.text();
+      expect(text).toContain("empty_completion_retry_failed");
+      if (streaming) expect(text).not.toContain('"type":"response.completed"');
+      else expect(JSON.parse(text).status).toBe("failed");
+      expect(f.sends).toHaveLength(2);
+    });
+  }
+
+  test("native SSE leaves empty terminal snapshots untouched after the first text", async () => {
+    const f = fixture([() => sse(empty(), [
+      { type: "response.output_item.added", output_index: 0, item: { id: "msg_1", type: "message", role: "assistant", content: [] } },
+      { type: "response.output_text.delta", output_index: 0, content_index: 0, item_id: "msg_1", delta: "남아야 할 답변" },
+      { type: "response.output_text.done", output_index: 0, content_index: 0, item_id: "msg_1", text: "" },
+      { type: "response.output_item.done", output_index: 0, item: empty().output[0] },
+    ])]);
+    takeSpendHome();
+    const response = await handleResponses(request(true, "질문", { store: false }), f.cfg, { model: "", provider: "" });
+    const text = await response.text();
+    const events = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+    expect(events.find(event => event.type === "response.output_text.delta")?.delta).toBe("남아야 할 답변");
+    expect(events.find(event => event.type === "response.output_text.done")?.text).toBe("");
+    expect(events.find(event => event.type === "response.completed")?.response.output[0].content[0].text).toBe("");
+    expect(f.sends).toHaveLength(1);
+  });
+
+  test("native retry failure consumes only one replacement even on HTTP 503", async () => {
+    const f = fixture([() => sse(empty()), () => new Response("unavailable", { status: 503 })]);
+    takeSpendHome();
+    const response = await handleResponses(request(true, "질문", { store: false }), f.cfg, { model: "", provider: "" });
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toContain("empty_completion_retry_failed");
+    expect(f.sends).toHaveLength(2);
+  });
+
+  test("native recovery cannot exceed a provider's explicit one-send budget", async () => {
+    const f = fixture([() => sse(empty())], endpoint, { transientRetryOn5xx: { enabled: true, attempts: 1 } });
+    takeSpendHome();
+    const response = await handleResponses(request(true, "질문", { store: false }), f.cfg, { model: "", provider: "" });
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(await response.text()).not.toContain("empty_completion_retry_failed");
+    expect(f.sends).toHaveLength(1);
+  });
+
+  test("native JSON retry HTTP failure retains first usage exactly once", async () => {
+    const f = fixture([() => Response.json(empty()), () => new Response("unavailable", { status: 503 })]);
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    takeSpendHome();
+    const response = await handleResponses(request(false, "질문", { store: false }), f.cfg, logCtx);
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toContain("empty_completion_retry_failed");
+    expect(f.sends).toHaveLength(2);
+    expect(logCtx.activeAttempt?.usage).toMatchObject({ inputTokens: 3, outputTokens: 1 });
+  });
+
+  test("native recovery preserves upstream SSE even when the caller requested JSON", async () => {
+    const f = fixture([() => sse(empty()), () => sse(answer())]);
+    takeSpendHome();
+    const response = await handleResponses(request(false, "질문", { store: false }), f.cfg, { model: "", provider: "" });
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(await response.text()).toContain("정상 답변");
+    expect(f.sends).toHaveLength(2);
+  });
+
+  for (const optOut of ["config", "environment"]) {
+    test(`native ${optOut} opt-out prevents replay but still rejects empty success`, async () => {
+      const f = fixture([() => sse(empty())]);
+      if (optOut === "environment") process.env.OCX_EMPTY_COMPLETION_RETRY = "0";
+      takeSpendHome();
+      const response = await handleResponses(request(true, "질문"),
+        { ...f.cfg, ...(optOut === "config" ? { emptyCompletionRetry: false } : {}) }, { model: "", provider: "" });
+      expect(await response.text()).toContain('"type":"response.failed"');
+      expect(f.sends).toHaveLength(1);
+    });
+  }
+
+  for (const url of ["https://other.test/v1/responses", "http://apis.opengateway.ai/v1/responses", "https://apis.opengateway.ai/other/responses"]) {
+    test(`native empty guard does not expand to ${url}`, async () => {
+      const f = fixture([() => Response.json(empty())], url);
+      takeSpendHome();
+      const response = await handleResponses(request(false, "질문", { store: false }), f.cfg, { model: "", provider: "" });
+      expect(await response.text()).toContain('"status":"completed"');
+      expect(f.sends).toHaveLength(1);
+    });
+  }
+});

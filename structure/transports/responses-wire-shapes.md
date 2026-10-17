@@ -528,6 +528,7 @@ request-log accounting without promoting a truncated repair candidate. Terminal 
 > Decision record: [ADR-0044](../decisions/ADR-0044-responses-http-sse.md)
 
 ## Inbound history and code-mode shell wire repairs
+OpenGateway 도구 결과 배열과 이미지 상세도 변환은 [OpenGateway 전송 계약](../providers-and-adapters.md#opengateway-chat-provider)을 따른다.
 
 Inbound function-call history with a missing JSON object prefix is repaired for every provider when restoring it produces an object. A terminal MiMo `</function></tool_call>` suffix is removed only when the remaining text parses as an object unchanged or after restoring a closing brace or quote and brace. Valid JSON containing these tags stays opaque; unrelated malformed arguments replay as `{}` without logging their content (`src/responses/parser.ts`). Regression coverage lives in `tests/responses/responses-mimo-envelope.test.ts`.
 Function-wrapper restoration supports `default.`-prefixed `exec` and `apply_patch` aliases while

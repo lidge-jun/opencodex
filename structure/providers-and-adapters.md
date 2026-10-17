@@ -323,6 +323,11 @@ Responses (`openai/o3-pro`); public discovery does not establish key validity. S
 `deepseek/deepseek-v4.1-flash-ultrafast` and `z-ai/glm-5.3-flash-ultrafast` are listed first. A custom model that replaces one of the discovered rows keeps
 that row's slot (`src/codex/catalog/routed-gather.ts`).
 Keys are created at `https://opengateway.ai/api-keys`.
+`src/adapters/openai-responses/opengateway-input.ts`는 OpenGateway의 `/v1/responses` 전송 직전에 텍스트 도구 결과 배열을 문자열로 바꾼다. `call_id`와 텍스트 순서는 유지한다. 이미지가 섞인 결과는 원본 이미지와 내용 순서를 사용자 메시지로 보존하며 병렬 호출의 결과 묶음 뒤에 둔다. 이미지의 `detail: original`은 upstream이 수용하는 `high`로 바꾸되 이미지 바이트는 바꾸지 않는다. 알 수 없는 형식과 암호화된 결과 배열은 조용히 삭제하지 않고 기존 검증에 남긴다. 다른 목적지와 원본 요청 객체는 바꾸지 않는다. `tests/providers/opengateway-provider.test.ts`가 실제 adapter 직렬화 경계에서 이 계약을 확인한다.
+
+`src/server/responses/opengateway-completion-guard.ts`는 정확한 `https://apis.opengateway.ai/v1/responses`의 HTTP 200 SSE/JSON에서 출력 전 빈 완료만 검사한다. 첫 텍스트, refusal(빈 refusal 포함), action 또는 unknown 이벤트부터는 원본 바이트를 그대로 전달하며 snapshot을 재구성하지 않는다. 정상 형식의 빈 terminal에서 reported `output_tokens >= outbound max_output_tokens`이면 재송신 없이 `incomplete/max_output_tokens`, 형식이 불완전하면 `invalid_completion` 실패다. Reasoning은 답변이 아니다.
+미소진 빈 완료는 실제 outbound body가 `selfContainedResponsesBody`를 통과할 때만 한 번 재시도한다. 명시적 `store:false`와 client-only tools가 필요하며 store 생략/true, continuation, background, hosted/unknown tool은 `empty_completion` 실패로 끝난다. `web_search`가 남아 있는 Codex 요청도 재생하지 않는다. 이 목적지에서는 설정 미지정 시 복구하되 `emptyCompletionRetry:false`와 `OCX_EMPTY_COMPLETION_RETRY=0`을 존중하며, 다른 목적지와 translated opt-in은 바뀌지 않는다.
+`src/server/responses/passthrough-completion.ts`가 기존 `rebuildAndRefetch("empty-completion")`의 pacing·accounting·abort·send budget에 연결하며 복구 물리 전송은 한 번이다. 첫 usage는 새 전송 전에 기존 attempt baseline에 기록한다. 두 번째 정상 형식의 빈 200만 `empty_completion_retry_failed`이며 재시도 HTTP 실패와 send-budget 거절은 원래 Response를 delivery에 넘긴다. 1 MiB/1,024개 이벤트·청크/30초 보관 한도에 닿으면 원본 prefix와 진행 중인 read를 전달하고 재시도를 닫는다. 보관 한도는 upstream을 취소하지 않으며 SSE stall은 기존 `resolveStallTimeoutMs`와 0-disable 정책을 따른다. timer·framer·reader cleanup 및 원본 바이트 보존은 `tests/responses/empty-completion-core.test.ts`, `tests/responses/empty-completion-hardening.test.ts`가 검증한다.
 
 ## TokenLab chat provider
 
