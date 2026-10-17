@@ -3,6 +3,7 @@ import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../base";
 import { buildSystemPrompt } from "../coding-agent/protocol";
 import { CODING_AGENT_TOOL_LIMITS } from "../coding-agent/tool-catalog";
 import { getConfigDir } from "../../config/paths";
+import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
 import {
   buildStepCliArgs,
   resolveStepCliProfile,
@@ -144,6 +145,26 @@ async function withConversationLock<T>(handle: string, task: () => Promise<T>): 
 /** One pool per OpenCodex home, so two homes in one process never share a StepCode session. */
 const pools = new Map<string, StepSessionPool>();
 
+const STEP_CLI_SHUTDOWN_KEY = "step-cli-sessions";
+let shutdownHookInstalled = false;
+
+/**
+ * Close every live StepCode process when the proxy stops.
+ *
+ * The sibling CLI routes spawn a child per request and kill it in a `finally`, so they cannot outlive a
+ * turn. This route deliberately keeps a process alive for a whole conversation, which means nothing
+ * kills it on shutdown: measured, a stopped proxy left an orphaned `step` behind holding the user's
+ * subscription session. Closing them here is the only thing standing between a restart and a leak.
+ */
+function ensureShutdownHook(): void {
+  if (shutdownHookInstalled) return;
+  shutdownHookInstalled = true;
+  registerOptionalShutdownHook(STEP_CLI_SHUTDOWN_KEY, () => {
+    for (const pool of pools.values()) void pool.closeAll();
+    pools.clear();
+  });
+}
+
 /** Drop every live session. Used by tests and available to a config reload. */
 export async function clearStepCliSessions(): Promise<void> {
   const open = [...pools.values()];
@@ -152,6 +173,7 @@ export async function clearStepCliSessions(): Promise<void> {
 }
 
 function poolFor(home: string, deps: StepCliAdapterDeps): StepSessionPool {
+  ensureShutdownHook();
   const existing = pools.get(home);
   if (existing) return existing;
   const { env, cwd } = stepCliProcessEnvironment(home);

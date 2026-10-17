@@ -16,6 +16,11 @@ import {
   STEP_PROTOCOL_VERSION,
   type StepFrame,
 } from "../../src/adapters/step-cli/stdio-frames";
+import {
+  didRunOptionalShutdownHooks,
+  resetOptionalShutdownHooksForTests,
+  runOptionalShutdownHooks,
+} from "../../src/lib/optional-shutdown-hooks";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 
 /**
@@ -554,5 +559,32 @@ describe("StepCode tool-catalog ceiling", () => {
     expect(error?.message).toMatch(/declares 200 tools/);
     expect(error?.message).toMatch(/128-tool ceiling/);
     expect(error?.message).toMatch(/CLI-backed provider shares/);
+  });
+});
+
+describe("StepCode session teardown on proxy shutdown", () => {
+  test("a stopped proxy closes the StepCode processes it still owns", async () => {
+    // The sibling CLI routes kill their child in a per-request `finally` and cannot outlive a turn.
+    // This route keeps a process for a whole conversation, so without a shutdown hook a stopped proxy
+    // leaves an orphaned `step` holding the user's subscription session — measured on this machine
+    // before the hook existed.
+    resetOptionalShutdownHooksForTests();
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), {
+      openSession: undefined,
+      spawn: () => ({ ...session, kill: () => true, exitCode: null, signalCode: null }) as never,
+      which: () => "/bin/true",
+    });
+    session.stream = [TURN_COMPLETE];
+    // No injected pool this time, so the real pool factory runs and registers the hook.
+    await adapter.runTurn!(
+      parsed([{ role: "user", content: "hello", timestamp: 0 }]),
+      THREAD_META,
+      () => {},
+    );
+    expect(didRunOptionalShutdownHooks()).toBe(false);
+    runOptionalShutdownHooks();
+    expect(didRunOptionalShutdownHooks()).toBe(true);
+    resetOptionalShutdownHooksForTests();
   });
 });
