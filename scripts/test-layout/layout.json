@@ -1880,6 +1880,7 @@
     "vision-reasoning-contract.test.ts": "vision",
     "vision-routed.test.ts": "vision",
     "vision-sidecar-e2e.test.ts": "vision",
+    "mistral-vision-sidecar.test.ts": "vision",
     "vision-sidecar-timeout-bounds.test.ts": "gui",
     "vision-text-only-predicate.test.ts": "vision",
     "volcengine-ark-assistant-content.test.ts": "providers",
