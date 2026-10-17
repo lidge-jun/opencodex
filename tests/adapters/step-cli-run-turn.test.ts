@@ -527,3 +527,32 @@ describe("StepCode query start retries", () => {
     expect(events.some(event => event.type === "error")).toBe(true);
   });
 });
+
+describe("StepCode tool-catalog ceiling", () => {
+  test("an oversized catalog names the count and the shared ceiling", async () => {
+    // Measured against a real Codex 0.162.0 client: 1749 declared tools / 2.5 MB, because Codex
+    // flattens every MCP server's tools into the function catalog. The shared CLI-family ceiling is
+    // 128 tools, the same bound `qoder`, `codebuddy` and `claude-cli` enforce — so the message has to
+    // say "too many, and this is the family limit", not just "invalid".
+    const many = Array.from({ length: 200 }, (_, index) => ({
+      name: `tool_${index}`,
+      description: "x",
+      parameters: { type: "object" },
+    }));
+    const adapter = createStepCliAdapter(provider(), { openSession: host(new FakeSession()) });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(
+      {
+        modelId: "step-5-preview",
+        context: { messages: [{ role: "user", content: "go", timestamp: 0 }], tools: many },
+        options: {},
+      } as unknown as OcxParsedRequest,
+      THREAD_META,
+      event => events.push(event),
+    );
+    const error = events.find(event => event.type === "error") as { message?: string } | undefined;
+    expect(error?.message).toMatch(/declares 200 tools/);
+    expect(error?.message).toMatch(/128-tool ceiling/);
+    expect(error?.message).toMatch(/CLI-backed provider shares/);
+  });
+});

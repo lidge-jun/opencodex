@@ -52,6 +52,22 @@ config may still initialize, which is what `--no-tools` makes unreachable. `perm
 runtime answers text only while looking healthy and a routed coding session would silently degrade
 into a chat.
 
+## Tool-catalog ceiling (shared with the CLI family)
+
+The client's tool catalog travels as inline-schema `sdkTools`, but it is still built by the shared
+`buildCodingAgentToolCatalog`, so this route inherits the same **128-tool / 2 MiB** ceiling that
+`codebuddy`, `qoder` and `claude-cli` enforce. A real Codex client can exceed it: Codex 0.162.0 was
+measured sending **1749 declared tools / 2.5 MB**, because it flattens every MCP server's tools into the
+function catalog. The route fails closed — a tool the client believes exists but that never reaches the
+model is worse than a refusal — and the refusal names the declared count, the ceiling and the operator
+action, since "exceeds tool count limit" alone cannot distinguish an oversized catalog from a malformed
+one. A stock Codex install without MCP servers carries roughly ten built-in tools and works.
+
+Raising the ceiling for this transport alone is technically affordable (the catalog rides in one frame
+under an 8 MiB ceiling rather than a staged file), but it is deliberately NOT done here: it would change
+a bound the sibling routes share, and 2.5 MB of tool schemas is not something to push into a model
+prompt anyway. That is a family decision for maintainers, and this PR only makes the constraint visible.
+
 ## Published contract
 
 The registry row publishes text-only models: `noVisionModels` covers every id, including

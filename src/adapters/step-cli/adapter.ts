@@ -1,6 +1,7 @@
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../base";
 import { buildSystemPrompt } from "../coding-agent/protocol";
+import { CODING_AGENT_TOOL_LIMITS } from "../coding-agent/tool-catalog";
 import { getConfigDir } from "../../config/paths";
 import {
   buildStepCliArgs,
@@ -618,7 +619,22 @@ export function createStepCliAdapter(
         tools = buildStepSdkTools(parsed, STEP_CLI_TOOL_SERVER);
       } catch (error) {
         if (!(error instanceof StepToolCatalogError)) throw error;
-        emit(refusal(`Invalid StepCode tool catalog: ${error.message}`, 400, "tool_catalog_invalid"));
+        // Name the numbers. Codex with many MCP servers flattens every remote tool into the function
+        // catalog (measured on a real Codex 0.162.0 client: 1749 tools, 2.5 MB), and the shared
+        // CLI-family ceiling is 128 tools / 2 MiB — the same bound `qoder`, `codebuddy` and
+        // `claude-cli` enforce. An operator seeing only "exceeds tool count limit" cannot tell a
+        // malformed catalog from an oversized one.
+        const declared = parsed.context.tools?.length ?? 0;
+        emit(
+          refusal(
+            `This request declares ${declared} tools, over the ${CODING_AGENT_TOOL_LIMITS.maxTools}-tool ceiling ` +
+              `every CLI-backed provider shares. Codex flattens each MCP server's tools into this catalog, so an ` +
+              `MCP-heavy setup reaches the ceiling; drop or disable MCP servers for this provider, or narrow the ` +
+              `tool set in the request. Detail: ${error.message}`,
+            400,
+            "tool_catalog_invalid",
+          ),
+        );
         return;
       }
 
