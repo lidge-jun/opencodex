@@ -204,6 +204,13 @@
       "documents": ["src/codex/runtime.ts", "src/codex/catalog/effort.ts"]
     },
     {
+      "path": "catalog-routed-ownership.md",
+      "tier": 2,
+      "title": "Routed-row authorship",
+      "scope": "Generated routed-row ownership signals and combo catalog description overrides.",
+      "documents": ["src/codex/catalog/ownership.ts"]
+    },
+    {
       "path": "subagents.md",
       "tier": 2,
       "title": "Subagents And Multi-Agent Surface",

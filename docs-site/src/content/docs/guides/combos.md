@@ -792,8 +792,8 @@ ocx combo remove <id> --yes
 ```
 
 `set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
-`--allow-metered-targets on|off`, `--display-name`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
-value of `--effort`, `--alias`, `--display-name`, `--decision-provider`, or `--decision-timeout` to
+`--allow-metered-targets on|off`, `--display-name`, `--description`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
+value of `--effort`, `--alias`, `--display-name`, `--description`, `--decision-provider`, or `--decision-timeout` to
 clear that field. The two decision flags apply only to `--strategy jev`. `--native-alias` requires a currently supported bare native
 model alias and a non-empty display name. `create` and `update` are aliases for `set`; `delete` is an alias for
 `remove`; and the same subcommands are available under `ocx route combo`.
@@ -859,6 +859,7 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |
 | `displayName` | No | none | Bounded display-only catalog label. Required and non-empty when `nativeAlias` is true. |
+| `description` | No | none | Display-only catalog row description, bounded like `displayName` (at most 128 characters, no control characters). Unset keeps the generated `Routed via opencodex → combo (combo).` text. Management API writes that omit it keep the saved value; an empty string clears it. |
 | `decisionProvider` | No | `"jev"` | JEV only. Provider id of the decision service: `"jev"` (TypeSafe, valid without a provider row; the same as omission) or a configured `adapter: "jev-decision"` row with a full HTTPS decision URL or a local HTTP `/systemone` URL, such as a self-hosted Ollama `tev1`. |
 | `decisionTimeoutMs` | No | `4000` | JEV only. Integer from 1000 to 120000: the decision deadline before failing open to the first eligible target. |
 
