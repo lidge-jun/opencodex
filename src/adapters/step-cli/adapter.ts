@@ -45,10 +45,6 @@ export interface StepCliAdapterDeps extends StepSessionDeps {
   openSession?: StepConversationHost;
 }
 
-/** `providerState` slot carrying the conversation handle between requests. */
-
-
-
 /**
  * Per-request turn state, keyed by the process that owns it.
  *
@@ -66,16 +62,6 @@ export interface StepCliAdapterDeps extends StepSessionDeps {
  * StepCode's own 120s tool window so a legitimate slow tool is never cut short.
  */
 const STEP_CLI_TERMINAL_DEADLINE_MS = 10 * 60_000;
-
-/**
- * Backoff for re-opening a query the runtime still considers busy.
- *
- * A turn settles when the CLI reports `turn_complete`, which can be a moment before the runtime frees
- * its single query slot. Measured on the real CLI: the very next request on the same conversation then
- * failed with `SESSION_BUSY`. The conversation lock means no other turn of ours is in flight while this
- * runs, so retrying here cannot collide with our own work — it is only bridging the runtime's own
- * handover delay.
- */
 
 /**
  * Backoff for re-opening a query the runtime still considers busy.
@@ -214,15 +200,6 @@ export function createStepCliAdapter(
   };
 }
 
-/** The body of a turn that already holds its conversation's process. */
-/**
- * Open a query, retrying only while the runtime reports its single slot is still busy.
- *
- * Every other failure propagates immediately: a capability or transport problem must not be turned
- * into three silent attempts.
- */
-
-/** The body of a turn that already holds its conversation's process. */
 /**
  * Open a query, retrying only while the runtime reports its single slot is still busy.
  *
@@ -307,7 +284,6 @@ async function driveTurn(
         pool: sessions,
         emit,
         settle,
-        done,
         emittedNames: tools.emittedNameMap,
       });
 
@@ -372,7 +348,7 @@ async function driveTurn(
         }),
       ]);
       clearTimer(deadlineTimer as never);
-      if (!currentTurn(session) !== undefined) return;
+      if (currentTurn(session) === undefined) return;
 
       // The turn is still registered, so nothing terminated it: either the client aborted, or the CLI
       // went quiet. Either way the query is still running inside StepCode, and since it serves one

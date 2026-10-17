@@ -690,6 +690,107 @@ describe("StepCode conversation queue", () => {
   });
 });
 
+describe("StepCode abandoned-turn recovery", () => {
+  /**
+   * A terminal deadline the test fires by hand, so the "CLI went quiet" path is driven without
+   * waiting ten minutes and without depending on wall-clock timing.
+   */
+  function manualTimers() {
+    const pending: Array<() => void> = [];
+    return {
+      setTimeout: ((fn: () => void) => {
+        pending.push(fn);
+        return pending.length as unknown as ReturnType<typeof setTimeout>;
+      }) as unknown as typeof setTimeout,
+      clearTimeout: (() => {}) as unknown as typeof clearTimeout,
+      armed: () => pending.length,
+      fire: () => {
+        for (const fn of pending.splice(0, pending.length)) fn();
+      },
+    };
+  }
+
+  /** Wait for the turn to reach its terminal deadline, rather than assuming a fixed sleep is enough. */
+  async function untilArmed(timers: ReturnType<typeof manualTimers>): Promise<void> {
+    for (let attempt = 0; attempt < 200 && timers.armed() === 0; attempt += 1) await Bun.sleep(1);
+  }
+
+  function expectRecovered(events: AdapterEvent[], session: FakeSession): void {
+    const error = events.find(event => event.type === "error") as { code?: string } | undefined;
+    // The client has to be told: a stream that just stops is indistinguishable from a hung proxy.
+    expect(error?.code).toBe("step_cli_turn_abandoned");
+    // StepCode serves one query per process, so a query left running makes every later request for
+    // this conversation collide with it. Interrupting is what stops the bleed.
+    expect(session.interrupts).toEqual(["q_1"]);
+    // And the process itself is released, rather than held for a conversation that just failed.
+    expect(session.closed).toBe(true);
+  }
+
+  test("a client abort interrupts the query and closes the session", async () => {
+    // Regression: the guard deciding "nothing terminated this turn" was written as
+    // `!currentTurn(session) !== undefined`. `!x` is ALWAYS a boolean and a boolean is never
+    // `undefined`, so the comparison was always true and the whole recovery block below it was dead
+    // code — the exact opposite of the refactor that introduced it. Every one of the existing tests
+    // passed over it, because on the happy path a terminal event ends the turn first and the
+    // distinction is invisible.
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+    // No frames: the CLI accepts the query and then says nothing, forever.
+    session.stream = [];
+
+    const controller = new AbortController();
+    const events: AdapterEvent[] = [];
+    const turn = adapter.runTurn!(
+      parsed(USER_ASK),
+      { headers: new Headers({ "thread-id": "conv-1" }), abortSignal: controller.signal } as never,
+      event => events.push(event),
+    );
+
+    await Bun.sleep(10);
+    expect(session.queries).toHaveLength(1);
+    controller.abort();
+    await turn;
+
+    expectRecovered(events, session);
+  });
+
+  test("the terminal deadline recovers the same way when no abort arrives", async () => {
+    const session = new FakeSession();
+    const timers = manualTimers();
+    const adapter = createStepCliAdapter(provider(), {
+      openSession: host(session),
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout,
+    });
+    session.stream = [];
+
+    const events: AdapterEvent[] = [];
+    const turn = adapter.runTurn!(parsed(USER_ASK), THREAD_META, event => events.push(event));
+
+    await untilArmed(timers);
+    expect(session.queries).toHaveLength(1);
+    timers.fire();
+    await turn;
+
+    expectRecovered(events, session);
+  });
+
+  test("a normally completed turn is not treated as abandoned", async () => {
+    // The other direction: the recovery must not fire on the path that already produced a terminal
+    // event, or every successful turn would interrupt its own query and drop the conversation.
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+    session.stream = [TURN_COMPLETE];
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(parsed(USER_ASK), THREAD_META, event => events.push(event));
+    await Bun.sleep(5);
+    expect(events.some(event => event.type === "done")).toBe(true);
+    expect(events.some(event => event.type === "error")).toBe(false);
+    expect(session.interrupts).toEqual([]);
+    expect(session.closed).toBe(false);
+  });
+});
+
 describe("StepCode held-result delivery ordering", () => {
   test("a turn is registered before the tool result unblocks the CLI", async () => {
     // The CLI may answer the instant it receives a tool result. Delivering the result before

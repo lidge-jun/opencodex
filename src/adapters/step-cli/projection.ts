@@ -175,8 +175,6 @@ export function composePrompt(parsed: OcxParsedRequest, userText: string): strin
 }
 
 /** Resolves when the client aborts, so a turn in flight does not outlive its request. */
-
-/** Resolves when the client aborts, so a turn in flight does not outlive its request. */
 export function abortSignal(incoming: IncomingMeta): Promise<void> {
   const signal = incoming.abortSignal;
   if (!signal) return new Promise<void>(() => undefined);
