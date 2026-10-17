@@ -769,8 +769,10 @@ export function createCodexAuthDispatchGuard(
   terminalHelper = false,
 ): ((headers: Headers) => void) | undefined {
   const reserveGuard = createCodexReserveDispatchGuard(ctx, config, modelId, admission, terminalHelper);
-  if (ctx.kind !== "pool") return reserveGuard;
+  if (ctx.kind !== "pool" && ctx.kind !== "main-pool") return reserveGuard;
   return headers => {
+    if (config.pausedCodexAccountIds?.includes(ctx.accountId)) throw new CodexPoolAuthenticationError("Selected Codex account is paused; resume it in account settings");
+    if (ctx.kind === "main-pool") { reserveGuard?.(headers); return; }
     assertPoolAccountCredits(ctx.accountId, poolContextCreditHoldResetAt(ctx, config));
     reserveGuard?.(headers);
   };

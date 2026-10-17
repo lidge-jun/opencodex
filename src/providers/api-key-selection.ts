@@ -13,6 +13,9 @@ import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 export { captureProviderApiKeySelection } from "./api-key-selection-capture";
 
 function matchesSelection(provider: OcxProviderConfig, expected: ProviderApiKeySelection): boolean {
+  if (expected.distributed) return provider.apiKeySelectionRevision === expected.revision
+    && provider.requestPacing?.enabled === true && provider.requestPacing.keySelection === "round-robin"
+    && !!provider.apiKeyPool?.some(entry => !entry.disabled && entry.id === expected.entryId && entry.key === expected.reference);
   const current = captureProviderApiKeySelection(provider);
   return current.entryId === expected.entryId && current.reference === expected.reference
     && current.revision === expected.revision;
@@ -24,10 +27,12 @@ function currentKeyProvider(config: OcxConfig, name: string, selection?: Provide
   let row = configured;
   if (selection?.distributed) {
     const entry = configured.apiKeyPool?.find(key => key.id === selection.entryId && key.key === selection.reference);
-    if (!entry || (!allowCooling && isKeyInCooldown(name, entry.id)) || configured.apiKeySelectionRevision !== selection.revision
+    if (!entry || entry.disabled || (!allowCooling && isKeyInCooldown(name, entry.id)) || configured.apiKeySelectionRevision !== selection.revision
       || !configured.requestPacing?.enabled || configured.requestPacing.keySelection !== "round-robin") return null;
     row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
   }
+  if (row.apiKeyPool?.some(entry => entry.disabled && entry.key === row.apiKey)
+    || row.apiKeyPool?.length && row.apiKeyPool.every(entry => entry.disabled)) return null;
   const current = routedProviderConfig(name, { ...row, _apiKeyAttempt: selection?.distributed ? selection : undefined });
   if (current.authMode === "oauth" || current.authMode === "forward") return null;
   if (current.authMode === "key" && !current.keyOptional && !current.apiKey?.trim()) return null;

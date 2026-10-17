@@ -7,7 +7,7 @@ const ENUMS: Readonly<Record<string, readonly (string | null)[]>> = {
   defaultEffortMode: ["fallback", "force"], reasoningEffortMode: ["strict", "adaptive"],
   imageInput: ["auto", "disabled"], cooldownWaitPolicy: ["before-last-resort"],
 };
-const STRINGS = new Set(["alias", "displayName", "decisionProvider", "decisionModel"]);
+const STRINGS = new Set(["alias", "displayName", "description", "decisionProvider", "decisionModel"]);
 const RANGES: Readonly<Record<string, readonly [number, number]>> = {
   stickyLimit: [1, 100], cooldownMs: [1, 600_000], waitForCooldownMs: [0, 600_000],
   decisionTimeoutMs: [1_000, 120_000],

@@ -1,3 +1,4 @@
+import { wasAccountAutoPaused } from "./account-auto-pause";
 import { anthropicModelFamily } from "./anthropic-model-quota";
 /** Narrow pre-output account recovery, fenced to the bearer that physically sent the turn. */
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -117,6 +118,11 @@ export async function rotateAnthropicAccountOnResponseForInstance(
   const { pauseAnthropicRateAdmission, anthropicRatePauseUntil } = anthropicRatePolicyFor(instance);
   const { recordAnthropicAccountRefusal, rotateAnthropicAccountOnRefusal,
     hasAnthropicFailoverQuorum, isAnthropicAccountPoolEnabled, pickAlternateAnthropicAccount } = routing;
+  if (wasAccountAutoPaused(response)) {
+    if (!options.canRetry || options.signal?.aborted) return null;
+    return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(),
+      options.currentDecision ? options.currentDecision() : options.decision ?? null, options.model, options.excludedAccountIds);
+  }
   const ownedCurrent = () => {
     if (configuredAnthropicInstance(options.config, instance) !== instance
       || !anthropicPhysicalSendOwnershipIsCurrent(sent)) return undefined;

@@ -19,6 +19,7 @@
  *   distinct one. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor extracts JWT `sub` —
  *   both append distinct identified accounts under multiauth.
  */
+import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
 import { findKiroAccountForLogin, withRetainedKiroUser } from "./kiro-account-identity";
@@ -638,7 +639,12 @@ function normalizeAccount(value: unknown): ProviderAccount | null {
   if (candidate.refreshAttentionGeneration === credentialGeneration(credential)) {
     account.refreshAttentionGeneration = candidate.refreshAttentionGeneration;
   }
-  if (candidate.paused === true) account.paused = true;
+  if (candidate.paused === true) {
+    account.paused = true;
+    const details = accountPauseDetailsSchema.safeParse(candidate.pauseDetails);
+    if (details.success) account.pauseDetails = details.data;
+  }
+  if (typeof candidate.pauseRevision === "string") account.pauseRevision = candidate.pauseRevision;
   const threshold = parseAnthropicAccountThreshold(candidate.autoSwitchThresholdOverride);
   if (threshold !== null) account.autoSwitchThresholdOverride = threshold;
   if (candidate.needsReauth === true && candidate.needsReauthReason === "verify_account") {
@@ -801,7 +807,7 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
   drainOAuthMutations();
   return result;
 }
-export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[]; finalizeResult?: (result: T, store: AuthStore) => void; afterPersist?: (result: T) => void }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[]; finalizeResult?: (result: T, store: AuthStore) => void; afterPersist?: (result: T) => void; withConfigLock?: boolean }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
     const selections = new Map(Object.entries(store).map(([provider, set]) => [provider, {
@@ -814,7 +820,7 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
     // Only providers whose credentials this mutation actually removed leave the downgrade
     // backup; a no-op removal names none. The result decides, so it is read here.
     const scrubbedProviders = options?.scrubLegacyBackup?.(result) ?? [];
-    options?.assertBeforePersist?.();
+    if (!options?.withConfigLock) options?.assertBeforePersist?.();
     const changedProviders: string[] = [];
     for (const provider of new Set([...selections.keys(), ...Object.keys(store)])) {
       const before = selections.get(provider);
@@ -837,7 +843,8 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
     // Receipt-producing mutations need the revision assigned by the bookkeeping above, not the
     // provisional value visible inside their callback. Finalization cannot await or mutate disk.
     options?.finalizeResult?.(result, store);
-    persist(store);
+    const publish = () => { if (options?.withConfigLock) options.assertBeforePersist?.(); persist(store); };
+    if (options?.withConfigLock) withConfigMutationLockSync(publish); else publish();
     if (scrubbedProviders.length > 0) scrubLegacyBackup(scrubbedProviders);
     // A committed observer may establish ordering before the generic selection
     // publication, but its failure can never turn a durable write into a reported failure.
@@ -1388,17 +1395,23 @@ export async function setAccountPaused(
   provider: string,
   accountId: string,
   paused: boolean,
+  automatic?: { generation: string; pauseRevision?: string; details: import("../types/account-auto-pause").AccountPauseDetails; isCurrent?: () => boolean; assertPolicyBeforePersist?: () => void },
 ): Promise<SetAccountPausedResult> {
   const result = await mutateStore(store => {
     const set = store[provider];
     const account = set?.accounts.find(candidate => candidate.id === accountId);
     if (!set || !account) return { status: "not-found" } as const;
-    if ((account.paused === true) === paused) {
+    if (automatic && (automatic.isCurrent?.() === false || credentialGeneration(account.credential) !== automatic.generation
+      || account.pauseRevision !== automatic.pauseRevision)) return { status: "not-found" } as const;
+    if (paused && account.paused === true) {
       return { status: "unchanged", activeAccountId: set.activeAccountId, activeAccountChanged: false } as const;
     }
 
     if (paused) account.paused = true;
     else delete account.paused;
+    account.pauseRevision = randomUUID();
+    if (automatic) account.pauseDetails = automatic.details;
+    else delete account.pauseDetails;
     // Pause is part of selection eligibility even when the operator changes a non-active
     // account. Bump the provider selection revision so observers receive the existing
     // post-persistence roster invalidation and stale automatic proposals cannot commit.
@@ -1432,7 +1445,10 @@ export async function setAccountPaused(
       activeAccountId: set.activeAccountId,
       activeAccountChanged,
     } as const;
-  }, [provider, accountId, paused]);
+  }, [provider, accountId, paused], { withConfigLock: !!automatic, assertBeforePersist: () => {
+    automatic?.assertPolicyBeforePersist?.();
+    if (automatic?.isCurrent?.() === false) throw new Error("Account auto-pause policy changed before persistence");
+  } });
   if (result.status === "updated") publishOAuthAccountPauseChange(provider);
   return result;
 }
@@ -1485,6 +1501,8 @@ export async function replaceProviderAccountSet(
         ...(account.needsReauth ? { needsReauth: true } : {}),
         ...(account.refreshAttentionGeneration ? { refreshAttentionGeneration: account.refreshAttentionGeneration } : {}),
         ...(account.paused ? { paused: true } : {}),
+        ...(account.pauseDetails ? { pauseDetails: account.pauseDetails } : {}),
+        ...(account.pauseRevision ? { pauseRevision: account.pauseRevision } : {}),
         ...(account.autoSwitchThresholdOverride !== undefined ? { autoSwitchThresholdOverride: account.autoSwitchThresholdOverride } : {}),
         ...(account.needsReauthReason === "verify_account" ? { needsReauthReason: account.needsReauthReason } : {}),
         ...(account.addedAt !== undefined ? { addedAt: account.addedAt } : {}),

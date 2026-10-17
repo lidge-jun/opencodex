@@ -304,6 +304,8 @@ Unicode pattern normalization uses [copy-on-write traversal](byte-accounting.md#
 `src/oauth/account-quota-rank.ts` ranks Antigravity custom windows for the requested
 Gemini or Claude family, including GPT-OSS in the Claude family. An unknown model
 retains all-window ranking; absent matching evidence retains the existing unranked behavior.
+Windows carrying `modelId` (exact model rows and the Argon summary pool) are excluded
+from headroom and from reset-time selection, including family-less requests.
 `src/server/responses/request-transport.ts` passes the routed model at initial selection.
 The passthrough, adapter, continuation, sidecar and run-turn execution owners pass
 the same routed model during account rotation, without bypassing their send-budget

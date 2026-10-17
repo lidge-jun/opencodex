@@ -236,7 +236,7 @@ ocx combo set <id> --targets provider/model[:weight],...
 ocx combo remove <id> --yes
 ```
 
-`set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias` 與 `--rename-from`。用 `-` 作為 `--effort` 或 `--alias` 的值可清除該欄位。`create` 與 `update` 為 `set` 的別名；`delete` 為 `remove` 的別名；且相同子指令在 `ocx route combo` 下也可用。
+`set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias`、`--display-name`、`--description` 與 `--rename-from`。用 `-` 作為 `--effort`、`--alias`、`--display-name` 或 `--description` 的值可清除該欄位。`create` 與 `update` 為 `set` 的別名；`delete` 為 `remove` 的別名；且相同子指令在 `ocx route combo` 下也可用。
 
 ### 管理 API
 
@@ -275,6 +275,7 @@ Combo 儲存於頂層 `combos` 物件中，以 combo id 為 key：
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；僅在呼叫者省略 effort 且目標宣告支援時套用。 |
 | `reasoningEffortMode` | 否 | `"strict"` | `strict` 或 `adaptive`；選擇混合能力交集及目標層級控制正規化。 |
 | `alias` | 否 | 無 | 可選的修剪後公開模型 id；使用上述別名規則。空值儲存為無別名。 |
+| `description` | 否 | 無 | 僅供 catalog 顯示的列描述，最多 128 個字元且不含控制字元。未設定時保留產生的 `Routed via opencodex → combo (combo).` 文字。 |
 
 ## 疑難排解
 

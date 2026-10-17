@@ -172,8 +172,8 @@ cross-route credential fallback не существует. Строки API GPT-
 | `anthropicEofTolerance?` | `boolean` | Позволяет Anthropic-совместимому шлюзу завершить поток до `message_stop`, только если получен видимый текст или полный JSON-объект аргументов инструмента. По умолчанию выключено. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Режим транспорта/аутентификации Google. По умолчанию `ai-studio`. |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Только Google. Отсутствие поля или `compatible` сохраняет совместимую схему и существующее недиректное восстановление после 400. `reject-lossy` отклоняет начальную потерю или неопределённый результат ограниченного сравнения до отправки и блокирует восстановление Vertex или Cloud Code Assist, которое сняло бы ограничения. Прямой AI Studio такое восстановление не выполняет. |
-| `project?` | `string` | Идентификатор проекта Vertex или Antigravity Cloud Code Assist. |
-| `location?` | `string` | Локация Vertex; fallback через окружение — `GOOGLE_CLOUD_LOCATION`. |
+| `project?` | `string` | Идентификатор проекта Vertex или Antigravity Cloud Code Assist. Если он задан, API-ключи Vertex используют endpoint проекта; без него — режим express, даже если задан `GOOGLE_CLOUD_PROJECT`. ADC использует fallback `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`. |
+| `location?` | `string` | Локация Vertex. Endpoint проекта для API-ключа по умолчанию использует `global` и игнорирует `GOOGLE_CLOUD_LOCATION`; ADC требует это поле или fallback `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Только Cursor: MCP-серверы в режимах stdio или Streamable HTTP. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Только Cursor: команды внешнего computer-use и record-screen. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Legacy boolean Cursor, эквивалентен `nativeLocalExec: "on"` только если новое поле не задано. |
