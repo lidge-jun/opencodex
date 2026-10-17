@@ -202,7 +202,48 @@ function callerInputAt(fixtureCase: FixtureCase, path: string): { ok: true; valu
  * equality whose expected value IS the caller's value at the same place. An absence check, or an
  * equality against a rewritten value, proves a transformation and cannot back a lossless claim.
  */
-function passthroughEvidenceIssues(claimId: string, fixtureCase: FixtureCase, assertion: FixtureAssertion): string[] {
+type PassthroughBinding = {
+  /** Outbound selectors that can prove this feature survived. */
+  selector: RegExp;
+  /** Extra requirement on the preserved value, so a partial value cannot stand in for the feature. */
+  valueIssue?: (value: unknown) => string | undefined;
+};
+
+/**
+ * Features that may be claimed as passthrough, and where their evidence must look. Evidence for an
+ * unrelated field (the model id, say) preserves a caller value but proves nothing about the feature.
+ * A new passthrough feature needs a binding here before it can be claimed.
+ */
+const PASSTHROUGH_FEATURE_BINDINGS: Readonly<Record<string, PassthroughBinding>> = {
+  "request.custom_tools": {
+    selector: /^\/body\/tools\/\d+$/,
+    valueIssue: value => (value as { type?: unknown } | null)?.type === "custom"
+      ? undefined
+      : "is not a native custom tool declaration",
+  },
+  "request.custom_tools.grammar": {
+    selector: /^\/body\/tools\/\d+\/format$/,
+    valueIssue: value => {
+      const format = value as { type?: unknown; definition?: unknown } | null;
+      return format?.type === "grammar" && typeof format.definition === "string" && format.definition.length > 0
+        ? undefined
+        : "is not a grammar format with a non-empty definition";
+    },
+  },
+  "request.prompt_cache_key": { selector: /^\/body\/prompt_cache_key$/ },
+};
+
+function passthroughEvidenceIssues(
+  claimId: string,
+  feature: string,
+  fixtureCase: FixtureCase,
+  assertion: FixtureAssertion,
+): string[] {
+  const binding = PASSTHROUGH_FEATURE_BINDINGS[feature];
+  if (!binding) return [`${claimId}: passthrough feature ${feature} has no evidence selector binding`];
+  if (!binding.selector.test(assertion.path)) {
+    return [`${claimId}: passthrough evidence ${assertion.id} selector ${assertion.path} does not prove ${feature}`];
+  }
   if (assertion.operator !== "equals" || !Object.prototype.hasOwnProperty.call(assertion, "expected")) {
     return [`${claimId}: passthrough evidence ${assertion.id} must be an equals assertion`];
   }
@@ -213,6 +254,8 @@ function passthroughEvidenceIssues(claimId: string, fixtureCase: FixtureCase, as
   if (!Bun.deepEquals(input.value, assertion.expected, true)) {
     return [`${claimId}: passthrough evidence ${assertion.id} expects a value that differs from the caller input`];
   }
+  const valueIssue = binding.valueIssue?.(assertion.expected);
+  if (valueIssue) return [`${claimId}: passthrough evidence ${assertion.id} ${valueIssue}`];
   return [];
 }
 
@@ -246,7 +289,7 @@ function manifestEvidenceIssues(manifest: CompatibilityManifestV1, fixture: Comp
           continue;
         }
         if (claim.disposition === "passthrough") {
-          issues.push(...passthroughEvidenceIssues(claim.id, found.fixtureCase, found.assertion));
+          issues.push(...passthroughEvidenceIssues(claim.id, claim.feature, found.fixtureCase, found.assertion));
         }
       }
     }
@@ -393,44 +436,94 @@ describe("custom-tool grammar evidence", () => {
 
   test("grammar loss cannot be labeled passthrough", () => {
     const index = claimIndex(OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST, "custom-tool-grammar");
+    const asPassthrough = (assertionIds: string[]) => {
+      const clone = mutableClone(OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST);
+      clone.claims[index]!.disposition = "passthrough";
+      delete clone.claims[index]!.limitation;
+      clone.claims[index]!.evidence = [{ kind: "fixture", id: openGatewayFixture.id, assertionIds }];
+      // Schema-valid on purpose: only the evidence gate can see that the value did not survive.
+      expect(compatibilityManifestIssues(clone)).toEqual([]);
+      return clone;
+    };
 
-    const absenceAsLossless = mutableClone(OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST);
-    absenceAsLossless.claims[index]!.disposition = "passthrough";
-    delete absenceAsLossless.claims[index]!.limitation;
-    absenceAsLossless.claims[index]!.evidence = [{
-      kind: "fixture",
-      id: openGatewayFixture.id,
-      assertionIds: ["custom-tool-grammar-removed"],
-    }];
-    // Schema-valid on purpose: only the evidence gate can see that the value did not survive.
-    expect(compatibilityManifestIssues(absenceAsLossless)).toEqual([]);
-    expect(manifestEvidenceIssues(absenceAsLossless, openGatewayFixture)).toContain(
+    expect(manifestEvidenceIssues(asPassthrough(["custom-tool-grammar-removed"]), openGatewayFixture)).toContain(
       "custom-tool-grammar: passthrough evidence custom-tool-grammar-removed must be an equals assertion",
     );
+    expect(manifestEvidenceIssues(asPassthrough(["custom-tool-lowered-to-function"]), openGatewayFixture)).toContain(
+      "custom-tool-grammar: passthrough evidence custom-tool-lowered-to-function selector /body/tools/0 does not prove request.custom_tools.grammar",
+    );
 
-    const rewrittenAsLossless = mutableClone(OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST);
-    rewrittenAsLossless.claims[index]!.disposition = "passthrough";
-    delete rewrittenAsLossless.claims[index]!.limitation;
-    rewrittenAsLossless.claims[index]!.evidence = [{
-      kind: "fixture",
-      id: openGatewayFixture.id,
-      assertionIds: ["custom-tool-lowered-to-function"],
-    }];
-    expect(compatibilityManifestIssues(rewrittenAsLossless)).toEqual([]);
-    expect(manifestEvidenceIssues(rewrittenAsLossless, openGatewayFixture)).toContain(
-      "custom-tool-grammar: passthrough evidence custom-tool-lowered-to-function expects a value that differs from the caller input",
+    // A genuinely preserved but unrelated caller value must not stand in for the grammar.
+    const withModelAssertion = structuredClone(openGatewayFixture);
+    withModelAssertion.cases[0]!.assertions.push({
+      id: "model-preserved",
+      operator: "equals",
+      path: "/body/model",
+      expected: withModelAssertion.cases[0]!.request.model,
+    });
+    expect(manifestEvidenceIssues(asPassthrough(["model-preserved"]), withModelAssertion)).toContain(
+      "custom-tool-grammar: passthrough evidence model-preserved selector /body/model does not prove request.custom_tools.grammar",
     );
   });
 
-  test("passthrough evidence must point at a caller-supplied value", () => {
-    const unmappable = mutableClone(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST);
-    unmappable.claims[claimIndex(unmappable, "custom-tool-grammar")]!.evidence = [{
+  test("a rewritten value cannot back a passthrough claim", () => {
+    const clone = mutableClone(OPENGATEWAY_KEY_GLM53_RESPONSES_MANIFEST);
+    const index = claimIndex(clone, "custom-tools");
+    clone.claims[index]!.disposition = "passthrough";
+    delete clone.claims[index]!.limitation;
+    expect(compatibilityManifestIssues(clone)).toEqual([]);
+    expect(manifestEvidenceIssues(clone, openGatewayFixture)).toContain(
+      "custom-tools: passthrough evidence custom-tool-lowered-to-function expects a value that differs from the caller input",
+    );
+  });
+
+  test("grammar passthrough evidence must carry a non-empty definition", () => {
+    const withoutDefinition = structuredClone(forwardFixture);
+    const fieldCase = withoutDefinition.cases.find(fixtureCase => fixtureCase.id === "field-contract")!;
+    const tools = fieldCase.request.tools as Array<{ format: Record<string, unknown> }>;
+    delete tools[0]!.format.definition;
+    const grammarAssertion = fieldCase.assertions.find(assertion => assertion.id === "custom-tool-grammar-preserved")!;
+    delete (grammarAssertion.expected as Record<string, unknown>).definition;
+    expect(manifestEvidenceIssues(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST, withoutDefinition)).toContain(
+      "custom-tool-grammar: passthrough evidence custom-tool-grammar-preserved is not a grammar format with a non-empty definition",
+    );
+  });
+
+  test("passthrough evidence must point at a caller-supplied value for a bound feature", () => {
+    const grammarIndex = claimIndex(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST, "custom-tool-grammar");
+    const unrelatedSelector = mutableClone(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST);
+    unrelatedSelector.claims[grammarIndex]!.evidence = [{
       kind: "fixture",
       id: forwardFixture.id,
       assertionIds: ["canonical-url"],
     }];
-    expect(manifestEvidenceIssues(unmappable, forwardFixture)).toContain(
-      "custom-tool-grammar: passthrough evidence canonical-url selector /url has no caller input to compare",
+    expect(manifestEvidenceIssues(unrelatedSelector, forwardFixture)).toContain(
+      "custom-tool-grammar: passthrough evidence canonical-url selector /url does not prove request.custom_tools.grammar",
+    );
+
+    const noCallerValue = structuredClone(forwardFixture);
+    noCallerValue.cases[0]!.assertions.push({
+      id: "second-tool-format",
+      operator: "equals",
+      path: "/body/tools/1/format",
+      expected: { type: "grammar", syntax: "lark", definition: "start: X" },
+    });
+    const citesMissingInput = mutableClone(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST);
+    citesMissingInput.claims[grammarIndex]!.evidence = [{
+      kind: "fixture",
+      id: forwardFixture.id,
+      assertionIds: ["second-tool-format"],
+    }];
+    expect(manifestEvidenceIssues(citesMissingInput, noCallerValue)).toContain(
+      "custom-tool-grammar: passthrough evidence second-tool-format selector /body/tools/1/format has no caller input to compare",
+    );
+
+    const unbound = mutableClone(OPENAI_CODEX_FORWARD_GPT56_SOL_MANIFEST);
+    const metadataIndex = claimIndex(unbound, "metadata");
+    unbound.claims[metadataIndex]!.disposition = "passthrough";
+    delete unbound.claims[metadataIndex]!.limitation;
+    expect(manifestEvidenceIssues(unbound, forwardFixture)).toContain(
+      "metadata: passthrough feature request.metadata has no evidence selector binding",
     );
   });
 

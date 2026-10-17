@@ -264,7 +264,8 @@ Every non-passthrough claim must state its limitation, and every fixture-backed 
 exact assertion ids that prove it. Add the secret-free request vector under
 `tests/fixtures/compatibility/` and execute it against the production adapter in a focused test.
 A `passthrough` claim may only cite `equals` assertions whose expected value is the caller's own
-value at the same place, so a removed or rewritten field cannot be labeled lossless. Keep related
+value at the same place, on a selector bound to that feature in the manifest test, so a removed,
+rewritten, or unrelated field cannot be labeled lossless. Keep related
 aspects as separate claims when a route can preserve one and lose the other, such as a custom tool
 and its grammar.
 Compatibility manifests are passive data: the ordinary router, Responses handler, and server

@@ -52,6 +52,14 @@ case-insensitive name. An `absent` assertion, an equality against a rewritten va
 with no caller counterpart (such as `/url` or a runner-selected credential header) cannot back a
 passthrough claim. Envelope header names are normalized to lowercase before assertions run.
 
+Passthrough evidence must also be about the claimed feature. The test keeps a binding from each
+feature that may be claimed as passthrough to the outbound selectors that can prove it
+(`request.custom_tools` → `/body/tools/<n>` holding a native custom declaration,
+`request.custom_tools.grammar` → `/body/tools/<n>/format` holding a grammar with a non-empty
+definition, `request.prompt_cache_key` → `/body/prompt_cache_key`). A preserved but unrelated value,
+such as the model id, cannot back a grammar claim, and a feature without a binding cannot be claimed
+as passthrough until one is added.
+
 ## Custom-tool representation and grammar
 
 Custom-tool representation (`request.custom_tools`) and grammar (`request.custom_tools.grammar`)
