@@ -23,7 +23,7 @@ export function loopbackFamilyAvailability(
   } catch (error) {
     const code = (error as { code?: unknown } | null)?.code;
     return code === "EADDRNOTAVAIL" || code === "EAFNOSUPPORT"
-      || code === "EPROTONOSUPPORT" || code === "ENETUNREACH"
+      || code === "EPROTONOSUPPORT"
       ? "unavailable" : "unknown";
   }
   listener.stop();

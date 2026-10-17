@@ -40,7 +40,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) removeTreeWithRetry(root);
 });
 
-test.each(["EADDRNOTAVAIL", "EAFNOSUPPORT", "EPROTONOSUPPORT", "ENETUNREACH"])(
+test.each(["EADDRNOTAVAIL", "EAFNOSUPPORT", "EPROTONOSUPPORT"])(
   "%s from an IPv6 bind proves the family unavailable", code => {
     expect(loopbackFamilyAvailability("[::1]", hostname => {
       expect(hostname).toBe("::1");
@@ -49,7 +49,7 @@ test.each(["EADDRNOTAVAIL", "EAFNOSUPPORT", "EPROTONOSUPPORT", "ENETUNREACH"])(
   },
 );
 
-test.each(["EACCES", "EPERM", "EMFILE", "EADDRINUSE", "ETIMEDOUT", "EINVAL"])(
+test.each(["EACCES", "EPERM", "EMFILE", "EADDRINUSE", "ETIMEDOUT", "EINVAL", "ENETUNREACH"])(
   "%s from a bind does not prove address absence", code => {
     expect(loopbackFamilyAvailability("[::1]", () => {
       throw Object.assign(new Error("ambiguous"), { code });
@@ -121,6 +121,18 @@ test("an unregistered live IPv4 listener still blocks startup when IPv6 is unava
   const fx = fixture();
   await expect(markCrossHomeSibling({ homeDir: fx.home, ...probes("unavailable", "127.0.0.1") }))
     .rejects.toThrow("refusing startup");
+});
+
+test("a network-unreachable bind does not hide an unregistered live IPv6 owner", async () => {
+  const fx = fixture();
+  const probe = probes("unknown", "[::1]");
+  const loopbackAvailabilityFn = (hostname: string) => loopbackFamilyAvailability(hostname, () => {
+    if (hostname === "[::1]") throw Object.assign(new Error("route failure"), { code: "ENETUNREACH" });
+    return { stop() {} };
+  });
+  await expect(markCrossHomeSibling({ homeDir: fx.home, ...probe, loopbackAvailabilityFn }))
+    .rejects.toThrow("refusing startup");
+  expect(probe.requests).toContain("[::1]");
 });
 
 test.each(["127.0.0.1", "[::1]"])("an attested live %s owner still makes the start a sibling", async host => {
