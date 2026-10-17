@@ -68,6 +68,12 @@ Mode changes apply to new sessions. `maxConcurrentThreadsPerSession` is a `PUT /
 `config.json` key; `ocx v2 threads <n>` writes `max_concurrent_threads_per_session` under
 `[features.multi_agent_v2]` in Codex's `$CODEX_HOME/config.toml` after v2 is enabled.
 
+The Models page's sub-agent limit counts children. A stored V2 total of 1 is root-only
+and displays 0; setting one child saves a V2 total of 2. New child limits must be at least
+1, and both the child count and converted API value must be safe integers (at most
+9,007,199,254,740,991). With global V2 disabled, including hybrid mode, no root slot is added.
+The API rejects unsafe limits with 400 before changing the feature flag or configuration.
+
 **Always proactive delegation** in Subagents → Advanced (formerly **Ultra mode**) changes the
 delegation trigger without changing reasoning effort. Its preset preserves user instructions,
 authority boundaries, task scope, and tool rules. The dashboard toggle, `PUT /api/v2` field
