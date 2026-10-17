@@ -4,6 +4,7 @@ import { runProviderCompletionTest, COMPLETION_TEST_PROMPT, COMPLETION_TEST_MAX_
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/key-store";
 import * as keyResolver from "../../src/providers/api-key-resolve";
 import type { OcxProviderConfig } from "../../src/types";
+import { translatorLiveBudgetCountForTests } from "../../src/lib/translator-budget";
 
 afterEach(() => setProviderKeychainEntryFactoryForTests(null));
 
@@ -75,6 +76,16 @@ describe("completion test applicability and input", () => {
     expect(await f.run()).toMatchObject({ ok: true, wire: "openai-chat" });
     expect(f.calls).toHaveLength(1);
   });
+  test("alias to a hard-pinned unsupported wire is rejected before credentials", async () => {
+    let reads = 0;
+    setProviderKeychainEntryFactoryForTests(() => { reads++; throw new Error("must not read"); });
+    const f = fixture({ apiKey: "keychain:fixture", modelAliases: { "minimax-m2.7": "friendly" } });
+    f.config.providers["opencode-go"] = f.row;
+    expect(await runProviderCompletionTest({ config: f.config, name: "opencode-go", model: "friendly" }))
+      .toEqual({ applicable: false, reason: "unsupported_adapter", adapter: "anthropic" });
+    expect(reads).toBe(0);
+    expect(f.calls).toHaveLength(0);
+  });
 });
 
 describe("bounded wire and model observations", () => {
@@ -129,6 +140,22 @@ describe("bounded wire and model observations", () => {
     expect(await f.run("friendly")).toMatchObject({ wireModel: "native", requestedModel: "friendly", modelComparison: "match" });
     expect(JSON.parse(String(f.calls[0]!.init!.body)).model).toBe("native");
   });
+  for (const adapter of ["openai-chat", "anthropic"] as const) test(`alias resolves native Responses override before ${adapter} applicability`, async () => {
+    const payload = frame({ type: "response.created", response: { model: "native" } })
+      + frame({ type: "response.output_text.delta", delta: "OK" })
+      + frame({ type: "response.completed", response: { model: "native" } });
+    const f = fixture({ adapter, modelAliases: { native: "friendly" }, modelAdapters: { native: "openai-responses" } }, () => new Response(payload));
+    expect(await f.run("friendly")).toMatchObject({ ok: true, wire: "openai-responses", wireModel: "native", modelComparison: "match" });
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]!.url).toBe("https://provider.example/v1/responses");
+    expect(JSON.parse(String(f.calls[0]!.init!.body))).toEqual({ model: "native", input: COMPLETION_TEST_PROMPT, stream: true, max_output_tokens: 32, store: false });
+  });
+  test("native wire override precedes bracket suffix stripping", async () => {
+    const f = fixture({ adapter: "openai-responses", modelAliases: { "native[1m]": "friendly" },
+      modelAdapters: { "native[1m]": "openai-chat" }, modelSuffixBracketStrip: true }, () => new Response(chat("native")));
+    expect(await f.run("friendly")).toMatchObject({ ok: true, wire: "openai-chat", wireModel: "native" });
+    expect(f.calls[0]!.url).toBe("https://provider.example/v1/chat/completions");
+  });
   test("missing metadata is unknown", async () => {
     const f = fixture({}, () => new Response(frame({ choices: [{ delta: { content: "OK" } }] }) + frame("[DONE]")));
     expect(await f.run()).toMatchObject({ ok: true, upstreamModel: null, modelComparison: "unknown", comparisonNote: "missing_metadata" });
@@ -165,6 +192,22 @@ describe("bounded wire and model observations", () => {
 });
 
 describe("failure classification and cleanup", () => {
+  for (const outcome of ["success", "http_status", "stream_error", "too_large", "timeout", "aborted"] as const) test(`${outcome} releases its translator budget`, async () => {
+    const before = translatorLiveBudgetCountForTests();
+    const controller = new AbortController();
+    const f = fixture({}, () => {
+      if (outcome === "success") return new Response(chat());
+      if (outcome === "http_status") return new Response(null, { status: 500 });
+      return new Response(new ReadableStream({ start(c) {
+        if (outcome === "stream_error") c.enqueue(new TextEncoder().encode(frame({ error: {} })));
+        if (outcome === "too_large") c.enqueue(new Uint8Array(COMPLETION_TEST_MAX_BYTES + 1));
+        if (outcome === "aborted") setTimeout(() => controller.abort(), 10);
+      } }));
+    });
+    const result = await f.run("test-model", { timeoutMs: 100 }, controller.signal);
+    expect(result).toMatchObject(outcome === "success" ? { ok: true } : { error: { code: outcome } });
+    expect(translatorLiveBudgetCountForTests()).toBe(before);
+  });
   for (const status of [401, 500, 302]) test(`HTTP ${status} never reads a secret body or follows Location`, async () => {
     let cancelled = false;
     const f = fixture({}, () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("opaque-fixture-key")); }, cancel() { cancelled = true; } }),

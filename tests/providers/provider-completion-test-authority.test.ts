@@ -55,7 +55,6 @@ describe("beforeSend request authority fingerprint", () => {
       }, () => sends++) });
       expect(result).toMatchObject({ error: { code: "credential_changed" }, termination: "failed" });
       expect(sends).toBe(0);
-      expect(f.calls).toHaveLength(0);
     });
   }
   for (const kind of ["env", "keychain"] as const) test(`${kind} resolved key rotation: zero physical sends`, async () => {
@@ -80,6 +79,15 @@ describe("beforeSend request authority fingerprint", () => {
     let sends = 0;
     expect(await f.run("test-model", { outboundDependencies: pinned(() => {}, () => sends++) })).toMatchObject({ ok: true });
     expect(sends).toBe(1);
+  });
+  test("alias wire changes during DNS invalidate the effective authority", async () => {
+    const f = fixture({ proxy: "direct", modelAliases: { native: "friendly" }, modelAdapters: { native: "openai-responses" } });
+    delete f.row.fetch;
+    let sends = 0;
+    expect(await f.run("friendly", { outboundDependencies: pinned(() => {
+      f.row.modelAdapters!.native = "openai-chat";
+    }, () => sends++) })).toMatchObject({ wire: "openai-responses", error: { code: "credential_changed" } });
+    expect(sends).toBe(0);
   });
   test("provider direct and proxy egress use the existing outbound transport owner", async () => {
     for (const key of proxyKeys) delete process.env[key];

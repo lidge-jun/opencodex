@@ -69,20 +69,21 @@ function transportExclusion(row: OcxProviderConfig): Extract<ProviderCompletionT
   if (typeof (row as { fetch?: unknown }).fetch === "function" && "proxy" in row) return "custom_executor_egress";
   return undefined;
 }
-function effectiveModel(config: OcxConfig, row: OcxProviderConfig, model: string): string {
+function nativeModel(config: OcxConfig, row: OcxProviderConfig, model: string): string {
   const known = new Set([...(row.models ?? []), ...Object.keys(row.modelAliases ?? {})]);
-  const native = known.has(model) ? model : resolveModelAlias(config, row, known, model) ?? model;
-  return row.modelSuffixBracketStrip ? stripBracketedModelSuffix(native) : native;
+  return known.has(model) ? model : resolveModelAlias(config, row, known, model) ?? model;
 }
 function derive(config: OcxConfig, name: string, row: OcxProviderConfig, model: string) {
-  const routed = resolveWireProtocolOverride(name, model, routedProviderConfig(name, row));
+  const resolved = routedProviderConfig(name, row);
+  const native = nativeModel(config, resolved, model);
+  const routed = resolveWireProtocolOverride(name, native, resolved);
   const wire = routed.adapter;
   if (wire !== "openai-chat" && wire !== "openai-responses") throw new Error("unsupported adapter");
   const transport = wire === "openai-chat" ? openAIChatTransport(routed)
     : buildResponsesTransport(routed, { headers: new Headers() });
   const headers = new Headers(transport.headers);
   headers.set("Accept", "text/event-stream");
-  const wireModel = effectiveModel(config, routed, model);
+  const wireModel = routed.modelSuffixBracketStrip ? stripBracketedModelSuffix(native) : native;
   // Capture primitive values now: rows and their nested header objects may mutate in place.
   const selection = routed._apiKeyAttempt;
   const fingerprint = JSON.stringify({ wire, url: transport.url, wireModel, headers: [...headers].sort(([a], [b]) => a.localeCompare(b)),
@@ -123,11 +124,13 @@ export async function runProviderCompletionTest(
   let snapshot: OcxProviderConfig = metadata;
   let destinationRefused = false;
   try { snapshot = routedProviderConfig(name, metadata); } catch { destinationRefused = true; }
-  const wire = resolveWireProtocolOverride(name, model, snapshot).adapter;
+  const native = nativeModel(config, snapshot, model);
+  const wire = resolveWireProtocolOverride(name, native, snapshot).adapter;
   if (wire !== "openai-chat" && wire !== "openai-responses") return { applicable: false, reason: "unsupported_adapter", adapter: wire };
   const now = deps.now ?? (() => performance.now());
   const result: Extract<ProviderCompletionTestResult, { applicable: true }> = {
-    applicable: true, ok: false, provider: name, requestedModel: model, wireModel: effectiveModel(config, snapshot, model), wire,
+    applicable: true, ok: false, provider: name, requestedModel: model,
+    wireModel: snapshot.modelSuffixBracketStrip ? stripBracketedModelSuffix(native) : native, wire,
     upstreamModel: null, modelComparison: "unknown", comparisonNote: "missing_metadata", identityVerified: false,
     ttftMs: null, totalLatencyMs: 0, outputTokenCap: COMPLETION_TEST_OUTPUT_TOKEN_CAP, termination: "failed", error: null,
   };
@@ -153,6 +156,7 @@ export async function runProviderCompletionTest(
   const started = now();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let response: Response | undefined;
+  const translatorBudget = createTranslatorBudget();
   let observed: string | undefined;
   let conflicting = false, terminal = false, content = false, finishReason = false;
   const observe = (value: unknown) => {
@@ -196,7 +200,7 @@ export async function runProviderCompletionTest(
       },
       cancel() { void reader!.cancel().catch(() => {}); },
     }, { highWaterMark: 0 });
-    for await (const event of decodeServerSentEvents(counted, { signal, translatorBudget: createTranslatorBudget() })) {
+    for await (const event of decodeServerSentEvents(counted, { signal, translatorBudget })) {
       if (authority.wire === "openai-chat" && event.data.trim() === "[DONE]") { terminal = true; break; }
       let chunk: Record<string, any>;
       try { chunk = JSON.parse(event.data); } catch { throw new DiagnosticFailure("stream_error"); }
@@ -232,6 +236,7 @@ export async function runProviderCompletionTest(
       : error instanceof ProviderOutboundSendCancelledError ? "credential_changed"
       : error instanceof ProviderOutboundPolicyError ? "destination_refused" : "network");
   } finally {
+    translatorBudget.dispose();
     result.totalLatencyMs = Math.max(0, now() - started);
     if (observed !== undefined && !conflicting) {
       result.modelComparison = observed === authority.wireModel ? "match" : "mismatch";
