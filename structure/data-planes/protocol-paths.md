@@ -389,7 +389,7 @@ managed-client steps already applied to the body (alias/modelMap resolution, `oc
 directives). The caller-forward passthrough is decided earlier, on the caller's own credential,
 and returns before this point; the two branches share no credential and no header. The body sent
 is `envelope.freshBody()` when a source envelope exists, otherwise the ingress's own body.
-`src/server/messages-native.ts` is imported lazily, only for an eligible route.
+`src/server/messages-native.ts` is imported lazily, only for an eligible route. Native Messages errors reuse the shared OpenCode Zen guidance before resolving client retry headers. A Zen rate-limit 429, identified by message or explicit `rate_limit_error` type, without an upstream retry hint receives the same 15-second hint as the translated path; quota/billing and spent-usage-limit errors remain unchanged and valid upstream retry headers retain precedence. Both native Messages and `src/server/responses/adapter-dispatch.ts` forward parsed error types and codes to the shared guidance.
 
 Configured admission-key model scope also applies to separately billed Advisor models before
 managed native key or OAuth dispatch. `src/server/messages-native-scope.ts` resolves active

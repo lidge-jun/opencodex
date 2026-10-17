@@ -70,6 +70,9 @@ export function enrichOpenCodeZenRateLimitMessage(
   message: string,
   opts: {
     status: number;
+    /** Parsed upstream error type, when available. */
+    upstreamErrorType?: string | null;
+    upstreamErrorCode?: string | null;
     providerName?: string;
     baseUrl?: string;
     adapter?: string;
@@ -84,7 +87,9 @@ export function enrichOpenCodeZenRateLimitMessage(
 ): string {
   if (opts.status !== 429) return message;
   if (!isOpenCodeZenRateLimitProvider(opts)) return message;
-  if (!/rate\s*limit/i.test(message)) return message;
+  const errorText = `${opts.upstreamErrorType ?? ""} ${opts.upstreamErrorCode ?? ""} ${message}`.replace(/[_-]/g, " ");
+  if (/\b(?:quota|billing)\b|\busage\s+limit\b|\binsufficient\s+(?:credits?|balance|funds)\b|\b(?:credits?|balance)\s+(?:exhausted|depleted)\b/i.test(errorText)) return message;
+  if (opts.upstreamErrorType !== "rate_limit_error" && !/rate\s*limit/i.test(message)) return message;
   if (message.includes(ENRICHMENT_MARKER)) return message;
 
   const upstreamRetry = validateClientRetryAfterHeader(
@@ -165,7 +170,7 @@ export function enrichOpenCodeZenFreeTierMessage(
 }
 
 /**
- * Single entry point for Zen upstream-error guidance on the Responses wire: short-window
+ * Single entry point for Zen upstream-error guidance on Responses and native Messages: short-window
  * rate limits first, then the keyless free-tier admission refusal. Each layer is a no-op
  * outside its own case, so the composition is safe for every other upstream failure.
  */

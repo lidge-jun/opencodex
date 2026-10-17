@@ -345,6 +345,8 @@ Bearer 金鑰；公開模型清單無法驗證金鑰有效性。
 error 加入 provider guidance 與 synthetic `Retry-After`；若上游有 `Retry-After`，仍以上游值為準。
 same-key wait-and-retry 仍需透過 [`retryOn429`](/zh-tw/reference/configuration/) 明確 opt-in。
 
+在標準 `opencode-zen` 提供者中，使用 API 金鑰驗證及官方路由 `https://opencode.ai/zen/v1` 或 `https://opencode.ai/inference/v1` 時，Gemini 會在預設 `googleMode: ai-studio` 下自動使用 Google 原生 API。Zen 模型 ID 維持不變，包括沒有 `-tiered` 後綴的 Flash ID。Claude 使用 Anthropic Messages，不受 `googleMode` 影響。載入已儲存的設定時，僅忽略這些原生模型符合條件的舊 Chat/Responses 覆寫設定，以及符合條件的 Responses 專用 `image_generation` 託管工具偏好。自訂提供者、非金鑰驗證路由及其他偏好維持不變。
+
 **無 key 的 `opencode-free` tier 目前對第三方 client 關閉。** Zen 會拒絕任何沒有帶 `x-opencode-session`
 header 的 request，回傳 error type `MissingSessionID` 與訊息 "OpenCode's free tier can only be used in
 OpenCode"。這道 gate 只檢查該 header 是否存在，因此 proxy 大可捏造一個值通過，但 opencodex 不這麼做。

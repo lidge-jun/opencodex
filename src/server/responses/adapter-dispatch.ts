@@ -1898,6 +1898,8 @@ export async function prepareAdapterExchange(
             authMode: route.provider.authMode,
             hasApiKey: Boolean(route.provider.apiKey?.trim()),
             upstreamRetryAfter,
+            upstreamErrorType: normalized.type,
+            upstreamErrorCode: normalized.code,
             // This recovery path is the HTTP Responses wire; custom runTurn transports
             // never reach enrichOpenCodeZenUpstreamMessage here.
             supportsHttpSameKeyRetry: true,

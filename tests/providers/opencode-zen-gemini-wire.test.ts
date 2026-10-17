@@ -45,6 +45,16 @@ function expectWire(providerName: string, provider: OcxProviderConfig, modelId: 
 }
 
 describe("OpenCode Zen Gemini destination and wire policy", () => {
+  test("Claude uses Messages across runtime, static and Fast policy", () => {
+    for (const baseUrl of BASES) for (const model of ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "Claude-future"]) {
+      for (const googleMode of [undefined, "ai-studio", "vertex", "cloud-code-assist"] as const) for (const adapter of ["openai-chat", "openai-responses"] as const) {
+        expectWire("opencode-zen", zen({ baseUrl, googleMode, modelAdapters: { [model]: adapter } }), model, "anthropic");
+      }
+      expectWire("renamed-zen", zen({ baseUrl }), model, "openai-chat");
+      expectWire("opencode-zen", zen({ baseUrl: "https://custom.example.test/v1" }), model, "openai-chat");
+      expectWire("opencode-zen", zen({ baseUrl, authMode: "oauth" }), model, "openai-chat");
+    }
+  });
   test.each(BASES)("pins Gemini models at %s across runtime, static and Fast policy", baseUrl => {
     for (const model of MODELS) for (const override of ["openai-chat", "openai-responses"]) {
       const provider = zen({ baseUrl, modelAdapters: { [model]: override }, supportsServiceTier: true });
@@ -103,13 +113,13 @@ describe("OpenCode Zen Gemini destination and wire policy", () => {
     const authority = captureFastPolicyAuthority("opencode-zen", provider, true);
     provider.baseUrl = "https://custom.example.test/v1";
     expect(Object.isFrozen(prefixes)).toBe(true);
-    expect(prefixes).toEqual({ "gemini-": "google" });
+    expect(prefixes).toEqual({ "gemini-": "google", "claude-": "anthropic" });
     expect(resolveFastPolicy(authority, "gemini-3.7-flash").adapter).toBe("google");
     expect(fastPolicyForModel(provider, "gemini-3.7-flash", "opencode-zen").adapter).toBe("openai-responses");
   });
 
   test("Zen siblings and other provider identities retain their existing wires", () => {
-    for (const model of ["claude-sonnet-5-5", "gpt-6.1-sol", "deepseek-v4-flash", "not-gemini-3.7-flash"]) {
+    for (const model of ["gpt-6.1-sol", "deepseek-v4-flash", "not-gemini-3.7-flash"]) {
       expect(openCodeZenGeminiEndpoint(zen(), model)).toBeUndefined();
       expectWire("opencode-zen", zen(), model, "openai-chat");
       expectWire("opencode-zen", zen({ modelAdapters: { [model]: "openai-responses" } }), model, "openai-responses");
@@ -169,6 +179,29 @@ describe("OpenCode Zen Gemini Responses translation", () => {
     releaseSpendHome?.();
     releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
+  });
+
+  test("translated Claude uses parsed rate-limit types and preserves upstream retry hints", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    for (const retryAfter of [undefined, "37"]) {
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends++;
+        return Response.json({ type: "error", error: { type: "rate_limit_error", message: "Too Many Requests" } },
+          { status: 429, headers: retryAfter ? { "retry-after": retryAfter } : {} });
+      }) as typeof fetch;
+      const config = { providers: { "opencode-zen": zen() } } as unknown as OcxConfig;
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "opencode-zen/claude-sonnet-5-5", input: "hello", stream: false }),
+      }), config, { model: "", provider: "" }, { inboundWire: "responses" });
+      const text = await response.text();
+      expect(response.status, text).toBe(429);
+      expect(response.headers.get("retry-after")).toBe(retryAfter ?? "15");
+      expect(text).toContain("15-20 requests per minute");
+      expect(text.includes("Try again in 15s")).toBe(!retryAfter);
+      expect(sends).toBe(1);
+    }
   });
 
   // Routing canonicalizes the fixed Zen preset to /zen/v1; both accepted endpoint
