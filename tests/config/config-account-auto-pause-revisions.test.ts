@@ -171,7 +171,7 @@ test("a detached loadConfig snapshot adopts the disk epoch without invalidating 
   const live = structuredClone(loadConfig());
   // The live object differs from disk in memory only; its own observation advances the generation.
   live.providers.fixture!.accountAutoPause = { enabled: true, consecutiveFailures: 3 };
-  observeAccountAutoPauseRevisions(live);
+  observeAccountAutoPauseRevisions(live, raw());
   const fence = captureAccountAutoPauseFence(live, "fixture");
   expect(fence).toBeDefined();
   loadConfig();
@@ -179,3 +179,19 @@ test("a detached loadConfig snapshot adopts the disk epoch without invalidating 
   expect(accountAutoPauseFenceIsLocal("fixture", fence!)).toBe(true);
 });
 
+
+test("an observed external policy change and restore invalidates an older attempt", () => {
+  saveConfig(fixture());
+  const live = loadConfig();
+  const fence = captureAccountAutoPauseFence(live, "fixture");
+  expect(fence).toBeDefined();
+  const original = bytes();
+  const edited = raw();
+  edited.providers.fixture.accountAutoPause = { enabled: true, consecutiveFailures: 3 };
+  writeFileSync(join(home, "config.json"), JSON.stringify(edited));
+  loadConfig();
+  writeFileSync(join(home, "config.json"), original);
+  loadConfig();
+  expect(raw().accountAutoPausePolicyRevisions.fixture).toBe(fence!.diskRevision);
+  expect(accountAutoPauseFenceIsLocal("fixture", fence!)).toBe(false);
+});

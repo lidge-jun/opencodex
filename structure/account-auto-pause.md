@@ -62,7 +62,8 @@ threshold, provider disabled, base URL, adapter, auth mode). A provider is track
 configured `accountAutoPause`; providers that never opted in leave no map in the file. Only
 `persistConfigUnlocked` mints values, from the literal pre-write file, so caller-supplied revisions never
 authorize anything. Each process also keeps an observed map with a local generation, bumped on
-fingerprint changes adopted by load, reload and save-time reconciliation. A capture records
+fingerprint changes adopted by reload and save-time reconciliation, and on disk-to-disk changes seen
+by any load; a detached load never compares itself with the live fingerprint. A capture records
 the revision, generation, threshold and route. A pause commits only while all of these are still
 equal, both in memory and in the fresh persisted file inside the config mutation lock. The OAuth
 automatic commit runs its final check and auth publication under that lock, and contention means

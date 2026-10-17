@@ -5,7 +5,9 @@ import type { OcxConfig } from "../types";
 import { getConfigPath } from "./paths";
 
 type PolicyConfig = { providers?: unknown; accountAutoPausePolicyRevisions?: unknown };
-type Observed = { diskRevision: string; localGen: number; unknown: boolean; fingerprint: string };
+// fingerprint follows the live config; diskFingerprint follows the last observed disk state, so a
+// detached load compares disk with disk and still fences an observed external policy change.
+type Observed = { diskRevision: string; localGen: number; unknown: boolean; fingerprint: string; diskFingerprint: string };
 export type AccountAutoPauseFence = { configPath: string; diskRevision: string; localGen: number; threshold: number; route: string };
 const observed = new Map<string, Map<string, Observed>>();
 const UUID = z.uuid();
@@ -62,13 +64,14 @@ export function observeAccountAutoPauseRevisions(config: PolicyConfig, disk: Pol
     const old = entries.get(name);
     const prior = previous?.get(name) ?? old?.fingerprint ?? fingerprint;
     entries.set(name, { fingerprint, diskRevision: revisionFor(map, name) ?? "legacy", unknown: map === null,
+      diskFingerprint: accountAutoPauseFingerprint(provider(disk, name)),
       localGen: (old?.localGen ?? 0) + (prior !== fingerprint ? 1 : 0) });
   }
 }
 /**
- * A loaded snapshot adopts the disk epoch only. Many callers read detached snapshots; letting one
- * replace the live fingerprint would advance localGen on every live/snapshot difference and keep
- * invalidating in-flight fences. Fingerprints and generations start here only for unseen names.
+ * A loaded snapshot adopts the disk epoch and compares its policy with the previously observed
+ * disk policy. Many callers read detached snapshots; comparing one with the live fingerprint would
+ * advance localGen on every live/snapshot difference. A disk-to-disk change still advances it.
  */
 function adoptDiskAutoPauseRevisions(config: PolicyConfig): void {
   const path = getConfigPath();
@@ -78,8 +81,10 @@ function adoptDiskAutoPauseRevisions(config: PolicyConfig): void {
   for (const name of new Set([...entries.keys(), ...Object.keys(record(config.providers) ?? {}), ...Object.keys(map ?? {})])) {
     const old = entries.get(name);
     const diskRevision = revisionFor(map, name) ?? "legacy";
-    entries.set(name, old ? { ...old, diskRevision, unknown: map === null }
-      : { fingerprint: accountAutoPauseFingerprint(provider(config, name)), diskRevision, unknown: map === null, localGen: 0 });
+    const diskFingerprint = accountAutoPauseFingerprint(provider(config, name));
+    entries.set(name, old
+      ? { ...old, diskRevision, unknown: map === null, diskFingerprint, localGen: old.localGen + (old.diskFingerprint !== diskFingerprint ? 1 : 0) }
+      : { fingerprint: diskFingerprint, diskFingerprint, diskRevision, unknown: map === null, localGen: 0 });
   }
 }
 /** Initial load is an observation, never a persistence operation. */
