@@ -959,3 +959,57 @@ test("standalone bare-block recovery ignores blocks naming undeclared tools", as
   expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe(block);
   expect(events.filter(event => event.type === "tool_call_start")).toEqual([]);
 });
+
+test("a raw-text structured call plus its bare echo suppress the markup", async () => {
+  const script = "const r = await tools.exec_command({cmd:'node --version'}); text(r.output);";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "check node", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: `Running now.\n${block}`, tool_calls: [
+      { id: "call_exec", function: { name: "exec", arguments: script } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+  expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe("Running now.\n");
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: script },
+  ]);
+});
+
+test("a raw-text structured call with a different body keeps the markup visible", async () => {
+  const callBody = "text('first command');";
+  const blockBody = "text('different command');";
+  const block = `<tool_call><function=exec>${blockBody}</parameter></function></tool_call>`;
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "check", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: block, tool_calls: [
+      { id: "call_exec", function: { name: "exec", arguments: callBody } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+  expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe(block);
+  expect(events.find(event => event.type === "tool_call_delta")).toEqual({ type: "tool_call_delta", arguments: callBody });
+});
+
+test("a raw-text call plus its bare echo with a stray </invoke> close suppresses the markup", async () => {
+  const script = "const r = await tools.exec_command({cmd:'node --version'}); text(r.output);";
+  // The exact shape observed live: the echo carries </parameter></invoke>\\n</function></tool_call>.
+  const block = `<tool_call><function=exec>${script}</parameter></invoke>\n</function></tool_call>`;
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "check node", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: `Running.\n${block}`, tool_calls: [
+      { id: "call_exec", function: { name: "exec", arguments: script } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+  expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe("Running.\n");
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: script },
+  ]);
+});

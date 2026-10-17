@@ -88,6 +88,7 @@ const BLOCK_HEADER = /<tool_call>\s*<function=([^>\r\n]+)>/y;
 const NEXT_BLOCK_HEADER = /\n<tool_call>\s*<function=[^>\r\n]+>/g;
 const FUNCTION_CLOSE = "</function>";
 const PARAMETER_CLOSE = "</parameter>";
+const INVOKE_CLOSE = "</invoke>";
 
 function trimmedEnd(text: string, from: number, to: number): number {
   while (to > from && /\s/.test(text[to - 1]!)) to--;
@@ -121,6 +122,13 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
     let bodyEnd = trimmedEnd(text, bodyStart, close);
     const closed = endsWithAt(text, bodyStart, bodyEnd, FUNCTION_CLOSE);
     if (closed) bodyEnd = trimmedEnd(text, bodyStart, bodyEnd - FUNCTION_CLOSE.length);
+    // MiMo's echo can also carry a stray `</invoke>` close (the Command Code grammar's
+    // alternate function close) between `</parameter>` and `</function>`. Strip tail
+    // closers from the end inward — </invoke> first, then </parameter> — so the body
+    // comparison sees the same text the structured arguments carried (#7260 follow-up).
+    while (endsWithAt(text, bodyStart, trimmedEnd(text, bodyStart, bodyEnd), INVOKE_CLOSE)) {
+      bodyEnd = trimmedEnd(text, bodyStart, bodyEnd) - INVOKE_CLOSE.length;
+    }
     if (endsWithAt(text, bodyStart, bodyEnd, PARAMETER_CLOSE)) bodyEnd -= PARAMETER_CLOSE.length;
     const call = {
       name: header[1]!.trim(),
@@ -517,8 +525,19 @@ function duplicatedSerializedToolCallRanges(
     const body = freeformBody(call.body);
     return structuredCalls.some(structured => {
       const input = structured.names.has(call.name) ? inputFromArguments(structured.argumentsText, structured.freeformTool) : undefined;
-      if (input === undefined) return false;
-      const normalized = freeformBody(input);
+      // MiMo can send a function tool's arguments as raw JS text instead of JSON and echo
+      // the same body as a bare block (#7260 follow-up). A raw-arguments string that equals
+      // the block body is the strongest possible agreement between the two representations,
+      // so it authorizes suppression exactly like a parsed `input` match.
+      let normalized: string | undefined = input !== undefined ? freeformBody(input) : undefined;
+      if (normalized === undefined && structured.freeformTool !== undefined && structured.argumentsText !== "") {
+        // JSON-parsable arguments keep the original bridge-unwrap contract; only a non-JSON
+        // payload whose entire text equals the block body authorizes the raw-text match.
+        try { JSON.parse(structured.argumentsText); } catch {
+          if (freeformBody(structured.argumentsText) === body) normalized = body;
+        }
+      }
+      if (normalized === undefined) return false;
       return normalized === body || (structured.recoveredParameterWrapper === true
         && body.startsWith("<parameter=") && normalized === freeformBody(body.slice("<parameter=".length)));
     });
