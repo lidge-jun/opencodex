@@ -414,6 +414,7 @@
   "cli-restore-back.test.ts": "cli", "cli-route-policy-not-found.test.ts": "cli",
   "cli-start-auxiliary-bind.test.ts": "cli", "cli-start-journal-order.test.ts": "cli",
   "sibling-home-client-sync.test.ts": "cli", "cli-status-hub-state.test.ts": "cli",
+  "cross-home-loopback-family.test.ts": "cli",
   "cli-status-json.test.ts": "cli", "cli-status-oauth-health.test.ts": "cli",
   "cli-stop-json.test.ts": "cli", "cli-storage-inspect.test.ts": "cli",
   "cli-transport-honesty.test.ts": "cli", "cli-update-badge.test.ts": "cli",
