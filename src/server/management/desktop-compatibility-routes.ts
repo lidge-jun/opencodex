@@ -1,3 +1,4 @@
+import { hasHumanDashboardSession } from "./consent-session";
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
@@ -11,7 +12,7 @@ export async function handleDesktopCompatibilityRoutes(ctx: ManagementContext): 
   if (ctx.req.method !== "GET" && ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
   // A local dashboard confirmation precedes any persisted key or CurrentUser Root mutation.
   // This is caller provenance, not protection against an arbitrary same-user process.
-  if (ctx.req.method === "POST" && (ctx.principal !== "gui-session" || !ctx.trustedLoopbackIngress)) {
+  if (ctx.req.method === "POST" && (!hasHumanDashboardSession(ctx) || !ctx.trustedLoopbackIngress)) {
     return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
   }
   let action: "prepare" | "trust" | "remove-trust" | "renew" | undefined, fingerprint: string | undefined;
