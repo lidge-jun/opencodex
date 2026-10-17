@@ -41,7 +41,28 @@ interface PoolEntry {
  * silently restarted — a restart would lose the model's view of earlier tool results, and a tool
  * result the client already delivered is not recoverable from the transcript.
  */
-export class StepSessionPool {
+/**
+ * The conversation bookkeeping the adapter depends on.
+ *
+ * Narrower than the pool itself so a test can supply a fake process and still exercise the real
+ * `runTurn` path — the path that decides whether a captured call is answered, refused or abandoned.
+ */
+export interface StepConversationHost {
+  get(ref: StepConversationRef | undefined): StepConversationSession | undefined;
+  open(ref: StepConversationRef): Promise<StepConversationSession>;
+  nextRef(): StepConversationRef;
+  rememberHeldTool(ref: StepConversationRef, held: StepHeldTool): void;
+  takeHeldTool(ref: StepConversationRef): StepHeldTool | undefined;
+  closeAll(): Promise<void>;
+}
+
+/** The session surface `runTurn` uses. */
+export type StepConversationSession = Pick<
+  StepCliSession,
+  "sessionId" | "closed" | "handshake" | "startQuery" | "sendInput" | "endInput" | "interrupt" | "close" | "resolveHeldToolResult" | "allowPermission" | "denyPermission" | "refuseToolCall"
+>;
+
+export class StepSessionPool implements StepConversationHost {
   readonly #entries = new Map<string, PoolEntry>();
   /**
    * In-flight opens, keyed by handle.

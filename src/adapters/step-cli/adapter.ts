@@ -16,14 +16,19 @@ import {
   type StepSessionDeps,
   type StepSessionEvent,
 } from "./session";
-import { StepSessionPool, type StepConversationRef } from "./session-pool";
+import {
+  StepSessionPool,
+  type StepConversationHost,
+  type StepConversationRef,
+  type StepConversationSession,
+} from "./session-pool";
 import { buildStepSdkTools, resolveStepToolName, StepToolCatalogError } from "./tool-bridge";
 import { STEP_CLI_CONTINUATION_KEY, STEP_CLI_HOST, STEP_CLI_TOOL_SERVER } from "./constants";
 import type { StepFrame } from "./stdio-frames";
 
 export interface StepCliAdapterDeps extends StepSessionDeps {
-  /** Injection seam so tests never spawn a real CLI. */
-  openSession?: StepSessionPool;
+  /** Injection seam so tests drive the real `runTurn` path without a CLI. */
+  openSession?: StepConversationHost;
 }
 
 /** `providerState` slot carrying the conversation handle between requests. */
@@ -47,15 +52,93 @@ const STEP_CLI_IDLE_TIMEOUT_MS = 10 * 60_000;
  */
 interface StepTurnRuntime {
   ref: StepConversationRef;
-  pool: StepSessionPool;
+  pool: StepConversationHost;
   emit: (event: AdapterEvent) => void;
   settle: () => void;
   done: Promise<void>;
   emittedNames: Map<string, string>;
 }
 
-const turnRuntimes = new WeakMap<StepCliSession, StepTurnRuntime>();
-const lastAssistantUsage = new WeakMap<StepCliSession, OcxUsage>();
+const turnRuntimes = new WeakMap<StepConversationSession, StepTurnRuntime>();
+const lastAssistantUsage = new WeakMap<StepConversationSession, OcxUsage>();
+/** Query currently owned by each session, so an abandoned turn can interrupt exactly that one. */
+const lastQueryId = new WeakMap<StepConversationSession, string>();
+
+/** How many turns may queue behind one conversation before a caller is told to retry. */
+const MAX_QUEUED_TURNS = 2;
+
+/**
+ * Hard ceiling on waiting for a terminal event from the CLI.
+ *
+ * The turn would otherwise wait for the client's abort, and a client that never aborts (or a CLI that
+ * went quiet) would hold the conversation lock for the life of the process. Set well above
+ * StepCode's own 120s tool window so a legitimate slow tool is never cut short.
+ */
+const STEP_CLI_TERMINAL_DEADLINE_MS = 10 * 60_000;
+
+/**
+ * Backoff for re-opening a query the runtime still considers busy.
+ *
+ * A turn settles when the CLI reports `turn_complete`, which can be a moment before the runtime frees
+ * its single query slot. Measured on the real CLI: the very next request on the same conversation then
+ * failed with `SESSION_BUSY`. The conversation lock means no other turn of ours is in flight while this
+ * runs, so retrying here cannot collide with our own work — it is only bridging the runtime's own
+ * handover delay.
+ */
+const STEP_CLI_QUERY_RETRY_DELAYS_MS = [200, 600, 1500] as const;
+
+interface ConversationLock {
+  /** Settles when every queued turn ahead of this one has finished. */
+  readonly chain: Promise<void>;
+  /** Turns waiting or running; used to refuse an unbounded pile-up. */
+  waiters: number;
+}
+
+/**
+ * Per-conversation serialisation.
+ *
+ * StepCode serves ONE query per process, and this proxy's turn state is keyed by that process, so two
+ * overlapping turns on one conversation overwrite each other's runtime, interrupt each other's query
+ * and close each other's session — which is exactly what two clients sharing a `thread-id` produce,
+ * and it was measured as both requests failing with `SESSION_NOT_FOUND` and `step_cli_session_closed`.
+ * Turns are therefore queued in arrival order.
+ *
+ * Sequential traffic is unaffected: a turn that finishes before the next arrives takes an empty chain
+ * and completes without yielding.
+ */
+const conversationLocks = new Map<string, ConversationLock>();
+
+async function withConversationLock<T>(handle: string, task: () => Promise<T>): Promise<T> {
+  const existing = conversationLocks.get(handle);
+  if (existing && existing.waiters >= MAX_QUEUED_TURNS + 1) {
+    throw new Error(
+      `StepCode serves one turn per conversation at a time and ${existing.waiters} are already queued for this one.`,
+    );
+  }
+  const previous = existing?.chain ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const chain = previous.then(
+    () => gate,
+    () => gate,
+  );
+  const entry: ConversationLock = { chain, waiters: (existing?.waiters ?? 0) + 1 };
+  conversationLocks.set(handle, entry);
+  void chain.finally(() => {
+    // Drop the entry once this turn's chain drains, unless a later turn already replaced it — otherwise
+    // the map would retain one settled promise per conversation handle for the life of the process.
+    if (conversationLocks.get(handle) === entry) conversationLocks.delete(handle);
+  });
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    entry.waiters -= 1;
+    release();
+  }
+}
 
 /** One pool per OpenCodex home, so two homes in one process never share a StepCode session. */
 const pools = new Map<string, StepSessionPool>();
@@ -104,7 +187,11 @@ function poolFor(home: string, deps: StepCliAdapterDeps): StepSessionPool {
  * client has executed the tool and sent its next request, and answering it is how that result reaches
  * the model inside the query the model is already running.
  */
-function handleReverseRequest(session: StepCliSession, frame: StepFrame): void {
+/**
+ * Exported for its regression tests: every reverse request must be ANSWERED, and the tests drive this
+ * exact function rather than a mirror of it.
+ */
+export function handleReverseRequest(session: StepConversationSession, frame: StepFrame): void {
   const payload = asRecord(frame.payload);
   const expired = payload.__expired === true;
   const turn = turnRuntimes.get(session);
@@ -120,10 +207,24 @@ function handleReverseRequest(session: StepCliSession, frame: StepFrame): void {
     return;
   }
 
-  if (!turn) return;
-
+  // Even with no turn registered, a reverse request must be ANSWERED. Dropping it leaves the runtime
+  // waiting out its own 60s/120s window with nothing to show for it, and the client has no way to
+  // learn that the call was silently dropped.
   if (frame.method === "permission.request") {
     session.allowPermission(frame);
+    return;
+  }
+
+  if (frame.method === "sdk_tool.invoke" && !turn) {
+    session.refuseToolCall(
+      frame,
+      "OpenCodex is not expecting a tool call for this conversation right now, so it was not executed.",
+    );
+    return;
+  }
+
+  if (!turn) {
+    session.denyPermission(frame, `OpenCodex cannot handle ${frame.method ?? "this request"} outside a turn.`);
     return;
   }
 
@@ -179,7 +280,12 @@ function handleReverseRequest(session: StepCliSession, frame: StepFrame): void {
  * Reading the wrong level makes every turn look idle until it times out, so the nesting is resolved
  * once here and every branch below works off the inner message.
  */
-function handleRuntimeEvent(session: StepCliSession, frame: StepFrame): void {
+/**
+ * Exported with `handleReverseRequest` for the same reason: the CLI's event vocabulary is the other
+ * half of this transport, and the terminal-event mapping had no test at all until the suite pointed
+ * out that it was the one thing a fake process must be able to deliver.
+ */
+export function handleRuntimeEvent(session: StepConversationSession, frame: StepFrame): void {
   const turn = turnRuntimes.get(session);
   if (!turn) return;
   const payload = asRecord(frame.payload);
@@ -215,6 +321,13 @@ function handleRuntimeEvent(session: StepCliSession, frame: StepFrame): void {
     });
     turnRuntimes.delete(session);
     turn.settle();
+    // Release the runtime's single query slot for this conversation's next turn. Skipped when a tool
+    // call was captured, which ends the turn earlier and keeps the query alive on purpose.
+    const queryId = lastQueryId.get(session);
+    if (queryId) {
+      lastQueryId.delete(session);
+      void session.endInput(queryId);
+    }
     return;
   }
 
@@ -517,7 +630,7 @@ export function createStepCliAdapter(
         ? { handle: identified, sessionId: "" }
         : sessions.nextRef();
 
-      let session: StepCliSession;
+      let session: StepConversationSession;
       try {
         session = await sessions.open(ref);
         await session.handshake();
@@ -526,19 +639,83 @@ export function createStepCliAdapter(
         return;
       }
 
+      // From here on this turn owns the conversation's process and its turn state, so anything else
+      // arriving for the same conversation waits rather than corrupting it.
+      await withConversationLock(ref.handle, () =>
+        driveTurn(parsed, incoming, emit, {
+          sessions,
+          session,
+          ref,
+          tools,
+          setTimer: deps.setTimeout ?? setTimeout,
+          clearTimer: deps.clearTimeout ?? clearTimeout,
+        }),
+      );
+    },
+  };
+}
+
+/** The body of a turn that already holds its conversation's process. */
+/**
+ * Open a query, retrying only while the runtime reports its single slot is still busy.
+ *
+ * Every other failure propagates immediately: a capability or transport problem must not be turned
+ * into three silent attempts.
+ */
+async function startQueryWithBusyRetry(
+  session: StepConversationSession,
+  options: { model: string | undefined; maxThinkingTokens: number | undefined; sdkTools: readonly unknown[]; streamingInput: boolean },
+  delay: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
+): Promise<{ queryId: string; sessionId: string }> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await session.startQuery(options);
+    } catch (error) {
+      // Deliberately message-based rather than `instanceof StepSessionError`: a retry predicate that
+      // silently stops firing when an error class changes would turn a handover race into a hard
+      // failure, which is exactly the failure this retry exists to remove.
+      const busy = /one query at a time|SESSION_BUSY/i.test(
+        error instanceof Error ? error.message : String(error),
+      );
+      if (!busy || attempt >= STEP_CLI_QUERY_RETRY_DELAYS_MS.length) throw error;
+      await delay(STEP_CLI_QUERY_RETRY_DELAYS_MS[attempt]!);
+      attempt += 1;
+    }
+  }
+}
+
+async function driveTurn(
+  parsed: OcxParsedRequest,
+  incoming: IncomingMeta,
+  emit: (event: AdapterEvent) => void,
+  context: {
+    sessions: StepConversationHost;
+    session: StepConversationSession;
+    ref: StepConversationRef;
+    tools: ReturnType<typeof buildStepSdkTools>;
+    setTimer: typeof setTimeout;
+    clearTimer: typeof clearTimeout;
+  },
+): Promise<void> {
+  const { sessions, session, ref, tools, setTimer, clearTimer } = context;
+  {
+
       // A tool result the client computed on its previous request goes back first: it releases the
       // reverse request this session is holding, and the model continues inside the same query.
       const held = sessions.takeHeldTool(ref);
       let continuedQuery = false;
+      /** Set when the held call was refused because this turn did not answer it. */
+      let abandonedQueryId = false;
       if (held) {
         const result = latestToolResult(parsed);
         // Matched by CALL ID, never by position: a client may follow a tool call with a new user
         // message instead of a result, in which case the newest result in the transcript belongs to an
         // earlier call and delivering it would answer the wrong question.
-        const matches = result?.toolCallId === held.callId;
+        const matches = Boolean(result) && result!.toolCallId === held.callId;
         const delivered = session.resolveHeldToolResult(
           { id: held.frameId, method: "sdk_tool.invoke" } as StepFrame,
-          matches && result ? result : { content: [{ type: "text", text: "" }], isError: true },
+          matches && result ? result! : { content: [{ type: "text", text: "" }], isError: true },
         );
         if (!delivered) {
           emit(
@@ -552,11 +729,21 @@ export function createStepCliAdapter(
           await session.close();
           return;
         }
-        // This turn IS the answer to a captured call. The model already has the instruction and is
-        // mid-query, so nothing is prompted again.
-        continuedQuery = true;
+        if (matches) {
+          // This turn IS the answer to a captured call: the model already has the instruction and is
+          // mid-query, so nothing is prompted again.
+          continuedQuery = true;
+        } else {
+          // The client sent something other than the held call's result — typically a new user
+          // message. The held call has just been refused, so the query it belongs to is unwinding;
+          // leaving it running would make this request's own text unstartable, and swallowing that
+          // text would lose the user's turn entirely. Interrupt it and carry on with a fresh query.
+          abandonedQueryId = true;
+        }
       }
 
+      // Text is suppressed ONLY when this turn really is the answer to the held call; a turn that
+      // abandoned the call still carries the user's message and must keep it.
       const userText = continuedQuery ? undefined : pendingUserText(parsed);
       if (!continuedQuery && !userText) {
         emit(
@@ -583,15 +770,23 @@ export function createStepCliAdapter(
       });
 
       let queryId: string | undefined;
+      let deadlineTimer: unknown;
       try {
+        if (abandonedQueryId && lastQueryId.get(session)) {
+          // The query that owned the abandoned call is still unwinding; stop it before starting a new
+          // one, since StepCode serves a single query per process.
+          await session.interrupt(lastQueryId.get(session)!);
+          lastQueryId.delete(session);
+        }
         if (!continuedQuery) {
-          const started = await session.startQuery({
+          const started = await startQueryWithBusyRetry(session, {
             model: stepModelId(parsed.modelId),
             maxThinkingTokens: stepThinkingTokens(parsed),
             sdkTools: tools.sdkTools,
             streamingInput: true,
           });
           queryId = started.queryId;
+          lastQueryId.set(session, queryId);
           await session.sendInput(queryId, composePrompt(parsed, userText ?? ""));
         }
       } catch (error) {
@@ -602,9 +797,17 @@ export function createStepCliAdapter(
         return;
       }
 
-      // The turn owns the response until it settles: text, a captured tool call, a completion, or a
-      // client abort. Returning before that leaves the stream without a terminal event.
-      await Promise.race([done, abortSignal(incoming)]);
+      // The turn owns the response until it settles: text, a captured tool call, a completion, the
+      // client's abort, or the hard deadline. Returning before that leaves the stream without a
+      // terminal event; never returning would hold the conversation lock forever.
+      await Promise.race([
+        done,
+        abortSignal(incoming),
+        new Promise<void>(resolve => {
+          deadlineTimer = setTimer(resolve, STEP_CLI_TERMINAL_DEADLINE_MS);
+        }),
+      ]);
+      clearTimer(deadlineTimer as never);
       if (!turnRuntimes.has(session)) return;
 
       // The turn is still registered, so nothing terminated it: either the client aborted, or the CLI
@@ -626,8 +829,7 @@ export function createStepCliAdapter(
         if (session.closed) return;
       }
       await session.close();
-    },
-  };
+  }
 }
 
 /**

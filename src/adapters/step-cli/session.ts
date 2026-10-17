@@ -516,6 +516,24 @@ export class StepCliSession {
     return [...this.#held.values()].filter(entry => !entry.answered).map(entry => entry.frame);
   }
 
+  /**
+   * Close this query's input stream with `query.input_end`.
+   *
+   * Not optional housekeeping: StepCode's `#maybeFinish` refuses to finish a query whose input has
+   * not ended, so without this the runtime's single query slot is never released and the NEXT
+   * `query.start` on the same process fails with SESSION_BUSY. A multi-turn text conversation would
+   * therefore work for exactly one turn.
+   *
+   * Deliberately not sent when a tool call was captured: that query is still owed the client's tool
+   * result, and ending its input would let the runtime finish it before the model continues.
+   */
+  async endInput(queryId: string): Promise<void> {
+    if (this.#closed) return;
+    await this.#send(this.#nextId(), "query.input_end", { queryId }, this.#options.requestTimeoutMs).catch(
+      () => undefined,
+    );
+  }
+
   /** StepCode's `query.interrupt`, used when the client aborts a turn mid-flight. */
   async interrupt(queryId: string): Promise<void> {
     if (this.#closed) return;

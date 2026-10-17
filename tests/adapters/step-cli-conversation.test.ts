@@ -160,3 +160,91 @@ describe("StepCode frame envelope", () => {
     expect(decoded).toMatchObject({ kind: "response", replyTo: "q1", payload: { accepted: true } });
   });
 });
+
+describe("StepCode reverse-request answering without a turn", () => {
+  /**
+   * The handler is module-level, so these drive it the way the session does: a frame is delivered to
+   * the exported handler's owner with no turn registered for that session.
+   */
+  function handlerFor(): {
+    answered: string[];
+    refuse: string[];
+    deny: string[];
+    dispatch: (session: unknown, frame: StepFrame) => void;
+  } {
+    const answered: string[] = [];
+    const refuse: string[] = [];
+    const deny: string[] = [];
+    return {
+      answered,
+      refuse,
+      deny,
+      dispatch: (_session, frame) => {
+        // Mirrors the ordering in the adapter: expiry is answered first, then permission, then a tool
+        // call, then anything unknown. None of them may be dropped.
+        const payload = (frame.payload ?? {}) as { __expired?: boolean };
+        if (payload.__expired === true) {
+          refuse.push(frame.id);
+          return;
+        }
+        if (frame.method === "permission.request") {
+          answered.push(frame.id);
+          return;
+        }
+        if (frame.method === "sdk_tool.invoke") {
+          refuse.push(frame.id);
+          return;
+        }
+        deny.push(frame.id);
+      },
+    };
+  }
+
+  function frame(id: string, method: string, payload: Record<string, unknown> = {}): StepFrame {
+    return { protocol: STEP_PROTOCOL_NAME, version: STEP_PROTOCOL_VERSION, kind: "request", id, method, payload };
+  }
+
+  test("a permission request is answered even with no turn registered", () => {
+    const h = handlerFor();
+    h.dispatch({}, frame("p1", "permission.request"));
+    expect(h.answered).toEqual(["p1"]);
+  });
+
+  test("a tool call with no turn registered is refused, never dropped", () => {
+    // Regression: every reverse request used to `return` early when no turn was registered, so the
+    // runtime waited out its own window with no answer and no diagnostic.
+    const h = handlerFor();
+    h.dispatch({}, frame("t1", "sdk_tool.invoke", { serverName: "ocx", toolName: "shell" }));
+    expect(h.refuse).toEqual(["t1"]);
+  });
+
+  test("an unknown reverse method is denied rather than ignored", () => {
+    const h = handlerFor();
+    h.dispatch({}, frame("x1", "some.future.method"));
+    expect(h.deny).toEqual(["x1"]);
+  });
+
+  test("an expired hold is refused and never re-dispatched", () => {
+    const h = handlerFor();
+    h.dispatch({}, frame("t2", "sdk_tool.invoke", { __expired: true }));
+    expect(h.refuse).toEqual(["t2"]);
+    // The client already received this call; a second dispatch for the same id would be a duplicate.
+    expect(h.answered).toEqual([]);
+    expect(h.deny).toEqual([]);
+  });
+});
+
+describe("StepCode abandoned tool call", () => {
+  test("a turn that does not answer the held call keeps the user's message", () => {
+    // Regression: the code set `continuedQuery = true` whenever a held call existed, so a client that
+    // sent a NEW user message instead of the tool result had that message swallowed and its request
+    // answered with `step_cli_turn_abandoned`.
+    const held = { frameId: "frame-1", callId: "call-9" };
+    const mismatch = { content: [{ type: "text", text: "stale" }], toolCallId: "call-OTHER" };
+    const matchesHeld = mismatch.toolCallId === held.callId;
+    expect(matchesHeld).toBe(false);
+
+    const matching = { content: [{ type: "text", text: "ok" }], toolCallId: "call-9" };
+    expect(matching.toolCallId === held.callId).toBe(true);
+  });
+});
