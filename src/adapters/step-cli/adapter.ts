@@ -799,46 +799,23 @@ async function driveTurn(
   const { sessions, session, ref, tools, setTimer, clearTimer } = context;
   {
 
-      // A tool result the client computed on its previous request goes back first: it releases the
-      // reverse request this session is holding, and the model continues inside the same query.
+      // Decide what this turn IS before any side effect. Delivering a held tool result unblocks the
+      // CLI, and it may answer with frames immediately; the turn has to be registered before that
+      // happens or those frames arrive with no runtime to route them to and are dropped, leaving the
+      // turn to time out on a model that already answered.
       const held = sessions.takeHeldTool(ref);
-      let continuedQuery = false;
-      /** Set when the held call was refused because this turn did not answer it. */
-      let abandonedQueryId = false;
-      if (held) {
-        const result = latestToolResult(parsed);
-        // Matched by CALL ID, never by position: a client may follow a tool call with a new user
-        // message instead of a result, in which case the newest result in the transcript belongs to an
-        // earlier call and delivering it would answer the wrong question.
-        const matches = Boolean(result) && result!.toolCallId === held.callId;
-        const delivered = session.resolveHeldToolResult(
-          { id: held.frameId, method: "sdk_tool.invoke" } as StepFrame,
-          matches && result ? result! : { content: [{ type: "text", text: "" }], isError: true },
-        );
-        if (!delivered) {
-          emit(
-            refusal(
-              "The held StepCode tool call expired before the tool result arrived; StepCode only waits two minutes for one.",
-              504,
-              "step_cli_tool_result_too_late",
-              "upstream_error",
-            ),
-          );
-          await session.close();
-          return;
-        }
-        if (matches) {
-          // This turn IS the answer to a captured call: the model already has the instruction and is
-          // mid-query, so nothing is prompted again.
-          continuedQuery = true;
-        } else {
-          // The client sent something other than the held call's result — typically a new user
-          // message. The held call has just been refused, so the query it belongs to is unwinding;
-          // leaving it running would make this request's own text unstartable, and swallowing that
-          // text would lose the user's turn entirely. Interrupt it and carry on with a fresh query.
-          abandonedQueryId = true;
-        }
-      }
+      const heldResult = held ? latestToolResult(parsed) : undefined;
+      // Matched by CALL ID, never by position: a client may follow a tool call with a new user
+      // message instead of a result, in which case the newest result in the transcript belongs to an
+      // earlier call and delivering it would answer the wrong question.
+      const heldMatches = Boolean(held) && heldResult!.toolCallId === held!.callId;
+      // This turn IS the answer to a captured call: the model already has the instruction and is
+      // mid-query, so nothing is prompted again.
+      const continuedQuery = Boolean(held) && heldMatches;
+      // The client sent something other than the held call's result — typically a new user message.
+      // The query that owned the call is unwinding; leaving it running would make this request's own
+      // text unstartable, and swallowing that text would lose the user's turn entirely.
+      const abandonedQueryId = Boolean(held) && !heldMatches;
 
       // Text is suppressed ONLY when this turn really is the answer to the held call; a turn that
       // abandoned the call still carries the user's message and must keep it.
@@ -866,6 +843,28 @@ async function driveTurn(
         done,
         emittedNames: tools.emittedNameMap,
       });
+
+      // Registered FIRST, delivered second. See the comment above: the CLI can answer the moment it
+      // receives the result.
+      if (held) {
+        const delivered = session.resolveHeldToolResult(
+          { id: held.frameId, method: "sdk_tool.invoke" } as StepFrame,
+          heldMatches && heldResult ? heldResult : { content: [{ type: "text", text: "" }], isError: true },
+        );
+        if (!delivered) {
+          turnRuntimes.delete(session);
+          emit(
+            refusal(
+              "The held StepCode tool call expired before the tool result arrived; StepCode only waits two minutes for one.",
+              504,
+              "step_cli_tool_result_too_late",
+              "upstream_error",
+            ),
+          );
+          await session.close();
+          return;
+        }
+      }
 
       let queryId: string | undefined;
       let deadlineTimer: unknown;

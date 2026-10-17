@@ -693,3 +693,55 @@ describe("StepCode conversation queue", () => {
     await Promise.all([held, ...accepted]);
   });
 });
+
+describe("StepCode held-result delivery ordering", () => {
+  test("a turn is registered before the tool result unblocks the CLI", async () => {
+    // The CLI may answer the instant it receives a tool result. Delivering the result before
+    // registering the turn drops those frames — no runtime to route them to — and the turn then waits
+    // out its deadline on a model that already answered. The fake delivers synchronously inside
+    // `resolveHeldToolResult` so the race is deterministic rather than timing-dependent.
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+
+    session.stream = [
+      requestFrame("perm-1", "permission.request", { toolName: "ocx__shell", toolUseId: "perm-1" }),
+      requestFrame("tool-1", "sdk_tool.invoke", {
+        serverName: "ocx",
+        toolName: "shell",
+        input: { cmd: "echo ok" },
+        toolUseId: "call-9",
+      }),
+    ];
+    await adapter.runTurn!(
+      parsed([{ role: "user", content: "go", timestamp: 0 }]),
+      THREAD_META,
+      () => {},
+    );
+    expect(session.queries).toHaveLength(1);
+
+    // Second turn: answering the held call makes the fake emit the completion SYNCHRONOUSLY, inside
+    // the delivery call, before `resolveHeldToolResult` returns.
+    const original = session.resolveHeldToolResult.bind(session);
+    session.resolveHeldToolResult = (frame, result) => {
+      const out = original(frame, result);
+      handleRuntimeEvent(session, eventFrame({ type: "status", status: "turn_complete" }));
+      return out;
+    };
+    session.stream = [];
+    const second: AdapterEvent[] = [];
+    const settled = adapter.runTurn!(
+      parsed([
+        { role: "user", content: "go", timestamp: 0 },
+        { role: "toolResult", toolCallId: "call-9", toolName: "shell", content: "ok", isError: false, timestamp: 1 },
+      ]),
+      THREAD_META,
+      event => second.push(event),
+    );
+    // The completion arrived during delivery, so it must already be recorded rather than lost.
+    await Bun.sleep(5);
+    expect(second.some(event => event.type === "done")).toBe(true);
+    await settled;
+    expect(second.some(event => event.type === "done")).toBe(true);
+    expect(second.some(event => event.type === "error")).toBe(false);
+  });
+});
