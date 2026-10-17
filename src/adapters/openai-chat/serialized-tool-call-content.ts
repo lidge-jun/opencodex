@@ -5,6 +5,7 @@ import { repairFreeformToolInput } from "../../responses/apply-patch-envelope";
 const OPEN_TAG = "<tool_call>";
 const CLOSE_TAG = "</tool_call>";
 const FUNCTION_TAG = "<function=";
+const FUNCTION_CALLS_CLOSE = "</function_calls>";
 /**
  * Streaming bounds (ingestStreaming only; buffered reconciliation already knows its structured calls).
  * MAX_HELD_BYTES is a runaway guard on held text plus queued events, far below the translator budget,
