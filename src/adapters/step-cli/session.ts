@@ -98,10 +98,15 @@ export class StepSessionError extends Error {
   }
 }
 
-/** What the adapter needs to hear while a session is live. */
+/**
+ * What the adapter needs to hear while a session is live.
+ *
+ * Every event carries the session that produced it: the handler is shared across every conversation,
+ * so the origin is the only way to route a frame to the turn that is waiting for it.
+ */
 export type StepSessionEvent =
-  | { type: "event"; frame: StepFrame }
-  | { type: "reverse_request"; frame: StepFrame };
+  | { type: "event"; frame: StepFrame; session: StepCliSession }
+  | { type: "reverse_request"; frame: StepFrame; session: StepCliSession };
 
 export interface StepSessionHandlers {
   onEvent(event: StepSessionEvent): void;
@@ -285,7 +290,7 @@ export class StepCliSession {
       this.#holdReverse(frame);
       return;
     }
-    this.#handlers.onEvent({ type: "event", frame });
+    this.#handlers.onEvent({ type: "event", frame, session: this });
   }
 
   #holdReverse(frame: StepFrame): void {
@@ -294,6 +299,7 @@ export class StepCliSession {
         this.#handlers.onEvent({
           type: "reverse_request",
           frame: { ...frame, payload: { ...(frame.payload as object ?? {}), __expired: true } } as StepFrame,
+          session: this,
         });
       }
     }, this.#options.reverseRequestHoldMs);
@@ -303,7 +309,7 @@ export class StepCliSession {
       timer,
       answered: false,
     });
-    this.#handlers.onEvent({ type: "reverse_request", frame });
+    this.#handlers.onEvent({ type: "reverse_request", frame, session: this });
   }
 
   #settle(pending: PendingRequest, frame: StepFrame): void {
@@ -450,6 +456,23 @@ export class StepCliSession {
   /** Answer a `permission.request`: allow, because the client already asked for this call. */
   allowPermission(frame: StepFrame): void {
     this.#respondOk(frame.id, { behavior: "allow" });
+  }
+
+  /**
+   * Refuse a tool call with a reason the model can act on.
+   *
+   * A tool result frame carrying only `{message}` is not a refusal: StepCode reads `payload.content`
+   * and renders an absent content list as an EMPTY result, which the model reports as a tool that ran
+   * and produced nothing. Only an `error` envelope throws inside the SDK tool wrapper.
+   */
+  refuseToolCall(frame: StepFrame, reason: string): void {
+    this.#respondError(frame.id, "TOOL_NOT_AVAILABLE", reason);
+    const held = this.#held.get(frame.id);
+    if (held) {
+      held.answered = true;
+      this.#clearTimer(held.timer as never);
+      this.#held.delete(frame.id);
+    }
   }
 
   /** Refuse a `permission.request` with a reason the model can act on. */

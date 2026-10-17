@@ -1,0 +1,61 @@
+import { describe, expect, test } from "bun:test";
+
+import { latestToolResult } from "../../src/adapters/step-cli/adapter";
+import type { OcxParsedRequest } from "../../src/types";
+
+function parsed(messages: unknown[]): OcxParsedRequest {
+  return { modelId: "step-5-preview", context: { messages }, options: {} } as unknown as OcxParsedRequest;
+}
+
+describe("StepCode tool-result extraction", () => {
+  test("reads a string tool result, which is what a Responses function_call_output becomes", () => {
+    const result = latestToolResult(
+      parsed([
+        { role: "user", content: "go", timestamp: 0 },
+        { role: "toolResult", toolCallId: "c1", toolName: "shell", content: "LIVE_BRIDGE_OK", isError: false, timestamp: 1 },
+      ]),
+    );
+    expect(result).toEqual({ content: [{ type: "text", text: "LIVE_BRIDGE_OK" }] });
+  });
+
+  test("joins the text parts of a structured tool result", () => {
+    const result = latestToolResult(
+      parsed([
+        {
+          role: "toolResult",
+          toolCallId: "c1",
+          toolName: "shell",
+          content: [
+            { type: "text", text: "first" },
+            { type: "text", text: " second" },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ]),
+    );
+    expect(result?.content).toEqual([{ type: "text", text: "first second" }]);
+  });
+
+  test("marks an errored tool result so the model is told the call failed", () => {
+    const result = latestToolResult(
+      parsed([{ role: "toolResult", toolCallId: "c1", toolName: "shell", content: "boom", isError: true, timestamp: 1 }]),
+    );
+    expect(result?.isError).toBe(true);
+  });
+
+  test("takes the newest result when a turn carries several", () => {
+    const result = latestToolResult(
+      parsed([
+        { role: "toolResult", toolCallId: "c1", toolName: "shell", content: "old", isError: false, timestamp: 1 },
+        { role: "user", content: "and again", timestamp: 2 },
+        { role: "toolResult", toolCallId: "c2", toolName: "shell", content: "new", isError: false, timestamp: 3 },
+      ]),
+    );
+    expect(result?.content).toEqual([{ type: "text", text: "new" }]);
+  });
+
+  test("returns undefined when this turn is not the answer to a captured call", () => {
+    expect(latestToolResult(parsed([{ role: "user", content: "hello", timestamp: 0 }]))).toBeUndefined();
+  });
+});
