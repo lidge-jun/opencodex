@@ -5,6 +5,10 @@ import { repairFreeformToolInput } from "../../responses/apply-patch-envelope";
 const OPEN_TAG = "<tool_call>";
 const CLOSE_TAG = "</tool_call>";
 const FUNCTION_TAG = "<function=";
+const FUNCTION_CALLS_CLOSE = "</function_calls>";
+const FUNCTION_NAME_CLOSE = "</function_name>";
+const CONST_INPUT_OPEN = "<const input>";
+const CONST_OPEN_RE = /^<const\s+[A-Za-z_$][\w$]*\s*=?\s*>?/;
 /**
  * Streaming bounds (ingestStreaming only; buffered reconciliation already knows its structured calls).
  * MAX_HELD_BYTES is a runaway guard on held text plus queued events, far below the translator budget,
@@ -42,6 +46,128 @@ export function freeformToolsByWireName<T extends FreeformToolIdentity & { freef
   return new Map(tools?.filter(tool => tool.freeform).map(tool => [wireName(tool), { name: tool.name, namespace: tool.namespace }] as const) ?? []);
 }
 
+/** One bare block recovered as an executable call when MiMo sends no structured payload. */
+export interface RecoveredBareBlock {
+  name: string;
+  input: string;
+}
+
+/**
+ * Bare blocks a declared freeform tool can own, for the observed MiMo shape where the
+ * whole call lives only in the visible text and `delta.tool_calls` never arrives.
+ * A block qualifies only when its function name matches a declared freeform tool's
+ * wire name and its body survives the same safety rules as the empty-input recovery:
+ * non-empty, no nested parameter wrappers, no nested block headers. Fenced examples,
+ * prose-only text, and blocks naming undeclared tools return nothing, so ordinary
+ * commentary cannot lose bytes.
+ */
+export function recoverStandaloneBareBlocks(
+  text: string,
+  freeformTools: ReadonlyMap<string, FreeformToolIdentity>,
+  context: TextContext = { fence: null, lineStart: true },
+): RecoveredBareBlock[] {
+  if (freeformTools.size === 0) return [];
+  return callsIn(text, context).flatMap(call => {
+    if (!freeformTools.has(call.name)) return [];
+    const wrappedBody = freeformBody(call.body);
+    const hasParameterOpener = wrappedBody.startsWith("<parameter=");
+    const constOpenMatch = CONST_OPEN_RE.exec(wrappedBody);
+    const hasConstInputOpener = constOpenMatch !== null;
+    const body = hasParameterOpener
+      ? freeformBody(wrappedBody.slice("<parameter=".length)) : wrappedBody;
+    const unwrappedBody = hasConstInputOpener
+      ? freeformBody(wrappedBody.slice(constOpenMatch![0].length)) : (hasParameterOpener ? body : wrappedBody);
+    if (body.trim() === ""
+        || (hasParameterOpener && /^<parameter=[A-Za-z_$][\w$.-]*>/.test(wrappedBody))
+        || body.includes("<parameter=") || body.includes("</parameter>")) return [];
+    return [{ name: call.name, input: unwrappedBody }];
+  });
+}
+
+/**
+ * The ranges of bare serialized blocks to hide from visible text when no structured
+ * payload and no declared freeform tools exist (the Codex Desktop harness path: the
+ * client-side harness parses and executes these blocks, so the proxy must only keep
+ * them out of the assistant's visible answer). Used by the adapter's flush paths when
+ * the routed model is a dotted MiMo V2 ID and nothing else claimed the markup.
+ */
+export function standaloneBareBlockRanges(
+  text: string,
+  context: TextContext = { fence: null, lineStart: true },
+): { start: number; end: number }[] {
+  return [...callsIn(text, context), ...midLineCallsIn(text, context)]
+    .map(call => ({ start: call.start, end: call.end }));
+}
+
+/** Removes bare serialized blocks from visible text when no structured call claims them. */
+export function stripStandaloneBareBlocks(
+  text: string,
+  context: TextContext = { fence: null, lineStart: true },
+): string {
+  let result = "";
+  let cursor = 0;
+  for (const range of standaloneBareBlockRanges(text, context)) {
+    result += text.slice(cursor, range.start);
+    cursor = range.end;
+  }
+  return result + text.slice(cursor);
+}
+
+/** True when text carries a serialized tool-call block (used as an emission gate). */
+export function containsSerializedToolCallBlock(text: string): boolean {
+  return /<tool_call>\s*<function=/.test(text);
+}
+
+/**
+ * A streaming splitter that also holds mid-line serialized blocks. MiMo emits the
+ * block directly after a prose sentence; the plain splitter releases those as text
+ * because only line-start markup qualifies (#7260). This variant additionally holds
+ * from a mid-line `<tool_call><function=` header when it sits outside fences/inline
+ * code, so the drain path can reconcile or strip the whole block at stream end.
+ */
+export function splitAtPossibleSerializedToolCallIncludingMidLine(
+  text: string,
+  initialContext: TextContext = { fence: null, lineStart: true },
+  final = false,
+): ReturnType<typeof splitAtPossibleSerializedToolCall> {
+  const split = splitAtPossibleSerializedToolCall(text, initialContext, final);
+  if (split.hasOpenTag) return split;
+  // Find the first mid-line header; skip when the text carries an open fence/code span.
+  const MID_LINE_HEADER = /<tool_call>\s*<function=[^>\r\n]+>/g;
+  for (let m = MID_LINE_HEADER.exec(text); m !== null; m = MID_LINE_HEADER.exec(text)) {
+    const at = m.index;
+    // Hold from the header unless the prose before it leaves a fence or inline-code span
+    // open (fenced examples are user-visible, not control markup).
+    const fenceCheck = splitAtPossibleSerializedToolCall(text.slice(0, at).replaceAll(OPEN_TAG, "<tool-call>"), { fence: initialContext.fence, lineStart: initialContext.lineStart, inlineTicks: initialContext.inlineTicks }, true);
+    if (fenceCheck.context.fence !== null || fenceCheck.context.inlineTicks !== undefined) continue;
+    return { emit: text.slice(0, at), defer: text.slice(at), hasOpenTag: true, context: { fence: null, lineStart: false } };
+  }
+  // A partial `<tool_call>` prefix at the end of the chunk must also be held so the
+  // complete header can be recognized when the next delta arrives.
+  if (!final) {
+    for (let cut = Math.min(text.length, OPEN_TAG.length); cut > 0; cut--) {
+      if (text.endsWith(OPEN_TAG.slice(0, cut))) {
+        // Only hold the partial when the preceding text is not inside a fence.
+        const before = text.slice(0, text.length - cut);
+        const fenceCheck = splitAtPossibleSerializedToolCall(before, initialContext, true);
+        if (fenceCheck.context.fence !== null || fenceCheck.context.inlineTicks !== undefined) break;
+        return { emit: text.slice(0, text.length - cut), defer: OPEN_TAG.slice(0, cut), hasOpenTag: false, context: fenceCheck.context };
+      }
+    }
+    // Same for a partial header after a complete `<tool_call>` opener.
+    const lastOpen = text.lastIndexOf(OPEN_TAG);
+    if (lastOpen >= 0) {
+      const afterOpen = text.slice(lastOpen + OPEN_TAG.length);
+      if (afterOpen.length > 0 && !afterOpen.includes("\n")
+          && (FUNCTION_TAG.startsWith(afterOpen.trimStart())
+              || (afterOpen.trimStart().startsWith(FUNCTION_TAG) && !/[>\r\n]/.test(afterOpen.trimStart().slice(FUNCTION_TAG.length))))) {
+        return { emit: text.slice(0, lastOpen), defer: text.slice(lastOpen), hasOpenTag: false, context: { fence: null, lineStart: false } };
+      }
+    }
+  }
+  return split;
+}
+
 export interface StructuredToolCallReference {
   names: ReadonlySet<string>;
   argumentsText: string;
@@ -54,6 +180,7 @@ const BLOCK_HEADER = /<tool_call>\s*<function=([^>\r\n]+)>/y;
 const NEXT_BLOCK_HEADER = /\n<tool_call>\s*<function=[^>\r\n]+>/g;
 const FUNCTION_CLOSE = "</function>";
 const PARAMETER_CLOSE = "</parameter>";
+const INVOKE_CLOSE = "</invoke>";
 
 function trimmedEnd(text: string, from: number, to: number): number {
   while (to > from && /\s/.test(text[to - 1]!)) to--;
@@ -82,22 +209,70 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
   const next = NEXT_BLOCK_HEADER.exec(text);
   const limit = next ? next.index + 1 : text.length;
   let unclosed: SerializedToolCall | undefined;
-  for (let close = text.indexOf(CLOSE_TAG, bodyStart); close >= 0 && (close < limit || !unclosed);
-    close = text.indexOf(CLOSE_TAG, close + CLOSE_TAG.length)) {
-    let bodyEnd = trimmedEnd(text, bodyStart, close);
+  for (
+    let close = nextBlockClose(text, bodyStart);
+    close.index >= 0 && (close.index < limit || !unclosed);
+    close = nextBlockClose(text, close.end)
+  ) {
+    const { index: closeIndex, end: closeEnd, tag: closeTag } = close;
+    let bodyEnd = trimmedEnd(text, bodyStart, closeIndex);
     const closed = endsWithAt(text, bodyStart, bodyEnd, FUNCTION_CLOSE);
     if (closed) bodyEnd = trimmedEnd(text, bodyStart, bodyEnd - FUNCTION_CLOSE.length);
+    // MiMo's echo can also end with the Command Code alternate closer
+    // ...</function></function_calls> or ...</invoke></function_calls> instead of
+    // </function></tool_call>. Treat the alternate close as a completed block only when
+    // a known function closer immediately precedes it, so prose containing the tag alone
+    // cannot terminate a block.
+    if (closeTag === FUNCTION_CALLS_CLOSE) {
+      const inner = trimmedEnd(text, bodyStart, closeIndex);
+      const hasFn = endsWithAt(text, bodyStart, inner, FUNCTION_CLOSE);
+      const hasInvoke = endsWithAt(text, bodyStart, inner, INVOKE_CLOSE);
+      const hasFnName = endsWithAt(text, bodyStart, inner, FUNCTION_NAME_CLOSE);
+      if (!hasFn && !hasInvoke && !hasFnName) continue;
+      let altEnd = inner;
+      if (hasFn) altEnd = trimmedEnd(text, bodyStart, altEnd - FUNCTION_CLOSE.length);
+      else if (hasInvoke) altEnd = trimmedEnd(text, bodyStart, altEnd - INVOKE_CLOSE.length);
+      else if (hasFnName) altEnd = trimmedEnd(text, bodyStart, altEnd - FUNCTION_NAME_CLOSE.length);
+      if (endsWithAt(text, bodyStart, altEnd, PARAMETER_CLOSE)) altEnd -= PARAMETER_CLOSE.length;
+      return {
+        name: header[1]!.trim(),
+        body: text.slice(bodyStart, altEnd),
+        start: offset,
+        end: closeEnd,
+      };
+    }
+    // MiMo's echo can also carry a stray `</invoke>` close (the Command Code grammar's
+    // alternate function close) between `</parameter>` and `</function>`. Strip tail
+    // closers from the end inward — </invoke> first, then </parameter> — so the body
+    // comparison sees the same text the structured arguments carried (#7260 follow-up).
+    while (endsWithAt(text, bodyStart, trimmedEnd(text, bodyStart, bodyEnd), INVOKE_CLOSE)) {
+      bodyEnd = trimmedEnd(text, bodyStart, bodyEnd) - INVOKE_CLOSE.length;
+    }
     if (endsWithAt(text, bodyStart, bodyEnd, PARAMETER_CLOSE)) bodyEnd -= PARAMETER_CLOSE.length;
     const call = {
       name: header[1]!.trim(),
       body: text.slice(bodyStart, bodyEnd),
       start: offset,
-      end: close + CLOSE_TAG.length,
+      end: closeEnd,
     };
     if (closed) return call;
-    if (close < limit) unclosed ??= call;
+    if (closeIndex < limit) unclosed ??= call;
   }
   return unclosed;
+}
+
+/** The next candidate block close: `</tool_call>` or MiMo's alternate `</function_calls>`. */
+function nextBlockClose(text: string, from: number): { index: number; end: number; tag: string } {
+  const a = text.indexOf(CLOSE_TAG, from);
+  const b = text.indexOf(FUNCTION_CALLS_CLOSE, from);
+  const c = text.indexOf(FUNCTION_NAME_CLOSE, from);
+  const candidates = [
+    a >= 0 ? { index: a, end: a + CLOSE_TAG.length, tag: CLOSE_TAG } : undefined,
+    b >= 0 ? { index: b, end: b + FUNCTION_CALLS_CLOSE.length, tag: FUNCTION_CALLS_CLOSE } : undefined,
+    c >= 0 ? { index: c, end: c + FUNCTION_NAME_CLOSE.length, tag: FUNCTION_NAME_CLOSE } : undefined,
+  ].filter((x): x is { index: number; end: number; tag: string } => x !== undefined)
+   .sort((x, y) => x.index - y.index);
+  return candidates[0] ?? { index: -1, end: -1, tag: CLOSE_TAG };
 }
 
 /** Finds complete bare blocks outside literal Markdown; ambiguous outer blocks stop the scan. */
@@ -235,6 +410,9 @@ export class SerializedToolCallContentBuffer {
   private context: TextContext = { fence: null, lineStart: true };
   private queued: { offset: number; event: AdapterEvent }[] = [];
 
+  /** When true, ingest also holds mid-line serialized blocks (MiMo emission shape). */
+  holdMidLine = false;
+
   constructor(private readonly budget: TranslatorBudget) {}
 
   /** Remembers visible text released before a later structured call can be reconciled. */
@@ -312,7 +490,9 @@ export class SerializedToolCallContentBuffer {
       this.append(delta);
       return "";
     }
-    const split = splitAtPossibleSerializedToolCall(this.text + delta, this.context);
+    const split = this.holdMidLine
+      ? splitAtPossibleSerializedToolCallIncludingMidLine(this.text + delta, this.context)
+      : splitAtPossibleSerializedToolCall(this.text + delta, this.context);
     this.replace(split.defer, split.hasOpenTag);
     this.context = split.context;
     if (!split.hasOpenTag) this.continuationBreak = deferredContinuationBreak(split.defer, split.context);
@@ -465,6 +645,27 @@ function hasDoubledInput(structured: StructuredToolCallReference, repeated: Seri
 }
 
 /** The `[start, end)` ranges of blocks whose function identity and freeform input match a dispatched call. */
+/** Mid-line bare blocks (MiMo emits them right after a prose sentence with no newline). */
+function midLineCallsIn(text: string, context?: TextContext): SerializedToolCall[] {
+  const midLineCalls: SerializedToolCall[] = [];
+  const lineStartSpans = new Set(callsIn(text, context ?? { fence: null, lineStart: true }).map(call => `${call.start}:${call.end}`));
+  const MID_LINE_HEADER = /<tool_call>\s*<function=[^>\r\n]+>/g;
+  MID_LINE_HEADER.lastIndex = 0;
+  for (let header = MID_LINE_HEADER.exec(text); header !== null; header = MID_LINE_HEADER.exec(text)) {
+    const at = header.index;
+    if (context?.fence) {
+      // Skip blocks that sit inside a fence; the splitter's fence tracking already covers
+      // line-start cases, so only a cheap before-text check is needed here.
+      const before = text.slice(0, at);
+      const fences = (before.match(/^ {0,3}(`{3,}|~{3,})/gm) ?? []).length;
+      if (fences % 2 === 1) continue;
+    }
+    const call = blockAt(text, at);
+    if (call && !lineStartSpans.has(`${call.start}:${call.end}`)) midLineCalls.push(call);
+  }
+  return midLineCalls;
+}
+
 function duplicatedSerializedToolCallRanges(
   text: string,
   structuredCalls: readonly StructuredToolCallReference[],
@@ -473,18 +674,49 @@ function duplicatedSerializedToolCallRanges(
   if (structuredCalls.length === 0) return [];
   const repeated = repeatedCallIn(text, context);
   if (repeated) {
-    // A doubled call beside an agreeing call leaves the pair ambiguous. If reduction was
-    // refused, keep the markup too: otherwise the visible text and executable call disagree.
     const matching = structuredCalls.filter(structured => agreesWithRepeatedBlock(structured, repeated));
     const doubled = structuredCalls.some(structured => structured !== matching[0] && hasDoubledInput(structured, repeated));
     return matching.length === 1 && !doubled ? [{ start: repeated.start, end: repeated.end }] : [];
   }
-  return callsIn(text, context).filter(call => {
-    const body = freeformBody(call.body);
+  const lineStartCalls = callsIn(text, context);
+  const midLineCalls = midLineCallsIn(text, context);
+  return [...lineStartCalls, ...midLineCalls].filter(call => {
+    let body = freeformBody(call.body);
+    // Two wrapper families:
+    // A) <const input>script</parameter> — a complete tag; strip the whole tag.
+    // B) <const r=await tools... — the script itself is `const r=await...` and only the
+    //    leading `<` is stray markup. Strip just the bracket so the script stays intact.
+    const constMatch = CONST_OPEN_RE.exec(body);
+    if (constMatch) {
+      const afterTag = freeformBody(body.slice(constMatch[0].length));
+      // Shape A (<const input>const r=await...): the script restarts with its own
+      // `const` declaration after the tag — the tag is a complete wrapper; strip it whole.
+      // Shape B (<const r=await tools...): the script IS `const r=await...` and the
+      // leading `<` is the only stray character — drop just the bracket.
+      if (afterTag.startsWith("const ")) {
+        body = afterTag;
+      } else {
+        body = body.slice(1);
+      }
+    }
     return structuredCalls.some(structured => {
       const input = structured.names.has(call.name) ? inputFromArguments(structured.argumentsText, structured.freeformTool) : undefined;
-      if (input === undefined) return false;
-      const normalized = freeformBody(input);
+      // MiMo can send a function tool's arguments as raw JS text instead of JSON and echo
+      // the same body as a bare block (#7260 follow-up). A raw-arguments string that equals
+      // the block body is the strongest possible agreement between the two representations,
+      // so it authorizes suppression exactly like a parsed `input` match.
+      let normalized: string | undefined = input !== undefined ? freeformBody(input) : undefined;
+      if (normalized === undefined && structured.argumentsText !== "") {
+        // JSON-parsable arguments keep the original bridge-unwrap contract; only a non-JSON
+        // payload whose entire text equals the block body authorizes the raw-text match.
+        // A text that merely looks like JSON (starts with { or [) stays protected: it may
+        // be a truncated JSON payload, not the raw-text shape MiMo sends.
+        const looksLikeJson = /^\s*[[{]/.test(structured.argumentsText);
+        try { JSON.parse(structured.argumentsText); } catch {
+          if (!looksLikeJson && freeformBody(structured.argumentsText) === body) normalized = body;
+        }
+      }
+      if (normalized === undefined) return false;
       return normalized === body || (structured.recoveredParameterWrapper === true
         && body.startsWith("<parameter=") && normalized === freeformBody(body.slice("<parameter=".length)));
     });
@@ -518,6 +750,10 @@ function doubledInputReduction(
 ): string | undefined {
   if (!functionNames.has(repeated.name)) return undefined;
   const body = freeformBody(repeated.body);
+  // Raw-text doubled arguments (no JSON wrapper) reduce to the single body.
+  if (body !== "" && (argumentsText === body + body || argumentsText === body + "\n" + body)) {
+    return body;
+  }
   try {
     const parsed = JSON.parse(argumentsText) as unknown;
     if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
@@ -530,6 +766,23 @@ function doubledInputReduction(
     // A malformed concatenation is handled by the prefix repair instead.
   }
   return undefined;
+}
+
+/**
+ * The raw-text counterpart of the doubled-input reduction: MiMo can send a plain
+ * function tool's arguments as `body + body` raw text (no JSON wrapper). When the
+ * first half equals a bare block's body exactly, the call meant that body once.
+ */
+function rawTextDoubledReduction(
+  argumentsText: string,
+  functionNames: ReadonlySet<string>,
+  repeated: SerializedToolCall,
+): string | undefined {
+  if (!functionNames.has(repeated.name)) return undefined;
+  const body = freeformBody(repeated.body);
+  if (body === "" || argumentsText === body) return undefined;
+  return argumentsText === body + body || argumentsText === body + "\n" + body
+    ? body : undefined;
 }
 
 /** Removes a malformed argument prefix only when a bare block and the JSON suffix prove identical input. */

@@ -47,7 +47,7 @@ import { messagesToChatFormat } from "./openai-chat/messages";
 import { withOpenAIChatToolNames } from "./openai-chat/tool-name-registry";
 import { openAIChatTransport, stripBracketedModelSuffix } from "./openai-chat/wire";
 import { toolChoiceToChatFormat, toolsToChatFormatForProvider } from "./openai-chat/tool-schema";
-import { freeformToolsByWireName, type FreeformToolIdentity, reconcileSerializedToolCallEvents, reconcileStructuredToolCall, reconcileStructuredToolCalls, SerializedToolCallContentBuffer } from "./openai-chat/serialized-tool-call-content";
+import { containsSerializedToolCallBlock, freeformToolsByWireName, type FreeformToolIdentity, reconcileSerializedToolCallEvents, reconcileStructuredToolCall, reconcileStructuredToolCalls, recoverStandaloneBareBlocks, SerializedToolCallContentBuffer, stripStandaloneBareBlocks } from "./openai-chat/serialized-tool-call-content";
 
 export { stripBracketedModelSuffix } from "./openai-chat/wire";
 export { buildOpenAIChatPassthroughRequest } from "./openai-chat/passthrough";
@@ -301,6 +301,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       const pendingToolCalls: PendingToolCall[] = [];
       const toolCallContent = new SerializedToolCallContentBuffer(budget);
+    toolCallContent.holdMidLine = /(?:^|[/-])mimo-v2\.6-pro(?:\.|$)/i.test(lastRequestedModelId ?? "");
       const heldText = (): AdapterEvent[] => toolCallContent.drain([]);
       let toolCallSeq = 0;
       const closeToolCalls = (): PendingToolCall[] => {
@@ -338,6 +339,46 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         // Held markup is released only now, as one batch per response: the doubled-input repair needs every call.
         const references = reconcileStructuredToolCalls(calls.map(call => ({ wireName: call.name, restoredName: toolNames.restore(call.name), argumentsText: call.args, freeformTool: freeformTools.get(call.name) })), toolCallContent.current(), !toolCallContent.releasedAnswerText && /(?:^|[/-])mimo-v2(?:\.|$)/i.test(lastRequestedModelId ?? ""));
         calls.forEach((call, index) => { call.args = references[index]!.argumentsText; });
+        // MiMo can put a whole freeform call only in the visible text and never send the
+        // structured `delta.tool_calls` payload (#7214 follow-up). Recovered bare blocks
+        // that name a declared freeform tool become synthetic calls so the client executes
+        // one call instead of rendering raw markup.
+        if (calls.length === 0 && /(?:^|[/-])mimo-v2(?:\.|$)/i.test(lastRequestedModelId ?? "")) {
+          const recovered = recoverStandaloneBareBlocks(toolCallContent.current(), freeformTools);
+          if (recovered.length > 0) {
+            const syntheticReferences = recovered.map(block => ({
+              names: new Set([block.name]),
+              argumentsText: JSON.stringify({ input: block.input }),
+              freeformTool: freeformTools.get(block.name),
+            }));
+            yield* toolCallContent.drain(syntheticReferences);
+            for (const block of recovered) {
+              yield { type: "tool_call_start", id: `call_${++toolCallSeq}`, name: toolNames.restore(block.name) };
+              yield { type: "tool_call_delta", arguments: JSON.stringify({ input: block.input }) };
+              yield { type: "tool_call_end" };
+            }
+            return "continue";
+          }
+          // Codex Desktop harness sessions declare no tools and send no structured
+          // payload; the client-side harness executes these blocks. The proxy's job is
+          // only to keep the markup out of the visible answer text.
+          // Also covers the one-declared-tool case: MiMo declares exec as freeform but
+          // sends the whole call only in the visible text, mid-line.
+          {
+            const heldText = toolCallContent.current();
+            const stripped = stripStandaloneBareBlocks(heldText);
+            if (stripped !== heldText) {
+              const events = toolCallContent.drain([]);
+              for (const event of events) {
+                if (event.type === "text_delta") {
+                  const clean = stripStandaloneBareBlocks(event.text);
+                  if (clean.length > 0) yield { type: "text_delta", text: clean };
+                } else yield event;
+              }
+              return "continue";
+            }
+          }
+        }
         yield* toolCallContent.drain(references);
         for (const call of calls) {
           if (!call.id) call.id = `call_${++toolCallSeq}`;
@@ -351,7 +392,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         event: Extract<AdapterEvent, { type: "error" }>,
       ): Generator<AdapterEvent, "terminate"> {
         closeToolCalls();
-        yield* heldText(); // Pending tools are not dispatched, so held text stays visible.
+        // Pending tools are not dispatched, so held text stays visible — but a MiMo echo
+        // block that exactly matches one of those undelivered calls is still duplicate
+        // markup, not answer text. Reconcile against the closed calls before releasing.
+        const closedCalls = [...pendingToolCalls];
+        const references = reconcileStructuredToolCalls(closedCalls.map(call => ({ wireName: call.name, restoredName: toolNames.restore(call.name), argumentsText: call.args, freeformTool: freeformTools.get(call.name) })), toolCallContent.current(), false);
+        yield* toolCallContent.drain(references);
         yield event;
         return "terminate";
       };
@@ -800,6 +846,35 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             const delta: Extract<AdapterEvent, { type: "tool_call_delta" }> = { type: "tool_call_delta", arguments: args };
             structuredCalls.push({ wireName: name, restoredName: toolNames.restore(name), argumentsText: args, freeformTool: freeformTools.get(name), delta });
             events.push({ type: "tool_call_start", id, name: toolNames.restore(name) }, delta, { type: "tool_call_end" });
+          }
+        }
+        // Same MiMo standalone-bare-block recovery as the streamed path: with no structured
+        // payload, qualifying blocks become synthetic calls so the markup is suppressed once.
+        if (structuredCalls.length === 0 && /(?:^|[/-])mimo-v2(?:\.|$)/i.test(lastRequestedModelId ?? "")) {
+          const recovered = recoverStandaloneBareBlocks(answerText, freeformTools);
+          if (recovered.length > 0) {
+            recovered.forEach((block, blockIndex) => {
+              const id = `call_${blockIndex + 1}`;
+              const delta: Extract<AdapterEvent, { type: "tool_call_delta" }> = { type: "tool_call_delta", arguments: JSON.stringify({ input: block.input }) };
+              structuredCalls.push({ wireName: block.name, restoredName: toolNames.restore(block.name), argumentsText: delta.arguments, freeformTool: freeformTools.get(block.name), delta });
+              events.push({ type: "tool_call_start", id, name: toolNames.restore(block.name) }, delta, { type: "tool_call_end" });
+            });
+          }
+          // Same no-tools harness path as the streamed adapter: strip the bare markup
+          // from the visible text events when nothing else claimed it.
+          if (freeformTools.size === 0) {
+            const stripped = stripStandaloneBareBlocks(answerText);
+            if (stripped !== answerText) {
+              const replacement: AdapterEvent[] = [];
+              for (let i = contentStart; i < contentEnd; i++) {
+                const event = events[i]!;
+                if (event.type === "text_delta") {
+                  const clean = stripStandaloneBareBlocks(event.text);
+                  if (clean.length > 0) replacement.push({ type: "text_delta", text: clean });
+                } else replacement.push(event);
+              }
+              events.splice(contentStart, contentEnd - contentStart, ...replacement);
+            }
           }
         }
         const references = reconcileStructuredToolCalls(structuredCalls, answerText, /(?:^|[/-])mimo-v2(?:\.|$)/i.test(lastRequestedModelId ?? ""));

@@ -345,6 +345,12 @@ prefix, and wrapper's `input` value all agree. Mismatched markup and arguments r
 MiMo V2 Chat IDs of `mimo-v2` or `mimo-v2.*` can send `{}` for a freeform call and put
 its input in one bare block; hyphenated IDs (`mimo-v2-pro`, `mimo-v2-omni`) are excluded. With no other text, one call and an exact wire-tool match, the adapter restores `input` and removes the block.
 Prose, fences, ordinary functions, multiple calls/blocks, and nonempty arguments remain inert. A malformed `<parameter=` opener is stripped only at that block's start; streaming recovery stops after earlier answer text is released.
+The same dotted MiMo V2 IDs can also emit the entire freeform call only as one bare block with
+no structured payload at all. When no structured call exists, a qualifying block — non-empty
+body, no nested parameter wrappers, no nested block headers, function name matching a declared
+freeform tool's wire name — is recovered as a synthetic `input` call and its markup is removed,
+streamed and buffered. Prose around the block stays visible; fenced examples, undeclared tools,
+other models, and hyphenated MiMo IDs keep the original no-recovery behavior.
 Two immediately adjacent identical bare blocks, with optional trailing whitespace after the pair,
 are suppressed only when exactly one structured call matches their function name and carries their
 body as `input` or exact raw arguments, or when one doubled `input` can be reduced to that body.
