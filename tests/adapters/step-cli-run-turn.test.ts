@@ -1,13 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  createStepCliAdapter,
-  handleReverseRequest,
-  handleRuntimeEvent,
-  latestToolResult,
-  projectToolResultContent,
-  withConversationLock,
-} from "../../src/adapters/step-cli/adapter";
+import { createStepCliAdapter } from "../../src/adapters/step-cli/adapter";
+import { withConversationLock } from "../../src/adapters/step-cli/conversation";
+import { handleReverseRequest, handleRuntimeEvent } from "../../src/adapters/step-cli/events";
+import { latestToolResult, projectToolResultContent } from "../../src/adapters/step-cli/projection";
 import type {
   StepConversationHost,
   StepConversationRef,

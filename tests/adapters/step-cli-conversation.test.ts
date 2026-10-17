@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { conversationHandle, latestToolResult } from "../../src/adapters/step-cli/adapter";
+import { conversationHandle } from "../../src/adapters/step-cli/conversation";
+import { latestToolResult } from "../../src/adapters/step-cli/projection";
 import {
   encodeStepFrame,
   STEP_LENGTH_PREFIX_BYTES,

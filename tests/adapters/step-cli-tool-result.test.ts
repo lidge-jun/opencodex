@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { latestToolResult } from "../../src/adapters/step-cli/adapter";
+import { latestToolResult } from "../../src/adapters/step-cli/projection";
 import type { OcxParsedRequest } from "../../src/types";
 
 function parsed(messages: unknown[]): OcxParsedRequest {
