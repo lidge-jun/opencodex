@@ -47,7 +47,7 @@ import { messagesToChatFormat } from "./openai-chat/messages";
 import { withOpenAIChatToolNames } from "./openai-chat/tool-name-registry";
 import { openAIChatTransport, stripBracketedModelSuffix } from "./openai-chat/wire";
 import { toolChoiceToChatFormat, toolsToChatFormatForProvider } from "./openai-chat/tool-schema";
-import { freeformToolsByWireName, type FreeformToolIdentity, reconcileSerializedToolCallEvents, reconcileStructuredToolCall, reconcileStructuredToolCalls, recoverStandaloneBareBlocks, SerializedToolCallContentBuffer } from "./openai-chat/serialized-tool-call-content";
+import { freeformToolsByWireName, type FreeformToolIdentity, reconcileSerializedToolCallEvents, reconcileStructuredToolCall, reconcileStructuredToolCalls, recoverStandaloneBareBlocks, SerializedToolCallContentBuffer, stripStandaloneBareBlocks } from "./openai-chat/serialized-tool-call-content";
 
 export { stripBracketedModelSuffix } from "./openai-chat/wire";
 export { buildOpenAIChatPassthroughRequest } from "./openai-chat/passthrough";
@@ -357,6 +357,22 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               yield { type: "tool_call_end" };
             }
             return "continue";
+          }
+          // Codex Desktop harness sessions declare no tools and send no structured
+          // payload; the client-side harness executes these blocks. The proxy's job is
+          // only to keep the markup out of the visible answer text.
+          if (freeformTools.size === 0) {
+            const stripped = stripStandaloneBareBlocks(toolCallContent.current());
+            if (stripped !== toolCallContent.current()) {
+              const events = toolCallContent.drain([]);
+              for (const event of events) {
+                if (event.type === "text_delta") {
+                  const clean = stripStandaloneBareBlocks(event.text);
+                  if (clean.length > 0) yield { type: "text_delta", text: clean };
+                } else yield event;
+              }
+              return "continue";
+            }
           }
         }
         yield* toolCallContent.drain(references);
@@ -839,6 +855,22 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               structuredCalls.push({ wireName: block.name, restoredName: toolNames.restore(block.name), argumentsText: delta.arguments, freeformTool: freeformTools.get(block.name), delta });
               events.push({ type: "tool_call_start", id, name: toolNames.restore(block.name) }, delta, { type: "tool_call_end" });
             });
+          }
+          // Same no-tools harness path as the streamed adapter: strip the bare markup
+          // from the visible text events when nothing else claimed it.
+          if (freeformTools.size === 0) {
+            const stripped = stripStandaloneBareBlocks(answerText);
+            if (stripped !== answerText) {
+              const replacement: AdapterEvent[] = [];
+              for (let i = contentStart; i < contentEnd; i++) {
+                const event = events[i]!;
+                if (event.type === "text_delta") {
+                  const clean = stripStandaloneBareBlocks(event.text);
+                  if (clean.length > 0) replacement.push({ type: "text_delta", text: clean });
+                } else replacement.push(event);
+              }
+              events.splice(contentStart, contentEnd - contentStart, ...replacement);
+            }
           }
         }
         const references = reconcileStructuredToolCalls(structuredCalls, answerText, /(?:^|[/-])mimo-v2(?:\.|$)/i.test(lastRequestedModelId ?? ""));

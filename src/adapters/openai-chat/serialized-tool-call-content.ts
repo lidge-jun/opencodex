@@ -84,6 +84,35 @@ export function recoverStandaloneBareBlocks(
   });
 }
 
+/**
+ * The ranges of bare serialized blocks to hide from visible text when no structured
+ * payload and no declared freeform tools exist (the Codex Desktop harness path: the
+ * client-side harness parses and executes these blocks, so the proxy must only keep
+ * them out of the assistant's visible answer). Used by the adapter's flush paths when
+ * the routed model is a dotted MiMo V2 ID and nothing else claimed the markup.
+ */
+export function standaloneBareBlockRanges(
+  text: string,
+  context: TextContext = { fence: null, lineStart: true },
+): { start: number; end: number }[] {
+  return [...callsIn(text, context), ...midLineCallsIn(text, context)]
+    .map(call => ({ start: call.start, end: call.end }));
+}
+
+/** Removes bare serialized blocks from visible text when no structured call claims them. */
+export function stripStandaloneBareBlocks(
+  text: string,
+  context: TextContext = { fence: null, lineStart: true },
+): string {
+  let result = "";
+  let cursor = 0;
+  for (const range of standaloneBareBlockRanges(text, context)) {
+    result += text.slice(cursor, range.start);
+    cursor = range.end;
+  }
+  return result + text.slice(cursor);
+}
+
 export interface StructuredToolCallReference {
   names: ReadonlySet<string>;
   argumentsText: string;
@@ -556,27 +585,10 @@ function hasDoubledInput(structured: StructuredToolCallReference, repeated: Seri
 }
 
 /** The `[start, end)` ranges of blocks whose function identity and freeform input match a dispatched call. */
-function duplicatedSerializedToolCallRanges(
-  text: string,
-  structuredCalls: readonly StructuredToolCallReference[],
-  context?: TextContext,
-): { start: number; end: number }[] {
-  if (structuredCalls.length === 0) return [];
-  const repeated = repeatedCallIn(text, context);
-  if (repeated) {
-    // A doubled call beside an agreeing call leaves the pair ambiguous. If reduction was
-    // refused, keep the markup too: otherwise the visible text and executable call disagree.
-    const matching = structuredCalls.filter(structured => agreesWithRepeatedBlock(structured, repeated));
-    const doubled = structuredCalls.some(structured => structured !== matching[0] && hasDoubledInput(structured, repeated));
-    return matching.length === 1 && !doubled ? [{ start: repeated.start, end: repeated.end }] : [];
-  }
-  // MiMo also emits the block mid-line, immediately after a prose sentence with no
-  // newline. The line-start splitter deliberately keeps those visible while streaming,
-  // but at reconciliation time — with the structured calls in hand — a mid-line block
-  // whose function name and exact body match a dispatched call is the same echo.
-  const lineStartCalls = callsIn(text, context);
-  const lineStartSpans = new Set(lineStartCalls.map(call => `${call.start}:${call.end}`));
+/** Mid-line bare blocks (MiMo emits them right after a prose sentence with no newline). */
+function midLineCallsIn(text: string, context?: TextContext): SerializedToolCall[] {
   const midLineCalls: SerializedToolCall[] = [];
+  const lineStartSpans = new Set(callsIn(text, context ?? { fence: null, lineStart: true }).map(call => `${call.start}:${call.end}`));
   const MID_LINE_HEADER = /<tool_call>\s*<function=[^>\r\n]+>/g;
   MID_LINE_HEADER.lastIndex = 0;
   for (let header = MID_LINE_HEADER.exec(text); header !== null; header = MID_LINE_HEADER.exec(text)) {
@@ -591,6 +603,23 @@ function duplicatedSerializedToolCallRanges(
     const call = blockAt(text, at);
     if (call && !lineStartSpans.has(`${call.start}:${call.end}`)) midLineCalls.push(call);
   }
+  return midLineCalls;
+}
+
+function duplicatedSerializedToolCallRanges(
+  text: string,
+  structuredCalls: readonly StructuredToolCallReference[],
+  context?: TextContext,
+): { start: number; end: number }[] {
+  if (structuredCalls.length === 0) return [];
+  const repeated = repeatedCallIn(text, context);
+  if (repeated) {
+    const matching = structuredCalls.filter(structured => agreesWithRepeatedBlock(structured, repeated));
+    const doubled = structuredCalls.some(structured => structured !== matching[0] && hasDoubledInput(structured, repeated));
+    return matching.length === 1 && !doubled ? [{ start: repeated.start, end: repeated.end }] : [];
+  }
+  const lineStartCalls = callsIn(text, context);
+  const midLineCalls = midLineCallsIn(text, context);
   return [...lineStartCalls, ...midLineCalls].filter(call => {
     let body = freeformBody(call.body);
     // Two wrapper families:

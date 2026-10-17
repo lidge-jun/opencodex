@@ -381,6 +381,40 @@ test("buffered Chat responses suppress a repeated echo beside an unrelated struc
   ]);
 });
 
+test("a bare block in a no-tools harness session (Codex Desktop path) is hidden from visible text", async () => {
+  const script = "const r = await tools.exec_command({cmd:'node -v'}); text(r.output);";
+  const block = `<tool_call><function=exec><const input>${script}</parameter></function></tool_call>`;
+  // No tools declared — the harness executes the block client-side.
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "check version", timestamp: 0 }],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: `Checking now.\n${block}\nDone setting up.`, finish_reason: "stop" } }],
+  }), createTestTranslatorBudget());
+  const visible = events.filter(event => event.type === "text_delta").map(event => event.text).join("");
+  expect(visible).toBe("Checking now.\n\nDone setting up.");
+  expect(visible).not.toContain("<tool_call>");
+  expect(visible).not.toContain("<function=");
+  expect(visible).not.toContain("tools.exec_command");
+});
+
+test("a mid-line bare block in a no-tools session is hidden from visible text", async () => {
+  const script = "const results=await Promise.allSettled([tools.exec_command({cmd:'ls'})]);";
+  const block = `<tool_call><function=exec><const results=await Promise.allSettled([tools.exec_command({cmd:'ls'})]);</parameter></invoke>\n</function_calls>`;
+  // Mid-line: prose directly followed by the block with no newline (the live screenshot shape).
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "run", timestamp: 0 }],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: `I will run the commands now.${block}`, finish_reason: "stop" } }],
+  }), createTestTranslatorBudget());
+  const visible = events.filter(event => event.type === "text_delta").map(event => event.text).join("");
+  expect(visible).toBe("I will run the commands now.");
+  expect(visible).not.toContain("<tool_call>");
+});
+
 test("buffered Chat responses preserve repeated markup when two structured calls match", async () => {
   const script = "text('ok');";
   const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
