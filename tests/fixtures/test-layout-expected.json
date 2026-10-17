@@ -1066,7 +1066,7 @@
   "responses-custom-tool-stream-consistency.test.ts": "responses",
   "responses-default-namespace-emit-normalize.test.ts": "responses",
   "responses-fetch-helpers-boundary.test.ts": "responses", "responses-field-backfill.test.ts": "responses",
-  "responses-run-turn-key-pacing.test.ts": "responses",
+  "responses-run-turn-key-pacing.test.ts": "responses", "responses-request-compression.test.ts": "responses",
   "responses-forward-dangling-call.test.ts": "responses", "responses-forward-incomplete-quota.test.ts": "responses",
   "responses-forward-posit-continuation.test.ts": "responses", "responses-forward-prompt-envelope.test.ts": "responses",
   "responses-freeform-wrapper-keys.test.ts": "responses", "responses-function-tool-repair.test.ts": "responses",

@@ -163,6 +163,9 @@ export const configSchema = z.object({
     .min(0)
     .optional()
     .catch(undefined),
+  // Opt-in outbound request compression (#7247). An unknown codec degrades to identity, matching
+  // the guards above: a hand-edit typo must not change what the proxy sends or refuse traffic.
+  upstreamRequestCompression: z.enum(["off", "gzip", "zstd"]).optional().catch(undefined),
   // Opt-in inbound body ceiling (#3573). An invalid hand edit degrades to the 256 MiB default
   // rather than failing the parse, matching the outbound guard above: a malformed number must
   // not change what the proxy admits. The hard ceiling is NOT enforced here — because of that

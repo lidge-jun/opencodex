@@ -31,6 +31,7 @@ import {
 } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
+import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 
 export { withUpstreamHttpVersion };
 
@@ -206,10 +207,18 @@ export function sendWithConnectionPolicy(
   // Bun can reset large native Codex string uploads before receiving headers while
   // the identical UTF-8 buffer succeeds. Convert only at the final HTTP send so
   // WebSocket selection still sees the serialized string and no retry is added.
+  // Opt-in compression (#7247) takes precedence at the same boundary and also yields bytes. Every
+  // retry and HTTP fallback re-enters here with the caller's original string, so each send derives
+  // its own coded bytes; `headers` is already this send's private copy.
   const target = input instanceof Request ? input.url : String(input);
   const body = init?.body;
-  const largeCodexBody = typeof body === "string"
-    && /^https:\/\/chatgpt\.com\/backend-api\/codex\/responses(?:\/compact)?$/.test(target)
+  const compressed = compressUpstreamRequestBody(target, body, headers);
+  if (compressed) {
+    headers.set("Content-Encoding", compressed.encoding);
+    headers.delete("Content-Length");
+  }
+  const largeCodexBody = !compressed && typeof body === "string"
+    && isCanonicalCodexResponsesUrl(target)
     && Buffer.byteLength(body, "utf8") >= 1024 * 1024;
   (init as Record<symbol, (() => void) | undefined> | undefined)?.[PHYSICAL_DISPATCH]?.();
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
@@ -217,7 +226,7 @@ export function sendWithConnectionPolicy(
   outboundCredentials().remember(headers);
   return physicalFetch(input, {
     ...init,
-    ...(largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
+    ...(compressed ? { body: compressed.body } : largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
     headers,
     redirect: "manual",
     ...(fresh ? { keepalive: false } : {}),
