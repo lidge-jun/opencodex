@@ -6,6 +6,7 @@ const OPEN_TAG = "<tool_call>";
 const CLOSE_TAG = "</tool_call>";
 const FUNCTION_TAG = "<function=";
 const FUNCTION_CALLS_CLOSE = "</function_calls>";
+const CONST_INPUT_OPEN = "<const input>";
 /**
  * Streaming bounds (ingestStreaming only; buffered reconciliation already knows its structured calls).
  * MAX_HELD_BYTES is a runaway guard on held text plus queued events, far below the translator budget,
@@ -68,12 +69,15 @@ export function recoverStandaloneBareBlocks(
     if (!freeformTools.has(call.name)) return [];
     const wrappedBody = freeformBody(call.body);
     const hasParameterOpener = wrappedBody.startsWith("<parameter=");
+    const hasConstInputOpener = wrappedBody.startsWith(CONST_INPUT_OPEN);
     const body = hasParameterOpener
       ? freeformBody(wrappedBody.slice("<parameter=".length)) : wrappedBody;
+    const unwrappedBody = hasConstInputOpener
+      ? freeformBody(wrappedBody.slice(CONST_INPUT_OPEN.length)) : (hasParameterOpener ? body : wrappedBody);
     if (body.trim() === ""
         || (hasParameterOpener && /^<parameter=[A-Za-z_$][\w$.-]*>/.test(wrappedBody))
         || body.includes("<parameter=") || body.includes("</parameter>")) return [];
-    return [{ name: call.name, input: body }];
+    return [{ name: call.name, input: unwrappedBody }];
   });
 }
 
@@ -555,8 +559,32 @@ function duplicatedSerializedToolCallRanges(
     const doubled = structuredCalls.some(structured => structured !== matching[0] && hasDoubledInput(structured, repeated));
     return matching.length === 1 && !doubled ? [{ start: repeated.start, end: repeated.end }] : [];
   }
-  return callsIn(text, context).filter(call => {
-    const body = freeformBody(call.body);
+  // MiMo also emits the block mid-line, immediately after a prose sentence with no
+  // newline. The line-start splitter deliberately keeps those visible while streaming,
+  // but at reconciliation time — with the structured calls in hand — a mid-line block
+  // whose function name and exact body match a dispatched call is the same echo.
+  const lineStartCalls = callsIn(text, context);
+  const lineStartSpans = new Set(lineStartCalls.map(call => `${call.start}:${call.end}`));
+  const midLineCalls: SerializedToolCall[] = [];
+  const MID_LINE_HEADER = /<tool_call>\s*<function=[^>\r\n]+>/g;
+  MID_LINE_HEADER.lastIndex = 0;
+  for (let header = MID_LINE_HEADER.exec(text); header !== null; header = MID_LINE_HEADER.exec(text)) {
+    const at = header.index;
+    if (context?.fence) {
+      // Skip blocks that sit inside a fence; the splitter's fence tracking already covers
+      // line-start cases, so only a cheap before-text check is needed here.
+      const before = text.slice(0, at);
+      const fences = (before.match(/^ {0,3}(`{3,}|~{3,})/gm) ?? []).length;
+      if (fences % 2 === 1) continue;
+    }
+    const call = blockAt(text, at);
+    if (call && !lineStartSpans.has(`${call.start}:${call.end}`)) midLineCalls.push(call);
+  }
+  return [...lineStartCalls, ...midLineCalls].filter(call => {
+    let body = freeformBody(call.body);
+    // MiMo can wrap the body in a stray <const input> opener (the same family as the
+    // malformed <parameter= opener); strip it before comparing with the structured input.
+    if (body.startsWith(CONST_INPUT_OPEN)) body = freeformBody(body.slice(CONST_INPUT_OPEN.length));
     return structuredCalls.some(structured => {
       const input = structured.names.has(call.name) ? inputFromArguments(structured.argumentsText, structured.freeformTool) : undefined;
       // MiMo can send a function tool's arguments as raw JS text instead of JSON and echo
