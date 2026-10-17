@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import { gunzipSync, gzipSync, zstdDecompressSync } from "node:zlib";
+import { getDefaultConfig, validateConfigCandidate } from "../../src/config";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { applyProxyEnvWith } from "../../src/config/proxy-env";
 import { setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
@@ -63,6 +64,17 @@ describe("upstreamRequestCompression config", () => {
     expect(field.parse(7)).toBeUndefined();
     expect(field.parse("gzip")).toBe("gzip");
     expect(field.parse(undefined)).toBeUndefined();
+  });
+
+  test("live writes and imports refuse an unknown codec instead of silently dropping it", () => {
+    for (const value of ["off", "gzip", "zstd", undefined]) {
+      expect(validateConfigCandidate({ ...getDefaultConfig(), upstreamRequestCompression: value as never }).ok).toBe(true);
+    }
+    for (const value of ["brotli", "GZIP", 1, null, true]) {
+      const result = validateConfigCandidate({ ...getDefaultConfig(), upstreamRequestCompression: value as never });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("upstreamRequestCompression");
+    }
   });
 
   test("the running server's config object is installed at startup and read per send", async () => {
