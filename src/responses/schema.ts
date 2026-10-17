@@ -27,10 +27,9 @@ const inputFileBlockSchema = z.object({
   file_data: z.string().optional(),
 });
 // codex-rs protocol/src/models.rs sends audio as input_audio with an audio_url, in
-// both user content and tool output. Accepting the block keeps a legitimate audio turn
-// out of the malformed-item catch-all. The translated IR records only its PRESENCE —
-// there is no audio carrier and no adapter-level refusal; a typed unsupported-modality
-// signal reaching final adapter dispatch remains a recorded residual.
+// both user content and tool output. The translated IR preserves supported inline
+// WAV/MP3 bytes and the Chat adapter sends them as input_audio; other wires and
+// unsupported formats are refused at the final translated-adapter boundary.
 const inputAudioBlockSchema = z.object({
   type: z.literal("input_audio"),
   audio_url: z.string().min(1),
