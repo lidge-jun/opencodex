@@ -318,6 +318,7 @@ describe("provider single-model completion consent and result", () => {
     { args: ["test", "example", "--model", "   ", "--yes"], tty: false },
     { args: ["test", "example", "--model", "x".repeat(257), "--yes"], tty: false },
     { args: ["test", "example", "--model", "a\x00b", "--yes"], tty: false },
+    { args: ["test", "example", "--model", "a\u0085b", "--yes"], tty: false },
     { args: [...completionArgs, "--yes", "--yes"], tty: false },
   ])("invalid/unconfirmed invocation refuses before all requests", async ({ args, tty }) => {
     const calls: ProbeCall[] = [];

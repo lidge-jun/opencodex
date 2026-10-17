@@ -21,6 +21,7 @@ import { decodeServerSentEvents } from "../../lib/sse-decoder";
 import { createTranslatorBudget } from "../../lib/translator-budget";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
+import { managementBodyTooLargeResponse, readManagementJsonBody } from "./body";
 
 export const COMPLETION_TEST_PROMPT = "Reply exactly OK.";
 export const COMPLETION_TEST_OUTPUT_TOKEN_CAP = 32;
@@ -232,7 +233,7 @@ export async function runProviderCompletionTest(
         terminal = type === "response.completed" || type === "response.incomplete";
         if (type === "response.failed") throw new DiagnosticFailure("stream_error");
       }
-      if (text) { content = true; result.ttftMs ??= Math.max(0, now() - started); }
+      if (text) { content = true; result.ttftMs ??= Math.max(0, Math.round(now() - started)); }
       if (terminal) break;
     }
     signal.throwIfAborted();
@@ -248,7 +249,7 @@ export async function runProviderCompletionTest(
       : error instanceof ProviderOutboundPolicyError ? "destination_refused" : "network");
   } finally {
     translatorBudget.dispose();
-    result.totalLatencyMs = Math.max(0, now() - started);
+    result.totalLatencyMs = Math.max(0, Math.round(now() - started));
     if (observed !== undefined && !conflicting) {
       result.modelComparison = observed === authority.wireModel ? "match" : "mismatch";
       delete result.comparisonNote;
@@ -267,7 +268,9 @@ export async function handleProviderCompletionTestRoute(
   deps: ProviderCompletionTestDependencies = {},
 ): Promise<Response> {
   let body: unknown;
-  try { body = await req.json(); } catch { return jsonResponse({ error: "invalid completion test request" }, 400); }
+  try { body = await readManagementJsonBody(req); } catch (error) {
+    return managementBodyTooLargeResponse(error, req, config) ?? jsonResponse({ error: "invalid completion test request" }, 400);
+  }
   if (!body || typeof body !== "object" || Array.isArray(body)
     || Object.keys(body).some(key => key !== "model" && key !== "confirm")
     || (body as { confirm?: unknown }).confirm !== true || typeof (body as { model?: unknown }).model !== "string") {

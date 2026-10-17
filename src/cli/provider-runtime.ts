@@ -216,7 +216,7 @@ async function testProvider(argv: string[], deps: RuntimeApiDeps): Promise<numbe
   rejectArgs(args, USAGE);
   if (yes && model === undefined) throw new CliUsageError("--yes requires --model", USAGE);
   if (model !== undefined) {
-    if (!model || model.length > 256 || /[\x00-\x1f\x7f]/.test(model)) {
+    if (!model || model.length > 256 || /[\x00-\x1f\x7f-\x9f]/.test(model)) {
       throw new CliUsageError("--model must contain 1..256 characters without control characters", USAGE);
     }
     return testCompletion(name, model, yes, wantsJson, deps);

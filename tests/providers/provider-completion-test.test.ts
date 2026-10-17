@@ -11,7 +11,7 @@ afterEach(() => setProviderKeychainEntryFactoryForTests(null));
 describe("completion test applicability and input", () => {
   const invalid = [null, [], false, {}, { model: "test-model" }, { model: "test-model", confirm: false },
     { model: "test-model", confirm: true, prompt: "hello" }, { model: 1, confirm: true },
-    ...["", " ", "x".repeat(257), "a\nb", "a\u0000b", "a\u007fb", "\ntest-model"].map(model => ({ model, confirm: true }))];
+    ...["", " ", "x".repeat(257), "a\nb", "a\u0000b", "a\u007fb", "a\u0085b", "\ntest-model"].map(model => ({ model, confirm: true }))];
   for (const [index, body] of invalid.entries()) test(`invalid body ${index}: 400 and no send`, async () => {
     const f = fixture();
     expect((await f.route(body)).status).toBe(400);
@@ -20,6 +20,12 @@ describe("completion test applicability and input", () => {
   test("unknown provider: 404 and no send", async () => {
     const f = fixture();
     expect(await f.route(undefined, "absent")).toEqual({ status: 404, body: { error: "unknown provider" } });
+    expect(f.calls).toHaveLength(0);
+  });
+  test("oversized request body: shared management limit answers 413 and no send", async () => {
+    const f = fixture();
+    const response = await f.route({ model: "test-model", confirm: true, pad: "x".repeat(4 * 1024 * 1024 + 16) });
+    expect(response.status).toBe(413);
     expect(f.calls).toHaveLength(0);
   });
   for (const [overrides, reason] of [
@@ -130,6 +136,17 @@ describe("bounded wire and model observations", () => {
       const next = frames.shift(); if (next) c.enqueue(new TextEncoder().encode(next)); else c.close();
     } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } }));
     expect(await f.run("test-model", { now: () => clock })).toMatchObject({ ok: true, ttftMs: 100, totalLatencyMs: 100 });
+  });
+  test("fractional clock readings are reported as whole milliseconds", async () => {
+    const readings = [10.25, 138.9, 375.61];
+    let last = readings[0]!;
+    const f = fixture();
+    const result = await f.run("test-model", { now: () => (last = readings.shift() ?? last) });
+    expect(result).toMatchObject({ ok: true });
+    const { ttftMs, totalLatencyMs } = result as { ttftMs: number; totalLatencyMs: number };
+    expect(Number.isInteger(ttftMs)).toBe(true);
+    expect(Number.isInteger(totalLatencyMs)).toBe(true);
+    expect(totalLatencyMs).toBeGreaterThanOrEqual(ttftMs);
   });
   for (const [upstream, expected] of [["other", "mismatch"], ["test-model", "match"], ["", "mismatch"]]) test(`raw upstream comparison ${expected}`, async () => {
     const f = fixture({}, () => new Response(chat(upstream)));
