@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { gunzipSync, zstdDecompressSync } from "node:zlib";
+import { randomBytes } from "node:crypto";
+import { gunzipSync, gzipSync, zstdDecompressSync } from "node:zlib";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { applyProxyEnvWith } from "../../src/config/proxy-env";
 import { setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
@@ -95,7 +96,9 @@ describe("final HTTP send compression", () => {
       await sendWithConnectionPolicy(capture.execute, endpoint, { method: "POST", body: large });
       expect(capture.calls[0]!.init?.body).toBe(small);
       expect(sentHeaders(capture.calls[0]!.init).has("content-encoding")).toBe(false);
-      expect(Buffer.from(capture.calls[1]!.init?.body as Uint8Array).equals(Buffer.from(large, "utf8"))).toBe(true);
+      const sentLarge = capture.calls[1]!.init?.body;
+      expect(Buffer.isBuffer(sentLarge)).toBe(true);
+      expect((sentLarge as Buffer).equals(Buffer.from(large, "utf8"))).toBe(true);
     }
   });
 
@@ -105,6 +108,7 @@ describe("final HTTP send compression", () => {
       const capture = captureFetch();
       const body = JSON.stringify({ input: "é🦊 history ".repeat(2000) });
       const headers = { "content-type": "application/json", "content-length": "999", authorization: "Bearer test-token" };
+      const headersBefore = structuredClone(headers);
       const signal = new AbortController().signal;
       const init: RequestInit = { method: "POST", body, headers, signal };
 
@@ -121,7 +125,8 @@ describe("final HTTP send compression", () => {
         expect(decode(mode, call.init?.body)).toBe(body);
       }
       expect(init.body).toBe(body);
-      expect(init.headers).toEqual(headers);
+      expect(init.headers).toBe(headers);
+      expect(headers).toEqual(headersBefore);
     });
   }
 
@@ -173,20 +178,30 @@ describe("final HTTP send compression", () => {
     expect(sentHeaders(capture.calls[1]!.init).has("content-encoding")).toBe(false);
   });
 
-  test("a nested pass and a rebuild compress once, and only toward the canonical destination", async () => {
+  test("a nested pass and a rebuild compress once, receipt first, and only toward the canonical destination", async () => {
     bind("gzip");
+    let compressions = 0;
+    setUpstreamRequestCompressionForTests({ compressor: (_mode, bytes) => { compressions++; return gzipSync(bytes) as Buffer<ArrayBuffer>; } });
+    const events: string[] = [];
     const capture = captureFetch();
-    const body = json(8192);
-    const toCanonical = providerFetch({ adapter: "openai-responses", baseUrl: "https://gateway.example/v1", fetch: capture.execute }, undefined, {
+    const recording = (async (input, init) => { events.push("executor"); return capture.execute(input, init); }) as typeof fetch;
+    // Barely compressible, so the coded output stays above the threshold and a second pass would code it again.
+    const body = JSON.stringify({ input: randomBytes(8192).toString("hex") });
+    const toCanonical = providerFetch({ adapter: "openai-responses", baseUrl: "https://gateway.example/v1", fetch: recording }, undefined, {
       httpOnly: true,
-      dispatchOverride: (_input, init, execute) => execute(new URL(`${endpoint}/compact`), init),
+      onPhysicalDispatch: () => events.push("receipt"),
+      // Hands the send back through the boundary a second time, as a credential-revalidating override does.
+      dispatchOverride: (_input, init, execute) => sendWithConnectionPolicy(execute, new URL(`${endpoint}/compact`), init),
     });
     await toCanonical("https://gateway.example/v1/responses", { method: "POST", body });
+    expect(compressions).toBe(1);
+    expect(events).toEqual(["receipt", "executor"]);
     const awayFromCanonical = providerFetch({ adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", fetch: capture.execute }, undefined, {
       httpOnly: true,
       dispatchOverride: (_input, init, execute) => execute("https://gateway.example/v1/responses", init),
     });
     await awayFromCanonical(endpoint, { method: "POST", body });
+    expect(compressions).toBe(1);
 
     expect(capture.calls).toHaveLength(2);
     expect(sentHeaders(capture.calls[0]!.init).get("content-encoding")).toBe("gzip");
@@ -224,7 +239,8 @@ describe("final HTTP send compression", () => {
 
   test("a codec failure falls back to the identity send, silently, keeping the large-body buffer", async () => {
     bind("gzip");
-    setUpstreamRequestCompressionForTests({ compressor: () => { throw new Error("codec exploded"); } });
+    let attempts = 0;
+    setUpstreamRequestCompressionForTests({ compressor: () => { attempts++; throw new Error("codec exploded"); } });
     const errors = spyOn(console, "error");
     const warnings = spyOn(console, "warn");
     try {
@@ -233,7 +249,10 @@ describe("final HTTP send compression", () => {
       await sendWithConnectionPolicy(capture.execute, endpoint, { method: "POST", body });
       expect(capture.calls).toHaveLength(1);
       expect(sentHeaders(capture.calls[0]!.init).has("content-encoding")).toBe(false);
-      expect(Buffer.from(capture.calls[0]!.init?.body as Uint8Array).equals(Buffer.from(body, "utf8"))).toBe(true);
+      expect(attempts).toBe(1);
+      const sent = capture.calls[0]!.init?.body;
+      expect(Buffer.isBuffer(sent)).toBe(true);
+      expect((sent as Buffer).equals(Buffer.from(body, "utf8"))).toBe(true);
       expect(errors).not.toHaveBeenCalled();
       expect(warnings).not.toHaveBeenCalled();
     } finally {
