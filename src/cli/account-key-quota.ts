@@ -2,6 +2,7 @@
 import { parseQuotaFailureCode, type AccountQuotaFields, type ProviderQuota, type ProviderQuotaWindow, type ProviderQuotaCreditsUsd } from "../providers/quota-types";
 import { terminalSafeText } from "./runtime-api";
 import type { AccountRow, FamilyRows } from "./account-api";
+import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Malformed API-key quota response.");
@@ -88,7 +89,9 @@ export function projectApiKeyQuotaRows(value: unknown, provider: string): Family
     }
     const masked = optionalString(row, "masked");
     return { provider, type: "api-key", id, label: optionalString(row, "label") ?? masked,
-      masked, active: optionalBoolean(row, "active") ?? id === activeId, ...fields };
+      masked, active: optionalBoolean(row, "active") ?? id === activeId,
+      // Same projection as the plain key listing: disabled keeps the key paused, unknown details drop.
+      paused: row.disabled === true, pauseDetails: accountPauseDetailsSchema.safeParse(row.pauseDetails).data, ...fields };
   });
   return { rows, activeId, status: 200 };
 }

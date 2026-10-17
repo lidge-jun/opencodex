@@ -65,9 +65,26 @@ export function observeAccountAutoPauseRevisions(config: PolicyConfig, disk: Pol
       localGen: (old?.localGen ?? 0) + (prior !== fingerprint ? 1 : 0) });
   }
 }
+/**
+ * A loaded snapshot adopts the disk epoch only. Many callers read detached snapshots; letting one
+ * replace the live fingerprint would advance localGen on every live/snapshot difference and keep
+ * invalidating in-flight fences. Fingerprints and generations start here only for unseen names.
+ */
+function adoptDiskAutoPauseRevisions(config: PolicyConfig): void {
+  const path = getConfigPath();
+  let entries = observed.get(path);
+  if (!entries) { entries = new Map(); observed.set(path, entries); }
+  const map = revisions(config);
+  for (const name of new Set([...entries.keys(), ...Object.keys(record(config.providers) ?? {}), ...Object.keys(map ?? {})])) {
+    const old = entries.get(name);
+    const diskRevision = revisionFor(map, name) ?? "legacy";
+    entries.set(name, old ? { ...old, diskRevision, unknown: map === null }
+      : { fingerprint: accountAutoPauseFingerprint(provider(config, name)), diskRevision, unknown: map === null, localGen: 0 });
+  }
+}
 /** Initial load is an observation, never a persistence operation. */
 export function observeLoadedAutoPauseConfig(config: OcxConfig): OcxConfig {
-  observeAccountAutoPauseRevisions(config);
+  adoptDiskAutoPauseRevisions(config);
   return config;
 }
 export function captureAccountAutoPauseFence(config: OcxConfig, name: string): AccountAutoPauseFence | undefined {

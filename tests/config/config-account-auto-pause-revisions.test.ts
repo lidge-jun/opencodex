@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, initializePersistedConfigIfMissing, loadConfig, saveConfig } from "../../src/config";
 import { configSchema } from "../../src/config/schema/config-schema";
-import { captureAccountAutoPauseFence, accountAutoPauseFenceIsLocal } from "../../src/config/account-auto-pause-revisions";
+import { captureAccountAutoPauseFence, accountAutoPauseFenceIsLocal, observeAccountAutoPauseRevisions } from "../../src/config/account-auto-pause-revisions";
 import { armClaudeCodeBaseline, reconcileLiveConfigFromDisk, saveConfigPreservingClaudeCode } from "../../src/config/live-reconcile";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -165,3 +165,17 @@ test("post-publication bookkeeping failure still adopts the new policy epoch", a
     expect(accountAutoPauseFenceIsLocal("fixture", fence)).toBe(false);
   } finally { fail.mockRestore(); }
 });
+
+test("a detached loadConfig snapshot adopts the disk epoch without invalidating an in-flight fence", () => {
+  saveConfig(fixture());
+  const live = structuredClone(loadConfig());
+  // The live object differs from disk in memory only; its own observation advances the generation.
+  live.providers.fixture!.accountAutoPause = { enabled: true, consecutiveFailures: 3 };
+  observeAccountAutoPauseRevisions(live);
+  const fence = captureAccountAutoPauseFence(live, "fixture");
+  expect(fence).toBeDefined();
+  loadConfig();
+  loadConfig();
+  expect(accountAutoPauseFenceIsLocal("fixture", fence!)).toBe(true);
+});
+
