@@ -52,6 +52,28 @@ config may still initialize, which is what `--no-tools` makes unreachable. `perm
 runtime answers text only while looking healthy and a routed coding session would silently degrade
 into a chat.
 
+## Module layout
+
+`src/adapters/step-cli/` is one dependency-ordered layer per concern, so a reader looking for one
+question does not have to read the whole route:
+
+| Module | Owns |
+|---|---|
+| `adapter.ts` | orchestration only — what one turn is, in what order, when it is terminal |
+| `conversation.ts` | conversation identity (which thread owns which process) and turn ordering |
+| `events.ts` | what the CLI says and what this peer owes it back |
+| `projection.ts` | pure request/response conversions, testable without a session |
+| `registry.ts` | state that must outlive a request, plus shutdown wiring |
+| `errors.ts` | failure text and the status a client can retry on |
+| `session.ts` / `session-pool.ts` / `stdio-frames.ts` | the framed transport itself |
+
+The graph is one-way: `adapter` → {`conversation`, `events`, `projection`, `registry`, `errors`},
+`events` → {`projection`, `registry`}, and nothing imports `adapter`. Two edges are cut to keep it that
+way — `poolFor` receives the session handlers as an argument instead of importing `events`, and the
+idle timeout lives in `registry` next to the pool that reads it. `events` reaches turn state only
+through `registry`'s accessors (`currentTurn`, `endTurn`, `recordAssistantUsage`, …), never by
+touching its maps, so the storage shape can change without every caller changing with it.
+
 ## Tool-catalog ceiling (shared with the CLI family)
 
 The client's tool catalog travels as inline-schema `sdkTools`, but it is still built by the shared

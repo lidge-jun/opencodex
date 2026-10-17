@@ -18,10 +18,14 @@ import {
 } from "./projection";
 import { resolveStepCliProfile, STEP_CLI_PROFILE, type StepCliProfile } from "./profiles";
 import {
+  beginTurn,
   clearStepCliSessions,
-  lastQueryId,
+  currentQuery,
+  currentTurn,
+  endTurn,
+  forgetQuery,
   poolFor,
-  turnRuntimes,
+  rememberQuery,
 } from "./registry";
 import { StepSessionError, type StepSessionDeps } from "./session";
 import type { StepConversationHost, StepConversationRef, StepConversationSession } from "./session-pool";
@@ -298,7 +302,7 @@ async function driveTurn(
       const done = new Promise<void>(resolve => {
         settle = resolve;
       });
-      turnRuntimes.set(session, {
+      beginTurn(session, {
         ref,
         pool: sessions,
         emit,
@@ -315,7 +319,7 @@ async function driveTurn(
           heldMatches && heldResult ? heldResult : { content: [{ type: "text", text: "" }], isError: true },
         );
         if (!delivered) {
-          turnRuntimes.delete(session);
+          endTurn(session);
           emit(
             refusal(
               "The held StepCode tool call expired before the tool result arrived; StepCode only waits two minutes for one.",
@@ -332,11 +336,11 @@ async function driveTurn(
       let queryId: string | undefined;
       let deadlineTimer: unknown;
       try {
-        if (abandonedQueryId && lastQueryId.get(session)) {
+        if (abandonedQueryId && currentQuery(session)) {
           // The query that owned the abandoned call is still unwinding; stop it before starting a new
           // one, since StepCode serves a single query per process.
-          await session.interrupt(lastQueryId.get(session)!);
-          lastQueryId.delete(session);
+          await session.interrupt(currentQuery(session)!);
+          forgetQuery(session);
         }
         if (!continuedQuery) {
           const started = await startQueryWithBusyRetry(session, {
@@ -346,11 +350,11 @@ async function driveTurn(
             streamingInput: true,
           });
           queryId = started.queryId;
-          lastQueryId.set(session, queryId);
+          rememberQuery(session, queryId);
           await session.sendInput(queryId, composePrompt(parsed, userText ?? ""));
         }
       } catch (error) {
-        turnRuntimes.delete(session);
+        endTurn(session);
         settle();
         emit(mapSessionFailure(error));
         await session.close();
@@ -368,13 +372,13 @@ async function driveTurn(
         }),
       ]);
       clearTimer(deadlineTimer as never);
-      if (!turnRuntimes.has(session)) return;
+      if (!currentTurn(session) !== undefined) return;
 
       // The turn is still registered, so nothing terminated it: either the client aborted, or the CLI
       // went quiet. Either way the query is still running inside StepCode, and since it serves one
       // query at a time the NEXT request for this conversation would be rejected or blocked by it.
       // Interrupt it, and close the session when the interrupt cannot be confirmed.
-      turnRuntimes.delete(session);
+      endTurn(session);
       emit({
         type: "error",
         message: "The StepCode turn ended without a terminal event.",

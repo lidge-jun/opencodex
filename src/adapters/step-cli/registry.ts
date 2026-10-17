@@ -59,6 +59,54 @@ export const lastQueryId = new WeakMap<StepConversationSession, string>();
 
 /** How many turns may queue behind one conversation before a caller is told to retry. */
 
+/* ------------------------------------------------------------------------- *
+ * Turn runtime accessors.
+ *
+ * `events` and `adapter` go through these instead of touching the maps, so the storage shape can
+ * change without every caller changing with it — and so "who owns this session's turn" is answered in
+ * one place rather than by whoever happens to remember the variable name.
+ * ------------------------------------------------------------------------- */
+
+/** Attach a turn to the session that owns it, replacing any turn left behind. */
+export function beginTurn(session: StepConversationSession, turn: StepTurnRuntime): void {
+  turnRuntimes.set(session, turn);
+}
+
+/** The turn currently owning this session, if any. */
+export function currentTurn(session: StepConversationSession): StepTurnRuntime | undefined {
+  return turnRuntimes.get(session);
+}
+
+/** Detach a session's turn. Returns true when one was actually attached. */
+export function endTurn(session: StepConversationSession): boolean {
+  return turnRuntimes.delete(session);
+}
+
+/** Record the usage the CLI reported for this session's assistant turn. */
+export function recordAssistantUsage(session: StepConversationSession, usage: OcxUsage): void {
+  lastAssistantUsage.set(session, usage);
+}
+
+/** The usage recorded for this session's assistant turn, if any. */
+export function assistantUsage(session: StepConversationSession): OcxUsage | undefined {
+  return lastAssistantUsage.get(session);
+}
+
+/** Remember which query this session is running, so an abandoned turn interrupts exactly that one. */
+export function rememberQuery(session: StepConversationSession, queryId: string): void {
+  lastQueryId.set(session, queryId);
+}
+
+/** The query this session is running, if any. */
+export function currentQuery(session: StepConversationSession): string | undefined {
+  return lastQueryId.get(session);
+}
+
+/** Forget the session's query, e.g. once its input stream has been closed. */
+export function forgetQuery(session: StepConversationSession): void {
+  lastQueryId.delete(session);
+}
+
 /** One pool per OpenCodex home, so two homes in one process never share a StepCode session. */
 export const pools = new Map<string, StepSessionPool>();
 

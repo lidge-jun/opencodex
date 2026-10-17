@@ -2,7 +2,14 @@ import type { AdapterEvent } from "../../types";
 import type { StepSessionEvent } from "./session";
 import type { StepConversationSession } from "./session-pool";
 import { asRecord, continuationFor, toUsage } from "./projection";
-import { lastAssistantUsage, lastQueryId, turnRuntimes } from "./registry";
+import {
+  assistantUsage,
+  currentQuery,
+  currentTurn,
+  endTurn,
+  forgetQuery,
+  recordAssistantUsage,
+} from "./registry";
 import { resolveStepToolName } from "./tool-bridge";
 import type { StepFrame } from "./stdio-frames";
 
@@ -29,7 +36,7 @@ import type { StepFrame } from "./stdio-frames";
 export function handleReverseRequest(session: StepConversationSession, frame: StepFrame): void {
   const payload = asRecord(frame.payload);
   const expired = payload.__expired === true;
-  const turn = turnRuntimes.get(session);
+  const turn = currentTurn(session);
 
   if (expired) {
     // The hold elapsed, so the client can never answer this call. Refuse it so StepCode stops waiting
@@ -97,7 +104,7 @@ export function handleReverseRequest(session: StepConversationSession, frame: St
       stopReason: "tool_use",
       providerState: continuationFor(turn.ref, session.sessionId),
     });
-    turnRuntimes.delete(session);
+    endTurn(session);
     turn.settle();
     return;
   }
@@ -135,7 +142,7 @@ export function handleReverseRequest(session: StepConversationSession, frame: St
  * out that it was the one thing a fake process must be able to deliver.
  */
 export function handleRuntimeEvent(session: StepConversationSession, frame: StepFrame): void {
-  const turn = turnRuntimes.get(session);
+  const turn = currentTurn(session);
   if (!turn) return;
   const payload = asRecord(frame.payload);
   const message = asRecord(payload.message ?? payload);
@@ -156,25 +163,25 @@ export function handleRuntimeEvent(session: StepConversationSession, frame: Step
 
   if (type === "assistant") {
     const usage = toUsage(asRecord(asRecord(message.message).usage));
-    if (usage) lastAssistantUsage.set(session, usage);
+    if (usage) recordAssistantUsage(session, usage);
     return;
   }
 
   if (type === "status" && (message.status === "turn_complete" || message.status === "done")) {
-    const usage = lastAssistantUsage.get(session);
+    const usage = assistantUsage(session);
     turn.emit({
       type: "done",
       ...(usage ? { usage } : {}),
       stopReason: "stop",
       providerState: continuationFor(turn.ref, session.sessionId),
     });
-    turnRuntimes.delete(session);
+    endTurn(session);
     turn.settle();
     // Release the runtime's single query slot for this conversation's next turn. Skipped when a tool
     // call was captured, which ends the turn earlier and keeps the query alive on purpose.
-    const queryId = lastQueryId.get(session);
+    const queryId = currentQuery(session);
     if (queryId) {
-      lastQueryId.delete(session);
+      forgetQuery(session);
       void session.endInput(queryId);
     }
     return;
@@ -189,7 +196,7 @@ export function handleRuntimeEvent(session: StepConversationSession, frame: Step
       code: "step_cli_permission_denied",
       retryable: false,
     });
-    turnRuntimes.delete(session);
+    endTurn(session);
     turn.settle();
   }
 }
