@@ -45,19 +45,15 @@ export interface StepTurnRuntime {
   pool: StepConversationHost;
   emit: (event: AdapterEvent) => void;
   settle: () => void;
-  done: Promise<void>;
   emittedNames: Map<string, string>;
 }
 
 export const turnRuntimes = new WeakMap<StepConversationSession, StepTurnRuntime>();
 
 export const lastAssistantUsage = new WeakMap<StepConversationSession, OcxUsage>();
-/** Query currently owned by each session, so an abandoned turn can interrupt exactly that one. */
 
 /** Query currently owned by each session, so an abandoned turn can interrupt exactly that one. */
 export const lastQueryId = new WeakMap<StepConversationSession, string>();
-
-/** How many turns may queue behind one conversation before a caller is told to retry. */
 
 /* ------------------------------------------------------------------------- *
  * Turn runtime accessors.
