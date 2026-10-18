@@ -1,0 +1,33 @@
+RFC #7206 PR A provenance: Original offline TypeScript scheduler / 15 deterministic tests.
+
+Source:
+  offline-scheduler-model.ts
+  offline-scheduler-model.rfc-spec.ts
+
+Command, run from tests/fixtures/idle-stagger/prior-rfc:
+  node --experimental-strip-types --test offline-scheduler-model.rfc-spec.ts
+
+Environment: Node v22.16.0. No network, credentials, tokens, GUI, runtime workers or upstream calls.
+
+Original pre-PR A drafting run (2026-10-16, Node 22):
+  tests 15
+  suites 0
+  pass 15
+  fail 0
+  cancelled 0
+  skipped 0
+  todo 0
+
+Reproduced locally again from the PR A source archive:
+  tests 15
+  suites 0
+  pass 15
+  fail 0
+  cancelled 0
+  skipped 0
+  todo 0
+  duration_ms 292.990799
+
+Caveat: this receipt reports local Node execution only, and does NOT claim that
+the maintainers independently reproduced the results or that Bun CI has passed.
+It also does not establish provider activation semantics, permission or cost.
