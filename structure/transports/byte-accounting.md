@@ -292,11 +292,13 @@ Native Chat's optional reasoning capture (`src/server/chat-native-reasoning.ts`)
 reasoning and tool ids before concatenation and reserves the previous string during replacement.
 Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay.
 Terminal, error and cancellation paths release collector retention; the shared replay cache owns
-its own bounded text after insertion. Before replay expansion and request serialization, native
-Chat preflights the exact escaped JSON growth against the translator budget remaining after the
-request's other retained copies. An over-budget replay returns 413 without truncating history;
-the post-build request charge remains owned and released by the existing retry/key-rotation
-lifecycle. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior.
+its own bounded text after insertion. For a changed replay, native Chat measures the exact
+escaped-JSON net change and checks the final request size (`baseBytes + serializedBytes`)
+against the fixed `maxSerializedBytes` cap before expansion. It then reserves that full size as
+transient `request_copies` against the remaining translator budget before applying replay and
+serializing the request, releasing the reservation in `finally`. Exceeding either limit returns
+413 without truncating history. The post-build request charge remains owned and released by
+the existing retry/key-rotation lifecycle. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior.
 
 The Opus 5.5 progress normalizer in `src/adapters/anthropic-progress.ts` reserves its one-block
 thinking/signature buffer before concatenation, replaces signatures rather than appending, and

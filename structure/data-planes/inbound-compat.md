@@ -542,11 +542,14 @@ Explicit preserve lists (including `[]`) remain authoritative, and an explicit p
 can disable fabricated placeholders while allowing original cached reasoning.
 For tool-enabled DeepSeek requests the configured placeholder also repairs earlier assistant
 answers without tool calls. Those turns have no call-id replay entry; supplied reasoning wins.
-Before copying replay into the request, native passthrough preflights the total escaped JSON byte
-growth against the request's remaining translator budget. Repeated cached call ids across assistant
-turns therefore fail with the standard 413 `translation_buffer_limit` response when over budget;
-history is never silently truncated. Key rotation and retry rebuild and charge the request after
-releasing the previous body, preserving the same scope and normal replay behavior within budget.
+Before copying replay into the request, native passthrough measures the exact escaped-JSON net
+change and checks the final request size (`baseBytes + serializedBytes`) against the fixed
+`maxSerializedBytes` cap. For a changed replay, it then reserves that full size as transient
+`request_copies` against the translator budget remaining after other retained copies, before
+applying replay and serializing the body. The transient reservation is released in `finally`.
+Exceeding either limit returns the standard 413 `translation_buffer_limit` response; history is
+never silently truncated. Key rotation and retry rebuild and charge the request after releasing
+the previous body, preserving the same scope and normal replay behavior within budget.
 
 `src/server/chat-native-reasoning.ts` records upstream JSON and fragmented SSE reasoning under
 all parallel call ids, separately for each choice. Replay requires a sanitized `thread-id`,
