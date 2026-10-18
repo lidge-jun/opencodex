@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
+import * as accountStore from "../../src/codex/account-store";
 import { headersForCodexAuthContext, type CodexAuthContext } from "../../src/codex/auth-context";
 import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { captureMainQuotaWriter, clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
@@ -18,6 +19,7 @@ import {
 } from "../../src/codex/routing";
 import {
   forgetCodexFailureWindows,
+  failureWindowSteersNewThreads,
   isCodexFailureWindowDegraded,
   noteCodexFailureWindowSample,
 } from "../../src/codex/routing/failure-window";
@@ -226,6 +228,131 @@ test("a main terminal without an owned dispatch proof cannot seed the window", (
   }, forwardProvider)!;
   for (let index = 0; index < 20; index++) record("failed", 500);
   expect(isCodexFailureWindowDegraded(MAIN_CODEX_ACCOUNT_ID)).toBe(false);
+});
+
+test("a cross-process replacement after the unlocked live check cannot donate a terminal sample", () => {
+  const cfg = config();
+  const old = poolTerminal(cfg);
+  const original = accountStore.isCodexAccountGenerationLive;
+  let swapped = false;
+  const liveCheck = spyOn(accountStore, "isCodexAccountGenerationLive").mockImplementation((id, generation) => {
+    const live = original(id, generation);
+    if (id === "a" && live && !swapped) {
+      swapped = true;
+      const credential = readCodexAccountRecord(id)!.credential!;
+      saveCodexAccountCredential(id, { ...credential, accessToken: "replacement-after-read" });
+    }
+    return live;
+  });
+  try {
+    old("completed");
+    expect(swapped).toBe(true);
+  } finally {
+    liveCheck.mockRestore();
+  }
+  const current = poolTerminal(cfg);
+  for (let index = 0; index < 19; index++) current("failed", 500);
+  expect(isCodexFailureWindowDegraded("a")).toBe(false);
+  current("failed", 500);
+  expect(isCodexFailureWindowDegraded("a")).toBe(true);
+});
+
+test("a replacement does not inherit degraded state or the prior pinned warning", () => {
+  const cfg = config({ activeCodexAccountPinned: "a" });
+  const old = poolTerminal(cfg);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    for (let index = 0; index < 20; index++) old("failed", 500);
+    expect(isCodexFailureWindowDegraded("a")).toBe(true);
+    failureWindowSteersNewThreads(cfg, "a", Date.now());
+    expect(warn).toHaveBeenCalledTimes(1);
+    const credential = readCodexAccountRecord("a")!.credential!;
+    saveCodexAccountCredential("a", { ...credential, accessToken: "replacement-access" });
+    expect(isCodexFailureWindowDegraded("a")).toBe(false);
+    const current = poolTerminal(cfg);
+    for (let index = 0; index < 19; index++) current("failed", 500);
+    old("completed");
+    expect(isCodexFailureWindowDegraded("a")).toBe(false);
+    current("failed", 500);
+    expect(isCodexFailureWindowDegraded("a")).toBe(true);
+    failureWindowSteersNewThreads(cfg, "a", Date.now());
+    expect(warn).toHaveBeenCalledTimes(2);
+    // Rejecting a stale writer must not erase the replacement's healthy or degraded window.
+    old("failed", 500);
+    expect(isCodexFailureWindowDegraded("a")).toBe(true);
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test("a replacement after the insertion snapshot is filtered at window read time", () => {
+  const cfg = config();
+  const old = poolTerminal(cfg);
+  const original = accountStore.beginCodexAccountGenerationLiveCheck;
+  let swapped = false;
+  const snapshot = spyOn(accountStore, "beginCodexAccountGenerationLiveCheck").mockImplementation(() => {
+    const live = original();
+    if (!swapped) {
+      swapped = true;
+      const credential = readCodexAccountRecord("a")!.credential!;
+      saveCodexAccountCredential("a", { ...credential, accessToken: "replacement-after-snapshot" });
+    }
+    return live;
+  });
+  try {
+    old("completed");
+    expect(swapped).toBe(true);
+  } finally {
+    snapshot.mockRestore();
+  }
+  const current = poolTerminal(cfg);
+  for (let index = 0; index < 19; index++) current("failed", 500);
+  expect(isCodexFailureWindowDegraded("a")).toBe(false);
+  current("failed", 500);
+  expect(isCodexFailureWindowDegraded("a")).toBe(true);
+});
+
+test("a full tagged window loads one current credential snapshot per read", () => {
+  const cfg = config();
+  const generation = readCodexAccountRecord("a")!.generation;
+  for (let index = 0; index < 512; index++) {
+    recordCodexUpstreamOutcome(cfg, "a", 200, { failureWindowCredentialGeneration: generation, now: NOW });
+  }
+  const original = accountStore.beginCodexAccountGenerationLiveCheck;
+  const snapshot = spyOn(accountStore, "beginCodexAccountGenerationLiveCheck").mockImplementation(original);
+  try {
+    expect(isCodexFailureWindowDegraded("a", NOW)).toBe(false);
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    const credential = readCodexAccountRecord("a")!.credential!;
+    saveCodexAccountCredential("a", { ...credential, accessToken: "next-full-window" });
+    expect(isCodexFailureWindowDegraded("a", NOW)).toBe(false);
+    expect(snapshot).toHaveBeenCalledTimes(2);
+  } finally {
+    snapshot.mockRestore();
+  }
+});
+
+test("a replacement does not inherit the previous generation's recovery timer", () => {
+  const cfg = config();
+  const firstGeneration = readCodexAccountRecord("a")!.generation;
+  const record = (outcome: number, generation: number, now: number) => recordCodexUpstreamOutcome(cfg, "a", outcome,
+    { failureWindowCredentialGeneration: generation, now });
+  const fillGeneration = (generation: number, failed: boolean, now: number) => {
+    for (let index = 0; index < 20; index++) record(failed ? 500 : 200, generation, now);
+  };
+  fillGeneration(firstGeneration, true, NOW);
+  fillGeneration(firstGeneration, false, NOW + 61_000);
+  expect(isCodexFailureWindowDegraded("a", NOW + 61_000)).toBe(true);
+  const credential = readCodexAccountRecord("a")!.credential!;
+  const nextGeneration = saveCodexAccountCredential("a", { ...credential, accessToken: "next-access" });
+  fillGeneration(nextGeneration, false, NOW + 62_000);
+  expect(isCodexFailureWindowDegraded("a", NOW + 62_000)).toBe(false);
+  fillGeneration(nextGeneration, true, NOW + 63_000);
+  expect(isCodexFailureWindowDegraded("a", NOW + 63_000)).toBe(true);
+  // Only G2 successes remain in-window; its own 30-second recovery starts here.
+  fillGeneration(nextGeneration, false, NOW + 124_000);
+  expect(isCodexFailureWindowDegraded("a", NOW + 153_999)).toBe(true);
+  expect(isCodexFailureWindowDegraded("a", NOW + 154_000)).toBe(false);
 });
 
 test("fewer than 20 samples do not degrade an account", () => {
