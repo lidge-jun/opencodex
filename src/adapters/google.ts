@@ -378,6 +378,7 @@ function messagesToGeminiFormat(
   stripRejectedClaudeSdkParagraph = false,
   isCloudCodeAssist = false,
   nestToolResultImages = false,
+  toolResponseImagesLast = false,
 ): { systemInstruction?: unknown; contents: unknown[]; replayedCallIds: string[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -557,11 +558,17 @@ function messagesToGeminiFormat(
           }
 
           const responseParts: unknown[] = [];
+          const trailingImages: unknown[] = [];
           for (const call of toolCalls) {
             const result = resultsById.get(call.wireCallId);
-            if (result) responseParts.push(...geminiToolResultParts(result, call.wireName, call.wireCallId, nestToolResultImages));
-            else responseParts.push(geminiMissingToolResultPart(call.wireName, call.wireCallId));
+            if (result) {
+              const [response, ...images] = geminiToolResultParts(result, call.wireName, call.wireCallId, nestToolResultImages);
+              responseParts.push(response);
+              (toolResponseImagesLast ? trailingImages : responseParts).push(...images);
+            } else responseParts.push(geminiMissingToolResultPart(call.wireName, call.wireCallId));
           }
+          // CCA Claude misses later responses when image siblings interrupt the response batch.
+          responseParts.push(...trailingImages);
           const orphanParts = orphanResults.flatMap(geminiOrphanToolResultParts);
           contents.push({ role: "user", parts: responseParts });
           // Orphan images cannot share Argon's response batch or claim another call's ownership.
@@ -1039,6 +1046,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
         provider.googleMode === "vertex" && parsed.modelId === "gemini-4-argon",
+        isCloudCodeAssist && /^claude-/i.test(routedModelId),
       );
       lastInjectedCallIds = [...replayedCallIds];
       lastReasoningReplayScope = parsed._reasoningReplayScope;

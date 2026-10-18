@@ -132,6 +132,13 @@ Google-family requests serialize a model tool-call turn and its results as one a
 `model -> user` pair. The user turn contains exactly one `functionResponse` for every representable
 call in original call order. Missing results use an explicit unknown-history marker; duplicate,
 mismatched, and standalone results become marked text instead of unpaired function responses.
+For Cloud Code Assist routed `claude-*` models, the complete matched `functionResponse` batch
+precedes its sibling images in the same user turn; images keep call order, MIME types and bytes.
+Interleaving an image before the remaining responses makes CCA Claude reject the batch as missing
+later tool results. Single-call and text-only batches keep their existing shape. CCA Gemini,
+non-Claude CCA models, AI Studio and non-Argon Vertex retain interleaved image siblings.
+`tests/adapters/google/google-tool-result-adjacency.test.ts` checks the final compiled request
+for three parallel calls, reversed results, distinct images and route isolation.
 For Vertex `gemini-4-argon`, matched results carry representable data-URL images inside
 `functionResponse.parts`, preserving each image's call ownership. Sibling images on that route can
 produce a misleading "Requests ending with a model turn are not supported" error even when the
