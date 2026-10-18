@@ -8,6 +8,7 @@ import {
   loginDshAccount,
   refreshDshAccountToken,
   resolveDshCredentialsPath,
+  DSH_PROFILE_MAX_BYTES,
 } from "../../src/oauth/dsh";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -199,6 +200,86 @@ describe("DSH Account Validation", () => {
     expect(res.valid).toBe(false);
     expect(evilTargetReceivedToken).toBe(false);
   });
+
+  test("rejects a declared oversized profile body without reading the stream", async () => {
+    let cancelReason: unknown;
+    const body = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    });
+    globalThis.fetch = async () => new Response(body, {
+      status: 200,
+      headers: { "content-length": String(DSH_PROFILE_MAX_BYTES + 1) },
+    });
+
+    const res = await validateDshAccountToken("mock-token");
+    expect(res).toEqual({ valid: false, error: "PROFILE_VALIDATION_FAILED" });
+    expect(cancelReason).toBeInstanceOf(DOMException);
+    expect((cancelReason as DOMException).name).toBe("QuotaExceededError");
+  });
+
+  test("rejects an oversized profile stream when content-length is missing or understated", async () => {
+    for (const headers of [undefined, { "content-length": "8" }]) {
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(DSH_PROFILE_MAX_BYTES + 1));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      globalThis.fetch = async () => new Response(body, { status: 200, headers });
+
+      const res = await validateDshAccountToken("mock-token");
+      expect(res).toEqual({ valid: false, error: "PROFILE_VALIDATION_FAILED" });
+      expect(cancelled).toBe(true);
+    }
+  });
+
+  test("accepts a profile document at the byte cap and rejects one byte over a chunked boundary", async () => {
+    const base = JSON.stringify({
+      code: 0,
+      data: { biz_code: 0, biz_data: { id: "user-cap", email: "cap@example.com" } },
+    });
+    const encoder = new TextEncoder();
+    const atCap = base + " ".repeat(DSH_PROFILE_MAX_BYTES - base.length);
+    expect(encoder.encode(atCap).byteLength).toBe(DSH_PROFILE_MAX_BYTES);
+
+    globalThis.fetch = async () => new Response(atCap, { status: 200 });
+    const ok = await validateDshAccountToken("mock-token");
+    expect(ok.valid).toBe(true);
+    expect(ok.accountId).toBe("user-cap");
+
+    const overCap = encoder.encode(atCap + " ");
+    const chunked = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(overCap.subarray(0, DSH_PROFILE_MAX_BYTES));
+        controller.enqueue(overCap.subarray(DSH_PROFILE_MAX_BYTES));
+      },
+    });
+    globalThis.fetch = async () => new Response(chunked, { status: 200 });
+    expect(await validateDshAccountToken("mock-token")).toEqual({ valid: false, error: "PROFILE_VALIDATION_FAILED" });
+  });
+
+  test("rejects with the caller's abort reason while the profile body is still streaming", async () => {
+    const body = new ReadableStream<Uint8Array>({ start() { /* open stream, no data */ } });
+    globalThis.fetch = async () => new Response(body, { status: 200 });
+    const controller = new AbortController();
+    const reason = new DOMException("operator cancelled", "AbortError");
+    const pending = validateDshAccountToken("mock-token", controller.signal);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+  });
+
+  test("surfaces a stalled profile body as PROFILE_VALIDATION_FAILED instead of hanging", async () => {
+    const body = new ReadableStream<Uint8Array>({ start() { /* open stream, no data */ } });
+    globalThis.fetch = async () => new Response(body, { status: 200 });
+    expect(await validateDshAccountToken("mock-token"))
+      .toEqual({ valid: false, error: "PROFILE_VALIDATION_FAILED" });
+  }, 30_000);
 });
 
 describe("DSH Account Login Flow", () => {
