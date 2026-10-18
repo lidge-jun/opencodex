@@ -1717,8 +1717,10 @@ export function noteProviderAttemptSend(
   if (attempt && attempt.sendCount > 0 && attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)) {
     // An input estimate is not evidence that a failed send used that many tokens.
     delete attempt.inputTokenEstimate;
+    // An account-scoped recovery kind names the status the sealed account answered.
     finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
-      : recovery === "key-401" ? 401 : recovery?.includes("429") ? 429 : 502,
+      : recovery === "key-401" || recovery === "oauth-401" ? 401 : recovery === "oauth-account-403" ? 403
+        : recovery === "oauth-account-402" ? 402 : recovery?.includes("429") ? 429 : 502,
     Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()), attempt.usage);
     // This attempt is being sealed because a NAMED recovery rejected it, so the recovery kind
     // is direct evidence here rather than an inference from history. Without this the sealed
