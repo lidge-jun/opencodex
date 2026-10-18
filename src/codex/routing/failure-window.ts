@@ -65,6 +65,8 @@ function recompute(
   const tagged = state.credentialGeneration !== undefined
     || state.samples.some(sample => sample.credentialGeneration !== undefined);
   const live = generationLive ?? (tagged ? beginCodexAccountGenerationLiveCheck() : undefined);
+  // Unknown evidence is not a credential removal: preserve samples and all derived state.
+  if (live?.snapshotStatus === "failed") return;
   if (state.credentialGeneration !== undefined && !live?.(accountId, state.credentialGeneration)) {
     state.degraded = false;
     state.healthySince = undefined;
@@ -116,7 +118,11 @@ function appendSample(
   config: OcxConfig, accountId: string, failed: boolean, now: number, credentialGeneration?: number,
 ): void {
   if (!codexFailureWindowEnabled(config)) return;
-  const live = credentialGeneration === undefined ? undefined : beginCodexAccountGenerationLiveCheck();
+  const existing = windows.get(accountId);
+  const tagged = credentialGeneration !== undefined || existing?.credentialGeneration !== undefined
+    || existing?.samples.some(sample => sample.credentialGeneration !== undefined);
+  const live = tagged ? beginCodexAccountGenerationLiveCheck() : undefined;
+  if (live?.snapshotStatus === "failed") return;
   // A stale arrival is not an ownership transition and must not delete a live replacement's state.
   if (credentialGeneration !== undefined && !live?.(accountId, credentialGeneration)) return;
   const state = stateFor(accountId);
