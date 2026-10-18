@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as clientLifecycle from "../../src/client/lifecycle-lock";
 import * as configIO from "../../src/config";
+import * as desktopLibrary from "../../src/claude/desktop-3p-library";
 import { saveConfig } from "../../src/config";
 import {
   inspectDesktopPickerProfile,
@@ -16,7 +18,7 @@ import {
   removeDesktop3pStandardPivot,
   writeDesktop3pConfig,
 } from "../../src/claude/desktop-3p";
-import { isOwnedDesktopEntry, isOwnedDesktopGatewayEntry } from "../../src/claude/desktop-3p-library";
+import { isOwnedDesktopEntry, isOwnedDesktopGatewayEntry, MAX_DESKTOP_PROFILE_FILE_BYTES } from "../../src/claude/desktop-3p-library";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let root: string;
@@ -24,6 +26,8 @@ let library: string;
 let configDir: string;
 let previousHome: string | undefined;
 let previousLibrary: string | undefined;
+let restoreLifecycleLock: (() => void) | undefined;
+const realClientLifecycleSync = clientLifecycle.withClientLifecycleSync;
 
 function env(): NodeJS.ProcessEnv {
   return { ...process.env, OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: library };
@@ -47,6 +51,13 @@ beforeEach(() => {
   mkdirSync(library, { recursive: true });
   process.env.OPENCODEX_HOME = configDir;
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = library;
+  // Keep real SQLite exclusion and lease checks, but isolate the user-scoped lock too.
+  const lifecycleLock = spyOn(clientLifecycle, "withClientLifecycleSync").mockImplementation(
+    (work, deps) => realClientLifecycleSync(work, {
+      ...deps, lockPath: deps?.lockPath ?? join(root, "locks", "lifecycle.sqlite"),
+    }),
+  );
+  restoreLifecycleLock = () => lifecycleLock.mockRestore();
   saveConfig({
     port: 10100,
     defaultProvider: "test",
@@ -56,6 +67,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restoreLifecycleLock?.();
+  restoreLifecycleLock = undefined;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousLibrary === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
@@ -173,6 +186,68 @@ describe("Claude Desktop picker profile", () => {
     expect(isOwnedDesktopGatewayEntry({ id: picker, name: "opencodex-picker" })).toBe(false);
     expect(inspectDesktop3pConfigLibrary({ env: env() })).toMatchObject({ kind: "standard", appliedId: picker });
   });
+
+  // Multi-MiB real-file fixtures plus ACL-hardened writes need extra Windows wall-clock budget.
+  test("oversized picker metadata refuses before profile and state writes", () => {
+    const id = "foreign-selected";
+    writeFileSync(join(library, `${id}.json`), "{}\n");
+    const metadata = {
+      appliedId: id, entries: [{ id, name: "Personal" }],
+      foreignRows: Array(500_000).fill("x"),
+    };
+    const before = JSON.stringify(metadata);
+    expect(Buffer.byteLength(before)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(metadata, null, 2))).toBeGreaterThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    const path = join(library, "_meta.json");
+    writeFileSync(path, before);
+    const names = readdirSync(library).sort();
+    const serialize = spyOn(desktopLibrary, "serializeDesktopLibraryJson");
+    try {
+      expect(applyDesktopPickerProfile({ proxyPort: 41234, env: env(), configDir }))
+        .toEqual({ ok: false, reason: "write_failed" });
+      expect(serialize).toHaveBeenCalledTimes(1);
+    } finally {
+      serialize.mockRestore();
+    }
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(readdirSync(library).sort()).toEqual(names);
+    expect(existsSync(join(configDir, "claude-picker", "profile-state.json"))).toBe(false);
+  }, 20_000);
+
+  test.each([
+    ["selected with a previous row", true, true],
+    ["selected without a previous row", true, false],
+    ["unselected", false, true],
+  ] as const)("oversized removal metadata preserves all artifacts: %s", (_name, selected, previousExists) => {
+    const picker = "picker", previous = "foreign";
+    const metadata = {
+      appliedId: selected ? picker : previous,
+      entries: [
+        { id: picker, name: "opencodex-picker" },
+        ...(previousExists ? [{ id: previous, name: "Personal" }] : []),
+      ],
+      foreignRows: Array(500_000).fill("x"),
+    };
+    const compact = JSON.stringify(metadata);
+    expect(Buffer.byteLength(compact)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(metadata, null, 2))).toBeGreaterThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    const metaPath = join(library, "_meta.json"), profilePath = join(library, `${picker}.json`);
+    const backupPath = `${profilePath}.bak`, statePath = join(configDir, "claude-picker", "profile-state.json");
+    mkdirSync(join(configDir, "claude-picker"), { recursive: true });
+    writeFileSync(metaPath, compact);
+    writeFileSync(profilePath, '{"egressProxyUrl":"http://127.0.0.1:41234"}\n');
+    writeFileSync(backupPath, '{"egressProxyUrl":"http://127.0.0.1:41233"}\n');
+    writeFileSync(statePath, JSON.stringify({ entryId: picker, previousAppliedId: previous }) + "\n");
+    if (previousExists) writeFileSync(join(library, `${previous}.json`), '{"foreign":true}\n');
+    const paths = [metaPath, profilePath, backupPath, statePath];
+    const snapshots = paths.map(path => readFileSync(path, "utf8"));
+    const names = readdirSync(library).sort();
+
+    expect(removeDesktopPickerProfile({ env: env(), configDir }))
+      .toEqual({ ok: false, reason: "desktop_config_too_large" });
+    expect(paths.map(path => readFileSync(path, "utf8"))).toEqual(snapshots);
+    expect(readdirSync(library).sort()).toEqual(names);
+  }, 20_000);
 
   test("a non-regular picker profile path inspects as unsafe instead of blocking", () => {
     const picker = "picker";

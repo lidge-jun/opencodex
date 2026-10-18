@@ -2,7 +2,9 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import * as filesystem from "node:fs";
 import { repoPath } from "../helpers/repo-root";
-import { readDesktopLibraryText, parseMetadata, readDesktopProfileForeignKeys } from "../../src/claude/desktop-3p-library";
+import { readDesktopLibraryText, readDesktopLibraryBytes, MAX_DESKTOP_PROFILE_FILE_BYTES, parseMetadata, readDesktopProfileForeignKeys } from "../../src/claude/desktop-3p-library";
+import { StoreIO } from "../../src/claude/desktop-remote-store-io";
+import { DesktopStoreError } from "../../src/claude/desktop-remote-store-state";
 import { saveConfig, readConfigDiagnostics } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -280,4 +282,116 @@ test.skipIf(process.platform === "win32")("a regular-to-symlink replacement betw
     expect(() => readDesktopLibraryText(path)).toThrow("desktop_config_not_regular");
     expect(filesystem.lstatSync(path).isSymbolicLink()).toBe(true);
   } finally { opening.mockRestore(); }
+});
+
+test("Desktop library reads accept the byte boundary and refuse a larger file", () => {
+  const path = join(fixtureHome, "bounded.json");
+  const source = "{}" + " ".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES - 2);
+  writeFileSync(path, source);
+  expect(readDesktopLibraryText(path)).toBe(source);
+  writeFileSync(path, source + " ");
+  expect(() => readDesktopLibraryText(path)).toThrow("desktop_config_too_large");
+  expect(readFileSync(path, "utf8")).toBe(source + " ");
+});
+
+test("Desktop library reads bound growth after descriptor validation", () => {
+  const path = join(fixtureHome, "growing.json");
+  writeFileSync(path, "0");
+  const read = filesystem.readSync;
+  let grew = false;
+  let consumed = 0;
+  const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+    if (!grew) {
+      grew = true;
+      filesystem.appendFileSync(path, "0".repeat(65));
+    }
+    const count = read(fd, buffer, offset, length, position);
+    consumed += count;
+    return count;
+  });
+  try {
+    expect(() => readDesktopLibraryBytes(path, 64)).toThrow("desktop_config_too_large");
+    expect(grew).toBe(true);
+    expect(consumed).toBe(65);
+  } finally { reading.mockRestore(); }
+});
+
+test("Desktop library reads refuse a path removed after descriptor validation", () => {
+  const path = join(fixtureHome, "removed-during-read.json");
+  writeFileSync(path, "{}");
+  const read = filesystem.readSync;
+  let removed = false;
+  const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+    const count = read(fd, buffer, offset, length, position);
+    if (!removed) { removed = true; unlinkSync(path); }
+    return count;
+  });
+  try {
+    expect(() => readDesktopLibraryBytes(path)).toThrow("desktop_config_not_regular");
+    expect(removed).toBe(true);
+  } finally { reading.mockRestore(); }
+});
+
+// Both the selected gateway pivot and foreign-selected residue cleanup must preflight
+// serialized metadata before creating a standard row or deleting any profile/backup.
+test.each([true, false])("oversized removal metadata preserves all files with selected gateway=%s", selectedGateway => {
+  const library = join(fixtureHome, "oversized-removal");
+  mkdirSync(library);
+  const owned = "owned-profile";
+  const foreign = "foreign-profile";
+  const metadata = {
+    appliedId: selectedGateway ? owned : foreign,
+    entries: [{ id: owned, name: "opencodex" }, { id: foreign, name: "Personal" }],
+    foreignRows: Array(500_000).fill("x"),
+  };
+  const metadataBefore = JSON.stringify(metadata);
+  expect(Buffer.byteLength(metadataBefore)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+  expect(Buffer.byteLength(JSON.stringify(metadata, null, 2) + "\n")).toBeGreaterThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+  const originals: Array<[string, string]> = [
+    ["_meta.json", metadataBefore],
+    [`${owned}.json`, JSON.stringify({
+      inferenceProvider: "gateway", inferenceCredentialKind: "static",
+      inferenceGatewayBaseUrl: "http://127.0.0.1:10100", inferenceGatewayApiKey: "not-a-secret",
+    })],
+    [`${owned}.json.bak`, '{"originalBackup":true}\n'],
+    [`${foreign}.json`, '{"foreign":true}\n'],
+  ];
+  for (const [name, content] of originals) writeFileSync(join(library, name), content);
+  const options = { env: envFor(library), appliedFingerprint: appliedFingerprint(join(library, `${owned}.json`)) };
+  expect(inspectDesktop3pConfigLibrary(options).kind).toBe(selectedGateway ? "gateway_ours" : "foreign");
+  const namesBefore = filesystem.readdirSync(library).sort();
+  const unlinked: string[] = [];
+  const result = removeDesktop3pStandardPivot({
+    ...options, unlink: path => { unlinked.push(path); unlinkSync(path); },
+  });
+  expect(result).toMatchObject({ ok: false, changed: false, kind: "write_failed", reason: "desktop_mutation_failed" });
+  expect(unlinked).toEqual([]);
+  expect(filesystem.readdirSync(library).sort()).toEqual(namesBefore);
+  for (const [name, content] of originals) expect(readFileSync(join(library, name), "utf8")).toBe(content);
+}, 20_000);
+
+test("StoreIO limits a growing read to its tighter cap plus one sentinel byte", () => {
+  const path = join(fixtureHome, "store-growing.json");
+  const maxBytes = 64;
+  const original = "{}\n";
+  const appended = " ".repeat(maxBytes + 1);
+  writeFileSync(path, original);
+  const read = filesystem.readSync;
+  let grew = false;
+  let consumed = 0;
+  const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+    if (!grew) { grew = true; filesystem.appendFileSync(path, appended); }
+    const count = read(fd, buffer, offset, length, position);
+    consumed += count;
+    return count;
+  });
+  try {
+    let failure: unknown;
+    try { new StoreIO().read(path, maxBytes); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(DesktopStoreError);
+    expect(failure).toMatchObject({ reason: "unsafe" });
+    expect(grew).toBe(true);
+    expect(consumed).toBe(maxBytes + 1);
+  } finally { reading.mockRestore(); }
+  expect(readFileSync(path, "utf8")).toBe(original + appended);
 });

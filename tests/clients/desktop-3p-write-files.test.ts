@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { atomicReplaceDesktopConfig, writeDesktop3pConfig } from "../../src/claude/desktop-3p";
-import { parseMetadata, readDesktopProfileForeignKeys, readDesktopProfileSnapshot } from "../../src/claude/desktop-3p-library";
+import { MAX_DESKTOP_PROFILE_FILE_BYTES, parseMetadata, readDesktopProfileForeignKeys, readDesktopProfileSnapshot } from "../../src/claude/desktop-3p-library";
 import * as desktopLibrary from "../../src/claude/desktop-3p-library";
 import { isTestHomeGuardArmed } from "../../src/lib/test-home-guard";
 import type { OcxConfig } from "../../src/types";
@@ -322,3 +322,15 @@ for (const scenario of ["backup", "rollback"] as const) {
     }
   }, 20000);
 }
+
+test("oversized backup source refuses before backup or replacement writes", () => {
+  const path = join(library, "oversized.json");
+  const original = Buffer.alloc(MAX_DESKTOP_PROFILE_FILE_BYTES + 1, 32);
+  fs.writeFileSync(path, original);
+  let writes = 0;
+  expect(() => atomicReplaceDesktopConfig(path, "{}\n", original, () => { writes++; }))
+    .toThrow("desktop_config_too_large");
+  expect(writes).toBe(0);
+  expect(fs.readFileSync(path).equals(original)).toBe(true);
+  expect(fs.existsSync(path + ".bak")).toBe(false);
+});
