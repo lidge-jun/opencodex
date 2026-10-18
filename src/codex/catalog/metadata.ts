@@ -38,6 +38,7 @@ import type { RawEntry } from "./parsing";
 import { readCurrentCatalogOrCache, readCurrentCodexCatalog, readCurrentCodexModelsCache, unique } from "./bundled";
 import { trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
+import { ROUTED_ORIGIN_FIELD } from "./ownership";
 import { RESERVE_METADATA_SOURCE_FIELD } from "./reserve";
 import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
@@ -813,6 +814,7 @@ export function observedReserveCatalogSource(
   }
   source.slug = NATIVE_RESERVE_MODEL;
   delete source.opencodex_catalog_kind;
+  delete source[ROUTED_ORIGIN_FIELD];
   delete source[RESERVE_METADATA_SOURCE_FIELD];
   delete source[ACCOUNT_BOUND_OBSERVED_NATIVE_MARKER];
   delete source[ACCOUNT_BOUND_OBSERVED_SELECTORS_MARKER];

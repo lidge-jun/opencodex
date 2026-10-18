@@ -300,7 +300,7 @@ batches, injection, journal replay, removal, and restore/compensation read and w
 holding it. Injection and coordinated restore take config before SQLite N; prompt writes
 take prompt-store before config. Nested writers receive an explicit live handle for the
 same canonical config destination; implicit nesting refuses fast. Symlink aliases contend
-on the real destination's lock. Each publication revalidates canonical identity and inode immediately before rename,
+on the real destination's lock. Acquisition revalidates the canonical path and captures the inode after the lock is held, admitting a preceding writer's completed atomic replacement while refusing a canonical retarget before entering the section. Each publication revalidates canonical identity and inode immediately before rename,
 including each Windows retry; the confirmed publication hook advances that witness. Async acquisition uses a monotonic
 deadline, defaults to two seconds, and accepts only integer timeouts from zero to ten
 seconds. Zero permits one immediate attempt.

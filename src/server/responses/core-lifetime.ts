@@ -1,4 +1,5 @@
 import type { TranslatorBudget } from "../../lib/translator-budget";
+import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { finalizeTranslatorBudgetResponse } from "../../lib/translator-budget";
 import { isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import {
@@ -50,7 +51,7 @@ export function finalizeOwnedTranslatorBudget(response: Response, budget: Transl
   if (isPreinspectedJsonResponse(response)) markPreinspectedJsonResponse(finalizedResponse);
   if (isNonReplayableResponse(response)) markResponseNonReplayable(finalizedResponse);
   if (runTurnAdapterSseResponses.has(response)) runTurnAdapterSseResponses.add(finalizedResponse);
-  return finalizedResponse;
+  return carryResponseToolOwnership(response, finalizedResponse);
 }
 
 /** Release a serving-account slot when the client body ends, errors or is cancelled. */
@@ -75,7 +76,7 @@ export function finalizeAccountLease(response: Response, release: () => void, on
   if (isEagerRelaySseResponse(response)) markEagerRelaySseResponse(wrapped);
   if (isPreinspectedJsonResponse(response)) markPreinspectedJsonResponse(wrapped);
   if (runTurnAdapterSseResponses.has(response)) runTurnAdapterSseResponses.add(wrapped);
-  return wrapped;
+  return carryResponseToolOwnership(response, wrapped);
 }
 
 

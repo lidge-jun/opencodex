@@ -396,6 +396,8 @@ des indications propres au fournisseur ainsi qu'un `Retry-After` synthétique ; 
 reste prioritaire. L'attente et la nouvelle tentative avec la même clé restent facultatives et s'activent avec
 [`retryOn429`](/fr/reference/configuration/).
 
+Sur les routes officielles `https://opencode.ai/zen/v1` et `https://opencode.ai/inference/v1` du fournisseur canonique `opencode-zen` avec authentification par clé API, Gemini utilise automatiquement l’API native Google en mode `googleMode: ai-studio` (par défaut). Les identifiants Zen sont conservés, y compris Flash sans suffixe `-tiered`. Claude utilise automatiquement Anthropic Messages, quel que soit `googleMode`. Au chargement des configurations enregistrées, seules les anciennes surcharges Chat/Responses admissibles de ces modèles natifs sont ignorées, ainsi que les préférences admissibles de l’outil hébergé `image_generation` propres à Responses. Les fournisseurs personnalisés, les routes sans authentification par clé et les autres préférences restent inchangés.
+
 **Le niveau sans clé `opencode-free` est actuellement fermé aux clients tiers.** Zen refuse toute requête
 qui arrive sans en-tête `x-opencode-session` et répond avec le type d'erreur `MissingSessionID` et le message
 « OpenCode's free tier can only be used in OpenCode ». Le contrôle porte uniquement sur la présence de

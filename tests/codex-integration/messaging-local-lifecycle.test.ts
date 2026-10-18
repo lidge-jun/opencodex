@@ -35,7 +35,7 @@ test("importing the unactivated subsystem allocates no listener, timer, child or
 
 test("messaging activation is command-local, never on an ordinary proxy startup path", async () => {
   // Native parser inventory, not graph completeness: catches static/dynamic literal imports.
-  const allowed = new Set(["src/cli/message-args.ts", "src/cli/message-command.ts"]);
+  const allowed = new Set(["src/cli/message-args.ts", "src/cli/message-command.ts", "src/cli/message-remote-args.ts", "src/cli/message-remote-command.ts"]);
   const transpiler = new Bun.Transpiler({ loader: "ts" });
   for await (const scanned of new Bun.Glob("src/**/*.{ts,mts}").scan({ cwd: repoPath() })) {
     const path = scanned.replaceAll("\\", "/"); // Bun.Glob yields native separators on Windows.
@@ -44,7 +44,7 @@ test("messaging activation is command-local, never on an ordinary proxy startup 
     const incoming = imports.filter(entry => /(?:^|\/)messaging(?:\/|$)/.test(entry.path));
     if (!allowed.has(path)) expect(incoming, path).toEqual([]);
     for (const entry of imports.filter(entry => /(?:^|\/)message-(?:command|args|runtime)$/.test(entry.path))) {
-      expect(["src/cli/dispatch.ts", "src/cli/message-command.ts"], path).toContain(path);
+      expect(["src/cli/dispatch.ts", "src/cli/message-command.ts", "src/cli/message-remote-command.ts", "src/cli/message-remote-args.ts"], path).toContain(path);
       if (path === "src/cli/dispatch.ts") {
         expect(entry.path).toBe("./message-command"); expect(entry.kind).toBe("dynamic-import");
       }

@@ -18,6 +18,7 @@ import type { RequestLogContext, RequestLogEntry } from "../../src/server/reques
 import { markProtocolEntry, protocolTraceForRequest } from "../../src/protocols/trace";
 import { parseRequest } from "../../src/responses/parser";
 import { buildToolBridgeMaps } from "../../src/server/responses";
+import { createAnthropicThinkingRecovery } from "../../src/server/responses/anthropic-thinking-recovery";
 import { deliverAdapterResponse } from "../../src/server/responses/adapter-delivery";
 import { peekReasoningForCall } from "../../src/responses/reasoning-replay-cache";
 import type { AdapterEvent, OcxConfig, OcxReasoningReplayScopeRef, OcxUsage } from "../../src/types";
@@ -287,6 +288,7 @@ describe("deliverAdapterResponse through a client encoder", () => {
       { type: "done" },
     ];
     const completed: Record<string, unknown>[] = [];
+    const upstream = new AbortController();
     const response = await deliverAdapterResponse(
       {
         logCtx: { model: "m", provider: "p" },
@@ -314,7 +316,9 @@ describe("deliverAdapterResponse through a client encoder", () => {
       { emptyCompletionGuardEnabled: false },
       {
         upstreamResponse: new Response(""),
-        upstream: new AbortController(),
+        upstream,
+        thinkingSignatureRecovery: createAnthropicThinkingRecovery(parsed, upstream.signal, { attempted: false }, () => false),
+        refetchThinkingSignature: async () => { throw new Error("unexpected recovery without thinking history"); },
         cleanupUpstreamAbort: () => {},
         localUpstream: false,
       } as unknown as Args[6],

@@ -177,6 +177,8 @@ export interface HandleResponsesOptions {
   nativeReasoningMint?: { owner?: NativeReasoningOwner };
   /** The Claude client's typed `web_search_*` / `web_fetch_*` declarations; kept only for `inboundWire: "anthropic"`. */
   anthropicServerTools?: readonly Record<string, unknown>[];
+  /** The Claude client's replayable server-tool exchanges (`replayedAnthropicServerBlocks`); same scope. */
+  anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
   /** Droid's per-request effort default; each concrete combo or policy target applies it only if its ladder allows it. */
   droidDefaultEffort?: string;
   /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */

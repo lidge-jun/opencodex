@@ -34,7 +34,9 @@ describe("owner registry home isolation", () => {
           import { ownerRegistryDir, readOwnerRegistry, registerOwnerRegistryHome,
             unregisterOwnerRegistryHome } from ${JSON.stringify(registryModule)};
           const startupHome = homedir();
-          process.env.HOME = process.env.USERPROFILE = ${JSON.stringify(home.path("worker"))};
+          // Windows homedir() follows USERPROFILE changes. Keep production's default
+          // home stable; only guarded callers exercise a rewritten worker home.
+          if (${guarded}) process.env.HOME = process.env.USERPROFILE = ${JSON.stringify(home.path("worker"))};
           // No preload and no registry override: child callers must still be isolated.
           delete process.env.OCX_OWNER_REGISTRY_DIR;
           const dir = ownerRegistryDir();
@@ -54,6 +56,8 @@ describe("owner registry home isolation", () => {
               unregisterOwnerRegistryHome(${JSON.stringify(foreignHome)});
             }
             delete process.env.OCX_OWNER_REGISTRY_DIR;
+            // Unpin into the protected home on cached and dynamic homedir() runtimes.
+            process.env.HOME = process.env.USERPROFILE = startupHome;
             delete process.env.OPENCODEX_HOME;
             try { readOwnerRegistry(); } catch { unpinnedRefused = true; }
           }

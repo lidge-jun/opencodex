@@ -7,8 +7,32 @@ import { handleConfigCommand } from "../../src/cli/config-command";
 import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
 import { createTempHome } from "../helpers/temp-home";
 
+test("Claude saved overrides and Responses-only preferences migrate without changing unrelated models", () => {
+  const raw = candidate({ "claude-sonnet-5-5": "openai-chat", "claude-opus-5-5": "openai-responses", "qwen-model": "openai-chat" }, {
+    modelPreferHostedTools: { "claude-opus-5-5": ["image_generation"] },
+  });
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    sanitizeOpenCodeZenOverridesForLoad(raw);
+    expect(raw.providers["opencode-zen"].modelAdapters).toEqual({ "qwen-model": "openai-chat" });
+    expect(raw.providers["opencode-zen"].modelPreferHostedTools).toBeUndefined();
+    expect(validateConfigCandidate(raw).ok).toBe(true);
+  } finally { warn.mockRestore(); }
+});
+
+test.each(["vertex", "cloud-code-assist"])("Claude migration preserves Google mode %s and Gemini overrides", googleMode => {
+  const raw = candidate({ "claude-opus-5-5": "openai-responses", "gemini-3.7-flash": "openai-responses" }, { googleMode });
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    sanitizeOpenCodeZenOverridesForLoad(raw);
+    expect(raw.providers["opencode-zen"].modelAdapters).toEqual({ "gemini-3.7-flash": "openai-responses" });
+    expect(raw.providers["opencode-zen"].googleMode).toBe(googleMode);
+    expect(validateConfigCandidate(raw).ok).toBe(true);
+  } finally { warn.mockRestore(); }
+});
+
 const BASES = ["https://opencode.ai/zen/v1", "https://opencode.ai/inference/v1"];
-const WARNING = "OpenCode Zen Gemini models now use the native Google API; obsolete Chat/Responses overrides were ignored while loading config.json.";
+const WARNING = "OpenCode Zen Gemini and Claude models now use their native APIs; obsolete Chat/Responses overrides were ignored while loading config.json.";
 
 function candidate(modelAdapters: unknown, overrides: Record<string, unknown> = {}) {
   return {

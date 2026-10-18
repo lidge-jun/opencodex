@@ -71,14 +71,14 @@ beforeAll(async () => {
       parsed: OcxParsedRequest;
       adapter: ProviderAdapter;
       incomingMeta: IncomingMeta;
-      fetchForRequest: (request: AdapterRequest, parsed: OcxParsedRequest) => typeof fetch;
+      fetchForRequest: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter) => typeof fetch;
       on429?: (retryAfter: string | null, headers: Headers, parsed: OcxParsedRequest, response: Response) => Promise<
         { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null
       >;
     }) => {
       // This is a dispatch seam test. The real loop is covered in anthropic-quota-dispatch.
       const first = await args.adapter.buildRequest(args.parsed, args.incomingMeta);
-      const refused = await args.fetchForRequest(first, args.parsed)(first.url, {
+      const refused = await args.fetchForRequest(first, args.parsed, args.adapter)(first.url, {
         method: first.method, headers: first.headers, body: first.body,
       });
       expect(refused.status).toBe(429);
@@ -91,7 +91,7 @@ beforeAll(async () => {
       // proven end to end rather than against a hand-written stub.
       expect(rotated.recoveryKind).toBe("anthropic-oauth-429");
       const second = await rotated.adapter.buildRequest(args.parsed, args.incomingMeta);
-      return args.fetchForRequest(second, args.parsed)(second.url, {
+      return args.fetchForRequest(second, args.parsed, rotated.adapter)(second.url, {
         method: second.method, headers: second.headers, body: second.body,
       });
     },

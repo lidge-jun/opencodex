@@ -87,6 +87,26 @@ modalities are declared; Kimi omits `capabilities` for unknown or text-only mode
 a supported capability field keep their existing configuration shape. After updating opencodex,
 regenerate or refresh the client configuration managed by opencodex to receive the updated metadata.
 
+## Replayed Anthropic thinking signatures
+
+On the Responses endpoint, an Anthropic-compatible upstream can reject a replayed thinking
+signature because it belongs to a different conversation prefix. When the error explicitly
+identifies this signature-binding problem, opencodex can remove replayed signed/redacted thinking
+and retry once within the request's send budget. This covers HTTP 400 refusals and initial stream
+errors before output or tool activity. Hosted web search and image/video bridges share one recovery
+limit across their model iterations: only the rejected inference is resent, while completed sidecar
+calls and tool results are retained. An empty-completion retry shares its request's allowance;
+ordinary continuations after output cannot use it. A failed replacement is
+returned without another signature retry. Other errors keep their existing handling.
+
+Sidecar recovery is disabled when enforced spend accounting cannot establish receipts for earlier
+ordinary sidecar sends. It never increases a caller or Combo send allowance.
+
+Only a successful, nonempty completion remembers the rejection for that conversation and serving
+identity for five minutes. Only the refused opaque payloads are suppressed when they can be
+identified; newly issued thinking remains replayable. Plaintext history remains available; a failed or cancelled retry does
+not disable thinking replay on later requests.
+
 ## Auth modes
 
 Provider configs accept three `authMode` values (`key` is the default). The built-in registry also
@@ -170,6 +190,13 @@ eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigra
 OpenCodex sends Argon requests and model discovery with the CLI User-Agent
 (`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model.
 
+On Vertex AI, `gemini-4-argon` receives images returned by tools, such as screenshots, inside
+the matching function response. This avoids the upstream 400 error "Requests ending with a
+model turn are not supported" after an image-producing tool call while preserving the images.
+Images from duplicate results or results without a matching call are preserved in a separate
+message after the tool responses, with a marker explaining that they could not be paired.
+No configuration change is needed; this handling is specific to Vertex Argon.
+
 For Gemini on Antigravity, including Argon, provider-marked thought summaries stay separate
 from the answer: Responses uses reasoning summary items, Chat Completions uses
 `reasoning_content`, and Messages uses `thinking` blocks. Clients decide how to display those
@@ -177,6 +204,13 @@ fields. A Responses client can request `reasoning.summary: "none"` to suppress s
 this does not turn off the model's internal reasoning. A thought signature is continuation
 metadata and can accompany ordinary text, so its presence alone does not hide that text.
 OpenCodex preserves unmarked answer text even when its wording sounds like planning or analysis.
+
+Gemini models, Argon in particular, sometimes skip thinking on a tool-calling turn and write their
+planning into the visible progress text, for example a progress line followed by "Let's read
+google.ts next." Once that text is sent back as history, the model tends to repeat the pattern
+on every later turn. To stop it from spreading, OpenCodex sends Gemini only the first sentence of
+the text that came before a tool call in earlier turns. Final answers are sent back in full, and
+what your client displays is not changed.
 
 The built-in `google-antigravity` model list is Gemini 3.8 Flash (`gemini-3.8-flash`), Gemini 4 Argon
 (`gemini-4-argon`), Claude Opus 5.5 (`claude-opus-5-5`), and Claude Sonnet 5.5
@@ -792,6 +826,7 @@ Qwen3.7 Plus/3.8 Max/3.8 Flash use Anthropic Messages. Legacy MiniMax M2.5 and
 Union Alpha also retain Messages. Models without a listed wire retain Chat.
 New native pins apply to the pinned Go destination with key authentication.
 Responses models still accept an explicit `modelAdapters` override.
+When reading an older saved configuration, OpenCodex ignores obsolete Chat/Responses overrides for the newly pinned Gemini and Qwen models, along with their formerly valid Responses-only hosted-tool preferences. Other providers, accounts and routing remain available. Reads leave the file unchanged; a later explicit configuration edit saves the upgraded values. New overrides for these native models are still rejected.
 Gemini uses `low`, `medium` and `high` thinking levels; higher requested efforts clamp to `high`.
 
 OpenCode Go requires a stable session identifier for routing. OpenCodex sends
@@ -841,7 +876,7 @@ headers. That is separate from the keyless desktop quota OpenCode advertises
 synthetic `Retry-After`; an upstream `Retry-After` still takes precedence. Same-key
 wait-and-retry remains opt-in via [`retryOn429`](/reference/configuration/).
 
-Gemini models on `opencode-zen` use Google's native API automatically when the provider uses an API key, the default `googleMode` (`ai-studio`), and either `https://opencode.ai/zen/v1` or `https://opencode.ai/inference/v1`. Use the model IDs listed by Zen; OpenCodex preserves them, including Flash IDs without a `-tiered` suffix. Older Gemini Chat/Responses overrides and Responses-only hosted-tool preferences are ignored when reading saved configurations.
+Gemini models on `opencode-zen` use Google's native API automatically when the provider uses an API key, the default `googleMode` (`ai-studio`), and either `https://opencode.ai/zen/v1` or `https://opencode.ai/inference/v1`. Use the model IDs listed by Zen; OpenCodex preserves them, including Flash IDs without a `-tiered` suffix. Claude models on these API-key routes use Anthropic Messages automatically, regardless of `googleMode`. When loading saved configurations, OpenCodex ignores eligible older Gemini and Claude Chat/Responses overrides only for native models in the canonical keyed `opencode-zen` provider on these official Zen routes. It also ignores eligible Responses-only `image_generation` hosted-tool preferences; custom providers, non-key routes, and other preferences remain unchanged.
 
 **The keyless `opencode-free` tier is currently closed to third-party clients.** Zen refuses
 any request that arrives without an `x-opencode-session` header, answering with error type

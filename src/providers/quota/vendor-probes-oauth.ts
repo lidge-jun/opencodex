@@ -300,7 +300,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   if (!initialRow || !currentRow || initialRow.loginId !== currentRow.loginId || initialRow.addedAt !== currentRow.addedAt
     || epoch !== captureProviderAccountQuotaEpoch(instance) || recovery.anthropicAccountIncarnation(probedAccountId) !== incarnation) return null;
   let quota: ProviderQuota | null;
-  let anthropicCurrent: (() => boolean) | undefined;
+  let anthropicCurrent: (() => boolean) | undefined; let anthropicPublish: (() => void) | undefined;
   try {
     const result = await recovery.probeAnthropicQuotaWithRecovery(probedAccountId, accessToken,
       fresh => {
@@ -311,7 +311,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
       () => targetCurrent() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration));
     if (result && !result.isCurrent()) return null;
     quota = result?.quota ?? null;
-    anthropicCurrent = result?.isCurrent;
+    anthropicCurrent = result?.isCurrent; anthropicPublish = result?.publishDecisionQuota;
   } catch (error) {
     if (error instanceof AnthropicQuotaProbeOwnershipError) return null;
     throw error;
@@ -322,7 +322,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   if (probedAccountId && probedAccountKey) {
     const stillOwnsToken = getAccountCredential(instance, probedAccountId)?.access === accessToken;
     if (stillOwnsToken && anthropicCurrent?.() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
-      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent });
+      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent }); anthropicPublish?.();
     }
   }
   const quotaReport = report(provider, "anthropic:oauth-usage", quota);

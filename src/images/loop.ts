@@ -1,3 +1,5 @@
+import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
+import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
 /**
  * Media bridge agentic loop — supports both image and video generation sidecars.
  *
@@ -23,7 +25,7 @@ import { bridgeToResponsesSSE } from "../bridge";
 import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import { releaseProviderRequestSlot, sendTrackingRequestSlot, type ProviderRequestSlot } from "../providers/request-pacing";
 import {
@@ -33,7 +35,7 @@ import {
   TRANSLATOR_MAX_TURN_BYTES,
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "../web-search/progress-stream";
+import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
 import { fulfillImageCall } from "./fulfill";
 import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult, createVideoBudget } from "./fulfill-video";
 import { submitVideoJob } from "./xai-video-client";
@@ -270,17 +272,18 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
   return parts;
 }
 
-function jsonError(status: number, message: string): Response {
-  return new Response(JSON.stringify({ error: { message, type: "upstream_error", code: null } }), {
+function jsonError(status: number, message: string, event?: Extract<AdapterEvent, { type: "error" }>): Response {
+  return new Response(JSON.stringify({ error: { message, type: event?.errorType ?? "upstream_error", code: event?.code ?? null,
+    ...(event?.retryable === false ? { retryable: false } : {}) } }), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(event?.retryable === false ? { "x-should-retry": "false" } : {}) },
   });
 }
 
 /** Hard provider/parse failure inside an iteration. The eager first iteration converts it to a
  *  non-2xx jsonError; later (already-streaming) iterations surface it as an in-stream error event. */
 class LoopError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(readonly status: number, message: string, readonly event?: Extract<AdapterEvent, { type: "error" }>) {
     super(message);
     this.name = "LoopError";
   }
@@ -291,6 +294,7 @@ class LoopError extends Error {
  * metadata, and the optional image/video bridge plans.
  */
 export interface ImageBridgeDeps {
+  thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
   parsed: OcxParsedRequest;
   clientToolCatalogRestriction?: ClientToolCatalogRestriction;
   adapter: ProviderAdapter;
@@ -321,7 +325,7 @@ export interface ImageBridgeDeps {
   /** Provider-specific fetch (e.g. xAI transport wrapper). Falls back to global fetch. */
   fetchImpl?: typeof globalThis.fetch;
   /** Bind physical dispatch to this iteration's built request; pacing remains owned by the loop. */
-  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter) => typeof globalThis.fetch;
+  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) => typeof globalThis.fetch;
   /** Reserve the routed provider's next request-start slot before each adapter dispatch. */
   waitForRequestSlot?: (signal?: AbortSignal) => Promise<ProviderRequestSlot | void>;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
@@ -464,6 +468,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   interface IterationResponse {
     response: Response;
     responseAdapter: ProviderAdapter;
+    parsed?: OcxParsedRequest;
+    retryThinking?: () => Promise<IterationResponse>;
     /** runTurn events are already bounded; consume them without replaying or charging twice. */
     collectedEvents?: AdapterEvent[];
   }
@@ -634,7 +640,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
-        const requestFetch = deps.fetchForRequest?.(request, iterParsed, requestAdapter) ?? fetchImpl;
+        const requestFetch = deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery) ?? fetchImpl;
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
@@ -685,7 +691,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         } finally {
           request.releaseBodyObservation?.();
         }
-        return { response, responseAdapter: requestAdapter };
+        bindAnthropicRejectionResponse(request, response);
+        return { response, responseAdapter: requestAdapter, parsed: iterParsed };
       };
 
       let prepared = await fetchOnce(adapter);
@@ -739,9 +746,18 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         prepared = await fetchOnce(adapter, rotated.recoveryKind);
       }
 
+      if (await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
+        try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
+        cachedRequest = undefined;
+        prepared = await fetchOnce(adapter, "opaque-blob-rejection");
+      }
       // Final headers have arrived. Clear only the deadline timer before ANY body read.
       headerDeadline.clear();
       if (!prepared.response.ok) {
+        if (deps.thinkingRecovery && prepared.responseAdapter.name === "anthropic") {
+          const event = await deps.thinkingRecovery.projectHttpFailure(prepared.response, signal);
+          throw new LoopError(event.status ?? prepared.response.status, event.message, event);
+        }
         let body: Awaited<ReturnType<typeof readBoundedResponseBody>>;
         try {
           body = await readBoundedResponseBody(prepared.response, { signal });
@@ -762,9 +778,21 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
         throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`);
       }
-      return prepared;
+      return { ...prepared, retryThinking: async () => {
+        cachedRequest = undefined;
+        headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+        try { return await fetchOnce(adapter, "opaque-blob-rejection"); }
+        catch (error) {
+          if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
+          if (headerDeadline.didExpire()) throw new LoopError(504,
+            `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
+          throw error;
+        } finally { headerDeadline.clear(); deps.onIterationEnd?.(); }
+      } };
     } catch (error) {
       if (isTranslatorBudgetExceededError(error)) throw error;
+      if (error instanceof SendBudgetExhaustedError) throw new LoopError(429, error.message,
+        { type: "error", status: 429, errorType: "rate_limit_error", code: error.code, message: error.message, retryable: false });
       if (headerDeadline.didExpire()) {
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
       }
@@ -791,14 +819,31 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     const iterationBudget = prepared.collectedEvents ? undefined : createIterationEventBudget();
     try {
       if (iterationBudget) {
-        const parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
-        for await (const event of parseStreamWithProgress(prepared.response, parse, {
-          signal,
-          inactivityTimeoutMs: stallTimeoutMs,
-          translatorBudget,
-          // A pass that fails was still billed; the error terminal below reports it with the hidden passes.
-          onErrorUsage: usage => { hiddenUsage = addUsage(hiddenUsage, usage); },
-        })) {
+        const parse = async function* (current: IterationResponse): AsyncGenerator<AdapterEvent> {
+          if (!current.response.ok && deps.thinkingRecovery) {
+            yield await deps.thinkingRecovery.projectHttpFailure(current.response, signal);
+            return;
+          }
+          try {
+            yield* parseStreamWithProgress(current.response, current.responseAdapter.parseStream.bind(current.responseAdapter), {
+              signal, inactivityTimeoutMs: stallTimeoutMs, translatorBudget,
+              preserveAdapterError: deps.thinkingRecovery !== undefined,
+              onErrorUsage: usage => { hiddenUsage = addUsage(hiddenUsage, usage); },
+            });
+          } catch (error) {
+            if (!(error instanceof WebSearchAdapterEventError)) throw error;
+            if (!error.replaySafe) yield { type: "heartbeat", replayUnsafe: true };
+            yield isNonReplayableResponse(current.response)
+              ? { ...error.event, message: "Provider stream error: upstream diagnostic withheld for a non-replayable failure", retryable: false }
+              : error.event;
+          }
+        };
+        const source = deps.thinkingRecovery && prepared.retryThinking
+          ? deps.thinkingRecovery.wrap(parse(prepared), async function* () {
+              yield* parse(await prepared.retryThinking!());
+            }, () => prepared.responseAdapter.name, !isNonReplayableResponse(prepared.response), prepared.response, prepared.parsed)
+          : parse(prepared);
+        for await (const event of source) {
           if (event.type === "heartbeat") yield event;
           else {
             iterationBudget.retain(event);
@@ -812,6 +857,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         throw error;
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
+      if (error instanceof LoopError) throw error;
+      if (error instanceof SendBudgetExhaustedError) throw new LoopError(429, error.message,
+        { type: "error", status: 429, errorType: "rate_limit_error", code: error.code, message: error.message, retryable: false });
       if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
       throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
@@ -829,8 +877,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       if (terminal.code === "translation_buffer_limit") {
         throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
       }
-      throw new LoopError(502, terminal.message);
+      throw new LoopError(terminal.status ?? 502, terminal.message, terminal);
     }
+    deps.thinkingRecovery?.observeIteration(events);
     return scanEventsForImageCall(events, mediaToolNames);
   };
 
@@ -845,7 +894,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       firstPrepared = await prepareIterationDrained(maxRounds <= 0);
     } catch (e) {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-      if (e instanceof LoopError) return jsonError(e.status, e.message);
+      if (e instanceof LoopError) return jsonError(e.status, e.message, e.event);
+      if (e instanceof SendBudgetExhaustedError) return jsonError(429, e.message,
+        { type: "error", status: 429, errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false });
       throw e;
     }
   }
@@ -1101,7 +1152,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             yield {
               type: "error",
               message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
-              ...(e instanceof LoopError ? { status: e.status } : {}),
+              ...(e instanceof LoopError ? { status: e.status, ...(e.event ?? {}) } : {}),
               ...(usage ? { usage } : {}),
             };
           }

@@ -315,6 +315,8 @@ entries, is kept.
 Claude Desktop first-party routes its Code tab and subagents through OpenCodex. The standalone Claude Code CLI has a separate first-party switch. Both clients read the same `~/.claude/settings.json` proxy and CA settings: if only one switch is on, the other client still transits the local proxy, where TLS terminates, but its Messages requests relay to Anthropic unchanged. Other Anthropic paths relay unchanged and unrelated hosts remain blind tunnels. With the CLI switch on, the standalone `claude` also lists routed models in `/model`; see [Model picker in the CLI](#model-picker-in-the-cli).
 
 :::note[Windows system proxy (Clash, v2rayN, corporate proxies)]
+When picker intent is off at OpenCodex startup, its Windows relay stays unbound. Turning picker
+mode on later starts it within the running service; OpenCodex does not need a restart.
 For picker-off installs or pending installs with no applied picker profile, a Windows system proxy
 is handed to the Code tab as `HTTPS_PROXY`, and
 that value takes precedence over the OpenCodex proxy in `~/.claude/settings.json`. The Code tab
@@ -960,7 +962,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
 | `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result; preserves loaded-tool names without adding declarations or enabling translated server-side deferral |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
-| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. Each search or fetch comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result` |
+| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. A search or fetch with a matching call and complete input comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. Orphan results are dropped without synthesizing a call, while the surrounding text is preserved. When the client sends a complete pair back in its history, the next `api.anthropic.com` request carries it in place only if the following block uniquely identifies its original turn. Repeated anchors, unmatched or duplicate call/result ids, malformed call input, or a result appearing before its call drop the exchange. Call input must be an object with a nonempty search query or fetch URL string; other destinations never see the exchange |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |

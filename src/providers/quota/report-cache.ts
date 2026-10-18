@@ -1,3 +1,5 @@
+import { decisionQuotaSinkActive, invalidateDecisionKeyQuotas, publishDecisionKeyQuota } from "../../lib/decision-quota-sink";
+import { providerDecisionWindows } from "../quota-decision-publication";
 import { createHash } from "node:crypto";
 import { effectiveCodexAuthAccountId, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { withoutRetiredCodexQuota, type StoredAccountQuota } from "../../codex/quota";
@@ -343,6 +345,18 @@ export function isProviderQuotaReportCurrent(value: ProviderQuotaReport): boolea
   const generation = nativeMainReportGenerations.get(value);
   return (generation === undefined || isMainAccountIdentityGenerationLive(generation))
     && (accountReportCurrent.get(value)?.() ?? true);
+}
+
+/** Called only by an accepted collector/cache publication, never the JEV read path. */
+export function publishCollectedDecisionQuota(reports: ProviderQuotaReport[], config: OcxConfig): void {
+  if (!decisionQuotaSinkActive()) return;
+  invalidateDecisionKeyQuotas();
+  for (const report of reports) {
+    const provider = config.providers[report.provider];
+    const evidence = routingEvidence.get(report);
+    if (provider && evidence && evidence.binding === providerQuotaRoutingBinding(report.provider, provider))
+      publishDecisionKeyQuota(report.provider, provider, providerDecisionWindows(evidence.quota));
+  }
 }
 
 /**

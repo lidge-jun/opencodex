@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
 import { configureSharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import { captureProviderApiKeySelection } from "../../src/providers/api-key-selection";
@@ -320,6 +321,28 @@ for (const statusCode of [401, 429]) for (const overridden of [false, true]) tes
   }
   unchanged(config); noLeaks(config);
 });
+
+for (const statusCode of [401, 429]) for (const transport of ["bearer", "x-api-key"] as const) {
+  for (const rewrite of ["credential", "destination"] as const) test(`Messages physical ${transport} ${statusCode} ownership after ${rewrite} rewrite`, async () => {
+    const config = fixture(2, false, true, [statusCode, 200]);
+    provider(config).apiKeyTransport = transport;
+    saveConfig(config);
+    const off = registerUpstreamRewriter("fixture-key-owner", target => {
+      if (rewrite === "credential") target.headers.set(transport === "bearer" ? "authorization" : "x-api-key",
+        transport === "bearer" ? "Bearer fixture-plugin-key" : "fixture-plugin-key");
+      if (rewrite === "destination") target.url += "?physical-owner=other";
+    });
+    try {
+      const result = await start(config, new AbortController());
+      expect(result.response.status).toBe(statusCode);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.key).toBe(rewrite === "credential" ? "fixture-plugin-key" : KEYS[0]);
+      expect(getKeyCooldownUntil(NAME, "k1")).toBeNull();
+      expect(getKeyCooldownUntil(NAME, "k2")).toBeNull();
+      unchanged(config); noLeaks(config);
+    } finally { off(); }
+  });
+}
 
 for (const cancel of [false, true]) test(`active manual key switch readmits the selected key (cancel=${cancel})`, async () => {
   const config = fixture();

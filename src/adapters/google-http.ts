@@ -1,3 +1,4 @@
+import { inheritAccountAutoPauseResponse } from "../lib/account-auto-pause-response";
 import type { AdapterFetchContext, AdapterRequest } from "./base";
 import { createAdapterPhysicalSend } from "./physical-send";
 import type { SendClass } from "../lib/request-execution-budget";
@@ -38,10 +39,10 @@ async function normalizeFinalGoogleError(label: string, res: Response, signal?: 
     const headers = new Headers(res.headers);
     headers.delete("content-encoding");
     headers.delete("content-length");
-    return new Response(safeGoogleHttpErrorMessage(label, res.status,
+    return inheritAccountAutoPauseResponse(res, new Response(safeGoogleHttpErrorMessage(label, res.status,
       body.displaySafe && !body.truncated ? body.text : ""), {
       status: res.status, statusText: res.statusText, headers,
-    });
+    }));
   }
   return normalizeUpstreamHttpErrorResponse(res, {
     signal,

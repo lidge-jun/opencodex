@@ -264,6 +264,13 @@ opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as 
 this combo or any JEV combo. Omitting both uses TypeSafe. `--decision-timeout <ms|->` sets the
 decision deadline (1000–120000, default 4000); `-` clears any of the three.
 
+`ocx combo set <id> --decision-quota-signals on|off|-` controls per-Combo advisory evidence.
+`--decision-quota-tiers '{"limited":80}'` sets partial threshold overrides; `-` clears them.
+Both are JEV-only. Omitted policy survives `--targets-file` replacement, `--targets` with `--strategy jev`, and rename (`--targets` alone keeps the existing failover default). Off retains thresholds;
+switching away from JEV removes both settings. This adds quota data to the selected decision
+backend, not probes, new account selection or hard exclusions. See
+[quota defaults, freshness and privacy](/guides/combos/#advisory-quota-signals-for-jev).
+
 `ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
 [--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an
 unsaved selection and reports the gate, backend, and latency; it may spend one decision call.
@@ -467,7 +474,9 @@ twice: the named range ending now, then the same range evaluated one equal windo
 filters apply to both reads. Human output prints current, previous, signed delta, and percent
 change. `--json` is `{schemaVersion,range,current,previous,delta,change,incomplete}`. The two
 reads are sequential, not an atomic snapshot. Custom `since`/`until` on each response must
-match the requested window.
+match the requested window. Both reads use the same connection and credential. If the
+connection, account, or credential changes during the command, it reports an owner
+mismatch and asks you to retry instead of printing a comparison.
 
 ### Page indexed request history
 

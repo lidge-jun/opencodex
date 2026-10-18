@@ -427,6 +427,14 @@ provider advertises `supports_websockets = true` only when `"websockets": true`;
 built-in provider may try WebSocket first, and a disabled proxy returns `426` so Codex falls back to
 HTTP/SSE.
 
+The proxy admits up to 128 client-facing Responses WebSocket connections. When a new connection
+finds all 128 slots occupied, it closes the least recently used idle connection to make room. Connections
+with an active response, pending client tool or approval results, a native steering/injection
+session, or buffered output are protected. If no idle connection can be released, the new
+connection receives the existing `503` capacity response. A reclaimed client can reconnect for
+later requests using the existing continuation handling. This happens only under connection
+pressure, needs no setting, and does not change voice connections or upstream connection reuse.
+
 If a canonical ChatGPT forward continuation references expired or missing local replay state,
 opencodex returns `previous_response_not_found` before sending anything upstream. Codex's
 WebSocket client recognizes this error and can reconnect with its full retained context,
@@ -1146,7 +1154,8 @@ Pool quota responses can authorize a pause only with valid usage and a captured 
 that is still current. A response without that proof may refresh displayed usage without pausing an account.
 Check this server’s authenticated `GET /api/codex-auth/low-quota-events` history for `logged`
 alerts or save failures. Manual resume remains in force for the current quota episode. The
-default alert reaches only the log and API; it does not produce a desktop or OS notification.
+default alert reaches only the log and API. Add `actions.desktop: true` to also show a macOS or
+Linux notification on the machine running the proxy; Windows stays log-only.
 
 When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback model
 (`gpt-reserve` / Luna Reserve). While that state is active, the Codex model picker can make
@@ -1639,6 +1648,8 @@ Consent applies to this provider ID in the selected `CODEX_HOME`; it does not
 approve other providers or other homes. Start and sync update only its `base_url`
 to the local proxy. Its identity, WebSocket setting, other TOML fields and history
 remain unchanged. Keep the proxy running while using this route.
+Turning the Codex integration OFF also prevents approved-provider URL updates on
+start or sync; the saved provider consent remains available when you turn it back on.
 
 This mode supports explicit Responses provider tables with `requires_openai_auth = true`
 and no custom credentials or headers. Non-loopback targets, authless Desktop mode

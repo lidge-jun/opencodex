@@ -4,6 +4,7 @@ import { comboFailureDecision } from "../../combos";
 import { httpStatusFromTerminalError } from "../../lib/errors";
 import type { RequestFailureStage } from "../../lib/request-failure-model";
 import type { RequestLogContext } from "../request-log";
+import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { createSseInspector } from "../relay";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 
@@ -198,11 +199,11 @@ function replayBufferedResponse(
       reader.cancel(reason).catch(() => undefined);
     },
   });
-  return new Response(body, {
+  return carryResponseToolOwnership(response, new Response(body, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
-  });
+  }));
 }
 
 function failedTerminalResponse(

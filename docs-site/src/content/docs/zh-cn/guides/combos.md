@@ -230,7 +230,7 @@ ocx combo remove <id> --yes
 ```
 
 `set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias`、`--native-alias`、
-`--display-name` 和 `--rename-from`。将 `--effort`、`--alias` 或 `--display-name` 的值设为
+`--display-name`、`--description` 和 `--rename-from`。将 `--effort`、`--alias`、`--display-name` 或 `--description` 的值设为
 `-` 可清除该字段。`--native-alias` 必须配合当前受支持的裸原生 alias 和非空显示名称使用。
 `create` 和 `update` 是 `set` 的别名；`delete` 是 `remove` 的别名；同样的子命令也可通过
 `ocx route combo` 使用。
@@ -278,6 +278,7 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | `alias` | 否 | 无 | 可选的、已修剪的公开模型 id；使用上面的别名规则。空值会以“无别名”形式存储。 |
 | `nativeAlias` | 否 | `false` | 显式允许当前受支持的裸原生 alias 接管路由和 catalog 优先级；绝不会根据 alias 自动推断。 |
 | `displayName` | 否 | 无 | 仅用于 catalog 展示的有界标签；`nativeAlias` 为 true 时必须非空。 |
+| `description` | 否 | 无 | 仅用于 catalog 展示的行描述，限制与 `displayName` 相同。未设置时保留生成的 `Routed via opencodex → combo (combo).` 文本。 |
 
 ## 故障排查
 

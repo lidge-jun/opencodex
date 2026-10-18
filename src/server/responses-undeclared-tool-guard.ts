@@ -298,7 +298,7 @@ export function collectProviderExecutedCallTypes(body: unknown): Set<ProviderExe
   return callTypes;
 }
 
-function isAuthorizedProviderExecutedCall(
+export function isAuthorizedProviderExecutedCall(
   item: Record<string, unknown>,
   callTypes: ProviderExecutedCallTypes,
 ): boolean {

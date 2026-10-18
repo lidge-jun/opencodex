@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MAX_ACTIVE_TURNS, abortAndReleaseAllTurns, activeRegistryMetrics, trackStreamLifetime, tryAdmitTurn, unregisterTurn } from "../../src/server/lifecycle";
+import { MAX_ACTIVE_TURNS, abortAndReleaseAllTurns, activeRegistryMetrics, registerTurn, trackStreamLifetime, tryAdmitTurn, unregisterTurn } from "../../src/server/lifecycle";
 import { workflowBudgetSnapshot } from "../../src/lib/workflow-budget";
 import {
   MAX_TRACKED_CODEX_WEBSOCKETS,
@@ -241,6 +241,75 @@ describe("active registry admission", () => {
     expect(attachedReleases).toBe(1);
     lease.release();
     expect(attachedReleases).toBe(1);
+  });
+
+  test("a completed child keeps its parent admitted and cannot cancel the next child", () => {
+    const before = activeRegistryMetrics().activeTurns;
+    const lease = tryAdmitTurn()!;
+    const parent = new AbortController();
+    const first = new AbortController();
+    const next = new AbortController();
+    let released = 0;
+    lease.attach({ release() { released += 1; } });
+    try {
+      registerTurn(parent, lease);
+      registerTurn(first, lease);
+      unregisterTurn(first);
+      expect(activeRegistryMetrics().activeTurns.active).toBe(before.active + 1);
+      expect(released).toBe(0);
+      registerTurn(next, lease);
+      expect(next.signal.aborted).toBe(false);
+      first.abort(new Error("late cleanup of completed child"));
+      unregisterTurn(first);
+      expect(parent.signal.aborted).toBe(false);
+      expect(next.signal.aborted).toBe(false);
+      expect(activeRegistryMetrics().activeTurns.active).toBe(before.active + 1);
+      unregisterTurn(next);
+      expect(released).toBe(0);
+      unregisterTurn(parent);
+      expect(released).toBe(1);
+      expect(activeRegistryMetrics().activeTurns.active).toBe(before.active);
+      expect(activeRegistryMetrics().activeTurns.releaseMisses).toBe(before.releaseMisses);
+    } finally { lease.release(); }
+  });
+
+  test("registering the same sole controller twice still releases on its one completion", () => {
+    const before = activeRegistryMetrics().activeTurns;
+    const lease = tryAdmitTurn()!;
+    const controller = new AbortController();
+    try {
+      registerTurn(controller, lease);
+      registerTurn(controller, lease);
+      unregisterTurn(controller);
+      expect(activeRegistryMetrics().activeTurns.active).toBe(before.active);
+      unregisterTurn(controller);
+      expect(activeRegistryMetrics().activeTurns.releaseMisses).toBe(before.releaseMisses);
+    } finally { lease.release(); }
+  });
+
+  test("parent cancellation after child completion still releases and aborts the active child", () => {
+    const before = activeRegistryMetrics().activeTurns;
+    const lease = tryAdmitTurn()!;
+    const parent = new AbortController();
+    const completed = new AbortController();
+    const pending = new AbortController();
+    const reason = new Error("parent turn superseded");
+    let released = 0;
+    lease.attach({ release() { released += 1; } });
+    try {
+      registerTurn(parent, lease);
+      registerTurn(completed, lease);
+      unregisterTurn(completed);
+      registerTurn(pending, lease);
+      parent.abort(reason);
+      expect(pending.signal.reason).toBe(reason);
+      expect(completed.signal.aborted).toBe(false);
+      expect(released).toBe(1);
+      expect(activeRegistryMetrics().activeTurns.active).toBe(before.active);
+      unregisterTurn(parent);
+      unregisterTurn(pending);
+      expect(activeRegistryMetrics().activeTurns.releaseMisses).toBe(before.releaseMisses);
+    } finally { lease.release(); }
   });
 
   test("the 256-turn gate bounds concurrency, not sequential continuation count", () => {

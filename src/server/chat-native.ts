@@ -1,3 +1,4 @@
+import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter } from "../lib/request-execution-budget";
 import { createInferenceSendBudget } from "./inference/context";
 import { observeAdvisorNativeReasoning } from "./inference/advisor-diagnostics";
@@ -62,12 +63,13 @@ import {
 import { fastPolicyForModel } from "../providers/service-tier";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
+import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { enrichOpenCodeZenFreeTierMessage } from "../providers/opencode-zen-rate-limit";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
+import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
 import { isLocalUpstream } from "../lib/local-upstream";
 import { linkAbortSignal } from "./responses";
 import {
@@ -448,7 +450,7 @@ export async function runNativeChatAttempt(
   let responseOwnsDistributedKey = true;
   const send = async (
     request: AdapterRequest,
-    recovery?: "rate-limit-429" | "key-429" | "key-401" | UpstreamSendRecovery,
+    recovery?: "rate-limit-429" | "key-401" | "key-429" | UpstreamSendRecovery,
     singleShot = false,
   ): Promise<Response> => {
     try {
@@ -515,8 +517,7 @@ export async function runNativeChatAttempt(
               const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
                 poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
               }), execution.comboDispatchPermit);
-              const ownsDistributedKey = !activeProvider._apiKeyAttempt?.distributed
-                || headers.get("authorization") === `Bearer ${activeProvider.apiKey}`;
+              const observeAutoPause = captureAccountAutoPauseAttempt(route.providerName, activeProvider, { config, oauth: undefined }, headers);
               let dispatched: Response;
               try {
                 // Capture this request's spend policy at its first physical boundary, including
@@ -534,10 +535,12 @@ export async function runNativeChatAttempt(
                 // A reselected provider transport is still a physical send: the connection policy
                 // and manual-redirect ownership wrap the selected implementation (#4992).
                 dispatched = await sendWithConnectionPolicy(
-                  (activeProvider as OcxProviderTransport).fetch ?? execute,
+                  distributedKeyPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute,
+                    route.providerName, activeProvider, request.url),
                   request.url,
                   applyUpstreamRecoveryInit({
                     ...init, method: request.method, headers, body: request.body,
+                    ...physicalSendObserverInit(observeAutoPause, request.url),
                   }, transportRecovery),
                   // Reselection can replace the provider transport and the wire shape, so the
                   // egress route is bound to the provider this send actually uses. Omitting it
@@ -549,9 +552,10 @@ export async function runNativeChatAttempt(
                 try { if (physicalBudget.spendEnforced) spendReport(1); }
                 finally { spendReport.close?.(); }
               }
-              responseOwnsDistributedKey = ownsDistributedKey;
+              responseOwnsDistributedKey = !activeProvider._apiKeyAttempt?.distributed
+                || distributedKeyResponseOwner(dispatched, config, route.providerName) !== null;
               if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
-              return dispatched;
+              return observeAutoPause ? observeAutoPause(dispatched) : dispatched;
             },
           }),
         );
@@ -584,6 +588,23 @@ export async function runNativeChatAttempt(
     response = await send(activeRequest);
     const retryPolicy = rateLimitRetryPolicyFor(activeProvider);
     let retries = 0;
+    let autoPauseMoves = 0;
+    for (;;) {
+      const priorResponse = response;
+      for (; wasAccountAutoPaused(response) && config.providers[route.providerName]?.apiKey && autoPauseMoves < 3 && transientSendAvailable(); autoPauseMoves++) {
+        const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
+        const next = fresh && (selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh);
+        if (!next) break;
+        try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ }
+        activeProvider = next;
+        stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
+        activeAdapter = createOpenAIChatAdapter(activeProvider);
+        releaseRetainedRequest();
+        activeRequest = buildActiveRequest();
+        retainRequest(activeRequest);
+        response = await send(activeRequest, "key-401");
+      }
+
     while (
       response.status === 429
       // A 429 this proxy synthesized for a refused reset replay is not a provider rate
@@ -631,6 +652,10 @@ export async function runNativeChatAttempt(
       retainRequest(activeRequest);
       response = await send(activeRequest, failureStatus === 401 ? "key-401" : "key-429");
     }
+      if (response !== priorResponse && wasAccountAutoPaused(response)) continue;
+      break;
+    }
+
   } catch (error) {
     releaseRetainedRequest();
     cleanupAbort();
