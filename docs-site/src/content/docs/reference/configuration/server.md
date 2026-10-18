@@ -827,8 +827,9 @@ The estimate includes each retained message's historical-context frame, not just
 Above the limit, readable text is written verbatim under the resolved OpenCodex home's
 `reasoning-archive/` (normally `~/.opencodex/reasoning-archive/`). The summarizer receives a
 path note instead of the text, and the finished readable summary includes a notice naming that file.
-New archives are private to the user on POSIX. An archive is provisional until a readable summary
-returns its path: failures, cancellation, invalid summaries, and opaque compaction responses remove
+New archives are private to the user on POSIX. An archive is provisional until successful replacement history
+returns its path, either in a readable summary or in a separate notice alongside a native result
+after routed v1 Combo failover. Failures, cancellation, and invalid summaries remove
 the current attempt's file. Internal retries reuse it; previously successful archives are preserved.
 Failed compaction returns no replacement history.
 
@@ -850,8 +851,9 @@ block with a warning, keeping unrelated providers and settings.
 
 Private provider ciphertext and signatures are not decrypted or copied into portable retained
 messages. An upstream native opaque compaction response retains its exact output item and
-ciphertext, without added retained messages or a rewritten summary. Native compact endpoints
-keep their existing behavior.
+ciphertext. If routed v1 Combo failover reaches a native result after withholding readable reasoning,
+replacement history also includes the retained historical messages or a notice naming their archive.
+Native compact endpoints keep their existing behavior.
 
 Routed v2 still returns exactly one compaction item. Its proxy-owned `ocx2:` envelope stores
 the summary and retained historical reasoning separately as JSON/Base64; this is encoding,

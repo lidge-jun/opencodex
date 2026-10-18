@@ -21,7 +21,7 @@ import { isMissingPathError } from "./atomic-write";
 import { getConfigDir, getConfigPath } from "./paths";
 import { getDefaultConfig } from "./proxy-env";
 import { salvageConfigCandidate } from "./salvage";
-import { sanitizeOpenCodeZenOverridesForLoad } from "./opencode-zen-upgrade";
+import { sanitizeOpenCodeOverridesForLoad } from "./opencode-wire-upgrade";
 import {
   sanitizeReasoningPinsForLoad,
   sanitizeRetryOn429ForLoad,
@@ -265,6 +265,16 @@ function upstreamHostCircuitThresholdError(value: unknown): string | null {
     && threshold >= 0
     && threshold <= UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD) return null;
   return `schema_invalid: upstreamHostCircuitThreshold: must be an integer from 0 to ${UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD}`;
+}
+
+// The schema degrades an unknown codec to identity so a hand edit cannot break startup; a live write
+// or import must instead be refused, or it would report success and then drop the value (#7247).
+function upstreamRequestCompressionError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "upstreamRequestCompression")) return null;
+  const mode = raw.upstreamRequestCompression;
+  if (mode === undefined || mode === "off" || mode === "gzip" || mode === "zstd") return null;
+  return "schema_invalid: upstreamRequestCompression: must be \"off\", \"gzip\" or \"zstd\"";
 }
 
 function plaintextV2AgentMessagesError(value: unknown): string | null {
@@ -726,6 +736,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)
+    ?? upstreamRequestCompressionError(value)
     ?? plaintextV2AgentMessagesError(value)
     ?? agentTaskRecoveryError(value)
     ?? quotaResetNotifyError(value)
@@ -766,7 +777,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
 export function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
-    sanitizeOpenCodeZenOverridesForLoad(parsed);
+    sanitizeOpenCodeOverridesForLoad(parsed);
     sanitizeReasoningPinsForLoad(parsed);
     // Same degradation as loadConfig: a hand-edited invalid retryOn429 must not trip the
     // schema and send the caller a default-config fallback (the config command could then

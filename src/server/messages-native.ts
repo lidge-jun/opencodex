@@ -1,3 +1,4 @@
+import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter } from "../lib/request-execution-budget";
 import { createInferenceSendBudget } from "./inference/context";
 /**
@@ -44,6 +45,7 @@ import { classifyError } from "../lib/errors";
 import { relaySseWithPayloadRewrite } from "./sse-payload-rewrite";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
+import { enrichOpenCodeZenUpstreamMessage } from "../providers/opencode-zen-rate-limit";
 import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
 import {
   applyReplayRefusalClientHeaders,
@@ -61,13 +63,13 @@ import {
   type UpstreamSendRecovery,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
+import { distributedKeyPhysicalFetch, distributedKeyResponseOwner, recordDistributedResponseFailure } from "../providers/api-key-response-ownership";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
   hasKeyPoolFailover,
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
-  recordDistributedKeyFailure,
   rotateProviderTransportOn401,
   rotateProviderTransportOn429,
   selectProactiveApiKeyTransport,
@@ -119,7 +121,7 @@ import {
   recordKeyWireAttemptUsage,
   type RequestLogContext,
 } from "./request-log";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
+import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
 import { anthropicBillingPhysicalFetch } from "../providers/anthropic-billing-ownership";
 import { rotateAnthropicBillingKeyOnResponse } from "../providers/anthropic-billing-recovery";
 import { linkAbortSignal } from "./responses/core-lifetime";
@@ -544,6 +546,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     pendingDistributedFailure = undefined;
     record?.();
   };
+  /** Send the native Messages request under the transient retry policy, re-validating the selected OAuth account or API key at the dispatch boundary. */
   const send = async (recovery?: "rate-limit-429" | "oauth-401" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
     if (requestTransientPolicy && remaining <= 0) {
@@ -615,11 +618,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
             }
             const releaseFamily = snapshot && oauthBinding ? anthropicModelQuotaFor(oauthBinding.instance).claimAnthropicFamilyRevalidation(snapshot.accountId, route.modelId) : () => {};
             if (!releaseFamily) throw new AnthropicAccountCooldownError(1);
+            const observeAutoPause = captureAccountAutoPauseAttempt(route.providerName, activeProvider, { config, oauth: sendingBinding?.snapshot }, headers);
             const selection = activeProvider._apiKeyAttempt;
-            const ownsDistributedKey = !selection?.distributed
-              || (activeProvider.apiKeyTransport === "bearer"
-                ? headers.get("authorization") === `Bearer ${activeProvider.apiKey}` && !headers.has("x-api-key")
-                : headers.get("x-api-key") === activeProvider.apiKey && !headers.has("authorization"));
             let dispatched: Response;
             const spendReport = createPhysicalSendReporter(physicalBudget, () => ({
               poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
@@ -640,9 +640,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
               if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
               physicalSendsUsed++;
               dispatched = await sendWithConnectionPolicy(
-                anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
+                distributedKeyPhysicalFetch(
+                  anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
+                  route.providerName, activeProvider, wire.url, activeProvider.apiKeyTransport === "bearer" ? "authorization" : "x-api-key"),
                 wire.url,
-                applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body }, transportRecovery),
+                applyUpstreamRecoveryInit({ ...init, method: "POST", headers, body: wire.body, ...physicalSendObserverInit(observeAutoPause, wire.url) }, transportRecovery),
                 { providerName: route.providerName, provider: activeProvider },
               );
             } finally {
@@ -660,19 +662,20 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                   && credentialGeneration(current.credential) === snapshot.generation
                   && current.credential.accountId === providerAccountUuid) {
                   bindAnthropicRefusalCredentialForSend(dispatched, sendOwner, providerAccountUuid);
-                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId);
+                  recordAnthropicAccountQuotaFromHeadersForInstance(nativeInstance!, snapshot.accountId, dispatched.headers, writerGeneration, dispatched.status, route.modelId, snapshot.generation);
                 }
               } catch { /* Passive observation must not fail the response. */ }
             }
+            const ownsDistributedKey = !selection?.distributed
+              || distributedKeyResponseOwner(dispatched, config, route.providerName) !== null;
             distributedResponseOwnsKey = ownsDistributedKey;
             const failureStatus = dispatched.status;
             pendingDistributedFailure = selection?.distributed && ownsDistributedKey && (failureStatus === 401 || failureStatus === 429)
               && !isNonReplayableResponse(dispatched)
-              ? () => { recordDistributedKeyFailure(config, route.providerName, selection, failureStatus,
-                Date.now(), dispatched.headers.get("retry-after")); }
+              ? () => { recordDistributedResponseFailure(dispatched, config, route.providerName, req.signal); }
               : undefined;
             if (!dispatched.ok) await recordKeyAttemptFailure(logCtx, dispatched, init.signal ?? upstream.signal);
-            return dispatched;
+            return observeAutoPause ? observeAutoPause(dispatched) : dispatched;
           },
         }),
       ),
@@ -700,9 +703,19 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     let billingRecoveryActive = false;
     const keySendAvailable = () => transientSendAvailable()
       && (!billingRecoveryActive || Math.max(physicalSendsUsed, physicalBudget.used) < physicalBudget.policy.maxTotalModelSends);
+    let autoPauseMoves = 0;
     const recoveryPasses = activeProvider._apiKeyAttempt?.distributed ? activeProvider.apiKeyPool?.length ?? 1 : 1;
     for (let pass = 0; ; pass++) {
       const priorResponse = response;
+      for (; wasAccountAutoPaused(response) && !oauthBinding && config.providers[route.providerName]?.apiKey && autoPauseMoves < 3 && keySendAvailable(); autoPauseMoves++) {
+        const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...activeProvider, _apiKeyAttempt: undefined });
+        const next = fresh && (selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh);
+        if (!next) break;
+        try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ }
+        rebuildFor(next);
+        response = await send("key-401");
+      }
+
       // A credential-scoped 401 on a static key pool says nothing about the sibling keys.
       while (response.status === 401 && distributedResponseOwnsKey && hasKeyPoolFailover(activeProvider) && keySendAvailable()) {
         const rotated = rotateProviderTransportOn401(config, route.providerName, activeProvider, {
@@ -762,6 +775,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       if (response === priorResponse || isNonReplayableResponse(response) || !keySendAvailable()) break;
       // Billing class transitions share the physical-send ceiling; distributed-only
       // transitions additionally retain their original bounded pool-pass allowance.
+      if (wasAccountAutoPaused(response) && autoPauseMoves < 3) continue;
       if (distributedResponseOwnsKey && (
         (billingRecoveryActive && [401, 429].includes(response.status))
         || (activeProvider.adapter === "anthropic" && hasKeyPoolFailover(activeProvider) && [400, 402].includes(response.status))
@@ -846,7 +860,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       upstream.abort();
       return fail(499, "Client cancelled request", "api_error");
     }
-    return retainUpstreamMessagesRequestId(nativeMessagesErrorResponse(response, bodyText, finishLog), response.headers);
+    return retainUpstreamMessagesRequestId(nativeMessagesErrorResponse(response, bodyText, finishLog, route.providerName, activeProvider), response.headers);
   }
 
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
@@ -1000,7 +1014,7 @@ function isNativeOverflowError(error: Rec, message: string): boolean {
  * Messages path, so a client sees the same contract on either lane: transient 5xx become 529
  * with a retry hint, and a proxy-side replay refusal keeps its no-retry marking.
  */
-function nativeMessagesErrorResponse(response: Response, bodyText: string, finishLog: FinishLog): Response {
+function nativeMessagesErrorResponse(response: Response, bodyText: string, finishLog: FinishLog, providerName: string, provider: OcxProviderConfig): Response {
   let upstreamType: string | undefined;
   let upstreamCode: string | undefined;
   let upstreamMessage: string | undefined;
@@ -1014,8 +1028,20 @@ function nativeMessagesErrorResponse(response: Response, bodyText: string, finis
     }
   } catch { /* keep generic classification */ }
   const detail = formatAnthropicErrorBody(response.status, response.headers, bodyText);
-  const message = upstreamMessage
+  const rawMessage = upstreamMessage
     ?? (detail ? `Provider error ${response.status}: ${detail}` : `Provider error ${response.status}`);
+  const message = enrichOpenCodeZenUpstreamMessage(rawMessage, {
+    status: response.status,
+    providerName,
+    baseUrl: provider.baseUrl,
+    adapter: provider.adapter,
+    authMode: provider.authMode,
+    hasApiKey: Boolean(provider.apiKey?.trim()),
+    upstreamRetryAfter: response.headers.get("retry-after"),
+    upstreamErrorType: upstreamType,
+    upstreamErrorCode: upstreamCode,
+    supportsHttpSameKeyRetry: true,
+  });
   const classified = classifyError(
     response.status,
     upstreamType ?? (response.status === 401 ? "authentication_error"

@@ -1,3 +1,4 @@
+import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { isNativeControlResponse } from "./native-response-control";
 import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
@@ -527,7 +528,7 @@ export async function deliverPassthroughResponse(
       } else if (!shouldDeferCodexResetDerivedCooldown(
         upstreamResponse,
         options.deferCodexResetDerivedCooldown,
-      ) && !isReplayRefusalResponse(upstreamResponse)) {
+      ) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {
         // A refusal this proxy made is not evidence about the account. Recording it would
         // classify the synthetic 429 as quota exhaustion and write a default cooldown against
         // a credential the request may never have reached, and that false signal outlives the
@@ -572,7 +573,7 @@ export async function deliverPassthroughResponse(
     // through sanitizePassthroughHeaders) so a redirect to a dead host can never
     // masquerade as a pre-connection failure after the credential was seen.
     // The numeric outcome above already classified it neutral — no streak.
-    if (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse)) {
+    if (isNonReplayableResponse(upstreamResponse) && !isReplayRefusalResponse(upstreamResponse) && !wasPermanentAccountRefusal(upstreamResponse)) {
       return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
     }
     if (upstreamResponse.status >= 300 && upstreamResponse.status < 400) {

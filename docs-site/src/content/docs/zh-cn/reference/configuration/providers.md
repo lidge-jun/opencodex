@@ -161,8 +161,8 @@ selector，而不是分配一个新名称。
 | `anthropicEofTolerance?` | `boolean` | 允许 Anthropic 兼容网关在 `message_stop` 前结束流，仅当已收到可见文本或完整的 JSON 对象工具输入时。默认关闭。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google 传输/身份验证模式。默认 `ai-studio`。 |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | 仅限 Google。省略或设为 `compatible` 时保留兼容架构和现有的非直连 400 修复。`reject-lossy` 会在发送前拒绝初始损失或结果不确定的有界比较，并阻止会放宽约束的 Vertex 或 Cloud Code Assist 修复。直连 AI Studio 从不执行该修复。 |
-| `project?` | `string` | Vertex 或 Antigravity Cloud Code Assist 项目 id。 |
-| `location?` | `string` | Vertex 位置；环境变量回退为 `GOOGLE_CLOUD_LOCATION`。 |
+| `project?` | `string` | Vertex 或 Antigravity Cloud Code Assist 项目 id。设置后，Vertex API 密钥使用项目端点；未设置时，即使存在 `GOOGLE_CLOUD_PROJECT` 也使用 express 模式。ADC 回退到 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`。 |
+| `location?` | `string` | Vertex 位置。API 密钥的项目端点默认使用 `global`，并忽略 `GOOGLE_CLOUD_LOCATION`；ADC 需要此字段或 `GOOGLE_CLOUD_LOCATION` 回退。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | 仅 Cursor：stdio 或 Streamable HTTP MCP 服务器。 |
 | `desktopExecutor?` | `DesktopExecutorConfig` | 仅 Cursor：外部 computer-use 和录屏命令。 |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |

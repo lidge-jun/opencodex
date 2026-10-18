@@ -399,7 +399,7 @@ The credits module beside `src/codex/quota-types.ts` retains validated WHAM cred
 
 ## Low-quota protection
 
-`src/codex/quota.ts` sends accepted usage observations through `src/codex/low-quota-observer.ts`; credits-only updates never replay carried usage into protection, and pool WHAM/header observations reach the policy only after raw percentages pass validation and the captured credential writer is still live; clamped display bars and responses from retired credentials cannot authorize a pause. The pool-account-only [configuration policy](../config.md#codex-pool-low-quota-protection) pauses live selection immediately, defers a bounded config save, and deduplicates account/window notices. Manual resume is respected across every qualifying window already active for that account until recovery or a new reset episode. Native main keeps its separate per-window hard lock. Each server registration owns a bounded status ledger; its authenticated management route exposes only its own account ids. The default alert is a log line plus a `logged` event, with no OS notification. A pool response that could not capture a writer at dispatch (credential already replaced, or the store unreadable) fails closed the same way: its snapshot still refreshes the display cache, but it never authorizes a policy pause. Writer-free legacy and login paths are explicitly distinct from that pool contract and keep their existing observation behavior.
+`src/codex/quota.ts` sends accepted usage observations through `src/codex/low-quota-observer.ts`; credits-only updates never replay carried usage into protection, and pool WHAM/header observations reach the policy only after raw percentages pass validation and the captured credential writer is still live; clamped display bars and responses from retired credentials cannot authorize a pause. The pool-account-only [configuration policy](../config.md#codex-pool-low-quota-protection) pauses live selection immediately, defers a bounded config save, and deduplicates account/window notices. Manual resume is respected across every qualifying window already active for that account until recovery or a new reset episode. Native main keeps its separate per-window hard lock. Each server registration owns a bounded status ledger; its authenticated management route exposes only its own account ids. The default alert is a log line plus a `logged` event; the opt-in `actions.desktop` sink in `src/codex/low-quota-desktop-notifier.ts` hands the notice, labelled only by the account's pseudonymous log label, to the host's OS notifier. A pool response that could not capture a writer at dispatch (credential already replaced, or the store unreadable) fails closed the same way: its snapshot still refreshes the display cache, but it never authorizes a policy pause. Writer-free legacy and login paths are explicitly distinct from that pool contract and keep their existing observation behavior.
 
 ## Bounded pool quota observations
 
@@ -433,23 +433,11 @@ Live bindings obey the cache-affinity release policy: `pool.cacheAffinity` is on
 
 The Codex parser in `src/oauth/pool-kernel.ts` is reexported by the compatibility facade and used by both `/api/pool/settings` and the legacy Codex settings route. Generic pools accept reset-first through their own parser; Anthropic rejects it. The shared dashboard control offers it only for Codex; API, CLI and translated guides preserve the same contract.
 
-The account-pool strategy control and `ocx account pool get openai strategy` summarize how the
-configured threshold applies to the active strategy. Manual-switch warnings use the routing usage
-score. A reset-less terminal short window is current only when its `shortObservedAt` is not in the
-future and is at most `TERMINAL_SHORT_WINDOW_FRESHNESS_MS` old; general `updatedAt` changes do not
-extend that observation.
+The account-pool strategy control and `ocx account pool get openai strategy` summarize how the configured threshold applies to the active strategy. Manual-switch warnings use the routing usage score. A reset-less terminal short window is current only when its `shortObservedAt` is not in the future and is at most `TERMINAL_SHORT_WINDOW_FRESHNESS_MS` old; general `updatedAt` changes do not extend that observation.
 
 ## Bound-thread rebind destination
 
-An ordinary quota-strategy re-evaluation may move a LIVE thread only to an account that has genuine
-quota headroom and is also strictly cooler than the bound account. Both bars are load-bearing.
-Without the headroom bar, "strictly cooler" has no floor, so a pool whose every member sits in the
-80-100% band hands a long conversation from account to account on consecutive turns; Codex prompt
-caches are account-isolated, so each hop restarts from a cold prefix and a 7k-token turn becomes a
-150k-token one (#4546). Without the strictly-cooler bar, `hasCodexQuotaHeadroom` — which answers
-true for unknown usage, correctly for an unbound pick — would trade a warm prefix for an unmeasured
-account. `CODEX_UNKNOWN_USAGE_SCORE` is 101, so the second bar excludes an unobserved destination
-without a special case.
+An ordinary quota-strategy re-evaluation may move a LIVE thread only to an account that has genuine quota headroom and is also strictly cooler than the bound account. Both bars are load-bearing. Without the headroom bar, "strictly cooler" has no floor, so a pool whose every member sits in the 80-100% band hands a long conversation from account to account on consecutive turns; Codex prompt caches are account-isolated, so each hop restarts from a cold prefix and a 7k-token turn becomes a 150k-token one (#4546). Without the strictly-cooler bar, `hasCodexQuotaHeadroom` — which answers true for unknown usage, correctly for an unbound pick — would trade a warm prefix for an unmeasured account. `CODEX_UNKNOWN_USAGE_SCORE` is 101, so the second bar excludes an unobserved destination without a special case.
 
 `src/codex/routing/failure-window.ts` keeps a 60-second sliding ratio beside the consecutive streak. Twenty or more terminal samples at a 25% transient-failure ratio mark the account degraded; it clears only after the ratio stays at or below 10% for 30 seconds. The ratio does not depend on completion order. Degraded accounts leave the unbound candidate list, so new threads move. A live thread binding is left alone, and a manual pin stays in place unless `codexPinnedTransientPolicy` is `detour-new-threads`. The default `hold` logs that the pin is degraded and keeps using it. `codexFailureWindow: false` leaves steering to the consecutive counter. Nothing here resends a turn that already started.
 
@@ -595,3 +583,16 @@ replacement drops that window's warning. Main/all quota cleanup forgets the base
 expire at reset or six hours after detection. Main-card/settings DTOs and live CLI projections expose
 only window kind, previous/current percentage and observation time; the notice says possible usage
 outside opencodex because a long-running request can also explain the rise.
+
+**JEV advisory publication.** Codex account-store load/persist, native-main cache transitions and accepted quota producers feed [loaded advisory quota](jev-decision.md#loaded-advisory-quota) only through the opt-in slot `src/lib/decision-quota-sink.ts`, a no-op unless a live JEV combo enables signals; these owner-observed generations stay separate from display caches and serving-account selection, and Codex header/WHAM parsers keep an explicit invalid reset invalid without changing display, durable history or hard-policy parsing.
+
+## Permanent refusal auto-pause
+
+The opt-in `providers.openai.accountAutoPause` observer in
+`src/oauth/account-auto-pause.ts` uses the sent pool credential generation or main quota
+writer, not the active account at response time. It persists exclusions in
+`pausedCodexAccountIds` with revision/reason/time in `codexAccountPauseState`, clears
+affinities and reconciles selection. `src/codex/account-pause.ts` changes the revision
+on resume. The physical guard in `src/codex/auth-context.ts` also rejects newly paused
+queued sends. Confirmed permanent refusals preserve credentials instead of forcing token
+refresh; threshold-triggered retries retain fixed-selector, file and send-budget guards.

@@ -25,6 +25,7 @@ async function eventsFor(blocks: Record<string, unknown>[], streaming: boolean, 
   const adapter = withTestTranslatorBudget(createAnthropicAdapter({ ...provider, baseUrl }, "none"));
   const request = await adapter.buildRequest(parseRequest({ model, input: "question", reasoning: { effort: "high" } }));
   const events: AdapterEvent[] = [];
+  let wireResponse: Response | undefined;
   if (streaming) {
     const frames = blocks.flatMap((block, index) => [
       frame("content_block_start", { index, content_block: block.type === "thinking" ? { type: "thinking", thinking: "", signature: "" } : block }),
@@ -36,11 +37,12 @@ async function eventsFor(blocks: Record<string, unknown>[], streaming: boolean, 
       frame("content_block_stop", { index }),
     ]);
     frames.push(frame("message_delta", { delta: { stop_reason: "tool_use" } }), frame("message_stop"));
-    for await (const event of adapter.parseStream(new Response(frames.join("")))) events.push(event);
+    wireResponse = new Response(frame("message_start", { message: { content: [] } }) + frames.join(""));
+    for await (const event of adapter.parseStream(wireResponse.clone())) events.push(event);
   } else {
     events.push(...await adapter.parseResponse!(new Response(JSON.stringify({ content: blocks, stop_reason: "tool_use" }))));
   }
-  return { adapter, request, events };
+  return { adapter, request, events, wireResponse };
 }
 
 for (const streaming of [false, true]) {
@@ -195,7 +197,7 @@ test("internal terminal continuation replays signed progress instead of unsigned
 
 for (const streamRoutedModelOutput of [false, true]) test(`hosted search displays signed commentary once and retains replay (live=${streamRoutedModelOutput})`, async () => {
   const search = { ...tool, name: "web_search", input: { query: "docs" } };
-  const { adapter, events } = await eventsFor([empty, redacted, update, search], true);
+  const { adapter, wireResponse } = await eventsFor([empty, redacted, update, search], true);
   let pass = 0;
   let replay: unknown;
   const fetchSpy = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(
@@ -205,18 +207,19 @@ for (const streamRoutedModelOutput of [false, true]) test(`hosted search display
   ));
   try {
     const response = await runWithWebSearch({
-      parsed: parseRequest({ model, input: "look up docs", stream: true, tools: [{ type: "web_search" }] }),
+      parsed: parseRequest({ model, input: "look up docs", stream: true, reasoning: { effort: "high" }, tools: [{ type: "web_search" }] }),
       adapter: { ...adapter,
         async buildRequest(parsed, meta) {
           const request = await adapter.buildRequest(parsed, meta);
           replay = JSON.parse(request.body as string).messages;
           return request;
         },
-        fetchResponse: async () => new Response("synthetic"),
-        async *parseStream() {
-          if (pass++ === 0) yield* events;
-          else { yield { type: "text_delta", text: "Final answer." }; yield { type: "done" }; }
-        },
+        fetchResponse: async () => pass++ === 0 ? wireResponse!.clone() : new Response(
+          frame("message_start", { message: { content: [] } })
+          + frame("content_block_start", { index: 0, content_block: { type: "text", text: "" } })
+          + frame("content_block_delta", { index: 0, delta: { type: "text_delta", text: "Final answer." } })
+          + frame("content_block_stop", { index: 0 })
+          + frame("message_delta", { delta: { stop_reason: "end_turn" } }) + frame("message_stop")),
       },
       incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
       forwardProvider: { adapter: "openai-responses", baseUrl: "https://sidecar.invalid", authMode: "forward" },

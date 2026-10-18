@@ -79,7 +79,7 @@ Usage:
   ocx alias <sub>             Short names for providers and models (list, set, rm, defaults)
   ocx combo <sub>             Combo routing strategies and failover
   ocx agent <sub>             Subagents, injection, effort caps, and sidecars
-  ocx message <sub>           Loaded local Codex sessions and queued peer messages (sessions|send)
+  ocx message <sub>           Codex queued messages, explicit SSH peers and foreground ownership
   ocx effort [sub]            Inspect and configure reasoning effort caps and defaults
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx inspect <sub>           Effective config, catalog, analytics, pacing, client-config
@@ -100,6 +100,7 @@ Usage:
   ocx advisor <status|on|off|set|consent>  Advisor sidecar settings and context-sharing consent
   ocx companion <show|set|reset>  Menu-bar and widget companion usage settings
   ocx lab <sub>               Inspect Lab evidence and control local automation
+  ocx codex-provider <sub>    Confirm custom Codex provider routing: status|allow|revoke
   ocx chatgpt <sub>          Experimental app-server shim: launch|restore|status (macOS)
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile

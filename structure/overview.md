@@ -138,7 +138,8 @@ still cover the rule, which is a judgement only review makes.
   request-path entrypoints sit on no cycle at all. Type-only imports and dynamic `import()` form no
   edge, so deferring an edge behind `import()` is a sanctioned way to break a loop (issue #6386).
   Bun parses the declarations and resolves local file and directory imports, preserving compact
-  syntax, erased type-only specifiers, and the runtime's TypeScript index-file precedence.
+  syntax, erased type-only specifiers, and the runtime's TypeScript index-file precedence. The
+  scanner canonicalizes the root so symlinked roots and resolved imports share graph identities.
   Enforced by `tests/ci-workflows/import-cycle-ratchet.test.ts`.
 - **INV-RESTORE-01** — `ocx restore` restores native Codex from the pristine catalog with
   retired bare/account-qualified native rows omitted from the output; the original backup stays

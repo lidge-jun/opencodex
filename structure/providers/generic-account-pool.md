@@ -23,3 +23,11 @@ are excluded. `tests/oauth/generic-session-affinity.test.ts` and
 `tests/server/server-generic-oauth-affinity.test.ts` exercise these boundaries with synthetic accounts.
 
 `src/types/provider.ts` declares the optional `sessionAffinity` mode; omission keeps existing behavior.
+
+## Combo sibling probes
+
+`src/server/responses/core-combo.ts` asks `src/oauth/generic-account-failover.ts` whether a refused
+account has an eligible sibling before cooling the whole target. This probe records the refused
+account's cooldown but passes `commit: false`, so it only peeks at a round-robin pool. An unsent
+sibling does not consume a sticky turn. Dispatching callers retain the default committed pick.
+`tests/oauth/generic-oauth-combo-account-cooldown.test.ts` covers this distinction.

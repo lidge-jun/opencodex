@@ -146,8 +146,9 @@ proxy.
 `ocx system codex-cli-update check` needs no live proxy and makes no package-registry request. It
 inspects bounded provenance metadata for the configured install candidate, including its redacted
 executable location and ownership evidence. Trusted published-launcher context authenticates that candidate snapshot,
-not a successful Codex execution. Because this one-shot command never executes Codex, environment and persisted candidates
-remain report-only (`managed: false`, normally `selection_unattested`) and `selectionAttested` remains `false`.
+not a successful Codex execution. On POSIX, `selectionAttested` can be `true` when the runtime resolver
+selects the same canonical environment candidate without executing it. A linked npm-global package
+manifest can then establish `managed: true` when it proves ownership and, if a candidate version is reported, that version matches the manifest; persisted candidates remain unattested.
 The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`, and `selectionAttested`.
 Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
@@ -155,6 +156,13 @@ a direct Bun/source launch has no such proof, ignores ambient and persisted cand
 only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels;
 every other Windows candidate fails closed. The command does not install or repair software, execute
 Codex or npm, control a running process, or write configuration/cache state.
+
+`ocx system codex-cli-update plan --json` adds a read-only update decision for an attested POSIX
+npm-global installation. It resolves `latest` through the official npm registry, validates the
+exact version and SHA-512 integrity, and refuses active sessions or incomplete process observation.
+Registry queries use isolated temporary npm configuration, cache and logs with best-effort cleanup.
+No software is installed and no process is signalled. Windows returns `windows_inspection_deferred`.
+See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
 
 For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 

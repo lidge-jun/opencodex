@@ -99,7 +99,7 @@ mod tests {
     use std::{
         future::{poll_fn, Future},
         sync::{mpsc, Arc},
-        task::{Context, Poll, Wake, Waker},
+        task::{Context, Poll, Waker},
         time::Duration,
     };
 
@@ -169,11 +169,6 @@ mod tests {
         writer.join().unwrap();
     }
 
-    struct Noop;
-    impl Wake for Noop {
-        fn wake(self: Arc<Self>) {}
-    }
-
     #[test]
     fn async_spawn_is_guarded_on_poll_without_holding_a_lock_across_pending() {
         let mut polled = false;
@@ -192,8 +187,7 @@ mod tests {
         fn assert_send(_: &impl Send) {}
         assert_send(&future);
         let mut future = std::pin::pin!(future);
-        let waker = Waker::from(Arc::new(Noop));
-        let mut cx = Context::from_waker(&waker);
+        let mut cx = Context::from_waker(Waker::noop());
         assert_eq!(future.as_mut().poll(&mut cx), Poll::Pending);
         // A paused output reader cannot stop a reconcile from writing its shim.
         drop(executable_write());

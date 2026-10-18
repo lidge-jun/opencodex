@@ -1,5 +1,5 @@
 import { isOpenCodeGoGeminiDestination, OPENCODE_GO_BASE_URL, OPENCODE_GO_MODEL_WIRES, OPENCODE_GO_LEGACY_NAME_PINS, type OpenCodeGoDestination } from "./opencode-go";
-import { openCodeZenBaseUrl, type OpenCodeZenDestination } from "./opencode-zen";
+import { openCodeZenBaseUrl, openCodeZenKeyBaseUrl, type OpenCodeZenDestination } from "./opencode-zen";
 
 /**
  * Accepted values for the per-provider upstream HTTP-version pin (#1668). Shared by the
@@ -106,7 +106,9 @@ const CREDENTIAL_PINNED_ADAPTERS: Readonly<Record<string, Readonly<Record<string
 
 function prefixPinsFor(providerName: string, provider: WirePinProvider | undefined): Readonly<Record<string, string>> | undefined {
   if (Object.hasOwn(CREDENTIAL_PINNED_ADAPTERS, providerName)) return CREDENTIAL_PINNED_ADAPTERS[providerName];
-  if (providerName === "opencode-zen" && openCodeZenBaseUrl(provider)) return { "gemini-": "google" };
+  if (providerName === "opencode-zen" && openCodeZenKeyBaseUrl(provider)) {
+    return openCodeZenBaseUrl(provider) ? { "gemini-": "google", "claude-": "anthropic" } : { "claude-": "anthropic" };
+  }
   if (!provider || !Object.hasOwn(WIRE_ADAPTER_PIN_PREFIXES, providerName)) return undefined;
   const rule = WIRE_ADAPTER_PIN_PREFIXES[providerName]!;
   return normalizedEndpoint(provider.baseUrl) === rule.endpoint ? rule.prefixes : undefined;

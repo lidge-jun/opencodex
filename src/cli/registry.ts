@@ -9,10 +9,16 @@ export interface CliCommandEntry {
 
 export const CLI_COMMANDS: CliCommandEntry[] = [
   {
+    name: "codex-provider",
+    usage: "ocx codex-provider <status|allow <id> [--yes]|revoke <id>>",
+    summary: "Explicitly allow or revoke local routing management for a custom Codex provider.",
+    details: ["Consent is bound to the selected CODEX_HOME and provider ID. Only base_url is managed; transport settings and history are preserved."],
+  },
+  {
     name: "message",
-    usage: "ocx message <sessions|send> [options]",
-    summary: "Discover loaded local Codex sessions and submit one queued peer message.",
-    details: ["Local Unix transport only; starts no daemon. queued is submission, not processing; never replay an unknown send."],
+    usage: "ocx message <sessions|send|enable|disable|status|hosts|serve> [options]",
+    summary: "Discover loaded Codex sessions and queue messages locally or through explicit SSH peers.",
+    details: ["Remote listeners/tunnels require explicit foreground serve; no daemon start. queued is submission, not processing; never replay an unknown send."],
   },
   {
     name: "chatgpt",
@@ -178,7 +184,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
-      "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, so its model picker re-reads the catalog. It ends live conversations.",
+      "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, after catalog/cache writes or a committed configuration change. It ends live conversations.",
       "--restart-app-server-only keeps the narrow behaviour: SIGTERM to matching app-server / code-mode-host processes, desktop app left running. It wins over --restart-codex when both are given.",
       "--restart-desktop-app is a deprecated alias of --restart-codex and prints a notice.",
     ],
@@ -446,11 +452,21 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "`inspect star` reads the repository star status only. Starring uses your GitHub identity and is available from the dashboard alone.",
     ],
   },
-  { name: "logs", usage: "ocx logs [filters] [--follow] [--json|--jsonl|--events]", summary: "Read or follow request logs." },
+  {
+    name: "logs",
+    usage: "ocx logs [filters] [--follow] [--json|--jsonl|--events]; ocx logs history [selectors] [--cursor <token>] [--json|--jsonl]; ocx logs get <request-id> [--json]",
+    summary: "Read or follow request logs.",
+    details: [
+      "Default reads the recent ring. `history` pages the derived index with a resumable cursor; `get` reads one canonical row; `explain` is the route-decision view.",
+    ],
+  },
   {
     name: "usage",
-    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]",
+    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]; ocx usage compare [--range <today|1d|7d|30d>] [--json]",
     summary: "Report token usage and estimated cost (alias of ocx observe usage).",
+    details: [
+      "`compare` reads the current named range and the previous equal window; `--range all` is refused.",
+    ],
   },
   {
     name: "storage",
@@ -519,14 +535,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "system",
     usage: "ocx system <status|health|settings|startup|diagnostics|sync|codex-app-server|codex-restart|update|codex-cli-update> ...",
-    summary: "Manage headless runtime settings, startup, sync, diagnostics, OpenCodex updates, and read-only Codex CLI inspection.",
+    summary: "Manage headless runtime settings, health, startup, sync, diagnostics, OpenCodex updates, and read-only Codex CLI inspection and planning.",
     details: [
       "system update manages OpenCodex itself.",
       "system health reads authenticated service and spend-ledger diagnostics; root health remains liveness.",
       "ocx system codex-cli-update check [--json]",
       "ocx system codex-cli-update attest [--json]",
       "ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]",
-      "The Codex CLI inspection command makes no package-registry request, does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.",
+      "ocx system codex-cli-update plan [--channel latest] [--json]",
+      "check and attest make no package-registry request, do not execute Codex or npm, and write nothing. plan adds a registry query and a process-table read and mutates no application state (temporary isolated npm files only, removed best-effort).",
     ],
   },
   {

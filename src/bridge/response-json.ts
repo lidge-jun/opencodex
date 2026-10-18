@@ -547,9 +547,9 @@ function buildResponseJSONWithBudget(
         const safeSources = safeWebSearchSources(e.sources);
         pushOutput({
           type: "web_search_call", id: `ws_${uuid()}`, status: e.status ?? "completed",
-          action: webSearchAction(e.queries, e.fetch),
+          action: webSearchAction(e.queries, e.anthropic),
           ...(safeSources.length > 0 ? { sources: safeSources } : {}),
-          ...(e.fetch ? { fetch_result: e.fetch.result } : {}),
+          ...(e.anthropic ? { anthropic_blocks: e.anthropic } : {}),
         });
         if (safeSources.length > 0) {
           for (const source of safeSources) {

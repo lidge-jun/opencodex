@@ -345,9 +345,9 @@ function createAnthropicMessageWriter(
         type: "web_search_call",
         id: search.itemId,
         status: search.status,
-        action: webSearchAction(search.queries, search.fetch),
+        action: webSearchAction(search.queries, search.anthropic),
         ...(search.sources.length > 0 ? { sources: search.sources } : {}),
-        ...(search.fetch ? { fetch_result: search.fetch.result } : {}),
+        ...(search.anthropic ? { anthropic_blocks: search.anthropic } : {}),
       });
       const toolIndex = blockIndex++;
       emit("content_block_start", {

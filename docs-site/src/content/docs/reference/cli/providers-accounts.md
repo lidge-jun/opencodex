@@ -24,7 +24,7 @@ both `--adapter` and `--base-url`.
 | `list` | `--json`, `--jsonl` | List configured providers and the remaining registry entries; `--jsonl` emits one configured provider object per line. |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--responses-path <path>`, `--auth-mode <key\|forward\|oauth\|local>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync`, `--live` | Save locally by default; `--sync` attempts client sync in either output mode. `--live` writes through the running proxy and cannot combine with `--sync`. `--force` permits overwrite. |
 | `edit <name>` | provider field flags, `--headers <json>`, `--model-context-tier <model=default\|long_context>`, `--upstream-http-version <http1.1\|->`, `--fast <on\|off>`, `--context-window <N\|->`, `--json` | Edit validated live provider fields without replacing key pools. Repeat `--model-context-tier` for multiple Copilot models. `--headers` merges custom request headers; pass `{}` or `-` to clear them. |
-| `test <name>` | `--json` | Probe the real upstream model endpoint. |
+| `test <name>` | `--model <id>`, `--yes`, `--json` | Check discovery; with `--model`, request one confirmed completion test. |
 | `show <name>` | `--json` | Show config with API keys masked. |
 | `remove <name>` | `--json`, `--live`, `--yes` | Local removal refuses the default and last provider. Live removal requires `--yes` and uses server dependency checks, default reassignment and account/custom-model cleanup. |
 | `set-default <name>` | `--json`, `--live` | Select a local default, or update the running proxy with `--live`. |
@@ -120,9 +120,36 @@ notices. Null, absent or `not-requested` refresh can exit 0 without a client syn
 Read back before recovery; do not repeat a persisted write to repair convergence.
 Errors use safe prose on stderr, including in JSON mode, rather than a JSON error envelope.
 
-`provider test` is separate: it checks upstream model discovery connectivity. A failed connection exits 1; success and a static catalog with no applicable discovery endpoint exit 0.
+`provider test <name>` without `--model` checks upstream model discovery connectivity. A failed connection exits 1; success and a static catalog with no applicable discovery endpoint exit 0.
 `applicable: false` is an expected static-catalog result, not successful inference
 or a failed connection.
+
+To send one completion request for a chosen model, use:
+
+```bash
+ocx provider test my-relay --model my-model
+ocx provider test my-relay --model my-model --yes --json
+```
+
+This test may incur provider charges. An interactive terminal asks for confirmation;
+`--yes` accepts the charge warning. Non-interactive use and `--json` require
+`--yes`. Using `--yes` without `--model` is a usage error. Declining confirmation
+sends no request and exits 1. The command uses the running proxy's management API.
+
+The completion test sends the fixed prompt `Reply exactly OK.`, requests a 32-token output cap, stops after 20 seconds or 64 KiB, and never retries or fails over.
+It supports key-auth or local OpenAI Chat and Responses providers, including
+per-model wire overrides. Disabled, OAuth, forwarded-auth and unsupported adapter
+or transport configurations return an applicability reason without sending a completion.
+TLS profiles, HTTP version pins, enabled request pacing and custom executors with
+a provider proxy override are currently unsupported.
+
+Results include time to first text delta (TTFT), total latency, the requested and
+wire model ids, sanitized upstream model metadata and a distinct match, mismatch
+or unknown comparison. Missing or conflicting metadata is unknown. The comparison
+uses the upstream id before masking, against the id actually sent after alias and
+suffix handling. Provider-reported metadata cannot verify model identity:
+`identityVerified` is always `false`. Generated text is not returned. A failed
+completion exits 1; success and a not-applicable result exit 0.
 
 ### Transport settings and request pacing
 
@@ -795,7 +822,9 @@ Clear the manual Codex account selection without resolving an account id, so it 
 
 ### `ocx account pause|resume <provider> <id|alias|main> [--json]`
 
-Pause or resume one account in the Codex, Anthropic, or generic OAuth provider pool, including
+Accounts paused by the opt-in [per-provider auto-pause policy](/reference/configuration/providers/#auto-pause-permanently-refused-accounts) use the same commands. Listing shows the fixed pause reason; resume clears it.
+
+Pause or resume one account in the Codex, Anthropic, generic OAuth, or API-key provider pool, including
 `google-antigravity`. For the Codex pool, `main` identifies only the built-in Codex account;
 OAuth accounts must be identified by id or a unique alias. A paused OAuth account
 is excluded from request selection, 429 failover, and proactive token refresh, and cannot be

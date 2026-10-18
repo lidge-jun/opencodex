@@ -14,6 +14,8 @@ export interface ObserveStreamDeps extends RuntimeApiDeps {
   /** Reduced timings for isolated tests only; never command-line options. */
   pollIntervalMs?: number;
   requestTimeoutMs?: number;
+  /** Frozen clock for usage-compare tests; never a command-line option. */
+  now?: () => number;
 }
 
 export class ObservationError extends Error {}

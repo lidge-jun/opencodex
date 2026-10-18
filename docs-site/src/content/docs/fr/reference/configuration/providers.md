@@ -167,8 +167,8 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `anthropicEofTolerance?` | `boolean` | Laissez une passerelle compatible Anthropic compléter un flux qui se termine avant `message_stop`, uniquement lorsque du texte visible ou une entrée complète d'outil d'objet JSON a été reçue. Désactivé par défaut. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Mode Google transport/auth. Par défaut `ai-studio`. |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google uniquement. Une valeur absente ou `compatible` conserve le schéma compatible et la réparation 400 existante hors mode direct. `reject-lossy` refuse une perte initiale ou une comparaison bornée indéterminée avant l’envoi et bloque une réparation Vertex ou Cloud Code Assist qui ouvrirait des contraintes. AI Studio direct n’effectue jamais cette réparation. |
-| `project?` | `string` | ID du projet Vertex ou Antigravity Cloud Code Assist. |
-| `location?` | `string` | Région Vertex ; la valeur de repli de l'environnement est `GOOGLE_CLOUD_LOCATION`. |
+| `project?` | `string` | ID du projet Vertex ou Antigravity Cloud Code Assist. Lorsqu'il est défini, les clés API Vertex utilisent le point de terminaison du projet ; sinon elles utilisent le mode express, même si `GOOGLE_CLOUD_PROJECT` est défini. ADC se replie sur `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`. |
+| `location?` | `string` | Région Vertex. Les points de terminaison de projet avec clé API utilisent `global` par défaut et ignorent `GOOGLE_CLOUD_LOCATION` ; ADC exige ce champ ou le repli `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor uniquement : serveurs MCP sur entrée-sortie standard ou HTTP diffusé en continu. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor uniquement : commandes externes d'utilisation d'un ordinateur et d'enregistrement de l'écran. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Ancien booléen de Cursor, équivalent à `nativeLocalExec: "on"` uniquement lorsque le champ plus récent n'est pas défini. |

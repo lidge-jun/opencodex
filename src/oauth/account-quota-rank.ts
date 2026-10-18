@@ -153,7 +153,8 @@ export function accountResetTimestamp(
   const quota = getCachedProviderAccountQuota(provider, accountId);
   if (!quota) return null;
   const family = classifyModelFamilyForQuota(provider, requestedModelId);
-  const windows = (quota.customWindows ?? []).filter(w => !family || windowMatchesFamily(w.label, family));
+  // Model-attributed rows are diagnostics; one must never become the account's reset time.
+  const windows = (quota.customWindows ?? []).filter(w => w.modelId === undefined && (!family || windowMatchesFamily(w.label, family)));
   const weekly = windows.find(w => /week/i.test(w.label));
   let rawReset = weekly?.resetAt ?? quota.weeklyResetAt;
   if (rawReset === undefined && provider !== "google-antigravity" && provider !== "anthropic") {

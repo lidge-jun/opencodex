@@ -4,15 +4,28 @@ import { isCodexAccountPaused, setCodexAccountPaused } from "./account-pause";
 import { createLowQuotaEventLedger, type LowQuotaEvent } from "./low-quota-events";
 import { registerLowQuotaObserver } from "./low-quota-observer";
 import { resetAtToMs } from "./quota-types";
+import { codexAccountLogLabel, fallbackCodexAccountLogLabel } from "./account-label";
+import type { LowQuotaNotice, LowQuotaNoticeSink } from "./low-quota-desktop-notifier";
 
-type Window = "short" | "weekly";
-type Notice = { window: Window; percentUsed: number; threshold: number };
 type Dependencies = {
   persist?: (config: OcxConfig) => void | Promise<void>;
-  notify?: (notice: Notice) => void | Promise<void>;
+  /** Injected sink; takes precedence over desktop delivery. */
+  notify?: (notice: LowQuotaNotice, signal: AbortSignal) => void | Promise<void>;
+  /** Resolved per notice, and only while the live policy opts into actions.desktop. */
+  desktopSink?: () => LowQuotaNoticeSink | undefined;
 };
 type EventBase = Omit<LowQuotaEvent, "timestamp" | "status" | "delivery">;
-type Episode = { reset: string; notice: "in-flight" | "logged" | "delivered" | "failed" | undefined; pausedByUs: boolean; noticeBase?: EventBase };
+type Episode = {
+  reset: string;
+  notice: "in-flight" | "logged" | "delivered" | "failed" | undefined;
+  pausedByUs: boolean;
+  noticeBase?: EventBase;
+  noticeAbort?: AbortController;
+  /** A failed notice may retry only after this time, so a broken notifier is not respawned per request. */
+  noticeRetryAt?: number;
+  /** The episode's log line was written; retries do not repeat it. */
+  warned?: boolean;
+};
 export type LowQuotaRegistration = (() => void) & {
   hasPendingSave(): boolean;
   flush(): Promise<void>;
@@ -20,6 +33,7 @@ export type LowQuotaRegistration = (() => void) & {
 };
 
 const RETRY_DELAYS_MS = [100, 250];
+const NOTICE_RETRY_MS = 5 * 60_000;
 const FLUSH_DEADLINE_MS = 500;
 
 /** Each server owns its own policy, episode state and deferred writer. */
@@ -43,6 +57,12 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     delivery: LowQuotaEvent["delivery"], status: LowQuotaEvent["status"]): void {
     if (delivery === "pause-save") pauseStatus.set(base, status);
     ledger.publish({ ...base, delivery, status, timestamp: Date.now() });
+  }
+  /** Publishes one cancellation for an in-flight notice and stops its delivery. */
+  function cancelNotice(episode: Episode): void {
+    if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
+    episode.noticeAbort?.abort();
+    episode.noticeAbort = undefined;
   }
   function cancelTimer(): void {
     if (saveTimer) clearTimeout(saveTimer);
@@ -132,9 +152,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       if (pauseStatus.get(base) === "pending") event(base, "pause-save", "cancelled");
       pendingPauseEvents.delete(key);
     }
-    for (const episode of episodes.values()) {
-      if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
-    }
+    for (const episode of episodes.values()) cancelNotice(episode);
     dirty = false;
     autoPausedAccounts.clear();
     unregister();
@@ -175,9 +193,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     const policy = config.codexPool?.lowQuotaProtection;
     const nextKey = JSON.stringify(policy);
     if (policyKey !== nextKey) {
-      for (const episode of episodes.values()) {
-        if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
-      }
+      for (const episode of episodes.values()) cancelNotice(episode);
       episodes.clear();
       autoPausedAccounts.clear();
       policyKey = nextKey;
@@ -187,7 +203,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
     for (const id of autoPausedAccounts) if (!liveIds.has(id)) autoPausedAccounts.delete(id);
     for (const [key, episode] of episodes) {
       if (liveIds.has(key.split("\u0000")[0]!)) continue;
-      if (episode.notice === "in-flight" && episode.noticeBase) event(episode.noticeBase, "notice", "cancelled");
+      cancelNotice(episode);
       episodes.delete(key);
     }
     if (!liveIds.has(accountId)) return;
@@ -203,7 +219,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       const key = `${accountId}\u0000${window}`;
       if (percentUsed < policy.threshold) {
         const prior = episodes.get(key);
-        if (prior?.notice === "in-flight" && prior.noticeBase) event(prior.noticeBase, "notice", "cancelled");
+        if (prior) cancelNotice(prior);
         episodes.delete(key);
         continue;
       }
@@ -211,6 +227,7 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
       const reset = resetAt === null ? "unknown" : String(resetAt);
       let episode = episodes.get(key);
       if (!episode || episode.reset !== reset) {
+        if (episode) cancelNotice(episode);
         episode = { reset, notice: undefined, pausedByUs: false };
         episodes.set(key, episode);
       }
@@ -234,32 +251,41 @@ export function registerCodexLowQuotaProtection(config: OcxConfig, deps: Depende
         scheduleSave();
       }
       // A manual resume leaves pausedByUs set until recovery or a new reset episode.
-      if (policy.actions.notify && episode.notice !== "in-flight" && episode.notice !== "logged" && episode.notice !== "delivered") {
-        console.warn(`[codex-low-quota] ${window === "short" ? "5-hour" : "weekly"} quota reached ${percentUsed}% used (threshold ${policy.threshold}%)`);
-        if (!deps.notify) {
+      if (policy.actions.notify && episode.notice !== "in-flight" && episode.notice !== "logged" && episode.notice !== "delivered"
+        && !(episode.notice === "failed" && (episode.noticeRetryAt ?? 0) > Date.now())) {
+        if (!episode.warned) {
+          episode.warned = true;
+          console.warn(`[codex-low-quota] ${window === "short" ? "5-hour" : "weekly"} quota reached ${percentUsed}% used (threshold ${policy.threshold}%)`);
+        }
+        const sink = deps.notify ?? (policy.actions.desktop === true ? deps.desktopSink?.() : undefined);
+        if (!sink) {
           event(base, "notice", "logged");
           episode.notice = "logged";
           continue;
         }
-        episode.notice = "in-flight";
-        episode.noticeBase = base;
+        const account = config.codexAccounts?.find(candidate => candidate.id === accountId);
+        const notice: LowQuotaNotice = {
+          accountLabel: account ? codexAccountLogLabel(account) : fallbackCodexAccountLogLabel(accountId),
+          window, percentUsed, threshold: policy.threshold, resetAt,
+        };
+        const abort = new AbortController();
+        const current = episode;
+        current.notice = "in-flight";
+        current.noticeBase = base;
+        current.noticeAbort = abort;
         event(base, "notice", "pending");
+        const settle = (status: "delivered" | "failed") => {
+          if (closed || abort.signal.aborted || episodes.get(key) !== current) return;
+          event(base, "notice", status);
+          current.notice = status;
+          current.noticeRetryAt = status === "failed" ? Date.now() + NOTICE_RETRY_MS : undefined;
+          current.noticeBase = undefined;
+          current.noticeAbort = undefined;
+        };
         try {
-          void Promise.resolve(deps.notify({ window, percentUsed, threshold: policy.threshold })).then(() => {
-            if (closed || episodes.get(key) !== episode) return;
-            event(base, "notice", "delivered");
-            episode.notice = "delivered";
-            episode.noticeBase = undefined;
-          }, () => {
-            if (closed || episodes.get(key) !== episode) return;
-            event(base, "notice", "failed");
-            episode.notice = "failed";
-            episode.noticeBase = undefined;
-          });
+          void Promise.resolve(sink(notice, abort.signal)).then(() => settle("delivered"), () => settle("failed"));
         } catch {
-          event(base, "notice", "failed");
-          episode.notice = "failed";
-          episode.noticeBase = undefined;
+          settle("failed");
         }
       }
     }

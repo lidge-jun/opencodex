@@ -1,3 +1,4 @@
+import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
@@ -29,6 +30,7 @@ import {
   applyUpstreamRecoveryInit,
   isNonReplayableResponse,
   prepareSameTarget429Wait,
+  SendBudgetExhaustedError,
 } from "../../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
 import { AdmissionModelDeniedError, MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
@@ -121,6 +123,7 @@ export function createAdapterContinuations(
     | "rateLimitRetries"
     | "stallTimeoutMs"
     | "localUpstream"
+    | "thinkingSignatureRecovery"
    >,
 ) {
   const { options, logCtx, config } = requestContext;
@@ -159,6 +162,10 @@ export function createAdapterContinuations(
         errorType: MODEL_NOT_ALLOWED_FOR_KEY, code: MODEL_NOT_ALLOWED_FOR_KEY, retryable: false,
       };
     }
+    if (refusal instanceof SendBudgetExhaustedError) return {
+      type: "error", status: 429, errorType: "rate_limit_error", code: refusal.code,
+      message: refusal.message, retryable: false,
+    };
     return {
       type: "error",
       message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}`,
@@ -309,6 +316,14 @@ export function createAdapterContinuations(
         const recoveryKind = nextContinuationRecoveryKind;
         nextContinuationRecoveryKind = undefined;
         response = await fetchContinuation(recoveryKind);
+        bindAnthropicRejectionResponse(transportState.sameTargetRequest, response);
+        if (initialRecoveryKind === "empty-completion" && await adapterExchange.thinkingSignatureRecovery.prepareHttp(
+          response, transportState.activeAdapter.name, nextParsed,
+        )) {
+          try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ }
+          invalidateSameTargetRequest();
+          response = await fetchContinuation("opaque-blob-rejection");
+        }
         if (kiroRefusalPendingReplay) {
           try { void kiroRefusalPendingReplay.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           kiroRefusalPendingReplay = undefined;
@@ -704,24 +719,25 @@ export function createAdapterContinuations(
       // listener that can cancel its reader even while the parser holds the body lock.
       // The shared signal is not aborted on timeout: this generator must still emit
       // the error that the already-live Responses bridge turns into a terminal.
-      if (nextParsed.stream) {
-        yield* readResponseStreamWithInactivity(
-          response,
-          upstream.signal,
-          bodyInactivityMs,
-          guarded => transportState.activeAdapter.parseStream(guarded, translatorBudget, logCtx.activeTierMetadata),
-        );
-      } else if (transportState.activeAdapter.parseResponse) {
-        yield* await readResponseBodyWithInactivity(
-          response,
-          upstream.signal,
-          bodyInactivityMs,
-          guarded => transportState.activeAdapter.parseResponse!(guarded, translatorBudget, logCtx.activeTierMetadata),
-        );
-      } else {
-        try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
-        yield { type: "error", message: "Provider continuation does not support response parsing" };
-      }
+      const parse = async function* (current: Response): AsyncGenerator<AdapterEvent> {
+        if (!current.ok) {
+          yield await adapterExchange.thinkingSignatureRecovery.projectHttpFailure(current, upstream.signal);
+        } else if (nextParsed.stream) {
+          yield* readResponseStreamWithInactivity(current, upstream.signal, bodyInactivityMs,
+            guarded => transportState.activeAdapter.parseStream(guarded, translatorBudget, logCtx.activeTierMetadata));
+        } else if (transportState.activeAdapter.parseResponse) {
+          yield* await readResponseBodyWithInactivity(current, upstream.signal, bodyInactivityMs,
+            guarded => transportState.activeAdapter.parseResponse!(guarded, translatorBudget, logCtx.activeTierMetadata));
+        } else {
+          try { void current.body?.cancel().catch(() => {}); } catch { /* closed */ }
+          yield { type: "error", message: "Provider continuation does not support response parsing" };
+        }
+      };
+      yield* adapterExchange.thinkingSignatureRecovery.wrap(parse(response), async function* () {
+        invalidateSameTargetRequest();
+        yield* parse(await fetchContinuation("opaque-blob-rejection"));
+      }, () => transportState.activeAdapter.name,
+      initialRecoveryKind === "empty-completion" && !isNonReplayableResponse(response), response, nextParsed);
     } catch (error) {
       // Classify the thrown error before reading signal state: cancelling the stalled
       // source can synchronously abort the shared signal, which would otherwise report

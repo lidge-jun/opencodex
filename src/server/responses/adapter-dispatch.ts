@@ -1,3 +1,6 @@
+import { recoverAutoPausedAccount } from "./account-auto-pause-recovery";
+import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
+import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { classifyAnthropic429 } from "../../oauth/anthropic-rate-limit-policy";
@@ -87,6 +90,7 @@ import {
   reasoningEffortRejectionText,
   anthropicFastRefused,
 } from "./core-opaque-recovery";
+import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import {
   isTransientConsoleGoUploadRejection,
@@ -139,6 +143,7 @@ export async function prepareAdapterExchange(
     | "sameTargetToken"
     | "transportToken"
     | "oauthDispatch"
+    | "recoverAutoPausedSelection"
     | "imageTierBias"
     | "oauth401ReplayAttempted"
     | "isOAuth401ReplayProvider"
@@ -392,11 +397,12 @@ export async function prepareAdapterExchange(
     upstreamResponse = new Response(text, { status: original.status, statusText: original.statusText, headers });
     return upstreamResponse;
   };
+  const autoPauseEnabled = config.providers[route.providerName]?.accountAutoPause?.enabled === true;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
-    || billingPoolRequest || billingRecoveryActive;
+    || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
@@ -518,10 +524,10 @@ export async function prepareAdapterExchange(
           label: safeHostLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
           ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
-            || billingPoolRequest
+            || billingPoolRequest || autoPauseEnabled
             ? {
               // A pending compaction permit already booked this leg's first physical send.
-              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
+              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || autoPauseEnabled
                 ? {
                   attempts: Math.min(initialSendCap,
                     sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
@@ -591,7 +597,7 @@ export async function prepareAdapterExchange(
   let rateLimitRetries = 0;
   // Shared with the terminal-guard continuation below: an image-tier reduction that let the
   // main request clear a 413 must not be forgotten on the very next continuation build.
-  if (!upstreamResponse.ok) {
+  // Recovery helpers also serve initial HTTP-200 adapter errors during delivery.
     // Recovery loop: multi-key 429 failover + at most ONE opaque-state rebuild and ONE
     // anthropic 413 tightened retry
     // (devlog/260714_image_normalization_pipeline/030). One mutable activeAdapter serves
@@ -600,6 +606,9 @@ export async function prepareAdapterExchange(
     // 413→429 rotation cannot silently undo the tightening.
     let imageRetryAttempted = false;
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
+    const thinkingSignatureRecovery = createAnthropicThinkingRecovery(
+      parsed, upstream.signal, opaqueBlobRecoveryGuard, () => !sendBudgetExhausted(),
+    );
     // Console Go answers a transient 400 "Invalid upload request." for bodies it accepts
     // moments later; at most one byte-identical replay is allowed per request.
     const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
@@ -863,6 +872,11 @@ export async function prepareAdapterExchange(
         return { failed: formatErrorResponse(502, "upstream_error", msg) };
       }
     };
+    const refetchThinkingSignature = () => {
+      invalidateSameTargetRequest();
+      return rebuildAndRefetch("opaque-blob-rejection");
+    };
+  if (!upstreamResponse.ok) {
     const rotateAntigravityAuth = async (
       failedResponse: Response,
       recovery: AttemptRecoveryKind,
@@ -913,6 +927,15 @@ export async function prepareAdapterExchange(
     };
    // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
    recovery: for (;;) {
+      if (wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
+        const recovered = await recoverAutoPausedAccount({ requestKey: transportState, reserve: reserveCredentialHop,
+          remaining: transientSendCapFor(transientRetryPolicyFor(route.provider)?.attempts, sendBudgetState.targetSendsUsed),
+          refresh: () => transportState.recoverAutoPausedSelection(parsed), refetch: () => rebuildAndRefetch("oauth-account-429"), setPermit: permit => { sendBudgetState.pendingHopPermit = permit; } });
+        if (!recovered) break;
+        if ("failed" in recovered) return recovered.failed;
+        upstreamResponse = recovered; continue recovery;
+      }
+
       // Preserve the terminal verdict through adapter and combo error formatting.
       // This also covers a reset reached by a 401/429/413 recovery refetch.
       if (isNonReplayableResponse(upstreamResponse)) {
@@ -920,8 +943,19 @@ export async function prepareAdapterExchange(
           return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
         } finally { cleanupUpstreamAbort(); }
       }
+      bindAnthropicRejectionResponse(transportState.sameTargetRequest, upstreamResponse);
+      if (await thinkingSignatureRecovery.prepareHttp(
+        upstreamResponse, transportState.activeAdapter.name,
+      )) {
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
+        invalidateSameTargetRequest();
+        const result = await rebuildAndRefetch("opaque-blob-rejection");
+        if ("failed" in result) return result.failed;
+        upstreamResponse = result;
+        continue recovery;
+      }
      if (
-       upstreamResponse.status === 401
+       upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
        && isOAuth401ReplayProvider
         && transportState.sentOAuthSnapshot
         && !oauth401ReplayAttempted
@@ -1041,7 +1075,7 @@ export async function prepareAdapterExchange(
         continue recovery;
       }
 
-      if (route.providerName === "google-antigravity" && upstreamResponse.status === 401
+      if (route.providerName === "google-antigravity" && upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
         && oauth401ReplayAttempted && !antigravityAuthRotationAttempted
         && !isNonReplayableResponse(upstreamResponse)) {
         antigravityAuthRotationAttempted = true;
@@ -1877,6 +1911,8 @@ export async function prepareAdapterExchange(
             authMode: route.provider.authMode,
             hasApiKey: Boolean(route.provider.apiKey?.trim()),
             upstreamRetryAfter,
+            upstreamErrorType: normalized.type,
+            upstreamErrorCode: normalized.code,
             // This recovery path is the HTTP Responses wire; custom runTurn transports
             // never reach enrichOpenCodeZenUpstreamMessage here.
             supportsHttpSameKeyRetry: true,
@@ -1902,6 +1938,7 @@ export async function prepareAdapterExchange(
     }
   }
 
+  bindAnthropicRejectionResponse(transportState.sameTargetRequest, upstreamResponse);
   cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
 
   return {
@@ -1911,6 +1948,8 @@ export async function prepareAdapterExchange(
     stallTimeoutMs,
     localUpstream,
     upstreamResponse,
+    thinkingSignatureRecovery,
+    refetchThinkingSignature,
     rateLimitPolicy,
     get rateLimitRetries(): typeof rateLimitRetries {
       return rateLimitRetries;

@@ -23,6 +23,9 @@ import { resolveStallTimeoutMs } from "../../stall-timeout";
 import { clientEncoderForDelivery, deliverClientEncodedResponse } from "../inference/client-encoder-delivery";
 import { noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
+import { readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
+import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
+import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 
@@ -49,7 +52,7 @@ export async function deliverAdapterResponse(
     | "notifyResponseComplete"
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
-  adapterExchange: Pick<AdapterExchange, "upstreamResponse" | "upstream" | "cleanupUpstreamAbort" | "localUpstream">,
+  adapterExchange: Pick<AdapterExchange, "upstreamResponse" | "upstream" | "cleanupUpstreamAbort" | "localUpstream" | "thinkingSignatureRecovery" | "refetchThinkingSignature">,
   continuationState: Pick<AdapterContinuations, "terminalGuardEnabled" | "fetchTerminalGuardContinuation" | "fetchGuardedEmptyCompletionRetry">,
 ): Promise<Response> {
   const { logCtx, options, config } = requestContext;
@@ -61,7 +64,7 @@ export async function deliverAdapterResponse(
     rememberKiroDeliveredFinalAnswer,
     responseStateOptions,
   } = requestState;
-  const { upstreamResponse, upstream, cleanupUpstreamAbort, localUpstream } = adapterExchange;
+  const { upstreamResponse, upstream, cleanupUpstreamAbort, localUpstream, thinkingSignatureRecovery, refetchThinkingSignature } = adapterExchange;
   const {
     terminalGuardEnabled,
     fetchTerminalGuardContinuation,
@@ -77,6 +80,43 @@ export async function deliverAdapterResponse(
   const { routedCompaction } = sidecarState;
   const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
   const upstreamRequestsStream = parsed.stream || isCanonicalOpenAiForwardProvider(route.provider);
+  const recoverThinkingSignature = (events: AsyncIterable<AdapterEvent>): AsyncIterable<AdapterEvent> =>
+    thinkingSignatureRecovery.wrap(events, async function* () {
+      const result = await refetchThinkingSignature();
+      let response = "failed" in result ? result.failed : result;
+      // A replacement can be an HTTP/auth/budget refusal; never feed its JSON body to an SSE parser.
+      if (!response.ok) {
+        // A local refusal closes the upstream signal before returning its generated JSON.
+        // Reading that bounded local body still honors caller cancellation.
+        const errorSignal = "failed" in result ? options.abortSignal ?? new AbortController().signal : upstream.signal;
+        const nonReplayable = isNonReplayableResponse(response);
+        if (nonReplayable) response = await sanitizeNonReplayableUpstreamError(response, errorSignal);
+        const body = await readDisplaySafeErrorText(response, errorSignal, "Upstream recovery failed");
+        const error = normalizeUpstreamErrorText(body, "Upstream recovery failed");
+        yield { type: "error", status: response.status, message: error.message ?? error.safeText,
+          errorType: error.type ?? "upstream_error", ...(error.code ? { code: error.code } : {}),
+          ...(nonReplayable ? { retryable: false } : {}) };
+        return;
+      }
+      try {
+        const retryEvents = upstreamRequestsStream
+          ? readResponseStreamWithInactivity(response, upstream.signal, bodyInactivityMs,
+            guarded => transportState.activeAdapter.parseStream(guarded, translatorBudget, logCtx.activeTierMetadata))
+          : (async function* () {
+              yield* await readResponseBodyWithInactivity(response, upstream.signal, bodyInactivityMs,
+                guarded => transportState.activeAdapter.parseResponse!(guarded, translatorBudget, logCtx.activeTierMetadata));
+            })();
+        for await (const event of retryEvents) {
+          options.onCompactionRecoveryAdapterEvent?.(event);
+          yield event;
+        }
+      } catch (error) {
+        if (!(error instanceof ResponseBodyInactivityError)) throw error;
+        yield { type: "error", message: "Upstream recovery response body stalled before completing",
+          status: 504, errorType: "upstream_error" };
+      }
+    }, () => transportState.activeAdapter.name, !isNonReplayableResponse(upstreamResponse), upstreamResponse);
+
   const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
     ? requestState.clientToolCatalogRestriction : undefined;
   const deliveryToolBridgeMaps = clientToolCatalog
@@ -110,15 +150,16 @@ export async function deliverAdapterResponse(
         throw error;
       }
     })();
+    const recoveredEvents = recoverThinkingSignature(initialEventStream);
     const eventStream = terminalGuardEnabled
       ? guardTerminalEventStream({
           parsed,
-          firstEvents: initialEventStream,
+          firstEvents: recoveredEvents,
           adapterName: transportState.activeAdapter.name,
           maxAutoContinuations: 1,
           continuation: next => fetchTerminalGuardContinuation(next, undefined, !parsed.stream),
         })
-      : initialEventStream;
+      : recoveredEvents;
     // Optional advisor guard (registered per request by the sidecar planner; absent unless the
     // user enabled the advisor): holds synthetic `advisor` tool calls, consults the configured
     // expert model, and re-dispatches the worker. Sits inside the empty-completion guard so an
@@ -147,6 +188,7 @@ export async function deliverAdapterResponse(
     // One completion owner for both deliveries: the bridge calls it from its terminal, the
     // direct client encoder from the fold of the same events.
     const onCompletedResponse = (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
+      if (!options.abortSignal?.aborted) thinkingSignatureRecovery.rememberSuccess(response);
       const served = transportState.sentOAuthSnapshot;
       if (transportState.activeAdapter.name === "kiro" && response.status === "completed" && served
         && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
@@ -250,18 +292,22 @@ export async function deliverAdapterResponse(
         ));
       }
       for (const event of initialEvents) options.onCompactionRecoveryAdapterEvent?.(event);
+      const recoveredEvents: AdapterEvent[] = [];
+      for await (const event of recoverThinkingSignature((async function* () { yield* initialEvents; })())) {
+        recoveredEvents.push(event);
+      }
       let guardedEvents: AdapterEvent[];
       if (terminalGuardEnabled) {
         guardedEvents = [];
         for await (const event of guardTerminalEventStream({
           parsed,
-          firstEvents: (async function* () { yield* initialEvents; })(),
+          firstEvents: (async function* () { yield* recoveredEvents; })(),
           adapterName: transportState.activeAdapter.name,
           maxAutoContinuations: 1,
           continuation: next => fetchTerminalGuardContinuation(next, undefined, !parsed.stream),
         })) guardedEvents.push(event);
       } else {
-        guardedEvents = initialEvents;
+        guardedEvents = recoveredEvents;
       }
       // Optional advisor guard — same semantics as the streaming branch above.
       if (parsed._advisorGuard) {
@@ -325,6 +371,7 @@ export async function deliverAdapterResponse(
     // #1926 gap 2: same buffered-path durability bound as the primary branch.
     await awaitThoughtSignatureDurability();
     if (adapterResponseReachedServingTerminal(events, json)) {
+      if (!options.abortSignal?.aborted) thinkingSignatureRecovery.rememberSuccess(json);
       const served = transportState.sentOAuthSnapshot;
       if (transportState.activeAdapter.name === "kiro" && json.status === "completed" && served
         && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
