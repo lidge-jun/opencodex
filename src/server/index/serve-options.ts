@@ -206,6 +206,7 @@ import type { WorkflowRefusalLog } from "../workflow-refusal";
 import { readyProtocolMetadata } from "../../remote/protocol";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
+import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
 
@@ -1347,8 +1348,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             response = await handleResponsesCompact(req, config, logCtx, turnAdmissionLease, admission, {
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
             });
-          } catch {
-            response = formatErrorResponse(500, "server_error", "Unexpected compact request failure");
+          } catch (error) {
+            response = reasoningArchiveErrorResponse(error)
+              ?? formatErrorResponse(500, "server_error", "Unexpected compact request failure");
           }
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
@@ -1519,6 +1521,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               },
             });
           } catch (error) {
+            const archiveError = reasoningArchiveErrorResponse(error);
+            if (archiveError) return withRequestLogId(
+              withCors(responseWithDeferredRequestLog(archiveError, requestId, start, logCtx), req, policy), requestId,
+            );
             // A bounded upstream body can fail before handleResponses returns a client response.
             // Finalize before rethrow so accounting observes the physical send while the caller
             // retains the existing reset/rejection instead of receiving a synthesized response.
