@@ -248,13 +248,19 @@ export function sendWithConnectionPolicy(
   });
 }
 
-const codexWsExecutors = new WeakSet<object>();
-const codexWsExecutor = (send: (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => Promise<Response>) => {
-  codexWsExecutors.add(send);
+interface CodexWsExecutor { provider: OcxProviderConfig; http: typeof globalThis.fetch }
+const codexWsExecutors = new WeakMap<object, CodexWsExecutor>();
+const codexWsExecutor = (send: (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => Promise<Response>, binding: CodexWsExecutor) => {
+  codexWsExecutors.set(send, binding);
   return send as typeof globalThis.fetch;
 };
-/** True for the executor a `dispatchOverride` receives on the WS branch: it must not get HTTP-only send policy. */
-export const isCodexWsExecutor = (execute: unknown): boolean => typeof execute === "function" && codexWsExecutors.has(execute);
+/**
+ * Set for the executor a `dispatchOverride` receives on the WS branch: it must not get HTTP-only
+ * send policy. `provider` is the one WS eligibility was checked against; a dispatch-time
+ * replacement was not, so it sends through `http` (the same fallback) instead.
+ */
+export const codexWsExecutorBinding = (execute: unknown): CodexWsExecutor | undefined =>
+  typeof execute === "function" ? codexWsExecutors.get(execute) : undefined;
 
 export interface ProviderFetchOptions {
   accountAutoPause?: (name: string, provider: OcxProviderConfig, headers: Headers) => AccountAutoPauseObserver | undefined;
@@ -410,7 +416,8 @@ export function providerFetch(
         httpFetch(url, { ...fallbackInit, [WS_FALLBACK_RECEIPT]: notifyOnce } as RequestInit, reacquirePacing, null)) as typeof globalThis.fetch;
       const wsSend = codexWsExecutor((url: Parameters<typeof globalThis.fetch>[0], wsInit?: RequestInit) => codexWsUpstreamFetch(String(url), wsInit ?? init,
         fallback, runtime, options.onCodexWsQuota, options.beforeDispatch, options.nativeControl,
-        async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold));
+        async () => { (await waitForPacing(init.signal ?? undefined))?.release(); }, notifyOnce, options.preOutputRefusalHold),
+        { provider, http: markEgressTransparentExecutor(fallback) });
       // A WS frame is a physical send like any other, so it runs the same override: that is where a
       // key-auth send is committed to its attempt row and the send budget is rebound to the
       // credential that left. Without it a key-auth WS turn logged `sendCount: 0`.
