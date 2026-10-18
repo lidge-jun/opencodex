@@ -1154,6 +1154,7 @@
   "server-xai-oauth-401-replay.test.ts": "server", "server-xai-responses-streaming.test.ts": "server",
   "service-auth-qualified-localhost.test.ts": "service", "service-child-ownership.test.ts": "service",
   "service-handled-signal-exit.test.ts": "service", "service-claim.test.ts": "service",
+  "service-install-wrapper-cleanup.test.ts": "service",
   "service-ownership-compatibility.test.ts": "service", "service-ownership-handover.test.ts": "service",
   "service-ownership-state.test.ts": "service", "ownership-mutation-lease-diagnostics.test.ts": "service", "service-probe-docker.test.ts": "service",
   "service-secrets.test.ts": "service", "service-sqlite-home.test.ts": "service",
