@@ -3,6 +3,8 @@ title: Provider Configuration
 description: Provider entries, authentication, endpoints, model catalogs, quotas, context caps, and provider-specific options.
 ---
 
+<!-- Created: 2026-10-16; Updated: 2026-10-18; Version: 1.1 (Vertex endpoint note) -->
+
 A provider tells opencodex where a model lives, which wire adapter it speaks, and how requests are
 authenticated.
 
@@ -99,6 +101,7 @@ separate. Full request URLs such as `/api/v1/responses` are not provider base UR
 | `upstreamHostCircuitThreshold?` | `number` | `0` | Opt-in circuit threshold for proven pre-connection DNS/TCP failures on native OpenAI forward Responses and compact sends. `0` disables it; `1`–`20` opens a 30-second provider-origin cooldown after that many terminal logical requests. While open, requests receive `503` with `Retry-After` before account selection or upstream send; after cooldown, one half-open request is admitted. Timeouts and HTTP responses never count, and any HTTP response closes the circuit. Applies only to Codex Pool routing with no pinned account; it is inert for `codexAccountMode: "direct"` and account-qualified selectors. |
 | `maxUpstreamBodyBytes?` | `number` | `0` | Opt-in ceiling, in bytes, on a serialized native Responses **passthrough** body. `0` or omitted disables it — no limit is inferred for any destination. When set, a built body above the ceiling is refused locally before the send: streaming turns receive a terminal `response.failed` / `context_length_exceeded` so the client compacts instead of resending, and non-streaming turns receive a `413` naming the size, the number of embedded `input_image` items, and roughly how many megabytes of image data they represent. Checked at every build and rebuild point, including OAuth-refresh replay and alternate-account retry. Translated adapter paths are not covered. There is deliberately no default: the only measured ceiling here belongs to the WebSocket transport, which already falls back to HTTP for oversized turns, so a default would refuse requests that currently succeed. Set it when your gateway has a known request-size limit and you would rather see an actionable local error than an opaque upstream failure. |
 | `maxInboundBodyBytes?` | `number` | `0` | Opt-in ceiling, in bytes, on a decompressed **inbound** data-plane request body — the mirror of `maxUpstreamBodyBytes` above. `0` or omitted keeps the built-in 256 MiB default. Raise it when a large-context session can no longer compact: Codex replays the whole history to the compaction model, so on the 922k-token opt-in window the compaction request is itself the one that crosses the limit, and the session is stuck at the only operation that would have shrunk it. Clamped to 1 MiB–512 MiB. The ceiling is not negotiable: the reader materializes the body several times over (wire bytes, decoded bytes, the decoded string, and the parsed object graph), so peak memory is a multiple of whatever is admitted, and an unbounded value would be a memory exhaustion lever. Applies to `/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, and `/v1/messages`. The listener's accept size is fixed when the proxy binds, so a change takes effect on restart. A body above the limit is refused locally with HTTP 413 and `code: "inbound_body_too_large"`, which is deliberately distinct from the `context_length_exceeded` 413 a provider size refusal produces. |
+| `upstreamRequestCompression?` | `"off" \| "gzip" \| "zstd"` | `"off"` | Opt-in compression of native ChatGPT Responses HTTP request bodies. Codex re-sends the whole conversation on every turn, and when that turn goes over HTTP OpenCodex otherwise forwards it to `chatgpt.com` uncompressed; on a metered or long-distance egress that upload is the dominant cost. When set, string bodies from 1 KiB to 16 MiB sent to `https://chatgpt.com/backend-api/codex/responses` and `/compact` are compressed at the final send and labelled with `Content-Encoding`. WebSocket turns, every other destination, bodies that already declare a `Content-Encoding`, and bodies outside that size window are sent unchanged, and a codec failure falls back to the uncompressed send. `zstd` is the encoding Codex CLI itself uses with this backend and is the faster choice for image-heavy turns; `gzip` (level 1) is also available. In a local measurement, code-heavy history shrank about 2–4×, while embedded images barely shrink. Compression runs synchronously on the proxy's event loop, so each eligible send briefly delays other in-flight requests — on the order of 2–3 ms per MiB for text on a recent laptop CPU, more for incompressible data with `gzip`. Byte limits such as `maxUpstreamBodyBytes` still measure the uncompressed body. Set it with `ocx config set upstreamRequestCompression zstd` (an unknown value is refused) or by editing `config.json`, where an unknown value is ignored, then restart the proxy to apply. |
 | `modelCacheTtlMs?` | `number` | `300000` | Freshness window for the per-provider `/models` cache. |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache policy: disabled, 5-minute ephemeral, or 1-hour extended. When unset, a `/v1/messages` request on a translated route whose own `cache_control` breakpoints all ask for `ttl: "1h"` is treated as `"long"`; a request that mixes 1h and 5m breakpoints keeps the 5-minute default, and an explicit value always wins. |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | off | Optional proactive OAuth refresh and Codex-account warmup policy. |
@@ -364,10 +367,11 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google transport/auth mode. Default `ai-studio`. |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google only. Omitted/`compatible` preserves the compatible tool schema and existing non-direct 400 repair. `reject-lossy` rejects initial schema loss or an indeterminate bounded comparison before dispatch and withholds a Vertex or Cloud Code Assist repair that would open constraints. Direct AI Studio never performs that repair. |
 | `directGeminiWireRenames?` | `boolean` | Google only. Applies in AI Studio mode, including custom Google-compatible URLs. Omitted or `true` keeps the `-tiered` wire rename for Gemini Flash ids (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`); `false` sends the requested bare ids to the wire unchanged. Vertex and canonical keyed OpenCode Zen routes preserve the requested model ID regardless of this setting; Cloud Code Assist routing is unchanged. Set `false` when the configured upstream still serves the bare ids. |
-| `project?` | `string` | Vertex or Antigravity Cloud Code Assist project id. |
+| `project?` | `string` | Vertex or Antigravity Cloud Code Assist project id. Vertex API keys use this project endpoint when set; without it they use express mode, even if `GOOGLE_CLOUD_PROJECT` is set. ADC falls back to `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`. |
 | — | — | Antigravity account quota probes (`retrieveUserQuota` and `retrieveUserQuotaSummary`) always go to Google's own Cloud Code host through the pinned outbound transport, regardless of a configured `baseUrl`; the account bearer is never sent to an operator-configured endpoint and a redirect aborts the probe. Only the model-list fallback still honors `baseUrl`. |
 | — | — | If Antigravity quota summary returns 403 for a valid OAuth account, OpenCodex retries that endpoint once with the legacy `antigravity/1.0` User-Agent and the same token and project. A 401 is not retried. Inference and model discovery retain the IDE User-Agent. |
-| `location?` | `string` | Vertex location; environment fallback is `GOOGLE_CLOUD_LOCATION`. |
+| — | — | Antigravity quota shows Gemini 4 Argon as separate `Argon` / `Argon (Weekly)` windows next to Gem and Cla. They are display-only: account ranking, quota exhaustion, reset ordering and reset notifications keep using the Gemini and Claude windows, and Argon requests are still judged by the Gemini window. |
+| `location?` | `string` | Vertex location. API-key project endpoints default to `global` and ignore `GOOGLE_CLOUD_LOCATION`; ADC requires this field or the `GOOGLE_CLOUD_LOCATION` fallback. Gemini 4 Argon supports `global`, `us`, and `eu`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor only: stdio or Streamable HTTP MCP servers. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor only: external computer-use and record-screen commands. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
@@ -1900,3 +1904,42 @@ original reasoning. Other model families require the preserve declaration.
 Tool-enabled DeepSeek requests also require reasoning on earlier assistant answers without tool
 calls. The configured placeholder fills these omissions; no original reasoning can be recovered
 from the tool-call cache for those turns. Preserve their supplied reasoning for full fidelity.
+
+## Auto-pause permanently refused accounts
+
+`providers.<provider>.accountAutoPause` is opt-in and defaults to off. It applies to that
+provider's OAuth accounts, Codex pool accounts (including the main account in pool mode),
+and configured API-key pool entries. For example:
+
+```sh
+ocx config set providers.anthropic.accountAutoPause.enabled true
+ocx config set providers.anthropic.accountAutoPause.consecutiveFailures 2
+```
+
+`consecutiveFailures` is an integer from 1 to 100; omitting it uses 2. Only exact,
+account-scoped HTTP 401/403 refusals qualify: an organization forbidding OAuth, an inactive
+or expired subscription, an account denied API/Claude Code access, or a downgrade to a free
+plan with no credits. A model permission error, expired access token, quota window, 429,
+5xx, malformed response or network failure never pauses an account.
+
+The counter is process-local, serialized per account, and resets on a successful HTTP
+response, explicit resume or a new login. Token refresh alone does not reset an OAuth
+account's streak. Transient errors leave the counter unchanged. Restarting the proxy clears
+counters; completed pauses, their fixed reason codes and timestamps persist. Independent
+proxy processes maintain independent counters. Changing, disabling or re-enabling the policy, disabling the provider,
+or changing its endpoint discards in-flight refusal observations, so a refusal from a request
+sent under the earlier policy can never pause an account afterwards. A refusal counts only for the credential that actually
+reached the upstream: when a local plugin rewrites the credential or destination of a send, that
+send never counts toward a pause. For Codex pool accounts this includes the workspace
+(`chatgpt-account-id`) the request was sent for.
+
+At the threshold, OpenCodex excludes the account using its existing pause mechanism and
+attempts an eligible sibling for the current request within the existing retry/send budget.
+Fixed Codex account selectors and account-bound uploaded files retain their restrictions.
+A pause never cancels already dispatched work or changes credentials. It emits one generic
+log line without account identifiers or upstream error text.
+
+`ocx account list <provider>` shows the pause reason. The dashboard's Paused badge exposes
+the reason and time. Use `ocx account resume <provider> <account-id-or-alias>` to clear the
+reason and allow selection again. On an API-key row, clicking Resume also activates the key.
+This policy never resumes an account automatically.

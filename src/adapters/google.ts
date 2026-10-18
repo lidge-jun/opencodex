@@ -36,7 +36,7 @@ import {
   observeAntigravityReplay,
 } from "./google-antigravity-replay";
 import { canonicalAntigravityUsageModel, resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
-import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
+import { selectVertexEndpoint, vertexInferenceUrl, vertexReplayModelKey } from "./google-vertex-endpoint";
 import { forgetThoughtSignatureForReplay, lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
 import {
   isTranslatorBudgetExceededError,
@@ -333,13 +333,20 @@ function geminiToolResultParts(
   msg: OcxToolResultMessage,
   wireName: string,
   wireCallId: string,
+  nestToolResultImages: boolean,
 ): unknown[] {
   const functionResponse: Record<string, unknown> = {
     name: wireName,
     response: { result: geminiToolResultText(msg.content) },
     id: wireCallId,
   };
-  return [{ functionResponse }, ...toolResultImageParts(msg.content)];
+  const images = toolResultImageParts(msg.content);
+  // Vertex Argon rejects image siblings beside a functionResponse as an unsupported model tail.
+  if (nestToolResultImages && images.length > 0) {
+    functionResponse.parts = images;
+    return [{ functionResponse }];
+  }
+  return [{ functionResponse }, ...images];
 }
 
 function geminiMissingToolResultPart(wireName: string, wireCallId: string): unknown {
@@ -370,6 +377,7 @@ function messagesToGeminiFormat(
   identityModelId: string,
   stripRejectedClaudeSdkParagraph = false,
   isCloudCodeAssist = false,
+  nestToolResultImages = false,
 ): { systemInstruction?: unknown; contents: unknown[]; replayedCallIds: string[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -551,13 +559,17 @@ function messagesToGeminiFormat(
           const responseParts: unknown[] = [];
           for (const call of toolCalls) {
             const result = resultsById.get(call.wireCallId);
-            if (result) responseParts.push(...geminiToolResultParts(result, call.wireName, call.wireCallId));
+            if (result) responseParts.push(...geminiToolResultParts(result, call.wireName, call.wireCallId, nestToolResultImages));
             else responseParts.push(geminiMissingToolResultPart(call.wireName, call.wireCallId));
           }
-          for (const orphan of orphanResults) {
-            responseParts.push(...geminiOrphanToolResultParts(orphan));
-          }
+          const orphanParts = orphanResults.flatMap(geminiOrphanToolResultParts);
           contents.push({ role: "user", parts: responseParts });
+          // Orphan images cannot share Argon's response batch or claim another call's ownership.
+          if (nestToolResultImages && orphanParts.some(part => typeof part === "object" && part !== null && "inline_data" in part)) {
+            contents.push({ role: "user", parts: orphanParts });
+          } else {
+            responseParts.push(...orphanParts);
+          }
           i = j - 1;
         }
         break;
@@ -1026,6 +1038,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         identityModelId,
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
+        provider.googleMode === "vertex" && parsed.modelId === "gemini-4-argon",
       );
       lastInjectedCallIds = [...replayedCallIds];
       lastReasoningReplayScope = parsed._reasoningReplayScope;
@@ -1192,9 +1205,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
         reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;
-        const vertexProject = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "api-key";
-        const vertexLocation = provider.location || process.env.GOOGLE_CLOUD_LOCATION || "global";
-        vertexReplayModel = `vertex:${vertexProject}:${vertexLocation}:${parsed.modelId}`;
+        const apiKey = resolveVertexApiKey(provider.apiKey);
+        const vertexEndpoint = selectVertexEndpoint(provider, Boolean(apiKey));
+        const url = vertexInferenceUrl(vertexEndpoint, parsed.modelId, method, streamParam);
+        vertexReplayModel = vertexReplayModelKey(vertexEndpoint, parsed.modelId);
         vertexReplaySession = vertexReplaySessionId(parsed);
         // Compile names before replay so the cache matches the exact provider-visible
         // functionCall identity. This is the same bounded TTL/LRU store used by CCA, with the
@@ -1210,27 +1224,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             (compiled.body as { contents: unknown[] }).contents,
           );
         }
-        // Vertex AI: project/location endpoint with GCP ADC, or x-goog-api-key fast path.
-        const apiKey = resolveVertexApiKey(provider.apiKey);
-        if (apiKey) {
-          const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${parsed.modelId}:${method}${streamParam}`;
-          headers["x-goog-api-key"] = apiKey;
-          return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
+        // Endpoint, location and model path were validated above, before any credential is attached.
+        if (apiKey) headers["x-goog-api-key"] = apiKey;
+        else {
+          // Resolve each marker per request; never share a process-global active account.
+          const markerAccount = gcpCredentialMarkerAccount(provider.apiKey);
+          headers["Authorization"] = `Bearer ${await getVertexAccessToken({ markerAccount })}`;
         }
-        const project = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
-        if (!project) throw new Error("Vertex AI requires a project id (provider.project or GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT).");
-        const location = provider.location || process.env.GOOGLE_CLOUD_LOCATION;
-        if (!location) throw new Error("Vertex AI requires a location (provider.location or GOOGLE_CLOUD_LOCATION).");
-        const locationError = googleVertexLocationConfigError(location);
-        if (locationError) throw new Error(locationError);
-        const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
-        const url = `https://${host}/v1/projects/${project}/locations/${location}/publishers/google/models/${parsed.modelId}:${method}${streamParam}`;
-        // The marker account travels per-request as an argument (never process-global state): a
-        // module-level "active marker" written at routing time would race across concurrent
-        // requests for different providers and could resolve one call with another's credential.
-        const markerAccount = gcpCredentialMarkerAccount(provider.apiKey);
-        const token = await getVertexAccessToken({ markerAccount });
-        headers["Authorization"] = `Bearer ${token}`;
         return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
       }
 

@@ -1,0 +1,169 @@
+import { MessageBudget } from "./budget";
+import { authenticatedRemoteSocket, peerEndpoint, remoteControl, type RemoteEndpoint } from "./remote-auth";
+import { startRemoteBridge } from "./remote-bridge";
+import { exactRecord, RemoteCapacity, REMOTE_LIMITS, remoteError, validPort, type RemotePeer, type RemoteState } from "./remote-contract";
+import { remotePortIsLoopback } from "./remote-ports";
+import { LocalMessageRpc } from "./rpc";
+import type { RemoteMessageStore } from "./remote-store";
+import { startRemoteTunnels, type RemoteTunnelPair, type RemoteTunnelDeps } from "./remote-tunnels";
+import { isThreadId, LocalMessagingError } from "./types";
+
+interface Route { peer: RemotePeer; port: number; generation: string; expiry: number; ready: boolean; tunnels?: RemoteTunnelPair }
+export interface RemoteOwnerDeps extends RemoteTunnelDeps { now?: () => number }
+/** Local owner-control capability never leaves this configuration home or enters remote enrollment. */
+export function ownerEndpoint(state: RemoteState): RemoteEndpoint {
+  return { port: state.port, machineId: state.machine.id, transaction: state.generation, key: state.controlKey };
+}
+/** Discover a route from the live authenticated owner, never a cached loopback port or implicit startup. */
+export async function resolveRemoteRoute(store: RemoteMessageStore, selector: string, budget: MessageBudget) {
+  const state = store.requireEnabled(), peer = store.peer(selector);
+  const result = exactRecord(await remoteControl(state, ownerEndpoint(state), "message/routes", {}, budget), ["routes"]);
+  if (!Array.isArray(result.routes) || result.routes.length > REMOTE_LIMITS.peers) throw remoteError("invalid_remote_route", "Messaging owner returned invalid routes.");
+  const matches = result.routes.filter(route => route && typeof route === "object" && route.machineId === peer.machine.id);
+  if (matches.length !== 1) throw remoteError("route_unavailable", "No live messaging route exists for this enrolled peer; run the explicit foreground owner.");
+  const route = exactRecord(matches[0], ["machineId", "transaction", "port", "kind"]);
+  if (route.transaction !== peer.transaction || !validPort(route.port) || !["initiated", "leased"].includes(String(route.kind))) throw remoteError("invalid_remote_route", "Messaging route does not match the current enrollment.");
+  store.requireCurrentPeer(state, peer);
+  return { state, peer, endpoint: peerEndpoint(peer, route.port) };
+}
+
+/** Explicit foreground lifetime: one listener, aggregate reservations and bounded owned tunnel teardown. */
+export async function startRemoteOwner(store: RemoteMessageStore, home: string, selectors: readonly string[], parent?: AbortSignal,
+  tunnelDeps: RemoteOwnerDeps = {}) {
+  const state = store.requireEnabled(), generation = crypto.randomUUID(), controller = new AbortController();
+  const now = tunnelDeps.now ?? (() => performance.now());
+  const capacity = new RemoteCapacity(), routes = new Map<string, Route>(), operations = new Set<Promise<unknown>>();
+  // Availability may retire before cleanup settles; retain every published pair's join and failure.
+  const ownedTunnels = new Set<RemoteTunnelPair>();
+  let finish!: () => void, finishError!: (error: Error) => void;
+  const finished = new Promise<void>((resolve, reject) => { finish = resolve; finishError = reject; });
+  void finished.catch(() => {});
+  let stopping = false, closing: Promise<void> | undefined, timer: ReturnType<typeof setInterval> | undefined;
+  const check = () => {
+    const current = store.requireEnabled();
+    if (stopping || current.generation !== state.generation) throw remoteError("owner_retired", "Messaging owner configuration changed; restart this foreground owner explicitly.");
+    return current;
+  };
+  const probe = async (peer: RemotePeer, port: number, budget: MessageBudget) => {
+    const release = capacity.reserve("connections"); let rpc: LocalMessageRpc | undefined;
+    try { rpc = await LocalMessageRpc.attach(await authenticatedRemoteSocket(check(), peerEndpoint(peer, port), budget), budget); }
+    finally { rpc?.close(); release(); }
+  };
+  const bridge = startRemoteBridge(store, home, capacity, controller.signal, {
+    async control(peer, method, params, budget) {
+      check();
+      if (method === "message/routes" && !peer) {
+        exactRecord(params, []);
+        const current = check();
+        return { routes: [...routes.values()].filter(route => route.ready && current.peers.some(p => p.transaction === route.peer.transaction)
+          && (route.tunnels ? route.tunnels.alive : route.expiry > now())).map(route => ({
+          machineId: route.peer.machine.id, transaction: route.peer.transaction, port: route.port, kind: route.tunnels ? "initiated" : "leased" })) };
+      }
+      if (method !== "message/lease" || !peer) throw new Error();
+      const lease = exactRecord(params, ["port", "generation"]);
+      if (!validPort(lease.port) || !isThreadId(lease.generation)) throw new Error();
+      if (!await remotePortIsLoopback(lease.port, budget, capacity)) throw new Error();
+      await probe(peer, lease.port, budget);
+      check(); budget.throwIfEnded(); store.requireCurrentPeer(state, peer);
+      const existing = routes.get(peer.machine.id);
+      if (existing?.tunnels) throw new Error();
+      if (existing && existing.generation !== lease.generation && existing.expiry > now()) {
+        if (existing.port === lease.port) throw new Error();
+        // A live generation keeps its lease. Native availability is not owner identity evidence.
+        const release = capacity.reserve("connections"); let oldBudget: MessageBudget | undefined;
+        let authenticated = false;
+        try {
+          oldBudget = new MessageBudget(budget.remainingMs(1000), budget.signal);
+          try {
+            const socket = await authenticatedRemoteSocket(check(), peerEndpoint(existing.peer, existing.port), oldBudget);
+            socket.terminate(); authenticated = true;
+          } catch (error) {
+            if (!(error instanceof LocalMessagingError) || !["remote_auth_failed", "operation_timeout"].includes(error.code)) throw error;
+          }
+        } finally { oldBudget?.dispose(); release(); }
+        check(); budget.throwIfEnded(); store.requireCurrentPeer(state, peer);
+        if (authenticated || routes.get(peer.machine.id) !== existing) throw new Error();
+      }
+      routes.set(peer.machine.id, { peer, port: lease.port, generation: lease.generation, ready: true, expiry: now() + REMOTE_LIMITS.leaseMs });
+      return { leased: true, generation: lease.generation };
+    },
+  });
+  const register = async (route: Route, budget: MessageBudget) => {
+    const free = capacity.reserve("connections");
+    try {
+      const result = exactRecord(await remoteControl(check(), peerEndpoint(route.peer, route.port), "message/lease",
+        { port: route.tunnels!.returnPort, generation }, budget), ["leased", "generation"]);
+      check(); budget.throwIfEnded(); store.requireCurrentPeer(state, route.peer);
+      if (routes.get(route.peer.machine.id) !== route) throw new Error();
+      if (result.leased !== true || result.generation !== generation || !route.tunnels!.alive) throw new Error();
+    } finally { free(); }
+  };
+  const renew = async (budget: MessageBudget) => {
+    const results = await Promise.allSettled([...routes.values()].filter(route => route.tunnels).map(route => register(route, budget)));
+    const failure = results.find(result => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+    check(); budget.throwIfEnded();
+  };
+  const close = (): Promise<void> => closing ??= (async () => {
+    stopping = true; clearInterval(timer); parent?.removeEventListener("abort", abort); controller.abort();
+    const results = await Promise.allSettled([bridge.close(), ...[...ownedTunnels].map(tunnels => tunnels.close()), ...operations]);
+    routes.clear(); ownedTunnels.clear();
+    if (results.some(result => result.status === "rejected")) {
+      const error = remoteError("cleanup_incomplete", "Messaging owner cleanup did not complete cleanly.");
+      finishError(error); throw error;
+    }
+    finish();
+  })();
+  const abort = () => { void close().catch(() => {}); };
+  parent?.addEventListener("abort", abort, { once: true });
+  if (parent?.aborted) abort();
+  const setup = new MessageBudget(30000, controller.signal);
+  try {
+    const unique = new Set(selectors.map(selector => store.peer(selector).machine.id));
+    if (unique.size !== selectors.length) throw remoteError("duplicate_peer", "Do not initiate the same peer more than once.");
+    for (const selector of selectors) {
+      check(); const peer = store.peer(selector);
+      const tunnels = await startRemoteTunnels(store, peer, setup, capacity, controller.signal, tunnelDeps);
+      const route: Route = { peer, port: tunnels.localPort, generation, expiry: Infinity, ready: false, tunnels };
+      try {
+        check(); setup.throwIfEnded(); ownedTunnels.add(tunnels); routes.set(peer.machine.id, route);
+      } catch (error) {
+        // Before publication this local scope, not the routes map, owns the join.
+        await tunnels.close(); throw error;
+      }
+      void tunnels.exited.then(() => {
+        if (!stopping && routes.get(peer.machine.id) === route) { routes.delete(peer.machine.id); abort(); }
+      });
+      // The data connection proves both the peer and native initialization before ready publication.
+      await probe(peer, route.port, setup); await register(route, setup);
+      check(); setup.throwIfEnded();
+    }
+    // Earlier peers may have spent their lease lifetime waiting for later setup.
+    const renewal = new MessageBudget(setup.remainingMs(5000), setup.signal);
+    try { await renew(renewal); for (const route of routes.values()) route.ready = true; }
+    finally { renewal.dispose(); }
+  } catch (error) { await close(); throw error; }
+  finally { setup.dispose(); }
+  if (stopping) { await close(); throw remoteError("owner_retired", "Messaging owner stopped during setup."); }
+  let refreshing = false;
+  timer = setInterval(() => {
+    if (refreshing || stopping) return;
+    refreshing = true;
+    const task = (async () => {
+      const budget = new MessageBudget(5000, controller.signal);
+      try {
+        check();
+        for (const route of [...routes.values()]) {
+          if (!store.read()?.peers.some(peer => peer.transaction === route.peer.transaction)) {
+            routes.delete(route.peer.machine.id); await route.tunnels?.close();
+          } else if (!route.tunnels && route.expiry <= now()) routes.delete(route.peer.machine.id);
+        }
+        await renew(budget);
+      } catch { abort(); }
+      finally { budget.dispose(); refreshing = false; }
+    })();
+    operations.add(task);
+    void task.finally(() => operations.delete(task));
+  }, 10000);
+  return { port: bridge.port, capacity, close, finished };
+}

@@ -1154,7 +1154,8 @@ Pool quota responses can authorize a pause only with valid usage and a captured 
 that is still current. A response without that proof may refresh displayed usage without pausing an account.
 Check this server’s authenticated `GET /api/codex-auth/low-quota-events` history for `logged`
 alerts or save failures. Manual resume remains in force for the current quota episode. The
-default alert reaches only the log and API; it does not produce a desktop or OS notification.
+default alert reaches only the log and API. Add `actions.desktop: true` to also show a macOS or
+Linux notification on the machine running the proxy; Windows stays log-only.
 
 When the ChatGPT 5-hour quota is exhausted, Codex may offer a reserve fallback model
 (`gpt-reserve` / Luna Reserve). While that state is active, the Codex model picker can make

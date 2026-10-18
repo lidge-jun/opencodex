@@ -45,8 +45,31 @@ function quotaInfoEntries(modelInfo: Record<string, unknown>): Record<string, un
   return entries;
 }
 
+/**
+ * Gemini 4 Argon has its own quota pool. Its names also contain "gemini", so every family
+ * decision below checks Argon first; otherwise Argon readings fill or replace the Gem family.
+ */
+const ARGON_TOKEN = /(?:^|[^a-z0-9])argon(?:[^a-z0-9]|$)/i;
+const GEMINI_TOKEN = /(?:^|[^a-z0-9])gemini(?:[^a-z0-9]|$)/i;
+const CLAUDE_FAMILY_TOKEN = /(?:^|[^a-z0-9])(?:claude|3p|gpt|opus|sonnet)(?:[^a-z0-9]|$)/i;
+/** Canonical model of the Argon summary pool; tagging keeps the window out of routing. */
+const ARGON_POOL_MODEL_ID = "gemini-4-argon";
+
+type AntigravitySummaryFamily = "argon" | "gem" | "cla";
+
+/** A bucket's own id and name decide its family when they name one; the group decides otherwise. */
+function antigravitySummaryBucketFamily(bucket: Record<string, unknown>): AntigravitySummaryFamily | undefined {
+  const identity = `${typeof bucket.bucketId === "string" ? bucket.bucketId : ""} ${typeof bucket.displayName === "string" ? bucket.displayName : ""}`;
+  if (ARGON_TOKEN.test(identity)) return "argon";
+  if (GEMINI_TOKEN.test(identity)) return "gem";
+  if (CLAUDE_FAMILY_TOKEN.test(identity)) return "cla";
+  return undefined;
+}
+
 function classifyAntigravityFamily(modelId: string, modelInfo: Record<string, unknown>, quotaInfo: Record<string, unknown>): "Gem" | "Cla" | null {
   const displayName = typeof modelInfo.displayName === "string" ? modelInfo.displayName : "";
+  // Argon models keep their exact model rows but never seed the shared Gem family bar.
+  if (ARGON_TOKEN.test(`${modelId} ${displayName}`)) return null;
   const tier = typeof quotaInfo.tier === "string" ? quotaInfo.tier : "";
   const haystack = `${modelId} ${displayName} ${tier}`.toLowerCase();
   if (haystack.includes("gemini")) return "Gem";
@@ -128,9 +151,13 @@ function parseAntigravityQuotaSummary(body: Record<string, unknown> | null): Pro
   for (const rawGroup of groups) {
     const group = asRecord(rawGroup);
     if (!group) continue;
-    const groupName = `${typeof group.displayName === "string" ? group.displayName : ""} ${typeof group.description === "string" ? group.description : ""}`.toLowerCase();
-    const isGemini = groupName.includes("gemini");
-    const isClaude = groupName.includes("claude") || groupName.includes("3p") || groupName.includes("gpt");
+    const groupDisplayName = typeof group.displayName === "string" ? group.displayName : "";
+    const groupName = `${groupDisplayName} ${typeof group.description === "string" ? group.description : ""}`.toLowerCase();
+    // A description that merely mentions Argon must not move a whole Gemini group.
+    const groupFamily: AntigravitySummaryFamily | undefined = ARGON_TOKEN.test(groupDisplayName) ? "argon"
+      : groupName.includes("gemini") ? "gem"
+        : groupName.includes("claude") || groupName.includes("3p") || groupName.includes("gpt") ? "cla"
+          : undefined;
 
     const buckets = Array.isArray(group.buckets) ? (group.buckets as unknown[]) : [];
     for (const rawBucket of buckets) {
@@ -143,13 +170,19 @@ function parseAntigravityQuotaSummary(body: Record<string, unknown> | null): Pro
 
       const isWeekly = windowStr.includes("week");
       const is5h = windowStr.includes("5h") || windowStr.includes("five");
+      const family = antigravitySummaryBucketFamily(bucket) ?? groupFamily;
 
-      if (isGemini) {
+      if (family === "argon") {
+        const label = is5h ? "Argon" : isWeekly ? "Argon (Weekly)" : "";
+        if (label && !customWindowsMap.has(label)) {
+          customWindowsMap.set(label, { label, modelId: ARGON_POOL_MODEL_ID, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
+        }
+      } else if (family === "gem") {
         const label = is5h ? "Gem" : isWeekly ? "Gem (Weekly)" : "";
         if (label && !customWindowsMap.has(label)) {
           customWindowsMap.set(label, { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
         }
-      } else if (isClaude) {
+      } else if (family === "cla") {
         const label = is5h ? "Cla" : isWeekly ? "Cla (Weekly)" : "";
         if (label && !customWindowsMap.has(label)) {
           customWindowsMap.set(label, { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
@@ -164,7 +197,7 @@ function parseAntigravityQuotaSummary(body: Record<string, unknown> | null): Pro
     }
   }
 
-  const PREFERRED_ORDER = ["Gem", "Gem (Weekly)", "Cla", "Cla (Weekly)"];
+  const PREFERRED_ORDER = ["Gem", "Gem (Weekly)", "Cla", "Cla (Weekly)", "Argon", "Argon (Weekly)"];
   const customWindows = Array.from(customWindowsMap.values()).sort((a, b) => {
     const ia = PREFERRED_ORDER.indexOf(a.label);
     const ib = PREFERRED_ORDER.indexOf(b.label);

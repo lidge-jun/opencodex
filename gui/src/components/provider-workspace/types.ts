@@ -62,6 +62,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
+  pauseDetails?: { reason: string; pausedAt: number };
   autoSwitchThresholdOverride?: number | null;
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
@@ -73,6 +74,8 @@ export type OAuthAccountRow = AccountQuotaReading & {
 };
 
 export type ApiKeyRow = AccountQuotaReading & {
+  disabled?: boolean;
+  pauseDetails?: { reason: string; pausedAt: number };
   id: string;
   label?: string;
   masked: string;

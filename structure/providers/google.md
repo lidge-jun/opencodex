@@ -1,5 +1,24 @@
 # Google Provider
 
+Created: 2026-10-16 | Updated: 2026-10-18 | Version: 1.1 (Vertex endpoint selection)
+
+## Vertex API-key endpoint selection
+
+`src/adapters/google-vertex-endpoint.ts` selects the Vertex endpoint once per request and the
+same selection feeds the thought-signature replay namespace. API keys follow explicit provider
+configuration only: `provider.project` selects
+`/v1/projects/{project}/locations/{location}/...` with `provider.location` or `global`, which
+keeps models such as Gemini 4 Argon reachable when express mode would pick a region without
+them. Without `provider.project`, API keys keep the projectless express endpoint even when
+`GOOGLE_CLOUD_PROJECT`, `GCLOUD_PROJECT` or `GOOGLE_CLOUD_LOCATION` are set, so an unrelated
+gcloud default cannot move an express key onto another project. Those environment fallbacks
+apply to ADC only, which still requires a project and a location and resolves service-account
+markers per request. Every branch validates the location and rejects a model id that is not a
+single path segment before any credential is attached; keys stay in `x-goog-api-key`.
+`tests/adapters/google/gcp-adc.test.ts` and
+`tests/adapters/google/google-vertex-thought-signature.test.ts` cover the selection, ambient
+environment isolation, ADC fallbacks, model-path rejection, and replay isolation.
+
 ## Vertex credential markers
 
 `src/lib/gcp-adc.ts` resolves an explicit `gcp-sa:<account>` through the OS credential store.
@@ -113,9 +132,18 @@ Google-family requests serialize a model tool-call turn and its results as one a
 `model -> user` pair. The user turn contains exactly one `functionResponse` for every representable
 call in original call order. Missing results use an explicit unknown-history marker; duplicate,
 mismatched, and standalone results become marked text instead of unpaired function responses.
-Representable data-URL images remain sibling `inline_data` parts in either case.
+For Vertex `gemini-4-argon`, matched results carry representable data-URL images inside
+`functionResponse.parts`, preserving each image's call ownership. Sibling images on that route can
+produce a misleading "Requests ending with a model turn are not supported" error even when the
+last turn is `user`. When an adjacent orphan batch contains representable images on that route,
+the entire marked orphan batch follows the complete function-response batch in a separate user
+turn, preserving orphan result order and image bytes without assigning an orphan image to another call. Text-only
+orphans, standalone orphans and other routes retain their existing representation.
+`tests/adapters/google/google-vertex-thought-signature.test.ts` covers the scoped wire format.
 
 > Decision record: [ADR-0058](../decisions/ADR-0058-google-tool-result-adjacency-repair.md)
+> Decision record: [ADR-7279](../decisions/ADR-7279-vertex-argon-tool-images.md)
+> Decision record: [ADR-7280](../decisions/ADR-7280-vertex-argon-orphan-images.md)
 
 ## Google opening functionCall repair
 

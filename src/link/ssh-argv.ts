@@ -6,6 +6,8 @@
  * - HostKeyAlias=<alias> with UserKnownHostsFile=<link known_hosts> and
  *   GlobalKnownHostsFile=none: only a host key the user confirmed for this link is trusted,
  *   and the stored entry has the same form for every port and ProxyJump route.
+ * - HashKnownHosts=no: private probe records keep their alias-prefixed form even
+ *   when the user's normal SSH configuration hashes its own known_hosts file.
  * - KnownHostsCommand=none, VerifyHostKeyDNS=no and CheckHostIP=no: no other source of host-key
  *   trust (a helper command, DNS SSHFP records, IP entries) can stand in for the link file.
  *   Command-line options win over ~/.ssh/config, so a user config cannot re-enable them.
@@ -73,6 +75,7 @@ function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "a
     "-o", `StrictHostKeyChecking=${strict}`,
     "-o", `HostKeyAlias=${alias}`,
     "-o", `UserKnownHostsFile=${optionPath(knownHostsFile)}`,
+    "-o", "HashKnownHosts=no",
     "-o", "GlobalKnownHostsFile=none",
     "-o", "KnownHostsCommand=none",
     "-o", "VerifyHostKeyDNS=no",
