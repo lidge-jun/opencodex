@@ -939,6 +939,8 @@ describe("google adapter — Vertex and direct Gemini thought-text opt-in", () =
     const vertexOptIn = { ...vertexBase, showThinkingSummary: true };
     expect(await wireThinkingConfig(vertexOptIn, "gemini-2.5-flash", "high")).toBeUndefined();
     expect(await wireThinkingConfig(vertexOptIn, "gemini-3.1-flash-image", "high")).toBeUndefined();
+    expect(await wireThinkingConfig({ ...vertexOptIn, noReasoningModels: ["gemini-4-argon"] }, "gemini-4-argon", "high")).toBeUndefined();
+    expect(await wireThinkingConfig({ ...directBase, showThinkingSummary: true, noReasoningModels: ["gemini-3.5-flash"] }, "gemini-3.5-flash", "high")).toBeUndefined();
   });
 
   test("emits thinking_delta for Vertex and direct Gemini only when showThinkingSummary is true", async () => {

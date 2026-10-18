@@ -1033,10 +1033,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         : provider.googleMode === "vertex" || openCodeZenGeminiEndpoint(provider, parsed.modelId) !== undefined
           ? parsed.modelId
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
+      const configuredEfforts = configuredReasoningEfforts(provider, parsed.modelId);
       const thinkingEligible = provider.googleMode !== "cloud-code-assist"
         && !isImageCapableModel(parsed.modelId)
-        && (configuredReasoningEfforts(provider, parsed.modelId) !== undefined
-          || (provider.googleMode !== "vertex"
+        && (configuredEfforts !== undefined
+          ? configuredEfforts.length > 0
+          : (provider.googleMode !== "vertex"
             && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")));
       returnsThoughtSummaries = (provider.googleMode === "cloud-code-assist" || (thinkingEligible && provider.showThinkingSummary === true))
         && /^gemini-/.test(routedModelId) && !isImageCapableModel(parsed.modelId);
