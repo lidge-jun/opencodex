@@ -4,6 +4,7 @@ import { enrichProviderFromRegistry } from "../../src/providers/derive";
 import { providerMatchesRegistryTransportWithStaticGuards } from "../../src/providers/static-model-discovery";
 import { routedProviderConfig } from "../../src/router";
 import type { OcxProviderConfig } from "../../src/types";
+import { getModelMetadata } from "../../src/generated/model-metadata";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -45,5 +46,27 @@ describe("static opencode-go catalog destination ownership (#7097)", () => {
         expect(fetchCalls).toBe(0);
       });
     }
+  }
+});
+
+describe("static opencode-go model metadata additions", () => {
+  const ADDED_MODELS = [
+    { id: "gemini-4-argon-contributor", contextWindow: 1048576, maxTokens: 65536, reasoning: true },
+    { id: "gpt-6-luna", contextWindow: 1050000, maxTokens: 128000, reasoning: true },
+    { id: "deepseek-v4.1-flash", contextWindow: 1000000, maxTokens: 384000, reasoning: true },
+    { id: "longcat-2.5-preview-free", contextWindow: 1000000, maxTokens: 131072, reasoning: true },
+    { id: "step-5-preview", contextWindow: 256000, maxTokens: 64000, reasoning: true },
+    { id: "space-bunny", contextWindow: 1000000, maxTokens: 131072, reasoning: true },
+    { id: "beam-free", contextWindow: 1000000, maxTokens: 131072, reasoning: true },
+  ] as const;
+
+  for (const { id, contextWindow, maxTokens, reasoning } of ADDED_MODELS) {
+    test(`${id} exposes valid metadata in static catalog`, () => {
+      const meta = getModelMetadata("opencode-go", id);
+      expect(meta).toBeDefined();
+      expect(meta?.contextWindow).toBe(contextWindow);
+      expect(meta?.maxTokens).toBe(maxTokens);
+      expect(meta?.reasoning).toBe(reasoning);
+    });
   }
 });
