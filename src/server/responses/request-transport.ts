@@ -71,7 +71,7 @@ import {
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { isCodexWsExecutor, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { codexWsExecutorBinding, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
@@ -758,7 +758,8 @@ export async function prepareResponsesTransport(
           pacingChanged = false;
         }
         if (selectionIsCurrent(requestBindings.get(wireRequest)) && copilotSessionExpiresAt > Date.now() + 1000) {
-          const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? execute;
+          const ws = codexWsExecutorBinding(execute);
+          const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? ws?.http ?? execute;
           const binding = requestBindings.get(wireRequest);
           const snapshot = anthropicInstance !== undefined && binding?.kind === "oauth"
             ? binding.snapshot : undefined;
@@ -799,7 +800,9 @@ export async function prepareResponsesTransport(
             }
             commitKeyAttemptSend();
             // The WS executor dials its own socket: HTTP connection policy and body coding do not apply.
-            response = isCodexWsExecutor(execute) ? await execute(destination, dispatchInit) : await sendWithConnectionPolicy(
+            // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
+            // provider reselected above was not, so it takes the HTTP fallback under its own route.
+            response = ws?.provider === route.provider ? await execute(destination, dispatchInit) : await sendWithConnectionPolicy(
               distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
               destination,
               { ...dispatchInit, redirect: "manual",
