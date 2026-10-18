@@ -1033,7 +1033,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         : provider.googleMode === "vertex" || openCodeZenGeminiEndpoint(provider, parsed.modelId) !== undefined
           ? parsed.modelId
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
-      returnsThoughtSummaries = provider.googleMode === "cloud-code-assist"
+      const thinkingEligible = provider.googleMode !== "cloud-code-assist"
+        && !isImageCapableModel(parsed.modelId)
+        && (configuredReasoningEfforts(provider, parsed.modelId) !== undefined
+          || (provider.googleMode !== "vertex"
+            && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")));
+      returnsThoughtSummaries = (provider.googleMode === "cloud-code-assist" || (thinkingEligible && provider.showThinkingSummary === true))
         && /^gemini-/.test(routedModelId) && !isImageCapableModel(parsed.modelId);
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
       const identityModelId = provider.googleMode === "cloud-code-assist" ? routedModelId : parsed.modelId;
@@ -1073,15 +1078,19 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // current behavior; Vertex participates only through an explicitly configured ladder (the
       // seed google-vertex entry ships none). Image models are excluded — thinkingConfig would
       // suppress the responseModalities fallback below. CCA maps effort on its envelope path.
-      const thinkingEligible = provider.googleMode !== "cloud-code-assist"
-        && !isImageCapableModel(parsed.modelId)
-        && (configuredReasoningEfforts(provider, parsed.modelId) !== undefined
-          || (provider.googleMode !== "vertex"
-            && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")));
       const thinkingLevel = thinkingEligible
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
-      if (thinkingLevel) generationConfig.thinkingConfig = { thinkingLevel };
+      const includeThoughts = thinkingEligible
+        && provider.showThinkingSummary === true
+        && parsed.options.hideThinkingSummary !== true
+        && /^gemini-/.test(routedModelId);
+      if (thinkingLevel || includeThoughts) {
+        generationConfig.thinkingConfig = {
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+          ...(includeThoughts ? { includeThoughts: true } : {}),
+        };
+      }
       if (!generationConfig.thinkingConfig && isImageCapableModel(parsed.modelId)) {
         generationConfig.responseModalities = ["TEXT", "IMAGE"];
       }

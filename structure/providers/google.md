@@ -75,12 +75,13 @@ these fixtures do not attest live upstream availability.
 ## Google thought-text visibility boundary
 
 Google-family parts with `thought: true` stay separate from assistant output. After a CCA
-Gemini request is built, the shared streaming/buffered classifier emits `thinking_delta` for
-these provider-authored summaries. Other Google wires, non-Gemini CCA models and uninitialized
-adapters retain `reasoning_raw_delta`. Model provenance is refreshed on every build.
+Gemini request or a `showThinkingSummary`-opted-in Gemini request is built, the shared
+streaming/buffered classifier emits `thinking_delta` for these provider-authored summaries.
+Other Google wires without the opt-in, non-Gemini models and uninitialized adapters retain
+`reasoning_raw_delta`. Model provenance is refreshed on every build.
 `showThinkingSummary` defaults on only for the Antigravity preset; explicit provider false and
-explicit wire summary none win. Eligible CCA Gemini requests use `includeThoughts: true` only
-when provider opt-in and per-request display both allow it. Thought signatures remain attached
+explicit wire summary none win. Eligible CCA, Vertex and direct Gemini requests use
+`includeThoughts: true` only when provider opt-in and per-request display both allow it. Thought signatures remain attached
 to their tool calls independently; they never become Anthropic thinking signatures.
 
 The visibility marker is the boolean `thought: true`, not the presence of a `thoughtSignature`

@@ -870,6 +870,101 @@ describe("google adapter — Antigravity thought-text opt-in", () => {
 });
 
 
+describe("google adapter — Vertex and direct Gemini thought-text opt-in", () => {
+  const vertexBase = {
+    adapter: "google",
+    googleMode: "vertex",
+    baseUrl: "https://aiplatform.googleapis.com",
+    apiKey: "vertex-key",
+    project: "fixture-proj",
+    location: "global",
+    modelReasoningEfforts: { "gemini-4-argon": ["low", "medium", "high"] },
+  } as const;
+  const directBase = {
+    adapter: "google",
+    baseUrl: "https://generativelanguage.googleapis.com",
+    apiKey: "direct-key",
+    modelReasoningEfforts: { "gemini-4-argon": ["low", "medium", "high"] },
+  } as const;
+
+  function makeParsed(modelId: string, effort?: string, hideThinkingSummary?: boolean): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      options: { ...(effort ? { reasoning: effort } : {}), ...(hideThinkingSummary ? { hideThinkingSummary } : {}) },
+      context: { messages: [{ role: "user", content: "hi" }], tools: [] },
+    } as unknown as OcxParsedRequest;
+  }
+
+  async function wireThinkingConfig(
+    providerConfig: Record<string, unknown>,
+    modelId: string,
+    effort?: string,
+    hideThinkingSummary?: boolean,
+  ): Promise<Record<string, unknown> | undefined> {
+    const { body } = await createGoogleAdapter(providerConfig as never)
+      .buildRequest(makeParsed(modelId, effort, hideThinkingSummary));
+    const parsedBody = JSON.parse(body) as {
+      generationConfig?: { thinkingConfig?: Record<string, unknown> };
+    };
+    return parsedBody.generationConfig?.thinkingConfig;
+  }
+
+  test("opts Vertex and direct Gemini into includeThoughts when showThinkingSummary is true", async () => {
+    const vertexOptIn = { ...vertexBase, showThinkingSummary: true };
+    const directOptIn = { ...directBase, showThinkingSummary: true };
+    expect(await wireThinkingConfig(vertexOptIn, "gemini-4-argon", "high"))
+      .toEqual({ thinkingLevel: "high", includeThoughts: true });
+    expect(await wireThinkingConfig(vertexOptIn, "gemini-4-argon"))
+      .toEqual({ includeThoughts: true });
+    expect(await wireThinkingConfig(directOptIn, "gemini-4-argon", "medium"))
+      .toEqual({ thinkingLevel: "medium", includeThoughts: true });
+    expect(await wireThinkingConfig(directOptIn, "gemini-3.5-flash"))
+      .toEqual({ includeThoughts: true });
+  });
+
+  test("omits includeThoughts when showThinkingSummary is absent, false, or client-suppressed", async () => {
+    const vertexOptIn = { ...vertexBase, showThinkingSummary: true };
+    expect(await wireThinkingConfig(vertexBase, "gemini-4-argon", "high"))
+      .toEqual({ thinkingLevel: "high" });
+    expect(await wireThinkingConfig({ ...vertexBase, showThinkingSummary: false }, "gemini-4-argon", "high"))
+      .toEqual({ thinkingLevel: "high" });
+    expect(await wireThinkingConfig(vertexOptIn, "gemini-4-argon", "high", true))
+      .toEqual({ thinkingLevel: "high" });
+    expect(await wireThinkingConfig(vertexOptIn, "gemini-4-argon", undefined, true))
+      .toBeUndefined();
+  });
+
+  test("excludes unladdered Vertex models and image-capable models from includeThoughts", async () => {
+    const vertexOptIn = { ...vertexBase, showThinkingSummary: true };
+    expect(await wireThinkingConfig(vertexOptIn, "gemini-2.5-flash", "high")).toBeUndefined();
+    expect(await wireThinkingConfig(vertexOptIn, "gemini-3.1-flash-image", "high")).toBeUndefined();
+  });
+
+  test("emits thinking_delta for Vertex and direct Gemini only when showThinkingSummary is true", async () => {
+    const payload = {
+      candidates: [{
+        content: { parts: [{ thought: true, text: "vertex summary" }, { text: "answer" }] },
+        finishReason: "STOP",
+      }],
+    };
+    const optedInAdapter = withTestTranslatorBudget(createGoogleAdapter({ ...vertexBase, showThinkingSummary: true } as never));
+    await optedInAdapter.buildRequest(makeParsed("gemini-4-argon", "high"));
+    const optedInEvents = await optedInAdapter.parseResponse!(Response.json(payload));
+    expect(optedInEvents[0]).toEqual({ type: "thinking_delta", thinking: "vertex summary" });
+
+    const defaultAdapter = withTestTranslatorBudget(createGoogleAdapter(vertexBase as never));
+    await defaultAdapter.buildRequest(makeParsed("gemini-4-argon", "high"));
+    const defaultEvents = await defaultAdapter.parseResponse!(Response.json(payload));
+    expect(defaultEvents[0]).toEqual({ type: "reasoning_raw_delta", text: "vertex summary" });
+
+    const unladderedAdapter = withTestTranslatorBudget(createGoogleAdapter({ ...vertexBase, showThinkingSummary: true } as never));
+    await unladderedAdapter.buildRequest(makeParsed("gemini-2.5-flash", "high"));
+    const unladderedEvents = await unladderedAdapter.parseResponse!(Response.json(payload));
+    expect(unladderedEvents[0]).toEqual({ type: "reasoning_raw_delta", text: "vertex summary" });
+  });
+});
+
 describe("CCA thought summary provenance and replay", () => {
   const cca = { adapter: "google", googleMode: "cloud-code-assist", baseUrl: "https://daily-cloudcode-pa.googleapis.com",
     apiKey: "fixture-key", project: "fixture-project", showThinkingSummary: true } as const;
