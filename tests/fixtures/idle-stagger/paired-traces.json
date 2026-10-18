@@ -1,0 +1,32 @@
+{
+  "description": "SYNTHETIC ONLY. Same 300-minute horizon and logical cohort across passive, legacy, offline-policy; hypothetical availability, not upstream measurements.",
+  "traces": [
+    {
+      "name": "passive", "startMs": 0, "endMs": 18000000,
+      "observations": [
+        {"atMs": 0, "accounts":{"A":"usable","B":"unusable"}},
+        {"atMs": 3600000, "accounts":{"A":"unusable","B":"unusable"}},
+        {"atMs": 10800000, "accounts":{"A":"unknown","B":"unusable"}},
+        {"atMs": 14400000, "accounts":{"A":"usable","B":"unusable"}}
+      ]
+    },
+    {
+      "name": "legacy", "startMs": 0, "endMs": 18000000,
+      "observations": [
+        {"atMs": 0, "accounts":{"A":"usable","B":"usable"}},
+        {"atMs": 5400000, "accounts":{"A":"unusable","B":"unusable"}},
+        {"atMs": 12600000, "accounts":{"A":"unknown","B":"unusable"}},
+        {"atMs": 14400000, "accounts":{"A":"usable","B":"usable"}}
+      ]
+    },
+    {
+      "name": "offline-policy", "startMs": 0, "endMs": 18000000,
+      "observations": [
+        {"atMs": 0, "accounts":{"A":"usable","B":"unusable"}},
+        {"atMs": 5400000, "accounts":{"A":"unusable","B":"usable"}},
+        {"atMs": 10800000, "accounts":{"A":"unusable","B":"unknown"}},
+        {"atMs": 14400000, "accounts":{"A":"usable","B":"usable"}}
+      ]
+    }
+  ]
+}
