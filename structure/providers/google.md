@@ -172,7 +172,8 @@ tool call and turns with Responses `phase: "final_answer"` are replayed whole.
 whitespace, a script's own sentence terminator (CJK, Devanagari, Arabic, Armenian, Ethiopic,
 Myanmar), or a line break, with trailing closing quotes,
 brackets and Markdown emphasis kept. Boundaries that only close a leading list marker or
-`e.g.`/`i.e.`/`etc.`/`vs.` are skipped. It never matches wording.
+`e.g.`/`i.e.`/`etc.`/`vs.` are skipped. Boundary checks use a fixed-size suffix and scan
+intervening whitespace intervals once, keeping the split linear in text length. It never matches wording.
 
 Final answers (assistant turns without tool calls), non-Gemini models such as Claude on
 Antigravity, tool calls, their signatures and client-visible output are unchanged. A leak in the
