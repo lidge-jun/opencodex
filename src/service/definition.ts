@@ -90,8 +90,16 @@ export function parseBakedListenPort(read: () => string): number | null {
 export function resolvedProxyEnv(env: NodeJS.ProcessEnv = process.env): { name: string; value: string }[] {
   const resolved: { name: string; value: string }[] = [];
   for (const key of PROXY_ENV_KEYS) {
-    const value = env[key]?.trim() || env[key.toLowerCase()]?.trim();
+    const value = [env[key]?.trim(), env[key.toLowerCase()]?.trim()].find(v => v && !OWN_CLAUDE_INTERCEPT_PROXY.test(v));
     if (value) resolved.push({ name: key, value });
   }
   return resolved;
 }
+
+/**
+ * The URL Claude first-party writes into `~/.claude/settings.json` (`claudeInterceptProxyUrl`),
+ * which every process Claude Code starts inherits. Baked into the service, it would send the
+ * proxy's own outbound traffic back through its intercept listener. Only the token-bearing form
+ * is matched: a plain `http://127.0.0.1:<port>` is a user's local proxy client and is kept.
+ */
+const OWN_CLAUDE_INTERCEPT_PROXY = /^http:\/\/opencodex:[^@/]+@127\.0\.0\.1:\d{1,5}\/?$/i;
