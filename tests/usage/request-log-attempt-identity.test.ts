@@ -56,4 +56,19 @@ describe("request log attempt identity", () => {
       },
     });
   });
+
+  test("cache reads sum across attempts that report them under different fields", () => {
+    // An Anthropic leg reports both fields; an OpenAI-shaped leg only cachedInputTokens.
+    const anthropic = beginRequestAttempt(1, "anthropic", "model-a", "anthropic");
+    noteAttemptSend(anthropic, undefined);
+    finishRequestAttempt(anthropic, 502, 1, { inputTokens: 100, outputTokens: 0, cachedInputTokens: 60, cacheReadInputTokens: 60 });
+    const openai = beginRequestAttempt(2, "openai", "model-b", "openai-chat");
+    noteAttemptSend(openai, undefined);
+    finishRequestAttempt(openai, 200, 1, { inputTokens: 100, outputTokens: 5, cachedInputTokens: 40 });
+
+    expect(aggregateAttemptUsage([anthropic, openai]).usage).toMatchObject({
+      cachedInputTokens: 100,
+      cacheReadInputTokens: 100,
+    });
+  });
 });
