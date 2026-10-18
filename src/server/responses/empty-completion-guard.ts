@@ -243,6 +243,11 @@ export async function* guardEmptyCompletionEventStream(
     heldBytes = 0;
     return released;
   };
+  // Held events from a discarded attempt are released with the retry's output, so a boundary
+  // keeps the retry's reasoning from being appended to the discarded attempt's reasoning item.
+  const markRetryBoundary = () => {
+    if (held.length > 0 && held.at(-1)?.type !== "assistant_boundary") held.push({ type: "assistant_boundary" });
+  };
 
   while (true) {
     let terminalSeen = false;
@@ -279,6 +284,7 @@ export async function* guardEmptyCompletionEventStream(
         if (retries < maxRetries) {
           // Suppress the terminal: the client must never see a completed event
           // for a turn that produced nothing. Retry the identical turn.
+          markRetryBoundary();
           retries += 1;
           try {
             source = await options.continuation();
@@ -300,6 +306,7 @@ export async function* guardEmptyCompletionEventStream(
           // malformed function call). Nothing actionable reached the client, so this is the same
           // replay-safe shape as an empty completion: retry the identical turn once.
           usage = mergeUsage(usage, event.usage);
+          markRetryBoundary();
           retries += 1;
           try {
             source = await options.continuation();
@@ -351,6 +358,7 @@ export async function* guardEmptyCompletionEventStream(
       // actionable reached the client. Retry once, then surface a stated error
       // instead of letting the bridge reduce the turn to adapter_eof.
       if (!sawContent && !passthrough && retries < maxRetries) {
+        markRetryBoundary();
         retries += 1;
         try {
           source = await options.continuation();
