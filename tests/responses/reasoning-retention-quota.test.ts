@@ -110,6 +110,50 @@ describe("applyReasoningRetention archive quota", () => {
     },
   );
 
+  test.each(["read", "stat", "undefined", "success"] as const)("scan and close failure priority (%s)", kind => {
+    const archiveDir = setup();
+    const prior = join(archiveDir, "prior.md");
+    writeFileSync(prior, "preserve");
+    const primary = kind === "undefined" ? undefined : new Error(`fixture primary ${kind}`);
+    const secondary = new Error("fixture close failure");
+    const openDirectory = fs.opendirSync.bind(fs);
+    const originalStat = fs.lstatSync.bind(fs);
+    let closes = 0;
+    const stat = kind === "stat" ? spyOn(fs, "lstatSync").mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+      if (String(path) === prior) throw primary;
+      return (originalStat as (...args: unknown[]) => unknown)(path, ...args);
+    }) as typeof fs.lstatSync) : undefined;
+    const open = spyOn(fs, "opendirSync").mockImplementation(((path: fs.PathLike) => {
+      const dir = openDirectory(path, { bufferSize: 1 });
+      const read = dir.readSync.bind(dir);
+      const close = dir.closeSync.bind(dir);
+      dir.readSync = () => {
+        if (kind === "read" || kind === "undefined") throw primary;
+        return read();
+      };
+      dir.closeSync = () => { closes++; close(); throw secondary; };
+      return dir;
+    }) as typeof fs.opendirSync);
+    const input = [reasoningItem("original reasoning")];
+    const before = structuredClone(input);
+    let rejected = false;
+    let failure: unknown;
+    try {
+      try { applyReasoningRetention(input, { archiveDir, maxTokens: 1, archiveMaxFiles: 1 }); }
+      catch (error) { rejected = true; failure = error; }
+      expect(rejected).toBe(true);
+      expect(failure).toBeInstanceOf(ReasoningArchiveError);
+      expect(Object.hasOwn(failure as object, "cause")).toBe(true);
+      expect((failure as Error).cause).toBe(kind === "success" ? secondary : primary);
+      expect((failure as Error).message).toContain(kind === "success" ? "could not be closed"
+        : kind === "stat" ? "not inspectable" : "cannot be scanned");
+      expect(closes).toBe(1);
+      expect(input).toEqual(before);
+      expect(readdirSync(archiveDir)).toEqual(["prior.md"]);
+      expect(readFileSync(prior, "utf8")).toBe("preserve");
+    } finally { open.mockRestore(); stat?.mockRestore(); }
+  });
+
   test("byte cap admits an exactly fitting archive and refuses one byte over", () => {
     const archiveDir = setup();
     const input = [reasoningItem("x".repeat(100))];

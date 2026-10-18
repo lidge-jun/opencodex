@@ -194,6 +194,7 @@ function scanArchiveUsage(archiveDir: string, maxBytes: number, maxFiles: number
   let files = 0;
   let bytes = 0;
   let inspected = 0;
+  let failure: ReasoningArchiveError | undefined;
   try {
     // One entry per read: a legacy over-capacity directory must not first become an array
     // or an unbounded read-ahead buffer on this synchronous request path.
@@ -218,13 +219,14 @@ function scanArchiveUsage(archiveDir: string, maxBytes: number, maxFiles: number
       if (inspected >= maxFiles) throw new ReasoningArchiveError("reasoning archive scan changed beyond its inspection limit");
     }
   } catch (error) {
-    if (error instanceof ReasoningArchiveError) throw error;
-    throw new ReasoningArchiveError("reasoning archive directory cannot be scanned", { cause: error });
+    failure = error instanceof ReasoningArchiveError ? error
+      : new ReasoningArchiveError("reasoning archive directory cannot be scanned", { cause: error });
   } finally {
     try { directory?.closeSync(); } catch (error) {
-      throw new ReasoningArchiveError("reasoning archive directory could not be closed", { cause: error });
+      failure ??= new ReasoningArchiveError("reasoning archive directory could not be closed", { cause: error });
     }
   }
+  if (failure !== undefined) throw failure;
   return { files, bytes };
 }
 
