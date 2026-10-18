@@ -418,6 +418,32 @@ test.each(["absent", "empty"] as const)("a valid %s snapshot still retires the p
   expect(isCodexFailureWindowDegraded("a")).toBe(false);
 });
 
+test.each(["[]", "false", "0", "null", "\"\"", "\"text\""])("a wrong-shaped top-level snapshot %s preserves the failure window", contents => {
+  const cfg = config({ activeCodexAccountPinned: "a" });
+  const record = poolTerminal(cfg);
+  const path = join(home, "codex-accounts.json");
+  const bytes = readFileSync(path);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    for (let index = 0; index < 20; index++) record("failed", 500);
+    expect(isCodexFailureWindowDegraded("a")).toBe(true);
+    failureWindowSteersNewThreads(cfg, "a", Date.now());
+    expect(warn).toHaveBeenCalledTimes(1);
+    writeFileSync(path, contents);
+    expect(isCodexFailureWindowDegraded("a")).toBe(true);
+    expect(accountStore.beginCodexAccountGenerationLiveCheck().snapshotStatus).toBe("failed");
+    failureWindowSteersNewThreads(cfg, "a", Date.now());
+    expect(warn).toHaveBeenCalledTimes(1);
+    writeFileSync(path, bytes);
+    expect(isCodexFailureWindowDegraded("a")).toBe(true);
+    failureWindowSteersNewThreads(cfg, "a", Date.now());
+    expect(warn).toHaveBeenCalledTimes(1);
+  } finally {
+    warn.mockRestore();
+    writeFileSync(path, bytes);
+  }
+});
+
 test("a replacement does not inherit the previous generation's recovery timer", () => {
   const cfg = config();
   const firstGeneration = readCodexAccountRecord("a")!.generation;

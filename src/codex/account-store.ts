@@ -150,6 +150,7 @@ function loadCodexAccountRecordStoreResult(): CodexAccountRecordStoreResult {
   const normalized: CodexAccountStore = {};
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as RawCodexAccountStore;
+    if (!isObject(raw)) throw new Error("invalid Codex account store shape");
     for (const [id, value] of Object.entries(raw)) {
       const record = normalizeRecord(value);
       if (record) normalized[id] = record;
