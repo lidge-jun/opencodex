@@ -14,6 +14,7 @@ import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
 import { clearAccountQuota } from "./quota";
 import { forgetManualPreference } from "./routing/active-account";
 import { deleteAllHealthForAccount } from "./routing/health-store";
+import { forgetCodexFailureWindow } from "./routing/failure-window";
 import { clearThreadAccountMapForAccount } from "./routing/thread-affinity";
 
 import { clearCodexPoolRefreshFailure } from "./pool-refresh-backoff";
@@ -49,11 +50,15 @@ export function purgeCodexAccountRuntimeState(accountId: string): void {
   clearAccountNeedsReauth(accountId);
   clearAccountQuota(accountId);
   clearThreadAccountMapForAccount(accountId);
-  // Deliberately not via `./routing`: the account-delete path only needs the health rows and
-  // the manual preference gone, and importing the router here closed a cycle through
-  // routing/health-store and routing/active-account.
+  // Deliberately not via `./routing`: the account-delete path only needs the health rows
+  // and their sibling routing state gone, and importing the router barrel here closed a
+  // cycle through routing/health-store and routing/active-account. The leaf imports below
+  // carry every per-account forget that barrel helper used to perform — including the
+  // failure window, whose degrade and pin-warning state must not leak into a replacement
+  // account or a new physical login behind __main__.
   deleteAllHealthForAccount(accountId);
   forgetManualPreference(accountId);
+  forgetCodexFailureWindow(accountId);
   clearCodexPoolRefreshFailure(accountId);
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
     clearMainAccountInfoCache();
