@@ -950,20 +950,118 @@ describe("google adapter — Vertex and direct Gemini thought-text opt-in", () =
         finishReason: "STOP",
       }],
     };
-    const optedInAdapter = withTestTranslatorBudget(createGoogleAdapter({ ...vertexBase, showThinkingSummary: true } as never));
-    await optedInAdapter.buildRequest(makeParsed("gemini-4-argon", "high"));
-    const optedInEvents = await optedInAdapter.parseResponse!(Response.json(payload));
-    expect(optedInEvents[0]).toEqual({ type: "thinking_delta", thinking: "vertex summary" });
 
-    const defaultAdapter = withTestTranslatorBudget(createGoogleAdapter(vertexBase as never));
-    await defaultAdapter.buildRequest(makeParsed("gemini-4-argon", "high"));
-    const defaultEvents = await defaultAdapter.parseResponse!(Response.json(payload));
-    expect(defaultEvents[0]).toEqual({ type: "reasoning_raw_delta", text: "vertex summary" });
+    async function extractFirstEvent(
+      adapter: ReturnType<typeof createGoogleAdapter>,
+      stream: boolean,
+    ): Promise<AdapterEvent | undefined> {
+      if (stream) {
+        for await (const event of adapter.parseStream(
+          new Response(`data: ${JSON.stringify(payload)}
 
-    const unladderedAdapter = withTestTranslatorBudget(createGoogleAdapter({ ...vertexBase, showThinkingSummary: true } as never));
-    await unladderedAdapter.buildRequest(makeParsed("gemini-2.5-flash", "high"));
-    const unladderedEvents = await unladderedAdapter.parseResponse!(Response.json(payload));
-    expect(unladderedEvents[0]).toEqual({ type: "reasoning_raw_delta", text: "vertex summary" });
+`, {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        )) {
+          return event;
+        }
+        return undefined;
+      }
+      const events = await adapter.parseResponse!(Response.json(payload));
+      return events[0];
+    }
+
+    for (const stream of [false, true]) {
+      const optedInVertexAdapter = withTestTranslatorBudget(
+        createGoogleAdapter({ ...vertexBase, showThinkingSummary: true } as never),
+      );
+      await optedInVertexAdapter.buildRequest(makeParsed("gemini-4-argon", "high"));
+      expect(await extractFirstEvent(optedInVertexAdapter, stream)).toEqual({
+        type: "thinking_delta",
+        thinking: "vertex summary",
+      });
+
+      const optedInDirectAdapter = withTestTranslatorBudget(
+        createGoogleAdapter({ ...directBase, showThinkingSummary: true } as never),
+      );
+      await optedInDirectAdapter.buildRequest(makeParsed("gemini-3.5-flash", "high"));
+      expect(await extractFirstEvent(optedInDirectAdapter, stream)).toEqual({
+        type: "thinking_delta",
+        thinking: "vertex summary",
+      });
+
+      const defaultAdapter = withTestTranslatorBudget(createGoogleAdapter(vertexBase as never));
+      await defaultAdapter.buildRequest(makeParsed("gemini-4-argon", "high"));
+      expect(await extractFirstEvent(defaultAdapter, stream)).toEqual({
+        type: "reasoning_raw_delta",
+        text: "vertex summary",
+      });
+
+      const unladderedAdapter = withTestTranslatorBudget(
+        createGoogleAdapter({ ...vertexBase, showThinkingSummary: true } as never),
+      );
+      await unladderedAdapter.buildRequest(makeParsed("gemini-2.5-flash", "high"));
+      expect(await extractFirstEvent(unladderedAdapter, stream)).toEqual({
+        type: "reasoning_raw_delta",
+        text: "vertex summary",
+      });
+    }
+  });
+
+  test("reused adapter resets summary provenance across eligible and ineligible Vertex and direct Gemini models", async () => {
+    const payload = {
+      candidates: [{
+        content: { parts: [{ thought: true, text: "thought text" }, { text: "answer" }] },
+        finishReason: "STOP",
+      }],
+    };
+
+    async function extractFirstEvent(
+      adapter: ReturnType<typeof createGoogleAdapter>,
+      stream: boolean,
+    ): Promise<AdapterEvent | undefined> {
+      if (stream) {
+        for await (const event of adapter.parseStream(
+          new Response(`data: ${JSON.stringify(payload)}
+
+`, {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        )) {
+          return event;
+        }
+        return undefined;
+      }
+      const events = await adapter.parseResponse!(Response.json(payload));
+      return events[0];
+    }
+
+    for (const stream of [false, true]) {
+      const vertexAdapter = withTestTranslatorBudget(
+        createGoogleAdapter({ ...vertexBase, showThinkingSummary: true } as never),
+      );
+      for (const [modelId, expected] of [
+        ["gemini-4-argon", { type: "thinking_delta", thinking: "thought text" }],
+        ["gemini-2.5-flash", { type: "reasoning_raw_delta", text: "thought text" }],
+        ["gemini-4-argon", { type: "thinking_delta", thinking: "thought text" }],
+        ["gemini-3.1-flash-image", { type: "reasoning_raw_delta", text: "thought text" }],
+      ] as const) {
+        await vertexAdapter.buildRequest(makeParsed(modelId, "high"));
+        expect(await extractFirstEvent(vertexAdapter, stream)).toEqual(expected);
+      }
+
+      const directAdapter = withTestTranslatorBudget(
+        createGoogleAdapter({ ...directBase, showThinkingSummary: true } as never),
+      );
+      for (const [modelId, expected] of [
+        ["gemini-3.5-flash", { type: "thinking_delta", thinking: "thought text" }],
+        ["gemini-3.1-flash-image", { type: "reasoning_raw_delta", text: "thought text" }],
+        ["gemini-3.5-flash", { type: "thinking_delta", thinking: "thought text" }],
+      ] as const) {
+        await directAdapter.buildRequest(makeParsed(modelId, "high"));
+        expect(await extractFirstEvent(directAdapter, stream)).toEqual(expected);
+      }
+    }
   });
 });
 
