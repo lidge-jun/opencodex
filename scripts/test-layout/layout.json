@@ -118,6 +118,7 @@
     "restart-replacement.test.ts": "server", "deepseek-artifact-tool-schema.test.ts": "providers",
     "client-config-export-output-limit.test.ts": "config", "qoder-client.test.ts": "clients", "responses-skills-snapshot.test.ts": "responses", "responses-code-mode-mcp-direct.test.ts": "responses", "local-read-response-proof.test.ts": "server",
     "claude-desktop-system-proxy.test.ts": "claude-integration", "codex-config-drift-heal.test.ts": "codex-integration",
+    "openai-chat-audio.test.ts": "adapters/openai",
     "openai-chat-serialized-tool-call-scaling.test.ts": "adapters/openai",
     "openai-chat-nonce-tool-call-content.test.ts": "adapters/openai",
     "openai-chat-tool-call-id-remint.test.ts": "adapters/openai",
