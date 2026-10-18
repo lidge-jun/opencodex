@@ -116,6 +116,20 @@ describe("combo stream preflight", () => {
     }
   });
 
+  test("converts a zero-output incomplete without a stated reason into a retryable failure", async () => {
+    for (const response of [
+      { id: "r1", status: "incomplete" },
+      { id: "r1", status: "incomplete", incomplete_details: null },
+    ]) {
+      const result = await preflightComboStreamResponse(sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        { type: "response.incomplete", response },
+      ), { model: "m1", provider: "a" });
+      expect(result.kind).toBe("failed");
+      expect(result.response.status).toBe(502);
+    }
+  });
+
   test("does not replay semantic incompletes that another provider cannot safely repair", async () => {
     const source = sse(
       { type: "response.created", response: { id: "r1", status: "in_progress" } },
