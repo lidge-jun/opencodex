@@ -476,13 +476,24 @@ export function trackStreamLifetime(
   registerTurn(ac, lease);
   const reader = body.getReader();
   let closed = false;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  // A drain aborts the turn's controller; many callers pass a fresh one nothing else listens to,
+  // so the tracked stream itself has to stop.
+  const onAbort = () => {
+    if (closed) return;
+    finish();
+    reader.cancel(ac.signal.reason).catch(() => {});
+    try { streamController?.error(ac.signal.reason); } catch { /* already closed */ }
+  };
   const finish = () => {
     if (closed) return;
     closed = true;
+    ac.signal.removeEventListener("abort", onAbort);
     unregisterTurn(ac);
     onDone?.();
   };
-  return new ReadableStream<Uint8Array>({
+  const tracked = new ReadableStream<Uint8Array>({
+    start(controller) { streamController = controller; },
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
@@ -499,6 +510,10 @@ export function trackStreamLifetime(
       reader.cancel(reason).catch(() => {});
     },
   });
+  // After registerTurn, so the lease's own abort listener (release the turn) runs first. A
+  // controller registerTurn already aborted (a settled lease) keeps its previous behaviour.
+  ac.signal.addEventListener("abort", onAbort, { once: true });
+  return tracked;
 }
 
 export async function drainAndShutdown(
