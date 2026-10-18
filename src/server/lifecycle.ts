@@ -481,9 +481,10 @@ export function trackStreamLifetime(
   // so the tracked stream itself has to stop.
   const onAbort = () => {
     if (closed) return;
-    finish();
+    // Stop the stream before the caller's onDone runs, so a throwing callback cannot leave it open.
     reader.cancel(ac.signal.reason).catch(() => {});
     try { streamController?.error(ac.signal.reason); } catch { /* already closed */ }
+    finish();
   };
   const finish = () => {
     if (closed) return;
