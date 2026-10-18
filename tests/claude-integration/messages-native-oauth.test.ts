@@ -828,7 +828,10 @@ test("a pool whose every account refuses on spent quota answers the usage limit 
     sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
     return Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture window spent" } }, {
       status: 429,
-      headers: { "anthropic-ratelimit-unified-7d-status": "rejected", "anthropic-ratelimit-unified-7d-reset": String(resetSeconds), "retry-after": "7200" },
+      headers: {
+        "anthropic-ratelimit-unified-7d-status": "rejected", "anthropic-ratelimit-unified-7d-reset": String(resetSeconds),
+        "retry-after": "7200", "request-id": "req_fixture_spent",
+      },
     });
   }) as typeof fetch;
   const { response, text, row } = await send(config, { ...BODY, stream: false });
@@ -839,6 +842,7 @@ test("a pool whose every account refuses on spent quota answers the usage limit 
     message: `All Anthropic OAuth accounts have reached their usage limit; the first one resets at ${new Date(resetSeconds * 1000).toISOString()}`,
   });
   expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(7_000);
+  expect(response.headers.get("request-id")).toBe("req_fixture_spent");
   expect(row.protocolTrace?.mode).toBe("native");
 });
 
