@@ -119,7 +119,7 @@ function statusText(row: AccountRow): string {
   // `paused` leads, and does NOT replace `selected`. A paused-but-selected account is the
   // state an operator most needs named -- requests route to it while the pool believes it is
   // held out -- so printing only one of the two would hide exactly the confusing case (#2703).
-  if (row.paused) parts.push("paused");
+  if (row.paused) parts.push(row.pauseDetails ? `paused(${row.pauseDetails.reason})` : "paused");
   if (row.active) parts.push(row.type === "codex" ? "selected" : "active");
   if (row.needsReauth && !(row.provider === "kiro" && row.skipReason === "needs_reauth")) {
     parts.push(row.needsReauthReason === "verify_account" ? "needs-reauth(verify)" : "needs-reauth");

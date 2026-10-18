@@ -1,4 +1,7 @@
 import { markAnthropicFamilyEnumeration } from "./quota/anthropic-family-headers";
+import { rawAnthropicUsageWindows } from "./quota/anthropic-decision-windows";
+import { bindRawDecisionWindows } from "./quota-decision-publication";
+import { decisionQuotaSinkActive } from "../lib/decision-quota-sink";
 import { CLAUDE_CLI_USER_AGENT } from "./claude-cli-identity";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS } from "./quota-wire";
 import type { ProviderQuota, ProviderQuotaWindow } from "./quota-types";
@@ -41,6 +44,7 @@ function parseClaudeLimit(value: unknown): ProviderQuotaWindow | null {
   return { label, scope: "model", percent, ...(resetAt !== undefined ? { resetAt } : {}) };
 }
 
+/** Read the Anthropic OAuth usage endpoint for an access token and return the parsed quota, or null on a non-OK or malformed response. */
 export async function readAnthropicUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
   const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
     headers: {
@@ -87,6 +91,7 @@ export async function readAnthropicUsageQuota(accessToken: string): Promise<Prov
     ...(customWindows.length > 0 ? { customWindows } : {}),
     updatedAt: Date.now(),
   };
+  if (decisionQuotaSinkActive()) bindRawDecisionWindows(quota, rawAnthropicUsageWindows(body, quota.updatedAt));
   // Empty / schema-changed payloads must not cache as "success with no bars".
   return hasQuotaRows(quota) ? markAnthropicFamilyEnumeration(quota, Array.isArray(body.limits) && body.limits.every(raw => {
     const kind = asRecord(raw)?.kind;

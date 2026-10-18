@@ -1,3 +1,4 @@
+import { captureAccountAutoPauseAttempt, wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { createPhysicalSendReporter, rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { createInferenceSendBudget } from "../inference/context";
@@ -1058,6 +1059,7 @@ export async function handleResponsesCompact(
     ) => {
       // A gateway response is not evidence about any Codex account.
       if (gatewayTransport || !usesCodexForwardPoolAuth(ctx, route.provider)) return;
+      if ((outcome === 401 || outcome === 403) && upstream && wasPermanentAccountRefusal(upstream)) return;
       recordCodexUpstreamOutcome(config, ctx.accountId, outcome, {
         ...meta,
         threadId: ctx.kind === "pool" || ctx.kind === "main-pool" ? ctx.affinityKey : undefined,
@@ -1166,6 +1168,7 @@ export async function handleResponsesCompact(
         providerFetch(sendProvider, undefined, {
           providerName: route.providerName,
           modelId: route.modelId,
+          accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: sendAuthCtx }, headers),
           beforeDispatch: isCanonicalOpenAiForwardProvider(sendProvider)
             ? createCodexAuthDispatchGuard(sendAuthCtx, config, selectedModelId, admission) : undefined,
           dispatchOverride: sendProvider.authMode !== "forward" && sendProvider.apiKey
@@ -1287,7 +1290,7 @@ export async function handleResponsesCompact(
 
     recordDistributedResponseFailure(upstream, config, route.providerName, req.signal);
     if (
-      upstream.status === 401
+      upstream.status === 401 && !wasPermanentAccountRefusal(upstream)
       && (authCtx.kind === "main-pool" || authCtx.kind === "pool")
       && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, compactProvider)
@@ -1411,12 +1414,12 @@ export async function handleResponsesCompact(
     // surfaces to the client, which retries the compact task OUTSIDE the logical request
     // — reporting exhausted retries while another pool account sat idle (#913).
     if (
-      (upstream.status === 429 || upstream.status === 402)
+      (upstream.status === 429 || upstream.status === 402 || wasAccountAutoPaused(upstream))
       // A replay refusal this proxy synthesized carries 429 for the client's benefit only.
       // It is not pool quota evidence, and the alternate account below is another send of a
       // compact turn that may already have been processed.
       && !isNonReplayableResponse(upstream)
-      && !storedPool401ReplayAttempted
+      && (!storedPool401ReplayAttempted || wasAccountAutoPaused(upstream))
       && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
@@ -1521,7 +1524,7 @@ export async function handleResponsesCompact(
     // the same guards as the quota move, and a 5xx whose body confirms quota keeps today's path.
     if (
       shouldRetryCodexPoolAccountTransient(upstream)
-      && !storedPool401ReplayAttempted
+      && (!storedPool401ReplayAttempted || wasAccountAutoPaused(upstream))
       && !gatewayTransport
       && usesCodexForwardPoolAuth(authCtx, route.provider)
       && !authCtx.fixedAccount
@@ -1642,7 +1645,7 @@ export async function handleResponsesCompact(
       inspectResponseLogJson(logCtx, compactText);
       if (!options.compactionRoutingOverride) forgetCompactHandoffRoute(req, admission);
       rememberServingConversationStateIssuer(outcomeCtx, codexPoolAffinityKey(req.headers));
-    } else if (!options.compactionRoutingOverride && quotaFailure && !storedPool401ReplayAttempted) {
+    } else if (!options.compactionRoutingOverride && quotaFailure && (!storedPool401ReplayAttempted || wasAccountAutoPaused(upstream))) {
       const fallbackModel = compactHandoffRoute(req, admission, raw.model);
       if (fallbackModel && !req.signal.aborted) {
         const fallbackReq = new Request(req.url, {

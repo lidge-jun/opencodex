@@ -153,6 +153,13 @@
       ]
     },
     {
+      "path": "remote-messaging.md",
+      "tier": 3,
+      "title": "Remote Codex Messaging",
+      "scope": "Explicit peer enrollment, connection-bound capabilities, bounded foreground SSH ownership and queued remote replies.",
+      "documents": ["src/messaging/", "src/cli/", "src/link/"]
+    },
+    {
       "path": "local-messaging.md",
       "tier": 3,
       "title": "Local Codex Messaging",
@@ -202,6 +209,13 @@
       "title": "Effort-clamp observations",
       "scope": "Persisted effort-clamp observation identity and idempotent sync notices.",
       "documents": ["src/codex/runtime.ts", "src/codex/catalog/effort.ts"]
+    },
+    {
+      "path": "catalog-routed-ownership.md",
+      "tier": 2,
+      "title": "Routed-row authorship",
+      "scope": "Generated routed-row ownership signals and combo catalog description overrides.",
+      "documents": ["src/codex/catalog/ownership.ts"]
     },
     {
       "path": "subagents.md",
@@ -452,7 +466,8 @@
       "documents": [
         "src/combos/",
         "src/server/",
-        "src/usage/"
+        "src/usage/",
+        "src/lib/decision-quota-sink.ts"
       ]
     },
     {
@@ -627,6 +642,17 @@
         "src/usage/",
         "src/usage/timeline.ts",
         "src/vision/"
+      ]
+    },
+    {
+      "path": "provider-completion-diagnostic.md",
+      "tier": 5,
+      "title": "Provider Completion Diagnostic",
+      "scope": "Explicit single-model completion test: consent, applicability gate, send-time authority fingerprint, bounded streaming and metadata comparison.",
+      "documents": [
+        "gui/",
+        "src/cli/",
+        "src/server/"
       ]
     },
     {
@@ -900,6 +926,27 @@
       "scope": "Test-runner home and case-scoped lifecycle teardown ordering.",
       "documents": [
         "tests/"
+      ]
+    },
+    {
+      "path": "account-auto-pause.md",
+      "tier": 2,
+      "title": "Account Auto-Pause",
+      "scope": "Opt-in permanent account refusal classification, credential fences, durable pause metadata, bounded recovery and resume.",
+      "documents": [
+        "src/oauth/account-auto-pause.ts",
+        "src/oauth/account-auto-pause-policy.ts",
+        "src/providers/api-key-pause.ts",
+        "src/types/account-auto-pause.ts",
+        "src/lib/account-auto-pause-response.ts",
+        "src/server/responses/request-transport.ts",
+        "src/server/responses/account-auto-pause-recovery.ts",
+        "src/codex/account-pause.ts",
+        "src/config/schema/account-auto-pause.ts",
+        "gui/src/hooks/useProviderAccountPools.ts",
+        "src/config/account-auto-pause-revisions.ts",
+        "src/oauth/api-key-pool-preserve.ts",
+        "gui/src/account-pause-display.ts"
       ]
     }
   ],

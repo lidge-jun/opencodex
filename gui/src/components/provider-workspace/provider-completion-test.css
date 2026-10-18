@@ -1,0 +1,22 @@
+.pws-completion-test {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+.pws-completion-test > h4,
+.pws-completion-result {
+  grid-column: 1 / -1;
+}
+.pws-completion-test > .custom-select {
+  min-width: 0;
+}
+.pws-completion-result {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .pws-completion-test {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -6,12 +6,8 @@ import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { GenerationContext } from "../lib/state-store-sweeper";
 
 export const ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS = 30 * 60_000;
-export type AnthropicModelFamily = "Fable" | "Opus" | "Sonnet";
-export function anthropicModelFamily(model?: string): AnthropicModelFamily | undefined {
-  return /(?:^|[/])claude-fable-5(?:-|$)/i.test(model ?? "") ? "Fable"
-    : /(?:^|[/])claude-opus-/i.test(model ?? "") ? "Opus"
-      : /(?:^|[/])claude-sonnet-/i.test(model ?? "") ? "Sonnet" : undefined;
-}
+import { anthropicModelFamily } from "./anthropic-model-family";
+export { anthropicModelFamily, type AnthropicModelFamily } from "./anthropic-model-family";
 
 export function anthropicModelPercents(quota: ProviderQuota | null, model?: string): number[] {
   const family = anthropicModelFamily(model);

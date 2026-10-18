@@ -1,6 +1,7 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
+import { accountPauseStateSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { nativeReasoningRetentionSchema } from "./native-reasoning-retention";
@@ -163,6 +164,9 @@ export const configSchema = z.object({
     .min(0)
     .optional()
     .catch(undefined),
+  // Opt-in outbound request compression (#7247). An unknown codec degrades to identity, matching
+  // the guards above: a hand-edit typo must not change what the proxy sends or refuse traffic.
+  upstreamRequestCompression: z.enum(["off", "gzip", "zstd"]).optional().catch(undefined),
   // Opt-in inbound body ceiling (#3573). An invalid hand edit degrades to the 256 MiB default
   // rather than failing the parse, matching the outbound guard above: a malformed number must
   // not change what the proxy admits. The hard ceiling is NOT enforced here — because of that
@@ -303,6 +307,17 @@ export const configSchema = z.object({
   // and the default label is emitted, rather than failing the parse or writing a config Codex
   // would refuse to load — the provider id routing depends on is never derived from it.
   codexProviderDisplayName: z.string().trim().min(1).max(128).optional().catch(undefined),
+  // Preserve an invalid marker: silently treating corrupt epochs as legacy would grant stale attempts authority.
+  accountAutoPausePolicyRevisions: z.record(z.string(), z.uuid()).nullable().optional().catch(null),
+  // Details are display-only; keep each usable resume revision and the separate paused-id authority.
+  codexAccountPauseState: z.preprocess(value => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    return Object.fromEntries(Object.entries(value).flatMap(([id, row]) => {
+      if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.revision !== "string") return [];
+      const parsed = accountPauseStateSchema.safeParse({ [id]: row });
+      return [[id, parsed.success ? parsed.data[id] : { revision: row.revision }]];
+    }));
+  }, accountPauseStateSchema.optional()),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
   // A malformed allow-list degrades to "no account spends credits" rather than failing the parse,
   // so a hand-edited typo cannot trip the backup-and-defaults repair path; the write path rejects

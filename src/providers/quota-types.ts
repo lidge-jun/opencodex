@@ -19,7 +19,12 @@ export interface ProviderQuotaWindow {
   label: string;
   percent: number;
   resetAt?: number;
-  /** Exact CCA wire model measured by this window; display evidence only, not eligibility. */
+  /**
+   * Model this window is attributed to: the exact CCA wire model of a fallback measurement, or
+   * the canonical model of a quota-summary bucket dedicated to one model (Antigravity's Gemini 4
+   * Argon pool). Display evidence only, never eligibility: routing, exhaustion, reset ordering
+   * and reset notifications ignore every window that carries it.
+   */
   modelId?: string;
   /**
    * Set only when the PRODUCER proved this window covers one model family, structurally rather

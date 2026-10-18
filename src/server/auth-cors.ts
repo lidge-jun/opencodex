@@ -40,6 +40,7 @@ import { DECLARABLE_HOSTED_TOOL_TYPES } from "../responses/hosted-tool-policy";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import { anthropicOAuthInstanceConfigError } from "../config/schema/anthropic-account-pool";
+import { accountAutoPausePolicySchema } from "../config/schema/account-auto-pause";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { modelAutoCompactTokenLimitsConfigError } from "../providers/auto-compact-budget";
@@ -740,6 +741,9 @@ export function providerManagementConfigError(
     return "provider must be a plain object";
   }
   const raw = provider as Record<string, unknown>;
+  if (raw.accountAutoPause !== undefined && !accountAutoPausePolicySchema.safeParse(raw.accountAutoPause).success) {
+    return "accountAutoPause must be an object with optional boolean enabled and integer consecutiveFailures (1-100)";
+  }
   const contextTiersError = contextTierRecordConfigError(raw.modelContextTiers);
   if (contextTiersError) return contextTiersError;
   const capabilitiesError = modelCapabilitiesConfigError(raw.modelCapabilities);
@@ -796,6 +800,8 @@ export function providerManagementConfigError(
     // sends recover, not what the canonical forward seed is. Validated below
     // (retryOnResetPolicyConfigError).
     delete canonicalCandidate.retryOnReset;
+    // Validated account eligibility policy is independent of the canonical transport.
+    delete canonicalCandidate.accountAutoPause;
     // Context windows are the same kind of user-owned overlay as requestPacing: the operator
     // narrowing what their own native rows advertise. They can only ever LOWER the measured
     // window (see nativeOpenAiContextWindow), so admitting them cannot widen what the proxy
@@ -1087,6 +1093,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   apiKeyPool: "redacted",
   // Ordering preference only; it names no key material, so an editor may read and set it.
   apiKeyPoolStrategy: "editor",
+  accountAutoPause: "editor",
   apiKeySelectionRevision: "runtime",
   _apiKeyAttempt: "runtime",
   defaultModel: "editor",

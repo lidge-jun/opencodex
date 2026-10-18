@@ -1,3 +1,5 @@
+import { recoverAutoPausedAccount } from "./account-auto-pause-recovery";
+import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
@@ -141,6 +143,7 @@ export async function prepareAdapterExchange(
     | "sameTargetToken"
     | "transportToken"
     | "oauthDispatch"
+    | "recoverAutoPausedSelection"
     | "imageTierBias"
     | "oauth401ReplayAttempted"
     | "isOAuth401ReplayProvider"
@@ -394,11 +397,12 @@ export async function prepareAdapterExchange(
     upstreamResponse = new Response(text, { status: original.status, statusText: original.statusText, headers });
     return upstreamResponse;
   };
+  const autoPauseEnabled = config.providers[route.providerName]?.accountAutoPause?.enabled === true;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
-    || billingPoolRequest || billingRecoveryActive;
+    || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
@@ -520,10 +524,10 @@ export async function prepareAdapterExchange(
           label: safeHostLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
           ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
-            || billingPoolRequest
+            || billingPoolRequest || autoPauseEnabled
             ? {
               // A pending compaction permit already booked this leg's first physical send.
-              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
+              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || autoPauseEnabled
                 ? {
                   attempts: Math.min(initialSendCap,
                     sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
@@ -923,6 +927,15 @@ export async function prepareAdapterExchange(
     };
    // Keep recovery kinds in sync with the native Responses `passthroughRecovery:` loop above.
    recovery: for (;;) {
+      if (wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
+        const recovered = await recoverAutoPausedAccount({ requestKey: transportState, reserve: reserveCredentialHop,
+          remaining: transientSendCapFor(transientRetryPolicyFor(route.provider)?.attempts, sendBudgetState.targetSendsUsed),
+          refresh: () => transportState.recoverAutoPausedSelection(parsed), refetch: () => rebuildAndRefetch("oauth-account-429"), setPermit: permit => { sendBudgetState.pendingHopPermit = permit; } });
+        if (!recovered) break;
+        if ("failed" in recovered) return recovered.failed;
+        upstreamResponse = recovered; continue recovery;
+      }
+
       // Preserve the terminal verdict through adapter and combo error formatting.
       // This also covers a reset reached by a 401/429/413 recovery refetch.
       if (isNonReplayableResponse(upstreamResponse)) {
@@ -942,7 +955,7 @@ export async function prepareAdapterExchange(
         continue recovery;
       }
      if (
-       upstreamResponse.status === 401
+       upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
        && isOAuth401ReplayProvider
         && transportState.sentOAuthSnapshot
         && !oauth401ReplayAttempted
@@ -1062,7 +1075,7 @@ export async function prepareAdapterExchange(
         continue recovery;
       }
 
-      if (route.providerName === "google-antigravity" && upstreamResponse.status === 401
+      if (route.providerName === "google-antigravity" && upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
         && oauth401ReplayAttempted && !antigravityAuthRotationAttempted
         && !isNonReplayableResponse(upstreamResponse)) {
         antigravityAuthRotationAttempted = true;

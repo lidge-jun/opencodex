@@ -480,3 +480,30 @@ them. Both switches apply immediately; **Save** never changes them. When interce
 Claude/Anthropic accounts are managed only on **Providers > Anthropic > Accounts**: login and the browser option, the account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Claude no longer has an Account sub-tab. Provider-level controls such as the default provider, removal, and the enabled switch stay on Providers.
 
 The bookmarks `#claude` and `#claude/code` open this page, and the former `#claude/settings` redirects to `#claude/code`; `#claude/desktop` selects the separate Claude Desktop tab. The old `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Legacy `#integrations/claude` and `#integrations/claude/desktop` bookmarks still redirect to `#claude/code` and `#claude/desktop`, respectively. Arrow keys move between tabs; Home and End select the first and last tab.
+
+
+## Test one provider model
+
+In **Providers**, **Test connection** checks discovery connectivity. Use the
+separate **Test completion** control to check whether a selected model answers.
+Choose a model and accept the confirmation that the request may incur provider
+charges. Cancelling the confirmation sends nothing. Changing the provider or
+model, or leaving the page, cancels the test and discards a stale result.
+
+The completion test sends `Reply exactly OK.` once with a 32-token output cap,
+a 20-second deadline and a 64 KiB stream limit. It reports TTFT at the first
+non-empty text delta, total latency, the upstream-reported model and a match,
+mismatch or unknown comparison against the wire model id. Missing or conflicting
+metadata is unknown; upstream metadata does not verify model identity. The panel
+shows the applicability reason when authentication, adapter or transport settings
+cannot be tested. No generated text is displayed, and the diagnostic does not
+update routing health, request history or the provider catalog.
+
+The authenticated management endpoint is
+`POST /api/providers/test-completion?name=<provider>` with exactly
+`{"model":"<model>","confirm":true}`. Dashboard sessions require their usual CSRF
+token. Invalid input returns 400, unknown providers return 404 and a concurrent
+test for the same provider returns 409. Completed diagnostics and applicability
+results return 200, including a structured error when inference fails. Destination
+policy and provider egress settings apply; redirects, retries and failover are disabled.
+For the CLI workflow, see [Providers and accounts](/reference/cli/providers-accounts/).

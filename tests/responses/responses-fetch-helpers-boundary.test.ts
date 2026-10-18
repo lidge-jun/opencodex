@@ -190,6 +190,8 @@ describe("Responses fetch-helper import boundary", () => {
       // Import-free plugin rewrite slot (src/plugins/upstream-hooks.ts).
       "../../plugins/upstream-hooks",
       "../../providers/request-pacing",
+      // Opt-in request-body codec at the final send (#7247); runtime imports are node: built-ins only.
+      "./request-compression",
       "./ws-upstream",
     ]);
   });

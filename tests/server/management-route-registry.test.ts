@@ -256,13 +256,15 @@ describe("route exemptions stay honest", () => {
     });
   });
 
-  test("account-switch routes remain ordinary management mutations", () => {
+  test("account-switch and key pause routes remain ordinary management mutations", () => {
     for (const path of [
       "/api/codex-auth/active", "/api/oauth/accounts/active", "/api/providers/keys/active",
+      "/api/providers/keys/pause",
     ]) {
       const row = MANAGEMENT_ROUTES.find(r => r.method === "PUT" && r.path === path);
       expect(row?.mutates, path).toBe(true);
       expect(row?.exempt, path).toBeUndefined();
+      if (path === "/api/providers/keys/pause") expect(row?.module).toBe("server/management/oauth-account-routes");
     }
   });
 

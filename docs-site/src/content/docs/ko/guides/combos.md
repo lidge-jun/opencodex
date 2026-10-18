@@ -209,9 +209,9 @@ ocx combo set <id> --targets provider/model[:weight],...
 ocx combo remove <id> --yes
 ```
 
-`set`은 `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`, `--display-name`,
+`set`은 `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`, `--display-name`, `--description`,
 `--rename-from`도 받습니다. `--native-alias`에는 현재 지원되는 bare native alias와 비어 있지 않은 display name이 필요합니다. `--effort`, `--alias`,
-`--display-name`에 `-`를 지정하면 해당 값을 지울 수 있습니다. `create`와 `update`는 `set`의
+`--display-name`, `--description`에 `-`를 지정하면 해당 값을 지울 수 있습니다. `create`와 `update`는 `set`의
 별칭이고 `delete`는 `remove`의 별칭입니다. 모든 combo 하위 명령은 `ocx route combo ...`에서도 사용할 수 있습니다.
 
 ### Management API
@@ -256,6 +256,7 @@ ocx combo remove <id> --yes
 | `alias` | 아니요 | 없음 | 선택적으로 앞뒤 공백을 제거한 공개 모델 ID입니다. 위의 alias 규칙을 따릅니다. 빈 값은 alias 없음으로 저장됩니다. |
 | `nativeAlias` | 아니요 | `false` | 현재 지원되는 bare native alias가 routing/catalog 우선권을 갖도록 명시적으로 허용합니다. |
 | `displayName` | 아니요 | 없음 | catalog 표시 전용 label입니다. `nativeAlias`가 true이면 필수입니다. |
+| `description` | 아니요 | 없음 | catalog 행에 표시되는 설명입니다. `displayName`과 같은 제한이 적용됩니다. 설정하지 않으면 생성된 `Routed via opencodex → combo (combo).` 문구가 유지됩니다. |
 
 ## 문제 해결
 

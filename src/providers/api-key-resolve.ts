@@ -16,6 +16,7 @@
  * Policy: a reference that cannot be resolved fails closed (no key) and is warned once per
  * account; nothing ever rewrites plaintext into config or its backups.
  */
+import { invalidateDecisionKeyQuotas, observeDecisionKeyCredential } from "../lib/decision-quota-sink";
 import { resolveEnvValue } from "../config/proxy-env";
 import { loadKeyringBinding } from "../lib/keyring-native";
 import { isGcpCredentialMaterial } from "../lib/gcp-credential-input";
@@ -52,6 +53,7 @@ export function providerKeyResolutionGeneration(): number {
 /** Test seam: swap the OS entry for an in-memory one and drop caches. */
 export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychainEntryFactory | null): void {
   entryFactory = factory ?? defaultEntryFactory;
+  invalidateDecisionKeyQuotas();
   resolvedCache.clear();
   resolutionGeneration++;
   warnedAccounts.clear();
@@ -59,6 +61,7 @@ export function setProviderKeychainEntryFactoryForTests(factory: ProviderKeychai
 
 /** Write-path seam: a store/restore mutated secrets, so cached reads and warnings are stale. */
 export function invalidateResolvedProviderKeyCache(): void {
+  invalidateDecisionKeyQuotas();
   resolvedCache.clear();
   resolutionGeneration++;
   warnedAccounts.clear();
@@ -114,15 +117,18 @@ function readKeychain(account: string, quiet = false): string | undefined {
  */
 export function resolveProviderApiKey(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  if (isKeychainReference(value)) return readKeychain(keychainAccount(value));
-  return resolveEnvValue(value);
+  const resolved = isKeychainReference(value) ? readKeychain(keychainAccount(value)) : resolveEnvValue(value);
+  observeDecisionKeyCredential(value, resolved);
+  return resolved;
 }
 
 /** The same resolution without the unreadable-reference warning, for observe-only callers. */
 export function resolveProviderApiKeyQuietly(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  if (isKeychainReference(value)) return readKeychain(keychainAccount(value), true);
-  return resolveEnvValue(value);
+  const resolved = isKeychainReference(value) ? readKeychain(keychainAccount(value), true) : resolveEnvValue(value);
+  // A quiet read still sees a replaced secret; advisory key evidence published under the old one must not outlive it.
+  observeDecisionKeyCredential(value, resolved);
+  return resolved;
 }
 
 export type ProviderKeyStoreKind = "keychain" | "env" | "file" | "none";

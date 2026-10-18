@@ -190,6 +190,13 @@ eligible Enterprise accounts. Cloud Code Assist serves Argon only to the Antigra
 OpenCodex sends Argon requests and model discovery with the CLI User-Agent
 (`antigravity/cli/1.3.4`) and keeps the IDE User-Agent for every other model.
 
+On Vertex AI, `gemini-4-argon` receives images returned by tools, such as screenshots, inside
+the matching function response. This avoids the upstream 400 error "Requests ending with a
+model turn are not supported" after an image-producing tool call while preserving the images.
+Images from duplicate results or results without a matching call are preserved in a separate
+message after the tool responses, with a marker explaining that they could not be paired.
+No configuration change is needed; this handling is specific to Vertex Argon.
+
 For Gemini on Antigravity, including Argon, provider-marked thought summaries stay separate
 from the answer: Responses uses reasoning summary items, Chat Completions uses
 `reasoning_content`, and Messages uses `thinking` blocks. Clients decide how to display those

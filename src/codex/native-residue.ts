@@ -17,6 +17,7 @@ import { Database } from "bun:sqlite";
 
 import { getConfigDir } from "../config";
 import { catalogHasRoutedEntries, parseCatalogJson } from "./catalog/parsing";
+import { hasOcxRoutedAuthorship } from "./catalog/ownership";
 import { codexHistoryBackupId, legacyCodexHistoryBackupId, validateCodexHistoryBackupManifest } from "./history-manifest";
 import {
   hasInjectedCodexRouting,
@@ -79,7 +80,6 @@ const PROFILE_FILE_NAME = basename(CODEX_PROFILE_PATH);
 const CATALOG_FILE_NAME = basename(DEFAULT_CATALOG_PATH);
 const MODELS_CACHE_FILE_NAME = basename(CODEX_MODELS_CACHE_PATH);
 const JOURNAL_FILE_NAME = "opencodex-journal.json";
-const ROUTED_CATALOG_DESCRIPTION_PREFIX = "Routed via opencodex → ";
 const MAX_ROLLOUT_INSPECTION_BYTES = 64 * 1024 * 1024;
 const ROLLOUT_READ_CHUNK_BYTES = 64 * 1024;
 // Bound one observation across every referenced rollout, not just each file.
@@ -339,8 +339,7 @@ function classifyProfile(path: string): NativeRoutedResidueResult {
 }
 
 function isOcxRoutedCatalogEntry(entry: Record<string, unknown>): boolean {
-  return typeof entry.description === "string"
-    && entry.description.startsWith(ROUTED_CATALOG_DESCRIPTION_PREFIX);
+  return hasOcxRoutedAuthorship(entry);
 }
 
 function classifyCatalogLike(

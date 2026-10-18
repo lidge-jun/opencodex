@@ -1,3 +1,5 @@
+import { recoverAutoPausedAccount } from "./account-auto-pause-recovery";
+import { adoptCodexWsStage, capturePassthroughAffinity } from "./passthrough-observations";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { requestPacingOverloadResponse } from "./pacing-overload";
 import { recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
@@ -99,7 +101,6 @@ import {
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
   codexWsQuotaObserver,
-  isFixedCodexAccount,
   codexPoolAccountModel400Denial,
   shouldRetryCodexPoolAccountQuota,
   shouldRetryCodexPoolAccountTransient,
@@ -111,7 +112,7 @@ import {
   clearCodexModelDenialEvidence,
   recordCodexModelDenialEvidence,
 } from "../../codex/model-entitlements";
-import { codexWsSocketDeathStage, isCodexWsUpstreamResponse, readCodexWsStage } from "./codex-ws-wire";
+import { codexWsSocketDeathStage, isCodexWsUpstreamResponse } from "./codex-ws-wire";
 import { linkAbortSignal } from "./core-lifetime";
 import type { CodexAuthContext } from "../../codex/auth-context";
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
@@ -130,6 +131,7 @@ import {
 } from "../../lib/upstream-retry";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
+import { captureAccountAutoPauseAttempt, wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
@@ -152,7 +154,6 @@ import {
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
-import { captureCodexAffinityDiagnostic } from "../../codex/affinity-debug";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../codex/catalog/native-models";
 import {
   attemptOpaqueBlobRecovery,
@@ -201,6 +202,7 @@ export async function preparePassthroughExchange(
     | "genericFailoverAccountId"
     | "passiveQuotaWriterGeneration"
     | "oauthDispatch"
+    | "recoverAutoPausedSelection"
     | "resolveSelectionAdapter"
     | "resolveCopilotSelection"
     | "copilotRefusalResponse"
@@ -733,22 +735,11 @@ export async function preparePassthroughExchange(
       }
       nativeHostState.lease = null;
     };
-    /**
-     * #4191: a Codex WS exchange pins its content-free stage record on the
-     * Response it resolves (markCodexWsStage). Adopting the record here, at
-     * the single funnel every physical upstream response passes through,
-     * binds it to the attempt that actually served it — including the 502/504
-     * pre-response JSON settles that never reach the SSE relay.
-     */
-    const adoptCodexWsStage = (response: Response): void => {
-      const stage = readCodexWsStage(response);
-      if (stage && logCtx.activeAttempt) logCtx.activeAttempt.codexWsStage = stage;
-    };
     let upstreamResponse: Response, lastDistributedResponse: Response | undefined;
     const adoptObservedResponse = <T extends Response>(response: T): T => {
       if (!isNonReplayableResponse(response)) lastDistributedResponse = response.status === 401 || response.status === 429 ? response : undefined;
       settleObservedHostResponse();
-      adoptCodexWsStage(response);
+      adoptCodexWsStage(response, logCtx);
       return response;
     };
     let passthroughEstimate = typeof request.usageLog?.inputTokens === "number"
@@ -1050,6 +1041,7 @@ export async function preparePassthroughExchange(
               providerName: route.providerName,
               modelId: route.modelId,
               onPhysicalDispatch: receiptMode ? sendBudgetState.noteInitialDispatch : undefined,
+              accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: admissionState.authCtx }, headers),
               onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
               beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                 ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
@@ -1187,6 +1179,7 @@ export async function preparePassthroughExchange(
                 dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
                 providerName: route.providerName,
                 modelId: route.modelId,
+                accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: admissionState.authCtx }, headers),
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
                 beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                   ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
@@ -1209,8 +1202,18 @@ export async function preparePassthroughExchange(
 
     // Keep recovery kinds in sync with the generic `recovery:` loop below.
     passthroughRecovery: for (;;) {
+      if (wasAccountAutoPaused(upstreamResponse) && route.provider.authMode !== "forward") {
+        const recovered = await recoverAutoPausedAccount({ requestKey: transportState, reserve: reserveCredentialHop,
+          remaining: transientSendCapFor(transientRetryPolicyFor(route.provider)?.attempts, sendBudgetState.targetSendsUsed),
+          refresh: () => transportState.recoverAutoPausedSelection(parsed), refetch: () => rebuildAndRefetch("oauth-account-429"), setPermit: permit => { sendBudgetState.pendingHopPermit = permit; } });
+        if (!recovered) break;
+        if ("failed" in recovered) return recovered.failed;
+        upstreamResponse = recovered; continue passthroughRecovery;
+      }
+
+
     if (
-      upstreamResponse.status === 401
+      upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
       && (admissionState.authCtx.kind === "main-pool" || admissionState.authCtx.kind === "pool")
       && usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)
       && codex401ReplayKind === null
@@ -1293,6 +1296,7 @@ export async function preparePassthroughExchange(
             dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
             providerName: route.providerName,
             modelId: route.modelId,
+            accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: admissionState.authCtx }, headers),
             onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
             beforeDispatch: headers => {
               replayGuard?.(headers);
@@ -1336,14 +1340,14 @@ export async function preparePassthroughExchange(
       continue passthroughRecovery;
     }
 
-    if (codex401ReplayKind !== null && upstreamResponse.status === 401) break;
+    if (codex401ReplayKind !== null && upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)) break;
 
     // Native Responses providers return before the generic adapter recovery loop below. Keep
     // their OAuth contract identical: one pre-stream 401 forces a credential refresh and one
     // rebuilt replay. xAI's current subscription models use this branch now that their official
     // Grok CLI catalog declares the Responses backend.
     if (
-      upstreamResponse.status === 401
+      upstreamResponse.status === 401 && !wasPermanentAccountRefusal(upstreamResponse)
       && isOAuth401ReplayProvider
       && transportState.sentOAuthSnapshot
       && !oauth401ReplayAttempted
@@ -1440,6 +1444,7 @@ export async function preparePassthroughExchange(
                 dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
                 providerName: route.providerName,
                 modelId: route.modelId,
+                accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: admissionState.authCtx }, headers),
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
                 beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                   ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
@@ -1586,6 +1591,7 @@ export async function preparePassthroughExchange(
                 dispatchOverride: oauthDispatch(request, parsed, "passthrough"),
                 providerName: route.providerName,
                 modelId: route.modelId,
+                accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: admissionState.authCtx }, headers),
                 onCodexWsQuota: codexWsQuotaObserver(admissionState.authCtx, route.provider, route.modelId),
                 beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                   ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
@@ -1608,18 +1614,7 @@ export async function preparePassthroughExchange(
         || captureAuthCtx.kind === "pool"
         || captureAuthCtx.kind === "main-pool",
     ): void => {
-      if (!isCanonicalOpenAiForwardProvider(route.provider)) return;
-      captureCodexAffinityDiagnostic({
-        inboundHeaders: req.headers,
-        outboundHeaders: captureRequest.headers,
-        authKind: captureAuthCtx.kind,
-        accountMode: route.codexAccountMode,
-        fixedAccount: isFixedCodexAccount(captureAuthCtx),
-        credentialSubstituted,
-        accountGatedModel: ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId),
-        wireModelNormalized: parsed.modelId !== route.modelId,
-        status: response.status,
-      });
+      capturePassthroughAffinity(response, req.headers, captureRequest.headers, captureAuthCtx, route, parsed.modelId, credentialSubstituted);
     };
     recordDistributedResponseFailure(lastDistributedResponse ?? upstreamResponse, config, route.providerName, options.abortSignal);
     captureAffinityResponse(upstreamResponse);
@@ -1646,7 +1641,9 @@ export async function preparePassthroughExchange(
         options.abortSignal,
         parsed.modelId,
       );
-      if (model400Denial !== undefined) {
+      if (wasAccountAutoPaused(upstreamResponse)) {
+        poolRetryOutcome = upstreamResponse.status;
+      } else if (model400Denial !== undefined) {
         // Spend this refusal on more than one retry. It is the account's own authenticated
         // answer about this model, and the roster cache that selection otherwise reads expires
         // five minutes after a catalog sync fills it -- so without remembering this, the next
@@ -1679,7 +1676,7 @@ export async function preparePassthroughExchange(
         // ladder does have one — retrying the account the refreshed roster still grants — and
         // keeps it. An earlier revision also broke here on a non-400 outcome, which no test could
         // justify because this flag already produced the identical result.
-        const storedReplaySpent = codex401ReplayKind === "stored";
+        const storedReplaySpent = codex401ReplayKind === "stored" && !wasAccountAutoPaused(upstreamResponse);
         const retry = await retryCodexPoolOnAlternateAccount({
           callerAuthHeaders,
           config,
@@ -1698,7 +1695,7 @@ export async function preparePassthroughExchange(
           httpOnly: canonicalBufferedJson,
           preOutputRefusalHold: preOutputRefusalHold(),
           onResponse: (response, retryAuthCtx, retryRequest) => {
-            adoptCodexWsStage(response);
+            adoptCodexWsStage(response, logCtx);
             captureAffinityResponse(
               response,
               retryAuthCtx,

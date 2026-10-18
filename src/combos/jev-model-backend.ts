@@ -1,3 +1,6 @@
+import { boundedJevQuotaPayload, jevQuotaCandidates, withJevQuotaSummary } from "./jev-quota-route";
+import { JEV_QUOTA_INSTRUCTION } from "./jev-quota";
+import { serializeJevModelRequest, type JevModelRequestBody } from "./jev-model-request";
 import {
   buildJevState,
   candidatesFitRequestBounds,
@@ -25,11 +28,14 @@ export interface JevModelInvokeRequest {
   instructions: string;
   input: string;
   signal: AbortSignal;
+  /** Budget-only fallback, selected by the detached invoker before admission or dispatch. */
+  withoutQuota?: Pick<JevModelRequestBody, "instructions" | "input">;
 }
 
 export interface JevModelInvokeResult {
   text: string;
   usage?: Record<string, number>;
+  quotaOmitted?: true;
 }
 
 export type JevModelInvoke = (request: JevModelInvokeRequest) => Promise<JevModelInvokeResult>;
@@ -69,28 +75,44 @@ export function parseJevModelChoice(text: string, allowed: ReadonlySet<string>):
   return choice;
 }
 
+/** Resolve a JEV decision through the decision model, falling back with a gate reason on any failure; quota tiers are advisory input only and never widen the allowlist. */
 export async function resolveJevModelDecision(
   options: ResolveJevDecisionOptions & { decisionModel: string; invokeModel: JevModelInvoke },
 ): Promise<JevDecision> {
   const now = options.now ?? Date.now;
   const startedAt = now();
+  let candidates = options.candidates;
+  /** Build the fallback decision for a failure gate, attaching the quota summary for the candidates in scope. */
   const failed = (gate: Exclude<JevDecision["gate"], "apply">): JevDecision =>
-    fallbackDecision(options.fallback, gate, Math.max(0, now() - startedAt), "model");
+    withJevQuotaSummary(fallbackDecision(options.fallback, gate, Math.max(0, now() - startedAt), "model"), candidates);
 
   if (options.signal?.aborted) throw options.signal.reason;
   if (options.candidates.length === 0) return failed("no_choices");
   if (!candidatesFitRequestBounds(options.candidates)) return failed("invalid");
 
   let routeOptions: JevRouteOptionDescriptor[];
-  let input: string;
+  let input = "";
+  let instructions = JEV_MODEL_INSTRUCTIONS;
+  let withoutQuota: JevModelInvokeRequest["withoutQuota"];
   try {
     routeOptions = jevRouteOptions(options.candidates);
     if (routeOptions.length > JEV_MODEL_MAX_OPTIONS) return failed("invalid");
     const state = buildJevState(options.body, options.candidates);
     if (!hasJevDecisionState(state)) return failed("no_state");
-    input = buildJevModelPrompt(state, options.candidates);
-    if (new TextEncoder().encode(JEV_MODEL_INSTRUCTIONS + input).byteLength > JEV_MAX_REQUEST_BYTES) {
+    const payload = boundedJevQuotaPayload(jevQuotaCandidates(options), rows => {
+      instructions = JEV_MODEL_INSTRUCTIONS + (rows.some(row => row.quota) ? " " + JEV_QUOTA_INSTRUCTION : "");
+      input = buildJevModelPrompt(state, rows);
+      if (options.decisionQuotaSignals !== true) return instructions + input;
+      const request = { model: options.decisionModel, instructions, input };
+      return serializeJevModelRequest(request);
+    }, JEV_MAX_REQUEST_BYTES);
+    candidates = payload.candidates;
+    if (new TextEncoder().encode(payload.body).byteLength > JEV_MAX_REQUEST_BYTES) {
       return failed("invalid");
+    }
+    if (candidates.some(row => row.quota)) {
+      withoutQuota = { instructions: JEV_MODEL_INSTRUCTIONS,
+        input: buildJevModelPrompt(state, candidates.map(({ quota: _quota, ...row }) => row)) };
     }
   } catch {
     return failed("invalid");
@@ -99,7 +121,8 @@ export async function resolveJevModelDecision(
   const timeoutSignal = AbortSignal.timeout(jevDecisionTimeoutMs(options.timeoutMs));
   const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
   try {
-    const result = await options.invokeModel({ model: options.decisionModel, instructions: JEV_MODEL_INSTRUCTIONS, input, signal });
+    const result = await options.invokeModel({ model: options.decisionModel, instructions, input, signal, ...(withoutQuota ? { withoutQuota } : {}) });
+    if (result.quotaOmitted) candidates = candidates.map(({ quota: _quota, ...row }) => row);
     if (options.signal?.aborted) throw options.signal.reason;
     if (timeoutSignal.aborted) return failed("timeout");
     let choice: string;
@@ -111,14 +134,14 @@ export async function resolveJevModelDecision(
     const selected = routeOptions.find(option => option.key === choice)!;
     const usage = jevUsage({ usage: result.usage });
     if (options.signal?.aborted) throw options.signal.reason;
-    return {
+    return withJevQuotaSummary({
       backend: "model",
       targetKey: selected.targetKey,
       effort: selected.effort,
       gate: "apply",
       latencyMs: Math.max(0, now() - startedAt),
       ...(usage ? { usage } : {}),
-    };
+    }, candidates);
   } catch (error) {
     if (options.signal?.aborted) throw options.signal.reason;
     if (timeoutSignal.aborted || (error instanceof Error && error.name === "TimeoutError")) return failed("timeout");

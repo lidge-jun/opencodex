@@ -55,6 +55,7 @@ import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } fro
 import { ANTIGRAVITY_DISCOVERY_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
+import { preservableApiKeyPool } from "./api-key-pool-preserve";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
 import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
 import { resolveProviderTransport } from "../providers/xai-transport";
@@ -1513,36 +1514,6 @@ export function reconcileOAuthProviders(config: OcxConfig, persist = true): bool
   return true;
 }
 
-/** Runtime guards: provider config is intentionally passthrough, so persisted fields may be malformed. */
-function preservableApiKeyPool(value: unknown): NonNullable<OcxProviderConfig["apiKeyPool"]> | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const pool: NonNullable<OcxProviderConfig["apiKeyPool"]> = [];
-  const ids = new Set<string>();
-  const keys = new Set<string>();
-  for (const entry of value as unknown[]) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const candidate = entry as Record<string, unknown>;
-    const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
-    const key = sanitizeApiKeyValue(candidate.key);
-    if (!id || !key || ids.has(id) || keys.has(key)) continue;
-    const label = typeof candidate.label === "string" ? candidate.label : undefined;
-    const addedAt = typeof candidate.addedAt === "number" && Number.isFinite(candidate.addedAt)
-      ? candidate.addedAt
-      : undefined;
-    ids.add(id);
-    keys.add(key);
-    pool.push({
-      id,
-      key,
-      ...(label !== undefined ? { label } : {}),
-      ...(addedAt !== undefined ? { addedAt } : {}),
-    });
-  }
-  // `apiKey` remains the routing source of truth. Keep valid alternate slots even when a
-  // hand-edited config left the pool out of sync, rather than deleting usable credentials.
-  return pool.length > 0 ? pool : undefined;
-}
-
 const OAUTH_LOGIN_OWNED_PROVIDER_FIELDS = [
   "adapter",
   "baseUrl",
@@ -1597,11 +1568,10 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
     // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
     let storedApiKey = sanitizeApiKeyValue(existing.apiKey);
     const storedApiKeyPool = preservableApiKeyPool(existing.apiKeyPool);
-    // Unsafe/blank active key with a usable pool: promote the first safe pool entry so
-    // key billing keeps working instead of falling back to oauth while pool keys remain.
-    if (storedApiKey === undefined && storedApiKeyPool && storedApiKeyPool.length > 0) {
-      storedApiKey = storedApiKeyPool[0]!.key;
-    }
+    // Retain all-paused pools without activating any paused credential during login.
+    if (storedApiKeyPool?.some(entry => entry.key === storedApiKey && entry.disabled)) storedApiKey = undefined;
+    if (storedApiKey === undefined) storedApiKey = storedApiKeyPool?.find(entry => !entry.disabled)?.key;
+    if (storedApiKeyPool) next.apiKeyPool = storedApiKeyPool;
     if (storedApiKey !== undefined) {
       const pool = storedApiKeyPool ? [...storedApiKeyPool] : [];
       // Keep routing and listProviderApiKeys in sync: never leave a hidden active key that
