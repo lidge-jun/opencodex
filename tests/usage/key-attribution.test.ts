@@ -245,6 +245,17 @@ describe("key attempt accounting", () => {
     expect(active).toMatchObject({ ordinal: 2, provider: secondProvider,
       sendCount: 1, usage: { inputTokens: 50, outputTokens: 5 } });
   });
+  test.each([["oauth-account-403", 403], ["oauth-401", 401], ["oauth-account-402", 402]] as const)(
+    "an account rotation after %s seals the first row with the status it answered", (recovery, status) => {
+      const oauth = { adapter: "anthropic-messages", authMode: "oauth" as const, baseUrl: "https://example.test" };
+      const active = beginRequestAttempt(1, "anthropic", "model", "anthropic-messages");
+      const ctx: RequestLogContext = { provider: formatAnthropicProviderForLog("anthropic", "account-a"),
+        model: "model", activeAttempt: active, activeAttemptStartedAt: Date.now(), attempts: [active] };
+      noteProviderAttemptSend(ctx, "anthropic", oauth, undefined);
+      ctx.provider = formatAnthropicProviderForLog("anthropic", "account-b");
+      noteProviderAttemptSend(ctx, "anthropic", oauth, undefined, recovery);
+      expect(ctx.attempts?.[0]).toMatchObject({ ordinal: 1, status });
+    });
   test("wire snapshots replace the current send against a pre-send baseline", () => {
     const active = beginRequestAttempt(1, "test", "model", "openai-chat");
     const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active, attempts: [active] };
