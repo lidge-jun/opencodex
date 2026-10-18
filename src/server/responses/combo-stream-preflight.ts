@@ -121,7 +121,8 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
   if (event.type === "response.failed") return true;
   if (event.type !== "response.incomplete") return false;
   const reason = event.response?.incomplete_details?.reason;
-  return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
+  return reason === undefined
+    || (typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason));
 }
 
 /**
