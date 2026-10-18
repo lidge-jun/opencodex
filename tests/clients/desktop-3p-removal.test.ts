@@ -395,3 +395,139 @@ test("StoreIO limits a growing read to its tighter cap plus one sentinel byte", 
   } finally { reading.mockRestore(); }
   expect(readFileSync(path, "utf8")).toBe(original + appended);
 });
+
+test("bounded reader accepts an empty regular file unchanged", () => {
+  const path = join(fixtureHome, "empty.json");
+  writeFileSync(path, "");
+  expect(readDesktopLibraryBytes(path, 64)).toEqual(Buffer.alloc(0));
+  expect(readDesktopLibraryText(path)).toBe("");
+  expect(filesystem.statSync(path).size).toBe(0);
+});
+
+test("bounded reader caps growth from an empty file at limit plus one", () => {
+  const path = join(fixtureHome, "empty-growing.json");
+  writeFileSync(path, "");
+  const read = filesystem.readSync;
+  let grew = false, consumed = 0;
+  const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+    if (!grew) { grew = true; filesystem.appendFileSync(path, "x".repeat(80)); }
+    const count = read(fd, buffer, offset, length, position); consumed += count; return count;
+  });
+  try {
+    expect(() => readDesktopLibraryBytes(path, 64)).toThrow("desktop_config_too_large");
+    expect(grew).toBe(true); expect(consumed).toBe(65);
+    expect(readFileSync(path, "utf8")).toBe("x".repeat(80));
+  } finally { reading.mockRestore(); }
+});
+
+for (const timing of ["before open", "after read"] as const) {
+  // Windows refuses rename-over-open with EPERM before the intended identity recheck.
+  test.skipIf(process.platform === "win32" && timing === "after read")(`bounded reader refuses a same-byte regular inode replacement ${timing}`, () => {
+    const path = join(fixtureHome, "inode.json"), replacement = join(fixtureHome, "other-inode.json");
+    writeFileSync(path, "{}"); writeFileSync(replacement, "{}");
+    const original = filesystem.statSync(path, { bigint: true });
+    const next = filesystem.statSync(replacement, { bigint: true });
+    expect(next.ino).not.toBe(original.ino);
+    const open = filesystem.openSync, read = filesystem.readSync;
+    let changed = false;
+    const swap = () => { if (!changed) { filesystem.renameSync(replacement, path); changed = true; } };
+    const opening = spyOn(filesystem, "openSync").mockImplementation((target, flags, mode) => {
+      if (target === path && timing === "before open") swap();
+      return open(target, flags, mode);
+    });
+    const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+      const count = read(fd, buffer, offset, length, position);
+      if (timing === "after read") swap();
+      return count;
+    });
+    try {
+      expect(() => readDesktopLibraryBytes(path)).toThrow("desktop_config_not_regular");
+      expect(changed).toBe(true); expect(filesystem.statSync(path, { bigint: true }).ino).toBe(next.ino);
+    } finally { reading.mockRestore(); opening.mockRestore(); }
+    expect(readFileSync(path, "utf8")).toBe("{}");
+  });
+}
+
+// Deterministic comparison coverage: inject only ctimeNs, avoiding filesystem clock granularity.
+// This does not attest a real OS ctime transition or POSIX metadata behavior on Windows.
+for (const timing of ["descriptor", "path recheck"] as const) {
+  test(`bounded reader refuses a ctime-only observation change at ${timing}`, () => {
+    const path = join(fixtureHome, "ctime.json"); writeFileSync(path, "{}");
+    const original = filesystem.lstatSync(path, { bigint: true });
+    const changed = { ...original, ctimeNs: original.ctimeNs + 1n, isFile: () => true };
+    expect(changed.dev).toBe(original.dev); expect(changed.ino).toBe(original.ino);
+    expect(changed.size).toBe(original.size);
+    const fstat = filesystem.fstatSync, lstat = filesystem.lstatSync;
+    let pathCalls = 0, injected = false;
+    const descriptor = spyOn(filesystem, "fstatSync").mockImplementation(((fd: number, options: any) => {
+      if (timing === "descriptor") { injected = true; return changed; }
+      return fstat(fd, options);
+    }) as typeof filesystem.fstatSync);
+    const observing = spyOn(filesystem, "lstatSync").mockImplementation(((target: filesystem.PathLike, options: any) => {
+      if (target === path && ++pathCalls > 1 && timing === "path recheck") { injected = true; return changed; }
+      return lstat(target, options);
+    }) as typeof filesystem.lstatSync);
+    try {
+      expect(() => readDesktopLibraryBytes(path)).toThrow("desktop_config_not_regular");
+      expect(injected).toBe(true);
+    } finally { observing.mockRestore(); descriptor.mockRestore(); }
+    expect(readFileSync(path, "utf8")).toBe("{}");
+    expect(filesystem.statSync(path, { bigint: true }).ino).toBe(original.ino);
+  });
+}
+
+// Windows timestamp update/share semantics are not a POSIX ctime receipt. Keep the
+// portable injected comparisons above; execute this real timestamp case on POSIX.
+test.skipIf(process.platform === "win32")("bounded reader refuses a real ctime-only change after read on POSIX", () => {
+  const path = join(fixtureHome, "real-ctime.json"); writeFileSync(path, "{}");
+  filesystem.utimesSync(path, 1, 1);
+  const before = filesystem.statSync(path, { bigint: true }), read = filesystem.readSync;
+  let changed = false;
+  const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+    const count = read(fd, buffer, offset, length, position);
+    if (!changed) { filesystem.utimesSync(path, 1, 1); changed = true; }
+    return count;
+  });
+  try { expect(() => readDesktopLibraryBytes(path)).toThrow("desktop_config_not_regular"); }
+  finally { reading.mockRestore(); }
+  const after = filesystem.statSync(path, { bigint: true });
+  expect(changed).toBe(true); expect(after.ctimeNs).not.toBe(before.ctimeNs);
+  for (const key of ["dev", "ino", "size", "mode", "mtimeNs"] as const) expect(after[key]).toBe(before[key]);
+  expect(readFileSync(path, "utf8")).toBe("{}");
+});
+
+for (const selectedGateway of [true, false]) for (const extra of [0, 1]) {
+  test(`standard removal preflights exact output limit+${extra}, selected gateway=${selectedGateway}`, () => {
+    const library = join(fixtureHome, "boundary-removal"); mkdirSync(library);
+    const foreign = { id: "foreign", name: "Personal", extension: { tags: ["preserve"] } };
+    const owned = { id: "owned", name: "opencodex" };
+    const metadata = { appliedId: selectedGateway ? owned.id : foreign.id, entries: [owned, foreign], foreignMeta: { nested: [1, "keep"] }, pad: "" };
+    const standard = { id: "0".repeat(36), name: "opencodex-standard" };
+    const expected = selectedGateway
+      ? { ...metadata, appliedId: standard.id, entries: [...metadata.entries, standard] }
+      : { ...metadata, entries: [foreign] };
+    metadata.pad = "x".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES + extra - Buffer.byteLength(JSON.stringify(expected, null, 2) + "\n"));
+    expected.pad = metadata.pad;
+    expect(Buffer.byteLength(JSON.stringify(expected, null, 2) + "\n")).toBe(MAX_DESKTOP_PROFILE_FILE_BYTES + extra);
+    const before = JSON.stringify(metadata); expect(Buffer.byteLength(before)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    writeFileSync(join(library, "_meta.json"), before);
+    writeFileSync(join(library, "owned.json"), '{"inferenceProvider":"gateway","inferenceCredentialKind":"static","inferenceGatewayBaseUrl":"http://127.0.0.1:10100","inferenceGatewayApiKey":"not-a-secret"}');
+    writeFileSync(join(library, "owned.json.bak"), "backup"); writeFileSync(join(library, "foreign.json"), '{"foreign":true}\n');
+    const names = filesystem.readdirSync(library).sort(), snapshots = names.map(n => readFileSync(join(library, n), "utf8"));
+    const unlinked: string[] = [];
+    const result = removeDesktop3pStandardPivot({ env: envFor(library), unlink: path => { unlinked.push(path); unlinkSync(path); } });
+    if (extra) {
+      expect(result).toMatchObject({ ok: false, changed: false, kind: "write_failed" });
+      expect(unlinked).toEqual([]); expect(filesystem.readdirSync(library).sort()).toEqual(names);
+      expect(names.map(n => readFileSync(join(library, n), "utf8"))).toEqual(snapshots);
+    } else {
+      expect(result).toMatchObject({ ok: true, changed: true, kind: "removed" });
+      const after = JSON.parse(readFileSync(join(library, "_meta.json"), "utf8"));
+      expect(after.foreignMeta).toEqual(metadata.foreignMeta); expect(after.entries.find((e: any) => e.id === foreign.id)).toEqual(foreign);
+      expect(readFileSync(join(library, "foreign.json"), "utf8")).toBe('{"foreign":true}\n');
+      expect(existsSync(join(library, "owned.json"))).toBe(false);
+      if (selectedGateway) expect(JSON.parse(readFileSync(join(library, `${after.appliedId}.json`), "utf8"))).toEqual({});
+      else expect(after.appliedId).toBe(foreign.id);
+    }
+  }, 20_000);
+}

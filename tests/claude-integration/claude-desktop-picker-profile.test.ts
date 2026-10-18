@@ -1,3 +1,4 @@
+import * as pickerFilesystem from "node:fs";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -266,4 +267,94 @@ describe("Claude Desktop picker profile", () => {
     expect(inspectDesktopPickerProfile({ env: env(), configDir })).toEqual({ kind: "unsafe", reason: "desktop_config_not_regular" });
     expect(applyDesktopPickerProfile({ proxyPort: 41234, env: env(), configDir })).toEqual({ ok: false, reason: "write_failed" });
   });
+});
+
+describe("picker boundary and recovery receipts", () => {
+  for (const operation of ["apply", "remove selected", "remove fallback", "remove unselected"] as const) for (const extra of [0, 1]) {
+    test(`${operation} preflights exact metadata output limit+${extra} and preserves extensions`, () => {
+      const picker = { id: "picker", name: "opencodex-picker", extension: { keep: [1, "picker"] } };
+      const foreign = { id: "foreign", name: "Personal", extension: { keep: [2, "foreign"] } };
+      const selected = operation === "remove selected" || operation === "remove fallback";
+      const fallback = operation === "remove fallback";
+      const metadata = { appliedId: selected ? picker.id : foreign.id, entries: fallback ? [picker] : [picker, foreign], foreignMeta: { keep: [true, "nested"] }, pad: "" };
+      const standard = { id: "0".repeat(36), name: "opencodex-standard" };
+      const projected = operation === "apply" ? { ...metadata, appliedId: picker.id }
+        : fallback ? { ...metadata, appliedId: standard.id, entries: [...metadata.entries, standard] }
+        : selected ? { ...metadata, appliedId: foreign.id }
+        : { ...metadata, entries: [foreign] };
+      metadata.pad = "x".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES + extra - Buffer.byteLength(JSON.stringify(projected, null, 2) + "\n"));
+      projected.pad = metadata.pad;
+      expect(Buffer.byteLength(JSON.stringify(projected, null, 2) + "\n")).toBe(MAX_DESKTOP_PROFILE_FILE_BYTES + extra);
+      const beforeMeta = JSON.stringify(metadata); expect(Buffer.byteLength(beforeMeta)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+      writeFileSync(join(library, "_meta.json"), beforeMeta);
+      writeFileSync(join(library, "picker.json"), '{"egressProxyUrl":"http://127.0.0.1:41233"}\n');
+      writeFileSync(join(library, "picker.json.bak"), "old backup");
+      writeFileSync(join(library, "foreign.json"), '{"unowned":{"preserve":true}}\n');
+      mkdirSync(join(configDir, "claude-picker"), { recursive: true });
+      const statePath = join(configDir, "claude-picker", "profile-state.json");
+      writeFileSync(statePath, JSON.stringify({ entryId: picker.id, previousAppliedId: foreign.id }) + "\n");
+      const names = readdirSync(library).sort(), originals = names.map(n => readFileSync(join(library, n), "utf8"));
+      const beforeState = readFileSync(statePath, "utf8");
+      const result = operation === "apply"
+        ? applyDesktopPickerProfile({ proxyPort: 41234, env: env(), configDir })
+        : removeDesktopPickerProfile({ env: env(), configDir });
+      if (extra) {
+        expect(result).toEqual({ ok: false, reason: operation === "apply" ? "write_failed" : "desktop_config_too_large" });
+        expect(readdirSync(library).sort()).toEqual(names);
+        expect(names.map(n => readFileSync(join(library, n), "utf8"))).toEqual(originals);
+        expect(readFileSync(statePath, "utf8")).toBe(beforeState);
+      } else {
+        expect(result).toMatchObject({ ok: true, changed: true });
+        const after = readJson(join(library, "_meta.json"));
+        expect(after.foreignMeta).toEqual(metadata.foreignMeta);
+        if (!fallback) expect(after.entries.find((e: any) => e.id === foreign.id)).toEqual(foreign);
+        expect(readFileSync(join(library, "foreign.json"), "utf8")).toBe('{"unowned":{"preserve":true}}\n');
+        if (operation === "apply") {
+          expect(after.entries.find((e: any) => e.id === picker.id)).toEqual(picker);
+          expect(after.appliedId).toBe(picker.id);
+        } else {
+          expect(after.entries.some((e: any) => e.id === picker.id)).toBe(false);
+          expect(existsSync(join(library, "picker.json"))).toBe(false); expect(existsSync(statePath)).toBe(false);
+          if (fallback) expect(readJson(join(library, `${after.appliedId}.json`))).toEqual({});
+          else expect(after.appliedId).toBe(foreign.id);
+        }
+      }
+    }, 20_000);
+  }
+
+  for (const existing of [true, false]) {
+    test(`picker reports failure when metadata publication and ${existing ? "rollback restore" : "rollback cleanup"} fail`, () => {
+      const foreign = "foreign"; writeFileSync(join(library, `${foreign}.json`), '{"foreign":true}\n');
+      writeMetadata({ appliedId: foreign, foreignMeta: { keep: true }, entries: [{ id: foreign, name: "Personal" }] });
+      let profile: string | undefined;
+      if (existing) {
+        const first = applyDesktopPickerProfile({ proxyPort: 41233, env: env(), configDir });
+        expect(first.ok).toBe(true); if (!first.ok) throw new Error("fixture setup failed"); profile = first.path;
+      }
+      const meta = join(library, "_meta.json"), beforeMeta = readFileSync(meta, "utf8");
+      const realWrite = configIO.atomicWriteFile, rename = pickerFilesystem.renameSync, unlink = pickerFilesystem.unlinkSync;
+      let metadataFailed = false, recoveryFailed = false;
+      const writing = spyOn(configIO, "atomicWriteFile").mockImplementation((path, content, io, hooks) => {
+        if (path === meta) { metadataFailed = true; throw new Error("fixture metadata failure"); }
+        if (path.startsWith(library) && path.endsWith(".json") && path !== meta) profile = path;
+        return realWrite(path, content, io, hooks);
+      });
+      const renaming = spyOn(pickerFilesystem, "renameSync").mockImplementation((source, destination) => {
+        if (existing && metadataFailed && destination === profile) { recoveryFailed = true; throw new Error("fixture restore failure"); }
+        return rename(source, destination);
+      });
+      const removing = spyOn(pickerFilesystem, "unlinkSync").mockImplementation(path => {
+        if (!existing && metadataFailed && path === profile) { recoveryFailed = true; throw new Error("fixture cleanup failure"); }
+        return unlink(path);
+      });
+      try {
+        expect(applyDesktopPickerProfile({ proxyPort: 41234, env: env(), configDir })).toEqual({ ok: false, reason: "write_failed" });
+        expect(metadataFailed).toBe(true); expect(recoveryFailed).toBe(true);
+        expect(readFileSync(meta, "utf8")).toBe(beforeMeta);
+        // A failed rollback leaves a real residue; do not mistake the opaque failure for restoration.
+        expect(readJson(profile!).egressProxyUrl).toBe("http://127.0.0.1:41234");
+        expect(readFileSync(join(library, `${foreign}.json`), "utf8")).toBe('{"foreign":true}\n');
+      } finally { removing.mockRestore(); renaming.mockRestore(); writing.mockRestore(); }
+    });
+  }
 });

@@ -334,3 +334,27 @@ test("oversized backup source refuses before backup or replacement writes", () =
   expect(fs.readFileSync(path).equals(original)).toBe(true);
   expect(fs.existsSync(path + ".bak")).toBe(false);
 });
+
+for (const kind of ["profile", "metadata"] as const) for (const extra of [0, 1]) {
+  test(`normal writer preflights exact ${kind} output limit+${extra}`, () => {
+    const first = writeProfile(); expect(first.written).toBe(true);
+    const meta = join(library, "_meta.json"), target = kind === "profile" ? first.path : meta;
+    const value = { ...JSON.parse(fs.readFileSync(target, "utf8")), foreignPad: "" };
+    value.foreignPad = "x".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES + extra - Buffer.byteLength(JSON.stringify(value, null, 2) + "\n"));
+    expect(Buffer.byteLength(JSON.stringify(value, null, 2) + "\n")).toBe(MAX_DESKTOP_PROFILE_FILE_BYTES + extra);
+    const input = JSON.stringify(value); expect(Buffer.byteLength(input)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    fs.writeFileSync(target, input);
+    const beforeProfile = fs.readFileSync(first.path), beforeMeta = fs.readFileSync(meta);
+    expect(fs.existsSync(first.path + ".bak")).toBe(false);
+    const result = writeProfile();
+    if (extra) {
+      expect(result).toMatchObject({ written: false, reason: "desktop_config_too_large" });
+      expect(fs.readFileSync(first.path)).toEqual(beforeProfile); expect(fs.readFileSync(meta)).toEqual(beforeMeta);
+      expect(fs.existsSync(first.path + ".bak")).toBe(false);
+    } else {
+      expect(result.written).toBe(true); expect(fs.statSync(target).size).toBe(MAX_DESKTOP_PROFILE_FILE_BYTES);
+      expect(JSON.parse(fs.readFileSync(target, "utf8")).foreignPad).toBe(value.foreignPad);
+      expect(fs.readFileSync(first.path + ".bak")).toEqual(beforeProfile);
+    }
+  }, 20_000);
+}
