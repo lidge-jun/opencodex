@@ -1,0 +1,13 @@
+{
+  "description": "Synthetic failure and lifecycle fixture table; NO live credentials, HTTP or provider proof.",
+  "cases": [
+    {"name":"provider-fixed-model", "override":{"evidence":"fixed"}, "expectedAccountSlots":0},
+    {"name":"provider-sliding-model", "override":{"evidence":"sliding"}, "expectedAccountSlots":0},
+    {"name":"provider-unknown", "override":{"evidence":"unknown"}, "expectedAccountSlots":0},
+    {"name":"ambiguous-generation", "override":{"windowGeneration":null}, "expectedAccountSlots":0},
+    {"name":"weekly-exhausted", "override":{"weeklyHeadroom":false}, "expectedAccountSlots":0},
+    {"name":"account-paused", "override":{"optedIn":false}, "expectedAccountSlots":0},
+    {"name":"credential-invalid", "override":{"healthy":false}, "expectedAccountSlots":0},
+    {"name":"stale-quota-observation", "override":{"observedAtMs":1799998800000}, "expectedAccountSlots":0}
+  ]
+}
