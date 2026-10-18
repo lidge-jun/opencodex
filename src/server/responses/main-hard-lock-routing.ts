@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../../types";
 import { resolveComboId } from "../../combos";
-import { isBareOpenAiFamilyModel } from "../../router";
+import { isBareOpenAiFamilyModel, routeConcreteModel } from "../../router";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
   getMainAccountHardLockStatus,
@@ -10,6 +10,29 @@ import { codexQuotaScopeForModel } from "../../codex/routing/health-store";
 import { getEligiblePoolAccounts } from "../../codex/routing/selection";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
+import { mainAccountHardLockAppliesToCaller } from "../../codex/auth-context";
+import { codexRouteCredentialDomainHeaders, codexRouteCredentialOwnership } from "./core-auth";
+import type { HandleResponsesOptions } from "./core-options";
+
+export type MainHardLockCallerCheck = (sourceModel: string) => Promise<boolean>;
+
+/** Inspect the original credential domain, before fallback changes the route or drops headers. */
+export function mainHardLockFallbackCallerCheck(
+  req: Request, config: OcxConfig, options: HandleResponsesOptions,
+): MainHardLockCallerCheck {
+  return async sourceModel => {
+    let sourceRoute: ReturnType<typeof routeConcreteModel>;
+    try { sourceRoute = routeConcreteModel(config, sourceModel); }
+    // This preview cannot replace the normal routing phase's existing error response.
+    catch { return false; }
+    const headers = codexRouteCredentialDomainHeaders(req, sourceRoute, options, false, config);
+    const { substituteMainCredential } = codexRouteCredentialOwnership(headers, config, sourceRoute, options);
+    return mainAccountHardLockAppliesToCaller(headers, options.codexAuthPolicy ?? config, {
+      substituteMainCredentialForDirect: substituteMainCredential,
+      signal: options.abortSignal ?? req.signal,
+    });
+  };
+}
 
 function isConfiguredComboSelector(config: OcxConfig, modelId: string): boolean {
   const comboId = resolveComboId(config, modelId);
@@ -72,11 +95,12 @@ function rawModelOf(body: unknown): { raw: Record<string, unknown>; model: strin
  * - Luna Reserve keeps its own admission policy (`assertReserveAdmission`); its helper
  *   traffic is not operator chat and must not silently change models.
  */
-export function applyMainHardLockFallbackOverride(
+export async function applyMainHardLockFallbackOverride(
   body: unknown,
   config: OcxConfig,
-  now = Date.now(),
-): MainHardLockFallbackOverride | null {
+  now?: number,
+  callerCheck?: MainHardLockCallerCheck,
+): Promise<MainHardLockFallbackOverride | null> {
   const parsed = rawModelOf(body);
   if (!parsed) return null;
   const fallback = resolveMainAccountHardLockFallback(config);
@@ -85,14 +109,18 @@ export function applyMainHardLockFallbackOverride(
   if (!isBareOpenAiFamilyModel(parsed.model)
     || parsed.model === NATIVE_RESERVE_MODEL
     || isConfiguredComboSelector(config, parsed.model)) return null;
-  if (getMainAccountHardLockStatus(config, now).state !== "blocked") return null;
   const accountMode = providerCodexAccountMode(
     OPENAI_CODEX_PROVIDER_ID,
     config.providers?.[OPENAI_CODEX_PROVIDER_ID],
   );
-  if (accountMode !== "direct"
-    && getEligiblePoolAccounts(config, undefined, now, codexQuotaScopeForModel(parsed.model)).length > 0) {
-    return null;
+  if (accountMode === "direct") {
+    // Direct may forward a different caller's healthy credential. Only stored-main substitution
+    // or an observed-main match owes this lock. Recheck usage after the startup binding wait.
+    if (!callerCheck || !await callerCheck(parsed.model)) return null;
+    if (getMainAccountHardLockStatus(config, now ?? Date.now()).state !== "blocked") return null;
+  } else {
+    if (getMainAccountHardLockStatus(config, now ?? Date.now()).state !== "blocked") return null;
+    if (getEligiblePoolAccounts(config, undefined, now ?? Date.now(), codexQuotaScopeForModel(parsed.model)).length > 0) return null;
   }
 
   parsed.raw.model = fallback.model;
