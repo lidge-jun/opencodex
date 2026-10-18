@@ -8,6 +8,7 @@ import type { AttemptRecoveryKind } from "../../src/usage/log";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { parseStreamWithProgress, type ParseStreamWithProgressOptions } from "../../src/web-search/progress-stream";
 import { TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TRANSLATOR_MAX_TURN_BYTES, translatorLiveBudgetCountForTests } from "../../src/lib/translator-budget";
 
@@ -308,6 +309,15 @@ async function runAndGetSSE(streams: AdapterEvent[][], fulfill?: ImageCallResult
 }
 
 describe("runWithImageBridge", () => {
+  test("a pacing-queue overload passes through instead of becoming 502 Provider unreachable", async () => {
+    const overload = new RequestPacingQueueOverloadError("image-test", "queue_full", 2);
+    const result = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: { ...mockAdapter, fetchResponse: () => Promise.reject(overload) },
+    }).then(response => response.status, (error: unknown) => error);
+    expect(result).toBe(overload);
+  });
+
   test.each([307, 308])("the direct image-loop send does not follow %i", async status => {
     let targetHits = 0;
     let originHits = 0;
