@@ -274,19 +274,19 @@ for (const scenario of ["backup", "rollback"] as const) {
       if (!isTestHomeGuardArmed()) throw new Error("guard not armed");
       const profile = ${JSON.stringify(profile)}, meta = ${JSON.stringify(meta)}, fifo = ${JSON.stringify(fifo)};
       const scenario = ${JSON.stringify(scenario)};
-      const open = fs.openSync, read = fs.readFileSync, rename = fs.renameSync;
+      const open = fs.openSync, read = fs.readSync, rename = fs.renameSync;
       let profileFd, swapped = false;
       spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
         const fd = open(path, flags, mode);
         if (path === profile) profileFd = fd;
         return fd;
       });
-      spyOn(fs, "readFileSync").mockImplementation((path, options) => {
-        const bytes = read(path, options);
-        if (scenario === "backup" && path === profileFd && !swapped) {
+      spyOn(fs, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+        const count = read(fd, buffer, offset, length, position);
+        if (scenario === "backup" && fd === profileFd && !swapped) {
           rename(fifo, profile); swapped = true;
         }
-        return bytes;
+        return count;
       });
       spyOn(fs, "renameSync").mockImplementation((source, destination) => {
         if (scenario === "rollback" && destination === meta) throw new Error("fixture metadata failure");
