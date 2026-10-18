@@ -1080,6 +1080,19 @@ async function awaitMainAccountPolicyBindingSettled(
   if (!settled) throw new CodexMainProfileDrainingError();
 }
 
+/** Memory-only ownership check shared by Direct admission and pre-auth hard-lock routing. */
+export async function mainAccountHardLockAppliesToCaller(
+  headers: Headers,
+  policy: CodexAuthPolicyConfig,
+  options: Pick<ResolveCodexAuthContextOptions,
+    "substituteMainCredentialForDirect" | "signal" | "mainAccountPolicyBindingWaitMs"> = {},
+): Promise<boolean> {
+  if (options.substituteMainCredentialForDirect === true) return true;
+  if (!hasCallerCodexBearer(headers)) return false;
+  if (isMainAccountHardLockEnabled(policy)) await awaitMainAccountPolicyBindingSettled(options);
+  return callerMatchesObservedMain(headers);
+}
+
 /**
  * Resolve the credential for one Codex turn. A main hard-lock reached through unpinned pool
  * selection is annotated with the earliest known pool recovery, so the refusal can name a retry
@@ -1172,8 +1185,7 @@ async function resolveCodexAuthContextUnannotated(
     // Trusted substitution still has to claim and validate stored main below.
     if (!substituteStoredMain && !hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     if (!substituteStoredMain) {
-      if (isMainAccountHardLockEnabled(policy)) await awaitMainAccountPolicyBindingSettled(options);
-      if (callerMatchesObservedMain(headers)) assertMainAccountPolicy(policy);
+      if (await mainAccountHardLockAppliesToCaller(headers, policy, options)) assertMainAccountPolicy(policy);
       assertCallerOwnedMainPoolNotCooled();
       if (reserve) {
         const selected = materializeCodexUpstreamAuth(headers, { kind: "main", accountId: null }, { config: policy });

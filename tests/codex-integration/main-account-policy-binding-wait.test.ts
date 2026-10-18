@@ -22,6 +22,8 @@ import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/qu
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { handleResponses } from "../../src/server/responses";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 /**
  * The admission fence during an owned startup's main-policy binding (#5694 made it default-on).
@@ -44,6 +46,7 @@ const previousHome = process.env.OPENCODEX_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
 let releases: Array<() => Promise<void>> = [];
 let openGates: Array<() => void> = [];
+const originalFetch = globalThis.fetch;
 
 function bearerFor(id: string): string {
   const payload = Buffer.from(JSON.stringify({
@@ -162,6 +165,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  globalThis.fetch = originalFetch;
   // A case may end with the hold still up (the deadline case has to). Open every gate first:
   // `release` below awaits convergence, which cannot finish behind a closed barrier.
   for (const open of openGates.splice(0)) open();
@@ -178,6 +182,93 @@ afterEach(async () => {
 });
 
 describe("a caller-owned request waits out the startup policy binding", () => {
+  for (const source of ["loopback", "dedicated"] as const) {
+    test(`handleResponses missing caller bearer keeps immediate 401 during binding under ${source} admission`, async () => {
+      const startup = await holdStartup();
+      const cfg = directConfig();
+      cfg.codexMainAccountHardLockFallback = { model: "rescue/rescue-model" };
+      cfg.providers.rescue = { adapter: "openai-responses", authMode: "key", apiKey: "fixture-rescue",
+        baseUrl: "https://fallback.example/v1" };
+      let sends = 0;
+      globalThis.fetch = (async () => { sends++; throw new Error("missing caller must not send"); }) as typeof fetch;
+      const request = handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.3", stream: false, input: "hello" }),
+      }), cfg, { model: "", provider: "" }, {
+        admission: source === "loopback" ? { kind: "loopback", source }
+          : { kind: "configured", keyId: "fixture-admission", source },
+      });
+      const settled = trackSettlement(request);
+      const outcome = request.then(response => ({ response }), error => ({ error }));
+      try {
+        await Bun.sleep(25);
+        expect(startup.pending()).toBe(true);
+        expect(settled()).toBe(true);
+        const result = await outcome;
+        if (!("response" in result)) throw result.error;
+        expect(result.response.status).toBe(401);
+        await result.response.text();
+        expect(sends).toBe(0);
+      } finally {
+        startup.release();
+        const result = await outcome;
+        if ("response" in result && !result.response.bodyUsed && !result.response.body?.locked) {
+          await result.response.body?.cancel();
+        }
+      }
+    });
+  }
+
+  for (const [initialUsage, releaseBlocked] of [[100, true], [100, false], [undefined, true]] as const) {
+    test(`handleResponses rechecks fallback after binding settles from ${initialUsage ?? "unknown"} with blocked=${releaseBlocked}`, async () => {
+      const startup = await holdStartup();
+      observeMainQuotaIdentity(accountId);
+      observeMainQuotaCredential(token, accountId);
+      const writer = captureMainQuotaWriter(accountId)!;
+      if (initialUsage !== undefined) setAccountQuotaFromParsed(MAIN, { weeklyPercent: initialUsage }, undefined, writer);
+      const cfg = directConfig();
+      cfg.providers.rescue = { adapter: "openai-responses", authMode: "key", apiKey: "fixture-rescue",
+        baseUrl: "https://fallback.example/v1" };
+      cfg.codexMainAccountHardLockFallback = { model: "rescue/rescue-model" };
+      const seen: string[] = [];
+      const releaseSpend = acquireOwnedSpendHome();
+      globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+        seen.push(String(input));
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        return Response.json({ id: "resp_binding_fixture", status: "completed", model: body.model,
+          output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+      }) as typeof fetch;
+      const request = handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: callerHeaders(),
+        body: JSON.stringify({ model: "gpt-5.3", stream: false, input: "hello" }),
+      }), cfg, { model: "", provider: "" });
+      // Observe rejection too, so a failed assertion never leaves an unhandled request.
+      const outcome = request.then(response => ({ response }), error => ({ error }));
+      try {
+        await Bun.sleep(25);
+        expect(startup.pending()).toBe(true);
+        expect(seen).toEqual([]);
+        setAccountQuotaFromParsed(MAIN, { weeklyPercent: releaseBlocked ? 100 : 10 }, undefined, writer);
+        startup.release();
+        const result = await outcome;
+        if (!("response" in result)) throw result.error;
+        expect(result.response.status).toBe(200);
+        await result.response.text();
+        expect(seen).toEqual([releaseBlocked
+          ? "https://fallback.example/v1/responses" : "https://chatgpt.com/backend-api/codex/responses"]);
+      } finally {
+        startup.release();
+        try {
+          const result = await outcome;
+          if ("response" in result && !result.response.bodyUsed && !result.response.body?.locked) {
+            await result.response.body?.cancel();
+          }
+        } finally { releaseSpend(); }
+      }
+    });
+  }
+
   test("default config waits for convergence and then resolves an auth context", async () => {
     const startup = await holdStartup();
     expect(startup.pending()).toBe(true);
