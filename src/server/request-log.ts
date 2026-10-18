@@ -1852,16 +1852,20 @@ export function finishRequestAttempt(
 export function aggregateAttemptUsage(
   attempts: readonly PersistedUsageAttempt[],
 ): FinalizedUsageResult {
-  const status: UsageStatus = attempts.length > 0
-    && attempts.every(attempt => attempt.usageStatus === "unsupported")
+  // A usage-less attempt that never reached upstream spent nothing (summary.ts `spentNothing`),
+  // so it cannot leave the row's usage unknown.
+  const measured = attempts.filter(attempt => attempt.usage
+    || (attempt.sendCount !== 0 && attempt.locallyAnswered !== true));
+  const status: UsageStatus = measured.length > 0
+    && measured.every(attempt => attempt.usageStatus === "unsupported")
     ? "unsupported"
-    : attempts.some(attempt => (
+    : measured.some(attempt => (
         attempt.usageStatus === "unreported" || attempt.usageStatus === "unsupported"
       ))
       ? "unreported"
-      : attempts.some(attempt => attempt.usageStatus === "estimated")
+      : measured.some(attempt => attempt.usageStatus === "estimated")
         ? "estimated"
-        : attempts.length > 0
+        : measured.length > 0
           ? "reported"
           : "unreported";
 

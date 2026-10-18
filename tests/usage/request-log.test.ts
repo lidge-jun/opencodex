@@ -547,11 +547,9 @@ describe("request log metadata", () => {
       1,
       { inputTokens: 4, outputTokens: 1 },
     );
-    const unreported = finishRequestAttempt(
-      beginRequestAttempt(2, "b", "m2", "openai-chat"),
-      503,
-      1,
-    );
+    const sent = beginRequestAttempt(2, "b", "m2", "openai-chat");
+    noteAttemptSend(sent, undefined);
+    const unreported = finishRequestAttempt(sent, 503, 1);
     expect(aggregateAttemptUsage([reported, unreported])).toMatchObject({
       status: "unreported",
       usage: { inputTokens: 4, outputTokens: 1 },
