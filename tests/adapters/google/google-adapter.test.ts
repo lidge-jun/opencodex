@@ -887,6 +887,7 @@ describe("google adapter — Vertex and direct Gemini thought-text opt-in", () =
     modelReasoningEfforts: { "gemini-4-argon": ["low", "medium", "high"] },
   } as const;
 
+  /** Builds a minimal parsed request for Vertex/direct Gemini thought-opt-in tests. */
   function makeParsed(modelId: string, effort?: string, hideThinkingSummary?: boolean): OcxParsedRequest {
     return {
       modelId,
@@ -896,6 +897,7 @@ describe("google adapter — Vertex and direct Gemini thought-text opt-in", () =
     } as unknown as OcxParsedRequest;
   }
 
+  /** Extracts the compiled generationConfig.thinkingConfig from a built request. */
   async function wireThinkingConfig(
     providerConfig: Record<string, unknown>,
     modelId: string,
@@ -951,6 +953,7 @@ describe("google adapter — Vertex and direct Gemini thought-text opt-in", () =
       }],
     };
 
+    /** Reads the first adapter event from either a streaming SSE or buffered JSON response. */
     async function extractFirstEvent(
       adapter: ReturnType<typeof createGoogleAdapter>,
       stream: boolean,
@@ -1016,6 +1019,7 @@ describe("google adapter — Vertex and direct Gemini thought-text opt-in", () =
       }],
     };
 
+    /** Reads the first adapter event from either a streaming SSE or buffered JSON response. */
     async function extractFirstEvent(
       adapter: ReturnType<typeof createGoogleAdapter>,
       stream: boolean,
