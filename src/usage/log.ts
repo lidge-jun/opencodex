@@ -308,7 +308,7 @@ export interface PersistedUsageEntry {
   timestamp: number;
   provider: string;
   model: string;
-  surface?: "claude" | "claude-desktop" | "grok";
+  surface?: "claude" | "claude-desktop" | "grok" | "omp" | "hermes";
   /** Matched configured key id; absent for environment/loopback admissions and
    *  for every row written before attribution existed. */
   apiKeyId?: string;
@@ -450,21 +450,23 @@ export function normalizeRequestFailureAttribution(
   };
 }
 
-const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
-  "claude",
-  "claude-desktop",
-  "grok",
-]);
+const KNOWN_USAGE_SURFACES: Readonly<Record<NonNullable<PersistedUsageEntry["surface"]>, true>> = {
+  claude: true,
+  "claude-desktop": true,
+  grok: true,
+  omp: true,
+  hermes: true,
+};
 
 /**
  * The serializer guard for `surface`. Two failure modes shaped this: a literal
  * whitelist ("claude" | "claude-desktop" only) silently dropped every NEW surface at
  * write time, while a plain truthy spread would persist junk values from hand-edited
- * logs. Membership in this set is the middle path: adding a surface here is one edit,
+ * logs. Membership in this record is the middle path: adding a surface here is one edit,
  * and unknown values are still dropped.
  */
 export function isKnownUsageSurface(value: unknown): value is NonNullable<PersistedUsageEntry["surface"]> {
-  return typeof value === "string" && KNOWN_USAGE_SURFACES.has(value as NonNullable<PersistedUsageEntry["surface"]>);
+  return typeof value === "string" && Object.hasOwn(KNOWN_USAGE_SURFACES, value);
 }
 
 const KNOWN_ADMISSION_KINDS = new Set<NonNullable<PersistedUsageEntry["admissionKind"]>>([

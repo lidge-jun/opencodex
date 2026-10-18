@@ -233,6 +233,13 @@ For native OpenAI models, the generated OMP block selects its model-level Respon
 image input and reasoning-effort controls. Routed models retain the provider's Chat Completions
 dialect so their existing adapters remain compatible.
 
+Generated OMP and Hermes provider blocks include the nonsecret header
+`x-opencodex-client: omp` or `x-opencodex-client: hermes`. This labels new requests
+for the **Usage** and **Logs** client filters; it is not an API key, authentication,
+or routing permission. For an existing integration, use **Apply** in **Connect**
+to write the marker, then restart OMP or start a new Hermes session. Historical
+rows are not relabeled; earlier unmarked requests remain in their original bucket.
+
 OpenClaw has several, and they do different jobs. `OPENCLAW_CONFIG_PATH` selects the
 file; `OPENCLAW_STATE_DIR`, `OPENCLAW_PROFILE` and `OPENCLAW_HOME` select the state
 directory, which is also what detection looks at — so a profile or relocated home

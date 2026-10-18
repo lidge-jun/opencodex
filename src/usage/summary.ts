@@ -21,7 +21,7 @@ import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estim
  */
 export const USAGE_RANGES = ["today", "7d", "30d", "all"] as const;
 export type UsageRange = typeof USAGE_RANGES[number];
-export const USAGE_SURFACES = ["all", "codex", "claude", "grok"] as const;
+export const USAGE_SURFACES = ["all", "codex", "claude", "grok", "omp", "hermes"] as const;
 export type UsageSurface = typeof USAGE_SURFACES[number];
 /** Maximum number of calendar buckets returned by the all-history chart. */
 export const MAX_USAGE_DAY_BUCKETS = 366;
@@ -337,7 +337,7 @@ export function parseRange(input: string | null | undefined): UsageRange {
 }
 
 export function parseUsageSurface(input: string | null | undefined): UsageSurface {
-  if (input === "codex" || input === "claude" || input === "grok") return input;
+  if (input === "codex" || input === "claude" || input === "grok" || input === "omp" || input === "hermes") return input;
   return "all";
 }
 
@@ -1012,6 +1012,8 @@ function usagePartitionSurface(entry: PersistedUsageEntry): UsagePartitionSurfac
   if (entry.surface === undefined) return "codex";
   if (entry.surface === "claude" || entry.surface === "claude-desktop") return "claude";
   if (entry.surface === "grok") return "grok";
+  if (entry.surface === "omp") return "omp";
+  if (entry.surface === "hermes") return "hermes";
   return "other";
 }
 

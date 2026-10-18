@@ -462,7 +462,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "usage",
-    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]; ocx usage compare [--range <today|1d|7d|30d>] [--json]",
+    usage: "ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok|omp|hermes>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]; ocx usage compare [--range <today|1d|7d|30d>] [--json]",
     summary: "Report token usage and estimated cost (alias of ocx observe usage).",
     details: [
       "`compare` reads the current named range and the previous equal window; `--range all` is refused.",

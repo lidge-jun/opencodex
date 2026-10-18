@@ -30,11 +30,12 @@ beforeEach(() => {
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = `ocx_admin_${"a".repeat(43)}`;
   aggregates.resetUsageAggregateCacheForTests();
   saveConfig(config());
-  const rows = ["client-0", "client-1"].map((apiKeyId, i) => ({
-    timestamp: Date.now(), requestId: `request-${i}`, provider: "fixture", model: `model-${i}`,
-    surface: "codex", apiKeyId, admissionKind: "configured", accountLogLabel: "oabcdef",
+  const rows = ["client-0", "client-1"].flatMap((apiKeyId, i) => ["codex", "omp", "hermes"].map(surface => ({
+    timestamp: Date.now(), requestId: `request-${i}-${surface}`, provider: "fixture",
+    model: surface === "codex" ? `model-${i}` : `model-${i}-${surface}`,
+    ...(surface === "codex" ? {} : { surface }), apiKeyId, admissionKind: "configured", accountLogLabel: "oabcdef",
     status: 200, durationMs: 1, usageStatus: "reported", usage: { inputTokens: 2, outputTokens: 1 }, totalTokens: 3,
-  }));
+  })));
   writeFileSync(join(home, "usage.jsonl"), rows.map(row => JSON.stringify(row)).join("\n") + "\n");
 });
 
@@ -52,15 +53,20 @@ test("loopback hub reads only the explicitly authenticated key and strips accoun
   expect(unscoped.accumulator.summarize("all", Date.now(), "codex").accounts.map(row => row.accountLogLabel)).toContain("oabcdef");
   server = startServer(0);
   for (let i = 0; i < KEYS.length; i++) {
-    const response = await fetch(new URL("/v1/usage?range=all", server.url), { headers: { "x-opencodex-api-key": KEYS[i]! } });
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body).toMatchObject({ source: "hub", scope: "client", summary: { requests: 1, totalTokens: 3 } });
-    expect(body.models.map((row: { model: string }) => row.model)).toEqual([`model-${i}`]);
-    expect(JSON.stringify(body)).not.toContain("oabcdef");
-    expect(body).not.toHaveProperty("accounts");
-    expect(body.filter).not.toHaveProperty("apiKeyId");
-    expect(response.headers.get("cache-control")).toBe("no-store");
+    for (const surface of ["all", "codex", "omp", "hermes"]) {
+      const response = await fetch(new URL(`/v1/usage?range=all&surface=${surface}`, server.url), { headers: { "x-opencodex-api-key": KEYS[i]! } });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      const expectedModels = surface === "all"
+        ? [`model-${i}`, `model-${i}-hermes`, `model-${i}-omp`]
+        : [surface === "codex" ? `model-${i}` : `model-${i}-${surface}`];
+      expect(body).toMatchObject({ source: "hub", scope: "client", surface, summary: { requests: expectedModels.length, totalTokens: 3 * expectedModels.length } });
+      expect(body.models.map((row: { model: string }) => row.model).sort()).toEqual(expectedModels);
+      expect(JSON.stringify(body)).not.toContain("oabcdef");
+      expect(body).not.toHaveProperty("accounts");
+      expect(body.filter).not.toHaveProperty("apiKeyId");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    }
   }
 });
 

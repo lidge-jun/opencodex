@@ -237,6 +237,9 @@ identity stays missing; a shared prefix/cache key is not converted into a sessio
 outbound contract is covered by `tests/responses/chat-conversation-affinity.test.ts`. A promoted
 caller `x-session-id` arrives at this bridge already as `session_id` (see above).
 This transport contract does not prove a client's emission, Pool selection stability or cache hits.
+The generated Hermes provider's dynamic `session-id` remains independent of its non-secret
+[usage-surface hint](../dashboard-and-usage.md#client-surface-attribution); the same affinity test
+exercises both together without claiming a live-client capture or cache hit.
 
 ## Chat streaming client with a JSON upstream result
 

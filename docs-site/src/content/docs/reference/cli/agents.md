@@ -416,7 +416,7 @@ Inspect proxy requests, usage, storage, memory, and debug data. The direct alias
 | Alias | Equivalent resource |
 | --- | --- |
 | `ocx logs [filters] [--follow] [--json|--jsonl|--events]` | `ocx observe logs` |
-| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]` | `ocx observe usage` |
+| `ocx usage [--range <today|1d|7d|30d|all>] [--since <timestamp> --until <timestamp>] [--surface <all|codex|claude|grok|omp|hermes>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]` | `ocx observe usage` |
 | `ocx usage compare [--range <today|1d|7d|30d>] [--json]` | `ocx observe usage compare` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
@@ -434,8 +434,13 @@ still apply. These commands query the running proxy; they do not provide offline
 
 `--range today` (alias `1d`) reports the current local day. `--provider` and
 `--model` narrow the report to one upstream target — distinct from
-`--surface`, which selects the calling client (Codex, Claude Code, Grok)
+`--surface`, which selects the calling client (Codex, Claude Code, Grok, OMP, Hermes)
 rather than the provider serving the request.
+
+OMP and Hermes select their recorded client markers, not a provider name. Existing
+integrations need **Apply** in **Connect**, followed by an OMP restart or a new Hermes
+session, to send the nonsecret `x-opencodex-client` header. It has no authentication
+or permission meaning, and historical rows remain unchanged.
 
 The default view prints request, token and estimated-cost totals plus
 per-provider and per-model breakdowns. Costs are API list-price equivalents,
@@ -503,7 +508,7 @@ returned rows (1–2000, default 200). JSON reports
 Counts describe this observed window, not all history. JSONL emits rows only;
 empty matches succeed. Cursor metadata is not a resumable search token.
 
-Selectors include `--surface all|codex|claude|grok`, `--status all|success|errors`,
+Selectors include `--surface all|codex|claude|grok|omp|hermes`, `--status all|success|errors`,
 `--time-window all|15m|1h|24h`, `--model`, `--provider`, `--conversation`
 (alias `--conversationId`), `--intercepted-only`, `--min-tok-per-sec`,
 `--max-tok-per-sec`, and `--protocol-mode all|native|translated|legacy-bridge|blocked|none`.

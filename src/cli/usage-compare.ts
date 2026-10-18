@@ -25,7 +25,7 @@ import {
 } from "./runtime-api";
 
 export const USAGE_COMPARE_USAGE = `Usage:
-  ocx usage compare [--range <today|1d|7d|30d>] [--surface <all|codex|claude|grok>]
+  ocx usage compare [--range <today|1d|7d|30d>] [--surface <all|codex|claude|grok|omp|hermes>]
       [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]`;
 
 export type CompareRange = "today" | "7d" | "30d";

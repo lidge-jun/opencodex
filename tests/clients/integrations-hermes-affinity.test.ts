@@ -41,9 +41,10 @@ beforeEach(() => {
 afterEach(() => removeTreeWithRetry(root));
 
 function provider(): Record<string, unknown> {
-  return (Bun.YAML.parse(readFileSync(path, "utf8")) as {
+  const document = Bun.YAML.parse(readFileSync(path, "utf8")) as {
     providers: { opencodex: Record<string, unknown> };
-  }).providers.opencodex;
+  };
+  return document.providers.opencodex;
 }
 
 function writeProvider(block: Record<string, unknown>): void {
@@ -52,10 +53,13 @@ function writeProvider(block: Record<string, unknown>): void {
 }
 
 /** A pre-fix contribution, independent of the generator under test. */
-function seedLegacy(manual = false, semantic = true): void {
+function seedLegacy(manual = false, semantic = true, affinity = false, remote = false): void {
+  if (remote) input = { ...input, config: { ...input.config, hostname: "0.0.0.0" } };
   const block = {
     api: "http://127.0.0.1:10100/v1", api_key: HERMES_API_KEY_ENV_REF,
     api_mode: "chat_completions", discover_models: false, models: { "mock/example": {} },
+    ...(affinity ? { session_affinity_header: "session-id" } : {}),
+    ...(remote ? { extra_headers: { "x-opencodex-api-key": HERMES_API_KEY_ENV_REF } } : {}),
   };
   writeProvider(block);
   const contribution: ManagedContribution = {
@@ -74,7 +78,7 @@ function seedLegacy(manual = false, semantic = true): void {
 test("new Hermes integrations enable dynamic affinity even with only third-party models", () => {
   expect(applyIntegration(input)).toMatchObject({ ok: true, state: "current" });
   expect(provider()).toMatchObject({ session_affinity_header: "session-id", api_mode: "chat_completions" });
-  expect(provider().extra_headers).toBeUndefined();
+  expect(provider().extra_headers).toEqual({ "x-opencodex-client": "hermes" });
   expect(readFileSync(path, "utf8").startsWith(prefix)).toBe(true);
 });
 
@@ -110,6 +114,43 @@ test.each([
   expect(disableIntegration(changed).ok).toBe(true);
   expect(readFileSync(path, "utf8")).toBe(prefix);
 });
+
+test.each([[false, false], [false, true], [true, false], [true, true]])(
+  "affinity-only semantic=%s remote=%s waits for marker Apply without changing admission", async (semantic, remote) => {
+    seedLegacy(false, semantic, true, remote);
+    const before = readFileSync(path, "utf8");
+    const record = input.store!.readRecords().hermes;
+    const changed = { ...input, models: [{ namespaced: "mock/next", provider: "mock", id: "next" }] };
+    expect(readIntegrationState(changed).state).toBe("stale");
+    expect(refreshIntegration(changed)).toMatchObject({ ok: true, changed: false, state: "stale" });
+    expect(await refreshOwnedIntegration(changed)).toMatchObject({ ok: true, changed: false });
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(input.store!.readRecords().hermes).toEqual(record);
+    expect(input.store!.listOperations("hermes")).toEqual([]);
+
+    expect(applyIntegration(changed)).toMatchObject({ ok: true, changed: true, state: "current" });
+    expect(provider().extra_headers).toEqual({
+      ...(remote ? { "x-opencodex-api-key": HERMES_API_KEY_ENV_REF } : {}),
+      "x-opencodex-client": "hermes",
+    });
+    expect(provider().session_affinity_header).toBe("session-id");
+    expect(provider().models).toEqual({ "mock/next": {} });
+  },
+);
+
+test.each([undefined, null, {}, { "x-opencodex-client": "omp" }, { "x-opencodex-client": "hermes", "x-user": "keep" }])(
+  "after adoption the surface headers are protected against %j", extraHeaders => {
+    expect(applyIntegration(input).ok).toBe(true);
+    const block = provider();
+    if (extraHeaders === undefined) delete block.extra_headers;
+    else block.extra_headers = extraHeaders;
+    writeProvider(block);
+    const before = readFileSync(path, "utf8");
+    expect(readIntegrationState(input)).toMatchObject({ state: "conflict", reason: "foreign-edit" });
+    expect(refreshIntegration(input)).toMatchObject({ ok: false, reason: "conflict" });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  },
+);
 
 test("a manual affinity addition can be adopted despite catalog drift and YAML key reordering", () => {
   seedLegacy(true);

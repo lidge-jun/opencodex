@@ -114,18 +114,23 @@ describe("hermes", () => {
   test("capability metadata survives the generated YAML round-trip", () => {
     const built = buildClientConfigText("hermes", ctx());
     const parsed = Bun.YAML.parse(built.text) as HermesGeneratedConfig;
-    expect(parsed.providers[OPENCODE_PROVIDER_ID]!.models).toEqual(
-      (built.document as HermesGeneratedConfig).providers[OPENCODE_PROVIDER_ID]!.models,
-    );
+    const document = built.document as HermesGeneratedConfig;
+    expect(parsed.providers[OPENCODE_PROVIDER_ID]!.models).toEqual(document.providers[OPENCODE_PROVIDER_ID]!.models);
+    expect(parsed.providers[OPENCODE_PROVIDER_ID]!.extra_headers).toEqual({ "x-opencodex-client": "hermes" });
   });
 
-  test("a non-loopback bind adds the admission header, loopback does not", () => {
+  test("the surface marker preserves admission headers and dynamic affinity", () => {
     const loopback = buildClientConfig("hermes", ctx()) as HermesGeneratedConfig;
-    expect(loopback.providers[OPENCODE_PROVIDER_ID]!.extra_headers).toBeUndefined();
+    expect(loopback.providers[OPENCODE_PROVIDER_ID]!.extra_headers).toEqual({ "x-opencodex-client": "hermes" });
     const remote = buildClientConfig("hermes", ctx(REMOTE)) as HermesGeneratedConfig;
     expect(remote.providers[OPENCODE_PROVIDER_ID]!.extra_headers).toEqual({
       "x-opencodex-api-key": HERMES_API_KEY_ENV_REF,
+      "x-opencodex-client": "hermes",
     });
+    for (const document of [loopback, remote]) {
+      expect(document.providers[OPENCODE_PROVIDER_ID]!.session_affinity_header).toBe("session-id");
+      expect(document.providers[OPENCODE_PROVIDER_ID]!.extra_headers).not.toHaveProperty("session-id");
+    }
   });
 
   test("HERMES_HOME wins over the platform default", () => {

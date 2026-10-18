@@ -996,6 +996,8 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                         <span className="badge badge-accent">{t("logs.badge.claude")}</span>
                       )}
                       {log.surface === "grok" && <span className="badge badge-accent">{t("logs.badge.grok")}</span>}
+                      {log.surface === "omp" && <span className="badge badge-accent">{t("logs.badge.omp")}</span>}
+                      {log.surface === "hermes" && <span className="badge badge-accent">{t("logs.badge.hermes")}</span>}
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
                       <ProtocolBadge trace={log.protocolTrace} t={t} />
                     </span>

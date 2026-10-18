@@ -51,6 +51,15 @@ async function run(argv: string[], body: unknown): Promise<{ code: number; out: 
   }
 }
 
+test.each(["omp", "hermes"])("usage forwards the %s client surface", async (surface) => {
+  const body = payload({ surface });
+  const { code, urls, out } = await run(["usage", "--surface", surface, "--json"], body);
+  expect(code).toBe(0);
+  expect(urls).toHaveLength(1);
+  expect(new URL(urls[0]!).searchParams.get("surface")).toBe(surface);
+  expect(JSON.parse(out)).toEqual(body);
+});
+
 describe("formatUsageReport", () => {
   test("keeps malformed token counts and every human line inert", () => {
     const control = "before\x1b[2J\x07\u2028after\u2029";

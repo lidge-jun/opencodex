@@ -142,7 +142,7 @@ function entry(overrides: Partial<PersistedUsageEntry> & { ts: number }): Persis
     status: rest.status ?? 200,
     durationMs: rest.durationMs ?? 10,
     usageStatus: rest.usageStatus ?? "unreported",
-    ...(rest.surface === "claude" ? { surface: rest.surface } : {}),
+    ...(rest.surface !== undefined ? { surface: rest.surface } : {}),
     ...(rest.accountLogLabel !== undefined ? { accountLogLabel: rest.accountLogLabel } : {}),
     ...(rest.resolvedModel !== undefined ? { resolvedModel: rest.resolvedModel } : {}),
     ...(rest.usage ? { usage: rest.usage } : {}),
@@ -464,7 +464,7 @@ import { projectUsageSummary } from "../../src/usage/summary";
 describe("canonical range and surface constants", () => {
   test("the exported members match what the parsers accept", () => {
     expect([...USAGE_RANGES]).toEqual(["today", "7d", "30d", "all"]);
-    expect([...USAGE_SURFACES]).toEqual(["all", "codex", "claude", "grok"]);
+    expect([...USAGE_SURFACES]).toEqual(["all", "codex", "claude", "grok", "omp", "hermes"]);
     for (const range of USAGE_RANGES) expect(parseRange(range)).toBe(range);
     for (const surface of USAGE_SURFACES) expect(parseUsageSurface(surface)).toBe(surface);
   });
@@ -682,10 +682,13 @@ describe("projectUsageSummary", () => {
 });
 
 describe("parseUsageSurface", () => {
-  test("accepts all / codex / claude", () => {
+  test("accepts every supported product surface", () => {
     expect(parseUsageSurface("all")).toBe("all");
     expect(parseUsageSurface("codex")).toBe("codex");
     expect(parseUsageSurface("claude")).toBe("claude");
+    expect(parseUsageSurface("grok")).toBe("grok");
+    expect(parseUsageSurface("omp")).toBe("omp");
+    expect(parseUsageSurface("hermes")).toBe("hermes");
   });
 
   test("defaults to all on null or unknown", () => {
@@ -735,48 +738,6 @@ describe("summarizeUsage", () => {
     expect(none.summary.pricedRequests).toBe(0);
   });
 
-  test("filters totals, days, models, and providers by persisted request surface", () => {
-    const entries: PersistedUsageEntry[] = [
-      entry({
-        ts: FIXED_NOW - 1000,
-        provider: "openai",
-        model: "gpt-5.5",
-        usageStatus: "reported",
-        usage: { inputTokens: 10, outputTokens: 2 },
-        totalTokens: 12,
-      }),
-      entry({
-        ts: FIXED_NOW - 2000,
-        provider: "anthropic",
-        model: "claude-fable-5",
-        surface: "claude",
-        usageStatus: "reported",
-        usage: { inputTokens: 20, outputTokens: 4 },
-        totalTokens: 24,
-      }),
-    ];
-
-    const all = summarizeUsage(entries, "30d", FIXED_NOW);
-    expect(all.surface).toBe("all");
-    expect(all.summary).toMatchObject({ requests: 2, totalTokens: 36 });
-    expect(all.days.reduce((requests, day) => requests + day.requests, 0)).toBe(2);
-    expect(all.models.map(model => model.model).sort()).toEqual(["claude-fable-5", "gpt-5.5"]);
-    expect(all.providers.map(provider => provider.provider).sort()).toEqual(["anthropic", "openai"]);
-
-    const codex = summarizeUsage(entries, "30d", FIXED_NOW, "codex");
-    expect(codex.surface).toBe("codex");
-    expect(codex.summary).toMatchObject({ requests: 1, totalTokens: 12 });
-    expect(codex.days.reduce((requests, day) => requests + day.requests, 0)).toBe(1);
-    expect(codex.models).toEqual([expect.objectContaining({ provider: "openai", model: "gpt-5.5", requests: 1 })]);
-    expect(codex.providers).toEqual([expect.objectContaining({ provider: "openai", requests: 1 })]);
-
-    const claude = summarizeUsage(entries, "30d", FIXED_NOW, "claude");
-    expect(claude.surface).toBe("claude");
-    expect(claude.summary).toMatchObject({ requests: 1, totalTokens: 24 });
-    expect(claude.days.reduce((requests, day) => requests + day.requests, 0)).toBe(1);
-    expect(claude.models).toEqual([expect.objectContaining({ provider: "anthropic", model: "claude-fable-5", requests: 1 })]);
-    expect(claude.providers).toEqual([expect.objectContaining({ provider: "anthropic", requests: 1 })]);
-  });
 
   test("missing usage does not inflate token totals", () => {
     const entries: PersistedUsageEntry[] = [

@@ -19,3 +19,14 @@ test("Logs surface filter matches Usage buckets including Grok", () => {
   expect(logMatchesSurface({ surface: "claude-desktop" }, "codex")).toBe(false);
   expect(logMatchesSurface({ surface: "grok" }, "codex")).toBe(false);
 });
+
+test("OMP and Hermes are distinct buckets, never untagged Codex traffic", () => {
+  for (const surface of ["omp", "hermes"] as const) {
+    expect(logMatchesSurface({ surface }, "all")).toBe(true);
+    for (const filter of ["claude", "codex", "grok", "omp", "hermes"] as const) {
+      expect(logMatchesSurface({ surface }, filter)).toBe(surface === filter);
+    }
+    expect(logMatchesSurface({}, surface)).toBe(false);
+    expect(logMatchesSurface({ surface: "grok" }, surface)).toBe(false);
+  }
+});

@@ -10,7 +10,7 @@ const costs = { requests: count, totalTokens: count, estimatedCostUsd: count.opt
 const hubUsageSchema = z.object({
   schemaVersion: z.literal(1), source: z.literal("hub"), scope: z.literal("client"),
   range: z.enum(["today", "7d", "30d", "all"]),
-  surface: z.enum(["all", "codex", "claude", "grok"]),
+  surface: z.enum(["all", "codex", "claude", "grok", "omp", "hermes"]),
   since: count.nullable(), until: count.optional(), customWindow: z.literal(true).optional(),
   generatedAt: count,
   summary: z.object({ ...costs, inputTokens: count, outputTokens: count,

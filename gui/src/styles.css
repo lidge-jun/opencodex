@@ -2524,20 +2524,13 @@ button.prov-account-row.active { cursor: default; }
 .usage-range-fields .input { height: var(--control-md); padding-block: 0; }
 .usage-range-action { min-height: var(--control-md); }
 .usage-range-panel > p { margin: 0; }
-.usage-segmented { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 2px; gap: 2px; background: var(--surface); }
+.usage-segmented { display: inline-flex; flex-wrap: wrap; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 2px; gap: 2px; background: var(--surface); }
 .usage-segmented-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: var(--radius-pill); cursor: pointer; font: inherit; white-space: nowrap; }
 .usage-segmented-btn.active { background: var(--raised); color: var(--text); font-weight: var(--weight-semibold); }
-.usage-source-mark { width: var(--icon-sm); height: var(--icon-sm); flex: 0 0 auto; object-fit: contain; }
-/* Only monochrome source marks (Grok) are inverted for dark themes. Brand-colored
-   marks (Claude, Codex/OpenAI) must keep their brand color; inverting shifts the hue. */
-:root[data-theme="dark"] .usage-source-mark--mono { filter: invert(1); }
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .usage-source-mark--mono { filter: invert(1); }
-}
 
 @media (max-width: 760px) {
-  .usage-segmented-btn { min-height: var(--control-touch); }
+  .usage-segmented-btn, .logs-segmented .btn { min-height: var(--control-touch); }
+  .usage-source-btn { min-width: var(--control-touch); }
   .openai-mode-row { align-items: stretch; flex-direction: column; gap: 6px; }
   .openai-mode-control { width: 100%; }
   .openai-mode-control .usage-segmented-btn { flex: 1 1 0; min-width: 0; }

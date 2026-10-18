@@ -9,6 +9,7 @@
  */
 import {
   OPENCODE_PROVIDER_ID,
+  CLIENT_SURFACE_HEADER,
   type ManagedContribution,
   type ManagedFragment,
 } from "../clients/config-export";
@@ -47,6 +48,34 @@ export function isHermesAffinityUpgrade(
   const value = { ...observed };
   delete value.session_affinity_header;
   const predecessor: ManagedContribution = { clientId: "hermes", fragments: [{ path, value }] };
+  return fingerprint(canonicalContribution(predecessor)) === record.blockFingerprint
+    || (typeof record.semanticBlockFingerprint === "string"
+      && fingerprint(semanticContribution(predecessor)) === record.semanticBlockFingerprint);
+}
+
+/** Surface-marker adoption needs Apply, even when an implicit refresh owns the old block. */
+export function isClientSurfaceMarkerUpgrade(
+  doc: unknown,
+  record: OwnershipRecord,
+  desired: ManagedContribution,
+): boolean {
+  const clientId = record.clientId;
+  if ((clientId !== "omp" && clientId !== "hermes") || desired.clientId !== clientId) return false;
+  const path = ["providers", OPENCODE_PROVIDER_ID];
+  if (record.fragmentPaths.length !== 1 || record.fragmentPaths[0]!.length !== path.length
+    || !record.fragmentPaths[0]!.every((key, index) => key === path[index])) return false;
+  const fragment = desired.fragments.find(item => item.path.length === path.length
+    && item.path.every((key, index) => key === path[index]));
+  if (!isObject(fragment?.value)) return false;
+  const headersKey = clientId === "omp" ? "headers" : "extra_headers";
+  const headers = fragment.value[headersKey];
+  if (!isObject(headers) || headers[CLIENT_SURFACE_HEADER] !== clientId) return false;
+  const observed = readPath(doc, path);
+  if (!isObject(observed)) return false;
+  const observedHeaders = observed[headersKey];
+  if (observedHeaders !== undefined
+    && (!isObject(observedHeaders) || Object.hasOwn(observedHeaders, CLIENT_SURFACE_HEADER))) return false;
+  const predecessor: ManagedContribution = { clientId, fragments: [{ path, value: observed }] };
   return fingerprint(canonicalContribution(predecessor)) === record.blockFingerprint
     || (typeof record.semanticBlockFingerprint === "string"
       && fingerprint(semanticContribution(predecessor)) === record.semanticBlockFingerprint);

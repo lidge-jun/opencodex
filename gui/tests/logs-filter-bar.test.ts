@@ -13,14 +13,14 @@ test("surface radios support wrapping arrows and Home/End with roving focus", ()
   const win = new Window();
   Object.defineProperty(globalThis, "document", { configurable: true, value: win.document });
   try {
-    for (const surface of ["all", "claude", "codex", "grok"]) {
+    for (const surface of ["all", "claude", "codex", "grok", "omp", "hermes"]) {
       const button = win.document.createElement("button");
       button.id = `logs-surface-${surface}`;
       win.document.body.append(button);
     }
     const selected: string[] = [];
     const key = (value: string) => ({ key: value, preventDefault() {}, } as never);
-    logsSurfaceKeyDown(key("ArrowRight"), "grok", surface => selected.push(surface));
+    logsSurfaceKeyDown(key("ArrowRight"), "hermes", surface => selected.push(surface));
     expect(selected).toEqual(["all"]);
     expect(win.document.activeElement?.id).toBe("logs-surface-all");
     logsSurfaceKeyDown(key("Home"), "codex", surface => selected.push(surface));
@@ -162,8 +162,9 @@ test("LogsFilterBar rendered radios move selection, focus and the single tab sto
     const radio = (surface: string) => ui.container.querySelector<HTMLButtonElement>(`#logs-surface-${surface}`)!;
     radio("all").focus();
     const moves = [
-      ["ArrowLeft", "grok"], ["ArrowRight", "all"], ["ArrowDown", "claude"],
-      ["ArrowUp", "all"], ["End", "grok"], ["Home", "all"],
+      ["ArrowLeft", "hermes"], ["ArrowUp", "omp"], ["ArrowLeft", "grok"],
+      ["ArrowRight", "omp"], ["ArrowDown", "hermes"], ["ArrowRight", "all"],
+      ["ArrowDown", "claude"], ["ArrowUp", "all"], ["End", "hermes"], ["Home", "all"],
     ] as const;
     for (const [key, expected] of moves) {
       const event = new ui.win.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
@@ -181,5 +182,26 @@ test("LogsFilterBar rendered radios move selection, focus and the single tab sto
     expect(unrelated.defaultPrevented).toBe(false);
     expect(ui.filters().surface).toBe("all");
     expect(document.activeElement).toBe(radio("all"));
+  });
+});
+
+test("LogsFilterBar exposes all six named sources with themed marks and pointer selection", async () => {
+  await withFilterBar({ ...DEFAULT_LOG_FILTER_STATE }, async ui => {
+    const radios = [...ui.container.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+    expect(radios.map(button => button.getAttribute("aria-label"))).toEqual(
+      ["all", "claude", "codex", "grok", "omp", "hermes"].map(surface => `logs.filter.surface.${surface}`),
+    );
+    for (const surface of ["omp", "hermes"] as const) {
+      const button = ui.container.querySelector<HTMLButtonElement>(`#logs-surface-${surface}`)!;
+      await act(async () => { button.click(); });
+      expect(ui.filters().surface).toBe(surface);
+      expect(button.getAttribute("aria-checked")).toBe("true");
+      expect(button.querySelector('.client-mark[aria-hidden="true"]')).not.toBeNull();
+    }
+    const hermes = ui.container.querySelector<HTMLElement>("#logs-surface-hermes .client-mark--mask")!;
+    expect(hermes.style.maskImage || hermes.style.webkitMaskImage).toContain("/provider-icons/hermes-agent.svg");
+    expect(ui.container.querySelector("#logs-surface-hermes img")).toBeNull();
+    expect(ui.container.querySelector("#logs-surface-omp img")?.getAttribute("src")).toBe("/provider-icons/oh-my-pi.svg");
+    expect(ui.container.querySelector("#logs-surface-omp .client-mark--mask")).toBeNull();
   });
 });

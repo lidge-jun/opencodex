@@ -125,7 +125,7 @@ test("usage workspace i18n keys exist in every locale", async () => {
   }
 });
 
-test("Usage breakdown tables distinguish priced zero totals from excluded requests", async () => {
+test("Usage renders priced totals and six accessible source filters with themed marks", async () => {
   const globalKeys = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "ResizeObserver"] as const;
   const previous = new Map(globalKeys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const originalFetch = Object.getOwnPropertyDescriptor(globalThis, "fetch");
@@ -146,7 +146,10 @@ test("Usage breakdown tables distinguish priced zero totals from excluded reques
   Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: ResizeObserverStub });
   Object.defineProperty(testWindow, "ResizeObserver", { configurable: true, value: ResizeObserverStub });
   clearClientResourceStoresForTests();
-  globalThis.fetch = (async () => Response.json({
+  const requestedSurfaces: (string | null)[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    requestedSurfaces.push(new URL(String(input)).searchParams.get("surface"));
+    return Response.json({
     range: "30d",
     surface: "all",
     since: null,
@@ -184,7 +187,8 @@ test("Usage breakdown tables distinguish priced zero totals from excluded reques
     truncatedPrefixBytes: 0,
     entriesTruncated: false,
     entriesDropped: 0,
-  })) as typeof fetch;
+    });
+  }) as typeof fetch;
 
   const container = document.createElement("div");
   document.body.append(container);
@@ -213,6 +217,27 @@ test("Usage breakdown tables distinguish priced zero totals from excluded reques
     expect(unavailableModelRow?.textContent).toContain("—");
     expect(unavailableModelRow?.textContent).not.toContain("~$0.0000");
     expect(unavailableModelRow?.textContent).not.toContain("0 requests excluded");
+
+    const sources = container.querySelector('.usage-filters [role="group"]')!;
+    const buttons = [...sources.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons.map(button => button.getAttribute("aria-label"))).toEqual(["All", "Codex", "Claude", "Grok", "OMP", "Hermes"]);
+    for (const label of ["Codex", "Claude", "OMP"]) {
+      const button = buttons.find(button => button.getAttribute("aria-label") === label)!;
+      expect(button.querySelector('.client-mark--img[aria-hidden="true"] img')?.getAttribute("alt")).toBe("");
+      expect(button.querySelector(".client-mark--mask")).toBeNull();
+    }
+    for (const [label, asset] of [["Grok", "/provider-icons/grok.svg"], ["Hermes", "/provider-icons/hermes-agent.svg"]]) {
+      const mark = buttons.find(button => button.getAttribute("aria-label") === label)!.querySelector<HTMLElement>(".client-mark--mask")!;
+      expect(mark.style.maskImage || mark.style.webkitMaskImage).toContain(asset!);
+      expect(mark.getAttribute("aria-hidden")).toBe("true");
+    }
+    expect(buttons.find(button => button.getAttribute("aria-label") === "OMP")!.querySelector("img")?.getAttribute("src")).toBe("/provider-icons/oh-my-pi.svg");
+    for (const [surface, label] of [["omp", "OMP"], ["hermes", "Hermes"]]) {
+      const button = buttons.find(button => button.getAttribute("aria-label") === label)!;
+      await act(async () => { button.click(); });
+      expect(button.getAttribute("aria-pressed")).toBe("true");
+      expect(requestedSurfaces).toContain(surface);
+    }
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
@@ -405,23 +430,3 @@ test("Usage falls back to the generic caveat when a reported bound is unrenderab
   }
 });
 
-test("Usage source marks keep brand colors and invert only the monochrome Grok mark", async () => {
-  const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
-  const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
-
-  // Claude and Codex ship brand-colored SVGs and must not carry the mono modifier.
-  expect(page).toContain('src="/provider-icons/claude-color.svg"');
-  expect(page).not.toContain('usage-source-mark usage-source-mark--mono" src="/provider-icons/claude-color.svg"');
-  expect(page).toContain('src="/provider-icons/openai.svg"');
-  expect(page).not.toContain('usage-source-mark usage-source-mark--mono" src="/provider-icons/openai.svg"');
-
-  // Grok ships a black monochrome mark: it is the only one that needs dark-theme inversion.
-  expect(page).toContain('usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg"');
-
-  // Dark-theme inversion must be scoped to the mono modifier so brand hues survive.
-  expect(css).toContain(':root[data-theme="dark"] .usage-source-mark--mono { filter: invert(1); }');
-  expect(css).not.toContain(':root[data-theme="dark"] .usage-source-mark { filter: invert(1); }');
-  // The OS dark-mode (prefers-color-scheme) path must keep the same scoping.
-  expect(css).toContain(':root:not([data-theme="light"]) .usage-source-mark--mono { filter: invert(1); }');
-  expect(css).not.toContain(':root:not([data-theme="light"]) .usage-source-mark { filter: invert(1); }');
-});

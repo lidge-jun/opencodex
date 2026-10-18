@@ -162,10 +162,10 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 
 ## Usage accounting
 
-`OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
-through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
-is a measured value. Separate attempts add credits when usage is merged. The field is independent
-of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`.
+### Client surface attribution
+`src/server/chat-completions.ts` and HTTP Responses ingress in `src/server/index/serve-options.ts` recognize `x-opencodex-client: omp|hermes`; `x-opencodex-grok: 1` wins. These non-secret, caller-controlled hints affect usage buckets only, not admission, credentials, affinity or billing. `src/server/request-log.ts` retains them; `src/usage/log.ts` uses a closed own-property vocabulary. `src/usage/summary.ts` exposes disjoint Codex (unlabelled), Claude (including Desktop), Grok, OMP and Hermes filters plus All; old traffic is never inferred/backfilled. CLI filters share these choices. `src/remote/hub-usage.ts` accepts OMP/Hermes reports while rejecting unknown surfaces and stripping management-only fields.
+
+`OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent; zero is measured. Separate attempts add credits. This is independent of token estimation (`estimated` describes tokens) and is never USD or token usage. The human projection in `src/cli/observe.ts` includes persisted `id=...` for `ocx logs get` / `ocx logs explain`; rows with absent/control-character IDs omit it rather than rewriting the key, while JSON/JSONL retain the payload. `ocx logs history` pages the same derived index as the dashboard (`GET /api/request-history`) with resumable `nextCursor`.
 
 ### Upstream key account attribution
 

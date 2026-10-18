@@ -285,6 +285,11 @@ because its authoritative input-modality vocabulary currently has no video value
 
 > Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md)
 
+## Client usage attribution
+
+OMP's `headers` stamps `x-opencodex-client: omp`; Hermes's `extra_headers` stamps `x-opencodex-client: hermes` alongside required admission-header environment references, leaving dynamic affinity intact. These non-secret [usage hints](../dashboard-and-usage.md#client-surface-attribution) do not authenticate, route or identify billing; OMP remains loopback-only.
+Owned blocks without a marker stay `stale` until explicit Apply snapshots and writes it. Implicit refresh preserves bytes and ownership despite catalog drift. `src/integrations/ownership-policy.ts` requires the exact recorded predecessor or recorded semantic fingerprint, client and fragment path; unrecorded header edits and deletion/change after Apply remain conflicts. Disable and undo retain their ordinary checks.
+
 ## Hermes session affinity
 
 Hermes exports include `session_affinity_header: session-id` on the entire OpenCodex provider,

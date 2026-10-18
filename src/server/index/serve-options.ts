@@ -208,6 +208,7 @@ import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
+import { CLIENT_SURFACE_HEADER, OMP_SURFACE_VALUE, HERMES_SURFACE_VALUE } from "../../clients/config-export/constants";
 
 export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
 
@@ -1489,6 +1490,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           inboundProtocol: "responses",
         };
         if (req.headers.get("x-opencodex-grok") === "1") logCtx.surface = "grok";
+        else if (req.headers.get(CLIENT_SURFACE_HEADER) === OMP_SURFACE_VALUE) logCtx.surface = "omp";
+        else if (req.headers.get(CLIENT_SURFACE_HEADER) === HERMES_SURFACE_VALUE) logCtx.surface = "hermes";
         let logged = false;
         const finalizeNativePassthroughLog = (
           status: number,

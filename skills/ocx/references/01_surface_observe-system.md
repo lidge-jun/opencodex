@@ -33,7 +33,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx usage`
 
-Usage: `ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]`
+Usage: `ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok|omp|hermes>] [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]`
 
 Token and estimated-cost report over a time range.
 
@@ -46,7 +46,7 @@ State-changing: no. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--range` | string | today \| 1d \| 7d \| 30d \| all; default 30d. |
-| `--surface` | string | all \| codex \| claude \| grok; default all. |
+| `--surface` | string | all \| codex \| claude \| grok \| omp \| hermes; default all. |
 | `--since` | string | Inclusive epoch milliseconds or ISO datetime with timezone; requires --until. |
 | `--until` | string | Inclusive end; requires --since. Custom bounds override --range. |
 | `--provider` | string | Filter provider. |
@@ -421,7 +421,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx logs filter`
 
-Usage: `ocx logs filter [--surface <all|codex|claude|grok>] [--model <id>] [--provider <name>] [--status <all|success|errors>] [--time-window <all|15m|1h|24h>] [--min-tok-per-sec <n>] [--max-tok-per-sec <n>] [--intercepted-only] [--protocol-mode <all|native|translated|legacy-bridge|blocked|none>] [--conversation <id>] [--scan-limit <1-2000>] [--limit <1-2000>] [--json|--jsonl]`
+Usage: `ocx logs filter [--surface <all|codex|claude|grok|omp|hermes>] [--model <id>] [--provider <name>] [--status <all|success|errors>] [--time-window <all|15m|1h|24h>] [--min-tok-per-sec <n>] [--max-tok-per-sec <n>] [--intercepted-only] [--protocol-mode <all|native|translated|legacy-bridge|blocked|none>] [--conversation <id>] [--scan-limit <1-2000>] [--limit <1-2000>] [--json|--jsonl]`
 
 Select a bounded log snapshot with dashboard filters.
 
@@ -433,7 +433,7 @@ State-changing: no. JSON mode: `envelope`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--surface` | string | all \| codex \| claude \| grok. |
+| `--surface` | string | all \| codex \| claude \| grok \| omp \| hermes. |
 | `--model` | string | Case-insensitive exact identity across requested, resolved, served and attempted models. |
 | `--provider` | string | Case-insensitive provider or failover attempt identity. |
 | `--status` | string | all \| success (200-299) \| errors (400-599). |
@@ -455,7 +455,7 @@ State-changing: no. JSON mode: `envelope`.
 
 ### `ocx observe logs filter`
 
-Usage: `ocx observe logs filter [--surface <all|codex|claude|grok>] [--model <id>] [--provider <name>] [--status <all|success|errors>] [--time-window <all|15m|1h|24h>] [--min-tok-per-sec <n>] [--max-tok-per-sec <n>] [--intercepted-only] [--protocol-mode <all|native|translated|legacy-bridge|blocked|none>] [--conversation <id>] [--scan-limit <1-2000>] [--limit <1-2000>] [--json|--jsonl]`
+Usage: `ocx observe logs filter [--surface <all|codex|claude|grok|omp|hermes>] [--model <id>] [--provider <name>] [--status <all|success|errors>] [--time-window <all|15m|1h|24h>] [--min-tok-per-sec <n>] [--max-tok-per-sec <n>] [--intercepted-only] [--protocol-mode <all|native|translated|legacy-bridge|blocked|none>] [--conversation <id>] [--scan-limit <1-2000>] [--limit <1-2000>] [--json|--jsonl]`
 
 Select a bounded log snapshot with dashboard filters.
 
@@ -467,7 +467,7 @@ State-changing: no. JSON mode: `envelope`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--surface` | string | all \| codex \| claude \| grok. |
+| `--surface` | string | all \| codex \| claude \| grok \| omp \| hermes. |
 | `--model` | string | Case-insensitive exact identity across requested, resolved, served and attempted models. |
 | `--provider` | string | Case-insensitive provider or failover attempt identity. |
 | `--status` | string | all \| success (200-299) \| errors (400-599). |
@@ -647,7 +647,7 @@ Drives no management route.
 
 ### `ocx observe usage`
 
-Usage: `ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]`
+Usage: `ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok|omp|hermes>] [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]`
 
 Read token and estimated-cost usage.
 
@@ -660,7 +660,7 @@ State-changing: no. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--range` | string | today \| 1d \| 7d \| 30d \| all; default 30d. |
-| `--surface` | string | all \| codex \| claude \| grok; default all. |
+| `--surface` | string | all \| codex \| claude \| grok \| omp \| hermes; default all. |
 | `--since` | string | Inclusive epoch milliseconds or ISO datetime with timezone; requires --until. |
 | `--until` | string | Inclusive end; requires --since. Custom bounds override --range. |
 | `--provider` | string | Filter provider. |
@@ -676,7 +676,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx usage compare`
 
-Usage: `ocx usage compare [--range <today|1d|7d|30d>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]`
+Usage: `ocx usage compare [--range <today|1d|7d|30d>] [--surface <all|codex|claude|grok|omp|hermes>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]`
 
 Compare a usage range with the previous equal window.
 
@@ -689,7 +689,7 @@ State-changing: no. JSON mode: `envelope`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--range` | string | today \| 1d \| 7d \| 30d; default 30d. all is refused. |
-| `--surface` | string | all \| codex \| claude \| grok; default all. |
+| `--surface` | string | all \| codex \| claude \| grok \| omp \| hermes; default all. |
 | `--provider` | string | Filter provider. |
 | `--model` | string | Filter model. |
 | `--api-key-id` | string | Exact nonblank management key scope; connected clients refuse this. |

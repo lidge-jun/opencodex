@@ -3,6 +3,8 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSPrope
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
 import { readUsageResponseJson, UsageReadFailedError, type UsageReadMetadata } from "../usage-summary-resource";
 import { UsageIncompleteNotice } from "../components/usage-incomplete-notice";
+import ClientMark from "../components/ClientMark";
+import { INTEGRATION_MARKS } from "../components/integration-marks";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
 import { formatEstimatedUsdValue as formatUsdEstimate } from "../intl-formatters";
@@ -19,7 +21,7 @@ import UsageCompanionView from "./usage-companion-view";
 import { readUsageTab, selectUsageTab, usageTabKeyDown } from "./usage-tab-keydown";
 
 type Range = "all" | "30d" | "7d";
-type UsageSurface = "all" | "codex" | "claude" | "grok";
+type UsageSurface = "all" | "codex" | "claude" | "grok" | "omp" | "hermes";
 
 interface UsageSummaryTotals {
   throughputTokensPerSec?: number;
@@ -423,7 +425,7 @@ function UsageFilters({
   return (
     <div className="usage-filters">
       <div className="usage-segmented" role="group" aria-label={t("logs.filter.surface.label")}>
-        {(["all", "codex", "claude", "grok"] as UsageSurface[]).map(choice => {
+        {(["all", "codex", "claude", "grok", "omp", "hermes"] as UsageSurface[]).map(choice => {
           const label = t(`logs.filter.surface.${choice}`);
           return (
             <button
@@ -434,15 +436,7 @@ function UsageFilters({
               aria-pressed={surface === choice}
               onClick={() => onSurface(choice)}
             >
-              {choice === "codex" && (
-                <img className="usage-source-mark" src="/provider-icons/openai.svg" alt="" aria-hidden="true" />
-              )}
-              {choice === "claude" && (
-                <img className="usage-source-mark" src="/provider-icons/claude-color.svg" alt="" aria-hidden="true" />
-              )}
-              {choice === "grok" && (
-                <img className="usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg" alt="" aria-hidden="true" />
-              )}
+              {choice !== "all" && <ClientMark src={INTEGRATION_MARKS[choice]} label={label} size={14} />}
               <span className={choice === "all" ? "usage-source-label" : "usage-source-label usage-source-label-collapsible"}>
                 {label}
               </span>

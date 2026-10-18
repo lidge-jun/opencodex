@@ -10,18 +10,19 @@ const report = () => ({
   filter: { provider: null, model: null, matched: true, comboOverlap: false },
 });
 
-test("hub usage sends only the data key, preserves query and incomplete metadata", async () => {
-  const result = await fetchHubUsage("https://hub.example.test", "client-data-key", new URLSearchParams("range=all&model=model"), {
+test.each(["all", "omp", "hermes"])("hub usage sends only the data key and preserves %s surface and incomplete metadata", async surface => {
+  const query = `range=all&surface=${surface}&model=model`;
+  const result = await fetchHubUsage("https://hub.example.test", "client-data-key", new URLSearchParams(query), {
     fetchImpl: (async (input, init) => {
-      expect(String(input)).toBe("https://hub.example.test/v1/usage?range=all&model=model");
+      expect(String(input)).toBe(`https://hub.example.test/v1/usage?${query}`);
       expect(new Headers(init?.headers).get("x-opencodex-api-key")).toBe("client-data-key");
       expect(new Headers(init?.headers).get("authorization")).toBeNull();
       expect(init?.redirect).toBe("manual");
       expect(init?.cache).toBe("no-store");
-      return Response.json({ ...report(), usageIncomplete: true, usageIncompleteReason: "oversized_rows" });
+      return Response.json({ ...report(), surface, usageIncomplete: true, usageIncompleteReason: "oversized_rows" });
     }) as typeof fetch,
   });
-  expect(result).toMatchObject({ scope: "client", usageIncomplete: true });
+  expect(result).toMatchObject({ scope: "client", surface, usageIncomplete: true });
 });
 
 test.each([401, 403, 404, 500])("hub usage reports HTTP %i without a fallback request", async status => {
@@ -37,6 +38,8 @@ test("redirects, offline hubs, malformed bodies and oversized responses fail", a
     async () => new Response(null, { status: 302, headers: { location: "https://other.example.test" } }),
     async () => { throw new Error("offline"); },
     async () => Response.json({ ...report(), summary: {} }),
+    async () => Response.json({ ...report(), surface: "unknown" }),
+    async () => Response.json({ ...report(), surface: "constructor" }),
     async () => new Response("not json", { headers: { "content-type": "application/json" } }),
     async () => new Response("html", { headers: { "content-type": "text/html" } }),
     async () => new Response("x", { headers: { "content-type": "application/json", "content-length": String(MAX_HUB_USAGE_BYTES + 1) } }),
@@ -45,9 +48,9 @@ test("redirects, offline hubs, malformed bodies and oversized responses fail", a
   }
 });
 
-test("every DTO level drops management-only fields", () => {
+test.each(["all", "omp", "hermes"])("every DTO level drops management-only fields for %s", surface => {
   const data = report();
-  const result = parseHubUsage({ ...data, accounts: [{ accountLogLabel: "private" }],
+  const result = parseHubUsage({ ...data, surface, accounts: [{ accountLogLabel: "private" }],
     summary: { ...data.summary, private: "private" },
     providers: data.providers.map(row => ({ ...row, private: "private" })),
     models: data.models.map(row => ({ ...row, private: "private" })),
@@ -55,6 +58,7 @@ test("every DTO level drops management-only fields", () => {
     filter: { ...data.filter, apiKeyId: "private" },
   });
   expect(result).not.toBeNull();
+  expect(result?.surface).toBe(surface);
   expect(JSON.stringify(result)).not.toContain("private");
 });
 

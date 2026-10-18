@@ -1,6 +1,6 @@
 // Oh My Pi config export.
 import type { PiModelEntry, ExportModel, ExportContext, ManagedContribution } from "./contracts";
-import { PI_API_DIALECT, OPENCODE_PROVIDER_ID, LOOPBACK_API_KEY_PLACEHOLDER } from "./constants";
+import { PI_API_DIALECT, OPENCODE_PROVIDER_ID, LOOPBACK_API_KEY_PLACEHOLDER, CLIENT_SURFACE_HEADER, OMP_SURFACE_VALUE } from "./constants";
 import { normalizeExportModels, inputModalitiesForClient, exportModelLabel, authoritativeContextWindow, outputBudgetFor, singleFragment } from "./model-metadata";
 
 
@@ -24,6 +24,12 @@ export interface OmpProviderBlock {
   baseUrl: string;
   api: typeof PI_API_DIALECT;
   apiKey: string;
+  /**
+   * Provider-level headers OMP sends on every inference call. Carries the
+   * non-secret surface marker only; the remote `x-opencodex-api-key` credential
+   * wiring stays deferred, which is why this client remains `loopbackOnly`.
+   */
+  headers: Record<string, string>;
   models: OmpModelEntry[];
 }
 
@@ -87,6 +93,10 @@ export function buildOmpClientConfig(ctx: ExportContext): OmpGeneratedConfig {
         baseUrl: ctx.baseUrl,
         api: PI_API_DIALECT,
         apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
+        // Best-effort attribution for the usage dashboard, the same mechanism the
+        // managed Grok fence uses. Not a security boundary: any loopback caller can
+        // send this header, so the proxy treats it as a bucketing hint only.
+        headers: { [CLIENT_SURFACE_HEADER]: OMP_SURFACE_VALUE },
         models,
       },
     },

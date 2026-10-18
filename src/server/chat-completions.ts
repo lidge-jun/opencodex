@@ -92,6 +92,7 @@ import { parseSyntheticRowId } from "./fast-row";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported } from "../codex/loopback-target";
 import { applyDroidReasoningDefault, droidReasoningDefault, DROID_DEFAULT_EFFORT_HEADER } from "./droid-reasoning-default";
+import { CLIENT_SURFACE_HEADER, OMP_SURFACE_VALUE, HERMES_SURFACE_VALUE } from "../clients/config-export/constants";
 
 type Rec = Record<string, unknown>;
 
@@ -178,10 +179,10 @@ async function handleChatCompletionsWithBudget(
     chatBody.service_tier = "priority";
   }
   const stream = chatBody.stream === true;
-  // Best-effort Grok attribution: the managed fence stamps this header on every model
-  // it registers (extra_headers, sent verbatim by upstream Grok). Dashboard usage
-  // bucketing only — never an auth or billing signal.
+  // Non-secret usage hints only; neither marker affects admission or billing.
   if (req.headers.get("x-opencodex-grok") === "1") logCtx.surface = "grok";
+  else if (req.headers.get(CLIENT_SURFACE_HEADER) === OMP_SURFACE_VALUE) logCtx.surface = "omp";
+  else if (req.headers.get(CLIENT_SURFACE_HEADER) === HERMES_SURFACE_VALUE) logCtx.surface = "hermes";
   let callerAuthorizationRoute = false;
   let routeMayChangeCredentialDomain = false;
   let settledRoute: ReturnType<typeof routeModel> | null = null;

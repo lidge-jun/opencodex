@@ -75,6 +75,7 @@
   "integrations-hermes-affinity.test.ts": "clients",
   "integrations-journal.test.ts": "clients",
   "integrations-merge.test.ts": "clients",
+  "integrations-omp-surface-marker.test.ts": "clients",
   "integrations-serialize.test.ts": "clients",
   "integrations-state.test.ts": "clients",
   "integrations-superseded-store.test.ts": "clients",

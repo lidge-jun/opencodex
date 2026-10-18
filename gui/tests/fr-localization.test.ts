@@ -103,8 +103,13 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "logs.filter.surface.claude",
   "logs.filter.surface.codex",
   "logs.filter.surface.grok",
+  // Client product names stay unchanged across locales.
+  "logs.filter.surface.omp",
+  "logs.filter.surface.hermes",
   "logs.badge.claude",
   "logs.badge.grok",
+  "logs.badge.omp",
+  "logs.badge.hermes",
   "logs.col.estimatedCost",
   "logs.detail.ttft",
   "storage.card.home",

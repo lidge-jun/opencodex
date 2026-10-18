@@ -156,6 +156,16 @@ Logs filters combine surface, intercepted requests, provider, exact model, statu
 speed, and conversation ID over the currently loaded request ring. Provider and model
 choices also include fallback attempts; model matching ignores case and surrounding spaces
 but does not match partial names. Choices that disappear from the ring reset to All.
+
+The client selector in both Usage and Logs offers **All**, **Codex**, **Claude**,
+**Grok**, **OMP**, and **Hermes**, with client logos; Logs also labels OMP and Hermes
+rows. This selects the calling client, not the upstream model provider. Claude
+includes Claude Desktop; Codex includes unmarked requests. OMP and Hermes use the
+nonsecret `x-opencodex-client` marker from their generated integration config.
+For existing configs, use **Apply** in **Connect** and restart OMP or start a new
+Hermes session. Only new marked requests receive these labels: historical rows
+stay unchanged, and the marker does not authenticate a request or grant access.
+
 The conversation field also accepts a pasted `codex://threads/<id>` deep link, the form a
 Codex "copy session link" puts on the clipboard — the wrapper and any link metadata such
 as `?hostId=…` are ignored and the bare thread id is matched, the same value an

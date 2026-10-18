@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildGrokManagedBlock, injectGrokConfig } from "../../../src/grok/inject";
+import { buildOmpClientConfig } from "../../../src/clients/config-export/omp";
 import { handleChatCompletions } from "../../../src/server/chat-completions";
 import type { RequestLogContext } from "../../../src/server/request-log";
 import type { OcxConfig } from "../../../src/types";
@@ -58,4 +59,37 @@ test("a request carrying the header is tagged grok; one without is not", async (
   const plain: RequestLogContext = { model: "", provider: "" };
   await handleChatCompletions(chatReq({}), config, plain).catch(() => {});
   expect(plain.surface).toBeUndefined();
+});
+
+test("the managed OMP block stamps its own surface marker", () => {
+  // The marker is what puts OMP traffic in its own usage bucket instead of the
+  // untagged `codex` catch-all. It is non-secret, so the client stays loopbackOnly.
+  const block = buildOmpClientConfig({
+    baseUrl: "http://127.0.0.1:10100/v1",
+    config: { port: 10100, hostname: "127.0.0.1", defaultProvider: "mock", providers: {} } as OcxConfig,
+    models: [{ namespaced: "anthropic/claude-opus-5", provider: "anthropic", id: "claude-opus-5" }],
+  }).providers.opencodex!;
+  expect(block.headers).toEqual({ "x-opencodex-client": "omp" });
+  // Nothing secret rides along: the placeholder stays the only credential-shaped value.
+  expect(JSON.stringify(block)).not.toContain("x-opencodex-api-key");
+});
+
+test.each(["omp", "hermes"] as const)("a request carrying the %s marker is tagged separately from codex", async surface => {
+  const tagged: RequestLogContext = { model: "", provider: "" };
+  await handleChatCompletions(chatReq({ "x-opencodex-client": surface }), config, tagged).catch(() => {});
+  expect(tagged.surface).toBe(surface);
+});
+
+test.each(["cursor", "1", "Hermes", "toString"])("an unknown marker %s does not become a surface", async value => {
+  const unknown: RequestLogContext = { model: "", provider: "" };
+  await handleChatCompletions(chatReq({ "x-opencodex-client": value }), config, unknown).catch(() => {});
+  expect(unknown.surface).toBeUndefined();
+});
+
+test.each(["omp", "hermes"])("the Grok marker outranks the %s marker", async surface => {
+  const both: RequestLogContext = { model: "", provider: "" };
+  await handleChatCompletions(
+    chatReq({ "x-opencodex-grok": "1", "x-opencodex-client": surface }), config, both,
+  ).catch(() => {});
+  expect(both.surface).toBe("grok");
 });

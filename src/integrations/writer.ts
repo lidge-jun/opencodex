@@ -29,6 +29,7 @@ import {
 } from "./ownership";
 import {
   isHermesAffinityUpgrade,
+  isClientSurfaceMarkerUpgrade,
   protectedContributionFingerprint,
   refreshablePathsOf,
   semanticProtectedContributionFingerprint,
@@ -371,6 +372,12 @@ function applyOrRefreshIntegration(
     return {
       ok: true, changed: false, state: "stale", clientId,
       message: "Hermes session affinity requires Apply in Integrations; refresh left the configuration unchanged",
+    };
+  }
+  if (!allowAbsent && record && isClientSurfaceMarkerUpgrade(parsed, record, contribution)) {
+    return {
+      ok: true, changed: false, state: "stale", clientId,
+      message: "The usage-surface marker requires Apply in Integrations; refresh left the configuration unchanged",
     };
   }
 

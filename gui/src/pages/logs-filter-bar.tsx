@@ -3,6 +3,8 @@ import type { TFn, TKey } from "../i18n/shared";
 import { IconX } from "../icons";
 import { formatProviderDisplayName } from "../provider-icons";
 import { PROTOCOL_MODE_KEYS } from "../components/protocols/protocol-labels";
+import ClientMark from "../components/ClientMark";
+import { INTEGRATION_MARKS } from "../components/integration-marks";
 import { LOG_PROTOCOL_MODE_FILTERS, type LogFilterState, type LogProtocolModeFilter, type LogStatusFilter, type LogTimeWindow } from "./logs-filter";
 import { logsSurfaceKeyDown } from "./logs-surface-keydown";
 
@@ -47,13 +49,14 @@ export function LogsFilterBar({
       <div className="logs-toolbar">
         <span className="muted text-control">{t("logs.filter.surface.label")}</span>
         <div className="segmented logs-segmented" role="radiogroup" aria-label={t("logs.filter.surface.label")}>
-          {(["all", "claude", "codex", "grok"] as const).map(surface => (
+          {(["all", "claude", "codex", "grok", "omp", "hermes"] as const).map(surface => (
             <button
               key={surface}
               ref={surface === "all" ? allSurfaceRef : undefined}
               type="button"
               role="radio"
               aria-checked={filters.surface === surface}
+              aria-label={t(`logs.filter.surface.${surface}`)}
               id={`logs-surface-${surface}`}
               tabIndex={filters.surface === surface ? 0 : -1}
               className={`btn btn-sm${filters.surface === surface ? " btn-primary" : " btn-ghost"}`}
@@ -61,6 +64,7 @@ export function LogsFilterBar({
               onClick={() => onFilterChange({ ...filters, surface })}
               onKeyDown={event => logsSurfaceKeyDown(event, surface, nextSurface => onFilterChange({ ...filters, surface: nextSurface }))}
             >
+              {surface !== "all" && <ClientMark src={INTEGRATION_MARKS[surface]} label={t(`logs.filter.surface.${surface}`)} size={14} />}
               {t(`logs.filter.surface.${surface}`)}
             </button>
           ))}

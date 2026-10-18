@@ -117,6 +117,15 @@ for (const [flags, filters, expected] of cases) {
   });
 }
 
+test.each(["omp", "hermes"] as const)("%s selects only its recorded client rows", async (surface) => {
+  const logs = [...rows, { id: "omp-row", surface: "omp" }, { id: "hermes-row", surface: "hermes" }];
+  const expected = [`${surface}-row`];
+  expect(await run(logs, ["--surface", surface])).toBe(0);
+  expect(ids()).toEqual(expected);
+  expect(output().filters.surface).toBe(surface);
+  expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, surface }, NOW).map(row => row.id)).toEqual(expected);
+});
+
 test("actual management DTO carries the observed speed and protocol trace", async () => {
   const dto = requestLogDto({ requestId: "real-dto", timestamp: NOW, model: "synthetic-model", provider: "synthetic-provider",
     status: 200, durationMs: 2000, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 40 },

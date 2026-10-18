@@ -150,7 +150,7 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics {
   lastOutputAt?: number;
   /** Best-effort chat/session correlation for Logs grouping (#330). Opaque; omit when unknown. */
   conversationId?: string;
-  surface?: "claude" | "claude-desktop" | "grok";
+  surface?: "claude" | "claude-desktop" | "grok" | "omp" | "hermes";
   /** The matched configured key's id. Set ONLY for admissionKind "configured" —
    *  never a sentinel, so a hand-edited entry whose id happens to be "loopback"
    *  cannot absorb unrelated traffic. */
@@ -303,7 +303,7 @@ export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   /** Request-relative generation window (#6309): first output item of any kind, then the last output delta. */
   genStartMs?: number;
   lastOutputMs?: number;
-  surface?: "claude" | "claude-desktop" | "grok";
+  surface?: "claude" | "claude-desktop" | "grok" | "omp" | "hermes";
   /**
    * Set when the proxy answered this turn locally and sent nothing upstream. Without it a zero-send
    * row is indistinguishable from a request that vanished. A fixed adapter-supplied identifier,

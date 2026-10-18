@@ -3,6 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleChatCompletions } from "../../src/server/chat-completions";
+import { buildClientConfig, type HermesGeneratedConfig } from "../../src/clients/config-export";
+import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -64,9 +66,11 @@ async function chat(headers: Record<string, string>, cacheKey: string | undefine
     body: JSON.stringify({ model: "openai/gpt-5.6-luna", messages, stream: false, reasoning_effort: "medium",
       ...(cacheKey === undefined ? {} : { prompt_cache_key: cacheKey }) }),
   });
-  const response = await handleChatCompletions(req, config, { model: "", provider: "" });
+  const logContext: RequestLogContext = { model: "", provider: "" };
+  const response = await handleChatCompletions(req, config, logContext);
   await response.text();
   expect(response.status).toBe(200);
+  return logContext;
 }
 
 describe("Chat conversation identity at canonical Responses outbound boundary", () => {
@@ -104,4 +108,23 @@ describe("Chat conversation identity at canonical Responses outbound boundary", 
       }
     }, 20_000);
   }
+
+  test("the generated Hermes marker leaves dynamic A/A/B affinity intact", async () => {
+    const document = buildClientConfig("hermes", {
+      baseUrl: "http://127.0.0.1:10100/v1",
+      config: { port: 10100, hostname: "127.0.0.1", defaultProvider: "openai", providers: {} } as OcxConfig,
+      models: [{ namespaced: "openai/gpt-5.6-luna", provider: "openai", id: "gpt-5.6-luna" }],
+    }) as HermesGeneratedConfig;
+    const provider = document.providers.opencodex!;
+    const seen = mockNativeWire();
+    for (const [index, conversation] of ["a", "a", "b"].entries()) {
+      const logContext = await chat({ ...provider.extra_headers,
+        [provider.session_affinity_header]: `hermes-${conversation}` }, undefined, index === 1);
+      expect(logContext.surface).toBe("hermes");
+      expect(seen[index]!.headers.get("session_id")).toBe(`hermes-${conversation}`);
+      expect(seen[index]!.headers.get("session-id")).toBe(`hermes-${conversation}`);
+    }
+    expect(seen[0]!.headers.get("session_id")).toBe(seen[1]!.headers.get("session_id"));
+    expect(seen[2]!.headers.get("session_id")).not.toBe(seen[0]!.headers.get("session_id"));
+  }, 20_000);
 });

@@ -80,6 +80,13 @@ describe("compareUsageWindows", () => {
 });
 
 describe("ocx usage compare", () => {
+  test.each(["omp", "hermes"])("keeps the %s surface on both comparison reads", async (surface) => {
+    const result = await run(["usage", "compare", "--surface", surface, "--json"]);
+    expect(result.code).toBe(0);
+    expect(result.urls).toHaveLength(2);
+    expect(result.urls.map(url => url.searchParams.get("surface"))).toEqual([surface, surface]);
+  });
+
   test("reads current then previous equal windows and prints signed deltas", async () => {
     const expected = compareUsageWindows("today", NOW);
     const result = await run(["usage", "compare", "--range", "today", "--surface", "claude", "--provider", "xai", "--model", "grok"]);

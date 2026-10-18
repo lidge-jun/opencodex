@@ -37,10 +37,10 @@ const USAGE = `Usage:
   ocx logs filter [selectors] [--scan-limit <1..2000>] [--limit <1..2000>] [--json|--jsonl]
   ocx logs rebuild-index
   ocx logs index-status
-  ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>]
+  ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok|omp|hermes>]
       [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>]
       [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]
-  ocx usage compare [--range <today|1d|7d|30d>] [--surface <all|codex|claude|grok>]
+  ocx usage compare [--range <today|1d|7d|30d>] [--surface <all|codex|claude|grok|omp|hermes>]
       [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]
   ocx observe storage [codex-logs [status|protect|unprotect|repair|compact] [--mode <compat|quiet>]] [--json]
   ocx observe memory [--json]

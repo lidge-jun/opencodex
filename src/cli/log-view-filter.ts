@@ -30,7 +30,7 @@ function numberOption(args: string[], flag: string, integer = false): number | u
 function parseOptions(argv: string[]) {
   const args = [...argv];
   const json = takeFlag(args, "--json"), jsonl = takeFlag(args, "--jsonl");
-  const surface = enumOption(args, "--surface", ["all", "codex", "claude", "grok"], "all");
+  const surface = enumOption(args, "--surface", ["all", "codex", "claude", "grok", "omp", "hermes"], "all");
   const model = (takeOptionWithSyntax(args, "--model")?.value ?? "").trim().toLowerCase();
   const provider = (takeOptionWithSyntax(args, "--provider")?.value ?? "").trim().toLowerCase();
   const status = enumOption(args, "--status", ["all", "success", "errors"], "all");
@@ -95,6 +95,8 @@ function matches(row: LogRow, filters: ReturnType<typeof parseOptions>["filters"
   if (surface === "codex" && row.surface !== undefined) return false;
   if (surface === "claude" && row.surface !== "claude" && row.surface !== "claude-desktop") return false;
   if (surface === "grok" && row.surface !== "grok") return false;
+  if (surface === "omp" && row.surface !== "omp") return false;
+  if (surface === "hermes" && row.surface !== "hermes") return false;
   if (filters.interceptedOnly && typeof row.shadowCallRewrittenFrom !== "string") return false;
   if (protocolMode !== "all") {
     const mode = parseProtocolTraceV1(row.protocolTrace)?.mode;

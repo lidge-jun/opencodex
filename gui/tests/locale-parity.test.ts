@@ -102,12 +102,17 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "dash.mem.jsHeapArena",
   "logs.badge.claude",
   "logs.badge.grok",
+  // Client product names stay unchanged across locales.
+  "logs.badge.omp",
+  "logs.badge.hermes",
   "logs.col.estimatedCost",
   "logs.col.tokPerSec",
   "logs.detail.ttft",
   "logs.filter.surface.claude",
   "logs.filter.surface.codex",
   "logs.filter.surface.grok",
+  "logs.filter.surface.omp",
+  "logs.filter.surface.hermes",
   // Modal labels: transport headers, badges, URL field kept in English (zh/ko agree)
   "modal.apiKeyTransportBearer",
   "modal.badge.direct",

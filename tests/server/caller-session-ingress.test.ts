@@ -3,8 +3,10 @@ import * as callerIdentity from "../../src/server/caller-session-identity";
 import * as lifecycle from "../../src/server/lifecycle";
 import * as bodyAdmission from "../../src/server/inbound-body-admission";
 import * as timeouts from "../../src/server/responses/fetch-helpers";
-import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
+import { normalizeLogConversationId, sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
 import { ACCESS, PROXY_KEY, reserveIngressFixture } from "../helpers/reserve-ingress-fixture";
+import { clearRequestLogsForTests, observeRequestLogsForTests, type RequestLogEntry } from "../../src/server/request-log";
+import { readUsageEntries } from "../../src/usage/log";
 
 describe("caller session identity through admitted HTTP ingress", () => {
   for (const transport of ["responses", "messages", "chat"] as const) {
@@ -94,6 +96,50 @@ describe("caller session identity through admitted HTTP ingress", () => {
         promotionSpy.mockRestore();
         globalThis.fetch = blockedFetch;
         await fixture.close();
+      }
+    });
+  }
+
+  for (const transport of ["responses", "chat"] as const) {
+    test(`${transport} records client hints without changing admission or Grok priority`, async () => {
+      const fixture = await reserveIngressFixture();
+      try {
+        const unauthorized = await fixture.request("public", transport, "openai/gpt-5.6-luna", {
+          "x-opencodex-client": "hermes", "session-id": "hermes-denied",
+        });
+        expect(unauthorized.status).toBe(401);
+        expect(fixture.counters.inference).toHaveLength(0);
+        for (const [marker, grok, expected] of [
+          ["omp", undefined, "omp"], ["hermes", undefined, "hermes"],
+          ["cursor", undefined, undefined], ["omp", "1", "grok"], ["hermes", "1", "grok"],
+        ] as const) {
+          const session = `client-surface-${transport}-${marker}-${grok ?? "none"}`;
+          const conversationId = normalizeLogConversationId(session)!;
+          let resolveFinal!: (entry: RequestLogEntry) => void;
+          const finalLog = new Promise<RequestLogEntry>(resolve => { resolveFinal = resolve; });
+          const stopObserving = observeRequestLogsForTests(entry => {
+            if (entry.conversationId === conversationId) resolveFinal(entry);
+          });
+          try {
+            const response = await fixture.request("public", transport, "openai/gpt-5.6-luna", {
+              "x-opencodex-api-key": PROXY_KEY, authorization: `Bearer ${ACCESS}`,
+              "x-opencodex-client": marker, "session-id": session,
+              ...(grok ? { "x-opencodex-grok": grok } : {}),
+            });
+            expect(response.status, response.text).toBe(200);
+            const row = await finalLog;
+            expect(row.surface).toBe(expected);
+            const usage = await readUsageEntries();
+            const persisted = usage.find(entry => entry.requestId === row.requestId);
+            expect(persisted).toBeDefined();
+            expect(persisted?.surface).toBe(expected);
+          } finally {
+            stopObserving();
+          }
+        }
+      } finally {
+        await fixture.close();
+        clearRequestLogsForTests();
       }
     });
   }

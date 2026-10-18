@@ -53,6 +53,22 @@ export const GAJAE_API_KEY_ENV = "OPENCODEX_GAJAE_API_KEY";
 /** Pi's wire-dialect selector for an OpenAI-compatible endpoint. */
 export const PI_API_DIALECT = "openai-completions";
 
+/**
+ * The header a managed client config stamps so the proxy can bucket that
+ * client's traffic under its own usage surface.
+ *
+ * Bucketing only — never an auth or billing signal. Any loopback caller can
+ * send the same value, exactly as `x-opencodex-grok` already documents, which
+ * is why the proxy treats it as a hint and not as identity.
+ */
+export const CLIENT_SURFACE_HEADER = "x-opencodex-client";
+
+/** The value OMP's generated provider block carries. */
+export const OMP_SURFACE_VALUE = "omp";
+
+/** The value Hermes's generated provider block carries. */
+export const HERMES_SURFACE_VALUE = "hermes";
+
 /** Fallback only when the model has no known output limit; always clamped to context. */
 export const SCHEMA_REQUIRED_OUTPUT_BUDGET = 32_000;
 

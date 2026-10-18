@@ -1,7 +1,7 @@
 import type { KeyboardEvent } from "react";
 import type { LogSurfaceFilter } from "./logs-surface-filter";
 
-const SURFACES: readonly LogSurfaceFilter[] = ["all", "claude", "codex", "grok"];
+const SURFACES: readonly LogSurfaceFilter[] = ["all", "claude", "codex", "grok", "omp", "hermes"];
 
 /** Implements arrow/Home/End navigation for the Logs surface radio group. */
 export function logsSurfaceKeyDown(

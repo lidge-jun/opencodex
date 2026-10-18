@@ -91,7 +91,7 @@
    invisible in light mode and a near-black one invisible in dark -- which is
    not hypothetical, it shipped that way for prime, opencode and kimi. */
 .client-mark--mask {
-  background: var(--text);
+  background: currentColor;
   mask-size: contain;
   mask-repeat: no-repeat;
   mask-position: center;
