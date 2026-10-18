@@ -45,10 +45,7 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   wrapWithZeroOutputRefetch,
 } from "../lib/upstream-retry";
-import {
-  isTranslatorBudgetExceededError,
-  type TranslatorBudget,
-} from "../lib/translator-budget";
+import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
 import { authorizeResendForRecovery } from "../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedChatBody } from "./responses/reset-replay";
 import {
@@ -366,6 +363,8 @@ export async function runNativeChatAttempt(
       config.fastMode,
       route.providerName,
       replayScope,
+      undefined,
+      translatorBudget,
     );
     observeAdvisorNativeReasoning(req.headers, logCtx, request.body);
     return request;
