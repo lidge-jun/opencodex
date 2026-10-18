@@ -636,7 +636,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 104 built-in presets: 84 key-based, 16 OAuth, three local, and one default
+opencodex ships 105 built-in presets: 85 key-based, 16 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -1310,6 +1310,63 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
 > driving that harness headlessly from a proxy fits your plan's terms is a question between you and
 > Anthropic. OpenCodex does not convert the login into an API key and does not reproduce the CLI's
 > HTTP identity.
+
+### Perch CLI
+
+The `perch-cli` preset runs the [Perch](https://app.perchai.app) CLI headlessly, once per turn
+(`perch run --json`), with the same capture-only tool bridge as the Claude Code CLI row:
+
+```json
+{
+  "providers": {
+    "perch-cli": {
+      "adapter": "perch-cli",
+      "baseUrl": "https://app.perchai.app"
+    }
+  }
+}
+```
+
+- **Prerequisites:** `npm install -g perchai-cli` (the tested install; the adapter also reads the
+  script path out of other package managers' shims, but pnpm, yarn and volta are untested and asdf
+  shims are not supported), then sign in once with `perch login`. OpenCodex
+  stores no Perch credential; the CLI reads its own sign-in (`PERCH_CLI_AUTH_DIR`, default
+  `~/.perch`). A missing sign-in fails the turn with a sign-in error naming the command. On macOS
+  the CLI keeps its sign-in in the Keychain by default, which this row cannot pass to the CLI; sign in
+  with `PERCH_CLI_AUTH_DIR=~/.perch perch login` instead (macOS has not been verified end to end).
+- **Models:** `roost-standard` (Perch's 200K Roost tier), `roost-standard-max` (the 1M Roost tier)
+  and `deepseek-flash-starter`. Roost tiers are routed by Perch to a backend it picks; the service
+  log names the model that actually answered each turn. The 1M-context models are published at
+  512K, because the replayed conversation reaches Perch through its project rule files (at most 40
+  files of 64 KB), and Codex must compact before the history outgrows them.
+- **Tool ownership:** client tools are exposed as an isolated MCP catalog. Perch reports the
+  requested calls and ends the turn; approval, sandboxing and execution stay with Codex. A turn that
+  calls one of Perch's own built-in tools instead is rerun once with a correction, then fails with
+  `undeclared_tool_call`.
+- **Isolation:** each turn runs in a fresh staging folder and thread with an empty home directory, so
+  Perch loads none of the machine's Perch config, MCP servers or skills, and the account's durable
+  memories are left out of each turn (except in standalone builds, below).
+  The CLI's end-of-turn uploads of the turn transcript are answered locally and never sent.
+- **Network:** like the other CLI-backed providers, the CLI runs with the shared scoped environment,
+  so it does not inherit proxy variables, OpenCodex's configured outbound proxy, or
+  `NODE_EXTRA_CA_CERTS`. Behind a mandatory proxy or a TLS-inspecting firewall it needs a
+  system-level route.
+- **Streaming:** text and reasoning stream as Perch's model calls produce them. If the stream mirror
+  is unavailable, the turn still completes and its text arrives when the CLI exits. Standalone
+  OpenCodex builds always run without the mirror, so their text arrives at exit and the transcript
+  uploads above are not intercepted.
+- **Input media:** the models are text-only; with the vision sidecar on the request path, images are
+  described in text before they reach the row.
+- **Known limits:** Perch's persona prompt cannot be replaced (the client's instructions are added
+  after it), each request carries roughly 22K tokens of Perch's own prompt and tool definitions, and
+  a turn starts in about 6–10 seconds. Perch's read-only built-in tools (web search, web fetch) can
+  run inside a turn before OpenCodex sees the call, so the client's network sandbox does not cover
+  them.
+
+> **Terms:** this preset spends your Perch plan through Perch's own CLI. Perch's Terms of Service
+> (§6–7) limit access to Perch-hosted models to its Web, Desktop and CLI surfaces and prohibit
+> automating, proxying or exposing its hosted-model endpoints as an API without a plan that
+> includes API access. Read them before enabling this row; a proxied CLI may be treated as such use.
 
 ### A6API credit quota
 

@@ -451,6 +451,13 @@
       "documents": ["src/adapters/"]
     },
     {
+      "path": "providers/perch-cli.md",
+      "tier": 4,
+      "title": "Perch CLI",
+      "scope": "Perch CLI turn staging, isolation, capture-only tool bridge, outcome mapping and the in-process preload.",
+      "documents": ["src/adapters/"]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",

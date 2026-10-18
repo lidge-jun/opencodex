@@ -394,6 +394,7 @@
     "claude-auth-mode.test.ts": "claude-integration",
     "claude-authmode-migration.test.ts": "claude-integration",
     "claude-cli-adapter.test.ts": "providers",
+    "perch-cli-adapter.test.ts": "providers",
     "claude-cli-client-http.test.ts": "providers",
     "claude-cli-efficiency.test.ts": "providers",
     "claude-cli-tool-capture.test.ts": "providers",

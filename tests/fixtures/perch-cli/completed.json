@@ -1,0 +1,44 @@
+{
+ "ok": true,
+ "status": "completed",
+ "runId": "tkt-cli-0000000000000-fixture",
+ "assistantText": "OK",
+ "events": [
+  {
+   "type": "turn_started"
+  },
+  {
+   "type": "model_call_started",
+   "provider": "auto"
+  },
+  {
+   "type": "content_delta",
+   "text": "OK"
+  },
+  {
+   "type": "model_call_completed",
+   "provider": "auto"
+  },
+  {
+   "type": "assistant_response",
+   "text": "OK"
+  },
+  {
+   "type": "turn_completed"
+  }
+ ],
+ "contextSnapshot": {
+  "rows": [
+   {
+    "id": "tool-schemas",
+    "status": "sent_raw",
+    "content": "[]"
+   }
+  ],
+  "turnApiUsage": {
+   "inputTokens": 5998,
+   "outputTokens": 2,
+   "totalTokens": 6000
+  }
+ }
+}

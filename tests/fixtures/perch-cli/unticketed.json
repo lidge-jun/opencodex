@@ -1,0 +1,370 @@
+{
+ "ok": false,
+ "status": "failed",
+ "runId": "cli-turn-0000000000000-fixture",
+ "error": "The model is busy right now. Wait a moment and try again, or pick a different model from the model menu.",
+ "assistantText": "",
+ "events": [
+  {
+   "type": "turn_started"
+  },
+  {
+   "type": "model_call_started",
+   "provider": "auto"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-zai-glm-4.7-medium"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "github_models is not configured for auto routing; missing API key.",
+   "provider": "github_models",
+   "modelId": "github-models-openai-gpt-4o-mini"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "github_models is not configured for auto routing; missing API key.",
+   "provider": "github_models",
+   "modelId": "github-models-openai-gpt-4.1-mini"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "github_models is not configured for auto routing; missing API key.",
+   "provider": "github_models",
+   "modelId": "github-models-openai-gpt-4.1-nano"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "ai_gateway is not configured for auto routing; missing API key.",
+   "provider": "ai_gateway",
+   "modelId": "ai-gateway-anthropic-claude-haiku-4-5"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "ai_gateway is not configured for auto routing; missing API key.",
+   "provider": "ai_gateway",
+   "modelId": "ai-gateway-anthropic-claude-3-haiku"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-gpt-oss-120b-medium"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "groq is not configured for auto routing; missing API key.",
+   "provider": "groq",
+   "modelId": "groq-llama-3-3-70b-versatile"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cohere is not configured for auto routing; missing API key.",
+   "provider": "cohere",
+   "modelId": "cohere-command-a-03-2025"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cohere is not configured for auto routing; missing API key.",
+   "provider": "cohere",
+   "modelId": "cohere-command-r-plus-08-2024"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-zai-glm-4.7-low"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-zai-glm-4.7-high"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-gpt-oss-120b-low"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-gpt-oss-120b-high"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "github_models is not configured for auto routing; missing API key.",
+   "provider": "github_models",
+   "modelId": "github-models-openai-gpt-4o"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "github_models is not configured for auto routing; missing API key.",
+   "provider": "github_models",
+   "modelId": "github-models-openai-gpt-4.1"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "nvidia_nim is not configured for auto routing; missing API key.",
+   "provider": "nvidia_nim",
+   "modelId": "nvidia-nim-minimax-m2-7"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "nvidia_nim is not configured for auto routing; missing API key.",
+   "provider": "nvidia_nim",
+   "modelId": "nvidia-nim-mistral-nemotron"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cohere is not configured for auto routing; missing API key.",
+   "provider": "cohere",
+   "modelId": "cohere-command-a-vision-07-2025"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-openai-gpt-oss-120b-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-qwen-qwen3-coder-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-z-ai-glm-4-5-air-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-nvidia-nemotron-3-super-120b-a12b-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-deepseek-deepseek-r1-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-deepseek-deepseek-r1-0528-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-meta-llama-llama-4-maverick-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-meta-llama-llama-4-scout-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-mistralai-mistral-small-3-2-24b-instruct-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "github_models is not configured for auto routing; missing API key.",
+   "provider": "github_models",
+   "modelId": "github-models-openai-gpt-4.1-mini"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "github_models is not configured for auto routing; missing API key.",
+   "provider": "github_models",
+   "modelId": "github-models-openai-gpt-4.1-nano"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "ai_gateway is not configured for auto routing; missing API key.",
+   "provider": "ai_gateway",
+   "modelId": "ai-gateway-anthropic-claude-haiku-4-5"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "ai_gateway is not configured for auto routing; missing API key.",
+   "provider": "ai_gateway",
+   "modelId": "ai-gateway-anthropic-claude-3-haiku"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-gpt-oss-120b-medium"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "groq is not configured for auto routing; missing API key.",
+   "provider": "groq",
+   "modelId": "groq-llama-3-3-70b-versatile"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cohere is not configured for auto routing; missing API key.",
+   "provider": "cohere",
+   "modelId": "cohere-command-a-03-2025"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cohere is not configured for auto routing; missing API key.",
+   "provider": "cohere",
+   "modelId": "cohere-command-r-plus-08-2024"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-zai-glm-4.7-low"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-zai-glm-4.7-high"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-gpt-oss-120b-low"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cerebras is not configured for auto routing; missing API key.",
+   "provider": "cerebras",
+   "modelId": "cerebras-gpt-oss-120b-high"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "github_models is not configured for auto routing; missing API key.",
+   "provider": "github_models",
+   "modelId": "github-models-openai-gpt-4o"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "github_models is not configured for auto routing; missing API key.",
+   "provider": "github_models",
+   "modelId": "github-models-openai-gpt-4.1"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "nvidia_nim is not configured for auto routing; missing API key.",
+   "provider": "nvidia_nim",
+   "modelId": "nvidia-nim-minimax-m2-7"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "nvidia_nim is not configured for auto routing; missing API key.",
+   "provider": "nvidia_nim",
+   "modelId": "nvidia-nim-mistral-nemotron"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "cohere is not configured for auto routing; missing API key.",
+   "provider": "cohere",
+   "modelId": "cohere-command-a-vision-07-2025"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-openai-gpt-oss-120b-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-qwen-qwen3-coder-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-z-ai-glm-4-5-air-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-nvidia-nemotron-3-super-120b-a12b-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-deepseek-deepseek-r1-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-deepseek-deepseek-r1-0528-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-meta-llama-llama-4-maverick-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-meta-llama-llama-4-scout-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "openrouter is not configured for auto routing; missing API key.",
+   "provider": "openrouter",
+   "modelId": "openrouter-mistralai-mistral-small-3-2-24b-instruct-free"
+  },
+  {
+   "type": "model_call_failed",
+   "error": "Streaming exhausted in chat pool exhausted after 28 attempted fallbacks: openrouter is not configured for auto routing; missing API key.",
+   "errorCode": "api_error",
+   "provider": "auto"
+  },
+  {
+   "type": "diagnostic",
+   "code": "interrupted_turn_context_persisted",
+   "message": "Persisted interrupted turn context, evidence, and context meter state."
+  },
+  {
+   "type": "turn_failed",
+   "error": "The model is busy right now. Wait a moment and try again, or pick a different model from the model menu.",
+   "errorCode": "runtime_error",
+   "rawError": "Streaming exhausted in chat pool exhausted after 28 attempted fallbacks: openrouter is not configured for auto routing; missing API key."
+  }
+ ],
+ "contextSnapshot": {
+  "rows": [
+   {
+    "id": "tool-schemas",
+    "status": "sent_raw",
+    "content": "[{\"type\":\"function\",\"function\":{\"name\":\"validateWorkspaceRoot\"}},{\"type\":\"function\",\"function\":{\"name\":\"bash\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_in_background\"}},{\"type\":\"function\",\"function\":{\"name\":\"check_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"list_background_tasks\"}},{\"type\":\"function\",\"function\":{\"name\":\"kill_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"wait_for_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"glob\"}},{\"type\":\"function\",\"function\":{\"name\":\"grep\"}},{\"type\":\"function\",\"function\":{\"name\":\"readLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"writeLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"moveLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"copyLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"createDirectory\"}},{\"type\":\"function\",\"function\":{\"name\":\"deleteLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"editLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"apply_patch\"}},{\"type\":\"function\",\"function\":{\"name\":\"statPath\"}},{\"type\":\"function\",\"function\":{\"name\":\"readProjectMemory\"}},{\"type\":\"function\",\"function\":{\"name\":\"saveToMemory\"}},{\"type\":\"function\",\"function\":{\"name\":\"listLocalSources\"}},{\"type\":\"function\",\"function\":{\"name\":\"readLocalSourceFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"generateAPAuditPacket\"}},{\"type\":\"function\",\"function\":{\"name\":\"prepare_ap_evidence\"}},{\"type\":\"function\",\"function\":{\"name\":\"query_ap_cases\"}},{\"type\":\"function\",\"function\":{\"name\":\"render_ap_control_graph\"}},{\"type\":\"function\",\"function\":{\"name\":\"runManagedPlaybook\"}},{\"type\":\"function\",\"function\":{\"name\":\"send_worker_message\"}},{\"type\":\"function\",\"function\":{\"name\":\"task_stop\"}},{\"type\":\"function\",\"function\":{\"name\":\"spawn_worker\"}},{\"type\":\"function\",\"function\":{\"name\":\"spawn_worker_batch\"}},{\"type\":\"function\",\"function\":{\"name\":\"dispatch_agent\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_sandbox_code\"}},{\"type\":\"function\",\"function\":{\"name\":\"ctxInspect\"}},{\"type\":\"function\",\"function\":{\"name\":\"toolSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"configInspect\"}},{\"type\":\"function\",\"function\":{\"name\":\"syntheticOutput\"}},{\"type\":\"function\",\"function\":{\"name\":\"todoWrite\"}},{\"type\":\"function\",\"function\":{\"name\":\"create_artifact\"}},{\"type\":\"function\",\"function\":{\"name\":\"update_artifact\"}},{\"type\":\"function\",\"function\":{\"name\":\"loadSkill\"}},{\"type\":\"function\",\"function\":{\"name\":\"askUserQuestion\"}},{\"type\":\"function\",\"function\":{\"name\":\"propose_plan\"}},{\"type\":\"function\",\"function\":{\"name\":\"enterPlanMode\"}},{\"type\":\"function\",\"function\":{\"name\":\"exitPlanMode\"}},{\"type\":\"function\",\"function\":{\"name\":\"brief\"}},{\"type\":\"function\",\"function\":{\"name\":\"listMcpServers\"}},{\"type\":\"function\",\"function\":{\"name\":\"searchKnowledge\"}},{\"type\":\"function\",\"function\":{\"name\":\"webSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"webFetch\"}},{\"type\":\"function\",\"function\":{\"name\":\"scholarSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"get_market_signal\"}},{\"type\":\"function\",\"function\":{\"name\":\"query_market_signal_log\"}},{\"type\":\"function\",\"function\":{\"name\":\"explain_market_signal\"}},{\"type\":\"function\",\"function\":{\"name\":\"list_market_strategies\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_market_backtest\"}},{\"type\":\"function\",\"function\":{\"name\":\"get_market_track_record\"}},{\"type\":\"function\",\"function\":{\"name\":\"mcp__ocx__read_project_file\"}},{\"type\":\"function\",\"function\":{\"name\":\"mcp__ocx__list_dir\"}}]"
+   },
+   {
+    "id": "project-perch-md",
+    "status": "sent_raw"
+   }
+  ]
+ }
+}

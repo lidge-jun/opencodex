@@ -55,7 +55,7 @@ const DEFAULT_KILL_GRACE_MS = 2_000;
 /** Bound captured stderr so an error message can never carry an unbounded (or secret) payload. */
 const MAX_STDERR_BYTES = 8 * 1024;
 
-function killWindowsProcessTree(pid: number): void {
+export function killWindowsProcessTree(pid: number): void {
   const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
   execFileSync(taskkill, ["/PID", String(pid), "/T", "/F"], {
     stdio: "pipe",

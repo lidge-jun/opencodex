@@ -1,0 +1,296 @@
+{
+ "ok": false,
+ "status": "approval_required",
+ "runId": "tkt-cli-0000000000000-fixture",
+ "assistantText": "**Allow mcp  ocx  read project file?** `read_project_file` on ocx does not say whether it changes anything, so Perch treats it as a change. Approve to run it.",
+ "events": [
+  {
+   "type": "turn_started"
+  },
+  {
+   "type": "model_call_started",
+   "provider": "auto"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "The"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " user"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " wants"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " me"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " to"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " read"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " README"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": ".md"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " and"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " list"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " the"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " src"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " directory"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "."
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " According"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " to"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " the"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " PER"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "CH"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": ".md"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": ","
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " I"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " need"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " to"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " use"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " the"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " m"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "cp"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "__"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "oc"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "x"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "__"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " tools"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " to"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " access"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " the"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " user"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "'s"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " project"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " files"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "."
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " Let"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " me"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " make"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " both"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " calls"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " in"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " parallel"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " since"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " they"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "'re"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": " independent"
+  },
+  {
+   "type": "reasoning_delta",
+   "text": "."
+  },
+  {
+   "type": "model_call_completed",
+   "provider": "auto"
+  },
+  {
+   "type": "tool_call_requested",
+   "toolName": "mcp__ocx__read_project_file",
+   "toolCallId": "chatcmpl-tool-630fc3e7758e463da57e4fe60a10e9ec",
+   "input": {
+    "path": "README.md"
+   }
+  },
+  {
+   "type": "tool_call_started",
+   "toolName": "mcp__ocx__read_project_file",
+   "toolCallId": "chatcmpl-tool-630fc3e7758e463da57e4fe60a10e9ec",
+   "input": {
+    "path": "README.md"
+   }
+  },
+  {
+   "type": "tool_call_requested",
+   "toolName": "mcp__ocx__list_dir",
+   "toolCallId": "chatcmpl-tool-6b6fda0282ca47ef85b3b01a175549c3",
+   "input": {
+    "path": "src"
+   }
+  },
+  {
+   "type": "tool_call_started",
+   "toolName": "mcp__ocx__list_dir",
+   "toolCallId": "chatcmpl-tool-6b6fda0282ca47ef85b3b01a175549c3",
+   "input": {
+    "path": "src"
+   }
+  },
+  {
+   "type": "tool_call_failed",
+   "toolName": "mcp__ocx__read_project_file",
+   "toolCallId": "chatcmpl-tool-630fc3e7758e463da57e4fe60a10e9ec",
+   "error": "`read_project_file` on ocx does not say whether it changes anything, so Perch treats it as a change. Approve to run it.",
+   "errorCode": "tool_requires_approval"
+  },
+  {
+   "type": "assistant_response",
+   "text": "**要允許 Read Project File 嗎？** `read_project_file` on ocx does not say whether it changes anything, so Perch treats it as a change. Approve to run it."
+  },
+  {
+   "type": "turn_completed"
+  }
+ ],
+ "contextSnapshot": {
+  "rows": [
+   {
+    "id": "tool-schemas",
+    "status": "sent_raw",
+    "content": "[{\"type\":\"function\",\"function\":{\"name\":\"validateWorkspaceRoot\"}},{\"type\":\"function\",\"function\":{\"name\":\"bash\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_in_background\"}},{\"type\":\"function\",\"function\":{\"name\":\"check_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"list_background_tasks\"}},{\"type\":\"function\",\"function\":{\"name\":\"kill_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"wait_for_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"glob\"}},{\"type\":\"function\",\"function\":{\"name\":\"grep\"}},{\"type\":\"function\",\"function\":{\"name\":\"readLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"writeLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"moveLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"copyLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"createDirectory\"}},{\"type\":\"function\",\"function\":{\"name\":\"deleteLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"editLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"apply_patch\"}},{\"type\":\"function\",\"function\":{\"name\":\"statPath\"}},{\"type\":\"function\",\"function\":{\"name\":\"readProjectMemory\"}},{\"type\":\"function\",\"function\":{\"name\":\"saveToMemory\"}},{\"type\":\"function\",\"function\":{\"name\":\"listLocalSources\"}},{\"type\":\"function\",\"function\":{\"name\":\"readLocalSourceFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"generateAPAuditPacket\"}},{\"type\":\"function\",\"function\":{\"name\":\"prepare_ap_evidence\"}},{\"type\":\"function\",\"function\":{\"name\":\"query_ap_cases\"}},{\"type\":\"function\",\"function\":{\"name\":\"render_ap_control_graph\"}},{\"type\":\"function\",\"function\":{\"name\":\"runManagedPlaybook\"}},{\"type\":\"function\",\"function\":{\"name\":\"send_worker_message\"}},{\"type\":\"function\",\"function\":{\"name\":\"task_stop\"}},{\"type\":\"function\",\"function\":{\"name\":\"spawn_worker\"}},{\"type\":\"function\",\"function\":{\"name\":\"spawn_worker_batch\"}},{\"type\":\"function\",\"function\":{\"name\":\"dispatch_agent\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_sandbox_code\"}},{\"type\":\"function\",\"function\":{\"name\":\"ctxInspect\"}},{\"type\":\"function\",\"function\":{\"name\":\"toolSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"configInspect\"}},{\"type\":\"function\",\"function\":{\"name\":\"syntheticOutput\"}},{\"type\":\"function\",\"function\":{\"name\":\"todoWrite\"}},{\"type\":\"function\",\"function\":{\"name\":\"create_artifact\"}},{\"type\":\"function\",\"function\":{\"name\":\"update_artifact\"}},{\"type\":\"function\",\"function\":{\"name\":\"loadSkill\"}},{\"type\":\"function\",\"function\":{\"name\":\"askUserQuestion\"}},{\"type\":\"function\",\"function\":{\"name\":\"propose_plan\"}},{\"type\":\"function\",\"function\":{\"name\":\"enterPlanMode\"}},{\"type\":\"function\",\"function\":{\"name\":\"exitPlanMode\"}},{\"type\":\"function\",\"function\":{\"name\":\"brief\"}},{\"type\":\"function\",\"function\":{\"name\":\"listMcpServers\"}},{\"type\":\"function\",\"function\":{\"name\":\"searchKnowledge\"}},{\"type\":\"function\",\"function\":{\"name\":\"webSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"webFetch\"}},{\"type\":\"function\",\"function\":{\"name\":\"scholarSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"get_market_signal\"}},{\"type\":\"function\",\"function\":{\"name\":\"query_market_signal_log\"}},{\"type\":\"function\",\"function\":{\"name\":\"explain_market_signal\"}},{\"type\":\"function\",\"function\":{\"name\":\"list_market_strategies\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_market_backtest\"}},{\"type\":\"function\",\"function\":{\"name\":\"get_market_track_record\"}},{\"type\":\"function\",\"function\":{\"name\":\"mcp__ocx__read_project_file\"}},{\"type\":\"function\",\"function\":{\"name\":\"mcp__ocx__list_dir\"}}]"
+   },
+   {
+    "id": "project-perch-md",
+    "status": "sent_raw"
+   }
+  ],
+  "turnApiUsage": {
+   "inputTokens": 14769,
+   "outputTokens": 110,
+   "cacheReadInputTokens": 9408,
+   "totalTokens": 24287
+  }
+ }
+}

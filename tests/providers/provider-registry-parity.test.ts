@@ -46,7 +46,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper", "opengateway", "tokenlab", "modelflare",
   "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
-  "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun", "claude-cli",
+  "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun", "claude-cli", "perch-cli",
 ];
 
 describe("provider registry parity", () => {
@@ -1115,7 +1115,8 @@ describe("provider registry parity", () => {
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
     // claude-cli joins them as the first CLI-backed member: its row is `key` because the turn
     // leaves this machine, and keyless because the Claude Code CLI reads the operator's sign-in.
-    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "claude-cli"]);
+    // perch-cli follows for the same reason with the Perch CLI.
+    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "claude-cli", "perch-cli"]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {

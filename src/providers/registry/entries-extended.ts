@@ -1591,4 +1591,32 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token, reads none and injects none — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership: text/reasoning only for now. Subscription routing authorization flagged for maintainer review.",
   },
+  {
+    // Perch CLI through its own harness: one `perch run --json` per request with the claude-cli
+    // capture-only MCP tool bridge. The CLI owns its sign-in (`perch login`); see
+    // src/adapters/perch-cli/adapter.ts for the verified CLI contract.
+    id: "perch-cli",
+    label: "Perch CLI",
+    adapter: "perch-cli",
+    baseUrl: "https://app.perchai.app",
+    authKind: "key",
+    keyOptional: true,
+    dashboardUrl: "https://app.perchai.app",
+    defaultModel: "deepseek-flash-starter",
+    // Roost tiers route to a backend Perch picks (Starter: standard and standard-max only), under the
+    // tier's fixed contextCap (perchai-cli 2.4.109: standard 200K, standard_max 1M). Exact pins Perch
+    // reserves for Pro (gpt-6.1-sol) are not listed: on Starter Perch served one with poolside/laguna-s-2.1.
+    models: ["roost-standard", "roost-standard-max", "deepseek-flash-starter"],
+    liveModels: false,
+    // 1M-context models are published at 512K: the replay goes through Perch's rule files (~2.2 MB),
+    // so Codex has to compact (at 90%) before the history outgrows them, even for English at ~4.5 bytes a token.
+    modelContextWindows: {
+      "roost-standard": 200_000,
+      "roost-standard-max": 512_000,
+      "deepseek-flash-starter": 512_000,
+    },
+    noVisionModels: ["roost-standard", "roost-standard-max", "deepseek-flash-starter"],
+    // No reasoningEfforts: the Starter plan has no effort control; Pro tiers are not verified.
+    note: "Runs each request through the Perch CLI headlessly (`perch run --json`), one sessionless turn per request, with the same capture-only MCP tool bridge as the Claude Code CLI row. Text and reasoning stream through a preload that mirrors Perch's model calls and drops the CLI's turn uploads (cli-turn, cli-learning). Known limits: Perch's persona prompt cannot be replaced (client instructions are appended); Perch's read-class built-in tools (staging-folder reads, webSearch, webFetch) can run before the adapter sees them, so the client's network sandbox does not cover them; each request carries ~23K tokens of Perch overhead; 1M-context models are published at 512K because the replay must fit Perch's rule files. Images reach these text-only models through the vision sidecar. Requires `npm i -g perchai-cli` and `perch login`.",
+  },
 ];

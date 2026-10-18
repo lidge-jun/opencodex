@@ -13,7 +13,7 @@ export interface CodingAgentProviderProfile {
   /** Canonical OpenCodex provider id this profile serves. */
   providerId: string;
   /** Vendor family; selects the arg/env builder in the family adapter. */
-  family: "claude" | "codebuddy" | "qoder";
+  family: "claude" | "codebuddy" | "qoder" | "perch";
   /**
    * Region; drives the vendor's own region switch and keeps credentials deterministic.
    * A family with a single destination carries `global`.
