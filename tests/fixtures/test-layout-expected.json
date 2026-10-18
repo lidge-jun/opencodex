@@ -13,7 +13,7 @@
   "codex-provider-routing.test.ts": "codex-integration",
   "claude-picker-trust-windows.test.ts": "claude-integration", "claude-picker-windows.test.ts": "claude-integration", "config-native-reasoning-retention.test.ts": "config", "server-native-reasoning-retention-merge.test.ts": "server", "server-native-reasoning-retention.test.ts": "server", "responses-retained-reasoning-stream-recovery.test.ts": "responses",
   "advisor-retention.test.ts": "advisor", "responses-native-key-cooldown.test.ts": "responses", "responses-run-turn-key-readmission.test.ts": "responses", "qoder-spawn-readmission.test.ts": "adapters",
-  "api-key-selection-cooldown.test.ts": "providers", "api-key-auto-pause-distribution.test.ts": "providers", "server-chat-native-key-selection.test.ts": "server", "compact-key-selection.test.ts": "responses",
+  "api-key-selection-cooldown.test.ts": "providers", "api-key-auto-pause-distribution.test.ts": "providers", "explicit-key-pause-oauth-boundary.test.ts": "providers", "server-chat-native-key-selection.test.ts": "server", "compact-key-selection.test.ts": "responses",
   "messages-native-key-selection.test.ts": "claude-integration",
   "messages-native-empty-inline.test.ts": "claude-integration",
   "explicit-empty-tool-catalog.test.ts": "responses",

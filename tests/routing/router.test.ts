@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { openAIChatTransport } from "../../src/adapters/openai-chat/wire";
 import { mapReasoningEffort } from "../../src/reasoning-effort";
 import { NoEnabledOpenAiProviderError, routeCompactionModel, routeModel } from "../../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -39,7 +40,7 @@ describe("routeModel registry effort defaults", () => {
     expect(routeModel(cursorKeyAttempt, "cursor/auto").provider.authMode).toBe("oauth");
   });
 
-  test("falls back to OAuth routing for allowKeyAuthOverride providers when the active key is unresolved", () => {
+  test("keeps explicit key auth for allowKeyAuthOverride providers when the active key is unresolved", () => {
     const envName = "OCX_TEST_XAI_ROUTER_ENV";
     const config: OcxConfig = {
       port: 10100,
@@ -57,8 +58,11 @@ describe("routeModel registry effort defaults", () => {
     delete process.env[envName];
     try {
       const routed = routeModel(config, "xai/grok-4.5").provider;
-      expect(routed.authMode).toBe("oauth");
+      // authMode "key" is operator intent: an unresolved reference fails closed at the
+      // transport instead of silently reclassifying the provider to registry OAuth.
+      expect(routed.authMode).toBe("key");
       expect(routed.apiKey).toBeUndefined();
+      expect(() => openAIChatTransport(routed)).toThrow(/requires a non-empty credential/);
       expect(config.providers.xai!.authMode).toBe("key");
     } finally {
       if (previous === undefined) delete process.env[envName];
