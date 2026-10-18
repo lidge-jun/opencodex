@@ -1882,7 +1882,10 @@ export function aggregateAttemptUsage(
     return present.length > 0 ? present.reduce((sum, value) => sum + value, 0) : undefined;
   };
   const cachedInputTokens = sumOptional("cachedInputTokens");
-  const cacheReadInputTokens = sumOptional("cacheReadInputTokens");
+  // Readers take `cacheReadInputTokens ?? cachedInputTokens` (usage/cost.ts), so once any attempt
+  // reports the read field, an attempt that only reports `cachedInputTokens` must count in it too.
+  const cacheReadInputTokens = sumOptional("cacheReadInputTokens") === undefined ? undefined
+    : usages.reduce((sum, usage) => sum + (usage.cacheReadInputTokens ?? usage.cachedInputTokens ?? 0), 0);
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
