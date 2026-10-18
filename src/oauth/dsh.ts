@@ -129,12 +129,14 @@ export async function validateDshAccountToken(
 
     // Missing or understated Content-Length still meets the cap on the decoded
     // stream itself: once an over-limit byte is observed the retained buffer is
-    // discarded and the body is cancelled.
+    // discarded and cancellation is requested on the body. Malformed UTF-8 fails
+    // closed so a replacement character can never alter the authoritative ID.
     const bounded = await readBoundedResponseBody(response, {
       signal: combinedSignal,
       maxBytes: DSH_PROFILE_MAX_BYTES,
       totalTimeoutMs: DSH_PROFILE_FETCH_TIMEOUT_MS,
       inactivityTimeoutMs: DSH_PROFILE_FETCH_TIMEOUT_MS,
+      fatalUtf8: true,
     });
     if (bounded.oversized || bounded.truncated || !bounded.displaySafe) {
       return { valid: false, error: "PROFILE_VALIDATION_FAILED" };

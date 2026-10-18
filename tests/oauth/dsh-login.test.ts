@@ -164,6 +164,19 @@ describe("DSH Account Validation", () => {
     expect(await validateDshAccountToken("mock-token")).toEqual({ valid: false, error: "PROFILE_VALIDATION_FAILED" });
   });
 
+  test("rejects malformed UTF-8 inside the authoritative account ID instead of accepting an altered ID", async () => {
+    const encoder = new TextEncoder();
+    const prefix = encoder.encode('{"code":0,"data":{"biz_code":0,"biz_data":{"id":"user-');
+    const suffix = encoder.encode('","email":"u@example.com"}}}');
+    const malformed = new Uint8Array(prefix.length + 1 + suffix.length);
+    malformed.set(prefix);
+    malformed.set([0xff], prefix.length);
+    malformed.set(suffix, prefix.length + 1);
+    globalThis.fetch = async () => new Response(malformed, { status: 200 });
+
+    expect(await validateDshAccountToken("mock-token")).toEqual({ valid: false, error: "PROFILE_VALIDATION_FAILED" });
+  });
+
   test("returns ACCOUNT_TOKEN_INVALID when upstream returns 401", async () => {
     globalThis.fetch = async (input, init) => {
       const url = String(input);
@@ -203,11 +216,19 @@ describe("DSH Account Validation", () => {
 
   test("rejects a declared oversized profile body without reading the stream", async () => {
     let cancelReason: unknown;
+    let pulled = false;
     const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        // A regression that reads the body closes it instead of stalling on an
+        // open stream, so this asserts the pull flag directly instead of
+        // failing through an indirect timeout path.
+        pulled = true;
+        controller.close();
+      },
       cancel(reason) {
         cancelReason = reason;
       },
-    });
+    }, { highWaterMark: 0 });
     globalThis.fetch = async () => new Response(body, {
       status: 200,
       headers: { "content-length": String(DSH_PROFILE_MAX_BYTES + 1) },
@@ -217,6 +238,7 @@ describe("DSH Account Validation", () => {
     expect(res).toEqual({ valid: false, error: "PROFILE_VALIDATION_FAILED" });
     expect(cancelReason).toBeInstanceOf(DOMException);
     expect((cancelReason as DOMException).name).toBe("QuotaExceededError");
+    expect(pulled).toBe(false);
   });
 
   test("rejects an oversized profile stream when content-length is missing or understated", async () => {
