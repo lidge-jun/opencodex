@@ -45,6 +45,7 @@ import {
 } from "../../combos";
 import { formatErrorResponse } from "../../bridge";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
+import { sanitizeLogMetadataString } from "../../lib/redact";
 import {
   expandPreviousResponseInput,
   previousResponseReplayFailure,
@@ -1195,8 +1196,15 @@ export async function executeComboResponses(
       }
       return lastFailure;
     }
+    // A bare status made a revoked credential read as a provider outage. Prefer the parsed
+    // message over the whole envelope, and keep one redacted line per failure.
+    const failureReason = sanitizeLogMetadataString(
+      [failure.upstreamCode, failure.upstreamMessage ?? failure.classificationText].filter(Boolean).join(": ").replace(/\s+/g, " "),
+      200,
+    );
     console.warn(
-      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status} after ${Date.now() - started}ms`,
+      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status}`
+        + ` after ${Date.now() - started}ms${failureReason ? `: ${failureReason}` : ""}`,
     );
     const failureNow = Date.now();
     const attemptedTargets = pick.attempted;
