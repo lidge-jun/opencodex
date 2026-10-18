@@ -556,6 +556,8 @@ for (const mode of ["normal", "capacity", "exhausted-limit"] as const) {
         expect(SpendFixtureSocket.instances[0]!.sent).toHaveLength(1);
         expect(JSON.parse(SpendFixtureSocket.instances[0]!.sent[0]!).type).toBe("response.create");
         expect(budget.physicalStarted).toBe(1);
+        // The key-auth WS frame is a send, so its attempt row counts it like an HTTP send.
+        expect(ctx.activeAttempt?.sendCount).toBe(1);
       } else expect(response.status).toBe(429);
       tracker.settle(undefined);
       await ledger.waitForReporterDrain();

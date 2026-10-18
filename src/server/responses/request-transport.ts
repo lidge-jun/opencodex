@@ -71,7 +71,7 @@ import {
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { isCodexWsExecutor, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
@@ -798,7 +798,8 @@ export async function prepareResponsesTransport(
               passiveQuotaWriterGeneration = writerGeneration;
             }
             commitKeyAttemptSend();
-            response = await sendWithConnectionPolicy(
+            // The WS executor dials its own socket: HTTP connection policy and body coding do not apply.
+            response = isCodexWsExecutor(execute) ? await execute(destination, dispatchInit) : await sendWithConnectionPolicy(
               distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
               destination,
               { ...dispatchInit, redirect: "manual",
