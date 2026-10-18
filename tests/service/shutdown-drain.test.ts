@@ -14,6 +14,7 @@ import {
   markRecyclingForExit,
 } from "../../src/server";
 import {
+  abortAndReleaseAllTurns,
   acquireTemporaryDrain,
   acquireNativeMainProfileDrain,
   activeRegistryMetrics,
@@ -372,6 +373,24 @@ describe("trackStreamLifetime", () => {
     await tracked.cancel("test cancel");
     expect(getActiveTurnCount()).toBe(before);
     expect(ac.signal.aborted).toBe(true);
+  });
+});
+
+describe("trackStreamLifetime abort", () => {
+  // Callers such as the bridge and client-encoder delivery pass a fresh controller that nothing
+  // else listens to, so the tracked stream is the only thing a drain abort can stop.
+  test("a drain abort ends the stream and cancels its source", async () => {
+    let sourceCancelled = false;
+    let done = 0;
+    const source = new ReadableStream<Uint8Array>({ pull() {}, cancel() { sourceCancelled = true; } });
+    const lease = tryAdmitTurn();
+    expect(lease).not.toBeNull();
+    const reader = trackStreamLifetime(source, new AbortController(), () => { done += 1; }, lease!).getReader();
+    const pending = reader.read().then(() => "read", () => "errored");
+    abortAndReleaseAllTurns(new Error("server shutdown"));
+    expect(await Promise.race([pending, Bun.sleep(200).then(() => "still open")])).toBe("errored");
+    expect(sourceCancelled).toBe(true);
+    expect(done).toBe(1);
   });
 });
 
