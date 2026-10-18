@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../../types";
 import { resolveComboId } from "../../combos";
-import { isBareOpenAiFamilyModel, routeConcreteModel } from "../../router";
+import { isBareOpenAiFamilyModel } from "../../router";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
   getMainAccountHardLockStatus,
@@ -10,29 +10,7 @@ import { codexQuotaScopeForModel } from "../../codex/routing/health-store";
 import { getEligiblePoolAccounts } from "../../codex/routing/selection";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { mainAccountHardLockAppliesToCaller } from "../../codex/auth-context";
-import { codexRouteCredentialDomainHeaders, codexRouteCredentialOwnership } from "./core-auth";
-import type { HandleResponsesOptions } from "./core-options";
-
 export type MainHardLockCallerCheck = (sourceModel: string) => Promise<boolean>;
-
-/** Inspect the original credential domain, before fallback changes the route or drops headers. */
-export function mainHardLockFallbackCallerCheck(
-  req: Request, config: OcxConfig, options: HandleResponsesOptions,
-): MainHardLockCallerCheck {
-  return async sourceModel => {
-    let sourceRoute: ReturnType<typeof routeConcreteModel>;
-    try { sourceRoute = routeConcreteModel(config, sourceModel); }
-    // This preview cannot replace the normal routing phase's existing error response.
-    catch { return false; }
-    const headers = codexRouteCredentialDomainHeaders(req, sourceRoute, options, false, config);
-    const { substituteMainCredential } = codexRouteCredentialOwnership(headers, config, sourceRoute, options);
-    return mainAccountHardLockAppliesToCaller(headers, options.codexAuthPolicy ?? config, {
-      substituteMainCredentialForDirect: substituteMainCredential,
-      signal: options.abortSignal ?? req.signal,
-    });
-  };
-}
 
 function isConfiguredComboSelector(config: OcxConfig, modelId: string): boolean {
   const comboId = resolveComboId(config, modelId);

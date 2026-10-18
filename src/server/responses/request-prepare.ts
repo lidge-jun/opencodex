@@ -100,6 +100,7 @@ import type {
 import {
   codexRouteCredentialDomainHeaders,
   codexRouteCredentialOwnership,
+  mainHardLockFallbackCallerCheck,
   resolveResponsesCodexAuth,
   withClaudeNativeSession,
 } from "./core-auth";
@@ -158,7 +159,7 @@ import {
 } from "./core-codex-account";
 import { acquireUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { applyCompactionRoutingOverride, compactionRoutingKeepsProviderIdentity } from "./compaction-routing";
-import { applyMainHardLockFallbackOverride, mainHardLockFallbackCallerCheck } from "./main-hard-lock-routing";
+import { applyMainHardLockFallbackOverride } from "./main-hard-lock-routing";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   conversationStateBindingFromAuth,
