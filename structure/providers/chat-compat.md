@@ -569,20 +569,20 @@ anything about the provider's or model's capability, which the proxy has not
 established. Native Chat passthrough and Google inline video are separate routes and
 are unaffected.
 
-`input_audio` parts are recognized in the shared Responses parser and recorded as a
-presence marker in the translated IR. This is **presence only and not audio support**:
-the IR has no audio carrier and no adapter consumes one. The parser stays non-throwing
-because the native Responses passthrough also runs through `parseRequest` before the
-adapter forwards `_rawBody`, so refusing there would regress raw passthrough.
+`input_audio` parts with an inline WAV/MP3 data URL are supported on the translated Chat wire.
+The shared parser preserves the bytes as an `OcxAudioContent` part; the Chat serializer emits
+`input_audio` for user content and promotes tool-result audio into a follow-up user message
+because `role:"tool"` content is text-only. The parser stays non-throwing for native Responses
+passthrough; native Responses and native Chat retain their existing wire behavior. Remote audio,
+unsupported formats, the top-level `audio` spelling, developer audio, and system or assistant
+audio are refused. The final adapter checks the original input under the
+[untranslated-media contract](../adapters/registry.md#untranslated-input-media); translated
+adapters refuse unsupported inputs while native Responses retains the original body. The
+opposite Chat-to-Responses projection still rejects audio/file parts, except user-content inline
+documents. No audio transport or URL fetch is added, and no client filename, payload, URL or
+metadata enters errors. Admission charges supported audio by decoded size at the conservative
+256-bytes-per-token proxy, not an upstream token formula.
 
-The final registered adapter also checks the original input under the
-[untranslated-media contract](../adapters/registry.md#untranslated-input-media). Audio/file
-attachments cannot succeed merely because the normalized representation retained a text
-marker: translated adapters refuse them, while native Responses retains the original body.
-Chat conversion rejects recognized audio/file parts before projection, except a user-content
-file part whose inline base64 bytes now have a lossless carrier; the native Chat wire is
-unchanged. No audio transport and no automatic URL fetch is added, and no client filename,
-payload, URL or metadata is included in the new error messages.
 
 The shared coding-agent projection in `src/adapters/coding-agent/` (CodeBuddy, Qoder) carries supported tool-result image references as
 real image blocks. Current tool-result prose marks supported images as `[image attached below]` and unsupported references as `[image omitted: unsupported reference]`; historical tool-result prose retains `[image]` while supported references are also emitted as image blocks. In multi-turn projection, image blocks follow conversation order — history before current. Vendor tool execution stays disabled on both

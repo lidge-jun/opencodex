@@ -165,7 +165,7 @@ and processing failure. Buffered bridging keeps ciphertext charged through outpu
 releases all source leases on success or failure. Output retention remains independently charged.
 `tests/responses/compaction-event-ownership.test.ts` covers those transitions and unrelated owners.
 
-Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
+Translated media admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media). Supported inline WAV/MP3 audio is admitted on the Chat wire and charged by decoded payload size at the conservative 256-bytes-per-token proxy; remote or unsupported media and wires without a lossless carrier are refused. Native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 Hosted Responses image display uses the allocation-free JSON byte counter to admit retained
