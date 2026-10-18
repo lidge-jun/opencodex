@@ -324,6 +324,8 @@ export type CodexAuthContext =
       writerGeneration: number;
       /** Captured before async credential work; never reconstructed after the upstream response. */
       mainQuotaWriter?: MainQuotaWriter;
+      /** Immutable credential proof captured while materializing this physical attempt's headers. */
+      mainQuotaDispatch?: MainQuotaDispatch;
       reserveAuthorization?: MainReserveAuthorization;
       accessToken: string;
       chatgptAccountId: string;
@@ -1766,6 +1768,8 @@ export function materializeCodexUpstreamAuth(
     if (ctx.kind === "main-pool") {
       ctx.mainQuotaWriter = observeSelectedMainCredential(ctx, ctx.mainQuotaWriter);
       assertMainAccountPolicy(options.config);
+      ctx.mainQuotaDispatch = ctx.mainQuotaWriter && isMainQuotaWriterLive(ctx.mainQuotaWriter)
+        ? selectedMainQuotaDispatch(selected) : undefined;
     }
     assertMaterializedReserve(selected, ctx, options);
     return selected;
