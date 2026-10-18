@@ -105,19 +105,21 @@ test("normal WebSocket frame receives exactly one receipt", async () => {
 
 test("D7: accepted WS receipt remains charged if send and local HTTP admission both fail", async () => {
   globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
-  let receipts = 0, refunds = 0, httpSends = 0, overrides = 0;
+  let receipts = 0, refunds = 0, httpSends = 0, overrides = 0, socketFailed = false;
   const budget = createRequestExecutionBudget(undefined, undefined, {
     charge: () => true, refund: () => { refunds++; },
   });
   const booking = budget.reserveDispatch({ sendClass: "initial", targetKey: "chatgpt/codex", countedExternally: true });
   if (!booking.allowed) throw new Error("fixture booking denied");
-  FakeSocket.onSend = () => { expect(receipts).toBe(1); throw new Error("fixture socket send failure"); };
+  FakeSocket.onSend = () => { expect(receipts).toBe(1); socketFailed = true; throw new Error("fixture socket send failure"); };
   const fetcher = providerFetch(wsProvider((async () => {
     httpSends++;
     return new Response("unexpected");
   }) as typeof fetch), "1.4.0", {
     onPhysicalDispatch: () => { receipts++; expect(booking.permit.use()).toBe(true); },
-    dispatchOverride: async () => { overrides++; throw new Error("fixture local HTTP refusal"); },
+    // The override wraps the WS send once; its HTTP fallback must not re-run it (one logical send).
+    dispatchOverride: async (input, init, execute) => { overrides++; return execute(input, init); },
+    beforeDispatch: () => { if (socketFailed) throw new Error("fixture local HTTP refusal"); },
   });
   await expect(fetcher(wsUrl, streamingInit())).rejects.toThrow("fixture local HTTP refusal");
   booking.permit.release();
