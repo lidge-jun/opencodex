@@ -88,6 +88,7 @@ import {
   recordCodexUpstreamOutcome,
   type CodexUpstreamOutcome,
 } from "../../codex/routing";
+import { codexFailureWindowOutcomeMeta } from "../../codex/routing/failure-window";
 import {
   applyAccountChangeConversationStateScrub,
   conversationStateBindingFromAuth,
@@ -1062,6 +1063,7 @@ export async function handleResponsesCompact(
       if ((outcome === 401 || outcome === 403) && upstream && wasPermanentAccountRefusal(upstream)) return;
       recordCodexUpstreamOutcome(config, ctx.accountId, outcome, {
         ...meta,
+        ...codexFailureWindowOutcomeMeta(ctx),
         threadId: ctx.kind === "pool" || ctx.kind === "main-pool" ? ctx.affinityKey : undefined,
         fixedAccount: ctx.fixedAccount,
         modelId: selectedModelId,

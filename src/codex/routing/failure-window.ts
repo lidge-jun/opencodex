@@ -1,5 +1,9 @@
 import { pinnedCodexAccountId } from "../account-priority";
 import type { OcxConfig } from "../../types";
+import { isCodexAccountGenerationLive } from "../account-store";
+import { isMainQuotaDispatchLive } from "../main-account-cache";
+import type { CodexAuthContext } from "../auth-context";
+import type { CodexUpstreamOutcomeMeta } from "./cooldown-math";
 import {
   deleteAccountHealth,
   setAccountHealth,
@@ -19,6 +23,25 @@ type WindowState = { samples: Sample[]; degraded: boolean; healthySince?: number
 
 const windows = new Map<string, WindowState>();
 const pinnedDegradeWarned = new Set<string>();
+
+/** Read only dispatch-time provenance retained by auth materialization, never recapture at arrival. */
+export function codexFailureWindowOutcomeMeta(
+  context: CodexAuthContext,
+): Pick<CodexUpstreamOutcomeMeta, "failureWindowCredentialGeneration" | "mainFailureWindowDispatch"> {
+  if (context.kind === "pool") return { failureWindowCredentialGeneration: context.generation };
+  return context.kind === "main-pool" ? { mainFailureWindowDispatch: context.mainQuotaDispatch ?? null } : {};
+}
+
+/** Fence window samples only; other health and recovery-lease semantics stay with their owners. */
+export function noteCodexFailureWindowOutcome(
+  config: OcxConfig, accountId: string, failed: boolean, now: number, meta: CodexUpstreamOutcomeMeta,
+): void {
+  if (meta.mainFailureWindowDispatch !== undefined
+    && (!meta.mainFailureWindowDispatch || !isMainQuotaDispatchLive(meta.mainFailureWindowDispatch))) return;
+  const generation = meta.failureWindowCredentialGeneration ?? meta.credentialGeneration;
+  if (generation !== undefined && !isCodexAccountGenerationLive(accountId, generation)) return;
+  noteCodexFailureWindowSample(config, accountId, failed, now);
+}
 
 export function codexFailureWindowEnabled(config: OcxConfig): boolean {
   return config.codexFailureWindow !== false;

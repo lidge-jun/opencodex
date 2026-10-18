@@ -6,6 +6,7 @@ import { isThirtyDayOnlyCodexPlan } from "../plan";
 import { hasSpendableCodexCredits, isTerminalShortWindow, type CodexSpendableCredits } from "../quota-types";
 import type { CodexQuotaScope } from "./health-store";
 import type { TransientProbeGrant } from "./thread-affinity";
+import type { MainQuotaDispatch } from "../main-account-cache";
 
 export { TERMINAL_SHORT_WINDOW_FRESHNESS_MS } from "../quota-types";
 
@@ -99,6 +100,10 @@ export type CodexUpstreamOutcomeMeta = {
    * means the caller cannot supply lineage and the historical unfenced handling stands.
    */
   credentialGeneration?: number;
+  /** Main credential proof captured before dispatch; null means no owned proof was available. */
+  mainFailureWindowDispatch?: MainQuotaDispatch | null;
+  /** Pool sample provenance retained by a terminal callback even if its context is reused. */
+  failureWindowCredentialGeneration?: number;
 };
 
 export function computeCodexUsageScore(quota: {
