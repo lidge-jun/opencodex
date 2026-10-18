@@ -12,6 +12,7 @@ import { clearComboRecallForTests } from "../../src/server/responses/combo-sessi
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { clearRequestLogsForTests, type RequestLogContext } from "../../src/server/request-log";
+import { getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
 import {
   clearResponseStateForTests,
   flushResponseState,
@@ -218,6 +219,33 @@ describe("combo zero-output bare Responses error failover", () => {
         { ordinal: 2, provider: "b", model: "m2" },
       ],
     });
+  });
+
+  test("a refused child relay does not settle the parent turn's admission lease", async () => {
+    // Each passthrough child binds the parent's lease to its own relay controller. Cancelling the
+    // refused first stream unbinds that controller; it must not settle the turn the next target
+    // still runs in, or the second child is aborted on arrival ("turn already settled").
+    const sse = (...events: unknown[]) => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""),
+      { headers: { "content-type": "text/event-stream" } });
+    const a = serve(() => sse({ type: "response.created", response: { id: "ra", status: "in_progress" } }, { type: "response.failed",
+      response: { id: "ra", status: "failed", error: { type: "server_error", code: "upstream_server_error", message: "busy" } } }));
+    const b = serve(() => sse({ type: "response.completed", response: responsesSuccess("lease backup", "m2") }));
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b"),
+    });
+    const turnAdmissionLease = tryAdmitTurn();
+    if (!turnAdmissionLease) throw new Error("test turn admission unavailable");
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+      }), config, { model: "", provider: "" }, { turnAdmissionLease });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("lease backup");
+      expect(getActiveTurnCount()).toBe(0);
+    } finally { turnAdmissionLease.release(); }
   });
 
   test("undeclared first adapter tool call hops without changing the request catalog", async () => {
