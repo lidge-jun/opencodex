@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -330,6 +331,91 @@ test("a full tagged window loads one current credential snapshot per read", () =
   } finally {
     snapshot.mockRestore();
   }
+});
+
+function withFailedStoreSnapshot(kind: "read" | "parse", run: () => void): void {
+  const path = join(home, "codex-accounts.json");
+  const bytes = readFileSync(path);
+  const original = fs.readFileSync;
+  const read = kind === "read" ? spyOn(fs, "readFileSync").mockImplementation((...args: Parameters<typeof original>) => {
+    if (String(args[0]) === path) throw Object.assign(new Error("fixture read unavailable"), { code: "EACCES" });
+    return original(...args);
+  }) : undefined;
+  if (kind === "parse") writeFileSync(path, "{incomplete-json");
+  try {
+    run();
+  } finally {
+    read?.mockRestore();
+    writeFileSync(path, bytes);
+  }
+}
+
+test.each(["read", "parse"] as const)("a temporary %s snapshot failure preserves degraded samples and the pinned warning", kind => {
+  const cfg = config({ activeCodexAccountPinned: "a" });
+  const record = poolTerminal(cfg);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    for (let index = 0; index < 20; index++) record("failed", 500);
+    expect(isCodexFailureWindowDegraded("a")).toBe(true);
+    failureWindowSteersNewThreads(cfg, "a", Date.now());
+    expect(warn).toHaveBeenCalledTimes(1);
+    withFailedStoreSnapshot(kind, () => {
+      expect(accountStore.beginCodexAccountGenerationLiveCheck().snapshotStatus).toBe("failed");
+      expect(isCodexFailureWindowDegraded("a")).toBe(true);
+      failureWindowSteersNewThreads(cfg, "a", Date.now());
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+    expect(isCodexFailureWindowDegraded("a")).toBe(true);
+    failureWindowSteersNewThreads(cfg, "a", Date.now());
+    expect(warn).toHaveBeenCalledTimes(1);
+  } finally {
+    warn.mockRestore();
+  }
+});
+
+test.each(["read", "parse"] as const)("a temporary %s failure does not erase or append to nineteen retained samples", kind => {
+  const cfg = config();
+  const record = poolTerminal(cfg);
+  for (let index = 0; index < 19; index++) record("failed", 500);
+  expect(isCodexFailureWindowDegraded("a")).toBe(false);
+  withFailedStoreSnapshot(kind, () => {
+    noteCodexFailureWindowSample(cfg, "a", true, Date.now());
+    expect(isCodexFailureWindowDegraded("a")).toBe(false);
+  });
+  expect(isCodexFailureWindowDegraded("a")).toBe(false);
+  record("failed", 500);
+  expect(isCodexFailureWindowDegraded("a")).toBe(true);
+});
+
+test.each(["read", "parse"] as const)("a temporary %s snapshot failure preserves the recovery timer and retained generation", kind => {
+  const cfg = config();
+  const generation = readCodexAccountRecord("a")!.generation;
+  const record = (failed: boolean, now: number) => recordCodexUpstreamOutcome(cfg, "a", failed ? 500 : 200,
+    { failureWindowCredentialGeneration: generation, now });
+  for (let index = 0; index < 20; index++) record(true, NOW);
+  for (let index = 0; index < 20; index++) record(false, NOW + 61_000);
+  expect(isCodexFailureWindowDegraded("a", NOW + 61_000)).toBe(true);
+  withFailedStoreSnapshot(kind, () => expect(isCodexFailureWindowDegraded("a", NOW + 75_000)).toBe(true));
+  expect(isCodexFailureWindowDegraded("a", NOW + 90_999)).toBe(true);
+  expect(isCodexFailureWindowDegraded("a", NOW + 91_000)).toBe(false);
+  const credential = readCodexAccountRecord("a")!.credential!;
+  saveCodexAccountCredential("a", { ...credential, accessToken: "replacement-after-failure" });
+  const current = readCodexAccountRecord("a")!.generation;
+  for (let index = 0; index < 19; index++) recordCodexUpstreamOutcome(cfg, "a", 500,
+    { failureWindowCredentialGeneration: current, now: NOW + 92_000 });
+  expect(isCodexFailureWindowDegraded("a", NOW + 92_000)).toBe(false);
+});
+
+test.each(["absent", "empty"] as const)("a valid %s snapshot still retires the previous generation", kind => {
+  const cfg = config();
+  const old = poolTerminal(cfg);
+  for (let index = 0; index < 20; index++) old("failed", 500);
+  expect(isCodexFailureWindowDegraded("a")).toBe(true);
+  const path = join(home, "codex-accounts.json");
+  if (kind === "absent") unlinkSync(path);
+  else writeFileSync(path, "{}");
+  expect(accountStore.beginCodexAccountGenerationLiveCheck().snapshotStatus).toBe("ok");
+  expect(isCodexFailureWindowDegraded("a")).toBe(false);
 });
 
 test("a replacement does not inherit the previous generation's recovery timer", () => {
