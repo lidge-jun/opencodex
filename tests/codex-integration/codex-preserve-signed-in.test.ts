@@ -33,9 +33,10 @@ function mainLogin(email = "member@example.test", accountId = "workspace-a") {
   writeFileSync(authPath, JSON.stringify({ tokens: { access_token: "synthetic-main", id_token, account_id: accountId } }));
 }
 function config(strategy: OcxConfig["accountPoolStrategy"] = "quota"): OcxConfig {
+  // A separate workspace subscription remains eligible; exact native-main clones are excluded.
   const c: OcxConfig = { ...getDefaultConfig(), autoSwitchThreshold: 80,
     accountPoolStrategy: strategy, activeCodexAccountId: "copy", codexPreserveSignedInAccount: true,
-    codexAccounts: [{ id: "copy", email: " MEMBER@example.test ", isMain: false },
+    codexAccounts: [{ id: "copy", email: " MEMBER@example.test ", plan: "team", isMain: false },
       { id: "other", email: "other@example.test", isMain: false }],
   };
   for (const id of ["copy", "other"]) saveCodexAccountCredential(id, {
@@ -74,7 +75,7 @@ afterEach(async () => {
 });
 
 for (const strategy of ["quota", "round-robin", "fill-first", "reset-first"] as const) {
-  test(`${strategy}: other identities outrank native main and its active duplicate`, () => {
+  test(`${strategy}: other identities outrank native main and its separate workspace subscription`, () => {
     const c = config(strategy);
     c.codexAccountPriorities = { copy: 100, __main__: 100, other: -100 };
     rememberActiveCodexAccount(c, "copy");
