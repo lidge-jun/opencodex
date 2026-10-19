@@ -2,6 +2,7 @@ import { bridgeToResponsesSSE, formatErrorResponse } from "../../bridge";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
 import { isThroughputLimitText } from "../../claude/outbound";
 import { isDefiniteContextOverflow } from "../../combos/failover";
+import { classifyError } from "../../lib/errors";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { AdapterEvent } from "../../types";
 
@@ -114,6 +115,30 @@ export function sidecarLoopOverflowEvent(
   if (failure.event?.retryable === false && code !== "context_length_exceeded") return undefined;
   if (!isSidecarContextOverflow(failure.status, failure.message, code)) return undefined;
   return sidecarContextOverflowEvent(failure.event?.status ?? failure.status, failure.message);
+}
+
+/**
+ * The in-stream terminal for a sidecar loop failure that carries no adapter event, or
+ * `undefined` to keep the loop's existing generic event. An overflow ends as the overflow
+ * terminal. A failure this classifier deliberately kept (non-replayable, or an upstream
+ * `rate_limit_exceeded`) gets an explicit code whenever the bridge's wording heuristics would
+ * otherwise rename it `context_length_exceeded` and undo that verdict on the wire.
+ */
+export function sidecarLoopTerminalEvent(
+  failure: SidecarLoopFailure,
+): Extract<AdapterEvent, { type: "error" }> | undefined {
+  const overflow = sidecarLoopOverflowEvent(failure);
+  if (overflow || failure.event) return overflow;
+  if (classifyError(failure.status, "upstream_error", failure.message).code !== "context_length_exceeded") return undefined;
+  const rateLimited = failure.upstreamCode === "rate_limit_exceeded";
+  return {
+    type: "error",
+    status: failure.status,
+    message: failure.message,
+    errorType: rateLimited ? "rate_limit_error" : "upstream_error",
+    code: failure.upstreamCode ?? "upstream_error",
+    ...(failure.nonReplayable ? { retryable: false } : {}),
+  };
 }
 
 /** Read a provider's `error.code` from an already bounded, display-safe error body. */

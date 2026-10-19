@@ -1,5 +1,5 @@
 import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
-import { markSidecarContextOverflow, sidecarLoopOverflowEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
+import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
 /**
  * Media bridge agentic loop — supports both image and video generation sidecars.
@@ -1169,10 +1169,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           } else {
             // A later iteration's overflow ends the turn as the main path's terminal
             // context_length_exceeded, so Codex compacts instead of resending (#7316).
-            const overflow = e instanceof LoopError ? sidecarLoopOverflowEvent(loopFailure(e)) : undefined;
+            const terminal = e instanceof LoopError ? sidecarLoopTerminalEvent(loopFailure(e)) : undefined;
             yield {
               type: "error",
-              ...(overflow ?? {
+              ...(terminal ?? {
                 message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
                 ...(e instanceof LoopError ? { status: e.status, ...(e.event ?? {}) } : {}),
               }),

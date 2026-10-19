@@ -123,13 +123,21 @@ test.each([400, 413])("a later iteration's worded %i overflow keeps its evidence
 });
 
 // The provider may already have run a non-replayable turn; an overflow would invite a compacted resend.
-test("a later iteration's non-replayable 413 keeps its own failure", async () => {
+test.each(["Request body exceeds the 8 MiB limit", "This model's maximum context length is 8192 tokens"])("a later iteration's non-replayable 413 keeps its own failure (%s)", async body => {
   const run = wordedFailureRun(() => {
-    const response = new Response("Request body exceeds the 8 MiB limit", { status: 413 });
+    const response = new Response(body, { status: 413 });
     markResponseNonReplayable(response);
     return response;
   });
   const text = await run.text;
   expect(text).toContain("response.failed");
+  expect(text).not.toContain("context_length_exceeded");
+});
+
+// The bridge's wording heuristics must not rename a provider's own rate verdict an overflow.
+test("a later iteration's rate_limit_exceeded 400 keeps its rate verdict", async () => {
+  const run = wordedFailureRun(() => Response.json({ error: { message: "too many tokens", code: "rate_limit_exceeded" } }, { status: 400 }));
+  const text = await run.text;
+  expect(text).toContain('"code":"rate_limit_exceeded"');
   expect(text).not.toContain("context_length_exceeded");
 });

@@ -14,7 +14,7 @@ import { bridgeToResponsesSSE } from "../bridge";
 import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { mergeUsage } from "../server/responses/empty-completion-guard";
-import { markSidecarContextOverflow, sidecarLoopOverflowEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
+import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
@@ -1155,7 +1155,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false };
             // A later iteration's overflow ends the turn as the main path's terminal
             // context_length_exceeded, so Codex compacts instead of resending (#7316).
-            else yield (e instanceof LoopError ? sidecarLoopOverflowEvent(loopFailure(e)) : undefined)
+            else yield (e instanceof LoopError ? sidecarLoopTerminalEvent(loopFailure(e)) : undefined)
               ?? (e instanceof LoopError && e.event ? e.event
               : e instanceof LoopError && deps.thinkingRecovery
                 ? { type: "error", status: e.status, errorType: "upstream_error", message: e.message }

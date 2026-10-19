@@ -9,6 +9,7 @@ import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { PROVIDER_INPUT_TOO_LARGE_MESSAGE } from "../../src/server/responses/context-overflow";
+import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { parseStreamWithProgress, type ParseStreamWithProgressOptions } from "../../src/web-search/progress-stream";
 import { TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TRANSLATOR_MAX_TURN_BYTES, translatorLiveBudgetCountForTests } from "../../src/lib/translator-budget";
@@ -329,6 +330,30 @@ describe("runWithImageBridge", () => {
     expect(sse).toContain("response.failed");
     expect(sse).toContain('"code":"context_length_exceeded"');
     expect(sse).toContain(PROVIDER_INPUT_TOO_LARGE_MESSAGE);
+    expect(sends).toBe(2);
+  });
+
+  // A non-replayable turn may already have run; neither the loop nor the bridge's wording
+  // heuristics may turn it into an overflow that invites a compacted resend.
+  test("a later iteration's worded non-replayable 413 keeps its own failure", async () => {
+    streamQueue = [[...imageCallEvents]];
+    let sends = 0;
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: {
+        ...mockAdapter,
+        formatErrorBody: (_status, _headers, body) => body,
+        fetchResponse: async () => {
+          if (sends++ === 0) return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+          const failed = new Response("This model's maximum context length is 8192 tokens", { status: 413 });
+          markResponseNonReplayable(failed);
+          return failed;
+        },
+      },
+    });
+    const sse = await response.text();
+    expect(sse).toContain("response.failed");
+    expect(sse).not.toContain("context_length_exceeded");
     expect(sends).toBe(2);
   });
 
