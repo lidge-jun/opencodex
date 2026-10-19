@@ -33,6 +33,8 @@ export const RESPONSES_CORE_MODULES = [
   "deferred-send-reporter.ts",
   "combo-requested-effort.ts",
   "core-combo-native.ts",
+  // Reached from core-combo.ts: tool-loop continuations stay on the lane's previous target (#7298).
+  "combo-tool-loop-pin.ts",
   // Reached from core-combo.ts: the JEV model backend's internal decision turn.
   "jev-model-invoke.ts",
   "request-prepare.ts",
