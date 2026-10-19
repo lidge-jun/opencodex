@@ -327,6 +327,15 @@
       ]
     },
     {
+      "path": "transports/responses-combo-boundaries.md",
+      "tier": 3,
+      "title": "Combo Streaming Boundaries",
+      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings.",
+      "documents": [
+        "src/server/"
+      ]
+    },
+    {
       "path": "transports/policy-fallback.md",
       "tier": 3,
       "title": "Policy Candidate Fallback",
