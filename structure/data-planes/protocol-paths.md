@@ -378,12 +378,13 @@ replay config; backend credentials are decided at dispatch, so this errs toward 
 ingress, `count_tokens` and the planner all ask it. The planner can judge only the config-and-route
 parts: skill elision and web search depend on body content no feature describes.
 
+Failover combos reuse this lane for eligible concrete first-party Anthropic children through the existing `core-combo-native.ts` source/dispatcher seam. Only strict failover without a default effort qualifies; policy/JEV/other strategies and bridge-only rewrites retain the bridge. The shared executor inherits the combo's attempt, target budget, prepaid permit and gated callbacks, opening no second tracker/final row. Key source system/messages/tools/cache markers retain the native allowlist, image/tool-id safety; explicit operator TTL wins, otherwise TTL-less combo breakpoints stay unchanged. OAuth keeps its preamble/metadata/tool transformations. Counts/previews still decline logical combos without picking accounts. [Commit boundaries](../transports/responses-combo-boundaries.md) own failover; `tests/claude-integration/messages-native-combo.test.ts` proves mocked prefix preservation, not live cache-hit metrics.
+
 With the switch on, a declined route re-marks its bridge entry with the decline reason (after
 any `effort-row` / `fast-row`), so the trace says why the bridge was taken; with it off nothing is
 added. `claudeCode.stabilizePromptCache` is not a decline rule: it is a Claude-app cache
 optimization rather than routing policy, applies only on the translated path, and is a recorded
 gap of the native lane.
-
 `src/server/claude-messages.ts` decides the lane after the route and its wire settle and after the
 managed-client steps already applied to the body (alias/modelMap resolution, `ocx-route`, effort
 directives). The caller-forward passthrough is decided earlier, on the caller's own credential,
@@ -441,8 +442,7 @@ The TypeScript Agent SDK's `sdk-ts` entrypoint is accepted alongside `cli`, `sdk
 with the same required headers and bounds, so its first-party native feature betas are retained.
 Duplicates, oversized/invalid values and headers named by `Connection` cannot gain forwarding
 authority. The handle stores its headers privately in a WeakMap and serializes without them.
-The native builder applies it only for first-party Anthropic, independently of bearer/UUID
-selection. Operator `provider.headers` names take precedence case-insensitively over the observed
+The native builder applies it only for first-party Anthropic, independently of bearer/UUID selection. Operator `provider.headers` names take precedence case-insensitively over the observed
 identity bundle without duplicate spelling; unconfigured names retain the observed client values.
 Caller credentials, proxy/hop headers, arbitrary SDK names and betas are never part of the bundle.
 These are compatibility observations, not authorization or proof of client provenance. Missing

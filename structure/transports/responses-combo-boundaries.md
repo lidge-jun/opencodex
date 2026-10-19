@@ -116,6 +116,16 @@ redacted before whitespace flattening and bounded to 200 characters; unparsed bo
 
 A `runTurn` adapter has the equivalent boundary in `preflightAdapterEvents` (`src/adapters/run-turn-queue.ts`), streaming and non-streaming alike: when its first meaningful event is a tool call the current request did not declare, and no earlier replay-unsafe heartbeat recorded a side effect, `src/server/responses/run-turn-execution.ts` projects the fail-closed undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and Anthropic Messages inbound requests do not use this classification. The same heartbeat also decides an ordinary pre-output adapter error or an empty end: after a replay-unsafe heartbeat the child's 502 is marked non-replayable, so the combo stops on it instead of sending the turn to the next target.
 
+A native Messages child uses `src/server/messages-native-preflight.ts` after the native log tap,
+so the tap retains byte-stall/size/cancellation ownership. Its bounded prelude accepts only an
+empty-content `message_start` and `ping` as replayable. A structured retryable `error` before
+any other event returns to the ordinary combo failure classifier; any content block (including
+a tool start), unknown/malformed payload, terminal or byte/chunk cap commits conservatively.
+Buffered bytes replay unchanged. A collected failure after that commitment is non-replayable.
+Preflight retention is charged to the translator budget and released on delivery/cancellation.
+The same native executor binds the accepted stream to the parent's held lease, carries observed
+usage on cancellation, and reports terminal errors without treating them as successful rows.
+
 HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
 structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,
 deprecated, sunset, decommissioned, or no longer available). An unrelated application-level 410 is

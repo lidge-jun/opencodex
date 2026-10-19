@@ -16,6 +16,7 @@ import { sniffImageDimensions } from "../adapters/anthropic-image-guard";
 import { anthropicCacheWrite1hTokens } from "../adapters/anthropic/cache-retention";
 import { createToolCallIdAllocator } from "../adapters/tool-call-id";
 import { idleDeadline } from "../lib/abort";
+import { httpStatusFromTerminalError } from "../lib/errors";
 import {
   CLAUDE_NATIVE_THINKING,
   projectClaudeRequest,
@@ -86,6 +87,9 @@ export function tapAnthropicSseForLog(
   let usageAcc: Rec = {};
   // message_stop or an upstream error event: the turn's own terminal already went through.
   let terminalSeen = false;
+  let terminalErrorStatus: number | undefined;
+  const terminalMeta = (): PassthroughFinalizeMeta => terminalErrorStatus === undefined
+    ? { closeReason: "terminal" } : { closeReason: "terminal", terminalStatus: "failed" };
   const inspectFrame = (frame: string) => {
     const dataLine = frame
       .split("\n")
@@ -103,6 +107,10 @@ export function tapAnthropicSseForLog(
       usageAcc = { ...usageAcc, ...data.usage };
     } else if (data.type === "message_stop" || data.type === "error") {
       terminalSeen = true;
+      if (data.type === "error" && isRec(data.error)) {
+        terminalErrorStatus = httpStatusFromTerminalError(data.error) ?? 502;
+        logCtx.upstreamError = redactSecretString(typeof data.error.message === "string" ? data.error.message : "Provider stream failed").slice(0, 500);
+      }
     }
   };
   const inspect = (chunk: Uint8Array) => {
@@ -158,7 +166,7 @@ export function tapAnthropicSseForLog(
       // The turn already ended (message_stop or an upstream error event): an upstream that then
       // idles or keeps sending did not cut it short. Same rule as the read-error branch,
       // including the restored blank line for a terminal found only in the tail.
-      finalize(200, { closeReason: "terminal" });
+      finalize(terminalErrorStatus ?? 200, terminalMeta());
       try {
         if (terminalInTail) tapController?.enqueue(encoder.encode("\n\n"));
         tapController?.close();
@@ -189,6 +197,7 @@ export function tapAnthropicSseForLog(
     settled = true;
     idle.cancel();
     detachAbort();
+    recordUsage();
     finalize(499, { closeReason: "client_cancel" });
     try { tapController?.close(); } catch { /* downstream already torn down */ }
     reader.cancel(guard?.reqSignal?.reason).catch(() => {});
@@ -220,7 +229,7 @@ export function tapAnthropicSseForLog(
           idle.cancel();
           detachAbort();
           recordUsage();
-          finalize(200, { closeReason: "terminal" });
+          finalize(terminalErrorStatus ?? 200, terminalMeta());
           controller.close();
           return;
         }
@@ -254,14 +263,14 @@ export function tapAnthropicSseForLog(
         if (isTranslatorBudgetExceededError(err)) {
           // A local cap, not an upstream failure: the non-streaming native Messages fold
           // maps this error to a 413 itself, so it still errors the stream.
-          finalize(200, { closeReason: "terminal" });
+          finalize(terminalErrorStatus ?? 200, terminalMeta());
           try { controller.error(err); } catch { /* torn down */ }
           return;
         }
         if (terminalSeen) {
           // Only the transport trailer was lost; the client already has the turn's terminal.
           // The Responses relay likewise reports a read error only without a seen terminal.
-          finalize(200, { closeReason: "terminal" });
+          finalize(terminalErrorStatus ?? 200, terminalMeta());
           try {
             // An SSE parser drops an event that EOF cuts off before its blank line, so restore
             // the delimiter when the terminal was only found in that unterminated tail.
@@ -291,6 +300,7 @@ export function tapAnthropicSseForLog(
         settled = true;
         idle.cancel();
         detachAbort();
+        recordUsage();
         finalize(499, { closeReason: "client_cancel" });
       }
       reader.cancel(reason).catch(() => {});
