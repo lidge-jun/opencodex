@@ -312,13 +312,8 @@ do not. The 30-second, 128-entry cache rechecks capacity at insertion time.
 
 ## OpenGateway chat provider
 
-The `opengateway` key preset uses the OpenAI Chat adapter at
-`https://apis.opengateway.ai/v1`. Sionic AI operates the gateway. Registry-owned live
-discovery refreshes the public `/v1/models` catalog and retains active Chat Completions rows plus Responses-only rows that the registry pins to
-Responses (`openai/o3-pro`); public discovery does not establish key validity. Sionic-served
-`deepseek/deepseek-v4.1-flash-ultrafast` and `z-ai/glm-5.3-flash-ultrafast` are listed first. A custom model that replaces one of the discovered rows keeps
-that row's slot (`src/codex/catalog/routed-gather.ts`).
-Keys are created at `https://opengateway.ai/api-keys`.
+Preset discovery, Responses input projection and bounded empty-completion recovery follow
+[the OpenGateway contract](providers/opengateway.md).
 
 ## TokenLab chat provider
 
