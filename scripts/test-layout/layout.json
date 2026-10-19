@@ -744,7 +744,7 @@
     "combo-stream-preflight.test.ts": "routing",
     "combo-workspace-data.test.ts": "gui",
     "combo-workspace-jev-decision.test.ts": "gui",
-    "combos.test.ts": "codex-integration",
+    "combos.test.ts": "codex-integration", "combos-kiro-profile-hop.test.ts": "codex-integration",
     "command-code-error-finish.test.ts": "providers",
     "command-code-efforts.test.ts": "providers",
     "command-code-project-context.test.ts": "providers",

@@ -951,22 +951,6 @@ describe("combo failure policy and advancement", () => {
     expect(comboFailureDecision(410, "resource is gone")).toBe("stop");
     expect(comboFailureDecision(410, "The model has reached its end of life and is no longer available.")).toBe("hop");
     expect(comboFailureDecision(410, "The model is scheduled for retirement.")).toBe("hop");
-    // A Kiro 400 that names its own validator rejection is account-scoped: after the account layer
-    // has no login left to rotate to, the next combo target is the only chance to serve the turn.
-    const improper = JSON.stringify({ message: "ValidationException: Improperly formed request" });
-    const kiro = { failedAdapter: "kiro" };
-    expect(comboFailureDecision(400, improper, kiro)).toBe("hop");
-    expect(comboFailureDecision(400, `Provider error 400: ${improper}`, kiro)).toBe("hop");
-    expect(comboFailureDecision(400, JSON.stringify({ message: "Improperly formed request" }), kiro)).toBe("stop");
-    expect(comboFailureDecision(400, "ValidationException: model not found", kiro)).toBe("stop");
-    // Tokens in unrelated fields, or a failed target that is not Kiro (or unknown), never hop.
-    expect(comboFailureDecision(400, JSON.stringify({ metadata: "ValidationException", message: "Improperly formed request" }), kiro)).toBe("stop");
-    expect(comboFailureDecision(400, JSON.stringify({ error: { message: "Kiro invalid request: ValidationException: Improperly formed request" } }), kiro)).toBe("hop");
-    expect(comboFailureDecision(400, "Kiro invalid request: ValidationException: Improperly formed request", kiro)).toBe("hop");
-    expect(comboFailureDecision(400, "Kiro invalid request: ValidationException: Improperly formed request", { failedAdapter: "openai-chat" })).toBe("stop");
-    expect(comboFailureDecision(400, improper)).toBe("stop");
-    expect(comboFailureDecision(400, improper, { failedAdapter: "openai-chat" })).toBe("stop");
-    expect(comboFailureDecision(400, improper, { failedAdapter: "anthropic" })).toBe("stop");
     expect(comboFailureDecision(410, "gone", { code: "model_retired" })).toBe("hop");
     expect(comboFailureDecision(499, "client cancelled")).toBe("stop");
     expect(comboFailureDecision(422, "invalid_api_key")).toBe("hop");
