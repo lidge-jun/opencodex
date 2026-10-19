@@ -14,6 +14,8 @@ export interface IncomingMeta {
   abortSignal?: AbortSignal;
   /** Lease acquired before the response is committed; the physical send transfers it to its body. */
   pacingSlot?: ProviderRequestSlot;
+  /** Internal queued rebuild already owns the outer provider fetch admission. */
+  dispatchPacingHeld?: boolean;
   /** Combo children must surface a pre-output refusal so the selector can try the next target. */
   comboAttempt?: boolean;
   /**

@@ -23,7 +23,7 @@ export type TranslatorBufferKind =
   | "cursor_kv"
   | "request_copies";
 
-export type ExternallyCappedKind = "passthrough_serialization" | "mcp_payload";
+export type ExternallyCappedKind = "passthrough_serialization" | "mcp_payload" | "provider_image_upload";
 
 export class TranslatorBudgetExceededError extends Error {
   readonly code = "translation_buffer_limit";

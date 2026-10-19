@@ -875,6 +875,7 @@
     "server-jev-model-decision-e2e.test.ts": "server", "server-jev-model-quota-budget.test.ts": "server",
     "decision-routes.test.ts": "server",
     "deepinfra-provider.test.ts": "providers",
+    "deepseek-image-files.test.ts": "providers",
     "deepseek-inbound-wire.test.ts": "providers",
     "deepseek-reasoning-replay-gaps.test.ts": "providers",
     "deepseek-bare-tool-call-replay.test.ts": "providers",

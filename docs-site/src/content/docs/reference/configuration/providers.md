@@ -8,6 +8,29 @@ description: Provider entries, authentication, endpoints, model catalogs, quotas
 A provider tells opencodex where a model lives, which wire adapter it speaks, and how requests are
 authenticated.
 
+## DeepSeek: tokens versus image bytes
+
+DeepSeek documents a separate [48 MiB request-body limit](https://api-docs.deepseek.com/guides/files_api/).
+A screenshot-heavy session can reach that limit before its token context fills; increasing
+`model_auto_compact_token_limit` cannot prevent it.
+
+Uploads are **off by default**. Set `modelCapabilities: { "deepseek-flash": { deepseekImageFiles: true } }`
+on your provider if you accept separately persisted images on DeepSeek's servers for one hour.
+PATCH `null` on the axis or model entry clears the opt-in.
+
+For opted-in models on first-party Responses URLs, bodies above 40 MiB replace older inline images
+with [Files API references](https://api-docs.deepseek.com/guides/files_api/), aiming for 32 MiB.
+Image bytes, history and token usage stay unchanged. Files request one-hour expiry; successful
+partial uploads remain until expiry even if generation fails. The bounded reference cache is
+credential-isolated and lasts at most 50 minutes (less if the provider reports earlier expiry).
+A retry can reuse successful uploads; another credential uploads its own copy.
+
+Foreign gateways and Chat Completions are unchanged. Explicit `detail: low` stays inline because
+file references ignore it. Failures stop without discarding images or retrying generation. Repairs
+have a 60-second upload deadline, a 128 MiB input cap and at most two simultaneous preparations;
+provider pacing/concurrency still applies. Oversized text or unconvertible images still need
+compaction; this transport repair does not extend the model's context window.
+
 ## Context windows on custom providers
 
 When a custom provider omits a model's context window, OpenCodex can infer it from the bundled
@@ -1788,7 +1811,7 @@ contracts.
 
 ### Per-model capability declarations
 
-`modelCapabilities` stores explicit declarations keyed by exact upstream model ID. IDs preserve case and must not contain surrounding whitespace. Each entry may contain `inputModalities` (`text`, `image`, `audio`, `video`), `contextTier` (`default`, `long_context`) and `video.processing` (`static`, `agentic`). These are operator declarations, not proof of provider support. Context-tier and video fields currently record intent only and do not activate upstream behavior or increase catalog windows.
+`modelCapabilities` stores explicit declarations keyed by exact upstream model ID. IDs preserve case and must not contain surrounding whitespace. Each entry may contain `inputModalities` (`text`, `image`, `audio`, `video`), `contextTier` (`default`, `long_context`), `video.processing` (`static`, `agentic`) and `deepseekImageFiles` (`boolean`; see [DeepSeek image bytes](#deepseek-tokens-versus-image-bytes)). These are operator declarations, not proof of provider support. Context-tier and video fields currently record intent only and do not activate upstream behavior or increase catalog windows.
 
 The raw provider editor and provider API expose this map. POST/PUT replace an explicitly supplied map and reject null entries. PATCH merges individual axes; null clears a map, model, axis or video processing value, while `{}` makes no change. Omitted provider overwrites preserve the existing map. Malformed hand-edited files retain valid independent axes and treat malformed explicit input modalities as text-only, with a diagnostic.
 

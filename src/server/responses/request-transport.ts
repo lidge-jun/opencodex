@@ -72,6 +72,7 @@ import {
 } from "../../providers/api-key-selection";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { codexWsExecutorBinding, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
@@ -590,10 +591,43 @@ export async function prepareResponsesTransport(
       };
     }
     const build = resolved.buildRequest.bind(resolved);
+    const fileProvider = route.provider;
+    const fileProviderName = route.providerName;
     resolved.buildRequest = async (requestParsed, incoming) => {
       const request = await build(requestParsed, incoming);
       // Capture at adapter creation, never from mutable serving state after an await.
       if (binding) requestBindings.set(request, binding);
+      const allowedImageFileModels = fileProvider.modelCapabilities
+        ? Object.entries(fileProvider.modelCapabilities)
+          .filter(([, cap]) => cap?.deepseekImageFiles === true)
+          .map(([model]) => model)
+        : [];
+      if (allowedImageFileModels.length && needsDeepSeekImageFiles(request)) {
+        try {
+          // Ordinary uploads use provider pacing. A queued rebuild retains its enclosing
+          // fetch lease; reacquiring that same concurrency slot would deadlock at a limit of one.
+          const uploadFetch = providerFetch(fileProvider, options.codexWsRuntimeIdentity, {
+            httpOnly: true, providerName: fileProviderName, modelId: requestParsed.modelId,
+            beforeDispatch: () => {
+              if (!selectionIsCurrent(binding)) throw new Error("Credential selection changed before image upload");
+            },
+          });
+          const body = await deepSeekImageFileBody(request, incoming.dispatchPacingHeld ? uploadFetch.unpacedFetch! : uploadFetch,
+            incoming.abortSignal ?? options.abortSignal ?? req.signal, {
+              allowedModels: allowedImageFileModels, budget: incoming.translatorBudget,
+            });
+          if (body !== undefined) {
+            request.releaseBodyObservation?.();
+            request.body = body;
+            const headers = new Headers(request.headers);
+            headers.delete("content-length");
+            request.headers = Object.fromEntries(headers);
+            request.releaseBodyObservation = incoming.translatorBudget.observeExternallyCapped(
+              "passthrough_serialization", Buffer.byteLength(body, "utf8"),
+            );
+          }
+        } catch (error) { request.releaseBodyObservation?.(); throw error; }
+      }
       return request;
     };
     if (resolved.runTurn) {
@@ -847,6 +881,7 @@ export async function prepareResponsesTransport(
           adapterName: nextAdapter.name, oauthCredentialSnapshot: replayOAuthCredentialSnapshot });
         const rebuilt = await nextAdapter.buildRequest(requestParsed, {
           headers: requestState.selectedForwardHeaders, providerName: route.providerName, translatorBudget,
+          dispatchPacingHeld: true,
           ...(imageTierBias > 0 ? { imageTierBias } : {}),
         });
         const bodySize = checkOutboundBodySize(rebuilt.body, config.maxUpstreamBodyBytes);

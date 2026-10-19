@@ -15,6 +15,32 @@ the translator budget, which is why so many documents link here rather than rest
 
 ## Request-copy accounting
 
+### DeepSeek image replay
+
+First-party DeepSeek Responses bodies above 40 MiB can use
+`src/server/responses/deepseek-image-files.ts` during credential-bound adapter construction.
+Explicit per-model `modelCapabilities.<id>.deepseekImageFiles: true` declarations give owner consent
+to separately persisted files; absent or `false` disables uploads. Only HTTPS api.deepseek.com
+Responses POSTs for opted-in models qualify.
+
+Old inline images become byte-identical Files references until the body is at most 32 MiB.
+Files request one-hour expiry. The 512-entry cache holds credential/image hashes and opaque ids,
+never plaintext credentials or images; expiry is at most 50 minutes and respects earlier server expiry.
+Partial successes survive until expiry and can be reused on retry with the same credential.
+Low-detail images stay inline; errors preserve client history and do not replay inference.
+
+A 128 MiB repair-input ceiling and two concurrent preparations bound the additional workspace.
+The translator budget observes the parsed string copy, conservative base64/decoded/Blob/multipart
+workspace and replacement serialization; all temporary observations release on success, failure
+and cancellation. These are externally capped observations, not permission to exceed arbitrary
+translator collector limits. The original request and final retained wire body retain their existing owners.
+
+Uploads use the selected provider transport, pacing and physical credential-generation fence.
+A queued dispatch rebuild already holds its enclosing provider concurrency lease: only that nested
+upload skips a second pacing acquisition, avoiding a limit-one deadlock without admitting a new turn.
+The existing final physical-send fence still guards inference. Caller cancellation and a 60-second
+upload deadline cover uploads and bounded response reads. Usage and client compaction stay truthful.
+
 The optional Advisor protocol guard follows the [Advisor retention contract](../advisor.md#optional-subsystem-boundary).
 Its raw leg, reconstruction and appended replay history use independent local counters, also
 charged to the request translator budget when supplied by delivery or empty-completion retry.
