@@ -226,6 +226,35 @@ describe("primeCodexPoolQuotas", () => {
     } finally { globalThis.fetch = originalFetch; }
   });
 
+  test("credit renewal pacing is per credential generation and coalesces concurrent sweeps (#7290 intake)", async () => {
+    const config = makeConfig({ creditCodexAccountIds: ["p1"] });
+    seedPoolAccount(config, "p1", "plus");
+    const now = Date.now();
+    setAccountQuotaFromParsed("p1", { shortPercent: 100, shortResetAt: now + 3_600_000,
+      shortObservedAt: now, credits: { hasCredits: true, balance: 5, allowed: true, observedAt: now - 360_000 } });
+    const originalFetch = globalThis.fetch;
+    const tokens: string[] = [];
+    try {
+      globalThis.fetch = (async (input, init) => {
+        expect(String(input)).toContain("/backend-api/wham/usage");
+        expect(init?.method ?? "GET").toBe("GET");
+        tokens.push(new Headers(init?.headers).get("authorization") ?? "");
+        return new Response(null, { status: 503 });
+      }) as typeof fetch;
+      // Two sweeps racing on one generation share one metadata read.
+      await Promise.all([primeCodexPoolQuotas(config, "credit-renewal"), primeCodexPoolQuotas(config, "credit-renewal")]);
+      expect(tokens).toEqual(["Bearer access-p1"]);
+      await primeCodexPoolQuotas(config, "credit-renewal");
+      expect(tokens).toHaveLength(1);
+      // Replacing the credential starts a new generation, which is not bound by the old failure.
+      saveCodexAccountCredential("p1", { accessToken: "access-p1-next", refreshToken: "refresh-p1-next",
+        expiresAt: Date.now() + 5 * 60_000, chatgptAccountId: "acct-p1" });
+      await primeCodexPoolQuotas(config, "credit-renewal");
+      expect(tokens).toEqual(["Bearer access-p1", "Bearer access-p1-next"]);
+      expect(isCodexAccountHeldForCredits(config, "p1", getAccountQuota("p1"), "plus", Date.now())).toBe(true);
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   test("startup may observe pending account quota without inference or validation", async () => {
     const config = makeConfig();
     seedPoolAccount(config, "pending", "pro");

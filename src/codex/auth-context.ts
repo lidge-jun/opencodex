@@ -1446,6 +1446,7 @@ async function resolveCodexAuthContextUnannotated(
       if (
         requestScopedMainCredential
         && fixedAccountId === undefined
+        && !(callerMatchesObservedMain(headers) && policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID))
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
       ) {
         return await resolveCallerOwnedMainContext();
@@ -1604,6 +1605,7 @@ async function resolveCodexAuthContextUnannotated(
       // alternate is eligible. A validated caller may still serve this request,
       // just as it can after an upstream rejection, without changing Pool state.
       if (requestScopedMainCredential && fixedAccountId === undefined
+        && !(callerMatchesObservedMain(headers) && policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID))
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
         && !callerIsCooledPoolAccount(headers, config, accountId)) {
         return await resolveCallerOwnedMainContext();

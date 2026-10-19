@@ -2431,3 +2431,20 @@ test("context Direct bearer admission uses real stored-main materialization and 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("pool exhaustion never falls back to an observed paused main caller", async () => {
+  const cfg = config();
+  cfg.codexAccounts = [];
+  cfg.pausedCodexAccountIds = [MAIN_CODEX_ACCOUNT_ID];
+  cfg.codexMainAccountHardLock = false;
+  observeMainQuotaIdentity("paused-main-account");
+  observeMainQuotaCredential("paused-main-bearer", "paused-main-account");
+  const headers = new Headers({ authorization: "Bearer paused-main-bearer", "chatgpt-account-id": "paused-main-account" });
+  await expect(resolveCodexAuthContext(headers, cfg, "pool", {
+    requestScopedMainCredential: true,
+  })).rejects.toBeInstanceOf(CodexMainProfileDrainingError);
+  // Direct remains caller-owned; the pause applies to Pool fallback, not unrelated callers.
+  expect(await resolveCodexAuthContext(headers, cfg, "direct", {
+    requestScopedMainCredential: true,
+  })).toMatchObject({ kind: "main", accountId: null });
+});
