@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { exitCodeAfterTempSweep, settleIsolatedTestRoot } from "../../scripts/test";
 import { removeTestTempTree } from "../../scripts/test-temp";
 import {
+  containedRunTemp,
   describeLockedTemp,
   omitProbeProcess,
   quarantineFinalEperm,
@@ -89,6 +90,17 @@ describe("final EPERM quarantine", () => {
     expect(quarantineFinalEperm(fixture.locked, eperm(), seen, env)).toBe(true);
     expect(seen.warnings.some(line => line.includes("not a contained temp subtree"))).toBe(false);
     expect(readdirSync(fixture.runTmp)).toContain(".trash-fixed");
+  });
+
+  test("containment resolves TEMP with the 8.3-expanding native resolver by default", () => {
+    const fixture = containedFixture();
+    const native = spyOn(realpathSync, "native");
+    try {
+      expect(containedRunTemp(fixture.env)).toBe(fixture.runTmp);
+      expect(native).toHaveBeenCalledWith(fixture.env.TEMP);
+    } finally {
+      native.mockRestore();
+    }
   });
 
   test("an earlier EPERM does not diagnose or move", () => {
