@@ -12,7 +12,8 @@ import { codexQuotaScopeForModel } from "../../codex/routing/health-store";
 import { getEligiblePoolAccounts } from "../../codex/routing/selection";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
-export type MainHardLockCallerCheck = (sourceModel: string) => Promise<boolean>;
+/** Resolves to a synchronous ownership proof, or null when the caller does not own the locked main. */
+export type MainHardLockCallerCheck = (sourceModel: string) => Promise<(() => boolean) | null>;
 
 function isConfiguredComboSelector(config: OcxConfig, modelId: string): boolean {
   const comboId = resolveComboId(config, modelId);
@@ -96,7 +97,9 @@ export async function applyMainHardLockFallbackOverride(
   if (accountMode === "direct") {
     // Direct may forward a different caller's healthy credential. Only stored-main substitution
     // or an observed-main match owes this lock. Recheck usage after the startup binding wait.
-    if (!callerCheck || !await callerCheck(parsed.model)) return null;
+    const stillOwnsLockedMain = callerCheck ? await callerCheck(parsed.model) : null;
+    // Everything from here to the rewrite is synchronous, so this proof cannot go stale before it.
+    if (!stillOwnsLockedMain?.()) return null;
     if (getMainAccountHardLockStatus(config, now ?? Date.now()).state !== "blocked") return null;
   } else {
     if (getMainAccountHardLockStatus(config, now ?? Date.now()).state !== "blocked") return null;

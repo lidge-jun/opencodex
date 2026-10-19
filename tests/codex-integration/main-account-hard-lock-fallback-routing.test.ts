@@ -3,6 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyMainHardLockFallbackOverride } from "../../src/server/responses/main-hard-lock-routing";
+import { mainHardLockFallbackCallerCheck } from "../../src/server/responses/core-auth";
+import type { HandleResponsesOptions } from "../../src/server/responses/core-options";
 import { resolveMainAccountHardLockFallback } from "../../src/codex/main-account-hard-lock";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaCredential, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, setAccountQuotaFromParsed, type StoredAccountQuota } from "../../src/codex/quota";
@@ -279,8 +281,40 @@ describe("applyMainHardLockFallbackOverride", async () => {
     // Direct fails closed without the caller ownership proof supplied by request preparation.
     expect(await applyMainHardLockFallbackOverride(directBody, directCfg, now)).toBeNull();
     expect(directBody.model).toBe("gpt-5.3");
-    expect(await applyMainHardLockFallbackOverride(directBody, directCfg, now, async () => true))
+    expect(await applyMainHardLockFallbackOverride(directBody, directCfg, now, async () => () => true))
       .toEqual({ sourceModel: "gpt-5.3", targetModel: "deepseek/deepseek-chat" });
+  });
+
++  test.each(["none", "identity", "bearer"] as const)("Direct ownership is rechecked after the async caller check (change: %s)", async change => {
+    observeMainQuotaCredential("fixture-caller-a", "fallback-account-a");
+    observe({ weeklyPercent: 100 });
+    const cfg = config({
+      providers: {
+        deepseek: { adapter: "openai-responses", authMode: "key", baseUrl: "https://deepseek.example.test/v1" },
+        openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      },
+      codexMainAccountHardLockFallback: FALLBACK,
+    } as Partial<OcxConfig>);
+    const req = new Request("http://127.0.0.1/v1/responses", { method: "POST",
+      headers: { authorization: "Bearer fixture-caller-a", "chatgpt-account-id": "fallback-account-a" } });
+    const body = { model: "gpt-5.3", reasoning: { effort: "high" } };
+    const pending = applyMainHardLockFallbackOverride(body, cfg, undefined,
+      mainHardLockFallbackCallerCheck(req, cfg, {} as HandleResponsesOptions));
+    // The replacement is blocked too, so only the ownership recheck can refuse the reroute.
+    queueMicrotask(() => {
+      if (change === "identity") {
+        observeMainQuotaIdentity("fallback-account-b");
+        observeMainQuotaCredential("fixture-caller-b", "fallback-account-b");
+        setAccountQuotaFromParsed("__main__", { weeklyPercent: 100 }, undefined, captureMainQuotaWriter("fallback-account-b")!);
+      } else if (change === "bearer") observeMainQuotaCredential("fixture-caller-a-rotated", "fallback-account-a");
+    });
+    const result = await pending;
+    if (change === "none") {
+      expect(result).toEqual({ sourceModel: "gpt-5.3", targetModel: "deepseek/deepseek-chat" });
+      return;
+    }
+    expect(result).toBeNull();
+    expect(body).toEqual({ model: "gpt-5.3", reasoning: { effort: "high" } });
   });
 
   test("only bare Codex-native selectors qualify", async () => {

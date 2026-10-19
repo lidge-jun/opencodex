@@ -1096,6 +1096,20 @@ export async function mainAccountHardLockAppliesToCaller(
 }
 
 /**
+ * Resolve ownership once, then hand back a synchronous proof. Main identity or its observed bearer
+ * can change across the await; the hard-lock reroute rechecks the proof with no await between it
+ * and the body rewrite, so a replacement main's lock never reroutes the original caller.
+ */
+export async function mainAccountHardLockCallerProof(
+  headers: Headers,
+  policy: CodexAuthPolicyConfig,
+  options: Parameters<typeof mainAccountHardLockAppliesToCaller>[2] = {},
+): Promise<(() => boolean) | null> {
+  if (!await mainAccountHardLockAppliesToCaller(headers, policy, options)) return null;
+  return options.substituteMainCredentialForDirect === true ? () => true : () => callerMatchesObservedMain(headers);
+}
+
+/**
  * Resolve the credential for one Codex turn. A main hard-lock reached through unpinned pool
  * selection is annotated with the earliest known pool recovery, so the refusal can name a retry
  * time that a sibling account may meet (#7046).

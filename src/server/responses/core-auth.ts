@@ -25,7 +25,7 @@ import {
   CodexAuthContextError,
   applyCodexAuthContextToProvider,
   stripCodexRuntimeProviderFields,
-  mainAccountHardLockAppliesToCaller,
+  mainAccountHardLockCallerProof,
 } from "../../codex/auth-context";
 import { codexAccountSelectionForTurn, tryClaimNativeMainProfileForTurn } from "../lifecycle";
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
@@ -596,15 +596,15 @@ export async function refreshNativeMainForwardAuth(args: {
 /** Inspect the original credential domain, before fallback changes the route or drops headers. */
 export function mainHardLockFallbackCallerCheck(
   req: Request, config: OcxConfig, options: HandleResponsesOptions,
-): (sourceModel: string) => Promise<boolean> {
+): (sourceModel: string) => Promise<(() => boolean) | null> {
   return async sourceModel => {
     let sourceRoute: ReturnType<typeof routeConcreteModel>;
     try { sourceRoute = routeConcreteModel(config, sourceModel); }
     // This preview cannot replace the normal routing phase's existing error response.
-    catch { return false; }
+    catch { return null; }
     const headers = codexRouteCredentialDomainHeaders(req, sourceRoute, options, false, config);
     const { substituteMainCredential } = codexRouteCredentialOwnership(headers, config, sourceRoute, options);
-    return mainAccountHardLockAppliesToCaller(headers, options.codexAuthPolicy ?? config, {
+    return mainAccountHardLockCallerProof(headers, options.codexAuthPolicy ?? config, {
       substituteMainCredentialForDirect: substituteMainCredential,
       signal: options.abortSignal ?? req.signal,
     });
