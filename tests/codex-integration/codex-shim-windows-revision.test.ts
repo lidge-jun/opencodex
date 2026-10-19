@@ -94,24 +94,24 @@ describe("obsolete Windows shims are upgraded", () => {
 describe("obsolete Windows refresh transaction never clobbers a concurrent replacement", () => {
   const leftovers = (wrapper: string) => fs.readdirSync(dir).filter(name => name.startsWith(`${basename(wrapper)}.ocx-`));
 
-  test("publishes the staged wrapper and leaves no staging files", () => {
+  test("publishes the rendered wrapper and leaves no staging files", () => {
     const wrapper = join(dir, "codex.cmd");
     fs.writeFileSync(wrapper, "@echo off\r\nrem obsolete\r\n");
     const observed = stableShimPathProbe(wrapper)!;
-    expect(refreshObsoleteWindowsShim(wrapper, observed, staged => fs.writeFileSync(staged, "current wrapper"))).toBe(true);
+    expect(refreshObsoleteWindowsShim(wrapper, observed, () => "current wrapper")).toBe(true);
     expect(fs.readFileSync(wrapper, "utf8")).toBe("current wrapper");
     expect(leftovers(wrapper)).toEqual([]);
   });
 
-  test("a replacement published after the probe is put back untouched and nothing is written", () => {
+  test("a replacement published after the probe is put back untouched and nothing is rendered", () => {
     const wrapper = join(dir, "codex.cmd");
     fs.writeFileSync(wrapper, "@echo off\r\nrem obsolete\r\n");
     const observed = stableShimPathProbe(wrapper)!;
     fs.unlinkSync(wrapper);
     fs.writeFileSync(wrapper, "replacement native launcher from a concurrent installer");
-    let wrote = false;
-    expect(refreshObsoleteWindowsShim(wrapper, observed, () => { wrote = true; })).toBe(false);
-    expect(wrote).toBe(false);
+    let rendered = false;
+    expect(refreshObsoleteWindowsShim(wrapper, observed, () => { rendered = true; return "current wrapper"; })).toBe(false);
+    expect(rendered).toBe(false);
     expect(fs.readFileSync(wrapper, "utf8")).toBe("replacement native launcher from a concurrent installer");
     expect(leftovers(wrapper)).toEqual([]);
   });
@@ -120,11 +120,38 @@ describe("obsolete Windows refresh transaction never clobbers a concurrent repla
     const wrapper = join(dir, "codex.ps1");
     fs.writeFileSync(wrapper, "# obsolete");
     const observed = stableShimPathProbe(wrapper)!;
-    expect(refreshObsoleteWindowsShim(wrapper, observed, staged => {
-      fs.writeFileSync(staged, "current wrapper");
+    expect(refreshObsoleteWindowsShim(wrapper, observed, () => {
       fs.writeFileSync(wrapper, "replacement published mid-refresh");
+      return "current wrapper";
     })).toBe(false);
     expect(fs.readFileSync(wrapper, "utf8")).toBe("replacement published mid-refresh");
     expect(leftovers(wrapper)).toEqual([]);
+  });
+
+  test.skipIf(process.platform === "win32")("a link planted at the stage path is never written through", () => {
+    const wrapper = join(dir, "codex.cmd");
+    fs.writeFileSync(wrapper, "@echo off\r\nrem obsolete\r\n");
+    const victim = join(dir, "unrelated-launcher");
+    fs.writeFileSync(victim, "unrelated launcher bytes");
+    const staged = `${wrapper}.ocx-refresh-planted.cmd`;
+    fs.symlinkSync(victim, staged);
+    const observed = stableShimPathProbe(wrapper)!;
+    expect(refreshObsoleteWindowsShim(wrapper, observed, () => "current wrapper", staged)).toBe(false);
+    expect(fs.readFileSync(victim, "utf8")).toBe("unrelated launcher bytes");
+    expect(fs.lstatSync(staged).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(wrapper, "utf8")).toBe("@echo off\r\nrem obsolete\r\n");
+  });
+
+  test("a partial sibling upgrade resumes automatically instead of deferring forever", () => {
+    const cmd = join(dir, "codex.cmd"), ps1 = join(dir, "codex.ps1");
+    const wrappers = [cmd, ps1].map(wrapperPath => ({ originalPath: wrapperPath, wrapperPath, backupPath: `${wrapperPath}.opencodex-real` }));
+    for (const file of wrappers) fs.writeFileSync(file.backupPath, "native fixture launcher");
+    fs.writeFileSync(cmd, buildWindowsCodexShim(wrappers[0]!.backupPath, "C:\\bun.exe", "C:\\cli.ts", "process"));
+    fs.writeFileSync(ps1, previousTemplate("ps1", wrappers[1]!.backupPath));
+    fs.writeFileSync(join(dir, "codex-shim.json"), JSON.stringify({ platform: "win32", ...wrappers[0], wrappers }));
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} }).status).toBe("restored");
+    expectCurrent("ps1", ps1, wrappers[1]!.backupPath);
+    expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} }).status).toBe("healthy");
   });
 });

@@ -1,59 +1,115 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, linkSync, renameSync, unlinkSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { extname } from "node:path";
-import { sameFingerprintAfterRename, shimPathFingerprint, type StableShimPathProbe } from "./shim-fingerprint";
+import { sameFingerprint, sameFingerprintAfterRename, shimPathFingerprint, type ShimPathFingerprint, type StableShimPathProbe } from "./shim-fingerprint";
+
+interface FileIdentity { dev: bigint; ino: bigint }
+
+function entryIs(path: string, identity: FileIdentity): boolean {
+  try {
+    const entry = lstatSync(path, { bigint: true });
+    return !entry.isSymbolicLink() && entry.isFile() && entry.dev === identity.dev && entry.ino === identity.ino;
+  } catch {
+    return false;
+  }
+}
+
+/** Create `path` exclusively (never through an existing entry or link) and return the written file's identity. */
+function createExclusive(path: string, content: string): FileIdentity {
+  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
+    | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW);
+  const fd = openSync(path, flags, 0o644);
+  try {
+    writeFileSync(fd, content, "utf8");
+    const stat = fstatSync(fd, { bigint: true });
+    return { dev: stat.dev, ino: stat.ino };
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /**
- * Replace an owned, obsolete Windows wrapper without ever truncating or replacing a file someone
- * else published at the same path (an npm or version-manager install racing this refresh).
+ * Replace an owned, obsolete Windows wrapper without ever truncating, replacing or writing through
+ * a file someone else published (an npm or version-manager install racing this refresh, or a link
+ * planted beside the wrapper).
  *
  * 1. Move the observed wrapper aside and prove the moved file is the one that was probed; a
  *    different file means a concurrent replacement, which is put back untouched.
- * 2. Render the current wrapper into a staged sibling with the same extension.
- * 3. Publish with a hard link, which fails instead of replacing when the path is occupied again.
- *    A concurrent publisher then keeps the path, and only our own obsolete copy is discarded.
+ * 2. Create the stage exclusively under an unpredictable name and record its identity. An existing
+ *    entry, including a planted link, makes creation fail instead of being written through.
+ * 3. Publish with a hard link, which fails instead of replacing when the path is occupied again,
+ *    and only while the stage is still the file this refresh created.
  *
- * Returns true only when the current wrapper was published. Any filesystem that refuses hard links
- * leaves the obsolete wrapper restored and the refresh deferred.
+ * Every cleanup is bound to identity: only the stage this refresh created and only the moved copy
+ * of the observed wrapper are ever unlinked. Returns true only when the current wrapper was
+ * published; a filesystem that refuses hard links leaves the obsolete wrapper restored and the
+ * refresh deferred.
  */
 export function refreshObsoleteWindowsShim(
   wrapperPath: string,
   observed: StableShimPathProbe,
-  writeStaged: (stagedPath: string) => void,
+  render: () => string,
+  /** Test seam only: a fixed stage path, so a planted entry can be placed where the stage goes. */
+  stagedPathForTests?: string,
 ): boolean {
-  const tag = randomUUID().slice(0, 8);
   const extension = extname(wrapperPath);
-  const aside = `${wrapperPath}.ocx-obsolete-${tag}${extension}`;
-  const staged = `${wrapperPath}.ocx-refresh-${tag}${extension}`;
-  const discard = (path: string): void => { try { unlinkSync(path); } catch { /* already gone */ } };
+  const aside = `${wrapperPath}.ocx-obsolete-${randomUUID()}${extension}`;
+  const staged = stagedPathForTests ?? `${wrapperPath}.ocx-refresh-${randomUUID()}${extension}`;
+  let moved: ShimPathFingerprint | null = null;
+  const discardAside = (): void => {
+    const current = shimPathFingerprint(aside);
+    if (moved && current && sameFingerprint(current, moved)) { try { unlinkSync(aside); } catch { /* already gone */ } }
+  };
   /** Put the moved file back only onto an empty path; an occupied path keeps its new owner. */
   const restoreAside = (): void => {
     if (existsSync(wrapperPath)) return;
-    try { linkSync(aside, wrapperPath); discard(aside); } catch { /* the aside copy stays recoverable */ }
+    try { linkSync(aside, wrapperPath); } catch { return; /* the aside copy stays recoverable */ }
+    try { unlinkSync(aside); } catch { /* the restored link keeps the content */ }
   };
 
   try { renameSync(wrapperPath, aside); } catch { return false; }
-  const moved = shimPathFingerprint(aside);
+  moved = shimPathFingerprint(aside);
   if (!moved || !sameFingerprintAfterRename(observed.fingerprint, moved)) {
     restoreAside();
     return false;
   }
+  let created: FileIdentity;
   try {
-    writeStaged(staged);
+    created = createExclusive(staged, render());
   } catch (error) {
-    discard(staged);
     restoreAside();
+    if ((error as NodeJS.ErrnoException).code === "EEXIST" || (error as NodeJS.ErrnoException).code === "ELOOP") return false;
     throw error;
+  }
+  const discardStaged = (): void => {
+    if (entryIs(staged, created)) { try { unlinkSync(staged); } catch { /* already gone */ } }
+  };
+  if (!entryIs(staged, created)) {
+    restoreAside();
+    return false;
   }
   try {
     linkSync(staged, wrapperPath);
   } catch (error) {
-    discard(staged);
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") discard(aside);
+    discardStaged();
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") discardAside();
     else restoreAside();
     return false;
   }
-  discard(staged);
-  discard(aside);
+  if (!entryIs(wrapperPath, created)) {
+    // The stage was swapped between the check and the link. Withdraw only the link this call made
+    // to that swapped file (it still shares the stage's identity); a later replacement of the
+    // wrapper path is someone else's and stays.
+    try {
+      const published = lstatSync(wrapperPath, { bigint: true });
+      if (entryIs(staged, { dev: published.dev, ino: published.ino })) {
+        unlinkSync(wrapperPath);
+        restoreAside();
+      }
+    } catch { /* nothing to withdraw */ }
+    return false;
+  }
+  discardStaged();
+  discardAside();
   return true;
 }

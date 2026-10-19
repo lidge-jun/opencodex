@@ -350,24 +350,22 @@ function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry
  * updater's wrapper can carry them, and a replacement landing between the write
  * and the observation is otherwise indistinguishable from our own file.
  */
+/** The Windows wrapper for `wrapperPath`'s flavor (.ps1, .cmd/.bat, or extensionless Git-Bash sh). */
+function windowsShimContent(wrapperPath: string, realCodexPath: string, runtime?: DurableBunRuntime): string {
+  const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
+  const lower = wrapperPath.toLowerCase();
+  // UTF-8 BOM: Windows PowerShell 5.1 decodes BOM-less .ps1 files in the ANSI
+  // codepage, which mangles non-ASCII paths embedded in the shim.
+  if (lower.endsWith(".ps1")) return `\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli, bunRuntimeSource)}`;
+  if (lower.endsWith(".cmd") || lower.endsWith(".bat")) return buildWindowsCodexShim(realCodexPath, bun, cli, bunRuntimeSource);
+  // Extensionless Git-Bash sh launcher: sh shim with forward-slash paths.
+  return buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), bunRuntimeSource, gitBashPath(serviceApiTokenFilePath()));
+}
+
 function writeShim(wrapperPath: string, realCodexPath: string, runtime?: DurableBunRuntime): { dev: number; ino: number } | undefined {
   const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
   if (process.platform === "win32") {
-    const lower = wrapperPath.toLowerCase();
-    if (lower.endsWith(".ps1")) {
-      // UTF-8 BOM: Windows PowerShell 5.1 decodes BOM-less .ps1 files in the ANSI
-      // codepage, which mangles non-ASCII paths embedded in the shim.
-      writeFileSync(wrapperPath, `\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli, bunRuntimeSource)}`, "utf8");
-    } else if (lower.endsWith(".cmd") || lower.endsWith(".bat")) {
-      writeFileSync(wrapperPath, buildWindowsCodexShim(realCodexPath, bun, cli, bunRuntimeSource), "utf8");
-    } else {
-      // Extensionless Git-Bash sh launcher: sh shim with forward-slash paths.
-      writeFileSync(
-        wrapperPath,
-        buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), bunRuntimeSource, gitBashPath(serviceApiTokenFilePath())),
-        "utf8",
-      );
-    }
+    writeFileSync(wrapperPath, windowsShimContent(wrapperPath, realCodexPath, runtime), "utf8");
     return undefined;
   } else {
     // Stage the wrapper as its own inode and rename it into place, so ownership
@@ -517,9 +515,7 @@ function refreshShimFile(file: ShimFileState, runtime: DurableBunRuntime): boole
   if (process.platform === "win32" && existsSync(file.wrapperPath) && isShim(file.wrapperPath) && hasUsableBackingPath(file)) {
     const probe = stableShimPathProbe(file.wrapperPath);
     if (probe && probe.prefix.includes(SHIM_MARKER) && !isCurrentShimProbe(probe, "win32")) {
-      return refreshObsoleteWindowsShim(file.wrapperPath, probe, staged => {
-        writeShim(staged, file.realPath ?? file.backupPath, runtime);
-      });
+      return refreshObsoleteWindowsShim(file.wrapperPath, probe, () => windowsShimContent(file.wrapperPath, file.realPath ?? file.backupPath, runtime));
     }
   }
   return false;
@@ -1163,7 +1159,10 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
 
   if (replacementProbes.size === 0 && obsoleteShimProbes.size === 0) return { status: "healthy" };
   if (!options.enabled()) return { status: "disabled" };
-  if (files.length > 1 && (healthyCount > 0 || (replacementProbes.size > 0 && obsoleteShimProbes.size > 0))) {
+  // Windows current + obsolete siblings (a partial revision upgrade) resume: only the obsolete
+  // wrappers are refreshed, so a transient publish failure cannot block recovery forever.
+  const revisionOnlyMix = state.platform === "win32" && replacementProbes.size === 0;
+  if (files.length > 1 && ((healthyCount > 0 && !revisionOnlyMix) || (replacementProbes.size > 0 && obsoleteShimProbes.size > 0))) {
     return {
       status: "deferred",
       message: "Codex shim auto-restore deferred because tracked launcher siblings are in a mixed shim/replacement state.",
