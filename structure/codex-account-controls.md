@@ -103,6 +103,11 @@ protects:
 - A malformed section (blank or padded model, undeclared effort) disables the reroute entirely —
   the same disable-don't-widen reading as the compaction override — while the load and write
   boundaries report the malformation. The lock's own refusal behavior is untouched either way.
+- Before rewriting, concrete targets resolve against the current configuration through the
+  shared chosen-target check. Unavailable targets and qualified selectors that only reach the
+  terminal default provider retain the source lock's refusal. Bare default targets, declared
+  slash-containing model ids, configured combos and policy profiles keep their ordinary routing
+  semantics; policies retain request-evidence evaluation at dispatch preparation.
 
 The dashboard row mirrors the shadow-call row: the model pick, the effort and the switch each
 save immediately, and the switch writes `enabled: false` — a remembered pause that keeps the

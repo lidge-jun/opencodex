@@ -57,7 +57,7 @@ function observe(quota: Omit<StoredAccountQuota, "updatedAt">): void {
 }
 
 function config(overrides: Partial<OcxConfig> = {}): OcxConfig {
-  return { providers: {}, codexAccounts: [], ...overrides } as OcxConfig;
+  return { providers: { deepseek: { adapter: "openai-responses", authMode: "key", baseUrl: "https://deepseek.example.test/v1" } }, codexAccounts: [], ...overrides } as OcxConfig;
 }
 
 function withPoolAccount(target: OcxConfig): OcxConfig {
@@ -265,6 +265,7 @@ describe("applyMainHardLockFallbackOverride", async () => {
     deleteAllScopedHealth("pool-a");
     const directCfg = withPoolAccount(config({
       providers: {
+        deepseek: { adapter: "openai-responses", authMode: "key", baseUrl: "https://deepseek.example.test/v1" },
         openai: {
           adapter: "openai-responses",
           authMode: "forward",
@@ -327,6 +328,90 @@ describe("applyMainHardLockFallbackOverride", async () => {
     expect(await applyMainHardLockFallbackOverride([], cfg)).toBeNull();
     expect(await applyMainHardLockFallbackOverride({ model: "" }, cfg)).toBeNull();
     expect(await applyMainHardLockFallbackOverride({ model: 42 }, cfg)).toBeNull();
+  });
+
+  test("unavailable chosen targets keep the blocked source and reasoning intact", () => {
+    observe({ weeklyPercent: 100 });
+    const gateway = { adapter: "openai-responses", authMode: "key", baseUrl: "https://gateway.example.test/v1" } as const;
+    for (const target of ["private/secret-model", "former/secret-model", "combo/removed", "policy/removed", "retired-account/gpt-5.3"]) {
+      for (const providers of [{ gateway }, {}]) {
+        const cfg = config({ providers, defaultProvider: "gateway", codexMainAccountHardLockFallback: { model: target, reasoningEffort: "low" } } as Partial<OcxConfig>);
+        const body = { model: "gpt-5.3", reasoning: { effort: "high" } };
+        expect(applyMainHardLockFallbackOverride(body, cfg)).toBeNull();
+        expect(body).toEqual({ model: "gpt-5.3", reasoning: { effort: "high" } });
+      }
+    }
+    const cfg = config({ providers: { gateway, private: { ...gateway, disabled: true } }, defaultProvider: "gateway", codexMainAccountHardLockFallback: { model: "private/secret-model" } } as Partial<OcxConfig>);
+    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
+  });
+
+  test("target admission is rechecked after provider removal, re-addition and alias changes", () => {
+    observe({ weeklyPercent: 100 });
+    const provider = { adapter: "openai-responses", authMode: "key", baseUrl: "https://chosen.example.test/v1", alias: "chosen" } as const;
+    const cfg = config({ providers: { private: provider }, defaultProvider: "private", codexMainAccountHardLockFallback: { model: "chosen/secret-model" } } as Partial<OcxConfig>);
+    const apply = () => applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg);
+    expect(apply()).not.toBeNull();
+    delete cfg.providers.private;
+    expect(apply()).toBeNull();
+    cfg.providers.private = provider;
+    expect(apply()).not.toBeNull();
+    cfg.providers.private = { ...provider, alias: "renamed" };
+    expect(apply()).toBeNull();
+    cfg.codexMainAccountHardLockFallback = { model: "private/secret-model" };
+    expect(apply()).not.toBeNull();
+  });
+
+  test("bare fallback and explicitly declared slash model ids stay valid", () => {
+    observe({ weeklyPercent: 100 });
+    const provider = { adapter: "openai-responses", authMode: "key", baseUrl: "https://chosen.example.test/v1", models: ["vendor/native-model"] } as const;
+    for (const model of ["bare-model", "vendor/native-model", "private/vendor/native-model"]) {
+      const cfg = config({ providers: { private: { ...provider, models: [...provider.models] } }, defaultProvider: "private", codexMainAccountHardLockFallback: { model } } as Partial<OcxConfig>);
+      expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)?.targetModel).toBe(model);
+    }
+  });
+
+  test("configured combo aliases, policy profiles and account namespaces keep their admission", () => {
+    observe({ weeklyPercent: 100 });
+    const cfg = config({
+      providers: { private: { adapter: "openai-responses", authMode: "key", baseUrl: "https://chosen.example.test/v1" },
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" } },
+      combos: { rescue: { alias: "chosen-combo", targets: [{ provider: "private", model: "secret-model" }] } },
+      routingProfiles: { rescue: { alias: "chosen-policy", candidates: [{ provider: "private", model: "secret-model" }], require: { tools: true } } },
+      codexAccountNamespaces: { pinned: "pool-a" },
+    } as Partial<OcxConfig>);
+    for (const model of ["combo/rescue", "chosen-combo", "policy/rescue", "chosen-policy", "pinned/gpt-5.3"]) {
+      cfg.codexMainAccountHardLockFallback = { model };
+      expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)?.targetModel).toBe(model);
+    }
+  });
+
+  test("a stale qualified fallback never sends to the enabled default provider", async () => {
+    observeMainQuotaCredential("fixture-caller", "fallback-account-a");
+    observe({ weeklyPercent: 100 });
+    const cfg = config({
+      providers: {
+        openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" },
+        gateway: { adapter: "openai-responses", authMode: "key", apiKey: "fixture-key", baseUrl: "https://gateway.example.test/v1" },
+      },
+      defaultProvider: "gateway",
+      codexMainAccountHardLockFallback: { model: "private/secret-model" },
+    } as Partial<OcxConfig>);
+    let sends = 0;
+    const sentUrls: string[] = [];
+    globalThis.fetch = (async (input: unknown) => {
+      sends += 1;
+      sentUrls.push(String(input));
+      return Response.json({ id: "resp_fixture", status: "completed", output: [] });
+    }) as typeof fetch;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer fixture-caller", "chatgpt-account-id": "fallback-account-a" },
+      body: JSON.stringify({ model: "gpt-5.3", stream: false, input: "fixture" }),
+    }), cfg, { model: "", provider: "" });
+    await response.text();
+    expect(sentUrls).toEqual([]);
+    expect(sends).toBe(0);
+    expect(response.status).toBeGreaterThanOrEqual(400);
   });
 
   test("handleResponses strips caller credentials, preserves requestedModel on combo fallback, and yields to shadow/compaction turns", async () => {

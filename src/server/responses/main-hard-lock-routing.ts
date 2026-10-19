@@ -1,6 +1,8 @@
 import type { OcxConfig } from "../../types";
 import { resolveComboId } from "../../combos";
-import { isBareOpenAiFamilyModel } from "../../router";
+import { isBareOpenAiFamilyModel, previewRouteModel } from "../../router";
+import { resolveChosenTarget } from "./shadow-target-availability";
+import { getRoutingProfile, resolvePolicyProfileId } from "../../routing/profile";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
   getMainAccountHardLockStatus,
@@ -99,6 +101,20 @@ export async function applyMainHardLockFallbackOverride(
   } else {
     if (getMainAccountHardLockStatus(config, now ?? Date.now()).state !== "blocked") return null;
     if (getEligiblePoolAccounts(config, undefined, now ?? Date.now(), codexQuotaScopeForModel(parsed.model)).length > 0) return null;
+  }
+
+  // Combos and policies keep their own dispatch admission and declared failover/evidence.
+  // Other chosen targets must resolve now; a removed qualifier cannot become a default send.
+  const policyId = resolvePolicyProfileId(config, fallback.model);
+  if (!isConfiguredComboSelector(config, fallback.model)
+    && !(policyId && getRoutingProfile(config, policyId))) {
+    try {
+      const target = resolveChosenTarget(fallback.model, model => previewRouteModel(config, model));
+      if ("unavailable" in target) return null;
+    } catch {
+      // An unavailable target keeps the source lock's refusal without touching the body.
+      return null;
+    }
   }
 
   parsed.raw.model = fallback.model;
