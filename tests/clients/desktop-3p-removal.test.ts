@@ -478,6 +478,10 @@ for (const timing of ["descriptor", "path recheck"] as const) {
 
 // Windows timestamp update/share semantics are not a POSIX ctime receipt. Keep the
 // portable injected comparisons above; execute this real timestamp case on POSIX.
+// Re-applying the same atime/mtime moves ctime only when the kernel clock has ticked since the
+// last metadata change; on coarse-tick filesystems one immediate call often leaves it unchanged.
+// Repeat the identical utimes until ctime has really advanced, so the reader always faces a real
+// ctime-only transition and never a no-op that would rightly read back "{}".
 test.skipIf(process.platform === "win32")("bounded reader refuses a real ctime-only change after read on POSIX", () => {
   const path = join(fixtureHome, "real-ctime.json"); writeFileSync(path, "{}");
   filesystem.utimesSync(path, 1, 1);
@@ -485,13 +489,23 @@ test.skipIf(process.platform === "win32")("bounded reader refuses a real ctime-o
   let changed = false;
   const reading = spyOn(filesystem, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
     const count = read(fd, buffer, offset, length, position);
-    if (!changed) { filesystem.utimesSync(path, 1, 1); changed = true; }
+    if (!changed) {
+      const deadline = Date.now() + 5_000;
+      do filesystem.utimesSync(path, 1, 1);
+      while (filesystem.statSync(path, { bigint: true }).ctimeNs === before.ctimeNs && Date.now() < deadline);
+      changed = filesystem.statSync(path, { bigint: true }).ctimeNs !== before.ctimeNs;
+    }
     return count;
   });
-  try { expect(() => readDesktopLibraryBytes(path)).toThrow("desktop_config_not_regular"); }
+  let outcome: unknown;
+  try { outcome = readDesktopLibraryBytes(path); } catch (error) { outcome = error; }
   finally { reading.mockRestore(); }
+  // Assert the precondition first: a rejection is only owed once ctime really moved.
+  expect(changed).toBe(true);
+  expect(outcome).toBeInstanceOf(Error);
+  expect((outcome as Error).message).toContain("desktop_config_not_regular");
   const after = filesystem.statSync(path, { bigint: true });
-  expect(changed).toBe(true); expect(after.ctimeNs).not.toBe(before.ctimeNs);
+  expect(after.ctimeNs).not.toBe(before.ctimeNs);
   for (const key of ["dev", "ino", "size", "mode", "mtimeNs"] as const) expect(after[key]).toBe(before[key]);
   expect(readFileSync(path, "utf8")).toBe("{}");
 });
