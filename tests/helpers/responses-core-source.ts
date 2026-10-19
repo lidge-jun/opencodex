@@ -56,6 +56,9 @@ export const RESPONSES_CORE_MODULES = [
   "account-auto-pause-recovery.ts",
   "passthrough-execution.ts",
   "passthrough-dispatch.ts",
+  // Reached from passthrough-dispatch.ts: exact-URL OpenGateway empty-completion recovery.
+  "passthrough-completion.ts",
+  "opengateway-completion-guard.ts",
   "passthrough-observations.ts",
   "passthrough-key-rotation.ts",
   // Reached from passthrough/adapter dispatch, compact and runTurn: local spend-ledger refusal mapping.
