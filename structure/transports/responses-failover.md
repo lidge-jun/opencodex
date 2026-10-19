@@ -569,12 +569,13 @@ The resend charges the root workflow send counter once without a second request-
 
 ## Kiro account-profile hop
 
-`comboFailureDecision` takes an optional `failedAdapter` (the adapter of the target that failed;
-`executeComboResponses` passes `config.providers[target.provider].adapter`). Only `failedAdapter === "kiro"`
+`comboFailureDecision` takes an optional `failedAdapter` (the adapter the failed leg actually resolved;
+`executeComboResponses` passes the child log's `providerAdapter`, so a `kiro` provider whose model is routed
+through another wire by `modelAdapters` does not qualify, and an unresolved leg passes nothing). Only `failedAdapter === "kiro"`
 may hop on an HTTP 400 that `isKiroAccountProfileRefusal` recognises (`ValidationException` plus
 "Improperly formed request" in the parsed Kiro body, reached after the account layer has no sibling login
 left to rotate to). Any other provider, or a caller that does not pass the adapter, keeps the generic
 terminal `invalid_request_error` stop, so an invalid payload is never resent to another declared target.
-Coverage: `tests/codex-integration/combos.test.ts` (unit, with non-Kiro and unrelated-field negatives) and
+Coverage: `tests/codex-integration/combos-kiro-profile-hop.test.ts` (unit, with non-Kiro and unrelated-field negatives) and
 `tests/server/server-kiro-refusal-e2e.test.ts` (account rotation, combo exhaustion hop, non-Kiro 400 stop,
-malformed-payload stop).
+malformed-payload stop, `modelAdapters`-rerouted Kiro provider stop).

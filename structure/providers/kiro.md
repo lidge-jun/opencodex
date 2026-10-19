@@ -81,7 +81,7 @@ and the message "Improperly formed request" is the `profile` kind: the account l
 sibling login like any other account-scoped refusal, and both tokens are required in the parsed
 fields. `isKiroAccountProfileRefusal` applies the same rule to combo failure text (adapter-normalized
 `Kiro invalid request: ...` prose or a JSON body, with or without the `Provider error 400: ` frame).
-It is only consulted when the failed target's adapter is `kiro` (see
+It is only consulted when the adapter the failed combo leg resolved is `kiro` (see
 [combo failover](../transports/responses-failover.md)); coverage is
 `tests/providers/kiro/kiro-refusal.test.ts` and `tests/server/server-kiro-refusal-e2e.test.ts`. `src/providers/kiro-usage.ts` records monthly exhaustion only for the sent
 credential generation and login identity, independently of quota observation time. A

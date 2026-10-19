@@ -326,6 +326,32 @@ describe("Kiro refusal recovery through Responses", () => {
     } finally { await server.stop(true); }
   });
 
+  test("combo never hops a Kiro-configured target whose model is routed through another adapter", async () => {
+    await seed();
+    const routed = comboConfig("kiro");
+    routed.providers.kiro = { ...routed.providers.kiro!, modelAdapters: { "claude-sonnet-4.5": "openai-chat" } };
+    saveConfig(routed);
+    let routedSends = 0; let fallbackSends = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("https://runtime.us-east-1.kiro.dev/") && !KIRO_URL(url)) {
+        routedSends++;
+        return new Response(IMPROPER, { status: 400, headers: { "content-type": "application/json" } });
+      }
+      if (url.startsWith("https://fallback.example/")) { fallbackSends++; return fallbackOk(); }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const response = await comboPost(server);
+      await response.text();
+      // Same-provider account moves may still run; only the cross-target hop is fenced here.
+      expect(routedSends).toBeGreaterThan(0);
+      expect(response.status).toBe(400);
+      expect(fallbackSends).toBe(0);
+    } finally { await server.stop(true); }
+  });
+
 
   test("Kiro web-search sidecar completion clears B's older verdict after rotated refusal", async () => {
     const [a, b] = await seed();
