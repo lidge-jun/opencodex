@@ -304,6 +304,18 @@ describe("translator budget", () => {
     budget.dispose();
   });
 
+  test("an adapter-raised translator overflow keeps the usage the turn already consumed", async () => {
+    const usage = { inputTokens: 120, outputTokens: 30 };
+    const reported: unknown[] = [];
+    async function* events(): AsyncGenerator<AdapterEvent> {
+      yield { type: "error", status: 413, code: "translation_buffer_limit", message: "too big", usage };
+    }
+    const text = await textWithin(bridgeToResponsesSSE(events(), "test/model", undefined, undefined, undefined,
+      undefined, 2_000, { onUsage: value => reported.push(value) }));
+    expect(text).toContain('"code":"translation_buffer_limit"');
+    expect(text).toContain('"input_tokens":120');
+    expect(reported).toEqual([usage]);
+  });
   test("client cancellation invokes the bridge upstream cancel boundary once", async () => {
     let cancels = 0;
     async function* events(): AsyncGenerator<AdapterEvent> {

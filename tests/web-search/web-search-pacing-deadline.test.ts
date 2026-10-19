@@ -4,6 +4,7 @@ import { createAdapterPhysicalSend } from "../../src/adapters/physical-send";
 import { sleepWithAbort } from "../../src/lib/upstream-retry";
 import {
   providerRequestPacingStatus,
+  RequestPacingQueueOverloadError,
   resetProviderRequestPacingForTest,
   waitForProviderRequestSlot,
 } from "../../src/providers/request-pacing";
@@ -164,6 +165,14 @@ describe("web-search pacing and response-header deadline", () => {
       expect(providerRequestPacingStatus(NAME, provider)).toMatchObject({ queued: 0, inFlight: 0 });
     });
   }
+
+  test("a pacing-queue overload passes through instead of becoming 502 Provider unreachable", async () => {
+    const overload = new RequestPacingQueueOverloadError(NAME, "queue_full", 2);
+    const pending = run(fetcher(() => Promise.reject(new Error("must not send"))), {
+      adapter: { ...adapter(), fetchResponse: () => Promise.reject(overload) },
+    }).then(response => response.status, (error: unknown) => error);
+    expect((await settle(pending)).value).toBe(overload);
+  });
 
   test("client cancellation removes a queued send and leaves the next slot available", async () => {
     const held = await waitForProviderRequestSlot(NAME, provider, MODEL);
