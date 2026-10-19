@@ -323,7 +323,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // Returns "terminate" when a pending call cannot be dispatched, so every flush site
       // stops the turn instead of emitting an unusable call. `closeToolCalls()` runs first,
       // so budget reservations are released for every pending call even on the early return.
-      const flushToolCalls = function* (): Generator<AdapterEvent, "continue" | "terminate"> {
+      const flushToolCalls = function* (terminal = true): Generator<AdapterEvent, "continue" | "terminate"> {
         const calls = closeToolCalls();
         for (const call of calls) {
           // Ingest already proved `name` is a string; the typeof guard keeps this branch
@@ -338,7 +338,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
         const references = reconcileStructuredToolCalls(calls.map(call => ({ wireName: call.name, restoredName: toolNames.restore(call.name), argumentsText: call.args, freeformTool: freeformTools.get(call.name) })), toolCallContent.current(), !toolCallContent.releasedAnswerText && /(?:^|[/-])mimo-v2(?:\.|$)/i.test(lastRequestedModelId ?? ""));
         calls.forEach((call, index) => { call.args = references[index]!.argumentsText; });
-        yield* toolCallContent.recoverStandalone(calls.length === 0, () => `call_${++toolCallSeq}`, name => toolNames.restore(name));
+        yield* toolCallContent.recoverStandalone(calls.length === 0 && terminal, () => `call_${++toolCallSeq}`, name => toolNames.restore(name));
         yield* toolCallContent.drain(references);
         for (const call of calls) {
           if (!call.id) call.id = `call_${++toolCallSeq}`;
@@ -658,7 +658,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           yield* terminateWithError({ type: "error", message: "upstream stream ended without a terminal signal ([DONE] or finish_reason) — possible truncation" });
           return;
         }
-        if ((yield* flushToolCalls()) === "terminate") return;
+        if ((yield* flushToolCalls(sawFinish)) === "terminate") return; // A cut stream never synthesizes a bare call.
         const stopReason = stopReasonFor(finishReason);
         yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
       } catch (error) {

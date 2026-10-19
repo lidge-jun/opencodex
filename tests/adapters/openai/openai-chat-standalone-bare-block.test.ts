@@ -207,6 +207,17 @@ test.each(["other-model", "mimo-v2.6-pro"])("streamed %s keeps identified contro
   expect(budget.snapshot().currentBytes).toBe(0);
 });
 
+test("a stream cut without a terminal signal never executes a bare block", async () => {
+  const adapter = withTestTranslatorBudget(createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://gateway.example.test/v1", apiKey: "key" }));
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: true, options: {},
+    context: { messages: [{ role: "user", content: "Use exec", timestamp: 0 }], tools: [exec] } });
+  const events: AdapterEvent[] = [];
+  // No finish_reason and no [DONE]: the connection closed after a complete-looking block.
+  for await (const event of adapter.parseStream(new Response(frame({ choices: [{ delta: { content: "Running.\n" + block() } }] })))) events.push(event);
+  expect(events.filter(event => event.type === "tool_call_start")).toEqual([]);
+  expect(visible(events)).toBe("Running.\n" + block());
+});
+
 test("64k adjacent bare blocks scan and fail closed within a bounded time", () => {
   const content = block().repeat(64_000);
   const start = performance.now();
