@@ -711,6 +711,7 @@
     "codex-systemd-env-probe.test.ts": "codex-integration",
     "codex-shim-autorestore.test.ts": "codex-integration",
     "codex-shim-destroyed-probe.test.ts": "codex-integration",
+    "codex-shim-bypass-token.test.ts": "codex-integration",
     "codex-shim-ensure-failure.test.ts": "codex-integration",
     "codex-shim-readiness.test.ts": "codex-integration",
     "codex-shim-standalone.test.ts": "codex-integration",
