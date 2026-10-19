@@ -132,4 +132,76 @@ describe("codex auth account collision", () => {
       "pool-reauth",
     )).toEqual({ collision: false });
   });
+
+  test("rejects pool registration matching the main Codex login in the same plan bucket and email", async () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: "not-a-jwt",
+        account_id: "main-chatgpt-account",
+      },
+    }));
+    saveConfig({
+      port: 10100,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [],
+    } as OcxConfig);
+
+    const result = checkAccountIdCollision("main-chatgpt-account", "main@example.test", undefined);
+    expect(result.collision).toBe(true);
+    if (result.collision) {
+      expect(result.reason).toContain("native Codex main account");
+    }
+  });
+
+  test("allows different workspace member sharing the main login chatgpt account id", async () => {
+    const mainJwt = `header.${Buffer.from(JSON.stringify({
+      "https://api.openai.com/profile": { email: "main@example.test" },
+      "https://api.openai.com/auth": { chatgpt_plan_type: "team" },
+    })).toString("base64url")}.sig`;
+
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: mainJwt,
+        account_id: "shared-team-account",
+      },
+    }));
+    saveConfig({
+      port: 10100,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [],
+    } as OcxConfig);
+
+    const result = checkAccountIdCollision("shared-team-account", "other-colleague@example.test", "team");
+    expect(result).toEqual({ collision: false });
+
+    const dupResult = checkAccountIdCollision("shared-team-account", "main@example.test", "team");
+    expect(dupResult.collision).toBe(true);
+    if (dupResult.collision) {
+      expect(dupResult.reason).toContain("native Codex main account");
+    }
+  });
+
+  test("excludeAccountId skips main account collision when __main__ is excluded", () => {
+    writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+      tokens: {
+        access_token: "not-a-jwt",
+        account_id: "main-chatgpt-account",
+      },
+    }));
+    saveConfig({
+      port: 10100,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [],
+    } as OcxConfig);
+
+    expect(checkAccountIdCollision(
+      "main-chatgpt-account",
+      "main@example.test",
+      undefined,
+      "__main__",
+    )).toEqual({ collision: false });
+  });
 });
