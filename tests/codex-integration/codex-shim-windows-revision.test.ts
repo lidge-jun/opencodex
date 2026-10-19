@@ -8,8 +8,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { autoRestoreCodexShim, installCodexShim } from "../../src/codex/shim";
+import { stableShimPathProbe } from "../../src/codex/shim-fingerprint";
+import { refreshObsoleteWindowsShim } from "../../src/codex/shim-windows-refresh";
 import { buildWindowsCodexShim, buildWindowsPowerShellCodexShim, WINDOWS_SHIM_REVISION_MARKER } from "../../src/codex/shim-templates";
 import { isolateCodexShimEnvironment } from "../helpers/codex-shim-install-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -87,4 +89,42 @@ describe("obsolete Windows shims are upgraded", () => {
       expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} }).status).toBe("healthy");
     });
   }
+});
+
+describe("obsolete Windows refresh transaction never clobbers a concurrent replacement", () => {
+  const leftovers = (wrapper: string) => fs.readdirSync(dir).filter(name => name.startsWith(`${basename(wrapper)}.ocx-`));
+
+  test("publishes the staged wrapper and leaves no staging files", () => {
+    const wrapper = join(dir, "codex.cmd");
+    fs.writeFileSync(wrapper, "@echo off\r\nrem obsolete\r\n");
+    const observed = stableShimPathProbe(wrapper)!;
+    expect(refreshObsoleteWindowsShim(wrapper, observed, staged => fs.writeFileSync(staged, "current wrapper"))).toBe(true);
+    expect(fs.readFileSync(wrapper, "utf8")).toBe("current wrapper");
+    expect(leftovers(wrapper)).toEqual([]);
+  });
+
+  test("a replacement published after the probe is put back untouched and nothing is written", () => {
+    const wrapper = join(dir, "codex.cmd");
+    fs.writeFileSync(wrapper, "@echo off\r\nrem obsolete\r\n");
+    const observed = stableShimPathProbe(wrapper)!;
+    fs.unlinkSync(wrapper);
+    fs.writeFileSync(wrapper, "replacement native launcher from a concurrent installer");
+    let wrote = false;
+    expect(refreshObsoleteWindowsShim(wrapper, observed, () => { wrote = true; })).toBe(false);
+    expect(wrote).toBe(false);
+    expect(fs.readFileSync(wrapper, "utf8")).toBe("replacement native launcher from a concurrent installer");
+    expect(leftovers(wrapper)).toEqual([]);
+  });
+
+  test("a launcher published while staging keeps the path; only our obsolete copy is discarded", () => {
+    const wrapper = join(dir, "codex.ps1");
+    fs.writeFileSync(wrapper, "# obsolete");
+    const observed = stableShimPathProbe(wrapper)!;
+    expect(refreshObsoleteWindowsShim(wrapper, observed, staged => {
+      fs.writeFileSync(staged, "current wrapper");
+      fs.writeFileSync(wrapper, "replacement published mid-refresh");
+    })).toBe(false);
+    expect(fs.readFileSync(wrapper, "utf8")).toBe("replacement published mid-refresh");
+    expect(leftovers(wrapper)).toEqual([]);
+  });
 });

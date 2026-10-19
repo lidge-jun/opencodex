@@ -56,6 +56,7 @@ import {
   type UnixShimProbeResult,
 } from "./shim-probe";
 import { tryAcquireShimRestoreLock } from "./shim-restore-lock";
+import { refreshObsoleteWindowsShim } from "./shim-windows-refresh";
 import {
   isWindowsInteropDir,
   isExecutableCodexCandidate,
@@ -511,12 +512,14 @@ function refreshShimFile(file: ShimFileState, runtime: DurableBunRuntime): boole
     return true;
   }
   // An owned Windows wrapper from an older template revision (e.g. one that loads the service
-  // token before honoring OCX_SHIM_BYPASS) is rewritten in place over the same backing launcher.
+  // token before honoring OCX_SHIM_BYPASS) is replaced over the same backing launcher through an
+  // ownership-checked stage-and-link transaction that never clobbers a concurrent replacement.
   if (process.platform === "win32" && existsSync(file.wrapperPath) && isShim(file.wrapperPath) && hasUsableBackingPath(file)) {
     const probe = stableShimPathProbe(file.wrapperPath);
     if (probe && probe.prefix.includes(SHIM_MARKER) && !isCurrentShimProbe(probe, "win32")) {
-      writeShim(file.wrapperPath, file.realPath ?? file.backupPath, runtime);
-      return true;
+      return refreshObsoleteWindowsShim(file.wrapperPath, probe, staged => {
+        writeShim(staged, file.realPath ?? file.backupPath, runtime);
+      });
     }
   }
   return false;
@@ -945,6 +948,12 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
     }
     let refreshed = false;
     for (const file of files) refreshed = refreshShimFile(file, runtime) || refreshed;
+    // A Windows refresh that refused to publish over a concurrent replacement is not a success.
+    if (process.platform === "win32" && files.some(file => {
+      if (file.preserveOnly) return false;
+      const probe = stableShimPathProbe(file.wrapperPath);
+      return !probe || !probe.prefix.includes(SHIM_MARKER) || !isCurrentShimProbe(probe, "win32");
+    })) return { installed: false, message: "Codex shim refresh deferred because a tracked launcher changed during the refresh." };
     const allInstalled = files.every(file => file.preserveOnly
       ? existsSync(file.backupPath) && !existsSync(file.originalPath)
       : existsSync(file.wrapperPath)
