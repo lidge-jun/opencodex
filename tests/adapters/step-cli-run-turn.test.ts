@@ -842,3 +842,90 @@ describe("StepCode held-result delivery ordering", () => {
     expect(second.some(event => event.type === "error")).toBe(false);
   });
 });
+
+describe("StepCode turn ownership", () => {
+  function captureCall(session: FakeSession): void {
+    session.stream = [
+      requestFrame("perm-1", "permission.request", { toolName: "ocx__shell", toolUseId: "perm-1" }),
+      requestFrame("tool-1", "sdk_tool.invoke", {
+        serverName: "ocx",
+        toolName: "shell",
+        input: { cmd: "echo LIVE_BRIDGE_OK" },
+        toolUseId: "call-9",
+      }),
+    ];
+  }
+
+  test("a held call followed by user text with no tool result is refused and the text still runs", async () => {
+    // Regression: `heldResult!.toolCallId` dereferenced an undefined result when the transcript had no
+    // toolResult at all, so a client that cancelled its first tool and typed a new message threw before
+    // the held frame was released, and the outer catch misreported it as conversation_busy.
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+    captureCall(session);
+    await adapter.runTurn!(parsed(USER_ASK), THREAD_META, () => {});
+
+    const second: AdapterEvent[] = [];
+    session.stream = [TURN_COMPLETE];
+    await adapter.runTurn!(
+      parsed([...USER_ASK, { role: "user", content: "never mind, do this", timestamp: 2 }]),
+      THREAD_META,
+      event => second.push(event),
+    );
+
+    expect(second.some(event => event.type === "error")).toBe(false);
+    expect(second.find(event => event.type === "done")).toMatchObject({ stopReason: "stop" });
+    expect(session.delivered).toHaveLength(1);
+    expect(session.delivered[0]?.id).toBe("tool-1");
+    expect((session.delivered[0]?.result as { isError?: boolean }).isError).toBe(true);
+    expect(session.interrupts).toEqual(["q_1"]);
+    expect(session.queries).toHaveLength(2);
+    expect(session.inputs.at(-1)?.text).toContain("never mind, do this");
+    expect(session.closed).toBe(false);
+  });
+
+  test("a turn refused at the queue cap leaves the active turn and the accepted queue intact", async () => {
+    // Regression: the cap refusal shared a catch with post-ownership failures and closed the session
+    // unconditionally, disconnecting the turn that owned it and every caller already queued behind it.
+    const session = new FakeSession();
+    const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+    const ask = (text: string) => parsed([{ role: "user", content: text, timestamp: 0 }]);
+
+    session.stream = [];
+    const activeEvents: AdapterEvent[] = [];
+    const active = adapter.runTurn!(ask("active"), THREAD_META, event => activeEvents.push(event));
+    await Bun.sleep(10);
+    expect(session.queries).toHaveLength(1);
+
+    const queuedEvents: AdapterEvent[][] = [[], []];
+    const queued = queuedEvents.map((events, index) =>
+      adapter.runTurn!(ask(`queued-${index}`), THREAD_META, event => events.push(event)),
+    );
+    await Bun.sleep(10);
+
+    const rejectedEvents: AdapterEvent[] = [];
+    await adapter.runTurn!(ask("rejected"), THREAD_META, event => rejectedEvents.push(event));
+    expect(rejectedEvents).toEqual([
+      expect.objectContaining({ type: "error", status: 409, code: "step_cli_conversation_busy", retryable: true }),
+    ]);
+    // The refusal touched nothing the accepted turns depend on.
+    expect(session.closed).toBe(false);
+    expect(session.queries).toHaveLength(1);
+    expect(session.interrupts).toEqual([]);
+
+    // Drain: the active turn, then each queued turn in arrival order, all on the same open session.
+    for (let turn = 0; turn < 3; turn += 1) {
+      session.emitNow(TURN_COMPLETE);
+      await Bun.sleep(10);
+    }
+    await Promise.all([active, ...queued]);
+
+    for (const events of [activeEvents, ...queuedEvents]) {
+      expect(events.some(event => event.type === "done")).toBe(true);
+      expect(events.some(event => event.type === "error")).toBe(false);
+    }
+    expect(session.queries).toHaveLength(3);
+    expect(session.inputs.map(input => input.text.includes("rejected"))).toEqual([false, false, false]);
+    expect(session.closed).toBe(false);
+  });
+});

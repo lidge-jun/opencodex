@@ -86,6 +86,16 @@ interface ConversationLock {
 const conversationLocks = new Map<string, ConversationLock>();
 
 /**
+ * The caller was turned away at the queue cap and never owned the conversation.
+ *
+ * A distinct class so the adapter can tell an admission refusal (the current owner and its queue are
+ * untouched and must stay that way) from a failure raised by a turn that did own the conversation.
+ */
+export class ConversationQueueFullError extends Error {
+  override readonly name = "ConversationQueueFullError";
+}
+
+/**
  * Exported for its regression test: the queue cap is the only path in this adapter that refuses
  * rather than degrades, and it has to be observable to be trusted.
  */
@@ -97,7 +107,7 @@ const conversationLocks = new Map<string, ConversationLock>();
 export async function withConversationLock<T>(handle: string, task: () => Promise<T>): Promise<T> {
   const existing = conversationLocks.get(handle);
   if (existing && existing.waiters >= MAX_QUEUED_TURNS + 1) {
-    throw new Error(
+    throw new ConversationQueueFullError(
       `StepCode serves one turn per conversation at a time and ${existing.waiters} are already queued for this one.`,
     );
   }

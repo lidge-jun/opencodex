@@ -2,7 +2,7 @@ import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../ty
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../base";
 import { getConfigDir } from "../../config/paths";
 import { CODING_AGENT_TOOL_LIMITS } from "../coding-agent/tool-catalog";
-import { conversationHandle, withConversationLock } from "./conversation";
+import { ConversationQueueFullError, conversationHandle, withConversationLock } from "./conversation";
 import { STEP_CLI_HOST, STEP_CLI_TOOL_SERVER } from "./constants";
 import { sessionHandlers } from "./events";
 import { mapSessionFailure, refusal } from "./errors";
@@ -182,18 +182,18 @@ export function createStepCliAdapter(
           }),
         );
       } catch (error) {
-        // The queue cap is a refusal, not a crash: every other failure on this route becomes an error
-        // event, and letting this one escape as a rejected promise would hand the caller a generic
-        // failure instead of a retryable, explained refusal.
-        emit(
-          refusal(
-            error instanceof Error ? error.message : String(error),
-            409,
-            "step_cli_conversation_busy",
-            "rate_limit_error",
-            true,
-          ),
-        );
+        if (error instanceof ConversationQueueFullError) {
+          // The queue cap is a refusal, not a crash, and this caller never owned the conversation: the
+          // session it was handed is the one serving the accepted turn and its queue. Closing it here
+          // would disconnect every one of them to turn away a single extra request.
+          emit(
+            refusal(error.message, 409, "step_cli_conversation_busy", "rate_limit_error", true),
+          );
+          return;
+        }
+        // Anything else was raised by this turn after it owned the conversation, so the session state
+        // is no longer trustworthy and is closed.
+        emit(mapSessionFailure(error));
         await session.close();
       }
     },
@@ -252,7 +252,9 @@ async function driveTurn(
       // Matched by CALL ID, never by position: a client may follow a tool call with a new user
       // message instead of a result, in which case the newest result in the transcript belongs to an
       // earlier call and delivering it would answer the wrong question.
-      const heldMatches = Boolean(held) && heldResult!.toolCallId === held!.callId;
+      // A client that cancels the call and sends only new user text has no tool result in its
+      // transcript at all, so `heldResult` can be undefined while `held` exists.
+      const heldMatches = held !== undefined && heldResult !== undefined && heldResult.toolCallId === held.callId;
       // This turn IS the answer to a captured call: the model already has the instruction and is
       // mid-query, so nothing is prompted again.
       const continuedQuery = Boolean(held) && heldMatches;
