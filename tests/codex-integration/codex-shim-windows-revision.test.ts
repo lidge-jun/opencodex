@@ -5,7 +5,7 @@
  * backing launcher, never report them healthy or "already installed". No Windows shell runs here:
  * process.platform is overridden and the wrappers are only written and read.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -153,5 +153,73 @@ describe("obsolete Windows refresh transaction never clobbers a concurrent repla
     expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} }).status).toBe("restored");
     expectCurrent("ps1", ps1, wrappers[1]!.backupPath);
     expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} }).status).toBe("healthy");
+  });
+});
+
+describe("round-4 identity bindings", () => {
+  const obsoleteCmd = "@echo off\r\nrem obsolete\r\n";
+
+  test.skipIf(process.platform === "win32")("a stage swapped for a link just before publication is withdrawn", () => {
+    const wrapper = join(dir, "codex.cmd"), victim = join(dir, "unrelated-launcher.cmd");
+    fs.writeFileSync(wrapper, obsoleteCmd);
+    fs.writeFileSync(victim, "unrelated launcher bytes");
+    const observed = stableShimPathProbe(wrapper)!;
+    const link = fs.linkSync;
+    let swapped = false;
+    const spy = spyOn(fs, "linkSync").mockImplementation(((source: fs.PathLike, destination: fs.PathLike) => {
+      if (!swapped && String(source).includes(".ocx-refresh-")) {
+        fs.unlinkSync(source); fs.symlinkSync(victim, source); swapped = true;
+      }
+      return link(source, destination);
+    }) as typeof fs.linkSync);
+    try {
+      expect(refreshObsoleteWindowsShim(wrapper, observed, () => "current wrapper")).toBe(false);
+    } finally { spy.mockRestore(); }
+    expect(swapped).toBe(true);
+    expect(fs.readFileSync(victim, "utf8")).toBe("unrelated launcher bytes");
+    expect(fs.lstatSync(wrapper).isSymbolicLink()).toBe(false);
+    expect(fs.statSync(wrapper).ino).not.toBe(fs.statSync(victim).ino);
+    expect(fs.readFileSync(wrapper, "utf8")).toBe(obsoleteCmd);
+  });
+
+  test("an aside substituted before a failed publication is never restored as the launcher", () => {
+    const wrapper = join(dir, "codex.cmd");
+    fs.writeFileSync(wrapper, obsoleteCmd);
+    const observed = stableShimPathProbe(wrapper)!;
+    const link = fs.linkSync;
+    let substituted = "";
+    const spy = spyOn(fs, "linkSync").mockImplementation(((source: fs.PathLike, destination: fs.PathLike) => {
+      if (!substituted && String(source).includes(".ocx-refresh-")) {
+        substituted = fs.readdirSync(dir).find(name => name.includes(".ocx-obsolete-"))!;
+        fs.unlinkSync(join(dir, substituted));
+        fs.writeFileSync(join(dir, substituted), "foreign aside bytes");
+        throw Object.assign(new Error("transient sharing failure"), { code: "EACCES" });
+      }
+      return link(source, destination);
+    }) as typeof fs.linkSync);
+    try {
+      expect(refreshObsoleteWindowsShim(wrapper, observed, () => "current wrapper")).toBe(false);
+    } finally { spy.mockRestore(); }
+    expect(substituted).not.toBe("");
+    expect(fs.existsSync(wrapper)).toBe(false);
+    expect(fs.readFileSync(join(dir, substituted), "utf8")).toBe("foreign aside bytes");
+  });
+
+  test("a current sibling replaced during the stability wait defers without adopting it", () => {
+    const cmd = join(dir, "codex.cmd"), ps1 = join(dir, "codex.ps1");
+    const wrappers = [cmd, ps1].map(wrapperPath => ({ originalPath: wrapperPath, wrapperPath, backupPath: `${wrapperPath}.opencodex-real` }));
+    for (const file of wrappers) fs.writeFileSync(file.backupPath, "native fixture launcher");
+    fs.writeFileSync(cmd, buildWindowsCodexShim(wrappers[0]!.backupPath, "C:\\bun.exe", "C:\\cli.ts", "process"));
+    const obsolete = previousTemplate("ps1", wrappers[1]!.backupPath);
+    fs.writeFileSync(ps1, obsolete);
+    fs.writeFileSync(join(dir, "codex-shim.json"), JSON.stringify({ platform: "win32", ...wrappers[0], wrappers }));
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {
+      fs.unlinkSync(cmd);
+      fs.writeFileSync(cmd, "replacement native launcher");
+    } }).status).toBe("deferred");
+    expect(fs.readFileSync(cmd, "utf8")).toBe("replacement native launcher");
+    expect(fs.readFileSync(wrappers[0]!.backupPath, "utf8")).toBe("native fixture launcher");
+    expect(fs.readFileSync(ps1, "utf8")).toBe(obsolete);
   });
 });

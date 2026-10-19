@@ -56,7 +56,7 @@ import {
   type UnixShimProbeResult,
 } from "./shim-probe";
 import { tryAcquireShimRestoreLock } from "./shim-restore-lock";
-import { refreshObsoleteWindowsShim } from "./shim-windows-refresh";
+import { refreshAdmittedWindowsShims, refreshObsoleteWindowsShim } from "./shim-windows-refresh";
 import {
   isWindowsInteropDir,
   isExecutableCodexCandidate,
@@ -1122,7 +1122,7 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
   const replacementProbes = new Map<string, StableShimPathProbe>();
   const obsoleteShimProbes = new Map<string, StableShimPathProbe>();
   const seen = new Set<string>();
-  let healthyCount = 0;
+  const currentShimProbes = new Map<string, StableShimPathProbe>();
   for (const file of files) {
     if (seen.has(file.wrapperPath)) return { status: "ineligible" };
     seen.add(file.wrapperPath);
@@ -1145,7 +1145,7 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
         obsoleteShimProbes.set(file.wrapperPath, probe);
         continue;
       }
-      healthyCount += 1;
+      currentShimProbes.set(file.wrapperPath, probe);
       continue;
     }
     // A surviving backup would otherwise let the replacement path below wrap the
@@ -1162,7 +1162,7 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
   // Windows current + obsolete siblings (a partial revision upgrade) resume: only the obsolete
   // wrappers are refreshed, so a transient publish failure cannot block recovery forever.
   const revisionOnlyMix = state.platform === "win32" && replacementProbes.size === 0;
-  if (files.length > 1 && ((healthyCount > 0 && !revisionOnlyMix) || (replacementProbes.size > 0 && obsoleteShimProbes.size > 0))) {
+  if (files.length > 1 && ((currentShimProbes.size > 0 && !revisionOnlyMix) || (replacementProbes.size > 0 && obsoleteShimProbes.size > 0))) {
     return {
       status: "deferred",
       message: "Codex shim auto-restore deferred because tracked launcher siblings are in a mixed shim/replacement state.",
@@ -1189,8 +1189,9 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
           || !sameStableShimPathProbe(firstProbe, secondProbe)) return { status: "deferred" };
       }
       if (state.platform === "win32") {
-        const refreshed = installCodexShimInternal({ runtime, runtimeAdmitted: true, allowFreshInstall: false });
-        return refreshed.installed ? { status: "restored", message: refreshed.message } : { status: "deferred" };
+        const realFor = (path: string) => { const file = files.find(entry => entry.wrapperPath === path)!; return file.realPath ?? file.backupPath; };
+        return refreshAdmittedWindowsShims(obsoleteShimProbes, currentShimProbes, path => windowsShimContent(path, realFor(path), runtime))
+          ? { status: "restored", message: `Upgraded Codex autostart shim at ${[...obsoleteShimProbes.keys()].join(", ")}.` } : { status: "deferred" };
       }
       const result = refreshObsoleteUnixShims(files);
       return result.installed
