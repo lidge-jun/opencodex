@@ -255,3 +255,33 @@ describe("round-5 availability", () => {
     expect(fs.readdirSync(dir).filter(name => name.includes(".ocx-"))).toEqual([]);
   });
 });
+
+describe("descriptor hygiene", () => {
+  test("a failing stat of the moved wrapper closes its descriptor and restores the launcher", () => {
+    const wrapper = join(dir, "codex.cmd");
+    const obsolete = "@echo off\r\nrem obsolete\r\n";
+    fs.writeFileSync(wrapper, obsolete);
+    const observed = stableShimPathProbe(wrapper)!;
+    const open = fs.openSync, close = fs.closeSync, fstat = fs.fstatSync;
+    const opened = new Set<number>();
+    const opening = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+      const fd = open(...args); opened.add(fd); return fd;
+    }) as typeof fs.openSync);
+    const closing = spyOn(fs, "closeSync").mockImplementation(((fd: number) => { opened.delete(fd); return close(fd); }) as typeof fs.closeSync);
+    let injected = false;
+    const stating = spyOn(fs, "fstatSync").mockImplementation(((...args: Parameters<typeof fs.fstatSync>) => {
+      if (!injected && fs.readdirSync(dir).some(name => name.includes(".ocx-obsolete-"))) {
+        injected = true;
+        throw Object.assign(new Error("injected fstat failure"), { code: "EIO" });
+      }
+      return (fstat as (...a: unknown[]) => unknown)(...args);
+    }) as typeof fs.fstatSync);
+    try {
+      expect(refreshObsoleteWindowsShim(wrapper, observed, () => "current wrapper")).toBe(false);
+    } finally { stating.mockRestore(); closing.mockRestore(); opening.mockRestore(); }
+    expect(injected).toBe(true);
+    expect(opened.size).toBe(0);
+    expect(fs.readFileSync(wrapper, "utf8")).toBe(obsolete);
+    expect(fs.readdirSync(dir).filter(name => name.includes(".ocx-"))).toEqual([]);
+  });
+});

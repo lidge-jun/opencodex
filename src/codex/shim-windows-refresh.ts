@@ -74,13 +74,14 @@ function holdExisting(path: string): HeldFile | null {
     : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
   let fd: number;
   try { fd = openSync(path, flags); } catch { return null; }
-  const stat = fstatSync(fd, { bigint: true });
-  const identity: EntryIdentity = { dev: stat.dev, ino: stat.ino, link: false };
-  if (!stat.isFile() || !same(identity, entry) || !entryIs(path, identity)) {
-    try { closeSync(fd); } catch { /* already closed */ }
-    return null;
-  }
-  return { fd, identity };
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    const identity: EntryIdentity = { dev: stat.dev, ino: stat.ino, link: false };
+    if (stat.isFile() && same(identity, entry) && entryIs(path, identity)) return { fd, identity };
+  } catch { /* unreadable descriptor: treated like a mismatch */ }
+  // Every unsuccessful path releases the descriptor; the caller then hands the moved file back.
+  try { closeSync(fd); } catch { /* already closed */ }
+  return null;
 }
 
 /**
