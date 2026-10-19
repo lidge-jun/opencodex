@@ -2,6 +2,7 @@ import { recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
+import { usesApiKeyAccount } from "../../providers/label";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { classifyAnthropic429 } from "../../oauth/anthropic-rate-limit-policy";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
@@ -400,7 +401,7 @@ export async function prepareAdapterExchange(
   const autoPauseEnabled = config.providers[route.providerName]?.accountAutoPause?.enabled === true;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   let billingRecoveryActive = false;
-  const genericRefetchCountsSends = () => sendBudgetState.adapterSendBudget?.spendEnforced === true
+  const genericRefetchCountsSends = () => options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
     || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
@@ -762,7 +763,9 @@ export async function prepareAdapterExchange(
             : undefined;
           let refetchPermitUsed = false;
           const refetchReporter = refetchAllowance ? transientSendReporter(refetchAllowance.permit) : undefined;
-          const deferredRefetch = billingPoolRequest && refetchReporter ? deferPhysicalSendReporter(refetchReporter) : undefined;
+          const deferredRefetch = (billingPoolRequest || options.comboAttempt) && refetchReporter
+            ? deferPhysicalSendReporter(refetchReporter) : undefined;
+          const pendingKeyMetadata = deferredRefetch && usesApiKeyAccount(route.provider);
           try {
             return await refetchWithPolicy(
               recoveryKind => {
@@ -771,14 +774,14 @@ export async function prepareAdapterExchange(
                 });
                 // Prepare key metadata before the guarded transport commits its attempt;
                 // counters and permits still wait for the physical executor after pacing.
-                if (deferredRefetch) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
+                if (pendingKeyMetadata) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
                 const confirmDispatch = () => {
                   if (refetchAllowance?.permit && !refetchPermitUsed) {
                     if (!refetchAllowance.permit.use()) throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
                     refetchPermitUsed = true;
                   }
-                  if (!deferredRefetch) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
-                  // Eligible pools confirm after pacing at the physical executor; legacy
+                  if (!pendingKeyMetadata) transportState.noteRoutedAttemptSend(retryEstimate, recoveryKind ?? recovery);
+                  // Counted Combo/pool sends confirm at the physical executor; legacy
                   // helper paths retain their existing thunk admission boundary.
                   onDispatch?.();
                   if (preserveFailureResponse) replacementAdmitted = true;
@@ -891,7 +894,7 @@ export async function prepareAdapterExchange(
       const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
       const hop = reserveCredentialHop("auth-recovery",
         `${route.providerName}|${route.modelId}|antigravity-auth`,
-        !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null));
+        !adapterOwnsDispatch && genericRefetchCountsSends());
       if (!hop.allowed) return null;
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextId);
@@ -991,7 +994,7 @@ export async function prepareAdapterExchange(
               const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
               const hop = reserveCredentialHop("auth-recovery",
                 `${route.providerName}|${route.modelId}|terminal-refresh-account`,
-                !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null));
+                !adapterOwnsDispatch && genericRefetchCountsSends());
               if (hop.allowed) {
                 try {
                   const admitted = await applyFailoverSnapshot(alternate);
@@ -1434,9 +1437,9 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
-          // Transient and opted-in reset helpers report physical sends; an adapter-owned
+          // Counted generic helpers report physical sends; an adapter-owned
           // ladder settles its own booking.
-          !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null),
+          !adapterOwnsDispatch && genericRefetchCountsSends(),
         );
         if (!hop.allowed) break;
         const nextAccountId = rotateGenericOAuthAccountOnRefusal(
@@ -1538,9 +1541,9 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|adapter-recovery-oauth-429`,
-          // Transient and opted-in reset helpers report physical sends; an adapter-owned
+          // Counted generic helpers report physical sends; an adapter-owned
           // ladder settles its own booking.
-          !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null),
+          !adapterOwnsDispatch && genericRefetchCountsSends(),
         );
         if (!hop.allowed) break;
         const nextAccountId = rotateGenericOAuthAccountOn429(
@@ -1659,7 +1662,7 @@ export async function prepareAdapterExchange(
         const hop = reserveCredentialHop(
           "auth-recovery",
           `${route.providerName}|${route.modelId}|adapter-recovery-oauth-verify`,
-          !adapterOwnsDispatch && (transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null),
+          !adapterOwnsDispatch && genericRefetchCountsSends(),
         );
         if (!hop.allowed) break;
         // Auth-refusal rotation, not the rate-limit one: a verification refusal

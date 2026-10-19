@@ -11,6 +11,9 @@ That reservation occupies the shared ceiling immediately; it is not a completed 
 `comboInitialSend` hands only that child's single-use permit to `request-send-budget.ts`.
 `initialSendAllowance` includes that one prepaid send while `remainingBaseSends` keeps every
 booking spent. Other pending external bookings never become this child's free headroom.
+Generic Combo rebuilds use the same shared allowance even without an opt-in retry or spend
+policy. Their reporter settles at physical executor admission after pacing, using the exact
+prepaid recovery permit when present; unsent repairs and credential hops remain refundable.
 Configured transient totals subtract an owner-local counter updated by physical receipts, adapter
 observers and retry-helper reports, not shared-ledger deltas. Earlier Combo targets, later bookings
 by other owners and the child's unsent booking do not consume that total; the shared ceiling and
