@@ -206,15 +206,18 @@ test("a rotation-helper throw after hop reservation releases the permit and stil
     charge: options => { if (options?.deferDispatch === true && sentTokens.length > 0) hopCharges += 1; return true; },
     refund: () => { refunds += 1; },
   });
-  let outcome: Response | undefined;
-  try { outcome = await post(config, budget); } catch { /* a helper throw may surface as a rejection */ }
+  let thrown: unknown;
+  try { await post(config, budget); } catch (error) { thrown = error; }
+  // The helper's throw is the request's rejection itself: the policy-fallback seam converts
+  // only pacing overloads, so nothing synthesizes a 5xx here and post() must not resolve.
+  expect(thrown).toBeInstanceOf(Error);
+  expect((thrown as Error).message).toBe("synthetic pool-config read failure");
   // The hop really was reserved before the throw, and its release refunded the charge:
   // the counter equals the one physical send that actually left.
   expect(sentTokens).toHaveLength(1);
   expect(hopCharges).toBe(1);
-  expect(refunds).toBeGreaterThanOrEqual(1);
+  expect(refunds).toBe(1);
   expect(budget.used).toBe(sentTokens.length);
-  if (outcome) expect(outcome.status).toBeGreaterThanOrEqual(500);
 }, 20_000);
 
 test("every pool account spent still cools the combo target", async () => {
