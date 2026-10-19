@@ -168,8 +168,8 @@ Identity and consumer aggregation follow the [account attribution contract](../d
 When a serving-route change leaves a tool-bearing history whose reasoning has neither plaintext nor
 usable opaque content, a target that requires plaintext reasoning replay is ineligible. Failover
 continues to the next target; exhausting the eligible targets returns `400 target_incompatible`.
-Opaque reasoning minted by another provider or account is never forwarded, and plaintext is never
-fabricated.
+Foreign opaque reasoning is never forwarded or rewritten into plaintext; a turn with no reasoning item
+gets only the fixed placeholder in [tool-loop continuation](native-reasoning-retention.md#combo-tool-loop-continuation).
 
 ## Combo streaming commit boundary
 

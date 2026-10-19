@@ -115,6 +115,10 @@ Vertex prefers Codex's opaque `prompt_cache_key` for session identity and falls 
 first-user-message derivation for clients that omit it; only the fixed hash is retained.
 Both streaming and non-streaming responses feed the store; request compilation happens before replay
 so matching uses the provider-visible tool name.
+A first `functionCall` that still has no real signature after replay receives the Gemini-only
+`skip_thought_signature_validator` sentinel through `applyAntigravityThoughtSignatureFallback`, on
+Antigravity, Vertex and AI Studio alike. AI Studio gained it for combo hops that hand Gemini a call
+another model issued (#7298); non-Gemini model ids never receive it.
 
 `src/adapters/openai-responses/passthrough.ts` removes item-level `extra_content` through
 `stripProviderInputItemMetadata` in `src/adapters/openai-responses/request-strips.ts` only for

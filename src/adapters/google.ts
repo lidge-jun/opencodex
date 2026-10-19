@@ -1254,6 +1254,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
       reportToolSchemaLoss(compiled.toolSchemaLossReport);
       restoreGoogleToolName = compiled.restoreToolName;
+      // A functionCall issued by another model (a combo hop, #7298) has no Gemini signature, and
+      // Gemini 3 refuses the turn without one. The same Gemini-only sentinel CCA and Vertex
+      // apply; a real signature carried by history always wins.
+      if (Array.isArray((compiled.body as { contents?: unknown[] }).contents)) {
+        applyAntigravityThoughtSignatureFallback(routedModelId, (compiled.body as { contents: unknown[] }).contents);
+      }
       return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
     },
 

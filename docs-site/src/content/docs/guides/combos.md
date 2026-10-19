@@ -710,6 +710,22 @@ When routing Claude Code to the canonical ChatGPT Codex backend, OpenCodex remov
 
 A combo can also advance after an intact HTTP 400 `invalid_request_error` that specifically rejects `user`, reports `unsupported_value` for `reasoning.effort`/`reasoning_effort`, or reports `param: input` with an exact model-scoped `does not support image inputs` rejection. A route that refuses the request's media with code `unsupported_input_modality`, such as image input sent to a CLI provider route without a verified multimodal contract, advances the same way. This is a mismatch for that request, not evidence that the target is unhealthy, so it records no cooldown. This compatibility recovery does not silently change `none` into a different effort or broaden this exception to arbitrary invalid requests. Policy refusals, cancellation and already-committed output remain non-replayable. A single-target request still returns an unresolved upstream rejection.
 
+## Tool calls stay on one target
+
+When a model asks your client to run a tool, the request that returns the tool result finishes the
+same assistant turn. OpenCodex sends that request to the target that issued the tool call, as long
+as the target is still enabled, still in the combo, and out of cooldown. This holds for every
+strategy, including JEV, which skips its decision for that request. The next user message chooses a
+target normally.
+
+Tracking uses the client's thread or session id, so a client that sends neither gets a normal pick.
+If the original target is unavailable or fails, the combo fails over as usual, and the new target
+receives the earlier tool calls in a form it accepts. DeepSeek thinking models get a one-space
+reasoning placeholder for a tool call that another model issued without reasoning. Gemini gets
+Google's documented signature placeholder. Anthropic gets a plain tool call and result. Earlier
+versions could send DeepSeek a bare tool call here and fail with `The reasoning_text in the
+thinking mode must be passed back to the API`.
+
 ## Default reasoning effort
 
 `defaultEffort` supplies a configured effort when the selected target has a known, nonempty supported ladder. With the default `defaultEffortMode: "fallback"`, an explicit caller effort keeps precedence. `defaultEffortMode: "force"` overrides a valid caller effort with the configured default; it requires a valid, non-null `defaultEffort` and can increase cost and latency. Force mode is an explicit operator choice through combo configuration or management.
