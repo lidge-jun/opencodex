@@ -26,6 +26,7 @@ import {
 } from "./shim-templates";
 import {
   hasUsableBackingPath,
+  isCurrentShimProbe,
   isCurrentUnixShimProbe,
   isHealthyShimProbe,
   isVersionManagerOwnedCodexPath,
@@ -509,6 +510,15 @@ function refreshShimFile(file: ShimFileState, runtime: DurableBunRuntime): boole
     writeShim(file.wrapperPath, file.realPath ?? file.backupPath, runtime);
     return true;
   }
+  // An owned Windows wrapper from an older template revision (e.g. one that loads the service
+  // token before honoring OCX_SHIM_BYPASS) is rewritten in place over the same backing launcher.
+  if (process.platform === "win32" && existsSync(file.wrapperPath) && isShim(file.wrapperPath) && hasUsableBackingPath(file)) {
+    const probe = stableShimPathProbe(file.wrapperPath);
+    if (probe && probe.prefix.includes(SHIM_MARKER) && !isCurrentShimProbe(probe, "win32")) {
+      writeShim(file.wrapperPath, file.realPath ?? file.backupPath, runtime);
+      return true;
+    }
+  }
   return false;
 }
 
@@ -884,7 +894,8 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
   if (filesBefore.length > 0 && filesBefore.every(file => {
     if (file.preserveOnly) return existsSync(file.backupPath) && !existsSync(file.originalPath);
     const probe = stableShimPathProbe(file.wrapperPath);
-    return hasUsableBackingPath(file) && probe !== null && isHealthyShimProbe(probe, process.platform);
+    return hasUsableBackingPath(file) && probe !== null && isHealthyShimProbe(probe, process.platform)
+      && (process.platform !== "win32" || isCurrentShimProbe(probe, "win32"));
   })) {
     return { installed: false, message: "Codex autostart shim is already installed." };
   }
@@ -1125,7 +1136,7 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
       if (!isHealthyShimProbe(probe, state.platform)) {
         return { status: "ineligible", message: destroyedShimMessage(file) };
       }
-      if (state.platform !== "win32" && !isCurrentUnixShimProbe(probe)) {
+      if (!isCurrentShimProbe(probe, state.platform)) {
         obsoleteShimProbes.set(file.wrapperPath, probe);
         continue;
       }
@@ -1166,8 +1177,12 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
     if (obsoleteShimProbes.size > 0) {
       for (const [path, firstProbe] of obsoleteShimProbes) {
         const secondProbe = stableShimPathProbe(path);
-        if (!secondProbe || isCurrentUnixShimProbe(secondProbe)
+        if (!secondProbe || isCurrentShimProbe(secondProbe, state.platform)
           || !sameStableShimPathProbe(firstProbe, secondProbe)) return { status: "deferred" };
+      }
+      if (state.platform === "win32") {
+        const refreshed = installCodexShimInternal({ runtime, runtimeAdmitted: true, allowFreshInstall: false });
+        return refreshed.installed ? { status: "restored", message: refreshed.message } : { status: "deferred" };
       }
       const result = refreshObsoleteUnixShims(files);
       return result.installed

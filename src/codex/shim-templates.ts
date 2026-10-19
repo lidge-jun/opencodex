@@ -8,6 +8,11 @@ const SHIM_MARKER = "opencodex codex autostart shim";
 // Revision 4: OCX_SHIM_BYPASS skips loading the service API token. Bumping the marker
 // makes installed revision-3 wrappers obsolete so the existing refresh path rewrites them.
 const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 4";
+// Windows CMD and PowerShell wrappers carry their own revision. Revision 1 is the first one that
+// skips the service token under OCX_SHIM_BYPASS; a marked wrapper without it is obsolete and
+// install/auto-restore rewrite it in place. (The extensionless Git-Bash wrapper is the Unix
+// template and carries the Unix revision.)
+const WINDOWS_SHIM_REVISION_MARKER = "opencodex windows codex shim revision 1";
 
 const CODEX_SHIM_REENTRY_EXIT_CODE = 126;
 const CODEX_SHIM_REENTRY_DIAGNOSTIC = "opencodex: saved Codex launcher resolved back to the autostart shim; run ocx codex-shim uninstall and reinstall Codex before enabling codexAutoStart.";
@@ -194,6 +199,7 @@ export function buildWindowsCodexShim(realCodexPath: string, bunPath: string, cl
   const cliArgs = selfLaunchArgv([], { sourceEntrypoint: cliPath, isStandaloneExecutable: bunRuntimeSource === "standalone" });
   return `@echo off\r
 rem ${SHIM_MARKER}\r
+rem ${WINDOWS_SHIM_REVISION_MARKER}\r
 setlocal\r
 ${windowsBatchSet("OCX_REAL_CODEX", realCodexPath)}\r
 ${windowsBatchSet("OCX_BUN", bunPath)}\r
@@ -244,6 +250,7 @@ export function buildWindowsPowerShellCodexShim(realCodexPath: string, bunPath: 
     .map(arg => `${psString(arg)} `).join("");
   return `#!/usr/bin/env pwsh
 # ${SHIM_MARKER}
+# ${WINDOWS_SHIM_REVISION_MARKER}
 $hadApiAuthToken = Test-Path Env:\\OPENCODEX_API_AUTH_TOKEN
 $priorApiAuthToken = $env:OPENCODEX_API_AUTH_TOKEN
 try {
@@ -298,4 +305,4 @@ function gitBashPath(path: string): string {
   return path.replace(/\\/g, "/");
 }
 
-export { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER, CODEX_SHIM_REENTRY_EXIT_CODE, CODEX_SHIM_REENTRY_DIAGNOSTIC, shQuote, windowsBatchSet, psString, gitBashPath };
+export { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER, WINDOWS_SHIM_REVISION_MARKER, CODEX_SHIM_REENTRY_EXIT_CODE, CODEX_SHIM_REENTRY_DIAGNOSTIC, shQuote, windowsBatchSet, psString, gitBashPath };

@@ -283,10 +283,17 @@ export function loadServiceTokenFromFile(env: Record<string, string | undefined>
     : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
   let fd: number | undefined;
   try {
-    if (process.platform === "win32" && lstatSync(file).isSymbolicLink()) return null;
+    // Windows has no O_NOFOLLOW: refuse a link up front, then bind the opened descriptor to the
+    // entry by identity so a link swapped in between lstat and open is still refused.
+    const entry = process.platform === "win32" ? lstatSync(file, { bigint: true }) : undefined;
+    if (entry?.isSymbolicLink()) return null;
     fd = openSync(file, flags);
-    const stat = fstatSync(fd);
-    if (!stat.isFile() || stat.size > MAX_SERVICE_API_TOKEN_BYTES) return null;
+    const stat = fstatSync(fd, { bigint: true });
+    if (!stat.isFile() || stat.size > BigInt(MAX_SERVICE_API_TOKEN_BYTES)) return null;
+    if (entry) {
+      const after = lstatSync(file, { bigint: true });
+      if (after.isSymbolicLink() || after.dev !== stat.dev || after.ino !== stat.ino || entry.ino !== stat.ino || entry.dev !== stat.dev) return null;
+    }
     const buffer = Buffer.alloc(MAX_SERVICE_API_TOKEN_BYTES + 1);
     let length = 0;
     while (length < buffer.length) {

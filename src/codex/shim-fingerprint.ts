@@ -13,7 +13,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { posix, win32 } from "node:path";
-import { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER } from "./shim-templates";
+import { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER, WINDOWS_SHIM_REVISION_MARKER } from "./shim-templates";
 import type { ShimFileState } from "./shim-state-file";
 
 const CODEX_SHIM_PROBE_BYTES = 16 * 1024;
@@ -188,6 +188,15 @@ function isCurrentUnixShimProbe(probe: StableShimPathProbe): boolean {
   return probe.prefix.includes(UNIX_SHIM_REVISION_MARKER);
 }
 
+/** A Windows wrapper is current when it carries its flavor's revision (CMD/PowerShell, or Git-Bash's Unix one). */
+function isCurrentWindowsShimProbe(probe: StableShimPathProbe): boolean {
+  return probe.prefix.includes(WINDOWS_SHIM_REVISION_MARKER) || probe.prefix.includes(UNIX_SHIM_REVISION_MARKER);
+}
+
+function isCurrentShimProbe(probe: StableShimPathProbe, platform: NodeJS.Platform): boolean {
+  return platform === "win32" ? isCurrentWindowsShimProbe(probe) : isCurrentUnixShimProbe(probe);
+}
+
 function hasUsableBackingPath(file: ShimFileState): boolean {
   return [existsSync(file.backupPath) ? file.backupPath : undefined, file.realPath]
     .some(path => {
@@ -225,4 +234,4 @@ export function isVersionManagerOwnedCodexPath(
 }
 
 export type { ShimPathFingerprint, StableShimPathProbe };
-export { statFingerprint, sameFingerprint, sameFingerprintAfterRename, stableShimPathProbe, sameStableShimPathProbe, shimPathFingerprint, restoreWithoutReplacing, isHealthyShimProbe, isCurrentUnixShimProbe, hasUsableBackingPath };
+export { statFingerprint, sameFingerprint, sameFingerprintAfterRename, stableShimPathProbe, sameStableShimPathProbe, shimPathFingerprint, restoreWithoutReplacing, isHealthyShimProbe, isCurrentUnixShimProbe, isCurrentShimProbe, hasUsableBackingPath };
