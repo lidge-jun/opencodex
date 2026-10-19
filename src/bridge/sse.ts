@@ -770,9 +770,14 @@ export function bridgeToResponsesSSE(
         returnIterator();
       };
       let handlingTranslatorOverflow = false;
-      terminateForTranslatorOverflow = _error => {
+      terminateForTranslatorOverflow = error => {
         if (handlingTranslatorOverflow || terminated || clientCancelled || closed) return;
         handlingTranslatorOverflow = true;
+        // An adapter-raised overflow event carries the usage the turn already consumed; the
+        // provider billed it, so it must not be logged as zero.
+        const usage = (error as AdapterEvent | null | undefined)?.type === "error"
+          ? (error as Extract<AdapterEvent, { type: "error" }>).usage : undefined;
+        if (usage) options?.onUsage?.(usage);
         abortCurrentToolCallForTranslatorOverflow();
         currentWebSearch = null;
         releasePendingWebSources();
@@ -788,6 +793,7 @@ export function bridgeToResponsesSSE(
           sequence_number: seq++,
           response: {
             ...responseSnapshot("failed", finishedItems),
+            ...(usage ? { usage: responsesUsage(usage) } : {}),
             error: failure,
             last_error: failure,
           },
