@@ -1478,6 +1478,7 @@
     "release-resume-identity.test.ts": "ci-workflows",
     "release-version-line.test.ts": "ci-workflows",
     "release-version-sources.test.ts": "ci-workflows",
+    "release-windows-signing.test.ts": "ci-workflows",
     "remove-tree-helper.test.ts": "lib",
     "fixture-teardown-helper.test.ts": "ci-workflows",
     "replay-refusal-parity.test.ts": "server",
