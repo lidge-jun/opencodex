@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { getCodexAccountCredential } from "./account-store";
 import { loadConfig } from "../config";
 import { resolveCodexHomeDir } from "./home";
-import { extractAccountId } from "../oauth/chatgpt";
-import { isSelectableCodexPoolAccount } from "./account-id";
-import { codexPlanKey } from "./plan";
+import { extractAccountId, extractEmail } from "../oauth/chatgpt";
+import { isSelectableCodexPoolAccount, MAIN_CODEX_ACCOUNT_ID } from "./account-id";
+import { codexPlanKey, extractChatgptPlanType } from "./plan";
 import { MAX_AUTH_BYTES, readBounded } from "./native-profile-store";
 
 export interface CodexTokens {
@@ -105,6 +105,28 @@ export function checkAccountIdCollision(
 ): { collision: true; reason: string } | { collision: false } {
   const candidateEmail = normalizedEmail(email);
   const candidateWorkspace = isWorkspacePlan(plan);
+
+  if (excludeAccountId !== MAIN_CODEX_ACCOUNT_ID) {
+    const mainTokens = readCodexTokens();
+    if (mainTokens) {
+      const mainChatgptAccountId = extractAccountId(mainTokens.id_token, mainTokens.access_token)
+        ?? (mainTokens.account_id || null);
+      if (mainChatgptAccountId === chatgptAccountId) {
+        const mainPlan = extractChatgptPlanType(mainTokens.id_token, mainTokens.access_token);
+        const mainWorkspace = isWorkspacePlan(mainPlan);
+        if (mainWorkspace === candidateWorkspace) {
+          const mainEmail = normalizedEmail(extractEmail(mainTokens.id_token, mainTokens.access_token));
+          if (!candidateEmail || !mainEmail || mainEmail === candidateEmail) {
+            return {
+              collision: true,
+              reason: "Account is already configured as the native Codex main account.",
+            };
+          }
+        }
+      }
+    }
+  }
+
   for (const account of loadConfig().codexAccounts ?? []) {
     if (excludeAccountId && account.id === excludeAccountId) continue;
     if (!isSelectableCodexPoolAccount(account)) continue;
