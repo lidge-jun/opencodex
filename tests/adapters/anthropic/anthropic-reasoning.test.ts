@@ -492,7 +492,7 @@ describe("anthropic extended-thinking gate", () => {
     }));
     const messages = b.messages as { role: string; content: unknown }[];
 
-    expect(b.cache_control).toEqual({ type: "ephemeral" });
+    expect(b.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
     expect(JSON.stringify(messages)).not.toContain("rs_other_provider");
     expect(JSON.stringify(messages)).not.toContain("signature");
     expect(messages).toEqual([{ role: "user", content: "continue on anthropic" }]);

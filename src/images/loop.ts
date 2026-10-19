@@ -420,6 +420,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       ...(a.cacheCreationInputTokens !== undefined || b.cacheCreationInputTokens !== undefined
         ? { cacheCreationInputTokens: (a.cacheCreationInputTokens ?? 0) + (b.cacheCreationInputTokens ?? 0) }
         : {}),
+      ...(a.cacheCreation1hInputTokens !== undefined || b.cacheCreation1hInputTokens !== undefined
+        ? { cacheCreation1hInputTokens: (a.cacheCreation1hInputTokens ?? 0) + (b.cacheCreation1hInputTokens ?? 0) }
+        : {}),
       ...(a.reasoningOutputTokens !== undefined || b.reasoningOutputTokens !== undefined
         ? { reasoningOutputTokens: (a.reasoningOutputTokens ?? 0) + (b.reasoningOutputTokens ?? 0) }
         : {}),

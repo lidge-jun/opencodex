@@ -164,7 +164,10 @@ describe("native Claude system preamble", () => {
       const before = JSON.stringify(system);
       const clientIdentity = captureAnthropicClientIdentity(new Headers(observed));
       const built = buildAnthropicMessagesPassthroughRequest(provider, "m", { ...body, system }, undefined, { clientIdentity });
-      expect(JSON.parse(built.body).system).toEqual(system);
+      // Order and markers survive; the TTL-less marker takes the first-party 1h default.
+      expect(JSON.parse(built.body).system).toEqual([
+        system[0], system[1], { ...system[2], cache_control: { type: "ephemeral", ttl: "1h" } },
+      ]);
       expect(JSON.stringify(system)).toBe(before);
     }
   });

@@ -64,7 +64,7 @@ export function responsesUsage(usage: OcxUsage | undefined): Record<string, unkn
   // normalized contract).
   const rawInputDetails = isRecord(raw.input_tokens_details)
     ? Object.fromEntries(Object.entries(raw.input_tokens_details as Record<string, unknown>)
-      .filter(([key]) => key !== "cache_write_tokens"))
+      .filter(([key]) => key !== "cache_write_tokens" && key !== "cache_write_1h_tokens"))
     : {} as Record<string, unknown>;
   const rawOutputDetails = isRecord(raw.output_tokens_details)
     ? raw.output_tokens_details as Record<string, unknown>
@@ -92,6 +92,11 @@ export function responsesUsage(usage: OcxUsage | undefined): Record<string, unkn
       usage.cacheCreationInputTokens,
       Math.max(0, inputTokens - cacheRead),
     );
+    // The 1-hour-TTL share of the write (Anthropic cache_creation split), only when reported,
+    // so a translated Messages client can price it at the 1h rate.
+    if (usage.cacheCreation1hInputTokens !== undefined) {
+      inputDetails.cache_write_1h_tokens = Math.min(usage.cacheCreation1hInputTokens, inputDetails.cache_write_tokens as number);
+    }
   }
   out.input_tokens_details = inputDetails;
   out.output_tokens_details = { ...rawOutputDetails, reasoning_tokens: usage.reasoningOutputTokens ?? 0 };
