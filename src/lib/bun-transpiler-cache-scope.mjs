@@ -13,10 +13,20 @@
  * A disabled cache ("0" or empty), an unset one, or an unknown version is left as given.
  * Windows environment names are case-insensitive (Bun's lookup too) while this object is not,
  * so on win32 every spelling of the name is matched and replaced by one scoped entry.
+ * A cache that is already scoped (a launcher started from a launched process) is re-scoped in
+ * place, never nested, so the same runtime keeps reaching the same warm directory.
  */
 export const TRANSPILER_CACHE_ENV = "BUN_RUNTIME_TRANSPILER_CACHE_PATH";
 
-const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/;
+// Semver core, optional prerelease and build metadata (findPathBun accepts `+build`). The
+// alphabet has no separator, drive colon or NUL, so the segment cannot leave the cache.
+const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const SCOPED_TAIL = /^(.*?)[\\/]+(bun-[^\\/]+)[\\/]*$/;
+
+/** @param {unknown} version */
+function validVersion(version) {
+  return typeof version === "string" && version.length <= 64 && VERSION.test(version);
+}
 
 /**
  * @param {Record<string, string | undefined>} env
@@ -33,10 +43,12 @@ export function scopeTranspilerCacheToRuntime(env, runtimeVersion, join, platfor
   const name = names.includes(TRANSPILER_CACHE_ENV) ? TRANSPILER_CACHE_ENV : names[0];
   const cache = name === undefined ? undefined : env[name];
   if (typeof cache !== "string" || cache === "" || cache === "0") return env;
-  if (typeof runtimeVersion !== "string" || !VERSION.test(runtimeVersion)) return env;
+  if (!validVersion(runtimeVersion)) return env;
+  const tail = SCOPED_TAIL.exec(cache);
+  const base = tail && validVersion(tail[2].slice(4)) ? (tail[1] || cache.slice(0, cache.length - tail[2].length)) : cache;
   const scoped = { ...env };
   for (const variant of names) delete scoped[variant];
-  scoped[TRANSPILER_CACHE_ENV] = join(cache, `bun-${runtimeVersion}`);
+  scoped[TRANSPILER_CACHE_ENV] = join(base, `bun-${runtimeVersion}`);
   return scoped;
 }
 

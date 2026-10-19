@@ -4,7 +4,7 @@ import { codexAutoStartEnabled } from "../config";
 import { deriveStartupHealth, startupHealthProbeBudgetMs, type StartupHealth } from "../codex/autostart-health";
 import { getCodexRoutingKind } from "../codex/inject";
 import { diagnoseCodexShim } from "../codex/shim";
-import { durableBunPath } from "../lib/bun-runtime";
+import { durableBunChildEnv, durableBunPath } from "../lib/bun-runtime";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { desktopStartupOwnership } from "../service/desktop-startup";
 import type { OcxConfig } from "../types";
@@ -129,7 +129,7 @@ function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHea
   return new Promise(resolve => {
     execFile(bun, selfLaunchArgv(["__startup-health"], { sourceEntrypoint: cli }), {
       encoding: "utf8",
-      env: process.env,
+      env: durableBunChildEnv(process.env),
       timeout: PROBE_TIMEOUT_MS,
       windowsHide: true,
       maxBuffer: 256 * 1024,

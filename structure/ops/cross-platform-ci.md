@@ -94,6 +94,9 @@ so the two versions sharing one cache evict each other on every start, and each 
 loaded its CLI graph cold (a 15 s Windows `spawnSync` timeout in run 38697651428). The launcher
 therefore passes its child `<cache>/bun-<version>` (`src/lib/bun-transpiler-cache-scope.mjs`);
 `tests/cli/bun-transpiler-cache-scope.test.ts` covers it.
+Server children started on the bundled runtime from a different Bun (startup-health probe,
+dashboard startup install, Windows tray) get the same scope through `durableBunChildEnv` in
+`src/lib/bun-runtime.ts`; an already scoped path is re-scoped in place, never nested.
 Startup ACL reads use .NET, never module-autoloaded `Get-Acl`/`Set-Acl`
 (`tests/ci-workflows/ci-review-lanes.test.ts` scans `src/`).
 Across the jobs, the workflow runs:

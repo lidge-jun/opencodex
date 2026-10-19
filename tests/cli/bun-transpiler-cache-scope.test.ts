@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { scopeTranspilerCacheToRuntime, TRANSPILER_CACHE_ENV } from "../../src/lib/bun-transpiler-cache-scope.mjs";
+import { durableBunChildEnv, durableBunRuntime } from "../../src/lib/bun-runtime";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { COLD_SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -39,6 +40,33 @@ describe("launcher transpiler cache scope", () => {
     // POSIX names are case-sensitive: Bun never reads the lower-case spelling there.
     const posix = { bun_runtime_transpiler_cache_path: "/cache" };
     expect(scopeTranspilerCacheToRuntime(posix, "1.4.2", join, "linux")).toBe(posix);
+  });
+
+  test("an already scoped cache is re-scoped in place, never nested", () => {
+    const scoped = (cache: string, version: string) =>
+      scopeTranspilerCacheToRuntime({ [TRANSPILER_CACHE_ENV]: cache }, version, join)[TRANSPILER_CACHE_ENV];
+    expect(scoped(join("/cache", "bun-1.4.2"), "1.4.2")).toBe(join("/cache", "bun-1.4.2"));
+    expect(scoped(join("/cache", "bun-1.4.2"), "1.5.0")).toBe(join("/cache", "bun-1.5.0"));
+    expect(scoped(join("/cache", "bun-1.4.2") + "/", "1.4.2")).toBe(join("/cache", "bun-1.4.2"));
+    expect(scoped("C:\\cache\\bun-1.4.2", "1.4.2")).toBe(join("C:\\cache", "bun-1.4.2"));
+    // A directory that merely starts with bun- but is not a version stays a parent.
+    expect(scoped(join("/cache", "bun-cache"), "1.4.2")).toBe(join("/cache", "bun-cache", "bun-1.4.2"));
+  });
+
+  test("prerelease and build metadata versions are accepted, oversized ones are not", () => {
+    const env = { [TRANSPILER_CACHE_ENV]: "/cache" };
+    expect(scopeTranspilerCacheToRuntime(env, "1.4.0+build.1", join)[TRANSPILER_CACHE_ENV]).toBe(join("/cache", "bun-1.4.0+build.1"));
+    expect(scopeTranspilerCacheToRuntime(env, "1.4.3-canary-1", join)[TRANSPILER_CACHE_ENV]).toBe(join("/cache", "bun-1.4.3-canary-1"));
+    expect(scopeTranspilerCacheToRuntime(env, "1.4.3-" + "a".repeat(64), join)).toBe(env);
+  });
+
+  test("server children on the bundled runtime get a scoped cache only across a version change", () => {
+    const env = { ...process.env, [TRANSPILER_CACHE_ENV]: join(tmpdir(), "ocx-durable-scope") };
+    const runtime = durableBunRuntime();
+    const child = durableBunChildEnv(env);
+    if (runtime.source !== "bundled") { expect(child).toBe(env); return; }
+    const bundled = JSON.parse(readFileSync(join(dirname(dirname(runtime.path)), "package.json"), "utf8")).version as string;
+    expect(child[TRANSPILER_CACHE_ENV]).toBe(bundled === Bun.version ? env[TRANSPILER_CACHE_ENV] : join(env[TRANSPILER_CACHE_ENV]!, `bun-${bundled}`));
   });
 
   // CI shares one cache between the test-runner Bun and the bundled Bun the launcher starts.
