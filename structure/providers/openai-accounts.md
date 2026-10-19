@@ -484,7 +484,7 @@ wedged on an account that cannot serve it, which is why the refusal remains requ
 often that refusal fires and can never replace it.
 
 Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
-`src/codex/auth-api/login-flow.ts` distinguishes HTTP 429 from an attempted warmup as `codex_warmup_rate_limited` and preserves that code in OAuth status. Failed attempted warmup does not persist replacement credentials; quota-confirmed deferred registration and HTTP 401/403 handling remain separate. `src/codex/warmup.ts` retains a known 429 when bounded error-body draining times out.
+`src/codex/auth-api/login-flow.ts` distinguishes HTTP 429 from an attempted warmup as `codex_warmup_rate_limited` and preserves that code in OAuth status. Failed attempted warmup does not persist replacement credentials; quota-confirmed deferred registration and HTTP 401/403 handling remain separate. `src/codex/warmup.ts` retains a known 429 when bounded error-body draining times out. Before warmup or persistence, `src/codex/auth-collision.ts` rejects native-main and pool duplicates sharing ChatGPT account ID, personal/workspace plan bucket, and email (or missing email), excluding the reauthenticated row. Distinct members, workspace IDs, and plan buckets remain independent. Login uses the access-token plan when WHAM fails or omits its plan; usable WHAM plans take precedence. Display-name fallback happens only after identity checks. `tests/helpers/codex-main-collision.ts`, registered by `tests/codex-integration/codex-auth-api.test.ts`, covers these admission paths.
 
 
 ## Per-account auto-switch thresholds

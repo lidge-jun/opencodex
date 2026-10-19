@@ -94,9 +94,8 @@ function isWorkspacePlan(plan: unknown): boolean {
   return !!key && /team|business|enterprise|workspace|edu/.test(key);
 }
 
-// Main login and managed pool accounts are separate duplicate buckets.
-// Inside the pool, personal and workspace subscriptions are also separate buckets.
-// Within each pool bucket, keep the original ChatGPT account id + email collision guard.
+// Main login and pool accounts share the account id + email collision guard.
+// Personal and workspace subscriptions remain separate buckets.
 export function checkAccountIdCollision(
   chatgptAccountId: string,
   email?: string | null,
