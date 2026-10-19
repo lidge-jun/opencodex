@@ -206,24 +206,27 @@ describe("staging and argv", () => {
     expect(chunks.join("")).toBe(text);
     for (const c of chunks) expect(Buffer.byteLength(c)).toBeLessThanOrEqual(60_000);
   });
-  test("invocation runs node directly with the heap flag and the preload", () => {
+  test("invocation runs node directly with the heap flag, and with the preload only when enabled", () => {
     // npm's Windows shim: the bin script sits in node_modules beside it, and node.exe may sit next to it.
     const npmDir = join(FAKE_ROOT, "npm");
     mkdirSync(join(npmDir, "node_modules", "perchai-cli", "bin"), { recursive: true });
     writeFileSync(join(npmDir, "perch.cmd"), "");
     writeFileSync(join(npmDir, "node_modules", "perchai-cli", "bin", "perch"), "");
-    const inv = A.perchInvocation(join(npmDir, "perch.cmd"), "win32")!;
+    const inv = A.perchInvocation(join(npmDir, "perch.cmd"), "win32", true)!;
     expect(inv.file).toBe("node");
     expect(inv.args[0]).toBe("--max-old-space-size=4096");
     expect(inv.args[1]).toMatch(/^--import=file:\/\/\/.*perch-cli\/preload\.mjs$/);
     expect(inv.args[2]).toMatch(/perchai-cli[\\/]bin[\\/]perch$/);
     expect(A.perchInvocation(join(FAKE_ROOT, "perch-missing"), "linux")).toBeUndefined();
     const linked = join(npmDir, "node_modules", "perchai-cli", "bin", "perch");
-    expect(A.perchInvocation(linked, "linux")?.args[2]).toBe(linked);
-    // A standalone build cannot hand its embedded preload to the CLI's node, so it runs without one.
+    expect(A.perchInvocation(linked, "linux", true)?.args[2]).toBe(linked);
+    // Off by default: the CLI runs unmodified.
     expect(A.perchInvocation(linked, "linux", false)?.args).toEqual(["--max-old-space-size=4096", linked]);
+    expect(A.perchPreloadEnabled({})).toBe(false);
+    expect(A.perchPreloadEnabled({ OCX_PERCH_PRELOAD: "true" })).toBe(false);
+    expect(A.perchPreloadEnabled({ OCX_PERCH_PRELOAD: "1" })).toBe(true);
     // A version-manager shim is run as is, with the flags in NODE_OPTIONS.
-    const shim = A.perchInvocation(FAKE_BIN, "linux")!;
+    const shim = A.perchInvocation(FAKE_BIN, "linux", true)!;
     expect([shim.file, shim.args]).toEqual([FAKE_BIN, []]);
     expect(shim.nodeOptions).toMatch(/^--max-old-space-size=4096 --import=file:/);
     const shimEnv = A.buildChildEnv("h", shim);
@@ -244,7 +247,7 @@ describe("staging and argv", () => {
     writeFileSync(join(dir, "abs.cmd"), `@"node" "${script}" %*\r\n`);
     for (const shim of ["perch.cmd", "perch", "npm.cmd", "abs.cmd"]) expect(A.shimScript(join(dir, shim))).toBe(script);
     expect(A.perchInvocation(join(dir, "perch.cmd"), "win32")?.args.at(-1)).toBe(script);
-    expect(A.perchInvocation(join(dir, "perch"), "linux")).toMatchObject({ file: "node", args: ["--max-old-space-size=4096", expect.stringMatching(/^--import=/), script] });
+    expect(A.perchInvocation(join(dir, "perch"), "linux", true)).toMatchObject({ file: "node", args: ["--max-old-space-size=4096", expect.stringMatching(/^--import=/), script] });
     writeFileSync(join(dir, "other.cmd"), `node "%~dp0\\node_modules\\my-perchai-cli\\bin\\perch" %*\r\n`);
     expect(A.shimScript(join(dir, "other.cmd"))).toBeUndefined(); // another package's script is not Perch's
     expect(A.shimScript(FAKE_BIN)).toBeUndefined(); // no script named: treated as a native launcher

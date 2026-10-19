@@ -56,10 +56,9 @@ import { PERCH_CLI_PROFILE, PERCH_CLI_PROFILES } from "./profiles";
  *   annotations, so Perch classifies every bridge tool as a write, reports the whole parallel batch
  *   as `tool_call_requested`, and ends the run itself with status `approval_required` before calling
  *   the server. No process has to be killed mid-turn.
- * - Streaming (claude: --include-partial-messages). `perch run` prints one JSON document at exit.
- *   `./preload.mjs` runs inside the CLI and mirrors model-call deltas to fd 3, and also drops the
- *   CLI's turn uploads (which carry the whole replayed conversation and delay the result). Without
- *   the mirror the turn still works and emits its text when the CLI exits.
+ * - Streaming (claude: --include-partial-messages). `perch run` prints one JSON document at exit,
+ *   so by default the text is emitted then. The opt-in `./preload.mjs` (`perchPreloadEnabled`) runs
+ *   inside the CLI, mirrors model-call deltas to fd 3 and drops the CLI's turn uploads.
  */
 
 const CAPTURE_MCP_SERVER_PATH = fileURLToPath(new URL("../codebuddy/mcp-server.ts", import.meta.url));
@@ -158,13 +157,22 @@ export function shimScript(shim: string): string | undefined {
 }
 
 /**
- * Run the CLI's node entry directly: with the heap flag bin/perch would otherwise re-execute itself
- * for, and with the preload. On Windows `perch` is a `.cmd` shim, and going through cmd.exe
- * would also cut argv at the first newline.
+ * The preload is opt-in (`OCX_PERCH_PRELOAD=1`): it hooks `fetch` inside Perch's proprietary CLI,
+ * which its license and terms may not allow. Without it the CLI runs unmodified: no streaming, no
+ * caches, and Perch receives its transcript uploads. See the provider guide.
+ * A standalone build's own files live in its virtual filesystem, which the CLI's node cannot read,
+ * so those builds never load it.
  */
-export function perchInvocation(binary: string, platform: NodeJS.Platform = process.platform, preload = !isStandaloneBinary()): PerchInvocation | undefined {
-  // A standalone build's own files live in its virtual filesystem, which the CLI's node cannot read:
-  // those builds run without the preload (no streaming, no caches, transcript uploads not dropped).
+export function perchPreloadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.OCX_PERCH_PRELOAD?.trim() === "1" && !isStandaloneBinary();
+}
+
+/**
+ * Run the CLI's node entry directly: with the heap flag bin/perch would otherwise re-execute itself
+ * for, and with the preload when it is enabled. On Windows `perch` is a `.cmd` shim, and going
+ * through cmd.exe would also cut argv at the first newline.
+ */
+export function perchInvocation(binary: string, platform: NodeJS.Platform = process.platform, preload = perchPreloadEnabled()): PerchInvocation | undefined {
   const flags = [`--max-old-space-size=${PERCH_HEAP_MB}`, ...(preload ? [`--import=${PRELOAD_URL}`] : [])];
   let node = "node";
   let script: string;
