@@ -4,7 +4,7 @@ import type { AdapterEvent, OcxMessage, OcxParsedRequest } from "../../src/types
 import { parseRequest } from "../../src/responses/parser";
 import { clearBridgeSearchReplayCacheForTests } from "../../src/responses/bridge-search-replay-cache";
 import { runWithWebSearch } from "../../src/web-search/loop";
-import { restoreSidecarSearchResults, stripReplayedSearchPairs } from "../../src/web-search/sidecar-search-replay";
+import { rememberSidecarSearch, restoreSidecarSearchResults, stripReplayedSearchPairs } from "../../src/web-search/sidecar-search-replay";
 import { buildWebSearchTool } from "../../src/web-search/synthetic-tool";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { handleResponses } from "../../src/server/responses/core";
@@ -172,6 +172,28 @@ test("two cells after one reasoning item stay in one assistant turn with that re
     { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "plan" }] }, cell("ws_1"), cell("ws_2"),
     { type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] }]));
   expect(callOrder(parsed.context.messages)).toEqual(["user", "assistant[thinking,ws_1,ws_2]", "result:ws_1", "result:ws_2", "assistant[text]"]);
+});
+
+test("a cell before consecutive client batches answers within the first batch, before the next call", () => {
+  const parsed = parseRequest(body([{ role: "user", content: "go" }, cell("ws_first"), call("A"), output("A"), call("B"), output("B"),
+    cell("ws_late")]));
+  expect(callOrder(parsed.context.messages)).toEqual(
+    ["user", "assistant[ws_first,A]", "result:A", "result:ws_first", "assistant[B]", "result:B", "assistant[ws_late]", "result:ws_late"]);
+});
+
+test("a call after an earlier call's output in the same run starts a new turn after the search result", () => {
+  const parsed = parseRequest(body([{ role: "user", content: "go" }, call("A"), cell("ws_mid"), output("A"), call("B"), output("B")]));
+  expect(callOrder(parsed.context.messages)).toEqual(["user", "assistant[A,ws_mid]", "result:A", "result:ws_mid", "assistant[B]", "result:B"]);
+});
+
+test("a failed cell keeps its error flag when a recorded result is restored", () => {
+  const parsed = parseRequest(nextTurn({ type: "web_search_call", id: "ws_failed", status: "failed", action: { type: "search", query: "q" } }));
+  parsed._reasoningReplayScope = scope();
+  rememberSidecarSearch(parsed, "ws_failed", { id: "toolu_x", arguments: { query: "q" } }, "sidecar error: timeout");
+  restoreSidecarSearchResults(parsed);
+  const { result } = searchPair(parsed.context.messages, "ws_failed");
+  expect(result?.content).toBe("sidecar error: timeout");
+  expect(result?.isError).toBe(true);
 });
 
 test("synthetic call ids never collide with client call ids or with each other", () => {

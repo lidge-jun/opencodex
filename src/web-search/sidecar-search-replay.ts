@@ -55,7 +55,7 @@ export function restoreSidecarSearchResults(parsed: OcxParsedRequest): void {
     for (const message of parsed.context.messages) {
       if (message.role === "toolResult" && message.toolCallId === cell.callId && message.toolName === WEB_SEARCH_TOOL_NAME) {
         if (entry) message.content = entry.output;
-        else if (cell.failed) message.isError = true;
+        if (cell.failed) message.isError = true;
       } else if (entry && message.role === "assistant") {
         for (const part of message.content) {
           if (part.type !== "toolCall" || part.id !== cell.callId || part.name !== WEB_SEARCH_TOOL_NAME) continue;

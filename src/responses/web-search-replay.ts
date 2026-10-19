@@ -22,11 +22,10 @@ const MAX_FIELD_CHARS = 2048;
 const MAX_LIST_ENTRIES = 20;
 const CELL_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
-/** Items that continue the current call batch; anything else starts a new turn segment. */
-const CALL_BATCH_TYPES = new Set([
-  "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output",
-  "local_shell_call", "local_shell_call_output", "tool_search_call", "tool_search_output",
-]);
+/** Call items of a batch; a call after the batch's first output starts the next assistant turn. */
+const CALL_TYPES = new Set(["function_call", "custom_tool_call", "local_shell_call", "tool_search_call"]);
+/** Output items of a batch. Anything that is neither a call nor an output ends the batch. */
+const OUTPUT_TYPES = new Set(["function_call_output", "custom_tool_call_output", "local_shell_call_output", "tool_search_output"]);
 
 function capped(value: string): string {
   return value.length <= MAX_FIELD_CHARS ? value : `${value.slice(0, MAX_FIELD_CHARS)}…`;
@@ -103,9 +102,12 @@ export function rewriteReplayedWebSearchCells(input: readonly unknown[]): Rewrit
   const cells: OcxReplayedWebSearchCell[] = [];
   const seenCells = new Set<string>();
   let pending: Array<{ item: unknown; sourceIndex: number }> = [];
+  // True once the current batch reached its outputs: the next call opens a new assistant turn.
+  let outputPhase = false;
   const flush = () => {
     for (const entry of pending) { items.push(entry.item); sourceIndexes.push(entry.sourceIndex); }
     pending = [];
+    outputPhase = false;
   };
   input.forEach((item, sourceIndex) => {
     const type = isObj(item) ? item.type : undefined;
@@ -114,6 +116,7 @@ export function rewriteReplayedWebSearchCells(input: readonly unknown[]): Rewrit
       // The same cell replayed twice is one search.
       if (cellId && seenCells.has(cellId)) return;
       if (cellId) seenCells.add(cellId);
+      if (outputPhase) flush();
       const content = replayedWebSearchContent(item);
       const callId = allocate(cellId ?? "ws_replay");
       cells.push({ ...(cellId ? { cellId } : {}), callId, failed: content.failed });
@@ -122,7 +125,11 @@ export function rewriteReplayedWebSearchCells(input: readonly unknown[]): Rewrit
       pending.push({ item: { type: "function_call_output", call_id: callId, output: content.result }, sourceIndex });
       return;
     }
-    if (typeof type !== "string" || !CALL_BATCH_TYPES.has(type)) flush();
+    if (typeof type === "string" && OUTPUT_TYPES.has(type)) {
+      outputPhase = true;
+    } else if (!(typeof type === "string" && CALL_TYPES.has(type)) || outputPhase) {
+      flush();
+    }
     items.push(item);
     sourceIndexes.push(sourceIndex);
   });
