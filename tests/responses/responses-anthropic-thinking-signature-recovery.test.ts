@@ -10,7 +10,15 @@ import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope"
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { resetThoughtSignatureReplayForTests } from "../../src/responses/thought-signature-replay";
 import * as thoughtSignatureReplay from "../../src/responses/thought-signature-replay";
+import * as pacing from "../../src/providers/request-pacing";
+import { saveCredential, getAccountSet, setActiveAccount } from "../../src/oauth/store";
+import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
+import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY } from "../../src/lib/spend-reservation-ledger";
+import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { handleResponses } from "../../src/server/responses/core";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
+import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { comboExecutionBudgetPolicy } from "../../src/server/responses/core-combo";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -31,6 +39,10 @@ beforeEach(() => {
   clearReasoningReplayCacheForTests();
   resetThoughtSignatureReplayForTests();
   resetWorkflowBudgetsForTest();
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
+  clearKeyCooldowns();
+  clearGenericFailoverHealth();
 });
 
 afterEach(() => {
@@ -40,6 +52,10 @@ afterEach(() => {
     clearReasoningReplayCacheForTests();
     resetThoughtSignatureReplayForTests();
     resetWorkflowBudgetsForTest();
+    clearComboSelectionState();
+    clearComboTargetCooldowns();
+    clearKeyCooldowns();
+    clearGenericFailoverHealth();
     if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = originalHome;
     removeTreeWithRetry(testDir);
@@ -142,6 +158,160 @@ function expectStrippedRetry(bodies: string[]): void {
   expect(bodies[1]).toContain("earlier answer");
   expect(bodies[1]).toContain("next question");
 }
+
+async function comboRequest(count: number, stream = false) {
+  const cfg = config();
+  const template = cfg.providers["anthropic-test"]!;
+  const targets = Array.from({ length: count }, (_, index) => ({ provider: `target-${index}`, model: "claude-sonnet-4-5" }));
+  cfg.providers = Object.fromEntries(targets.map(({ provider }) => [provider, {
+    ...template, baseUrl: `https://${provider}.example.test`, apiKey: `synthetic-${provider}`,
+  }]));
+  cfg.combos = { replay: { strategy: "failover", targets } };
+  const body = await request(stream).json() as Record<string, unknown>;
+  body.model = "combo/replay";
+  return { cfg, body, req: () => new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  }) };
+}
+
+for (const streamError of [false, true]) test(`Combo signature repairs count every physical send (streamError=${streamError})`, async () => {
+  const { cfg, req } = await comboRequest(4, streamError);
+  const budget = createRequestExecutionBudget();
+  const sends: Array<{ host: string; body: string }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const host = new URL(String(input)).host;
+    const serialized = String(init?.body);
+    sends.push({ host, body: serialized });
+    return serialized.includes(SIGNATURE) ? streamError ? streamRejection() : rejection()
+      : rejection(500, "upstream unavailable after repair");
+  }) as typeof fetch;
+  const log: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponses(req(), cfg, log, { sendBudget: budget });
+  await response.text();
+  const limit = comboExecutionBudgetPolicy(4).maxTotalModelSends;
+  // A streamed repair failure is terminal in the committed child; buffered failures hop.
+  expect(sends.length).toBe(streamError ? 2 : limit);
+  expect(sends.length).toBeLessThanOrEqual(limit);
+  expect(budget.used).toBe(sends.length);
+  expect((log.attempts ?? []).reduce((count, attempt) => count + attempt.sendCount, 0)).toBe(sends.length);
+  expect(sends.filter(send => send.host === "target-3.example.test")).toHaveLength(streamError ? 0 : 1);
+  expect(sends.every(send => send.body.includes("earlier answer") && send.body.includes("next question"))).toBe(true);
+});
+
+test("Combo prepaid fast repair settles once before signature recovery", async () => {
+  const { cfg, req } = await comboRequest(1);
+  cfg.fastMode = true;
+  cfg.providers["target-0"]!.fastEnabled = true;
+  cfg.providers["target-0"]!.supportsServiceTier = true;
+  cfg.providers["target-0"]!.fastWire = { kind: "anthropic-speed", canonicalToWire: { priority: "fast" } };
+  cfg.providers["target-0"]!.models = ["claude-opus-5-5"];
+  cfg.combos!.replay!.targets[0]!.model = "claude-opus-5-5";
+  const bodies = fakeUpstream(index => index === 1
+    ? Response.json({ type: "error", error: { type: "rate_limit_error", message: "Usage credits are required for fast mode." } }, { status: 429 })
+    : index === 2 ? rejection() : success(false));
+  const budget = createRequestExecutionBudget();
+  const response = await handleResponses(req(), cfg, { model: "", provider: "" }, { sendBudget: budget });
+  expect(response.status, await response.clone().text()).toBe(200);
+  expect(await response.text()).toContain("Recovered answer");
+  expect(bodies).toHaveLength(3);
+  expect(budget.used).toBe(3);
+  expect(JSON.parse(bodies[0]!).speed).toBe("fast");
+  expect(JSON.parse(bodies[1]!).speed).toBeUndefined();
+  expect(bodies[1]).toContain(SIGNATURE);
+  expect(bodies[2]).not.toContain(SIGNATURE);
+});
+
+for (const prepaid of [false, true]) test(`Combo repair refused before dispatch releases its send (prepaid=${prepaid})`, async () => {
+  const { cfg, req } = await comboRequest(1);
+  if (prepaid) {
+    cfg.fastMode = true;
+    Object.assign(cfg.providers["target-0"]!, { fastEnabled: true, supportsServiceTier: true,
+      fastWire: { kind: "anthropic-speed", canonicalToWire: { priority: "fast" } } });
+  }
+  const bodies = fakeUpstream(() => prepaid
+    ? rejection(400, "Fast mode is not enabled for your organization.") : rejection());
+  const wait = pacing.waitForProviderRequestSlot;
+  let admissions = 0;
+  const spy = spyOn(pacing, "waitForProviderRequestSlot").mockImplementation(async (...args) => {
+    if (++admissions > 1) throw new Error("synthetic local pacing refusal");
+    return wait(...args);
+  });
+  const budget = createRequestExecutionBudget();
+  const log: RequestLogContext = { model: "", provider: "" };
+  try {
+    const response = await handleResponses(req(), cfg, log, { sendBudget: budget });
+    await response.text();
+    expect(admissions).toBe(2);
+    expect(bodies).toHaveLength(1);
+    expect(budget.used).toBe(1);
+    expect(log.attempts?.[0]?.sendCount).toBe(1);
+    if (prepaid) expect(JSON.parse(bodies[0]!).speed).toBe("fast");
+  } finally { spy.mockRestore(); }
+});
+
+for (const refused of [false, true]) test(`Combo OAuth hop settles its exact prepaid send (refused=${refused})`, async () => {
+  for (const id of ["first", "second"]) await saveCredential("xai", {
+    access: `synthetic-${id}`, refresh: `synthetic-refresh-${id}`,
+    expires: Date.now() + 3_600_000, accountId: id,
+  }, { addAccount: true });
+  await setActiveAccount("xai", getAccountSet("xai")!.accounts[0]!.id);
+  const cfg = { defaultProvider: "xai", providers: { xai: {
+    adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth", models: ["test"], proxy: "direct",
+  } }, combos: { replay: { strategy: "failover", targets: [{ provider: "xai", model: "test" }] } } } as OcxConfig;
+  const bodies = fakeUpstream(index => index === 1
+    ? Response.json({ error: { message: "quota exhausted" } }, { status: 429 })
+    : Response.json({ id: "chat-test", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] }));
+  const budget = createRequestExecutionBudget();
+  const log: RequestLogContext = { model: "", provider: "" };
+  const wait = pacing.waitForProviderRequestSlot;
+  let admissions = 0;
+  const spy = spyOn(pacing, "waitForProviderRequestSlot").mockImplementation(async (...args) => {
+    if (++admissions > 1 && refused) throw new Error("synthetic local pacing refusal");
+    return wait(...args);
+  });
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/replay", input: "hello", stream: false, store: false }),
+    }), cfg, log, { sendBudget: budget });
+    await response.text();
+    expect(response.status).toBe(refused ? 502 : 200);
+    expect(bodies).toHaveLength(refused ? 1 : 2);
+    expect(budget.used).toBe(bodies.length);
+    expect((log.attempts ?? []).reduce((count, attempt) => count + attempt.sendCount, 0)).toBe(bodies.length);
+  } finally { spy.mockRestore(); }
+});
+
+for (const mode of ["spend", "transient", "reset"] as const) test(`Combo signature repair preserves ${mode} accounting`, async () => {
+  const { cfg, req } = await comboRequest(1);
+  if (mode === "transient") cfg.providers["target-0"]!.transientRetryOn5xx = { enabled: true, attempts: 3 };
+  if (mode === "reset") cfg.providers["target-0"]!.retryOnReset = {};
+  const log: RequestLogContext = { model: "", provider: "", spendPoolId: "target-0", usageLogInputTokens: 10, spendOutputCeilingTokens: 100 };
+  const lines: string[] = [];
+  const ledger = createSpendReservationLedger({ salt: "combo-repair-spend", policy: {
+    ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens: 1_000_000 },
+  }, journal: { read: () => [], append: line => { lines.push(line); } } });
+  const tracker = mode === "spend" ? createRequestSpendTracker(log, undefined, ledger) : undefined;
+  const budget = createRequestExecutionBudget(undefined, undefined, tracker);
+  const bodies = fakeUpstream(index => {
+    if (index === 1) return rejection();
+    if (mode === "reset" && index === 2) throw Object.assign(new Error("synthetic pre-header reset"), { code: "ECONNRESET" });
+    if (mode === "transient" && index === 2) return rejection(503, "upstream unavailable");
+    return success(false);
+  });
+  try {
+    const response = await handleResponses(req(), cfg, log, { sendBudget: budget });
+    // Anthropic does not opt into the key-auth Chat transient ladder.
+    expect(response.status, await response.clone().text()).toBe(mode === "transient" ? 503 : 200);
+    await response.text();
+    expect(bodies).toHaveLength(mode === "reset" ? 3 : 2);
+    expect(budget.used).toBe(bodies.length);
+    expect((log.attempts ?? []).reduce((count, attempt) => count + attempt.sendCount, 0)).toBe(bodies.length);
+    expect(bodies[0]).toContain(SIGNATURE);
+    expect(bodies.slice(1).every(body => !body.includes(SIGNATURE))).toBe(true);
+    if (mode === "spend") expect(budget.physicalStarted).toBe(bodies.length);
+  } finally { tracker?.settle(undefined); }
+});
 
 function streamedFailure(text: string): {
   error: { type: string; code: string; message: string };
