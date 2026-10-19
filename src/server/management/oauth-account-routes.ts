@@ -374,7 +374,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // Without a flow id this cancels the provider's newest in-flight login, which is what the
     // single-user GUI has always meant by "Cancel". A host running concurrent code logins for
     // several users passes the flowId it was given at /api/oauth/login.
-    const cancelled = cancelLoginFlow(provider, typeof body.flowId === "string" ? body.flowId : undefined);
+    const cancelled = cancelLoginFlow(provider, typeof body.flowId === "string" ? body.flowId : undefined,
+      { dismissSettledFailure: true });
     return jsonResponse({ ok: true, cancelled });
   }
 
