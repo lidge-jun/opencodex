@@ -94,9 +94,12 @@ describe("final EPERM quarantine", () => {
 
   test("containment resolves TEMP with the 8.3-expanding native resolver by default", () => {
     const fixture = containedFixture();
+    // The fixture keeps the JS resolver's spelling (8.3 on hosted Windows); the default under
+    // test expands it, so the expectation must come from the same native resolver.
+    const expected = realpathSync.native(fixture.runTmp);
     const native = spyOn(realpathSync, "native");
     try {
-      expect(containedRunTemp(fixture.env)).toBe(fixture.runTmp);
+      expect(containedRunTemp(fixture.env)).toBe(expected);
       expect(native).toHaveBeenCalledWith(fixture.env.TEMP);
     } finally {
       native.mockRestore();
