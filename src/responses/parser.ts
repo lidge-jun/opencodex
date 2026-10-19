@@ -22,6 +22,7 @@ import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { hasRoutedIdentity, nameRoutedIdentity } from "../adapters/identity";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
+import { replayedWebSearchCall } from "./web-search-replay";
 import { buildImageTool, extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
@@ -232,6 +233,12 @@ export function parseRequest(
   // Built before the item loop: a custom_tool_call echoed back in `input` needs the
   // namespace from the request's own tool catalog to survive the round trip.
   const customToolNamespacesByName = customToolNamespaces(data.tools);
+  // Stash the hosted web_search config (if Codex enabled it) so the proxy can run searches via the
+  // sidecar for routed providers. buildTools still drops the hosted tool; the sidecar path
+  // re-injects a synthetic function tool only when it will actually handle the call. The same
+  // declaration decides how replayed search cells are rebuilt below.
+  const webSearch = extractHostedWebSearch(data.tools as unknown[] | undefined);
+  const replayedWebSearchCellIds: string[] = [];
   const systemPrompt: string[] = [];
   // Responses reasoning siblings belong to the following assistant, including across call items.
   // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
@@ -529,9 +536,25 @@ export function parseRequest(
       }
 
       if (effectiveType === "web_search_call") {
-        // Replayed hosted web-search evidence has no paired result payload that routed providers can
-        // consume. Keep it out of assistant-visible text: the old marker was useful as an internal
-        // loop hint, but when no sidecar is available the model can echo it as a fake answer.
+        // With search declared, rebuild the cell as the web_search call/result pair the routed model
+        // made, so it remembers it already searched (#7269). The sidecar swaps in the recorded result
+        // text once the replay scope is bound. Without a declaration the cell stays out of the
+        // history: a call to an undeclared tool, or assistant-visible marker text the model could
+        // echo as a fake answer, would be worse than the gap.
+        if (webSearch) {
+          const replay = replayedWebSearchCall(item as Record<string, unknown>, `ws_replay_${replayedWebSearchCellIds.length}`);
+          if (!replayedWebSearchCellIds.includes(replay.id)) {
+            replayedWebSearchCellIds.push(replay.id);
+            assistantHolderWithReasoning().content.push({
+              type: "toolCall", id: replay.id, name: WEB_SEARCH_TOOL_NAME, arguments: replay.arguments,
+            });
+            messages.push({
+              role: "toolResult", toolCallId: replay.id, toolName: WEB_SEARCH_TOOL_NAME,
+              content: replay.result, isError: replay.failed, timestamp: now,
+            });
+            continue;
+          }
+        }
         pendingReasoning.length = 0;
         continue;
       }
@@ -689,10 +712,6 @@ export function parseRequest(
   if (data.service_tier !== undefined) options.serviceTier = data.service_tier;
   if (data.prompt_cache_key !== undefined) options.promptCacheKey = data.prompt_cache_key;
 
-  // Stash the hosted web_search config (if Codex enabled it) so the proxy can run searches via the
-  // gpt-mini sidecar for routed providers. buildTools still drops the hosted tool; the sidecar path
-  // re-injects a synthetic function tool only when it will actually handle the call.
-  const webSearch = extractHostedWebSearch(data.tools as unknown[] | undefined);
   const imageGen = extractHostedImageGeneration([
     ...(data.tools as unknown[] ?? []),
     ...loadedToolSpecs,
@@ -718,6 +737,7 @@ export function parseRequest(
       ? { _continuationConversationMessageIndex: continuationConversationMessageIndex }
       : {}),
     ...(webSearch ? { _webSearch: webSearch } : {}),
+    ...(replayedWebSearchCellIds.length > 0 ? { _replayedWebSearchCellIds: replayedWebSearchCellIds } : {}),
     ...(imageGen ? { _imageGeneration: imageGen } : {}),
     ...(textFormat ? { _structuredOutput: true } : {}),
     ...(compactionRequest ? { _compactionRequest: true } : {}),

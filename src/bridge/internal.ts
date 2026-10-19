@@ -23,6 +23,11 @@ export function uuid(): string {
   return crypto.randomUUID().replace(/-/g, "");
 }
 
+/** The client-visible id of a hosted search cell: the producer's `ws_` id when well-formed, else a fresh one. */
+export function webSearchCellItemId(candidate: string | undefined): string {
+  return typeof candidate === "string" && /^ws_[A-Za-z0-9_-]{1,128}$/.test(candidate) ? candidate : `ws_${uuid()}`;
+}
+
 /** Test-only: bound the abandoned-owned-budget watchdog delay (null restores). */
 export let ownedBudgetAbandonedMs = 10 * 60 * 1000;
 const OWNED_BUDGET_ABANDONED_DEFAULT_MS = ownedBudgetAbandonedMs;

@@ -152,6 +152,12 @@ export interface OcxParsedRequest {
    * executes searches via the gpt-5.6-luna sidecar (see src/web-search). Absent when not requested.
    */
   _webSearch?: Record<string, unknown>;
+  /**
+   * Replayed hosted `web_search_call` cells the parser rebuilt as a `web_search` call/result pair,
+   * by cell id. The web-search sidecar swaps in the result it recorded for that cell, once the
+   * replay scope is bound (src/web-search/sidecar-search-replay.ts).
+   */
+  _replayedWebSearchCellIds?: string[];
   /** Hosted image_generation tool config stashed for the image bridge sidecar (see src/images). */
   _imageGeneration?: { toolNames: Set<string>; originalTool?: Record<string, unknown> };
   /**
@@ -448,9 +454,10 @@ export type AdapterEvent =
   // "Searching the web" spinner, then `end` once it resolves. The bridge maps begin → an
   // output_item.added(in_progress) and end → the matching output_item.done(completed|failed) under
   // the SAME output index, so the activity animates instead of flashing completed instantly.
-  | { type: "web_search_call_begin"; id: string }
+  // `itemId` lets the loop name the client-visible cell so it can record the result for replay.
+  | { type: "web_search_call_begin"; id: string; itemId?: string }
   | {
-      type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[];
+      type: "web_search_call_end"; id: string; itemId?: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[];
       /** Anthropic's server-side call (adapters/anthropic.ts): its `server_tool_use` and result block, verbatim. */
       anthropic?: AnthropicServerBlocks;
     }

@@ -33,6 +33,7 @@ import {
 import { formatWebSearchResults } from "./format-result";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
+import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResults } from "./sidecar-search-replay";
 
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -417,6 +418,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     ? Math.floor(deps.stallTimeoutSec * 1000)
     : 300_000;
 
+  // Put recorded results back into replayed search pairs before the first iteration (#7269).
+  restoreSidecarSearchResults(parsed);
   const messages: OcxMessage[] = [...parsed.context.messages];
   const replaySnapshots = new Set<AnthropicReplaySnapshot>();
   const loopT0 = Date.now();
@@ -849,6 +852,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   async function* runSearchCall(call: WebSearchCall, precedingThinking: OcxThinkingContent[] = [], appendAssistant = true): AsyncGenerator<AdapterEvent> {
     const results: { query: string; outcome: SidecarOutcome }[] = [];
     let beganCell = false;
+    const cellItemId = newSidecarSearchCellId();
     if (call.queries.length === 0) {
       // The model called web_search with neither query nor queries — count it against the budget
       // (loop-bounding) exactly as the old empty-query placeholder did, but emit no cell.
@@ -870,7 +874,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // Real sidecar search. Open the cell once, before the first real query runs.
         if (!beganCell) {
           beganCell = true;
-          yield { type: "web_search_call_begin", id: call.id };
+          yield { type: "web_search_call_begin", id: call.id, itemId: cellItemId };
         }
         // F5: the anthropic sidecar authenticates with its own stored OAuth — it never touches the
         // ChatGPT forward headers and must NOT record a Codex/OpenAI pool outcome.
@@ -945,12 +949,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     });
     // One aggregated tool result. isError only when EVERY query failed (a partial success is usable).
     const allFailed = results.every(r => !!r.outcome.error);
+    const resultText = formatWebSearchResults(results, !!parsed._structuredOutput);
     messages.push({
       role: "toolResult", toolCallId: call.id, toolName: WEB_SEARCH_TOOL_NAME,
-      content: formatWebSearchResults(results, !!parsed._structuredOutput),
+      content: resultText,
       isError: allFailed, timestamp: now,
     });
     if (beganCell) {
+      // The client sees only the cell; keep the result so its replay can carry it (#7269).
+      rememberSidecarSearch(parsed, cellItemId, { id: call.id, arguments: callArgs }, resultText);
       // The cell is "completed" if any query produced a usable result, else "failed". `queries`
       // carries every attempted query so Codex renders the native plural label.
       const anySuccess = results.some(r => !r.outcome.error);
@@ -966,7 +973,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         }
       }
       yield {
-        type: "web_search_call_end", id: call.id,
+        type: "web_search_call_end", id: call.id, itemId: cellItemId,
         queries: call.queries,
         status: anySuccess ? "completed" : "failed",
         ...(sources.length > 0 ? { sources } : {}),

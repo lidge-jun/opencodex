@@ -1270,7 +1270,7 @@
   "warmup-registration.test.ts": "ci-workflows", "warmup.test.ts": "codex-integration",
   "web-search-anthropic.test.ts": "web-search", "devin-web-search.test.ts": "web-search",
   "web-search-recovery-kind.test.ts": "web-search", "chat-legacy-functions-combo.test.ts": "responses",
-  "web-search-backend-union.test.ts": "web-search", "web-search-bridge-replay.test.ts": "web-search",
+  "web-search-backend-union.test.ts": "web-search", "web-search-bridge-replay.test.ts": "web-search", "web-search-sidecar-replay.test.ts": "web-search",
   "web-search-candidates.test.ts": "web-search", "web-search-parse.test.ts": "web-search",
   "web-search-passthrough-bridge.test.ts": "web-search", "web-search-progress-stream.test.ts": "web-search",
   "web-search-retry-heartbeat.test.ts": "web-search", "web-search-sidecar-429.test.ts": "web-search",

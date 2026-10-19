@@ -50,7 +50,7 @@ import {
   type TranslatorBudget,
   type TranslatorBufferKind,
 } from "../lib/translator-budget";
-import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
+import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction, webSearchCellItemId } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
 import { terminalRefusalFailure } from "./terminal-refusal";
 
@@ -1211,7 +1211,7 @@ export function bridgeToResponsesSSE(
               flushHiddenRawReasoning();
               if (currentToolCall) closeCurrentToolCall();
               if (currentWebSearch) closeCurrentWebSearch("completed", []);
-              const wsItemId = `ws_${uuid()}`;
+              const wsItemId = webSearchCellItemId(event.itemId);
               emit("response.output_item.added", {
                 output_index: outputIndex,
                 item: { type: "web_search_call", id: wsItemId, status: "in_progress" },
@@ -1224,7 +1224,7 @@ export function bridgeToResponsesSSE(
               // (defensive), synthesize the added frame first so the done has a matching item.
               if (!currentWebSearch || currentWebSearch.eventId !== event.id) {
                 if (currentWebSearch) closeCurrentWebSearch("completed", []);
-                const wsItemId2 = `ws_${uuid()}`;
+                const wsItemId2 = webSearchCellItemId(event.itemId);
                 emit("response.output_item.added", {
                   output_index: outputIndex,
                   item: { type: "web_search_call", id: wsItemId2, status: "in_progress" },

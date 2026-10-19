@@ -1898,6 +1898,7 @@
     "chat-legacy-functions-combo.test.ts": "responses",
     "web-search-backend-union.test.ts": "web-search",
     "web-search-bridge-replay.test.ts": "web-search",
+    "web-search-sidecar-replay.test.ts": "web-search",
     "web-search-candidates.test.ts": "web-search",
     "web-search-parse.test.ts": "web-search",
     "web-search-passthrough-bridge.test.ts": "web-search",
