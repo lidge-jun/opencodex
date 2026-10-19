@@ -1364,12 +1364,31 @@ export async function prepareAdapterExchange(
         && anthropicInstance
         && transportState.anthropicPoolAccountId
       ) {
-        const nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance, upstreamResponse, {
-          config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: upstream.signal,
-          canRetry: !sendBudgetExhausted() && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-        });
-        if (!nextAccountId) break;
+        // Same admission as the other rotation ladders: the roster cap cannot see the shared
+        // send budget. A canRetry term, not a break -- the call also records the refusal.
+        const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
+        const hop = reserveCredentialHop(
+          "auth-recovery",
+          `${route.providerName}|${route.modelId}|anthropic-pool-rotation`,
+          !adapterOwnsDispatch && genericRefetchCountsSends(),
+        );
+        let nextAccountId: string | null;
+        try {
+          nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance, upstreamResponse, {
+            config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
+            model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: upstream.signal,
+            // A denied reservation must not rotate on base headroom its bounds cannot see.
+            canRetry: hop.allowed && (hop.permit !== undefined || !sendBudgetExhausted())
+              && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+          });
+        } catch (rotationError) {
+          hop.permit?.release();
+          throw rotationError;
+        }
+        if (!nextAccountId) {
+          hop.permit?.release();
+          break;
+        }
         try {
           const admitted = await commitResolvedOAuthSelection(await anthropicRoutingFor(anthropicInstance).getAnthropicPoolAccessSnapshot(nextAccountId));
           if (!admitted) throw new Error("OAuth selection changed during recovery");
@@ -1392,12 +1411,26 @@ export async function prepareAdapterExchange(
           });
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
           recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
-         const result = await rebuildAndRefetch(upstreamResponse.status === 401 ? "oauth-401"
-           : upstreamResponse.status === 403 ? "oauth-account-403" : "anthropic-oauth-429");
-         if ("failed" in result) return result.failed;
-         upstreamResponse = result;
+          // The replay IS this hop's send; the dispatching layer settles the reservation.
+          sendBudgetState.pendingHopPermit = hop.permit;
+          let result: Response | { failed: Response };
+          try {
+            result = await rebuildAndRefetch(upstreamResponse.status === 401 ? "oauth-401"
+              : upstreamResponse.status === 403 ? "oauth-account-403" : "anthropic-oauth-429",
+              () => { if (!adapterOwnsDispatch) hop.permit?.use(); });
+          } finally {
+            sendBudgetState.pendingHopPermit = undefined;
+          }
+          if ("failed" in result) {
+            // A no-op once the boundary was reached; a refund when the rebuild died first.
+            hop.permit?.release();
+            return result.failed;
+          }
+          upstreamResponse = result;
           if (isNonReplayableResponse(upstreamResponse)) continue recovery;
-       } catch {
+        } catch {
+          // release() refunds a pre-send hop and is a no-op once the send settled it.
+          hop.permit?.release();
           break;
         }
       }
