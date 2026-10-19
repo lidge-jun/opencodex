@@ -982,7 +982,7 @@ export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined 
   const raw = usage as {
     input_tokens?: unknown;
     output_tokens?: unknown;
-    input_tokens_details?: { cached_tokens?: unknown; cache_write_tokens?: unknown };
+    input_tokens_details?: { cached_tokens?: unknown; cache_write_tokens?: unknown; cache_write_1h_tokens?: unknown };
     output_tokens_details?: { reasoning_tokens?: unknown };
     total_tokens?: unknown;
     prompt_tokens?: unknown;
@@ -1003,6 +1003,9 @@ export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined 
         : {}),
       ...(typeof raw.input_tokens_details?.cache_write_tokens === "number"
         ? { cacheCreationInputTokens: raw.input_tokens_details.cache_write_tokens }
+        : {}),
+      ...(typeof raw.input_tokens_details?.cache_write_1h_tokens === "number"
+        ? { cacheCreation1hInputTokens: raw.input_tokens_details.cache_write_1h_tokens }
         : {}),
       ...(typeof raw.output_tokens_details?.reasoning_tokens === "number"
         ? { reasoningOutputTokens: raw.output_tokens_details.reasoning_tokens }

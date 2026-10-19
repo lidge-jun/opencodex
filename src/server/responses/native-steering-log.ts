@@ -24,7 +24,7 @@ export function createNativeSteeringLogObserver(logCtx: RequestLogContext, onFir
       if (usage && (usages.has(event.response.id) || usages.size < MAX_NATIVE_STEERING_RESPONSES)) {
         // Retain numeric counters only, never arbitrary rawUsage metadata.
         const counters: OcxUsage = { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
-        for (const key of ["totalTokens", "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "reasoningOutputTokens"] as const) {
+        for (const key of ["totalTokens", "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "cacheCreation1hInputTokens", "reasoningOutputTokens"] as const) {
           if (typeof usage[key] === "number") counters[key] = usage[key];
         }
         usages.set(event.response.id, counters);
@@ -33,7 +33,7 @@ export function createNativeSteeringLogObserver(logCtx: RequestLogContext, onFir
     if (!usages.size) return;
     const total: OcxUsage = { inputTokens: 0, outputTokens: 0 };
     for (const usage of usages.values()) {
-      for (const key of ["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "reasoningOutputTokens"] as const) {
+      for (const key of ["inputTokens", "outputTokens", "totalTokens", "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "cacheCreation1hInputTokens", "reasoningOutputTokens"] as const) {
         const value = usage[key];
         if (typeof value === "number" && Number.isFinite(value)) total[key] = (total[key] ?? 0) + value;
       }

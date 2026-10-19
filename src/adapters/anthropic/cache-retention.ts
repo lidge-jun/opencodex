@@ -41,8 +41,9 @@ export function anthropicCacheWrite1hTokens(usage: Rec, write: number): number |
   return Math.min(value, write);
 }
 const MAX_DEPTH = 16;
-/** Tool inputs and schemas are caller data, not blocks: a cache_control key there is no breakpoint. */
-const isDataKey = (key: string): boolean => key === "cache_control" || key === "input" || key === "input_schema";
+/** Tool inputs, schemas and examples are caller data, not blocks: a cache_control key there is no breakpoint. */
+const isDataKey = (key: string): boolean => key === "cache_control" || key === "input" || key === "input_schema"
+  || key === "input_examples";
 
 /**
  * Every caller cache_control breakpoint TTL in a Messages body: top-level automatic caching plus

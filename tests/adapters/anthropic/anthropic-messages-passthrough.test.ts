@@ -115,13 +115,19 @@ describe("buildAnthropicMessagesPassthroughRequest", () => {
     };
     const source = {
       ...SOURCE,
-      tools: [{ name: "T", input_schema: { type: "object", properties: { cache_control: { type: "ephemeral" } } }, cache_control: { type: "ephemeral" } }],
+      tools: [{
+        name: "T",
+        input_schema: { type: "object", properties: { cache_control: { type: "ephemeral" } } },
+        input_examples: [{ cache_control: { type: "ephemeral" } }],
+        cache_control: { type: "ephemeral" },
+      }],
     };
     const upgraded = buildAnthropicMessagesPassthroughRequest(firstParty, "m", source).wireBody;
     expect((upgraded.system as Array<Record<string, unknown>>)[0]!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
     expect((upgraded.tools as Array<Record<string, unknown>>)[0]!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
     // A cache_control key inside a tool schema is caller data, not a breakpoint.
     expect((upgraded.tools as Array<{ input_schema: unknown }>)[0]!.input_schema).toEqual(source.tools[0]!.input_schema);
+    expect((upgraded.tools as Array<{ input_examples: unknown }>)[0]!.input_examples).toEqual(source.tools[0]!.input_examples);
     // The caller's object graph is copied on write, never mutated.
     expect(source.tools[0]!.cache_control).toEqual({ type: "ephemeral" });
     expect(SOURCE.system[0]!.cache_control).toEqual({ type: "ephemeral" });

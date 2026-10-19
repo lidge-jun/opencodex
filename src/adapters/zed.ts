@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { createAnthropicAdapter } from "./anthropic";
+import type { AnthropicCacheRetention } from "./anthropic/cache-retention";
 import { createGoogleAdapter } from "./google";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
@@ -218,15 +219,17 @@ export function zedEventStream(
   return body.pipeThrough(output);
 }
 
-function createDelegate(provider: OcxProviderConfig, zedProvider: ZedProvider): ProviderAdapter {
+function createDelegate(provider: OcxProviderConfig, zedProvider: ZedProvider, cacheRetention?: AnthropicCacheRetention): ProviderAdapter {
   const config = delegateProvider(provider, zedProvider);
-  if (zedProvider === "anthropic") return createAnthropicAdapter(config);
+  // The delegate only borrows the api.anthropic.com body builder; the wire goes to Zed's
+  // gateway, which does not document the 1h TTL, so an omitted retention stays 5m here.
+  if (zedProvider === "anthropic") return createAnthropicAdapter(config, cacheRetention ?? "short");
   if (zedProvider === "google") return createGoogleAdapter(config);
   if (zedProvider === "open_ai") return createResponsesPassthroughAdapter(config);
   return createOpenAIChatAdapter(config);
 }
 
-export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
+export function createZedAdapter(provider: OcxProviderConfig, cacheRetention?: AnthropicCacheRetention): ProviderAdapter {
   let delegate: ZedDelegate | undefined;
   let credentials: ZedCredentials | undefined;
 
@@ -246,7 +249,7 @@ export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
       /* Model inference fallback below; a transient catalog outage must not block passthrough. */
     }
     const zedProvider = providerFromCatalog(catalog, parsed.modelId);
-    const selected = createDelegate(provider, zedProvider);
+    const selected = createDelegate(provider, zedProvider, cacheRetention);
     const safeIncoming: IncomingMeta = {
      headers: incoming?.headers ?? new Headers(),
      translatorBudget: incoming?.translatorBudget ?? createTranslatorBudget(),
