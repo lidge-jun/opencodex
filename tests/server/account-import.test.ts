@@ -55,6 +55,11 @@ describe("Cockpit account-import parser", () => {
       record({ email: `${"a".repeat(250)}@x.io` }),
       record({ refresh_token: "token\ncontrol" }),
       record({ refresh_token: "x".repeat(16 * 1024 + 1) }),
+      record({ project_id: "" }),
+      record({ project_id: 123 }),
+      record({ project_id: "invalid project with spaces" }),
+      record({ project_id: "-leading-hyphen" }),
+      record({ project_id: "x".repeat(65) }),
       "not-an-object",
     ]);
     expect(parsed.ok).toBe(true);
@@ -85,6 +90,39 @@ describe("Cockpit account-import service and adapter", () => {
       .toEqual({ ok: false, status: 400, code: "unsupported_provider" });
     expect(await importAccounts({ provider: ACCOUNT_IMPORT_PROVIDER, format: "unknown", document: poisonousDocument }))
       .toEqual({ ok: false, status: 400, code: "unsupported_format" });
+  });
+
+  test("propagates optional project_id from document through importAccounts to persistence when discovery yields none", async () => {
+    let capturedCredential: any = null;
+    const adapter = createAntigravityAccountImportAdapter({
+      validate: async () => ({
+        access: "access-valid",
+        refresh: "refresh-valid",
+        expires: Date.now() + 60_000,
+        email: "fallback@example.com",
+        projectId: undefined,
+      }),
+      upsert: async (cred) => {
+        capturedCredential = cred;
+        return "inserted";
+      },
+    });
+
+    const result = await importAccounts({
+      provider: ACCOUNT_IMPORT_PROVIDER,
+      format: ACCOUNT_IMPORT_FORMAT,
+      document: [
+        record({ email: "fallback@example.com", refresh_token: "refresh-valid", project_id: "aicode-consumers" }),
+      ],
+    }, { resolveAdapter: () => ({ ok: true, adapter }) });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.result.importedCount).toBe(1);
+      expect(result.result.failedCount).toBe(0);
+    }
+    expect(capturedCredential).not.toBeNull();
+    expect(capturedCredential?.projectId).toBe("aicode-consumers");
   });
 
   test("processes valid records sequentially and exposes only fixed result fields", async () => {

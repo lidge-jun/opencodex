@@ -11,6 +11,7 @@ export const ACCOUNT_IMPORT_MAX_REQUEST_BYTES = ACCOUNT_IMPORT_MAX_BYTES + 1024;
 export const ACCOUNT_IMPORT_DEADLINE_MS = 600_000;
 export const ACCOUNT_IMPORT_MAX_RECORDS = 25;
 export const ACCOUNT_IMPORT_MAX_EMAIL_LENGTH = 254;
+export const ACCOUNT_IMPORT_MAX_PROJECT_ID_LENGTH = 64;
 export const ACCOUNT_IMPORT_MAX_REFRESH_TOKEN_BYTES = 16 * 1024;
 
 export type AccountImportStatus = "imported" | "updated" | "failed" | "unsupported";
@@ -65,6 +66,7 @@ export function throwIfAccountImportAborted(signal?: AbortSignal): void {
 export interface CockpitAccountRecord {
   email: string;
   refreshToken: string;
+  projectId?: string;
 }
 
 export type ParsedCockpitRecord =

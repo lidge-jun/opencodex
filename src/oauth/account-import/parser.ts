@@ -1,13 +1,14 @@
 import {
   ACCOUNT_IMPORT_MAX_BYTES,
   ACCOUNT_IMPORT_MAX_EMAIL_LENGTH,
+  ACCOUNT_IMPORT_MAX_PROJECT_ID_LENGTH,
   ACCOUNT_IMPORT_MAX_RECORDS,
   ACCOUNT_IMPORT_MAX_REFRESH_TOKEN_BYTES,
   type ParsedCockpitRecord,
 } from "./types";
 
 const encoder = new TextEncoder();
-const ALLOWED_RECORD_KEYS = new Set(["email", "refresh_token", "tags", "notes"]);
+const ALLOWED_RECORD_KEYS = new Set(["email", "refresh_token", "project_id", "tags", "notes"]);
 
 export type CockpitDocumentParseResult =
   | { ok: true; records: ParsedCockpitRecord[] }
@@ -50,17 +51,27 @@ function validMetadata(record: Record<string, unknown>): boolean {
   return record.notes === undefined || typeof record.notes === "string";
 }
 
+function validProjectId(value: unknown): value is string | undefined {
+  if (value === undefined) return true;
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > ACCOUNT_IMPORT_MAX_PROJECT_ID_LENGTH) return false;
+  return /^[a-z0-9][a-z0-9_.-]*[a-z0-9]$/i.test(trimmed);
+}
+
 function parseRecord(value: unknown, index: number): ParsedCockpitRecord {
   if (!isPlainRecord(value)) return { index, code: "invalid_record" };
   if (Object.keys(value).some(key => !ALLOWED_RECORD_KEYS.has(key))) return { index, code: "invalid_record" };
-  if (!validEmail(value.email) || !validRefreshToken(value.refresh_token) || !validMetadata(value)) {
+  if (!validEmail(value.email) || !validRefreshToken(value.refresh_token) || !validProjectId(value.project_id) || !validMetadata(value)) {
     return { index, code: "invalid_record" };
   }
+  const projectId = typeof value.project_id === "string" ? value.project_id.trim() : undefined;
   return {
     index,
     record: {
       email: value.email.toLowerCase(),
       refreshToken: value.refresh_token,
+      ...(projectId ? { projectId } : {}),
     },
   };
 }

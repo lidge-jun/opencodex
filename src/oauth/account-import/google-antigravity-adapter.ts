@@ -52,7 +52,11 @@ export function createAntigravityAccountImportAdapter(
       const providerEmail = safeProviderEmail(credential.email);
       if (!providerEmail) return { status: "failed", code: "credential_rejected" };
       if (providerEmail !== record.email) return { status: "failed", code: "identity_mismatch" };
-      if (typeof credential.projectId !== "string" || credential.projectId.length === 0) {
+      // Automatic discovery takes precedence; record.projectId serves as operator-supplied fallback
+      const resolvedProjectId = (typeof credential.projectId === "string" && credential.projectId.length > 0)
+        ? credential.projectId
+        : record.projectId;
+      if (typeof resolvedProjectId !== "string" || resolvedProjectId.length === 0) {
         return { status: "failed", code: "missing_project" };
       }
 
@@ -61,6 +65,7 @@ export function createAntigravityAccountImportAdapter(
         const disposition = await deps.upsert({
           ...credential,
           email: providerEmail,
+          projectId: resolvedProjectId,
           source: "credential-file",
         });
         return disposition === "updated"
