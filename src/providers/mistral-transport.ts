@@ -59,6 +59,8 @@ export function mistralMinuteRefusal(headers: Headers): "temporary" | "charge-ab
 export class MistralBudgetPacer {
   private readonly deadlines = new Map<string, number>();
   private readonly recoveries = new Map<string, RecoveryState>();
+  /** Latest live deadline evicted at capacity; unknown identities wait it out instead of sending early. */
+  private evictedUntil = 0;
   private waiting = 0;
 
   constructor(
@@ -81,7 +83,9 @@ export class MistralBudgetPacer {
       if (deadline <= this.now()) this.deadlines.delete(key);
     }
     if (!this.deadlines.has(identity) && this.deadlines.size >= MAX_IDENTITIES) {
-      this.deadlines.delete(this.deadlines.keys().next().value!);
+      const [evicted, until] = this.deadlines.entries().next().value!;
+      this.evictedUntil = Math.max(this.evictedUntil, until);
+      this.deadlines.delete(evicted);
     }
     this.deadlines.set(identity, Math.max(this.deadlines.get(identity) ?? 0, this.now() + delay));
     if (status === 429) {
@@ -105,7 +109,7 @@ export class MistralBudgetPacer {
     try {
       for (;;) {
         signal?.throwIfAborted();
-        const readyAt = this.deadlines.get(identity);
+        const readyAt = this.deadlines.get(identity) ?? (this.evictedUntil > this.now() ? this.evictedUntil : undefined);
         if (readyAt !== undefined && readyAt > deadline) {
           const delay = readyAt - this.now();
           throw new RequestPacingQueueOverloadError("mistral", "queue_expired", Math.ceil(delay / 1000));

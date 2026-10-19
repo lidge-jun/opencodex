@@ -240,6 +240,14 @@ describe("Mistral observed budget pacing", () => {
     expect(waits).toEqual([7000]);
   });
 
+  test("evicting a live deadline at capacity never admits that identity early", async () => {
+    const { pacing, waits } = fixture();
+    for (let index = 0; index <= 128; index++) pacing.observe(`identity-${index}`, budget("0", "600", "10", "30"));
+    // identity-0 was evicted to bound memory; its 30 s server delay still applies.
+    await pacing.acquire("identity-0");
+    expect(waits).toEqual([30_000]);
+  });
+
   test("waits for explicit retry times after token or request exhaustion", async () => {
     const { pacing, waits } = fixture();
     pacing.observe("tokens", budget("800", "600", "10", "9"));
