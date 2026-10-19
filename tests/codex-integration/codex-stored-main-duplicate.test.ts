@@ -305,3 +305,11 @@ describe("stored Pool duplicate of native main", () => {
     } finally { process.env.CODEX_HOME = original; }
   });
 });
+
+test("owned API-key-only login retires the prior ChatGPT collision", () => {
+  native();
+  expect(codexAccountUnusableReason(config, poolId)).toBe("duplicate_main");
+  writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), JSON.stringify({ auth_mode: "api_key", OPENAI_API_KEY: "fake-native-key" }));
+  reconcileMainCodexAccountRuntimeState();
+  expect(codexAccountUnusableReason(config, poolId)).toBeUndefined();
+});

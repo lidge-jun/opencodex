@@ -124,3 +124,23 @@ export function checkAccountIdCollision(
   }
   return { collision: false };
 }
+
+export type MainAuth = CodexTokenReadResult | { status: "api-key-only" };
+
+/** A valid API-key login has no ChatGPT identity; anything else unreadable stays unknown. */
+export function readMainAuth(authPath = join(resolveCodexHomeDir(), "auth.json")): MainAuth {
+  const main = readCodexTokensResult(authPath, { bounded: true });
+  if (main.status !== "invalid") return main;
+  try {
+    const j: unknown = JSON.parse(readBounded(authPath, MAX_AUTH_BYTES).toString("utf-8"));
+    if (j === null || typeof j !== "object" || Array.isArray(j)) return main;
+    const envelope = j as { auth_mode?: unknown; OPENAI_API_KEY?: unknown; tokens?: unknown };
+    const apiKeyOnly = envelope.tokens == null
+      && (envelope.auth_mode === undefined || envelope.auth_mode === "api_key")
+      && typeof envelope.OPENAI_API_KEY === "string" && envelope.OPENAI_API_KEY.trim() !== "";
+    return apiKeyOnly ? { status: "api-key-only" } : main;
+  } catch {
+    return main;
+  }
+}
+

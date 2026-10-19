@@ -10,7 +10,7 @@ import {
 import { captureConfigTopLevelRollback } from "../config/rebase-provenance";
 import { removeCodexAccountCredential } from "./account-store";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
-import { readCodexTokensResult } from "./auth-collision";
+import { readMainAuth } from "./auth-collision";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
 import { clearAccountQuota } from "./quota";
 import { forgetManualPreference } from "./routing/active-account";
@@ -80,8 +80,8 @@ function purgeMainCodexAccountRuntimeState(): void {
  * cooldown, quota, reauth, and thread affinity do not leak across accounts.
  */
 export function reconcileMainCodexAccountRuntimeState(): boolean {
-  const read = readCodexTokensResult();
-  if (read.status === "missing") observeMainCodexCollisionIdentity();
+  const read = readMainAuth();
+  if (read.status === "missing" || read.status === "api-key-only") observeMainCodexCollisionIdentity();
   const currentAccountId = read.status === "ok"
     ? extractAccountId(read.tokens.id_token, read.tokens.access_token) ?? (read.tokens.account_id || null)
     : null;
@@ -112,8 +112,8 @@ export function reconcileMainCodexAccountRuntimeState(): boolean {
 export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   // Startup observes the pinned owned path inside the exclusive claim: bound the read so a
   // replaced non-regular or oversized file cannot stall startup inside that claim.
-  const result = readCodexTokensResult(authPath, { bounded: true });
-  if (result.status === "missing") observeMainCodexCollisionIdentity();
+  const result = readMainAuth(authPath);
+  if (result.status === "missing" || result.status === "api-key-only") observeMainCodexCollisionIdentity();
   if (result.status !== "ok") return false;
   const { tokens } = result;
   if (typeof tokens.access_token !== "string" || !tokens.access_token

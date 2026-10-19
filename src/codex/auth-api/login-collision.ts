@@ -1,6 +1,6 @@
 import { lstatSync } from "node:fs";
 import { extractAccountId, extractAccountIdClaims, extractEmail } from "../../oauth/chatgpt";
-import { checkAccountIdCollision } from "../auth-collision";
+import { checkAccountIdCollision, readMainAuth } from "../auth-collision";
 import { resolveCodexHomeDir } from "../home";
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { withNativeMainSharedClaim } from "../native-main-claim";
@@ -8,7 +8,6 @@ import { resolveNativeProfileContext } from "../native-profile-store";
 import { NativeProfileError } from "../native-profile-types";
 import { extractChatgptPlanType } from "../plan";
 import { isNativeMainClaimUnavailable } from "./http";
-import { readMainAuth } from "./account-pause-group";
 
 export class CodexCollisionReadBusyError extends Error {
   constructor() { super("Native Codex login is busy or unreadable; retry login shortly."); }
