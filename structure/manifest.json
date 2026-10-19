@@ -533,6 +533,13 @@
       ]
     },
     {
+      "path": "providers/pool-credit-renewal.md",
+      "tier": 4,
+      "title": "Pool credit renewal",
+      "scope": "Independent credit-evidence renewal for opted-in exhausted Codex pool accounts.",
+      "documents": ["src/codex/auth-api/pool-mode-gate.ts"]
+    },
+    {
       "path": "providers/openai-accounts.md",
       "tier": 4,
       "title": "OpenAI Account Identity And Pool Operations",

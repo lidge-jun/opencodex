@@ -78,6 +78,21 @@ export async function runCodexCooldownRecoveryProbes(config: OcxConfig, now = Da
 
 const MAIN_CREDIT_RENEWAL_AGE_MS = 3 * 60_000;
 
+/** Traffic headers renew usage, never the independent credit observation (#7377). */
+function poolCreditRenewalDue(config: OcxConfig, accountId: string, now = Date.now()): boolean {
+  const account = configuredPoolAccount(config, accountId);
+  if (!account || !codexAccountUsesCreditsAfterLimit(config, accountId)
+    || isCodexAccountPaused(config, accountId) || isAccountNeedsReauth(accountId)) return false;
+  const quota = getAccountQuota(accountId);
+  if (codexUsageLimitResetAt(quota, account.plan, now) === undefined) return false;
+  const observedAt = quota?.credits?.observedAt;
+  if (observedAt !== undefined && Number.isFinite(observedAt)
+    && now - observedAt >= 0 && now - observedAt < MAIN_CREDIT_RENEWAL_AGE_MS) return false;
+  const attempt = poolQuotaPrimeAttemptedAt.get(accountId);
+  return !attempt || attempt.generation !== readCodexAccountRecord(accountId)?.generation
+    || now - attempt.at >= MAIN_CREDIT_RENEWAL_AGE_MS;
+}
+
 let mainHardLockRecoveryInFlight: Promise<void> | null = null;
 let mainHardLockRecoveryAttempt: { identity: number; credential: number; after: number; delay: number } | undefined;
 
@@ -186,6 +201,7 @@ export function registerCodexCooldownRecoveryProbeWorker(config: OcxConfig): voi
     afterTick: () => {
       void runCodexCooldownRecoveryProbes(config);
       void runMainAccountHardLockRecovery(config);
+      void primeCodexPoolQuotas(config, "credit-renewal");
     },
   });
 }
@@ -265,6 +281,7 @@ export async function primeCodexPoolQuotas(
   primeInFlight = trackBackgroundWork(`codex-pool-quota-prime:${reason}`, (async () => {
     const pool = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
     const stale = pool.filter(a => {
+      if (reason === "credit-renewal") return poolCreditRenewalDue(runtimeConfig, a.id);
       const q = getAccountQuota(a.id);
       const observationStale = reason === "priority-failback" && q
         && !codexQuotaHasFreshUsage(q, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS);
@@ -278,7 +295,10 @@ export async function primeCodexPoolQuotas(
       if (lastAttempt.generation !== readCodexAccountRecord(a.id)?.generation) return true;
       return Date.now() - lastAttempt.at >= POOL_CACHE_TTL;
     });
+    if (reason === "credit-renewal" && stale.length === 0) return;
     const primeMain = async () => {
+      // Main renewal owns its physical-identity claims and passive probe separately.
+      if (reason === "credit-renewal") return;
       const mainLease = tryAcquireNativeMainPrimeLease();
       if (!mainLease) return;
       try {
@@ -311,11 +331,12 @@ export async function primeCodexPoolQuotas(
         primeMain(),
         mapWithConcurrency(stale, POOL_QUOTA_REFRESH_CONCURRENCY, async a => {
           if (!getCodexAccountCredential(a.id)) return;
+          if (reason === "credit-renewal" && !poolCreditRenewalDue(getRuntimeConfig(config), a.id)) return;
           let result: PoolQuotaResult;
           try {
             const quota = getAccountQuota(a.id);
-            const bypassCachedQuota = reason === "priority-failback" && quota !== null
-              && !codexQuotaHasFreshUsage(quota, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS);
+            const bypassCachedQuota = reason === "credit-renewal" || (reason === "priority-failback" && quota !== null
+              && !codexQuotaHasFreshUsage(quota, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS));
             result = await fetchPoolAccountQuota(a.id, bypassCachedQuota, a.plan, getValidPoolTokenForPrime);
           } catch (error) {
             // Local quota-flight saturation proves no WHAM request existed for this account.
