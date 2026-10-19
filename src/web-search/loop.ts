@@ -14,7 +14,7 @@ import { bridgeToResponsesSSE } from "../bridge";
 import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { mergeUsage } from "../server/responses/empty-completion-guard";
-import { contextOverflowEvent, isSidecarContextOverflow } from "../server/responses/context-overflow";
+import { isSidecarContextOverflow, sidecarContextOverflowEvent } from "../server/responses/context-overflow";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
@@ -1143,7 +1143,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             // A later iteration's overflow ends the turn as the main path's terminal
             // context_length_exceeded, so Codex compacts instead of resending (#7316).
             else if (e instanceof LoopError && isSidecarContextOverflow(e.status, e.message, e.event?.code)) {
-              yield contextOverflowEvent();
+              yield sidecarContextOverflowEvent(e.event?.status ?? e.status, e.message);
             } else yield e instanceof LoopError && e.event ? e.event
               : e instanceof LoopError && deps.thinkingRecovery
                 ? { type: "error", status: e.status, errorType: "upstream_error", message: e.message }

@@ -155,6 +155,8 @@ describe("isSidecarContextOverflow", () => {
     expect(isSidecarContextOverflow(502, "kiro refused", "context_length_exceeded")).toBe(true);
     expect(isSidecarContextOverflow(400, "Provider error 400: tool schema is invalid")).toBe(false);
     expect(isSidecarContextOverflow(429, "too many tokens per minute")).toBe(false);
+    expect(isSidecarContextOverflow(400, "Provider error 400: too many tokens per minute")).toBe(false);
+    expect(isSidecarContextOverflow(400, "Provider error 400: maximum context length", "rate_limit_exceeded")).toBe(false);
     expect(isSidecarContextOverflow(502, "Provider stream error: maximum context length")).toBe(false);
     expect(isSidecarContextOverflow(413, "translator", "translation_buffer_limit")).toBe(false);
   });

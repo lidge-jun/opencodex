@@ -1,5 +1,6 @@
 import { bridgeToResponsesSSE, formatErrorResponse } from "../../bridge";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
+import { isThroughputLimitText } from "../../claude/outbound";
 import { isDefiniteContextOverflow } from "../../combos/failover";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { AdapterEvent } from "../../types";
@@ -56,19 +57,36 @@ async function* contextOverflowEvents(message: string): AsyncGenerator<AdapterEv
  *
  * An HTTP 413 is classified by status alone, exactly as the main path does. A 400/422 needs a
  * definite overflow phrase in the provider message (the rule combo failover already trusts), so a
- * plain bad request stays what it was. An adapter that already classified its own failure as
- * `context_length_exceeded` keeps that verdict whatever status it rode on. The local translator
- * limit is excluded: compacting cannot shrink a buffer this proxy owns.
+ * plain bad request stays what it was, and rate-window wording ("too many tokens per minute")
+ * never reads as an overflow: compacting does not fix a throughput limit. An adapter that already
+ * classified its own failure as `context_length_exceeded` keeps that verdict whatever status it
+ * rode on. The local translator limit is excluded: compacting cannot shrink a buffer this proxy owns.
  */
 export function isSidecarContextOverflow(
   status: number | undefined,
   message: string,
   code?: string | null,
 ): boolean {
-  if (code === "translation_buffer_limit") return false;
+  if (code === "translation_buffer_limit" || code === "rate_limit_exceeded") return false;
   if (code === "context_length_exceeded") return true;
   if (status === 413) return true;
-  return (status === 400 || status === 422) && isDefiniteContextOverflow(status, message);
+  return (status === 400 || status === 422) && !isThroughputLimitText(message)
+    && isDefiniteContextOverflow(status, message);
+}
+
+/**
+ * The in-stream terminal for a sidecar overflow. A bare 413 carries no provider wording worth
+ * keeping and gets the proxy-owned message. A worded verdict keeps its own status and message:
+ * that is the evidence combo failover reads to try a larger-context target, and replacing it
+ * would end the chain at the first target that was merely too small.
+ */
+export function sidecarContextOverflowEvent(
+  status: number | undefined,
+  message: string,
+): Extract<AdapterEvent, { type: "error" }> {
+  return status === undefined || status === 413 || !message
+    ? contextOverflowEvent()
+    : { ...contextOverflowEvent(message), status };
 }
 
 /**
@@ -78,12 +96,15 @@ export function isSidecarContextOverflow(
  * would otherwise reach Codex as a bare non-2xx that it resends unchanged through its retry
  * budget. Any other failure is returned untouched. Combo attempts do not come through here:
  * the combo layer reads the raw failure for its hop decision and maps a final 413 itself.
+ * A non-replayable failure (`x-should-retry: false`) also keeps its status and header: the
+ * provider may already have run that turn, and an overflow verdict would invite a compacted resend.
  */
 export async function sidecarContextOverflowResponse(
   response: Response,
   options: { stream: boolean; modelId: string; translatorBudget: TranslatorBudget },
 ): Promise<Response> {
   if (response.ok || !response.body) return response;
+  if (response.headers.get("x-should-retry") === "false") return response;
   if (!(response.headers.get("content-type") ?? "").includes("application/json")) return response;
   // The loop's own small JSON envelope. It is read whole and re-served when it is not an
   // overflow; the caller re-wraps the body for lifetime tracking either way.
