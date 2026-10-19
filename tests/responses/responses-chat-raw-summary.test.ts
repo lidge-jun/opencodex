@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../src/bridge";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { decodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
@@ -8,6 +8,9 @@ import { applyFinalRouteRequestNormalization } from "../../src/server/responses/
 import { handleResponses } from "../../src/server/responses/core";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+// The first request initializes the isolated runtime on cold Windows workers.
+setDefaultTimeout(30_000);
 
 const RAW = "raw reasoning, not a provider-authored summary";
 const provider = (extra: Partial<OcxProviderConfig> = {}): OcxProviderConfig => ({
@@ -44,7 +47,7 @@ async function dispatch(stream: boolean, extra: Partial<OcxProviderConfig>, reas
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "reasoner/reasoner", input: "ping", stream, reasoning }),
   }), { providers: { reasoner: provider(extra) } } as OcxConfig, { model: "", provider: "" },
-  { abortSignal: AbortSignal.timeout(5_000) });
+  { abortSignal: AbortSignal.timeout(20_000) });
   expect(response.status).toBe(200);
   const text = await response.text();
   return { text, output: stream ? frames(text).find(f => f.type === "response.completed")?.response.output
