@@ -69,4 +69,10 @@ describe("static opencode-go model metadata additions", () => {
       expect(meta?.reasoning).toBe(reasoning);
     });
   }
+
+  // Peak/off-peak (DeepSeek V4.1 Flash) and prompt-length tiers (GPT-6 Luna) have no single
+  // honest rate, so their cost stays unknown instead of encoding one unconditional price.
+  test.each(["deepseek-v4.1-flash", "gpt-6-luna"])("%s leaves tiered pricing unset", id => {
+    expect(getModelMetadata("opencode-go", id)?.cost).toBeUndefined();
+  });
 });
