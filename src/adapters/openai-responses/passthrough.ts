@@ -135,7 +135,8 @@ function usageFromResponsesPayload(payload: unknown): OcxUsage | undefined {
   const knownKeys = new Set(["input_tokens", "output_tokens", "total_tokens", "input_tokens_details", "output_tokens_details"]);
   const hasExtras = Object.keys(usage).some(key => !knownKeys.has(key))
     || (isPlainObject(usage.input_tokens_details)
-      && Object.keys(usage.input_tokens_details).some(key => key !== "cached_tokens" && key !== "cache_write_tokens"))
+      && Object.keys(usage.input_tokens_details).some(key => key !== "cached_tokens" && key !== "cache_write_tokens"
+        && key !== "cache_write_1h_tokens"))
     || (isPlainObject(usage.output_tokens_details)
       && Object.keys(usage.output_tokens_details).some(key => key !== "reasoning_tokens"));
   if (inputTokens === 0 && outputTokens === 0 && !hasExtras) return undefined;
@@ -147,6 +148,8 @@ function usageFromResponsesPayload(payload: unknown): OcxUsage | undefined {
     ...(typeof usage.total_tokens === "number" ? { totalTokens: usage.total_tokens } : {}),
     ...(typeof inputDetails?.cached_tokens === "number" ? { cachedInputTokens: inputDetails.cached_tokens } : {}),
     ...(typeof inputDetails?.cache_write_tokens === "number" ? { cacheCreationInputTokens: inputDetails.cache_write_tokens } : {}),
+    ...(typeof inputDetails?.cache_write_1h_tokens === "number"
+      ? { cacheCreation1hInputTokens: inputDetails.cache_write_1h_tokens } : {}),
     ...(typeof outputDetails?.reasoning_tokens === "number" ? { reasoningOutputTokens: outputDetails.reasoning_tokens } : {}),
     ...(hasExtras ? { rawUsage: { ...usage } } : {}),
   };
