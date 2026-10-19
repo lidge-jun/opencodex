@@ -9,7 +9,6 @@ import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-accoun
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
 import { readAnthropicUsageQuota } from "../claude-cli-usage";
-import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
   commitKiroAccountUsageState,
   fetchKiroUsageSnapshot,
@@ -44,8 +43,7 @@ import type { OcxConfig, OcxProviderConfig } from "../../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../quota-types";
 import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor } from "./anthropic-cooldown-recovery";
 
-const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing";
-const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
+export { fetchXaiQuota, parseXaiCreditsResponse } from "./xai";
 
 export async function fetchChatGptForwardQuota(
   config: OcxConfig,
@@ -121,110 +119,6 @@ export async function fetchChatGptForwardQuota(
     );
   }
   return null;
-}
-
-function centsValue(value: unknown): number | undefined {
-  const rec = asRecord(value);
-  return rec ? toFiniteNumber(rec.val) : undefined;
-}
-
-/** Decode JWT payload `sub` for xAI weekly credits when the stored credential lacks accountId. */
-function xaiUserIdFromAccessToken(accessToken: string): string | undefined {
-  const parts = accessToken.split(".");
-  if (parts.length < 2 || !parts[1]) return undefined;
-  try {
-    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as { sub?: unknown };
-    return typeof payload.sub === "string" && payload.sub.trim() ? payload.sub.trim() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Grok Build weekly credits envelope:
- * `{ config: { creditUsagePercent?, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end } } }`.
- * Omitted percent is treated as 0 (proto3 default).
- */
-export function parseXaiCreditsResponse(value: unknown): { percent: number; resetAt?: number } | null {
-  const body = asRecord(value);
-  const config = asRecord(body?.config);
-  if (!config) return null;
-  const period = asRecord(config.currentPeriod);
-  if (!period || period.type !== "USAGE_PERIOD_TYPE_WEEKLY") return null;
-  let percent = 0;
-  if (config.creditUsagePercent !== undefined) {
-    const normalized = normalizePercent(config.creditUsagePercent);
-    if (normalized === undefined) return null;
-    percent = normalized;
-  }
-  const resetAt = normalizeResetAt(period.end);
-  return {
-    percent,
-    ...(resetAt !== undefined ? { resetAt } : {}),
-  };
-}
-
-async function fetchXaiWeeklyCredits(accessToken: string, userId: string): Promise<ProviderQuota | null> {
-  try {
-    const response = await fetch(XAI_CREDITS_URL, {
-      redirect: "error",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${accessToken}`,
-        [XAI_GROK_COMPATIBILITY.headers.tokenAuth]: "xai-grok-cli",
-        [XAI_GROK_COMPATIBILITY.headers.authenticateResponse]: "authenticate-response",
-        "x-userid": userId,
-        [XAI_GROK_COMPATIBILITY.headers.clientVersion]: XAI_GROK_CLIENT_VERSION,
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!response.ok) return null;
-    const parsed = parseXaiCreditsResponse(await readQuotaJson(response));
-    if (!parsed) return null;
-    return {
-      weeklyPercent: parsed.percent,
-      ...(parsed.resetAt !== undefined ? { weeklyResetAt: parsed.resetAt } : {}),
-      updatedAt: Date.now(),
-    };
-  } catch {
-    return null;
-  }
-}
-
-export async function fetchXaiQuota(provider: string, context: { accessToken: string; upstreamAccountId?: string }): Promise<ProviderQuotaReport | null> {
-  const { accessToken } = context;
-
-  // Prefer the SuperGrok weekly credits window that actually gates prompting (#1283).
-  const userId = context.upstreamAccountId?.trim() || xaiUserIdFromAccessToken(accessToken);
-  if (userId) {
-    const weekly = await fetchXaiWeeklyCredits(accessToken, userId);
-    if (weekly) return report(provider, "xai:grok-billing-credits", weekly);
-  }
-
-  // Legacy monthly dollar pool — retained when weekly is unavailable.
-  try {
-    const response = await fetch(XAI_BILLING_URL, {
-      redirect: "error",
-      headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-    if (!response.ok) return null;
-    const body = asRecord(await readQuotaJson(response));
-    const config = asRecord(body?.config);
-    if (!config) return null;
-    const limitCents = centsValue(config.monthlyLimit);
-    const usedCents = centsValue(config.used);
-    if (limitCents === undefined || usedCents === undefined || limitCents <= 0) return null;
-    const percent = normalizePercent((usedCents / limitCents) * 100);
-    if (percent === undefined) return null;
-    return report(provider, "xai:grok-billing", {
-      monthlyPercent: percent,
-      monthlyResetAt: normalizeResetAt(config.billingPeriodEnd),
-      updatedAt: Date.now(),
-    });
-  } catch {
-    return null;
-  }
 }
 
 const anthropicUsageInflight = new Map<string, Promise<ProviderQuota | null>>();

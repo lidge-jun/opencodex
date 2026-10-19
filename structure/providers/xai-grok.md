@@ -276,7 +276,7 @@ what the Responses lane already relayed for responses-wire upstreams; the respon
 assembly for chat-wire upstreams tracks the echo in attempt telemetry only.
 Pool quota producers and account commands follow the [bounded raw-observation contract](openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
-Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
+Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority. `src/providers/quota/xai.ts` retains the failed weekly credits category when the legacy monthly fallback is also unusable; successful fallback clears the diagnosis. This is observation metadata and does not authorize inference or establish subscription billing.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

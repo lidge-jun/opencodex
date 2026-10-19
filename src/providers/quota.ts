@@ -67,6 +67,7 @@ import {
   fetchXaiQuota,
 } from "./quota/vendor-probes-oauth";
 import { fetchCommandCodeQuota, fetchKimiQuota, keyQuotaReaderForProvider } from "./quota/vendor-probes-key";
+import { probeXaiQuota } from "./quota/xai";
 import { antigravityQuotaDiagnosticIdentity, fetchAntigravityQuota, probeAntigravityUsageQuota } from "./quota/antigravity";
 import { persistKiroAccountState } from "./kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./quota/kiro-account-probe";
@@ -345,6 +346,7 @@ export async function fetchProviderQuotaReports(config: OcxConfig, forceRefresh 
 }
 async function readExplicitAccountQuota(provider: string, accountId: string, configured?: OcxProviderConfig): Promise<{
   result: ProviderQuotaProbeResult;
+  failure?: QuotaFailureCode;
   identity: string | undefined;
   isCurrent: () => boolean;
 } | null> {
@@ -361,8 +363,12 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
     && identity === explicitQuotaIdentity(provider, accountId, configured);
   if (!isCurrent()) return null;
   let result: ProviderQuotaProbeResult;
+  let failure: QuotaFailureCode | undefined;
   switch (provider) {
-    case "xai": result = await fetchXaiQuota(provider, { accessToken, upstreamAccountId: credential.accountId }); break;
+    case "xai": {
+      const probe = await probeXaiQuota(provider, { accessToken, upstreamAccountId: credential.accountId });
+      result = probe.report; failure = probe.failure; break;
+    }
     case "cursor": result = await fetchCursorQuota(provider, accessToken); break;
     case "kimi": result = await fetchKimiQuota(provider, config, accessToken); break;
     case "command-code": result = await fetchCommandCodeQuota(provider, config, accessToken); break;
@@ -370,7 +376,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
     case "dsh-account": result = await (await import("./quota/dsh-account")).fetchDshAccountQuota(provider, accessToken, { accountId, credential }); break;
     default: return null;
   }
-  return { result, identity, isCurrent };
+  return { result, failure, identity, isCurrent };
 }
 async function fetchExplicitAccountQuota(provider: string, accountId: string, force: boolean, configured?: OcxProviderConfig): Promise<AccountQuotaCacheEntry> {
   const key = accountCacheKey(provider, accountId);
@@ -398,6 +404,7 @@ async function fetchExplicitAccountQuota(provider: string, accountId: string, fo
       quota: quota ?? (current && result !== TERMINAL_QUOTA_FAILURE && !empty
         && lastGood && Date.now() - lastGood.updatedAt < LAST_GOOD_MAX_AGE_MS ? lastGood : null),
       ...(!current || (!quota && !empty) ? { unavailable: true as const } : {}),
+      ...(current && !quota && read?.failure ? { quotaFailure: read.failure, quotaFailureIsCurrent: isCurrent } : {}),
       identity: read?.identity ?? identity,
       isCurrent: () => epoch === explicitAccountEpoch && isCurrent(),
     };

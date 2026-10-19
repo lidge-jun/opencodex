@@ -704,6 +704,14 @@ cached result. An account with no per-account quota shows `-`, and one whose pro
 `unavailable` — blank would read as "no usage" rather than "not measured". `--json` carries the
 full breakdown per account, not just the summarized windows.
 
+For xAI Grok, an unavailable probe also carries a closed `quotaFailure` category in
+JSON, and human output shows `unavailable (<category>)`. For example, an HTTP503 weekly
+credits request followed by an unusable legacy monthly response retains `upstream_error`.
+A usable fallback clears the diagnosis. A last-good quota can remain visible with its
+original update time for up to 30 minutes while `quotaUnavailable` stays true; it is not a
+fresh reading. These categories do not prove exhaustion or change account health or
+billing permissions.
+
 API-key pools also support `ocx account list <provider> --quota [--refresh]`.
 Without `--quota`, their listing does not request a quota probe. The opt-in read
 uses each stored key's quota owner; `--refresh` requests fresh evidence from that
