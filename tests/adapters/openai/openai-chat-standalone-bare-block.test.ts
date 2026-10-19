@@ -218,6 +218,19 @@ test("a stream cut without a terminal signal never executes a bare block", async
   expect(visible(events)).toBe("Running.\n" + block());
 });
 
+test("a bare block arriving after the terminal finish_reason never executes", async () => {
+  for (const tail of ["", "data: [DONE]\n\n"]) {
+    const adapter = withTestTranslatorBudget(createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://gateway.example.test/v1", apiKey: "key" }));
+    adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: true, options: {},
+      context: { messages: [{ role: "user", content: "Use exec", timestamp: 0 }], tools: [exec] } });
+    const body = frame({ choices: [{ delta: { content: "Done." }, finish_reason: "stop" }] })
+      + frame({ choices: [{ delta: { content: "\n" + block() } }] }) + tail;
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(new Response(body))) events.push(event);
+    expect(events.filter(event => event.type === "tool_call_start")).toEqual([]);
+  }
+});
+
 test("64k adjacent bare blocks scan and fail closed within a bounded time", () => {
   const content = block().repeat(64_000);
   const start = performance.now();

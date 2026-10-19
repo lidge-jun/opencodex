@@ -87,7 +87,8 @@ export class StandaloneBareToolCallBuffer extends SerializedToolCallContentBuffe
     }
     const held = recoverStandaloneBareBlocks(this.current(), this.freeformTools, this.context);
     this.remember(held);
-    if (this.disabled || this.candidates.length === 0) return;
+    // The first terminal flush is the only recovery decision; content after it cannot authorize a call.
+    if (this.disabled || this.candidates.length === 0) { this.disabled = true; return; }
     yield* this.drainRanges(held);
     for (const call of this.candidates) yield* callEvents(call, nextId(), restore);
     this.clearCandidates();
