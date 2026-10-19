@@ -41,6 +41,30 @@ test("wrong nonce, wrong function, wrong input and incomplete blocks stay visibl
   }
 });
 
+test("invalid identified wrappers stay visible in streaming responses", async () => {
+  const adapter = withTestTranslatorBudget(createOpenAIChatAdapter({
+    adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "test",
+  }));
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: true, options: {}, context: {
+    messages: [{ role: "user", content: "Run the tool", timestamp: 0 }],
+    tools: [{ name: "exec", description: "JavaScript", freeform: true, parameters: {
+      type: "object", properties: { input: { type: "string" } },
+    } }],
+  } });
+  for (const text of [
+    block.replace(`</tool_call_${nonce}>`, "</tool_call_deadbeef>"),
+    block.replaceAll(nonce, "a".repeat(65)),
+  ]) {
+    const wire = [...text]
+      .map(content => `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`)
+      .join("") + "data: [DONE]\n\n";
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(new Response(wire))) events.push(event);
+    expect(events.filter(event => event.type === "text_delta").map(event => event.text).join("")).toBe(text);
+    expect(events.some(event => event.type === "tool_call_start")).toBe(false);
+  }
+});
+
 test("failed dispatch preserves held content and releases its budget", () => {
   const budget = createTestTranslatorBudget();
   const buffer = new SerializedToolCallContentBuffer(budget);
@@ -73,10 +97,11 @@ for (const stream of [false, true]) for (const empty of [false, true]) {
     } });
     const call = { id: "call_one", function: { name: "exec", arguments: empty ? "{}" : JSON.stringify({ input }) } };
     const prefix = empty ? "" : "Working. ";
+    const content = prefix + (empty ? block : block + block);
     const events: AdapterEvent[] = [];
-    if (!stream) events.push(...await adapter.parseResponse!(Response.json({ choices: [{ message: { content: prefix + block, tool_calls: [call] }, finish_reason: "tool_calls" }] }), createTestTranslatorBudget()));
+    if (!stream) events.push(...await adapter.parseResponse!(Response.json({ choices: [{ message: { content, tool_calls: [call] }, finish_reason: "tool_calls" }] }), createTestTranslatorBudget()));
     else {
-      const frames = [...(prefix + block)].map(content => ({ choices: [{ delta: { content } }] }));
+      const frames = [...content].map(frameContent => ({ choices: [{ delta: { content: frameContent } }] }));
       const wire = frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("")
         + `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, ...call }] } }] })}\n\n`
         + `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`;
