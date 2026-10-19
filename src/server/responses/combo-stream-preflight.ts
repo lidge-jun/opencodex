@@ -224,8 +224,13 @@ function failedTerminalResponse(
     : topLevelError && typeof topLevelError === "object" && !Array.isArray(topLevelError)
       ? topLevelError as Record<string, unknown>
     : {
-      type: "upstream_error",
-      code: "upstream_server_error",
+      // A caller-validated flat error can carry its identity beside type:error.
+      // Retain it when that caller established a 400, rather than discarding the
+      // rejection code before the single-shot opaque-state recovery sees it.
+      type: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
+        ? "invalid_request_error" : "upstream_error",
+      code: terminalPayload.type === "error" && logCtx.terminalHttpStatus === 400
+        ? (typeof terminalPayload.code === "string" ? terminalPayload.code : null) : "upstream_server_error",
       message: typeof terminalPayload.message === "string"
         ? terminalPayload.message
         : logCtx.upstreamError ?? "Provider stream failed before producing output",

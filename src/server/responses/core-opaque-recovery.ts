@@ -259,8 +259,15 @@ export function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
       }
     }
 
-    // The flat stream-error envelope carries type/message at the top level rather than under
-    // an error object; the same anchored identity applies there.
+    // Flat SSE error events carry their code/message beside type:error, without a nested
+    // error object. Match only the same dedicated code or exact verification identity.
+    if ((record.error === undefined || record.error === null)
+      && (record.type === "error" || record.type === "invalid_request_error")
+      && (record.code === "invalid_encrypted_content" || ((record.code === null || record.code === undefined)
+        && typeof record.message === "string" && record.message.startsWith("The encrypted content ")
+        && record.message.endsWith(" could not be verified. Reason: Encrypted content could not be decrypted or parsed.")))) return true;
+
+    // The caller-mismatch identity also arrives as a flat typed error.
     if (
       record.type === "invalid_request_error"
       && typeof record.message === "string"
@@ -277,14 +284,14 @@ export function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
 
 
 /**
- * Opted-in native reasoning retention forwards ciphertext another model or account minted. ChatGPT
- * can refuse it inside a 200 stream -- a Codex WebSocket `error` frame or `response.failed` --
- * rather than as an HTTP 4xx, so the passthrough inspects the zero-output prelude of exactly these
- * requests. Ordinary turns keep the function-output-only inspection.
+ * Opaque state can be refused inside a 200 stream rather than as an HTTP 4xx. The passthrough
+ * inspects its bounded zero-output prelude even when a restored thread has no serving record;
+ * successful native ciphertext remains unchanged and blobless turns do not gain inspection.
  */
 export function retainedReasoningStreamCandidate(parsed: OcxParsedRequest, outboundBody: string | undefined): boolean {
-  return parsed._nativeReasoningRetainedAcrossRoute === true
-    && parsed._stripReasoningEncryptedContent !== true
+  // A restored thread has no process-local serving record. Inspect its actual outbound
+  // opaque state too; only an explicit zero-output rejection can authorize the rebuild.
+  return parsed._stripReasoningEncryptedContent !== true
     && outboundResponsesBodyCarriesOpaqueBlob(outboundBody);
 }
 
@@ -310,7 +317,7 @@ export function retainedReasoningStreamRejection(
 
 
 /**
- * Whether an upstream Responses 4xx authoritatively rejected opaque replay state.
+ * Whether an upstream Responses 4xx or explicitly identified 502 rejected opaque replay state.
  *
  * The outbound-body check is intentional: the inbound transcript may contain a proxy envelope or
  * compaction blob that the adapter already lowered, in which case a replay would be byte-identical.
@@ -329,8 +336,10 @@ export function shouldAttemptOpaqueBlobRecovery(args: {
   const acceptedStatus = (args.status >= 400 && args.status < 500)
     || (
       args.status === 502
-      && outboundResponsesBodyCarriesEncryptedFunctionOutput(args.outboundBody)
-      && isEncryptedFunctionOutputRejection(args.errorBody)
+      // Gateways can project a reasoning-only rejection as 502. The existing strict
+      // identity classifier below still excludes generic gateway/transport failures.
+      && (!isEncryptedFunctionOutputRejection(args.errorBody)
+        || outboundResponsesBodyCarriesEncryptedFunctionOutput(args.outboundBody))
     );
   return acceptedStatus
     && adapterSpeaksResponsesWire(args.adapterName)

@@ -26,3 +26,21 @@ A combo picks a target per request, but a tool loop spans several requests that 
 
 When the pinned target is unavailable or fails, normal selection and failover run, and each strict serializer accepts foreign history instead of refusing it. `sanitizeReasoningInputContent` in `src/adapters/openai-responses/reasoning.ts` gives every assistant tool-call turn with no reasoning item a `reasoning_text: " "` item at its head on destinations with `requiresPlaintextReasoningReplay`. That is the Responses twin of the Chat adapter's `reasoning_content: " "` placeholder (#5421): a fixed single space, never invented reasoning. Gemini on AI Studio receives the validator sentinel for an unsigned first call, as Antigravity and Vertex already did ([Google provider](../providers/google.md#google-tool-call-thought-signature-replay)). Anthropic receives the call as an ordinary `tool_use`/`tool_result` pair with no thinking block. The opaque-only eligibility rule in `core-replay.ts` is unchanged. Coverage: `tests/server/server-combo-tool-loop-continuation.test.ts`, `tests/providers/deepseek-bare-tool-call-replay.test.ts` and `tests/adapters/google/google-ai-studio-foreign-call-signature.test.ts`.
 
+
+## Cold opaque-state rejection recovery
+
+`src/server/responses/core-opaque-recovery.ts` selects bounded zero-output stream preflight from
+opaque state in the actual outbound body, even without a process-local serving record after restart.
+The flat SSE error projector preserves a caller-validated 400 rejection identity, including its
+dedicated code or exact verification wording. A successful native replay remains untouched.
+Only the existing explicit rejection identities can
+trigger the existing one-shot sanitized rebuild; generic 502s do not. An identified reasoning-only
+502 follows that contract too. The encrypted-function-output-specific message still requires actual
+outbound encrypted function output. Existing transport retries retain their separate send accounting.
+Text/tool commitment, ambiguous-resend ownership, non-replayable responses, configured send limits
+and the one-shot guard still prohibit unsafe replay. The outbound rebuild preserves store:false and
+paired tool calls/results; this path never edits the on-disk conversation. It does not decrypt native
+ciphertext or add a new plaintext reconstruction rule. `tests/responses/responses-cold-opaque-recovery.test.ts`
+and `tests/responses/responses-azure-opaque-blob-recovery.test.ts` cover cold recovery and the negatives.
+
+> Decision record: [ADR-7369](../decisions/ADR-7369-cold-opaque-state-recovery.md)
