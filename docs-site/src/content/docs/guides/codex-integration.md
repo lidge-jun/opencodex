@@ -33,6 +33,13 @@ validation used after an upstream rejection. Existing model-permission and main-
 checks still apply. The fallback preserves the stored account's cooldown and does not persist the
 caller credential as the Pool selection. An exact account binding remains bound to that account.
 
+Adding or reauthenticating a pool account rejects a duplicate of the native main login with
+`Account is already configured as the native Codex main account.` The check compares ChatGPT
+account ID, personal/workspace subscription bucket, and email; a missing email does not prove
+a different identity. Different workspaces, distinct workspace members, and separate personal
+and workspace subscriptions remain supported. A failed usage lookup does not discard the
+subscription plan carried by the login token.
+
 ## Config injection
 
 `ocx sync` removes reasoning efforts unsupported by the selected Codex runtime from the catalog.
