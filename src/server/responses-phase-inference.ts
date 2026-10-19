@@ -13,8 +13,11 @@ import { replaceSseDataPayload, sseDataPayload } from "./sse-payload-rewrite";
  * follows each completed message, mirroring the openai-chat bridge strategy:
  * a message followed by tool-call work is commentary; a message at turn end
  * is the final answer. Messages already carrying an explicit phase are left
- * untouched, and each rewritten message stays buffered exactly one event, so
- * this adds no end-to-end latency, only one event of retention.
+ * untouched and forwarded without buffering. Each rewritten message stays
+ * buffered exactly one protocol event (SSE keepalives keep it pending), so
+ * this adds no end-to-end latency, only one event of retention. The terminal
+ * snapshot repeats the same per-item decisions, so output_item.done events
+ * and the final response.output never disagree for the same message.
  */
 
 const TERMINAL_EVENT_TYPES = new Set([
@@ -57,6 +60,10 @@ function parseDataPayload(block: string): Record<string, unknown> | null {
   }
 }
 
+function isDoneSentinel(block: string): boolean {
+  return sseDataPayload(block)?.trim() === "[DONE]";
+}
+
 function isMessageDoneBlock(block: string): boolean {
   const parsed = parseDataPayload(block);
   return parsed?.type === "response.output_item.done"
@@ -71,7 +78,7 @@ function withMessagePhase(block: string, phase: OcxMessagePhase): string {
   return replaceSseDataPayload(block, JSON.stringify(patched));
 }
 
-function withSnapshotPhases(block: string, phase: OcxMessagePhase): string {
+function withSnapshotPhases(block: string, inferred: ReadonlyMap<string, OcxMessagePhase>): string {
   const parsed = parseDataPayload(block);
   if (!parsed) return block;
   const response = parsed.response;
@@ -79,6 +86,12 @@ function withSnapshotPhases(block: string, phase: OcxMessagePhase): string {
   let changed = false;
   const output = response.output.map((item: unknown) => {
     if (isPlainObject(item) && item.type === "message" && item.phase === undefined) {
+      // Mirror the decision already emitted for this item on the wire, so
+      // clients reconciling the final snapshot never re-expand a message
+      // whose output_item.done said commentary. Items the rewrite never saw
+      // (joined mid-stream, no buffered decision) fall back to final_answer.
+      const id = typeof item.id === "string" ? item.id : null;
+      const phase = (id !== null ? inferred.get(id) : undefined) ?? "final_answer";
       changed = true;
       return { ...item, phase };
     }
@@ -92,14 +105,26 @@ function withSnapshotPhases(block: string, phase: OcxMessagePhase): string {
 export function createResponsesPhaseInferenceBlockRewrite(): SseBlockRewrite {
   // At most one message-done block is held at a time; the next block decides
   // its phase and is then processed itself. A malformed block releases the
-  // buffer unchanged rather than rewriting data we could not validate.
+  // buffer unchanged rather than rewriting data we could not validate. Each
+  // decision is retained per item id so the terminal snapshot can repeat it
+  // instead of contradicting already-emitted item phases; the map is bounded
+  // by the response's own message count and released at the terminal event.
   let pending: string | null = null;
+  const inferred = new Map<string, OcxMessagePhase>();
 
-  const releasePending = (): readonly string[] => {
+  const messageIdOf = (block: string): string | null => {
+    const parsed = parseDataPayload(block);
+    const item = parsed?.item;
+    return isPlainObject(item) && typeof item.id === "string" ? item.id : null;
+  };
+
+  const releasePending = (phase: OcxMessagePhase): readonly string[] => {
     if (pending === null) return [];
     const block = pending;
     pending = null;
-    return [block];
+    const id = messageIdOf(block);
+    if (id !== null) inferred.set(id, phase);
+    return [withMessagePhase(block, phase)];
   };
 
   const rewrite = (block: string): readonly string[] => {
@@ -107,28 +132,40 @@ export function createResponsesPhaseInferenceBlockRewrite(): SseBlockRewrite {
     const type = typeof parsed?.type === "string" ? parsed.type : null;
     if (TERMINAL_EVENT_TYPES.has(type!)) {
       // Turn end: any still-buffered message is the final answer, and the
-      // terminal snapshot mirrors the same phase for consistency.
-      return [
-        ...releasePending().map(b => withMessagePhase(b, "final_answer")),
-        type === "response.failed" ? block : withSnapshotPhases(block, "final_answer"),
-      ];
+      // terminal snapshot mirrors the same per-item decisions for consistency.
+      const released = releasePending("final_answer");
+      if (type === "response.failed") return [...released, block];
+      const snapshot = withSnapshotPhases(block, inferred);
+      inferred.clear();
+      return [...released, snapshot];
     }
     if (type === "response.output_item.done" && isMessageDoneBlock(block)) {
+      const item = parsed?.item;
+      if (isPlainObject(item) && item.phase !== undefined) {
+        // An explicit upstream phase needs no inference: forward immediately
+        // instead of buffering a message that an abnormal teardown would
+        // otherwise drop before it was ever emitted.
+        return [...releasePending("commentary"), block];
+      }
       // A following message done means the turn continued past the buffered
       // one (a phase change or a guarded continuation): commentary. Buffer
       // the current block for classification by whatever comes next.
-      const released = releasePending().map(b => withMessagePhase(b, "commentary"));
+      const released = releasePending("commentary");
       pending = block;
       return released;
     }
     if (type === null) {
-      // Unparseable / non-JSON blocks (e.g. the [DONE] sentinel) carry no
-      // classification evidence; release the buffer unchanged.
-      return [...releasePending(), block];
+      // Comment keepalives and other non-JSON data blocks carry no
+      // classification evidence in either direction, so a still-buffered
+      // message stays pending across them. The [DONE] sentinel closes the
+      // stream cleanly, which proves the buffered message was the turn's
+      // final answer.
+      if (isDoneSentinel(block)) return [...releasePending("final_answer"), block];
+      return [block];
     }
     // Any other protocol event after a completed message proves the turn
     // continued past it (tool calls, reasoning, a new item): commentary.
-    return [...releasePending().map(b => withMessagePhase(b, "commentary")), block];
+    return [...releasePending("commentary"), block];
   };
 
   return Object.assign(rewrite, {
@@ -137,6 +174,7 @@ export function createResponsesPhaseInferenceBlockRewrite(): SseBlockRewrite {
       // abnormal teardown before classification drops the retained block,
       // since the stream is failing anyway and no phase was ever proven.
       pending = null;
+      inferred.clear();
     },
   });
 }

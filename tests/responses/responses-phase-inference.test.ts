@@ -55,7 +55,96 @@ describe("Responses phase inference block rewrite", () => {
       messageDone(1, "final"),
       completed([{ type: "message", id: "msg_0", role: "assistant" }, { type: "message", id: "msg_1", role: "assistant" }]),
     ].flatMap(b => rewrite(b));
-    expect(out.map(phaseOf)).toEqual(["commentary", "final_answer", "final_answer,final_answer"]);
+    expect(out.map(phaseOf)).toEqual(["commentary", "final_answer", "commentary,final_answer"]);
+    rewrite.dispose?.();
+  });
+
+  test("message/tool/message keeps item-done and snapshot phases in agreement", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const out = [
+      messageDone(0, "checking the grid"),
+      functionCallAdded(1),
+      messageDone(2, "all done"),
+      completed([
+        { type: "message", id: "msg_0", role: "assistant" },
+        { type: "function_call", id: "fc_1", call_id: "call_1", name: "shell", arguments: "{}" },
+        { type: "message", id: "msg_2", role: "assistant" },
+      ]),
+    ].flatMap(b => rewrite(b));
+    expect(out.map(phaseOf)).toEqual(["commentary", undefined, "final_answer", "commentary,,final_answer"]);
+    rewrite.dispose?.();
+  });
+
+  test("multiple messages keep every snapshot phase equal to its item-done phase", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const out = [
+      messageDone(0, "first"),
+      messageDone(1, "second"),
+      messageDone(2, "final"),
+      completed([
+        { type: "message", id: "msg_0", role: "assistant" },
+        { type: "message", id: "msg_1", role: "assistant" },
+        { type: "message", id: "msg_2", role: "assistant" },
+      ]),
+    ].flatMap(b => rewrite(b));
+    expect(out.map(phaseOf)).toEqual(["commentary", "commentary", "final_answer", "commentary,commentary,final_answer"]);
+    rewrite.dispose?.();
+  });
+
+  test("snapshot keeps explicit upstream phases over inferred ones", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const out = [
+      messageDone(0, "narration"),
+      functionCallAdded(1),
+      messageDone(2, "answer", "final_answer"),
+      completed([
+        { type: "message", id: "msg_0", role: "assistant" },
+        { type: "message", id: "msg_2", role: "assistant", phase: "commentary" },
+      ]),
+    ].flatMap(b => rewrite(b));
+    // msg_2 carries an explicit upstream commentary phase, so it wins even
+    // though the message happens to close the turn.
+    expect(out.map(phaseOf)).toEqual(["commentary", undefined, "final_answer", "commentary,commentary"]);
+    rewrite.dispose?.();
+  });
+
+  test("snapshot messages never seen as item-done fall back to final_answer", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const out = [
+      messageDone(0, "checking"),
+      functionCallAdded(1),
+      completed([{ type: "message", id: "msg_9", role: "assistant" }]),
+    ].flatMap(b => rewrite(b));
+    expect(out.map(phaseOf)).toEqual(["commentary", undefined, "final_answer"]);
+    rewrite.dispose?.();
+  });
+
+  test("explicitly phased messages are forwarded without buffering", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const block = messageDone(0, "hi", "commentary");
+    // Forwarded immediately: nothing is retained, so a teardown after this
+    // block cannot drop the message.
+    expect(rewrite(block)).toEqual([block]);
+    rewrite.dispose?.();
+  });
+
+  test("SSE keepalive comments keep the buffered message pending", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const keepalive = ": keepalive\n\n";
+    const out = [messageDone(0, "checking"), keepalive, functionCallAdded(1)].flatMap(b => rewrite(b));
+    // The keepalive passes through with the message still buffered; the
+    // following tool call is what classifies it.
+    expect(out).toEqual([keepalive, out[1]!, functionCallAdded(1)]);
+    expect(phaseOf(out[1]!)).toBe("commentary");
+    rewrite.dispose?.();
+  });
+
+  test("the [DONE] sentinel classifies a still-buffered message as final_answer", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const done = "data: [DONE]\n\n";
+    const out = [messageDone(0, "answer"), done].flatMap(b => rewrite(b));
+    expect(phaseOf(out[0]!)).toBe("final_answer");
+    expect(out[1]).toBe(done);
     rewrite.dispose?.();
   });
 
