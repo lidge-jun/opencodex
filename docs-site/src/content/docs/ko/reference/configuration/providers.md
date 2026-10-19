@@ -53,7 +53,7 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 같은 계정과 스레드의 Codex WebSocket을 턴 사이에 재사용합니다. 기본값은 꺼짐입니다. 켜면 바쁜 소켓을 최대 750ms 기다리고, 모델이나 티어가 바뀌어도 소켓을 최대 2개 유지합니다. |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | 네이티브 OpenAI forward Responses와 compact 전송에서 입증된 연결 전 DNS/TCP 실패에 적용하는 선택적 회로 차단 임계값입니다. `0`은 비활성화하며, `1`~`20`은 이 횟수만큼 최종 논리 요청이 실패하면 provider-origin을 30초 동안 차단합니다. 차단 중에는 계정 선택이나 업스트림 전송 전에 `Retry-After`가 포함된 `503`을 반환하고, 시간이 지나면 반개방 요청 하나만 허용합니다. 타임아웃과 HTTP 응답은 집계하지 않으며, HTTP 응답이 하나라도 오면 회로를 닫습니다. Codex Pool 라우팅에서 계정이 고정되지 않은 경우에만 적용되며, `codexAccountMode: "direct"` 및 계정 한정 선택자에서는 동작하지 않습니다. |
 | `modelCacheTtlMs?` | `number` | `300000` | 공급자별 `/models` 캐시의 최신성 창입니다. |
-| `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 프롬프트 캐시 정책입니다. 비활성, 5분짜리 임시, 1시간짜리 확장 중 하나입니다. |
+| `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic 퍼스트파티: `"long"`, 그 외 Anthropic 호환 엔드포인트: `"short"` | Anthropic 프롬프트 캐시 정책입니다. 비활성, 5분짜리 임시, 1시간짜리 확장 중 하나입니다. 설정하지 않으면 `api.anthropic.com`(API 키 또는 OAuth 계정 풀) 요청은 1시간 TTL을 쓰고, 호환 게이트웨이와 벤더 엔드포인트는 5분 TTL을 유지합니다. 명시한 값이 항상 우선합니다. |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 꺼짐 | 선택적 선제 OAuth 갱신과 Codex 계정 워밍업 정책입니다. |
 
 각 전략의 계정별 유효 임계값은 `codexAccountAutoSwitchThresholds` 항목이 있으면 그 값이며, 없으면 전역 `autoSwitchThreshold`입니다. 0은 사용량 기반 사전 전환만 비활성화합니다. 시작 바인딩, 하드 잠금, 쿨다운, 모델 사용 권한 검사와 장애 복구는 계속 적용됩니다.

@@ -510,6 +510,8 @@ export interface OcxUrlCitation {
  * - `cachedInputTokens` is cache READ tokens only (a subset of `inputTokens`).
  * - `cacheReadInputTokens`/`cacheCreationInputTokens` carry the read/write split when
  *   the provider reports both; reads mirror `cachedInputTokens`.
+ * - `cacheCreation1hInputTokens` is the 1-hour-TTL subset of `cacheCreationInputTokens`
+ *   (Anthropic `cache_creation.ephemeral_1h_input_tokens`), priced at the 1h write tier.
  * - `totalTokens` = inputTokens + outputTokens. Never re-add cache detail on top.
  */
 export interface OcxUsage {
@@ -527,6 +529,7 @@ export interface OcxUsage {
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  cacheCreation1hInputTokens?: number;
   reasoningOutputTokens?: number;
   estimated?: boolean;
   /**

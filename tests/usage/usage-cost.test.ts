@@ -55,6 +55,19 @@ describe("normalizeCostTokens", () => {
     expect(cost.input).not.toBeCloseTo(160 * 3 / 1e6, 12);
   });
 
+  test("2b. 1-hour cache writes are priced at 2x base input, the rest at the 5m rate", () => {
+    const tokens = normalizeCostTokens({
+      inputTokens: 160, outputTokens: 10, cacheReadInputTokens: 40,
+      cacheCreationInputTokens: 20, cacheCreation1hInputTokens: 15,
+    });
+    expect(tokens).toEqual({ input: 100, output: 10, cacheRead: 40, cacheWrite: 20, cacheWrite1h: 15 });
+    const cost = calculateCost(tokens!, RATE);
+    // 5 tokens at 3.75 (1.25x) + 15 tokens at 6 (2x of input 3).
+    expect(cost.cacheWrite).toBeCloseTo((5 * 3.75 + 15 * 6) / 1e6, 12);
+    // A 1h share larger than the reported write is clamped to it.
+    expect(normalizeCostTokens({ inputTokens: 30, outputTokens: 0, cacheCreationInputTokens: 10, cacheCreation1hInputTokens: 50 })?.cacheWrite1h).toBe(10);
+  });
+
   test("3. read-only partial detail", () => {
     const tokens = normalizeCostTokens({ inputTokens: 100, outputTokens: 5, cacheReadInputTokens: 30 });
     expect(tokens).toEqual({ input: 70, output: 5, cacheRead: 30, cacheWrite: 0 });

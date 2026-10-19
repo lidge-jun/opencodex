@@ -65,6 +65,8 @@ export interface CostTokens {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** The 1-hour-TTL subset of `cacheWrite`, when the provider reports the split. */
+  cacheWrite1h?: number;
 }
 
 export interface CostBreakdown {
@@ -163,22 +165,35 @@ export function normalizeCostTokens(usage: OcxUsage): CostTokens | null {
   for (const cacheRead of candidates) {
     if (![input, output, cacheRead, cacheWrite].every(finiteNonNegative)) return null;
     if (cacheRead + cacheWrite > input) continue;
+    const cacheWrite1h = usage.cacheCreation1hInputTokens;
     return {
       input: Math.max(0, input - cacheRead - cacheWrite),
       output,
       cacheRead,
       cacheWrite,
+      ...(typeof cacheWrite1h === "number" && finiteNonNegative(cacheWrite1h) && cacheWrite1h > 0
+        ? { cacheWrite1h: Math.min(cacheWrite1h, cacheWrite) } : {}),
     };
   }
   return null;
 }
+
+/**
+ * Price of a 1-hour cache write relative to the 5-minute rate that Cost4.cacheWrite records.
+ * Anthropic bills 5m writes at 1.25x and 1h writes at 2x base input, so 2 / 1.25. Scaling the
+ * 5m rate (rather than input) keeps every tier multiplier already applied to the Cost4 and keeps
+ * a free-write row (cacheWrite 0) free.
+ */
+export const CACHE_WRITE_1H_OVER_5M = 2 / 1.25;
 
 /** jawcode unit convention: USD per 1M tokens (jawcode stats/db.ts calculateCatalogCost). */
 export function calculateCost(tokens: CostTokens, cost4: Cost4): CostBreakdown {
   const input = cost4.input * tokens.input / 1_000_000;
   const output = cost4.output * tokens.output / 1_000_000;
   const cacheRead = cost4.cacheRead * tokens.cacheRead / 1_000_000;
-  const cacheWrite = cost4.cacheWrite * tokens.cacheWrite / 1_000_000;
+  const write1h = Math.min(tokens.cacheWrite1h ?? 0, tokens.cacheWrite);
+  const cacheWrite = (cost4.cacheWrite * (tokens.cacheWrite - write1h)
+    + cost4.cacheWrite * CACHE_WRITE_1H_OVER_5M * write1h) / 1_000_000;
   return { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite };
 }
 
@@ -656,6 +671,7 @@ export function estimateComboCost(
     tokens.output += est.tokens.output;
     tokens.cacheRead += est.tokens.cacheRead;
     tokens.cacheWrite += est.tokens.cacheWrite;
+    if (est.tokens.cacheWrite1h) tokens.cacheWrite1h = (tokens.cacheWrite1h ?? 0) + est.tokens.cacheWrite1h;
     cost.input += est.cost.input;
     cost.output += est.cost.output;
     cost.cacheRead += est.cost.cacheRead;

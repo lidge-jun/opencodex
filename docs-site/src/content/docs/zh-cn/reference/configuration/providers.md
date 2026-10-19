@@ -53,7 +53,7 @@ ocx models provider openrouter on
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 可选：同一账号和线程的 Codex WebSocket 跨回合复用。开启后忙套接字最多等待 750ms，模型或服务层级变化时最多保留 2 个套接字，回合状态头只出现在每条消息上。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | 原生 OpenAI forward Responses 与 compact 发送的可选断路器阈值，仅统计已证明的连接前 DNS/TCP 故障。`0` 表示禁用；`1`–`20` 表示在这么多个终止逻辑请求失败后，对 provider-origin 冷却 30 秒。断路期间会在账户选择和上游发送之前返回带 `Retry-After` 的 `503`；冷却结束后只允许一个半开请求。超时和 HTTP 响应不计数，任意 HTTP 响应都会关闭断路器。 仅适用于未固定账户的 Codex Pool 路由；在 `codexAccountMode: "direct"` 或使用账户限定选择器时不会启用。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个提供者 `/models` 缓存的新鲜度窗口。 |
-| `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。 |
+| `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic 官方端点：`"long"`；其他 Anthropic 兼容端点：`"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。未设置时，发往 `api.anthropic.com`（API 密钥或 OAuth 账号池）的请求使用 1 小时 TTL，兼容网关和厂商端点保持 5 分钟 TTL。显式设置的值始终优先。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 关闭 | 可选的主动 OAuth 刷新与 Codex 账户预热策略。 |
 
 这些策略均使用各账户的有效阈值：存在 `codexAccountAutoSwitchThresholds` 条目时使用该值，否则继承全局 `autoSwitchThreshold`。覆盖值为 0 仅关闭基于用量的主动切换；启动绑定、硬锁、冷却、模型使用资格检查和故障恢复仍然生效。

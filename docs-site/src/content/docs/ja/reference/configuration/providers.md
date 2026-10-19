@@ -53,7 +53,7 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 同一アカウントとスレッドで Codex WebSocket をターンをまたいで再利用します。既定はオフ。オンにすると忙しいソケットを最大750ms待ち、モデルやティアの変更では最大2本を残します。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | ネイティブOpenAI forwardのResponses送信とcompact送信で、実証済みの接続前DNS/TCP障害に適用するオプトインのサーキットしきい値です。`0`で無効、`1`〜`20`ではその回数の終端論理リクエストが失敗するとprovider-originを30秒間遮断します。遮断中はアカウント選択やupstream送信の前に`Retry-After`付き`503`を返し、時間経過後はhalf-openリクエストを1件だけ許可します。タイムアウトとHTTP応答は数えず、HTTP応答が1件でもあれば回路を閉じます。 Codex Pool ルーティングでアカウントが固定されていない場合にのみ適用され、`codexAccountMode: "direct"` とアカウント修飾セレクターでは動作しません。 |
 | `modelCacheTtlMs?` | `number` | `300000` |プロバイダーごとの `/models` キャッシュの鮮度ウィンドウ。 |
-| `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。 |
+| `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic ファーストパーティ: `"long"`、その他の Anthropic 互換エンドポイント: `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。未設定の場合、`api.anthropic.com`（API キーまたは OAuth アカウント プール）へのリクエストは 1 時間の TTL を使い、互換ゲートウェイやベンダーのエンドポイントは 5 分の TTL のままです。明示した値が常に優先されます。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
 
 各戦略で使う実効しきい値は、アカウントの `codexAccountAutoSwitchThresholds` があればその値、なければグローバルの `autoSwitchThreshold` です。0 は使用量による先行切り替えだけを無効にし、起動時のバインド、ハードロック、クールダウン、モデル利用資格の確認、障害復旧は引き続き適用されます。

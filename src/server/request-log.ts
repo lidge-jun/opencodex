@@ -1864,7 +1864,7 @@ export function aggregateAttemptUsage(
   if (usages.length === 0) return { status };
 
   const sumOptional = (
-    key: "cachedInputTokens" | "cacheReadInputTokens" | "cacheCreationInputTokens"
+    key: "cachedInputTokens" | "cacheReadInputTokens" | "cacheCreationInputTokens" | "cacheCreation1hInputTokens"
       | "reasoningOutputTokens" | "providerCredits",
   ): number | undefined => {
     const present = usages.flatMap(usage => (
@@ -1875,6 +1875,7 @@ export function aggregateAttemptUsage(
   const cachedInputTokens = sumOptional("cachedInputTokens");
   const cacheReadInputTokens = sumOptional("cacheReadInputTokens");
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
+  const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
   const providerCredits = sumOptional("providerCredits");
   const totalTokens = usages.reduce(
@@ -1888,6 +1889,7 @@ export function aggregateAttemptUsage(
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
     ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
     ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
+    ...(cacheCreation1hInputTokens !== undefined ? { cacheCreation1hInputTokens } : {}),
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(status === "estimated" ? { estimated: true } : {}),

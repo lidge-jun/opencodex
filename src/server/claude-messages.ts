@@ -1110,7 +1110,8 @@ async function handleClaudeMessagesWithBudget(
   const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, {
     ...buildClaudeReplayConfig(config),
-    // Operator config wins; otherwise the caller's own 1h breakpoints keep 1h here.
+    // Operator config wins; otherwise the caller's explicit TTLs (all 1h, or a pinned 5m) carry
+    // over, and TTL-less breakpoints take the destination default.
     cacheRetention: config.cacheRetention ?? callerCacheRetention(anthropicBody),
   }, logCtx, {
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
