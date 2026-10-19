@@ -1196,10 +1196,10 @@ export async function executeComboResponses(
       }
       return lastFailure;
     }
-    // A bare status made a revoked credential read as a provider outage. Prefer the parsed
-    // message over the whole envelope, and keep one redacted line per failure.
+    // A bare status made a revoked credential read as a provider outage. Log only the parsed
+    // code and message, never the raw envelope, as one redacted, bounded line.
     const failureReason = sanitizeLogMetadataString(
-      [failure.upstreamCode, failure.upstreamMessage ?? failure.classificationText].filter(Boolean).join(": ").replace(/\s+/g, " "),
+      [failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ").replace(/\s+/g, " "),
       200,
     );
     console.warn(
