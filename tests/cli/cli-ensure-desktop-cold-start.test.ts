@@ -169,7 +169,7 @@ describe("Desktop process detection by executable identity", () => {
   function fakeDesktopHome(options: {
     installId?: string; args?: unknown; bareArgs?: boolean; label?: string; identifier?: string;
     plist?: "present" | "absent"; executable?: "present" | "absent" | "directory"; bundleName?: string;
-    bundleExecutable?: unknown; program?: unknown; relativeProgram?: boolean;
+    bundleExecutable?: unknown; program?: unknown; relativeProgram?: boolean; runAtLoad?: unknown;
   } = {}) {
     // Keep the bundle on cwd's drive: Windows relative() returns an absolute path across drives.
     const fixtureRoot = join(process.cwd(), ".tmp");
@@ -190,7 +190,7 @@ describe("Desktop process detection by executable identity", () => {
     // A root-relative POSIX spelling also reaches this same-drive fixture on Windows.
     const absoluteProgram = process.platform === "win32" ? executable.slice(2).replaceAll("\\", "/") : executable;
     const program = options.relativeProgram ? relative(process.cwd(), executable) : absoluteProgram;
-    const registration = { Label: options.label ?? "OpenCodex", RunAtLoad: true,
+    const registration = { Label: options.label ?? "OpenCodex", RunAtLoad: "runAtLoad" in options ? options.runAtLoad : true,
       ProgramArguments: options.bareArgs ? [program] : (options.args ?? [program, "--autostart"]),
       ...("program" in options ? { Program: options.program } : {}) };
     if (options.plist !== "absent") writeFileSync(join(home, "Library", "LaunchAgents", "OpenCodex.plist"), JSON.stringify(registration));
@@ -221,6 +221,26 @@ describe("Desktop process detection by executable identity", () => {
       expect(launch(fixture)).toBe(true);
       expect(fixture.seen.at(-1)).toEqual(["/usr/bin/open", "-g", realpathSync(fixture.bundle), "--args", "--autostart"]);
     } finally { removeTreeWithRetry(fixture.home); }
+  });
+
+  test("a false or missing RunAtLoad refuses launch without waiting or falling back to a CLI proxy", async () => {
+    for (const runAtLoad of [false, undefined]) {
+      const fixture = fakeDesktopHome({ installId: "install-a", runAtLoad });
+      try {
+        expect(launch(fixture)).toBe(false);
+        const calls = fresh();
+        const dependencies = deps({ ownership: "desktop", process: "absent" }, calls);
+        dependencies.launchDesktop = () => launch(fixture);
+        const result = await runDesktopColdStart(dependencies);
+        let cliFallbacks = 0;
+        if (result.kind === "cli") cliFallbacks++;
+        expect(result.kind === "failed" && result.message).toContain("Open OpenCodex manually");
+        expect(calls.waits).toEqual([]);
+        expect(calls.released).toBe(1);
+        expect(cliFallbacks).toBe(0);
+        expect(fixture.seen.filter(call => call[0] === "/usr/bin/open")).toHaveLength(0);
+      } finally { removeTreeWithRetry(fixture.home); }
+    }
   });
 
   test("a non-app directory refuses the launch without reading its Info.plist or waiting for a proxy", async () => {
