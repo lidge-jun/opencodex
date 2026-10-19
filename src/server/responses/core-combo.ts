@@ -45,7 +45,7 @@ import {
 } from "../../combos";
 import { formatErrorResponse } from "../../bridge";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
-import { sanitizeLogMetadataString } from "../../lib/redact";
+import { redactSecretString, sanitizeLogMetadataString } from "../../lib/redact";
 import {
   expandPreviousResponseInput,
   previousResponseReplayFailure,
@@ -1199,7 +1199,7 @@ export async function executeComboResponses(
     // A bare status made a revoked credential read as a provider outage. Log only the parsed
     // code and message, never the raw envelope, as one redacted, bounded line.
     const failureReason = sanitizeLogMetadataString(
-      [failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ").replace(/\s+/g, " "),
+      redactSecretString([failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ")).replace(/\s+/g, " "),
       200,
     );
     console.warn(

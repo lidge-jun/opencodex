@@ -301,6 +301,23 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     }
   });
 
+  test("the hop warning redacts credential framing before flattening parsed codes", async () => {
+    const credential = "synthetic-multipart-credential";
+    globalThis.fetch = (async () => Response.json({ error: {
+      code: `name="authorization"\r\n\r\n${credential}`,
+      message: "upstream refused",
+    } }, { status: 502 })) as unknown as typeof fetch;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loggedCombo(config, { model: "", provider: "" });
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      expect(line).toBeDefined();
+      expect(line!.includes(credential)).toBe(false);
+      expect(line).toContain("[REDACTED]");
+      expect(line).not.toMatch(/[\r\n]/);
+    } finally { warn.mockRestore(); }
+  });
+
   test("the hop warning never logs an unparsed upstream body", async () => {
     globalThis.fetch = (async () => new Response("upstream said: session=abc123 private detail", { status: 502 })) as unknown as typeof fetch;
     const warn = spyOn(console, "warn").mockImplementation(() => {});
