@@ -46,6 +46,7 @@ import type { NativeMessagesFinishLog } from "../messages-native";
 import { credentialDomainFor } from "../../protocols/opaque-state";
 import { chatCompletionsErrorResponse } from "../../chat/outbound";
 import { anthropicErrorResponse } from "../../claude/outbound";
+import { hasNativeOnlyTool } from "../../claude/inbound-content-options";
 import { isRequestExecutionBudget } from "../../lib/request-execution-budget";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 import { redactSecretString } from "../../lib/redact";
@@ -99,7 +100,7 @@ export interface NativeComboChildPlan {
 }
 
 export interface ComboProtocolLanes {
-  /** Pick predicate. False only for a candidate the `reject` policy skips. */
+  /** Pick predicate. False for a candidate the `reject` policy skips or a translated child of a native-only tool. */
   pickable(target: ComboTarget): boolean;
   /** The ingress refusal when every enabled candidate was skipped; otherwise undefined. */
   refusal(): Response | undefined;
@@ -114,6 +115,8 @@ export interface ComboProtocolLanes {
 
 interface CandidateVerdict {
   skip?: ProtocolFeature[];
+  /** A translated child would silently drop the request's native-only tool. */
+  nativeOnly?: true;
 }
 
 /** Build opt-in native eligibility and child plans; only the initial plan applies a JEV choice. */
@@ -177,6 +180,7 @@ export function createComboProtocolLanes(input: {
 
   const verdicts = new Map<string, CandidateVerdict>();
   let skipRecorded = false;
+  let nativeOnlyTool: boolean | undefined;
   const judge = (target: ComboTarget): CandidateVerdict => {
     const key = selector(target);
     const cached = verdicts.get(key);
@@ -206,13 +210,20 @@ export function createComboProtocolLanes(input: {
           addProtocolEntryReason(logCtx, "feature-unrepresentable");
         }
       }
+      // Under any policy: the source chose a native-only tool, so a translated child never runs it.
+      if (!native && inbound === "messages" && (nativeOnlyTool ??= hasNativeOnlyTool(envelope.freshBody()))) {
+        verdict.nativeOnly = true;
+      }
     }
     verdicts.set(key, verdict);
     return verdict;
   };
 
   return {
-    pickable: target => !reject || judge(target).skip === undefined,
+    pickable: target => {
+      const verdict = judge(target);
+      return verdict.nativeOnly !== true && (!reject || verdict.skip === undefined);
+    },
     refusal: () => {
       if (!reject) return undefined;
       const enabled = targets.filter(target => {
