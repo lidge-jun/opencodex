@@ -85,6 +85,8 @@ export function bridgeToResponsesSSE(
     hideThinkingSummary?: boolean;
     /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
     hideRawReasoning?: boolean;
+    /** Opt-in verbatim raw reasoning on the summary channel for Chat-to-Responses clients. */
+    rawReasoningAsSummary?: boolean;
     /**
      * Remote compaction v2 turn: accumulate all assistant text and, on done, emit ONE synthetic
      * `{type:"compaction", encrypted_content:"ocx1:"+base64(text)}` output item before
@@ -562,13 +564,21 @@ export function bridgeToResponsesSSE(
         if (!currentRawReasoning) return;
         const rawText = joinChunks(currentRawReasoning.text);
         rawReasoningForNextToolCall = rawText;
-        emit("response.reasoning_text.done", {
-          item_id: currentRawReasoning.itemId, output_index: currentRawReasoning.outputIndex, content_index: 0, text: rawText,
+        const asSummary = options?.rawReasoningAsSummary === true;
+        const indices = { item_id: currentRawReasoning.itemId, output_index: currentRawReasoning.outputIndex,
+          ...(asSummary ? { summary_index: 0 } : { content_index: 0 }) };
+        emit(asSummary ? "response.reasoning_summary_text.done" : "response.reasoning_text.done", {
+          ...indices, text: rawText,
         });
+        if (asSummary) emit("response.reasoning_summary_part.done", {
+          ...indices, part: { type: "summary_text", text: rawText },
+        });
+        // Keep replay independent of the display channel: clients may omit visible summaries.
+        const encrypted = asSummary ? encodeReasoningEnvelope({ txt: rawText }, budget) : undefined;
         const item = {
           type: "reasoning", id: currentRawReasoning.itemId,
-          summary: [] as never[],
-          content: [{ type: "reasoning_text", text: rawText }],
+          summary: asSummary ? [{ type: "summary_text", text: rawText }] : [],
+          ...(asSummary ? { encrypted_content: encrypted } : { content: [{ type: "reasoning_text", text: rawText }] }),
         };
         emit("response.output_item.done", { output_index: currentRawReasoning.outputIndex, item });
         retainFinishedItem(item as OutputItem, currentRawReasoning.text.bytes, "reasoning");
@@ -1045,6 +1055,10 @@ export function bridgeToResponsesSSE(
                 const itemId = `rs_${uuid()}`;
                 const item = { type: "reasoning", id: itemId, summary: [] as { type: string; text: string }[] };
                 emit("response.output_item.added", { output_index: outputIndex, item });
+                if (options?.rawReasoningAsSummary) emit("response.reasoning_summary_part.added", {
+                  item_id: itemId, output_index: outputIndex, summary_index: 0,
+                  part: { type: "summary_text", text: "" },
+                });
                 currentRawReasoning = { itemId, outputIndex, text: emptyChunks() };
               }
               currentRawReasoning.text = appendString(
@@ -1052,12 +1066,10 @@ export function bridgeToResponsesSSE(
                 event.text,
                 "reasoning",
               );
-              // Raw reasoning (openai-chat reasoning_content, kiro tags) rides the CONTENT
-              // channel. Clients control raw-reasoning display; this text is not a
-              // provider-authored summary.
-              emit("response.reasoning_text.delta", {
+              // Raw text stays verbatim; only the explicit compatibility option changes its channel.
+              emit(options?.rawReasoningAsSummary ? "response.reasoning_summary_text.delta" : "response.reasoning_text.delta", {
                 item_id: currentRawReasoning.itemId, output_index: currentRawReasoning.outputIndex,
-                content_index: 0, delta: event.text,
+                ...(options?.rawReasoningAsSummary ? { summary_index: 0 } : { content_index: 0 }), delta: event.text,
               });
               break;
             }

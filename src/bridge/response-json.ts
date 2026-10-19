@@ -88,6 +88,8 @@ function buildResponseJSONWithBudget(
     hideThinkingSummary?: boolean;
     /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
     hideRawReasoning?: boolean;
+    /** Opt-in verbatim raw reasoning on the summary channel for Chat-to-Responses clients. */
+    rawReasoningAsSummary?: boolean;
     toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>;
     /** Request-visible tool names. Required for client calls when enforcement is explicitly enabled. */
     declaredToolNames?: ReadonlySet<string>;
@@ -311,10 +313,12 @@ function buildResponseJSONWithBudget(
       currentRawReasoning = emptyChunks();
       return;
     }
+    const asSummary = options?.rawReasoningAsSummary === true;
     pushOutput({
       type: "reasoning", id: `rs_${uuid()}`,
-      summary: [],
-      content: [{ type: "reasoning_text", text: rawText }],
+      summary: asSummary ? [{ type: "summary_text", text: rawText }] : [],
+      ...(asSummary ? { encrypted_content: encodeReasoningEnvelope({ txt: rawText }, budget) }
+        : { content: [{ type: "reasoning_text", text: rawText }] }),
     }, currentRawReasoning.bytes, "reasoning");
     currentRawReasoning = emptyChunks();
   };

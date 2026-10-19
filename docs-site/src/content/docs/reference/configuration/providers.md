@@ -357,9 +357,10 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `inlineThinkTagModels?` | `string[]` | Opt-in recovery for `openai-chat` gateways without a server-side reasoning parser. A leading `<think>` / `<thinking>` / `<reasoning>` block (optionally after whitespace) activates splitting in streamed and buffered replies. All answer whitespace is preserved. Subsequent tags are delimiters anywhere, including same-line interleaving and code fences; this mode does not interpret Markdown. Ordinary text or a code fence before the first tag keeps the whole reply untouched. Off by default; prefer structured upstream reasoning or `reasoningSplitModels` where supported. |
 | `reasoningDetailsModels?` | `string[]` | Models whose endpoint returns thinking as a structured `reasoning_details` array (MiniMax M-series with `reasoning_split`); stream deltas are cumulative snapshots that are prefix-diffed, and preserved reasoning replays as a `reasoning_details` array instead of a `reasoning_content` string. |
 | `requiresReasoningPlaceholderModels?` | `string[]` | Models whose upstream rejects a tool_call continuation missing `reasoning_content` (DeepSeek thinking mode); a minimal placeholder is injected when the replay cache misses. Defaults to `preserveReasoningContentModels`; set `[]` to opt out. A provider save that keeps the destination keeps the stored list, including `[]`; see [What a provider save keeps](#what-a-provider-save-keeps). `PATCH /api/providers?name=<provider>` accepts an array or `null` to clear it. |
-| `showThinkingSummary?` | `boolean` | Display provider-authored summaries when a Responses client omits `reasoning.summary`. Explicit wire `"none"` wins; a client that serializes its preference as omission cannot be distinguished. Raw reasoning remains content and is never relabeled as a summary. The `google-antigravity` preset defaults to `true`; explicit `false` disables that default. CCA Gemini requests also opt into `generationConfig.thinkingConfig.includeThoughts` when display is enabled; image, Claude and gpt-oss requests do not. This does not change client configuration or global catalog summary defaults. |
+| `showThinkingSummary?` | `boolean` | Display provider-authored summaries when a Responses client omits `reasoning.summary`. Explicit wire `"none"` wins; a client that serializes its preference as omission cannot be distinguished. Raw reasoning remains content unless the separate `rawReasoningAsSummary` compatibility option is explicitly enabled. The `google-antigravity` preset defaults to `true`; explicit `false` disables that default. CCA Gemini requests also opt into `generationConfig.thinkingConfig.includeThoughts` when display is enabled; image, Claude and gpt-oss requests do not. This does not change client configuration or global catalog summary defaults. |
 | `hideRawReasoning?` | `boolean` | Keep a routed provider's raw chain of thought off the client-facing content channel (openai-chat `reasoning_content`, kiro tags, `response.reasoning_text.*`) while provider-authored summaries still stream on the summary channel. Explicit wire `reasoning.summary: "none"` keeps hiding both. This controls what a client displays; it does not keep the text from the client. A Responses bridge route still sends it inside the `ocxr1` replay envelope in the reasoning item's `encrypted_content`, which is base64 JSON rather than encryption, so the client can echo it back on the next turn. The direct Chat and Messages encoders have no envelope on their wire, so those clients receive no copy and replay comes from the server-side reasoning replay cache. `preserveReasoningContentModels` replay and DeepSeek-style continuations are unaffected either way. Off by default; a native passthrough route relays the upstream's own frames and ignores this option. A save of the same provider name keeps an omitted value even after a destination move; `PATCH` accepts a boolean or `null` to clear it. |
 | `thinkingToggleModels?` | `string[]` | Chat models using `thinking.enabled` rather than an effort ladder. |
+| `rawReasoningAsSummary?` | `boolean` | Default-off display compatibility for Responses clients such as Codex Desktop. On a final `openai-chat` route, expose upstream raw reasoning verbatim through the expandable summary channel, including when `reasoning.summary` is omitted. This generates no summary. `hideRawReasoning: true` and explicit wire `reasoning.summary: "none"` take precedence. Both streamed and buffered replies retain the txt-only `ocxr1` replay envelope (base64 JSON, not encryption). Native Responses passthrough, other adapters, and direct Chat/Messages replies are unchanged. Same-name provider saves keep an omitted value, including after a destination move; `PATCH` accepts a boolean or `null` to clear it. |
 | `thinkingBudgetModels?` | `string[]` | Chat models using integer `thinking_budget`; effort maps to a budget fraction. |
 | `noVisionModels?` | `string[]` | Text-only models sent through the vision sidecar; matching tolerates an Ollama `:size` tag. |
 | `escapeBuiltinToolNames?` | `boolean` | Escape built-in tool names for Anthropic-compatible gateways and restore them in returned calls. |
@@ -456,13 +457,13 @@ and `modelContextWindows` for that exact id when needed. Unknown ids are not gue
 
 The destination is the adapter, the base URL (scheme and host compared without regard to case, trailing slashes ignored) and, when the request names one, the auth mode. Moving a provider to another destination drops the eight settings because they describe the previous upstream, and drops the key pool because its keys were issued for it. A save never merges the rest of the old row into the new one.
 
-`hideRawReasoning` is an operator display policy, so a save of the same provider name keeps its stored value whenever the request omits it, including after a destination move. A value sent in the request wins, including `false`.
+`hideRawReasoning` and `rawReasoningAsSummary` are operator display policies, so a save of the same provider name keeps their stored values whenever the request omits them, including after a destination move. A value sent in the request wins, including `false`.
 
 The optional `inferContextWindow` setting also survives same-name saves that omit it, including
 destination moves. Its read, update, and clear behavior is described under
 [Context windows on custom providers](#context-windows-on-custom-providers).
 
-`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all eight settings; `null` clears one. It also accepts a boolean `hideRawReasoning` or `null` to clear it. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
+`PATCH /api/providers?name=<provider>` changes only the fields it names and keeps every other stored field, whatever the destination. It accepts all eight settings; `null` clears one. It also accepts boolean `hideRawReasoning` and `rawReasoningAsSummary` values or `null` to clear either. For the two reasoning lists an empty array is stored as an explicit opt-out rather than removed.
 
 With `webSearchBridge` enabled, a search continuation stays bound to the API-key selection that
 served the first request. Changing the selected key, its reference or resolved value, authentication
@@ -480,8 +481,23 @@ An explicit `inlineThinkTagModels` list replaces matching registry defaults; `[]
 Translated Responses requests with a validated active reasoning effort preserve raw reasoning
 when `reasoning.summary` is omitted. Explicit `"none"` keeps it hidden for replay; omission
 without an active effort also stays hidden. An injected combo default adds `summary: "auto"`
-only when the caller has not chosen a summary mode. Raw reasoning is never relabeled as a
-provider-authored summary, and Codex still controls its display with `show_raw_agent_reasoning`.
+only when the caller has not chosen a summary mode. By default, raw reasoning stays on the
+content channel and Codex controls its display with `show_raw_agent_reasoning`. To explicitly
+show verbatim Chat reasoning in the expandable summary area, set `rawReasoningAsSummary: true`
+on that provider; this creates no provider-authored summary. Add the flag to an existing Chat
+provider configuration, for example:
+
+```json
+{
+  "providers": {
+    "my-chat-gateway": {
+      "adapter": "openai-chat",
+      "baseUrl": "https://gateway.example/v1",
+      "rawReasoningAsSummary": true
+    }
+  }
+}
+```
 
 Custom-model `reasoningEfforts` normally override discovered provider metadata. The bounded
 exception is an explicit custom row whose model id has pinned native Codex capabilities,

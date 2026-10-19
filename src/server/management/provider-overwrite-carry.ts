@@ -31,8 +31,8 @@ const RETRY_POLICY_VALIDATORS = {
  * them afterwards: the disk row equals its baseline, so the three-way merge keeps the value the
  * save wrote.
  *
- * `hideRawReasoning` is an operator display policy, so every overwrite of the same provider name
- * carries it when omitted, even when the destination changes. The compatibility settings below
+ * `hideRawReasoning` and `rawReasoningAsSummary` are operator display policies, so every overwrite
+ * carries them when omitted, even when the destination changes. The compatibility settings below
  * record how one upstream behaves. An overwrite that keeps the destination
  * carries each one the request omits, including an explicit `[]` or `false`. An overwrite that
  * moves the provider to another destination carries none of them: they describe the previous
@@ -58,7 +58,7 @@ export const PROVIDER_COMPAT_CARRY_FIELDS = [
   ...RETRY_POLICY_FIELDS,
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
-export const PROVIDER_DISPLAY_CARRY_FIELDS = ["hideRawReasoning"] as const satisfies readonly (keyof OcxProviderConfig)[];
+export const PROVIDER_DISPLAY_CARRY_FIELDS = ["hideRawReasoning", "rawReasoningAsSummary"] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 export type ProviderCompatCarryField = typeof PROVIDER_COMPAT_CARRY_FIELDS[number];
 type ProviderDisplayCarryField = typeof PROVIDER_DISPLAY_CARRY_FIELDS[number];
@@ -159,8 +159,9 @@ export function providerCompatFieldConfigError(provider: Record<string, unknown>
   }
   const fold = provider.foldDeveloperRoleToSystem;
   if (fold !== undefined && typeof fold !== "boolean") return "foldDeveloperRoleToSystem must be a boolean";
-  const hideRawReasoning = provider.hideRawReasoning;
-  if (hideRawReasoning !== undefined && typeof hideRawReasoning !== "boolean") return "hideRawReasoning must be a boolean";
+  for (const field of PROVIDER_DISPLAY_CARRY_FIELDS) {
+    if (provider[field] !== undefined && typeof provider[field] !== "boolean") return `${field} must be a boolean`;
+  }
   const preserveResponses = provider.preserveResponsesReasoningContent;
   if (preserveResponses !== undefined && typeof preserveResponses !== "boolean") return "preserveResponsesReasoningContent must be a boolean";
   const wire = provider.reasoningWireFormat;
@@ -200,11 +201,12 @@ export function applyProviderCompatPatchFields(
     else return { error: "foldDeveloperRoleToSystem must be a boolean" };
     touched = true;
   }
-  if (Object.hasOwn(rawBody, "hideRawReasoning")) {
-    const value = rawBody.hideRawReasoning;
-    if (value === null) delete next.hideRawReasoning;
-    else if (typeof value === "boolean") next.hideRawReasoning = value;
-    else return { error: "hideRawReasoning must be a boolean" };
+  for (const field of PROVIDER_DISPLAY_CARRY_FIELDS) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (value === null) delete next[field];
+    else if (typeof value === "boolean") next[field] = value;
+    else return { error: `${field} must be a boolean` };
     touched = true;
   }
   if (Object.hasOwn(rawBody, "preserveResponsesReasoningContent")) {

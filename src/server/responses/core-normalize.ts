@@ -197,12 +197,15 @@ export async function applyFinalRouteRequestNormalization(args: {
     requestBody: parsed._rawBody,
   });
   // Recompute from the original wire preference on every route, including fallback.
-  // A provider default never converts raw reasoning into a summary.
+  // Only an explicit Chat-to-Responses compatibility opt-in relabels raw reasoning.
+  const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } } | undefined)?.reasoning?.summary;
+  parsed.options.rawReasoningAsSummary = inboundWire === "responses"
+    && route.provider.adapter === "openai-chat" && route.provider.rawReasoningAsSummary === true
+    && summary !== "none";
   if (inboundWire === "responses" && parsed._rawBody) {
-    const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } }).reasoning?.summary;
     parsed.options.hideThinkingSummary = summary === "none"
       || (!summary && !hasValidatedActiveReasoningEffort(parsed.options)
-        && route.provider.showThinkingSummary !== true);
+        && route.provider.showThinkingSummary !== true && !parsed.options.rawReasoningAsSummary);
   }
   // Provider policy, recomputed per final route like the summary default above so a fallback
   // cannot inherit the previous target's choice. Raw content-channel reasoning is suppressed;

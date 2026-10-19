@@ -478,12 +478,12 @@ Codex app, so tool cells group like native models — while the text still round
 `content[reasoning_text]` shape: raw deltas stream as `response.reasoning_text.delta` and the final
 item carries `content: [{type: "reasoning_text", text}]`, so Codex applies its own display policy —
 the desktop thinking band shows the "Thinking…" placeholder, and raw text appears only when
-`show_raw_agent_reasoning` is enabled. Routing raw CoT through the summary channel instead (the
+`show_raw_agent_reasoning` is enabled. Routing raw CoT through the summary channel by default (the
 #45 display intent, intentionally reverted 260911) put unsummarized thinking in the desktop band,
 which only fits native OpenAI providers that author real summaries. Diagnosis and codex-rs
 grouping evidence: `devlog/_fin/260709_native_response_pattern/`.
-Provider policy `hideRawReasoning` hides only this raw channel (summaries keep streaming); it controls
-display, not confidentiality ([Responses wire shapes](../transports/responses-wire-shapes.md)).
+Provider policy `hideRawReasoning` hides only this raw channel (summaries keep streaming); it controls display, not confidentiality ([Responses wire shapes](../transports/responses-wire-shapes.md)).
+An explicit provider `rawReasoningAsSummary: true` opts a final `openai-chat` route with Responses inbound into verbatim raw text on the summary channel, including when summary is omitted. It generates no summary. Both bridge paths retain the txt-only `ocxr1` replay envelope; `hideRawReasoning` and wire `summary: "none"` win. The default, native Responses passthrough and direct Chat/Messages wires are unchanged. `tests/responses/responses-chat-raw-summary.test.ts` covers display, fallback reset and tool replay.
 
 For models requiring a reasoning placeholder, a preserved thinking-only assistant receives it even
 without tools, keeping strict DeepSeek continuations valid (#5421). Chat replay policy in

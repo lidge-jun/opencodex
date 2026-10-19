@@ -1027,7 +1027,7 @@ export interface OcxProviderConfig {
   /**
    * Default to displaying provider-authored summaries when Responses summary is omitted.
    * Explicit wire summary:"none" wins; false disables a seeded provider default.
-   * Raw reasoning is never relabeled as a summary.
+   * Raw reasoning is controlled separately by rawReasoningAsSummary.
    */
   showThinkingSummary?: boolean;
   /**
@@ -1038,6 +1038,12 @@ export interface OcxProviderConfig {
    * envelope; direct Chat/Messages encoders send no copy and replay from the server-side cache.
    */
   hideRawReasoning?: boolean;
+  /**
+   * Default-off Chat-to-Responses display compatibility: expose raw reasoning on the summary
+   * channel, verbatim (not a generated summary). hideRawReasoning and wire summary:"none" win.
+   * Native Responses passthrough and direct Chat/Messages delivery are unchanged.
+   */
+  rawReasoningAsSummary?: boolean;
   /**
    * Opt-in same-target 429 retry policy. Codex itself never retries 429 (it retries 5xx only,
    * openai/codex#30471), and single-key pools have no failover, so the proxy waits and replays

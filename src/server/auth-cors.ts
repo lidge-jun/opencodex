@@ -1176,6 +1176,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   requiresReasoningPlaceholderModels: "editor",
   showThinkingSummary: "editor",
   hideRawReasoning: "editor",
+  rawReasoningAsSummary: "editor",
   retryOn429: "editor",
   transientRetryOn5xx: "editor",
   retryOnReset: "editor",
