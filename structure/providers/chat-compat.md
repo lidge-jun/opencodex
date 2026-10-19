@@ -325,8 +325,8 @@ the request body is byte-for-byte unchanged in this area and OpenRouter retains 
 
 Some Chat gateways expose one model-produced call twice: as a complete
 `<tool_call><function=…>…</function></tool_call>` content block and as a structured `tool_calls`
-entry. `src/adapters/openai-chat/serialized-tool-call-content.ts` recognizes bare blocks at the
-start of a line outside Markdown fences; inline, quoted and indented examples remain unchanged.
+entry. `src/adapters/openai-chat/serialized-tool-call-content.ts` recognizes bare line-start blocks outside Markdown.
+Its scanner `src/adapters/openai-chat/serialized-tool-call-markup.ts` also recognizes `<tool_call_deadbeef>` after ordinary prose, requiring identical closing IDs (1–64 hex characters); code, quotes and indentation stay literal. Recognition alone never dispatches a call.
 It holds a possible serialized block, resumes ordinary text delivery when the header cannot match,
 and removes the block only when its function name and
 freeform body match a structured call's parsed `input` or exact raw arguments from a declared
@@ -336,16 +336,16 @@ unwrap an alternate field, and JSON text that changes on dispatch is not treated
 Malformed JSON on an ordinary function is not raw input.
 A block may close a freeform body with a stray `</parameter>` and may omit `</function>`, and one
 newline after the function header is template layout, so MiMo's echoes of those shapes match too
-(#5724). Blocks are read by delimiter scan in linear time: the first `</tool_call>` preceded by
-`</function>` closes the block, and only when none appears before the next block header at the start
-of a line does the first `</tool_call>` close it, so a body can still carry literal tool-call tags.
+(#5724). Blocks are scanned in linear time; closing tags must match the opener’s exact ID (`</tool_call>` for bare blocks).
+Before the next line-start header, the first matching close preceded by `</function>` wins; otherwise the first matching close before that header is the unclosed fallback.
+If no matching close precedes that header, scanning continues beyond it but accepts only a matching close preceded by `</function>`. Bodies can still carry literal tags.
 If the gateway also prefixes the structured call's JSON
 arguments with the same freeform body, the adapter keeps the JSON suffix only when the block body,
 prefix, and wrapper's `input` value all agree. Mismatched markup and arguments remain byte-exact.
 MiMo V2 Chat IDs of `mimo-v2` or `mimo-v2.*` can send `{}` for a freeform call and put
-its input in one bare block; hyphenated IDs (`mimo-v2-pro`, `mimo-v2-omni`) are excluded. With no other text, one call and an exact wire-tool match, the adapter restores `input` and removes the block.
+its input in one bare or identified block; hyphenated IDs (`mimo-v2-pro`, `mimo-v2-omni`) are excluded. With no other text, one call and an exact wire-tool match, the adapter restores `input` and removes the block.
 Prose, fences, ordinary functions, multiple calls/blocks, and nonempty arguments remain inert. A malformed `<parameter=` opener is stripped only at that block's start; streaming recovery stops after earlier answer text is released.
-Two immediately adjacent identical bare blocks, with optional trailing whitespace after the pair,
+Two immediately adjacent identical blocks (bare or identified), with optional trailing whitespace,
 are suppressed only when exactly one structured call matches their function name and carries their
 body as `input` or exact raw arguments, or when one doubled `input` can be reduced to that body.
 Reducing a doubled `input` requires an arguments object with no keys besides `input`; extra keys

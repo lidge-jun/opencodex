@@ -1,10 +1,9 @@
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { AdapterEvent } from "../../types";
 import { repairFreeformToolInput } from "../../responses/apply-patch-envelope";
+import { contextAfter, deferredContinuationBreak, splitAtPossibleSerializedToolCall, MAX_TAG_LENGTH, TAG_SUFFIX, type TextContext } from "./serialized-tool-call-markup";
+export { splitAtPossibleSerializedToolCall } from "./serialized-tool-call-markup";
 
-const OPEN_TAG = "<tool_call>";
-const CLOSE_TAG = "</tool_call>";
-const FUNCTION_TAG = "<function=";
 /**
  * Streaming bounds (ingestStreaming only; buffered reconciliation already knows its structured calls).
  * MAX_HELD_BYTES is a runaway guard on held text plus queued events, far below the translator budget,
@@ -14,12 +13,6 @@ const FUNCTION_TAG = "<function=";
  */
 const MAX_HELD_BYTES = 4 * 1024 * 1024;
 const MAX_TRAILING_CHARS = 8 * 1024;
-
-interface TextContext {
-  fence: string | null;
-  lineStart: boolean;
-  inlineTicks?: number;
-}
 
 export interface SerializedToolCall {
   name: string;
@@ -49,9 +42,9 @@ export interface StructuredToolCallReference {
   recoveredParameterWrapper?: boolean;
 }
 
-const BLOCK_HEADER = /<tool_call>\s*<function=([^>\r\n]+)>/y;
+const BLOCK_HEADER = new RegExp(`<tool_call(${TAG_SUFFIX})>\\s*<function=([^>\\r\\n]+)>`, "y");
 /** A separate bare block starts a line (see `splitAtPossibleSerializedToolCall`); a header mid-line is body text. */
-const NEXT_BLOCK_HEADER = /\n<tool_call>\s*<function=[^>\r\n]+>/g;
+const NEXT_BLOCK_HEADER = new RegExp(`\\n<tool_call${TAG_SUFFIX}>\\s*<function=[^>\\r\\n]+>`, "g");
 const FUNCTION_CLOSE = "</function>";
 const PARAMETER_CLOSE = "</parameter>";
 
@@ -77,22 +70,23 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
   BLOCK_HEADER.lastIndex = offset;
   const header = BLOCK_HEADER.exec(text);
   if (!header) return undefined;
+  const closeTag = `</tool_call${header[1]}>`;
   const bodyStart = offset + header[0].length;
   NEXT_BLOCK_HEADER.lastIndex = bodyStart;
   const next = NEXT_BLOCK_HEADER.exec(text);
   const limit = next ? next.index + 1 : text.length;
   let unclosed: SerializedToolCall | undefined;
-  for (let close = text.indexOf(CLOSE_TAG, bodyStart); close >= 0 && (close < limit || !unclosed);
-    close = text.indexOf(CLOSE_TAG, close + CLOSE_TAG.length)) {
+  for (let close = text.indexOf(closeTag, bodyStart); close >= 0 && (close < limit || !unclosed);
+    close = text.indexOf(closeTag, close + closeTag.length)) {
     let bodyEnd = trimmedEnd(text, bodyStart, close);
     const closed = endsWithAt(text, bodyStart, bodyEnd, FUNCTION_CLOSE);
     if (closed) bodyEnd = trimmedEnd(text, bodyStart, bodyEnd - FUNCTION_CLOSE.length);
     if (endsWithAt(text, bodyStart, bodyEnd, PARAMETER_CLOSE)) bodyEnd -= PARAMETER_CLOSE.length;
     const call = {
-      name: header[1]!.trim(),
+      name: header[2]!.trim(),
       body: text.slice(bodyStart, bodyEnd),
       start: offset,
-      end: close + CLOSE_TAG.length,
+      end: close + closeTag.length,
     };
     if (closed) return call;
     if (close < limit) unclosed ??= call;
@@ -126,94 +120,6 @@ function repeatedCallIn(text: string, context?: TextContext): SerializedToolCall
   if (!first) return undefined;
   if (text.slice(first.end).trimEnd() !== text.slice(first.start, first.end).trimEnd()) return undefined;
   return { ...first, end: text.length };
-}
-
-/** Splits safe visible text from a possible control block while carrying Markdown context across chunks. */
-export function splitAtPossibleSerializedToolCall(
-  text: string,
-  initialContext: TextContext = { fence: null, lineStart: true },
-  final = false,
-): {
-  emit: string;
-  defer: string;
-  hasOpenTag: boolean;
-  context: TextContext;
-} {
-  const context = { ...initialContext };
-  const split = (at: number, hasOpenTag = false) => ({
-    emit: text.slice(0, at), defer: text.slice(at), hasOpenTag, context,
-  });
-  for (let index = 0; index < text.length; index++) {
-    if (context.lineStart) {
-      const rest = text.slice(index);
-      const fence = /^ {0,3}(`{3,}|~{3,})([^\n]*)/.exec(rest);
-      if (!context.inlineTicks && fence && (!context.fence || (fence[1]![0] === context.fence[0]
-          && fence[1]!.length >= context.fence.length && /^[ \t\r]*$/.test(fence[2]!)))) {
-        if (!final && !rest.includes("\n")) return split(index);
-        context.fence = context.fence ? null : fence[1]!;
-        index += fence[0].length - 1;
-        context.lineStart = false;
-        continue;
-      }
-      if (!final && /^ {0,3}(`*|~*)$/.test(rest)) return split(index);
-      // Only bare control markup qualifies. Prose, quotes, indented examples and
-      // fenced code stay user-visible even when their body matches a real call.
-      if (!context.fence && !context.inlineTicks) {
-        if (rest.startsWith(OPEN_TAG)) {
-          const header = rest.slice(OPEN_TAG.length).trimStart();
-          if (/^<function=[^>\r\n]+>/.test(header)) return split(index, true);
-          if (!final && (FUNCTION_TAG.startsWith(header)
-              || (header.startsWith(FUNCTION_TAG) && !/[>\r\n]/.test(header.slice(FUNCTION_TAG.length))))) {
-            return split(index);
-          }
-        } else if (!final && OPEN_TAG.startsWith(rest)) return split(index);
-      }
-    }
-    if (!context.fence && text[index] === "`") {
-      let end = index + 1;
-      while (text[end] === "`") end++;
-      if (!final && end === text.length) return split(index);
-      const ticks = end - index;
-      if (!context.inlineTicks) context.inlineTicks = ticks;
-      else if (context.inlineTicks === ticks) context.inlineTicks = undefined;
-      index = end - 1;
-    }
-    context.lineStart = text[index] === "\n";
-  }
-  return split(text.length);
-}
-
-/**
- * The line, fence and inline-code state after `text`. Serialized blocks are neutralised first so
- * the scan runs through the whole text instead of stopping at the first opening tag; a block ends
- * mid-line, which is exactly what the neutral spelling reports too.
- */
-function contextAfter(text: string, context: TextContext): TextContext {
-  if (text.length === 0) return context;
-  return splitAtPossibleSerializedToolCall(text.replaceAll(OPEN_TAG, "<tool-call>"), context, true).context;
-}
-
-/**
- * A deferred header/fence can itself be long. While its unresolved portion only grows, a
- * chunk-local check suffices; the first resolving character goes back through the full splitter.
- * Each unbounded phase is scanned once on entry and once on exit, preserving its Markdown rules.
- */
-function deferredContinuationBreak(text: string, context: TextContext): RegExp | undefined {
-  if (text.startsWith(OPEN_TAG)) {
-    if (/^<tool_call>\s*$/.test(text)) return /\S/;
-    if (/^<tool_call>\s*<function=[^>\r\n]*$/.test(text)) return /[>\r\n]/;
-  }
-  if (!context.inlineTicks && context.lineStart) {
-    const fence = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/.exec(text);
-    if (fence) {
-      if (!context.fence) return /\n/;
-      // Closing-fence ticks may grow only before its optional whitespace suffix.
-      if (!fence[2]) return fence[1]![0] === "`" ? /[^`]/ : /[^~]/;
-      return /[^ \t\r]/;
-    }
-  }
-  if (/^`+$/.test(text)) return /[^`]/;
-  return undefined;
 }
 
 /**
@@ -291,19 +197,22 @@ export class SerializedToolCallContentBuffer {
   /** Scan new text plus a fixed overlap, never the retained body (which may be a large rope). */
   private observeDelimiters(delta: string): void {
     const scan = this.delimiterSuffix + delta;
-    const closer = scan.lastIndexOf(CLOSE_TAG);
-    const afterCloser = closer + CLOSE_TAG.length;
-    if (closer >= 0) {
-      this.sawCloser = true;
-      this.openAfterCloser = false;
-      this.trailingProseChars = 0;
+    const tags = scan.matchAll(new RegExp(`<(/?)tool_call${TAG_SUFFIX}>`, "g"));
+    let afterCloser = -1;
+    for (const tag of tags) {
+      if (tag.index! + tag[0].length <= this.delimiterSuffix.length) continue;
+      if (tag[1]) {
+        this.sawCloser = true;
+        this.openAfterCloser = false;
+        this.trailingProseChars = 0;
+        afterCloser = tag.index! + tag[0].length;
+      } else {
+        this.openAfterCloser = true;
+      }
     }
-    if (scan.lastIndexOf(OPEN_TAG) >= (closer >= 0 ? afterCloser : 0)) {
-      this.openAfterCloser = true;
-    }
-    const tail = closer >= 0 ? scan.slice(afterCloser) : delta;
+    const tail = afterCloser >= 0 ? scan.slice(afterCloser) : delta;
     if (this.sawCloser) this.trailingProseChars += tail.replace(/\s+/g, "").length;
-    this.delimiterSuffix = scan.slice(-(Math.max(OPEN_TAG.length, CLOSE_TAG.length) - 1));
+    this.delimiterSuffix = scan.slice(-(MAX_TAG_LENGTH - 1));
   }
 
   /** Returns immediately safe text and retains only the suffix that still needs reconciliation. */
@@ -609,7 +518,7 @@ export function reconcileStructuredToolCalls(
       const body = hasParameterOpener
         ? freeformBody(wrappedBody.slice("<parameter=".length)) : wrappedBody;
       if (block.name === calls[0]!.wireName && body.trim() !== ""
-          && !/(?:^|\n)<tool_call>\s*<function=[^>\r\n]+>/.test(block.body)
+          && !new RegExp(`(?:^|\\n)<tool_call${TAG_SUFFIX}>\\s*<function=[^>\\r\\n]+>`).test(block.body)
           && !(hasParameterOpener && /^<parameter=[A-Za-z_$][\w$.-]*>/.test(wrappedBody))
           && !body.includes("<parameter=") && !body.includes("</parameter>")) {
         references[0] = { ...references[0]!, argumentsText: JSON.stringify({ input: body }),

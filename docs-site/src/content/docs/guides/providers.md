@@ -857,10 +857,12 @@ when a stable upstream session is required.
 
 **MiMo tool-call echoes.** On OpenCode Go and other Chat Completions routes, a bare
 `<tool_call>` block is hidden when it duplicates one structured call to the same tool
-with the same effective input. If the input differs or several calls could explain
+with the same effective input. This includes MiMo wrappers such as
+`<tool_call_deadbeef>` with matching closing IDs, including echoes appended to ordinary prose.
+Code examples remain visible. If the input differs or several calls could explain
 the block, the markup remains visible. For `mimo-v2` and dotted MiMo V2 model IDs such as
 `mimo-v2.6-pro`, if the gateway instead sends exactly one empty `{}` call for a declared
-freeform tool and puts its input in a standalone bare block, opencodex restores that
+freeform tool and puts its input in a standalone bare or identified block, opencodex restores that
 input to the call and hides the block. Hyphenated IDs such as `mimo-v2-pro` and
 `mimo-v2-omni` are outside this recovery rule. Prose, quoted
 examples, ordinary functions, and ambiguous responses remain unchanged. This also handles
