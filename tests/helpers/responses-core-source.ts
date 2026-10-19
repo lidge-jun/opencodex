@@ -47,6 +47,8 @@ export const RESPONSES_CORE_MODULES = [
   "compaction-recovery-policy.ts",
   "memory-models.ts",
   "request-transport.ts",
+  // Reached from request-transport.ts: opt-in DeepSeek upload-backed image replay.
+  "deepseek-image-files.ts",
   "request-sidecar-auth.ts",
   "response-effects.ts",
   "response-tool-ownership.ts",
