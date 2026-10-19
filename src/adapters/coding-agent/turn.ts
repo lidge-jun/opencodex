@@ -375,7 +375,13 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       if (terminalEmitted) return;
       terminalEmitted = true;
     }
-    if (event.type === "error" && cliOutputError !== undefined) input.onCliOutputError?.(cliOutputError);
+    if (event.type === "error" && cliOutputError !== undefined) {
+      try {
+        input.onCliOutputError?.(cliOutputError);
+      } catch {
+        // An observer failure must never drop the client's terminal event or turn it into a rejection.
+      }
+    }
     emit(event);
   };
 
