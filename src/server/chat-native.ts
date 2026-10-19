@@ -85,6 +85,7 @@ import { workflowRefusalResponse } from "./workflow-refusal";
 import type { ComboProtocolSource } from "./responses/core-combo-native";
 import type { ProtocolEnvelope } from "../protocols/envelope";
 import { nativeChatReplayScope, bindNativeChatReplayScope, nativeChatReasoningCapture } from "./chat-native-reasoning";
+import { resolveMistralTransport } from "../providers/mistral-transport";
 
 export { isNativeChatRouteEligible, nativeChatDeclineReason } from "./chat-native-eligibility";
 
@@ -332,7 +333,8 @@ export async function runNativeChatAttempt(
     refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
     return refusal;
   }
-  let activeProvider: OcxProviderConfig = route.provider;
+  // Key selection re-resolves the transport; a single-key route still needs canonical Mistral pacing.
+  let activeProvider: OcxProviderConfig = resolveMistralTransport(route.provider);
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
   const spendTracker = sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
   const physicalBudget = sendBudget ?? createInferenceSendBudget(req, logCtx);

@@ -9,6 +9,7 @@ import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { routedProviderConfig } from "../../src/providers/routed-config";
 import { parseRequest } from "../../src/responses/parser";
 import { handleResponses } from "../../src/server/responses";
+import { handleChatCompletions } from "../../src/server/chat-completions";
 import { fetchWithHeaderTimeout } from "../../src/server/responses/fetch-helpers";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -603,3 +604,26 @@ describe("Mistral error-triggered minute recovery", () => {
       new AbortController().signal, 5, false, transport.fetch!)).rejects.toThrow("Timeout elapsed");
   });
 });
+
+describe("Mistral native Chat recovery", () => {
+  test("an over-budget Retry-After reaches the caller without a replay", async () => {
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++;
+      return sends === 1
+        ? Response.json({ error: { message: "synthetic capacity refusal" } }, { status: 429, headers: { "retry-after": "120" } })
+        : Response.json({ id: "synthetic", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] });
+    }) as typeof fetch;
+    releaseSpendHome = acquireOwnedSpendHome();
+    const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture/model", messages: [{ role: "user", content: "Synthetic fixture" }], stream: false }),
+    }), { port: 0, defaultProvider: "fixture", providers: { fixture: {
+      adapter: "openai-chat", baseUrl, authMode: "key", apiKey: "synthetic-native-chat-key",
+    } } } as OcxConfig, { model: "", provider: "" });
+    await response.text();
+    expect(sends).toBe(1);
+    expect(response.status).toBe(429);
+  });
+});
+
