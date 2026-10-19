@@ -2,13 +2,11 @@ import { TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, type TranslatorBudget } from "../..
 import { jsonUtf8Bytes } from "../../lib/json-byte-size";
 import type { AdapterEvent } from "../../types";
 import {
-  hasNestedSerializedToolCallHeader, recoverStandaloneBareBlocks, reconcileSerializedToolCallEvents, scanSerializedToolCalls, SerializedToolCallContentBuffer,
+  hasNestedSerializedToolCallHeader, MAX_STANDALONE_CANDIDATES, recoverStandaloneBareBlocks, reconcileSerializedToolCallEvents, scanSerializedToolCalls, SerializedToolCallContentBuffer,
   type FreeformToolIdentity, type StructuredToolCallReference,
 } from "./serialized-tool-call-content";
-import { contextAfter } from "./serialized-tool-call-markup";
 
 const MAX_CANDIDATE_BYTES = 4 * 1024 * 1024;
-const MAX_CANDIDATES = 128;
 type BareCall = Pick<ReturnType<typeof recoverStandaloneBareBlocks>[number], "name" | "input">;
 const isMiMo = (model: string | undefined) => /(?:^|[/-])mimo-v2(?:\.|$)/i.test(model ?? "");
 const argumentsFor = (call: BareCall) => JSON.stringify({ input: call.input });
@@ -40,7 +38,7 @@ export class StandaloneBareToolCallBuffer extends SerializedToolCallContentBuffe
     const sizes = calls.map(call => jsonUtf8Bytes({ name: call.name, input: call.input }));
     const bytes = sizes.reduce((sum, size) => sum + size, 0);
     if (sizes.some(size => size > TRANSLATOR_MAX_CALL_ARGUMENT_BYTES)
-        || this.candidateBytes + bytes > MAX_CANDIDATE_BYTES || this.candidates.length + calls.length > MAX_CANDIDATES) {
+        || this.candidateBytes + bytes > MAX_CANDIDATE_BYTES || this.candidates.length + calls.length > MAX_STANDALONE_CANDIDATES) {
       this.clearCandidates();
       this.disabled = true;
       return;
@@ -65,20 +63,14 @@ export class StandaloneBareToolCallBuffer extends SerializedToolCallContentBuffe
     if (!this.eligible || this.disabled) return super.releaseBounded();
     const text = this.current();
     const scan = scanSerializedToolCalls(text, this.context, true);
-    if (scan.incomplete || scan.calls.some(call => hasNestedSerializedToolCallHeader(call.body))) {
+    if (scan.overflow || scan.incomplete || scan.calls.some(call => hasNestedSerializedToolCallHeader(call.body))) {
       // We cannot safely recognize a later inner block after losing its unresolved outer body.
       this.clearCandidates();
       this.disabled = true;
       return super.releaseBounded();
     }
     this.remember(recoverStandaloneBareBlocks(text, this.freeformTools, this.context));
-    // A control body is opaque: its backticks/fences cannot change surrounding Markdown.
-    const last = scan.calls.at(-1);
-    const context = last ? contextAfter(text.slice(last.end), { fence: null, lineStart: false })
-      : contextAfter(text, this.context);
-    const released = super.releaseBounded();
-    this.context = context;
-    return released;
+    return super.releaseBounded();
   }
 
   *recoverStandalone(noStructuredCalls: boolean, nextId: () => string, restore: (name: string) => string): Generator<AdapterEvent> {
@@ -88,6 +80,11 @@ export class StandaloneBareToolCallBuffer extends SerializedToolCallContentBuffe
       return;
     }
     if (!this.eligible || this.disabled) return;
+    if (scanSerializedToolCalls(this.current(), this.context, true).overflow) {
+      this.clearCandidates();
+      this.disabled = true;
+      return;
+    }
     const held = recoverStandaloneBareBlocks(this.current(), this.freeformTools, this.context);
     this.remember(held);
     if (this.disabled || this.candidates.length === 0) return;

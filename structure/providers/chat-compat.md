@@ -335,7 +335,7 @@ unwrap an alternate field, and JSON text that changes on dispatch is not treated
 Malformed JSON on an ordinary function is not raw input.
 A block may close a freeform body with a stray `</parameter>` and may omit `</function>`, and one
 newline after the function header is template layout, so MiMo's echoes of those shapes match too
-(#5724). Blocks are scanned in linear time; closing tags must match the opener’s exact ID (`</tool_call>` for bare blocks).
+(#5724). A forward-only next-line-header cursor keeps adjacent-block scanning linear; closing tags must match the opener’s exact ID (`</tool_call>` for bare blocks).
 Before the next line-start header, the first matching close preceded by `</function>` wins; otherwise the first matching close before that header is the unclosed fallback.
 If no matching close precedes that header, scanning continues beyond it but accepts only a matching close preceded by `</function>`. Bodies can still carry literal tags.
 If the gateway also prefixes the structured call's JSON arguments with the same freeform body, the adapter keeps the JSON suffix only when the block body,
@@ -356,12 +356,12 @@ drain all held text, including matching serialized blocks, because pending tools
 The held bytes use the shared translator budget. The streaming hold is bounded (`ingestStreaming`): once a closed block is followed by more than 8 KiB of prose with no block open after it, or held text plus queued events would pass 4 MiB, everything held is released in order with nothing suppressed, so an unmatched block no longer delays the rest of the answer to the end of the turn. A duplicate is the tail of the content, so its reconciliation is unaffected; past either bound the stream prefers delivery (the pre-#5548 raw markup) over suppression. Buffered responses keep the unbounded `ingest` because their structured calls are already known (`tests/adapters/openai/openai-chat-serialized-tool-call-hold-bound.test.ts`). For a model opted into inline `<think>` splitting,
 reconciliation sees only the answer text the splitter emits. A reasoning event that arrives while
 a block candidate is held waits behind it and is released in its original position, so event order
-never changes and a duplicate is not exposed early; line and fence context carry across the
-answer text on both sides of a think section. Streaming and buffered responses use the same
+never changes and a duplicate is not exposed early. Complete control bodies stay Markdown-opaque on every provider, including bounded release;
+line, fence and inline-code state carry across answer text and think sections. Streaming and buffered responses use the same
 matching and repair rules; regression coverage enters through `/v1/responses` in
 `tests/responses/responses-chat-tool-call-content.test.ts`.
 
-Standalone bare-call recovery follows [the separate MiMo policy](mimo-bare-calls.md).
+Standalone bare-call recovery follows [the separate MiMo policy](mimo-bare-calls.md); traversal stops at the 129th candidate header and disables the entire recovery batch.
 
 > Decision record: [ADR-5548](../decisions/ADR-5548-serialized-tool-call-content.md)
 > Decision record: [ADR-5724](../decisions/ADR-5724-serialized-tool-call-content.md)

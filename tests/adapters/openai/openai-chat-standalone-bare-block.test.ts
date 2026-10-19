@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
+import { recoverStandaloneBareBlocks, scanSerializedToolCalls, SerializedToolCallContentBuffer } from "../../../src/adapters/openai-chat/serialized-tool-call-content";
 import { StandaloneBareToolCallBuffer } from "../../../src/adapters/openai-chat/standalone-bare-tool-calls";
 import { createOpenAIChatToolNameRegistry } from "../../../src/adapters/openai-chat/tool-name-registry";
 import type { AdapterEvent, OcxParsedRequest } from "../../../src/types";
@@ -185,6 +186,64 @@ for (const mode of ["buffered", "streamed"] as const) {
     }
   });
 }
+
+test.each(["other-model", "mimo-v2.6-pro"])("streamed %s keeps identified control bodies opaque across bounded release", async model => {
+  const identified = (body: string) => `<tool_call_deadbeef><function=exec>${body}</function></tool_call_deadbeef>`;
+  const first = identified('text("`");');
+  const prose = "x".repeat(9000);
+  const example = "\nExample `" + identified("text(1);") + "` stays literal";
+  for (const chunks of [[first, prose, example], [first, prose, ...example]]) {
+    const events = await parse("streamed", chunks, { model, structured: true });
+    expect(visible(events)).toBe(first + prose + example);
+    expect(argumentsIn(events)).toEqual([JSON.stringify({ input: "text(1);" })]);
+  }
+  // The shared buffer also owns this contract without the standalone subclass.
+  const budget = createTestTranslatorBudget();
+  const buffer = new SerializedToolCallContentBuffer(budget);
+  const events = [first, prose, example].flatMap(chunk => buffer.ingestStreaming(chunk));
+  events.push(...buffer.drain([{ names: new Set(["exec"]), argumentsText: JSON.stringify({ input: "text(1);" }) }]));
+  expect(visible(events)).toBe(first + prose + example);
+  buffer.dispose();
+  expect(budget.snapshot().currentBytes).toBe(0);
+});
+
+test("64k adjacent bare blocks scan and fail closed within a bounded time", () => {
+  const content = block().repeat(64_000);
+  const start = performance.now();
+  const scan = scanSerializedToolCalls(content, undefined, true);
+  const recovered = recoverStandaloneBareBlocks(content, new Map([["exec", exec]]));
+  // Shared Markdown-context traversal must remain linear even without the recovery count cap.
+  const complete = scanSerializedToolCalls(content, undefined, true, Infinity);
+  const elapsed = performance.now() - start;
+  expect(elapsed).toBeLessThan(500);
+  expect(scan.calls.length).toBeLessThanOrEqual(128);
+  expect(complete.calls).toHaveLength(64_000);
+  expect(recovered).toEqual([]);
+});
+
+test.each([128, 129])("%i adjacent blocks respect the standalone candidate limit", async count => {
+  const content = block().repeat(count);
+  for (const mode of ["buffered", "streamed"] as const) {
+    const events = await parse(mode, [content]);
+    expect(argumentsIn(events)).toEqual(count === 128 ? Array(128).fill(JSON.stringify({ input: "text(1);" })) : []);
+    expect(visible(events)).toBe(count === 128 ? "" : content);
+  }
+});
+
+test.each([false, true])("candidate overflow after bounded release disables saved recovery (streaming=%s)", streaming => {
+  const budget = createTestTranslatorBudget();
+  const buffer = new StandaloneBareToolCallBuffer(budget, "mimo-v2.6-pro", new Map([["exec", exec]]));
+  buffer.ingestStreaming(block());
+  buffer.ingestStreaming("x".repeat(9000));
+  const overflow = "\n" + block().repeat(129) + (streaming ? "x".repeat(9000) : "");
+  if (streaming) buffer.ingestStreaming(overflow);
+  else buffer.ingest(overflow);
+  expect([...buffer.recoverStandalone(true, () => "must-not-run", name => name)]).toEqual([]);
+  buffer.ingest("\n" + block());
+  expect([...buffer.recoverStandalone(true, () => "still-disabled", name => name)]).toEqual([]);
+  buffer.dispose();
+  expect(budget.snapshot().currentBytes).toBe(0);
+});
 
 test("released prose is not retained with the bounded candidate and disposal releases its budget", () => {
   const budget = createTestTranslatorBudget();

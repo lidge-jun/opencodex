@@ -13,6 +13,7 @@ export { splitAtPossibleSerializedToolCall } from "./serialized-tool-call-markup
  */
 const MAX_HELD_BYTES = 4 * 1024 * 1024;
 const MAX_TRAILING_CHARS = 8 * 1024;
+export const MAX_STANDALONE_CANDIDATES = 128;
 
 export interface SerializedToolCall {
   name: string;
@@ -66,15 +67,13 @@ function endsWithAt(text: string, from: number, to: number, suffix: string): boo
  * bounds an unclosed candidate: with no close at all before it, it is body text, and a closed
  * `</function></tool_call>` after it still ends the block.
  */
-function blockAt(text: string, offset: number): SerializedToolCall | undefined {
+function blockAt(text: string, offset: number, nextHeaderAt: (from: number) => number): SerializedToolCall | undefined {
   BLOCK_HEADER.lastIndex = offset;
   const header = BLOCK_HEADER.exec(text);
   if (!header) return undefined;
   const closeTag = `</tool_call${header[1]}>`;
   const bodyStart = offset + header[0].length;
-  NEXT_BLOCK_HEADER.lastIndex = bodyStart;
-  const next = NEXT_BLOCK_HEADER.exec(text);
-  const limit = next ? next.index + 1 : text.length;
+  const limit = nextHeaderAt(bodyStart);
   let unclosed: SerializedToolCall | undefined;
   for (let close = text.indexOf(closeTag, bodyStart); close >= 0 && (close < limit || !unclosed);
     close = text.indexOf(closeTag, close + closeTag.length)) {
@@ -97,20 +96,29 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
 /** Finds outer blocks outside literal Markdown, reporting an unresolved enclosing header. */
 export function scanSerializedToolCalls(
   text: string, context: TextContext = { fence: null, lineStart: true }, allowMidLineBare = false,
-): { calls: SerializedToolCall[]; incomplete: boolean } {
+  maxCandidates = allowMidLineBare ? MAX_STANDALONE_CANDIDATES : Infinity,
+): { calls: SerializedToolCall[]; incomplete: boolean; overflow: boolean } {
   const calls: SerializedToolCall[] = [];
+  // Adjacent same-line blocks share one forward-only newline-header search, including EOF.
+  const headers = new RegExp(NEXT_BLOCK_HEADER.source, "g");
+  let next = headers.exec(text);
+  const nextHeaderAt = (from: number): number => {
+    while (next && next.index + 1 < from) next = headers.exec(text);
+    return next ? next.index + 1 : text.length;
+  };
   let offset = 0;
   while (offset < text.length) {
     const split = splitAtPossibleSerializedToolCall(text.slice(offset), context, true, allowMidLineBare);
     offset += split.emit.length;
     if (!split.hasOpenTag) break;
-    const match = blockAt(text, offset);
-    if (!match) return { calls, incomplete: true }; // An unresolved outer block cannot authorize an inner call.
+    if (calls.length >= maxCandidates) return { calls, incomplete: false, overflow: true };
+    const match = blockAt(text, offset, nextHeaderAt);
+    if (!match) return { calls, incomplete: true, overflow: false }; // An unresolved outer block cannot authorize an inner call.
     calls.push(match);
     offset = match.end;
     context = { fence: null, lineStart: false };
   }
-  return { calls, incomplete: false };
+  return { calls, incomplete: false, overflow: false };
 }
 
 function callsIn(text: string, context?: TextContext, allowMidLineBare = false): SerializedToolCall[] {
@@ -128,7 +136,9 @@ export function recoverStandaloneBareBlocks(
   context?: TextContext,
 ): { name: string; input: string; start: number; end: number }[] {
   if (freeformTools.size === 0) return [];
-  const blocks = callsIn(text, context, true);
+  const scan = scanSerializedToolCalls(text, context, true);
+  if (scan.overflow) return [];
+  const blocks = scan.calls;
   // A nested header makes delimiter ownership ambiguous; no later apparent sibling is safe.
   if (blocks.some(call => hasNestedSerializedToolCallHeader(call.body))) return [];
   return blocks.flatMap(call => {
@@ -338,8 +348,11 @@ export class SerializedToolCallContentBuffer {
       if (boundary.event) out.push(boundary.event);
       cursor = boundary.offset;
     }
-    // Later text continues after what was drained, so its line and fence state carry forward.
-    this.context = contextAfter(this.text, this.context);
+    // Control bodies are opaque on every provider, regardless of standalone recovery eligibility.
+    // Context still traverses the whole released text when recovery hit its candidate limit.
+    const last = scanSerializedToolCalls(this.text, this.context, this.allowMidLineBare, Infinity).calls.at(-1);
+    this.context = last ? contextAfter(this.text.slice(last.end), { fence: null, lineStart: false })
+      : contextAfter(this.text, this.context);
     this.queued = [];
     this.replace("", false);
     return this.observeText(out);
