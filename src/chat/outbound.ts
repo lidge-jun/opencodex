@@ -22,6 +22,7 @@ import {
   UNDECLARED_TOOL_CALL_ERROR_CODE,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { truncationReasonFor } from "../responses/truncated-stop-reason";
 import { createSseBlockBuffer, sseDataPayload } from "../server/sse-payload-rewrite";
 import { reasoningDetailEntriesForItem } from "./reasoning-details";
 
@@ -243,8 +244,14 @@ export function chatCompletionsIncompleteOutcome(
   reason: unknown,
   message: unknown,
 ): { finishReason: "length" | "content_filter" } | { failMessage: string } {
-  if (reason === "max_output_tokens") return { finishReason: "length" };
-  if (reason === "content_filter") return { finishReason: "content_filter" };
+  // Upstream Responses endpoints do not all use OpenAI's `max_output_tokens`: Volcengine Ark
+  // (Coding Plan `/responses`) sends `incomplete_details.reason: "length"` for a hit output cap.
+  // Read the reason through the shared truncation vocabulary so such a turn ends with
+  // finish_reason "length" instead of a 502. Proxy reasons (adapter_eof, upstream_stall_timeout,
+  // missing_terminal_event) are not in that vocabulary and still fail.
+  const truncation = typeof reason === "string" ? truncationReasonFor(reason) : undefined;
+  if (truncation === "max_output_tokens") return { finishReason: "length" };
+  if (truncation === "content_filter") return { finishReason: "content_filter" };
   const why = typeof reason === "string" ? reason : "unknown";
   return {
     failMessage: typeof message === "string" && message.length > 0
@@ -871,8 +878,8 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
   const incomplete = isRec(body.incomplete_details) ? body.incomplete_details : {};
   let incompleteFinish: "length" | "content_filter" | undefined;
   if (body.status === "incomplete") {
-    if (incomplete.reason === "max_output_tokens") incompleteFinish = "length";
-    else if (incomplete.reason === "content_filter") incompleteFinish = "content_filter";
+    const outcome = chatCompletionsIncompleteOutcome(incomplete.reason, undefined);
+    if ("finishReason" in outcome) incompleteFinish = outcome.finishReason;
     else throw new ChatCompletionsStreamError("upstream response ended without a supported completion boundary", {
       code: "upstream_incomplete", type: "upstream_error",
     });
