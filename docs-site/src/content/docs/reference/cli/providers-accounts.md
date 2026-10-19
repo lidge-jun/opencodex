@@ -471,9 +471,9 @@ reset changes and expires after six hours or at the observed reset, whichever co
 An unreadable 5h reading cannot hide a weekly block. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
 While blocked, recovery checks owned usage metadata on a capped 5/10/20/40/60-minute schedule, so a reset
-redeemed outside opencodex is noticed before the predicted reset; the first check waits five minutes, no
-check is scheduled past the latest known blocking reset, and a paused or reauthentication-required main is
-not checked. A longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
+redeemed outside opencodex is noticed before the predicted reset; the first check waits five minutes, checks
+stay at least five minutes apart, and the next check is pulled in to the latest known blocking reset. A paused
+or reauthentication-required main receives no checks before its predicted reset. A longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
 can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
 a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
 

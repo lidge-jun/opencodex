@@ -94,13 +94,37 @@ function poolCreditRenewalDue(config: OcxConfig, accountId: string, now = Date.n
 }
 
 let mainHardLockRecoveryInFlight: Promise<void> | null = null;
-let mainHardLockRecoveryAttempt: { identity: number; credential: number; after: number; delay: number } | undefined;
+/** `floor` and `resetBound` apply only while a predicted reset is (or just was) holding the lock. */
+type MainRecoveryAttempt = { identity: number; credential: number; after: number; delay: number; floor?: number; resetBound?: number };
+let mainHardLockRecoveryAttempt: MainRecoveryAttempt | undefined;
+/** The identity/credential that already waited out its first hold interval. */
+let mainHardLockHoldSeen: { identity: number; credential: number } | undefined;
+const MAIN_HOLD_MIN_INTERVAL_MS = nextQuotaQueryDelay();
 
 /** The predicted reset of a blocked main, or undefined when no future reset is known. */
 function predictedMainResetHold(status: ReturnType<typeof getMainAccountHardLockStatus>): number | undefined {
   return status.state === "blocked" && status.resetAt !== undefined && status.resetAt > Date.now()
     ? status.resetAt : undefined;
 }
+
+/**
+ * A hold read is due at its backoff deadline, pulled in to the latest known predicted reset (even
+ * one that moved earlier or just passed) but never sooner than one base interval after the last read.
+ */
+function mainRecoveryDueAt(attempt: MainRecoveryAttempt, holdResetAt: number | undefined): number {
+  const bound = holdResetAt ?? attempt.resetBound;
+  return bound === undefined ? attempt.after : Math.max(attempt.floor ?? 0, Math.min(attempt.after, bound));
+}
+
+/** First sight of a hold for this credential waits one base interval; transient retries do not re-arm it. */
+function armMainResetHold(identity: number, credential: number, holdResetAt: number): void {
+  const at = Date.now() + MAIN_HOLD_MIN_INTERVAL_MS;
+  mainHardLockHoldSeen = { identity, credential };
+  mainHardLockRecoveryAttempt = { identity, credential, delay: MAIN_HOLD_MIN_INTERVAL_MS, after: at, floor: at, resetBound: holdResetAt };
+}
+
+const mainHoldSeenFor = (identity: number, credential: number): boolean =>
+  mainHardLockHoldSeen?.identity === identity && mainHardLockHoldSeen.credential === credential;
 
 /** Metadata-only recovery on the existing sweep; failures retain the observed policy block. */
 export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise<void> {
@@ -119,6 +143,7 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
         || (observedAt !== undefined && now - observedAt >= MAIN_CREDIT_RENEWAL_AGE_MS));
   };
   const status = getMainAccountHardLockStatus(config);
+  if (status.state !== "blocked") mainHardLockHoldSeen = undefined;
   if (status.state !== "blocked" && !creditRecoveryNeeded()) { mainHardLockRecoveryAttempt = undefined; return; }
   if (isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
   // A predicted reset is a scheduling hint, never proof that the hard lock can be lifted. The
@@ -133,15 +158,14 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
   const identity = captureMainAccountIdentityGeneration();
   const credential = getMainQuotaCredentialGeneration();
   const previous = mainHardLockRecoveryAttempt;
-  if (holdResetAt !== undefined && (previous?.identity !== identity || previous.credential !== credential)) {
-    // The block was just observed: wait one base interval, and never past the predicted reset.
-    const delay = nextQuotaQueryDelay();
-    mainHardLockRecoveryAttempt = { identity, credential, delay, after: Math.min(Date.now() + delay, holdResetAt) };
+  if (holdResetAt !== undefined && !mainHoldSeenFor(identity, credential)) {
+    armMainResetHold(identity, credential, holdResetAt);
     return;
   }
+  const sameAttempt = previous?.identity === identity && previous.credential === credential;
+  if (sameAttempt && holdResetAt !== undefined) previous.resetBound = holdResetAt;
   const queryAfter = nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${credential}`) ?? 0;
-  if ((previous?.identity === identity && previous.credential === credential
-    && previous.after > Date.now()) || queryAfter > Date.now()) return;
+  if ((sameAttempt && mainRecoveryDueAt(previous, holdResetAt) > Date.now()) || queryAfter > Date.now()) return;
   const lease = tryAcquireNativeMainProfileClaim();
   if (!lease) return;
   mainHardLockRecoveryInFlight = (async () => {
@@ -166,9 +190,14 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
       || (passive && !creditRecoveryNeeded())
       || (currentHold !== undefined && isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID))) return;
     const credential = getMainQuotaCredentialGeneration();
+    // A hold that appeared during preparation is first seen now and waits its base interval.
+    if (currentHold !== undefined && !mainHoldSeenFor(identityGeneration, credential)) {
+      armMainResetHold(identityGeneration, credential, currentHold);
+      return;
+    }
     // Reconcile the physical bearer before consulting the previous credential's delay.
     if (previous?.identity === identityGeneration && previous.credential === credential
-      && previous.after > Date.now()) return;
+      && mainRecoveryDueAt(previous, currentHold) > Date.now()) return;
     const currentQueryAfter = nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${credential}`) ?? 0;
     if (currentQueryAfter > Date.now()) {
       mainHardLockRecoveryAttempt = { identity: identityGeneration, credential,
@@ -193,8 +222,8 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
           const delay = nextQuotaQueryDelay(previousDelay || undefined);
           const hold = predictedMainResetHold(getMainAccountHardLockStatus(config));
           mainHardLockRecoveryAttempt = getMainAccountHardLockStatus(config).state === "blocked" || creditRecoveryNeeded()
-            ? { identity: identityGeneration, credential, delay,
-              after: Math.max(Math.min(Date.now() + delay, hold ?? Infinity), queryAfter) }
+            ? { identity: identityGeneration, credential, delay, after: Math.max(Date.now() + delay, queryAfter),
+              ...(hold !== undefined ? { floor: Date.now() + MAIN_HOLD_MIN_INTERVAL_MS, resetBound: hold } : {}) }
             : undefined;
         }
       } else if (queryAfter > Date.now()) {
