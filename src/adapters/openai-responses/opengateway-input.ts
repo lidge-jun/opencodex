@@ -125,9 +125,8 @@ function projectOpenGatewayInput(input: readonly unknown[]): ProjectedInput {
 
 /** OpenGateway requires string tool results and auto/low/high image detail. */
 export function normalizeOpenGatewayResponsesInput(body: unknown, url: string): unknown {
-  const destination = new URL(url);
-  if (destination.origin !== "https://apis.opengateway.ai" || destination.pathname !== "/v1/responses"
-    || !isPlainObject(body) || !Array.isArray(body.input)) return body;
+  // Same exact-URL boundary as completion recovery; a query-routed variant is a different destination.
+  if (url !== "https://apis.opengateway.ai/v1/responses" || !isPlainObject(body) || !Array.isArray(body.input)) return body;
 
   const direct = projectOpenGatewayInput(body.input);
   if (!direct.changed) return body;

@@ -17,6 +17,11 @@ function project(input: unknown[], destination = url): unknown[] {
 }
 
 describe("OpenGateway input normalization", () => {
+  test("a query-routed variant stays untouched under the exact-URL contract", () => {
+    const body = { input: [{ type: "function_call_output", call_id: "a", output: [{ type: "input_text", text: "synthetic" }] }] };
+    expect(normalizeOpenGatewayResponsesInput(body, "https://apis.opengateway.ai/v1/responses?route=custom")).toBe(body);
+  });
+
   test("text projection keeps call ids and does not depend on completion recovery", () => {
     const input = project([
       { type: "function_call", call_id: "call_a", name: "echo", arguments: "{}" },
