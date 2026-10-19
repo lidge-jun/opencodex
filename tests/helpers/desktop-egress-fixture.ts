@@ -9,13 +9,16 @@ export async function listenFixture(server: Server, host = "127.0.0.1") {
   return { port: (server.address() as { port: number }).port,
     async close() { for (const socket of sockets) socket.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }
-export async function forwardProxy(kind: "http" | "https" | "socks5", targetPort: number, leaf: PemKeyPair, credentials = {username: "fixture", password: "secret"}) {
+export async function forwardProxy(kind: "http" | "https" | "socks5", targetPort: number, leaf: PemKeyPair, credentials = {username: "fixture", password: "secret"},
+  /** Regression seam: hold the upstream connect callback, as a loaded event loop does. */
+  options: { targetConnectDelayMs?: number } = {}) {
   const sockets = new Set<Socket>(), seen: { authority: string; auth: string }[] = [];
   const pipe = (client: Socket, head = Buffer.alloc(0)) => {
     const target = connect({ host: "127.0.0.1", port: targetPort }); sockets.add(target);
     target.on("error", () => client.destroy()); client.on("error", () => target.destroy());
     target.on("close", () => { sockets.delete(target); client.destroy(); }); client.on("close", () => target.destroy());
-    target.once("connect", () => { if (head.length) target.write(head); client.pipe(target).pipe(client); });
+    const relay = () => { if (head.length) target.write(head); client.pipe(target).pipe(client); };
+    target.once("connect", () => { if (options.targetConnectDelayMs) setTimeout(relay, options.targetConnectDelayMs); else relay(); });
   };
   const server = kind === "socks5" ? createTcp(client => {
     let held = Buffer.alloc(0), stage = 0, auth = "";
@@ -35,7 +38,10 @@ export async function forwardProxy(kind: "http" | "https" | "socks5", targetPort
         } else {
           if (held.length < 5 || held.length < 7 + held[4]!) return;
           const n = held[4]!, authority = held.subarray(5, 5 + n).toString() + ":" + held.readUInt16BE(5 + n);
-          seen.push({ authority, auth }); held = held.subarray(7 + n); client.off("data", onData);
+          // Removing the last listener does not pause a flowing socket: the client's TLS
+          // ClientHello can arrive before the upstream connects and would be dropped, stalling the
+          // dial until its 10 s deadline (macOS run 39215956943). Hold it until pipe() resumes.
+          seen.push({ authority, auth }); held = held.subarray(7 + n); client.off("data", onData); client.pause();
           client.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0])); pipe(client, held); return;
         }
       }
