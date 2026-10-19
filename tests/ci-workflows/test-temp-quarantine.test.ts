@@ -80,6 +80,17 @@ describe("final EPERM quarantine", () => {
     expect(readdirSync(fixture.runTmp)).toContain(".trash-fixed");
   });
 
+  test("an 8.3 TEMP alias still contains the long-form locked path", () => {
+    // Hosted Windows exports TEMP as C:\Users\RUNNER~1\... while the test path is long-form.
+    const fixture = containedFixture();
+    const alias = join(tmpdir(), "RUNNER~1-alias");
+    const env = { TEMP: join(alias, "opencodex-test-Aa11Bb", "tmp") };
+    const seen = diagnostic({ realpath: path => realpathSync(path.replace(alias, tmpdir())) });
+    expect(quarantineFinalEperm(fixture.locked, eperm(), seen, env)).toBe(true);
+    expect(seen.warnings.some(line => line.includes("not a contained temp subtree"))).toBe(false);
+    expect(readdirSync(fixture.runTmp)).toContain(".trash-fixed");
+  });
+
   test("an earlier EPERM does not diagnose or move", () => {
     const fixture = containedFixture();
     const seen = diagnostic();
