@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, type BigIntStats } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, type BigIntStats } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { claudeDesktopConfigLibraryDir, resolveConfigLibraryDir } from "./desktop-3p-paths";
@@ -44,6 +44,20 @@ export interface Desktop3pMetadata {
 
 export const DESKTOP_PICKER_ENTRY_NAME = "opencodex-picker";
 
+export const MAX_DESKTOP_PROFILE_FILE_BYTES = 4 * 1024 * 1024;
+
+export function assertDesktopLibraryTextSize(text: string): void {
+  if (Buffer.byteLength(text, "utf8") > MAX_DESKTOP_PROFILE_FILE_BYTES) {
+    throw new Error("desktop_config_too_large");
+  }
+}
+
+export function serializeDesktopLibraryJson(value: unknown): string {
+  const text = JSON.stringify(value, null, 2) + "\n";
+  assertDesktopLibraryTextSize(text);
+  return text;
+}
+
 /** A path that no longer names the observed file was swapped; a same-path failure keeps its own errno. */
 function pathStillNamesExpectedFile(path: string, expected: BigIntStats): boolean {
   try {
@@ -54,7 +68,13 @@ function pathStillNamesExpectedFile(path: string, expected: BigIntStats): boolea
 }
 
 /** Read regular config files only; a path swap must not turn an observation into a FIFO wait. */
-export function readDesktopLibraryBytes(path: string): Buffer {
+export function readDesktopLibraryBytes(
+  path: string,
+  maxBytes: number = MAX_DESKTOP_PROFILE_FILE_BYTES,
+): Buffer {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_DESKTOP_PROFILE_FILE_BYTES) {
+    throw new RangeError("invalid Desktop library read limit");
+  }
   const expected = lstatSync(path, { bigint: true });
   if (!expected.isFile()) throw new Error("desktop_config_not_regular");
   // POSIX open of a FIFO can itself block, before fstat is possible. Windows has no POSIX
@@ -73,7 +93,27 @@ export function readDesktopLibraryBytes(path: string): Buffer {
     const opened = fstatSync(fd, { bigint: true });
     if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino
       || opened.ctimeNs !== expected.ctimeNs) throw new Error("desktop_config_not_regular");
-    return readFileSync(fd);
+    if (opened.size > BigInt(maxBytes)) throw new Error("desktop_config_too_large");
+    // Allocate for the observed size plus one sentinel byte, not the full cap: callers scan many
+    // small profiles, and the cap would zero-fill megabytes per read. A file that fills the
+    // buffer grew after validation — keep reading within the bound so it classifies as
+    // desktop_config_too_large rather than silently truncating.
+    let bytes = Buffer.alloc(Number(opened.size) + 1);
+    let length = 0;
+    for (;;) {
+      const count = readSync(fd, bytes, length, Math.min(64 * 1024, bytes.length - length), null);
+      if (count === 0) break;
+      length += count;
+      if (length > maxBytes) throw new Error("desktop_config_too_large");
+      if (length === bytes.length && bytes.length <= maxBytes) {
+        const grown = Buffer.alloc(Math.min(maxBytes + 1, bytes.length * 2));
+        bytes.copy(grown, 0, 0, length);
+        bytes = grown;
+      }
+    }
+    if (length > maxBytes) throw new Error("desktop_config_too_large");
+    if (!pathStillNamesExpectedFile(path, opened)) throw new Error("desktop_config_not_regular");
+    return bytes.subarray(0, length);
   } finally {
     closeSync(fd);
   }
