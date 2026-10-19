@@ -10,7 +10,6 @@ import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 const PROVIDER = "xai-live-test";
 const HY3_PROVIDER = "opencode-go";
 const HY3_CONTROL_PROVIDER = "hy3-control-live-test";
-const OPENCODE_FREE_PROVIDER = "opencode-free";
 
 function withTestFetch<T extends OcxProviderConfig>(provider: T): T {
   if (globalThis.fetch !== originalFetch) {
@@ -158,38 +157,6 @@ describe("live provider model discovery (authority + fallback)", () => {
     expect(ids.sort()).toEqual(["grok-4.3", "grok-4.5"]);
     expect(models.find(m => m.provider === PROVIDER && m.id === "grok-4.5")?.contextWindow)
       .toBe(500_000);
-  });
-
-  test("opencode-free live discovery exposes big-pickle plus -free ids", async () => {
-    globalThis.fetch = (async (url: string | URL | Request) => {
-      expect(String(url)).toBe("https://opencode.ai/zen/v1/models");
-      return new Response(JSON.stringify({
-        data: [
-          { id: "big-pickle" },
-          { id: "kimi-k2.7-code" },
-          { id: "deepseek-v4-flash-free" },
-          { id: "hy3-free" },
-          { id: "mimo-v2.5-free" },
-          { id: "gpt-oss:120b" },
-        ],
-      }), { status: 200, headers: { "content-type": "application/json" } });
-    }) as typeof fetch;
-
-    const models = await gatherRoutedModels({
-      providers: {
-        [OPENCODE_FREE_PROVIDER]: withTestFetch({
-          baseUrl: "https://opencode.ai/zen/v1",
-          adapter: "openai-chat",
-          authMode: "key",
-          keyOptional: true,
-          models: ["big-pickle", "deepseek-v4-flash-free", "mimo-v2.5-free", "north-mini-code-free"],
-          liveModels: true,
-        }),
-      },
-    } as unknown as OcxConfig);
-
-    const ids = models.filter(m => m.provider === OPENCODE_FREE_PROVIDER).map(m => m.id).sort();
-    expect(ids).toEqual(["big-pickle", "deepseek-v4-flash-free", "hy3-free", "mimo-v2.5-free", "north-mini-code-free"]);
   });
 
   test("non-ok response also falls back to statics (and cooldown clears via clearModelCache)", async () => {

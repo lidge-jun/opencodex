@@ -65,7 +65,6 @@ import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
-import { enrichOpenCodeZenFreeTierMessage } from "../providers/opencode-zen-rate-limit";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -718,20 +717,12 @@ export async function runNativeChatAttempt(
       && (isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(upstreamMessage))
       ? upstreamMessage
       : detail ? `Provider error ${response.status}: ${detail}` : `Provider error ${response.status}`;
-    // Zen's keyless free tier refuses the request outright rather than rate-limiting it, and
-    // the raw `MissingSessionID` tells a user nothing about why or what to do (#4121).
-    const clientMessage = enrichOpenCodeZenFreeTierMessage(message, {
-      providerName: route.providerName,
-      baseUrl: route.provider.baseUrl,
-      adapter: route.provider.adapter,
-      upstreamErrorType: upstreamType,
-    });
     const classified = classifyError(
       response.status,
       upstreamType ?? (response.status === 401 ? "authentication_error"
         : response.status === 429 ? "rate_limit_error"
           : response.status >= 500 ? "server_error" : "invalid_request_error"),
-      clientMessage,
+      message,
     );
     // The verdict is read once, from the response that carries it and from the code a
     // re-wrapped body kept -- never from the status, which a real rate limit shares.

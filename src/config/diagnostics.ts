@@ -21,6 +21,7 @@ import { isMissingPathError } from "./atomic-write";
 import { getConfigDir, getConfigPath } from "./paths";
 import { getDefaultConfig } from "./proxy-env";
 import { salvageConfigCandidate } from "./salvage";
+import { sanitizeRemovedOpenCodeFreeForLoad } from "./removed-opencode-free";
 import { sanitizeOpenCodeOverridesForLoad } from "./opencode-wire-upgrade";
 import {
   sanitizeReasoningPinsForLoad,
@@ -777,6 +778,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
 export function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
+    sanitizeRemovedOpenCodeFreeForLoad(parsed);
     sanitizeOpenCodeOverridesForLoad(parsed);
     sanitizeReasoningPinsForLoad(parsed);
     // Same degradation as loadConfig: a hand-edited invalid retryOn429 must not trip the

@@ -1527,7 +1527,7 @@ describe("request log metadata", () => {
       new Response("provider says nope", { status: 400, headers: { "content-type": "text/plain" } }),
       "ocx-test-plain-upstream-error",
       Date.now(),
-      { model: "opencode-free/deepseek-v4-flash-free", provider: "opencode-free" },
+      { model: "opencode-zen/deepseek-v4-flash-free", provider: "opencode-zen" },
       entry => entries.push(entry),
     );
 
