@@ -2,6 +2,7 @@ import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
+import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import {
@@ -856,6 +857,10 @@ export function comboFailureDecision(
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, options?.code)) return "hop";
   if (isAnthropicBillingFailure(status, message, options?.code)) return "hop";
+  // Kiro's body validator rejects the request for the identity it was routed under. The account
+  // layer rotates logins first; this is the no-alternate case, so the next combo target is the
+  // only remaining chance to serve the turn. Must precede the generic invalid_request_error stop.
+  if (isKiroAccountProfileRefusal(status, message)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

@@ -951,6 +951,13 @@ describe("combo failure policy and advancement", () => {
     expect(comboFailureDecision(410, "resource is gone")).toBe("stop");
     expect(comboFailureDecision(410, "The model has reached its end of life and is no longer available.")).toBe("hop");
     expect(comboFailureDecision(410, "The model is scheduled for retirement.")).toBe("hop");
+    // A Kiro 400 that names its own validator rejection is account-scoped: after the account layer
+    // has no login left to rotate to, the next combo target is the only chance to serve the turn.
+    const improper = JSON.stringify({ message: "ValidationException: Improperly formed request" });
+    expect(comboFailureDecision(400, improper)).toBe("hop");
+    expect(comboFailureDecision(400, `Provider error 400: ${improper}`)).toBe("hop");
+    expect(comboFailureDecision(400, JSON.stringify({ message: "Improperly formed request" }))).toBe("stop");
+    expect(comboFailureDecision(400, "ValidationException: model not found")).toBe("stop");
     expect(comboFailureDecision(410, "gone", { code: "model_retired" })).toBe("hop");
     expect(comboFailureDecision(499, "client cancelled")).toBe("stop");
     expect(comboFailureDecision(422, "invalid_api_key")).toBe("hop");
