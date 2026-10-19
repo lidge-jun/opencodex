@@ -21,7 +21,7 @@ export const TRANSPILER_CACHE_ENV = "BUN_RUNTIME_TRANSPILER_CACHE_PATH";
 // Semver core, optional prerelease and build metadata (findPathBun accepts `+build`). The
 // alphabet has no separator, drive colon or NUL, so the segment cannot leave the cache.
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-const SCOPED_TAIL = /^(.*?)[\\/]+(bun-[^\\/]+)[\\/]*$/;
+const SCOPED_TAIL = /^(.*?)([\\/]+)(bun-[^\\/]+)[\\/]*$/;
 
 /** @param {unknown} version */
 function validVersion(version) {
@@ -45,7 +45,9 @@ export function scopeTranspilerCacheToRuntime(env, runtimeVersion, join, platfor
   if (typeof cache !== "string" || cache === "" || cache === "0") return env;
   if (!validVersion(runtimeVersion)) return env;
   const tail = SCOPED_TAIL.exec(cache);
-  const base = tail && validVersion(tail[2].slice(4)) ? (tail[1] || cache.slice(0, cache.length - tail[2].length)) : cache;
+  // At a filesystem or drive root ("/", "C:\\") keep one separator: a bare "C:" is drive-relative.
+  const base = !tail || !validVersion(tail[3].slice(4)) ? cache
+    : tail[1] === "" || /^[A-Za-z]:$/.test(tail[1]) ? tail[1] + tail[2][0] : tail[1];
   const scoped = { ...env };
   for (const variant of names) delete scoped[variant];
   scoped[TRANSPILER_CACHE_ENV] = join(base, `bun-${runtimeVersion}`);

@@ -51,6 +51,10 @@ describe("launcher transpiler cache scope", () => {
     expect(scoped("C:\\cache\\bun-1.4.2", "1.4.2")).toBe(join("C:\\cache", "bun-1.4.2"));
     // A directory that merely starts with bun- but is not a version stays a parent.
     expect(scoped(join("/cache", "bun-cache"), "1.4.2")).toBe(join("/cache", "bun-cache", "bun-1.4.2"));
+    // Root-level scopes keep their root, with or without a trailing separator.
+    expect(scoped("/bun-1.4.2/", "1.5.0")).toBe(join("/", "bun-1.5.0"));
+    expect(scoped("/bun-1.4.2", "1.5.0")).toBe(join("/", "bun-1.5.0"));
+    expect(scoped("C:\\bun-1.4.2\\", "1.5.0")).toBe(join("C:\\", "bun-1.5.0"));
   });
 
   test("prerelease and build metadata versions are accepted, oversized ones are not", () => {
