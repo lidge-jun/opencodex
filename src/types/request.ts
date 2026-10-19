@@ -46,6 +46,14 @@ export interface OcxReasoningReplayScopeRef {
   current?: Readonly<OcxReasoningReplayIdentity>;
 }
 
+/** One replayed hosted search cell, rebuilt as the `web_search` call/result pair `callId`. */
+export interface OcxReplayedWebSearchCell {
+  /** The client-visible cell id; absent when the cell carried no usable id (no recorded result). */
+  cellId?: string;
+  callId: string;
+  failed: boolean;
+}
+
 export interface OcxParsedRequest {
   modelId: string;
   /** Client-facing model selector retained for Anthropic routes after wire-model normalization. */
@@ -153,11 +161,11 @@ export interface OcxParsedRequest {
    */
   _webSearch?: Record<string, unknown>;
   /**
-   * Replayed hosted `web_search_call` cells the parser rebuilt as a `web_search` call/result pair,
-   * by cell id. The web-search sidecar swaps in the result it recorded for that cell, once the
-   * replay scope is bound (src/web-search/sidecar-search-replay.ts).
+   * Replayed hosted `web_search_call` cells the parser rebuilt as `web_search` call/result pairs
+   * (src/responses/web-search-replay.ts). The web-search sidecar swaps in the result it recorded for
+   * a cell, or removes the pairs when it does not run (src/web-search/sidecar-search-replay.ts).
    */
-  _replayedWebSearchCellIds?: string[];
+  _replayedWebSearchCells?: OcxReplayedWebSearchCell[];
   /** Hosted image_generation tool config stashed for the image bridge sidecar (see src/images). */
   _imageGeneration?: { toolNames: Set<string>; originalTool?: Record<string, unknown> };
   /**

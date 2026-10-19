@@ -4,8 +4,13 @@ import type { AdapterEvent, OcxMessage, OcxParsedRequest } from "../../src/types
 import { parseRequest } from "../../src/responses/parser";
 import { clearBridgeSearchReplayCacheForTests } from "../../src/responses/bridge-search-replay-cache";
 import { runWithWebSearch } from "../../src/web-search/loop";
+import { restoreSidecarSearchResults, stripReplayedSearchPairs } from "../../src/web-search/sidecar-search-replay";
 import { buildWebSearchTool } from "../../src/web-search/synthetic-tool";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { handleResponses } from "../../src/server/responses/core";
+import type { OcxConfig } from "../../src/types";
+import type { RequestLogContext } from "../../src/server/request-log";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 // #7269: a routed model searched through the sidecar, then called a client tool, which ended the
 // turn. Codex replays only the hosted cell (query, no result), and the parser used to drop it, so the
@@ -93,11 +98,11 @@ test("the next turn hands the routed model the search result the sidecar recorde
   expect(result?.toolName).toBe("web_search");
   expect(result?.content).toContain("Rank one: The Archmage");
   expect(result?.content).toContain("https://novel.example.test/best");
-  // The pair precedes the shell call, so the model sees it searched before running its tool.
+  // The search joins the shell call's batch, so the model sees it searched in the same turn as the tool.
   const order = seen[0]!.flatMap(message => message.role === "assistant"
     ? message.content.flatMap(part => part.type === "toolCall" ? [part.id] : [])
     : message.role === "toolResult" ? [`result:${message.toolCallId}`] : []);
-  expect(order).toEqual([cell.id, `result:${cell.id}`, "call_shell", "result:call_shell"]);
+  expect(order).toEqual([cell.id, "call_shell", "result:call_shell", `result:${cell.id}`]);
 });
 
 test.each([
@@ -129,12 +134,13 @@ test("a replayed cell without a recorded result still tells the model it searche
     "- A <https://a.example.test>",
     "- <https://b.example.test>",
   ].join("\n"));
-  expect(parsed._replayedWebSearchCellIds).toEqual(["ws_native"]);
+  expect(parsed._replayedWebSearchCells).toEqual([{ cellId: "ws_native", callId: "ws_native", failed: false }]);
 });
 
 test("a failed cell is replayed as a failed search, and a cell without an id gets a request-local one", () => {
   const parsed = parseRequest(nextTurn({ type: "web_search_call", status: "failed", action: { type: "search", query: "q" } }));
-  const { result } = searchPair(parsed.context.messages, "ws_replay_0");
+  restoreSidecarSearchResults(parsed);
+  const { result } = searchPair(parsed.context.messages, "ws_replay");
   expect(result?.isError).toBe(true);
   expect(result?.content).toContain("This search failed");
 });
@@ -144,5 +150,92 @@ test("without a hosted search declaration the replayed cell stays out of the rou
     action: { type: "search", query: "q" } }, [SHELL]));
   expect(searchPair(parsed.context.messages, "ws_native").call).toBeUndefined();
   expect(parsed.context.messages.some(message => message.role === "toolResult" && message.toolName === "web_search")).toBe(false);
-  expect(parsed._replayedWebSearchCellIds).toBeUndefined();
+  expect(parsed._replayedWebSearchCells).toBeUndefined();
+});
+
+const callOrder = (messages: OcxMessage[]) => messages.map(message => message.role === "assistant"
+  ? `assistant[${message.content.map(part => part.type === "toolCall" ? part.id : part.type).join(",")}]`
+  : message.role === "toolResult" ? `result:${message.toolCallId}` : message.role);
+const cell = (id: string) => ({ type: "web_search_call", id, status: "completed", action: { type: "search", query: id } });
+const call = (id: string) => ({ type: "function_call", call_id: id, name: "shell", arguments: "{}" });
+const output = (id: string) => ({ type: "function_call_output", call_id: id, output: id });
+const body = (input: unknown[]) => ({ model: "m", stream: true, tools: [{ type: "web_search" }, SHELL], input });
+
+test("a cell inside a parallel client batch never splits it: its result follows the batch", () => {
+  const parsed = parseRequest(body([{ role: "user", content: "go" }, call("A"), cell("ws_mid"), call("B"), output("A"), output("B"),
+    { type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] }]));
+  expect(callOrder(parsed.context.messages)).toEqual(["user", "assistant[A,ws_mid,B]", "result:A", "result:B", "result:ws_mid", "assistant[text]"]);
+});
+
+test("two cells after one reasoning item stay in one assistant turn with that reasoning", () => {
+  const parsed = parseRequest(body([{ role: "user", content: "go" },
+    { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "plan" }] }, cell("ws_1"), cell("ws_2"),
+    { type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] }]));
+  expect(callOrder(parsed.context.messages)).toEqual(["user", "assistant[thinking,ws_1,ws_2]", "result:ws_1", "result:ws_2", "assistant[text]"]);
+});
+
+test("synthetic call ids never collide with client call ids or with each other", () => {
+  const parsed = parseRequest(body([{ role: "user", content: "go" }, cell("ws_replay"),
+    { type: "web_search_call", status: "completed", action: { type: "search", query: "no id" } },
+    cell("shared"), call("shared"), output("shared")]));
+  const cells = parsed._replayedWebSearchCells!;
+  expect(cells.map(entry => entry.callId)).toEqual(["ws_replay", "ws_replay_1", "shared_1"]);
+  expect(cells.map(entry => entry.cellId)).toEqual(["ws_replay", undefined, "shared"]);
+  const ids = parsed.context.messages.flatMap(message => message.role === "assistant"
+    ? message.content.flatMap(part => part.type === "toolCall" ? [part.id] : []) : []);
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(searchPair(parsed.context.messages, "shared").result?.content).toBe("shared");
+});
+
+test("without a sidecar plan the pairs are removed, restoring the pre-#7269 history", () => {
+  const input = [{ role: "user", content: "go" },
+    { type: "reasoning", id: "rs_1", summary: [{ type: "summary_text", text: "plan" }] }, cell("ws_1"),
+    call("A"), output("A"), cell("ws_2"), { type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] }];
+  const parsed = parseRequest(body(input));
+  stripReplayedSearchPairs(parsed);
+  expect(callOrder(parsed.context.messages)).toEqual(["user", "assistant[thinking,A]", "result:A", "assistant[text]"]);
+  expect(parsed._replayedWebSearchCells).toBeUndefined();
+  expect(JSON.stringify(parsed.context.messages)).not.toContain("web_search");
+  // Stripping is idempotent.
+  stripReplayedSearchPairs(parsed);
+  expect(callOrder(parsed.context.messages)).toEqual(["user", "assistant[thinking,A]", "result:A", "assistant[text]"]);
+});
+
+test("a routed Anthropic turn with the sidecar off sends no call to the undeclared web_search tool", async () => {
+  const MODEL = "claude-opus-5-5";
+  const wires: string[] = [];
+  const frames = [
+    { type: "message_start", message: { id: "msg_x", type: "message", role: "assistant", model: MODEL, content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
+  ];
+  const fetch = (async (_input: unknown, init?: RequestInit) => {
+    wires.push(String(init?.body));
+    return new Response(frames.map(f => `event: ${f.type}\ndata: ${JSON.stringify(f)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+  }) as typeof globalThis.fetch;
+  const config = {
+    port: 0, defaultProvider: "anth", webSearchSidecar: { enabled: false },
+    providers: { anth: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "key", apiKey: "sk-ant-fixture", models: [MODEL], fetch } },
+  } as unknown as OcxConfig;
+  const release = acquireOwnedSpendHome();
+  try {
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...nextTurn({ type: "web_search_call", id: "ws_cell", status: "completed", action: { type: "search", query: "q" } }), model: `anth/${MODEL}` }),
+    }), config, { model: "", provider: "" } as RequestLogContext, {});
+    expect(response.status).toBe(200);
+    await response.text();
+  } finally {
+    release();
+  }
+  expect(wires).toHaveLength(1);
+  const wire = JSON.parse(wires[0]!) as { tools?: Array<{ name: string }>; messages: Array<{ content: unknown }> };
+  expect((wire.tools ?? []).some(tool => tool.name === "web_search")).toBe(false);
+  const blocks = wire.messages.flatMap(message => Array.isArray(message.content) ? message.content as Array<Record<string, unknown>> : []);
+  expect(blocks.some(block => block.type === "tool_use" && block.name === "web_search")).toBe(false);
+  expect(blocks.some(block => block.type === "tool_use" && block.name === "shell")).toBe(true);
+  expect(JSON.stringify(wire)).not.toContain("ws_cell");
 });

@@ -22,7 +22,7 @@ import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { hasRoutedIdentity, nameRoutedIdentity } from "../adapters/identity";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
-import { replayedWebSearchCall } from "./web-search-replay";
+import { rewriteReplayedWebSearchCells } from "./web-search-replay";
 import { buildImageTool, extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
@@ -238,7 +238,8 @@ export function parseRequest(
   // re-injects a synthetic function tool only when it will actually handle the call. The same
   // declaration decides how replayed search cells are rebuilt below.
   const webSearch = extractHostedWebSearch(data.tools as unknown[] | undefined);
-  const replayedWebSearchCellIds: string[] = [];
+  // With search declared, replayed hosted cells become web_search call/output pairs (#7269).
+  const webSearchReplay = webSearch && Array.isArray(data.input) ? rewriteReplayedWebSearchCells(data.input) : undefined;
   const systemPrompt: string[] = [];
   // Responses reasoning siblings belong to the following assistant, including across call items.
   // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
@@ -281,9 +282,12 @@ export function parseRequest(
     if (data.previous_response_id) continuationConversationMessageIndex = messages.length;
     messages.push({ role: "user", content: data.input, timestamp: now });
   } else if (data.input) {
-    for (let inputIndex = 0; inputIndex < data.input.length; inputIndex++) {
-      const item = data.input[inputIndex];
-      if (inputIndex > 0 && isAnthropicProgressMirror(item, anthropicProgressEnvelope(data.input[inputIndex - 1]))) continue;
+    const inputItems = (webSearchReplay?.items ?? data.input) as typeof data.input;
+    for (let itemIndex = 0; itemIndex < inputItems.length; itemIndex++) {
+      const item = inputItems[itemIndex];
+      // Boundaries are measured on the caller's input, before any replayed-search rewrite.
+      const inputIndex = webSearchReplay?.sourceIndexes[itemIndex] ?? itemIndex;
+      if (itemIndex > 0 && isAnthropicProgressMirror(item, anthropicProgressEnvelope(inputItems[itemIndex - 1]))) continue;
       const effectiveType = (item as { type?: string }).type ?? ("role" in item ? "message" : undefined);
       const itemRole = (item as { role?: string }).role;
       const externalTaskInput = effectiveType === "function_call_output" ? externalTaskInputContent(item) : undefined;
@@ -536,25 +540,9 @@ export function parseRequest(
       }
 
       if (effectiveType === "web_search_call") {
-        // With search declared, rebuild the cell as the web_search call/result pair the routed model
-        // made, so it remembers it already searched (#7269). The sidecar swaps in the recorded result
-        // text once the replay scope is bound. Without a declaration the cell stays out of the
-        // history: a call to an undeclared tool, or assistant-visible marker text the model could
-        // echo as a fake answer, would be worse than the gap.
-        if (webSearch) {
-          const replay = replayedWebSearchCall(item as Record<string, unknown>, `ws_replay_${replayedWebSearchCellIds.length}`);
-          if (!replayedWebSearchCellIds.includes(replay.id)) {
-            replayedWebSearchCellIds.push(replay.id);
-            assistantHolderWithReasoning().content.push({
-              type: "toolCall", id: replay.id, name: WEB_SEARCH_TOOL_NAME, arguments: replay.arguments,
-            });
-            messages.push({
-              role: "toolResult", toolCallId: replay.id, toolName: WEB_SEARCH_TOOL_NAME,
-              content: replay.result, isError: replay.failed, timestamp: now,
-            });
-            continue;
-          }
-        }
+        // Without a search declaration the cell stays out of routed history: a call to an undeclared
+        // tool, or assistant-visible marker text the model could echo as a fake answer, would be
+        // worse than the gap. With one, the cell was already rewritten into a web_search pair.
         pendingReasoning.length = 0;
         continue;
       }
@@ -737,7 +725,7 @@ export function parseRequest(
       ? { _continuationConversationMessageIndex: continuationConversationMessageIndex }
       : {}),
     ...(webSearch ? { _webSearch: webSearch } : {}),
-    ...(replayedWebSearchCellIds.length > 0 ? { _replayedWebSearchCellIds: replayedWebSearchCellIds } : {}),
+    ...(webSearchReplay ? { _replayedWebSearchCells: webSearchReplay.cells } : {}),
     ...(imageGen ? { _imageGeneration: imageGen } : {}),
     ...(textFormat ? { _structuredOutput: true } : {}),
     ...(compactionRequest ? { _compactionRequest: true } : {}),
