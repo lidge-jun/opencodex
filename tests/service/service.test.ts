@@ -2293,12 +2293,13 @@ describe("service lifecycle cleanup ordering", () => {
       platform: "win32",
       diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }),
       managerOps,
+      killServiceWrappers: () => { calls.push("kill:wrappers"); },
       stopTrackedProxy: async () => { calls.push("stop:standalone"); },
     });
     expect(calls).toEqual([
       "status:scheduler", "stop:scheduler",
       "status:native", "stop:native",
-      "stop:standalone", "install:native",
+      "kill:wrappers", "stop:standalone", "install:native",
     ]);
   });
 
@@ -2406,6 +2407,7 @@ describe("service lifecycle cleanup ordering", () => {
             if (failure === "stop") throw new Error("stop failed");
           },
         }),
+        killServiceWrappers: () => {},
         stopTrackedProxy: async () => {
           if (failure === "standalone") throw new Error("standalone failed");
         },
@@ -2421,9 +2423,10 @@ describe("service lifecycle cleanup ordering", () => {
       platform: "win32",
       diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: false, startable: false, stale: false, conflict: true, backend: "scheduler", summary: "test" }),
       managerOps: backend => ({ status: () => "present", stop: () => { stopped.push(backend); } }),
+      killServiceWrappers: () => { stopped.push("wrappers"); },
       stopTrackedProxy: async () => {},
     });
-    expect(stopped).toEqual(["scheduler", "native"]);
+    expect(stopped).toEqual(["scheduler", "native", "wrappers"]);
   });
 
   test("direct service stop kills the tracked proxy before restoring native Codex", async () => {
