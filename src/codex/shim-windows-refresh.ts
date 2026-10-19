@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, openSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { extname } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { sameFingerprintAfterRename, sameStableShimPathProbe, shimPathFingerprint, stableShimPathProbe, type StableShimPathProbe } from "./shim-fingerprint";
 
 interface FileIdentity { dev: bigint; ino: bigint }
@@ -68,6 +68,22 @@ function linkExpected(source: string, destination: string, expected: FileIdentit
   return "refused";
 }
 
+/** Whether `directory` supports hard links, proven with a throwaway pair before anything is displaced. */
+function hardLinksWork(directory: string): boolean {
+  const probe = join(directory, `.ocx-link-probe-${randomUUID()}`);
+  const linked = `${probe}-linked`;
+  let identity: FileIdentity;
+  try { identity = createExclusive(probe, ""); } catch { return false; }
+  try {
+    linkSync(probe, linked);
+    return entryIs(linked, identity);
+  } catch {
+    return false;
+  } finally {
+    for (const path of [linked, probe]) if (entryIs(path, identity)) { try { unlinkSync(path); } catch { /* best effort */ } }
+  }
+}
+
 /**
  * Replace an owned, obsolete Windows wrapper without ever truncating, replacing or writing through
  * a file someone else published (an npm or version-manager install racing this refresh, or an entry
@@ -97,12 +113,19 @@ export function refreshObsoleteWindowsShim(
   const discard = (path: string, identity: FileIdentity | null): void => {
     if (identity && entryIs(path, identity)) { try { unlinkSync(path); } catch { /* already gone */ } }
   };
-  /** Put the moved wrapper back only onto an empty path, and only while the aside is still it. */
+  /**
+   * Put the moved wrapper back only onto an empty path, and only while the aside is still it. If the
+   * link fails (hard links became unavailable mid-refresh), an identity-checked rename keeps the
+   * launcher from staying missing.
+   */
   const restoreAside = (): void => {
     if (!moved || existsSync(wrapperPath) || !entryIs(aside, moved)) return;
-    if (linkExpected(aside, wrapperPath, moved) === "published") discard(aside, moved);
+    if (linkExpected(aside, wrapperPath, moved) === "published") { discard(aside, moved); return; }
+    if (!existsSync(wrapperPath) && entryIs(aside, moved)) { try { renameSync(aside, wrapperPath); } catch { /* the aside copy stays recoverable */ } }
   };
 
+  // Never displace a working wrapper on a filesystem that cannot publish its replacement.
+  if (!hardLinksWork(dirname(wrapperPath))) return false;
   try { renameSync(wrapperPath, aside); } catch { return false; }
   const movedFingerprint = shimPathFingerprint(aside);
   const movedEntry = entryIdentity(aside);

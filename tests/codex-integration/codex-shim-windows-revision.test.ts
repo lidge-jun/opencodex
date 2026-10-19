@@ -223,3 +223,35 @@ describe("round-4 identity bindings", () => {
     expect(fs.readFileSync(ps1, "utf8")).toBe(obsolete);
   });
 });
+
+describe("round-5 availability", () => {
+  test("no hard-link support leaves the wrapper in place and untouched", () => {
+    const wrapper = join(dir, "codex.cmd");
+    fs.writeFileSync(wrapper, "@echo off\r\nrem obsolete\r\n");
+    const before = fs.statSync(wrapper, { bigint: true }).ino;
+    const observed = stableShimPathProbe(wrapper)!;
+    const spy = spyOn(fs, "linkSync").mockImplementation((() => { throw Object.assign(new Error("no links"), { code: "EPERM" }); }) as typeof fs.linkSync);
+    try {
+      expect(refreshObsoleteWindowsShim(wrapper, observed, () => "current wrapper")).toBe(false);
+    } finally { spy.mockRestore(); }
+    expect(fs.statSync(wrapper, { bigint: true }).ino).toBe(before);
+    expect(fs.readdirSync(dir).filter(name => name.includes(".ocx-"))).toEqual([]);
+  });
+
+  test("links failing after displacement still restore the launcher", () => {
+    const wrapper = join(dir, "codex.cmd");
+    const obsolete = "@echo off\r\nrem obsolete\r\n";
+    fs.writeFileSync(wrapper, obsolete);
+    const observed = stableShimPathProbe(wrapper)!;
+    const link = fs.linkSync;
+    const spy = spyOn(fs, "linkSync").mockImplementation(((source: fs.PathLike, destination: fs.PathLike) => {
+      if (String(source).includes(".ocx-link-probe-")) return link(source, destination);
+      throw Object.assign(new Error("links became unavailable"), { code: "EPERM" });
+    }) as typeof fs.linkSync);
+    try {
+      expect(refreshObsoleteWindowsShim(wrapper, observed, () => "current wrapper")).toBe(false);
+    } finally { spy.mockRestore(); }
+    expect(fs.readFileSync(wrapper, "utf8")).toBe(obsolete);
+    expect(fs.readdirSync(dir).filter(name => name.includes(".ocx-"))).toEqual([]);
+  });
+});
