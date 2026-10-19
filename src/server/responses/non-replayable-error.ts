@@ -1,4 +1,4 @@
-import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable, nonReplayableRetryAfterFor } from "../../lib/upstream-retry";
 import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
 
 const UPSTREAM_ERROR_TYPES = new Set([
@@ -39,10 +39,12 @@ export async function sanitizeNonReplayableUpstreamError(
     message: `Provider error ${response.status}: upstream diagnostic withheld for a non-replayable failure`,
   } });
   const headers = new Headers({ "content-type": "application/json" });
+  const retryAfter = nonReplayableRetryAfterFor(response);
+  if (retryAfter !== undefined) headers.set("retry-after", retryAfter);
   if (response.headers.get("x-should-retry") === "false") headers.set("x-should-retry", "false");
   const safe = new Response(response.status === 304 ? null : body, {
     status: response.status, headers,
   });
-  markResponseNonReplayable(safe);
+  markResponseNonReplayable(safe, retryAfter);
   return safe;
 }

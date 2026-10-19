@@ -1022,7 +1022,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   // FREEZE 2026-07-10: codestral-latest is unconfirmed behind auth. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   {
     id: "mistral", label: "Mistral", baseUrl: "https://api.mistral.ai/v1", adapter: "openai-chat", authKind: "key",
-    dashboardUrl: "https://console.mistral.ai/api-keys", defaultModel: "codestral-latest",
+    dashboardUrl: "https://console.mistral.ai/api-keys", defaultModel: "codestral-latest", promptCacheKey: true,
     // Native text-only input enrolls this model in the existing vision sidecar.
     modelInputModalities: { "zai-glm-5-3": ["text"] },
   },

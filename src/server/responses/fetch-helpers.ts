@@ -1,4 +1,5 @@
 import type { NativeResponseControl } from "./native-response-control";
+import { PROVIDER_HEADER_DEADLINE as HEADER_DEADLINE, type ProviderHeaderDeadline as HeaderDeadline } from "../../lib/provider-admission-wait";
 import type { CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
 import type { Server } from "bun";
 import {
@@ -62,9 +63,6 @@ export function physicalSendObserverInit(observer: AccountAutoPauseObserver | un
 }
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
 const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
-// Replacement admission waits on the client signal, outside the response-header deadline.
-const HEADER_DEADLINE = Symbol("header-deadline");
-type HeaderDeadline = { clientSignal: AbortSignal; pause(): void; resume(): void };
 
 /**
  * Announce once, per provider, that an explicit egress route moved this provider off the

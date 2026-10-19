@@ -3,6 +3,7 @@ import type { OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
 import { configuredOutboundFetch } from "../lib/proxy-env";
 import { resolveGithubCopilotTransport } from "./github-copilot-transport";
+import { resolveMistralTransport } from "./mistral-transport";
 
 export const XAI_GROK_CLI_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 
@@ -121,7 +122,7 @@ export function resolveProviderTransport(
   if (providerName === "github-copilot") {
     return resolveGithubCopilotTransport(provider, apiBaseUrl);
   }
-  if (providerName !== "xai") return provider;
+  if (providerName !== "xai") return resolveMistralTransport(provider);
 
   const cacheKey = promptCacheKey?.trim();
   const affinity = cacheKey ? deriveXaiConvId(cacheKey) : undefined;
