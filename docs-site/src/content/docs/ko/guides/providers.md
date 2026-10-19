@@ -286,14 +286,11 @@ Chat Completions 모델(그리고 Responses 전용이라 Responses로 보내는 
 `ocx provider add opengateway`를 실행하거나 대시보드에서 **OpenGateway**를 선택하세요.
 Chat 요청은 설정한 Bearer 키를 사용하며 공개 모델 목록은 키의 유효성을 검증하지 않습니다.
 
-**OpenCode Zen**(`opencode-zen`)과 키 없는 **OpenCode Free** 프리셋은
-`https://opencode.ai/zen/v1`을 공유합니다. 그 게이트웨이의 무료 모델은 종종 분당 약 15–20회 요청의 짧은 창 속도 제한에 걸립니다(커뮤니티 측정; OpenCode는 RPM을 공개하지 않음). Zen은 `Retry-After` / `X-RateLimit-*` 헤더 없는 일반 429를 반환할 수 있습니다. 이는 키 없는 데스크톱 할당량(`opencode-free`에서 약 5시간당 Big Pickle/무료 모델 200회)과 별개입니다. Zen이 그런 429에서 `Retry-After`를 생략하면 opencodex는 클라이언트 오류에 안내를 더하고 합성 `Retry-After`를 붙입니다(업스트림 `Retry-After`가 있으면 그것이 우선). 동일 키 대기 재시도는 [`retryOn429`](/ko/reference/configuration/)로 선택합니다.
+**OpenCode Zen**(`opencode-zen`)은 [opencode.ai/auth](https://opencode.ai/auth)에서 발급한 API 키로 `https://opencode.ai/zen/v1`을 사용합니다. 무료 모델은 분당 약 15–20회 요청의 짧은 창 속도 제한에 걸릴 수 있습니다(커뮤니티 측정; OpenCode는 RPM을 공개하지 않음). 속도 제한 429에 `Retry-After`가 없으면 opencodex가 안내와 합성 `Retry-After`를 추가하며, 유효한 업스트림 헤더가 우선합니다. 동일 키 재시도는 [`retryOn429`](/ko/reference/configuration/)로 선택합니다.
 
 정식 `opencode-zen` 제공자에서 API 키 인증과 공식 경로 `https://opencode.ai/zen/v1` 또는 `https://opencode.ai/inference/v1`을 사용하면 Gemini는 기본 `googleMode: ai-studio`에서 Google 네이티브 API를 자동으로 사용합니다. Zen 모델 ID는 `-tiered` 접미사가 없는 Flash ID도 그대로 유지합니다. Claude는 `googleMode`와 관계없이 Anthropic Messages를 사용합니다. 저장된 설정을 읽을 때 이 네이티브 모델의 조건에 맞는 기존 Chat/Responses 재정의와 조건에 맞는 Responses 전용 `image_generation` 호스팅 도구 선호 설정만 무시합니다. 사용자 지정 제공자, 키 인증이 아닌 경로, 그 밖의 선호 설정은 그대로 유지합니다.
 
-**키 없는 `opencode-free` 등급은 현재 서드파티 클라이언트에 닫혀 있습니다.** Zen은 `x-opencode-session` 헤더가 없는 요청을 모두 거부하고, 오류 타입 `MissingSessionID`와 "OpenCode's free tier can only be used in OpenCode" 메시지를 돌려줍니다. 관문은 헤더가 있는지만 보기 때문에 프록시가 값을 지어내 통과할 수도 있지만, opencodex는 그렇게 하지 않습니다. 세션 식별자와 버전이 붙은 `opencode/<version>` User-Agent를 만들어 보내는 것은 자신이 OpenCode 클라이언트라고 주장하는 일이고, OpenCode는 이 키 없는 등급에 서드파티 연동 계약을 공개한 적이 없습니다. 그렇게 받아낸 HTTP 200은 허가가 아니라 뚫린 관문일 뿐입니다. 그래서 opencodex는 우회하지 않고 제한을 그대로 알립니다. `opencode-free`로 보낸 요청은 업스트림 관문을 설명하는 오류를 돌려받습니다.
-
-같은 모델로 가는 지원 경로는 [opencode.ai/auth](https://opencode.ai/auth)에서 발급받은 OpenCode Zen API 키를 쓰는 **`opencode-zen`** 프리셋입니다. 나중에 OpenCode가 키 없는 등급의 서드파티 경로를 공개하면 opencodex도 따라갈 수 있고, 그때까지 이 프리셋은 제한을 기록해 두는 역할을 합니다. 업스트림 약관: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
+**`opencode-free` 지원이 제거되었습니다.** OpenCode의 업스트림 무료 등급 제한으로 모든 모델이 `403 permission_denied`를 반환하기 때문입니다([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). 기존 설정을 불러오면 해당 항목과 종속 모델 참조를 메모리에서 비활성화하고 프로세스당 한 번 경고하며 파일은 변경하지 않습니다. 기본 공급자였다면 표준 OpenAI OAuth 경로가 기본값이 됩니다. `opencode-go`, API 키를 사용하는 `opencode-zen` 또는 다른 공급자를 사용하세요. [OpenCode Zen 약관](https://opencode.ai/docs/zen/).
 
 대부분은 bearer 키와 함께 `openai-chat` 어댑터를 사용하며, **Xiaomi MiMo**(`xiaomi`) 같은
 Anthropic 호환 프리셋은 `anthropic` 어댑터(`x-api-key`)를 사용합니다. Xiaomi에는 OpenAI Chat
