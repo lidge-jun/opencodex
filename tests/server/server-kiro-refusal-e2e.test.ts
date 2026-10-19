@@ -10,6 +10,7 @@ import { createRequestExecutionBudget } from "../../src/lib/request-execution-bu
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
 import { encodeMessage } from "../../src/lib/eventstream-decoder";
 import { KIRO_COMPLETION_TOOL_NAME } from "../../src/adapters/kiro-constants";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { clearAccountQuotaCache } from "../../src/providers/quota";
 import { kiroAccountEvidence, noteKiroMonthlyRefusal } from "../../src/providers/kiro-usage";
@@ -32,11 +33,15 @@ beforeEach(() => {
   process.env.KIRO_REGION = "us-east-1";
   clearAccountQuotaCache();
   clearGenericFailoverHealth();
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
   clearAccountQuotaCache();
   clearGenericFailoverHealth();
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = oldHome;
   if (oldRegion === undefined) delete process.env.KIRO_REGION;
@@ -217,6 +222,109 @@ describe("Kiro refusal recovery through Responses", () => {
       } finally { await server.stop(true); }
     });
   }
+
+
+  // A 400 the vendor's validator calls improperly formed: account B can serve what A cannot.
+  const IMPROPER = JSON.stringify({ message: "ValidationException: Improperly formed request" });
+  const KIRO_URL = (url: string) => url.startsWith("https://runtime.") && url.endsWith(".kiro.dev/");
+
+  test("Kiro improperly-formed 400 rotates to the sibling account and is served", async () => {
+    await seed(); saveConfig(config());
+    const auths: Array<string | null> = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!KIRO_URL(url)) return realFetch(input, init);
+      auths.push(new Headers(init?.headers).get("authorization"));
+      return auths.length === 1 ? new Response(IMPROPER, { status: 400 }) : answer("served by b");
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const response = await post(server, true);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("served by b");
+      expect(auths).toEqual(["Bearer access-a", "Bearer access-b"]);
+    } finally { await server.stop(true); }
+  });
+
+  const comboConfig = (primary: "kiro" | "other"): OcxConfig => ({
+    ...config(),
+    providers: { ...config().providers,
+      other: { adapter: "openai-chat", baseUrl: "https://other.example/v1", authMode: "key",
+        apiKey: "sk-other", models: ["model-other"] },
+      fallback: { adapter: "openai-chat", baseUrl: "https://fallback.example/v1", authMode: "key",
+        apiKey: "sk-fallback", models: ["model-fallback"] } },
+    combos: { fan: { strategy: "failover", targets: [
+      primary === "kiro" ? { provider: "kiro", model: "claude-sonnet-4.5" } : { provider: "other", model: "model-other" },
+      { provider: "fallback", model: "model-fallback" },
+    ] } },
+  }) as unknown as OcxConfig;
+  const comboPost = (server: ReturnType<typeof startServer>) => realFetch(new URL("/v1/responses", server.url), {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "combo/fan", input: "hello", stream: false }) });
+  const fallbackOk = () => Response.json({ id: "chatcmpl-1", object: "chat.completion", model: "model-fallback",
+    choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "served by fallback" } }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+
+  test("combo hops to the next target once every Kiro account has refused as improperly formed", async () => {
+    await seed(); saveConfig(comboConfig("kiro"));
+    let kiroSends = 0; let fallbackSends = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (KIRO_URL(url)) { kiroSends++; return new Response(IMPROPER, { status: 400 }); }
+      if (url.startsWith("https://fallback.example/")) { fallbackSends++; return fallbackOk(); }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const response = await comboPost(server);
+      const text = await response.text();
+      expect(response.status).toBe(200);
+      expect(text).toContain("served by fallback");
+      expect(kiroSends).toBe(2);
+      expect(fallbackSends).toBe(1);
+    } finally { await server.stop(true); }
+  });
+
+  test("combo never forwards a non-Kiro target's identical 400 to the next target", async () => {
+    await seed(); saveConfig(comboConfig("other"));
+    let otherSends = 0; let fallbackSends = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.startsWith("https://other.example/")) {
+        otherSends++;
+        return Response.json({ error: { message: "ValidationException: Improperly formed request",
+          type: "invalid_request_error" } }, { status: 400 });
+      }
+      if (url.startsWith("https://fallback.example/")) { fallbackSends++; return fallbackOk(); }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const response = await comboPost(server);
+      await response.text();
+      expect(response.status).toBe(400);
+      expect(otherSends).toBe(1);
+      expect(fallbackSends).toBe(0);
+    } finally { await server.stop(true); }
+  });
+
+  test("combo stops on a Kiro 400 that is a malformed payload, not an account refusal", async () => {
+    await seed(); saveConfig(comboConfig("kiro"));
+    let fallbackSends = 0;
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (KIRO_URL(url)) return new Response(JSON.stringify({ message: "Improperly formed request" }), { status: 400 });
+      if (url.startsWith("https://fallback.example/")) { fallbackSends++; return fallbackOk(); }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    const server = startServer(0);
+    try {
+      const response = await comboPost(server);
+      await response.text();
+      expect(response.status).toBe(400);
+      expect(fallbackSends).toBe(0);
+    } finally { await server.stop(true); }
+  });
 
 
   test("Kiro web-search sidecar completion clears B's older verdict after rotated refusal", async () => {

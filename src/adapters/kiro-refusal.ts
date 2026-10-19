@@ -41,12 +41,30 @@ export function classifyKiroRefusal(status: number, bodyText: string): KiroRefus
   return { kind: "other" };
 }
 
+/** The adapter's own prefix for a normalized 400 (`normalizedKiroErrorMessage` in kiro-errors.ts). */
+const KIRO_INVALID_REQUEST_PREFIX = "Kiro invalid request: ";
+
 /**
- * The same verdict at the combo layer, where the body arrives as wrapped text rather than as a
- * live response ("Provider error 400: {...}"), which JSON cannot parse. Both vendor tokens must
- * still appear for the shape to count.
+ * The same verdict at the combo layer. There the text is either the adapter's normalized message
+ * ("Kiro invalid request: ValidationException: Improperly formed request", what a combo child's
+ * failure carries) or a raw JSON body, each possibly behind the "Provider error 400: " frame.
+ * JSON goes through the parsed `reason`/`message` rules of `classifyKiroRefusal` (tokens in
+ * unrelated fields never count); prose counts only behind the adapter's own prefix. Callers must
+ * also know the failed target is a Kiro adapter.
  */
 export function isKiroAccountProfileRefusal(status: number, bodyText: string): boolean {
   if (status !== 400 || Buffer.byteLength(bodyText, "utf8") > BOUNDED_BODY_MAX_BYTES) return false;
-  return bodyText.includes(VALIDATION_EXCEPTION) && IMPROPER_REQUEST_WORD.test(bodyText);
+  const text = bodyText.replace(/^Provider error \d{3}: /, "");
+  if (text.startsWith(KIRO_INVALID_REQUEST_PREFIX)) {
+    const detail = text.slice(KIRO_INVALID_REQUEST_PREFIX.length);
+    return detail.includes(VALIDATION_EXCEPTION) && IMPROPER_REQUEST_WORD.test(detail);
+  }
+  try {
+    const row: unknown = JSON.parse(text);
+    if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+    const envelope = (row as Record<string, unknown>).error;
+    const body = envelope && typeof envelope === "object" && !Array.isArray(envelope) ? envelope : row;
+    const { reason, message } = body as Record<string, unknown>;
+    return classifyKiroRefusal(400, JSON.stringify({ reason, message })).kind === "profile";
+  } catch { return false; }
 }

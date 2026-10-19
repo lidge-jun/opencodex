@@ -76,7 +76,14 @@ observed ID still informs routing preference.
 
 `src/adapters/kiro-refusal.ts` recognizes an exact monthly reason on HTTP 400/429 and a
 confirmed suspension on HTTP 403; ordinary 400/403 remains an error without an account
-verdict. `src/providers/kiro-usage.ts` records monthly exhaustion only for the sent
+verdict. A 400 whose parsed body carries `ValidationException` (as `reason`, or inside `message`)
+and the message "Improperly formed request" is the `profile` kind: the account layer rotates to a
+sibling login like any other account-scoped refusal, and both tokens are required in the parsed
+fields. `isKiroAccountProfileRefusal` applies the same rule to combo failure text (adapter-normalized
+`Kiro invalid request: ...` prose or a JSON body, with or without the `Provider error 400: ` frame).
+It is only consulted when the failed target's adapter is `kiro` (see
+[combo failover](../transports/responses-failover.md)); coverage is
+`tests/providers/kiro/kiro-refusal.test.ts` and `tests/server/server-kiro-refusal-e2e.test.ts`. `src/providers/kiro-usage.ts` records monthly exhaustion only for the sent
 credential generation and login identity, independently of quota observation time. A
 completed response from that same live credential clears an older verdict after disk
 hydration. Suspension is a process-local quarantine; rate refusals use a short cooldown.

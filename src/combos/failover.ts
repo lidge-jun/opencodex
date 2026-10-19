@@ -773,7 +773,7 @@ export function codexAccountModelRefusal(
 export function comboFailureDecision(
   status: number,
   message: string,
-  options?: { code?: string | null; codexModelRefusal?: CodexAccountModelRefusal },
+  options?: { code?: string | null; codexModelRefusal?: CodexAccountModelRefusal; failedAdapter?: string },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
   if (message.toLowerCase().includes("origin_rejected")) return "stop";
@@ -859,8 +859,10 @@ export function comboFailureDecision(
   if (isAnthropicBillingFailure(status, message, options?.code)) return "hop";
   // Kiro's body validator rejects the request for the identity it was routed under. The account
   // layer rotates logins first; this is the no-alternate case, so the next combo target is the
-  // only remaining chance to serve the turn. Must precede the generic invalid_request_error stop.
-  if (isKiroAccountProfileRefusal(status, message)) return "hop";
+  // only remaining chance to serve the turn. Only a caller that knows the failed target is a Kiro
+  // adapter grants it (the words alone prove nothing for another provider); it must precede the
+  // generic invalid_request_error stop.
+  if (options?.failedAdapter === "kiro" && isKiroAccountProfileRefusal(status, message)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

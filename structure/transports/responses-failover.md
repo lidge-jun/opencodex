@@ -566,3 +566,15 @@ The resend charges the root workflow send counter once without a second request-
 - **Attempt ownership:** Each attempt captures its adapter binding at the physical-send observation. Recovery passes that binding's key and `_apiKeyAttempt` to the existing API-key 401/429 helpers, so a late failure cannot cool or overwrite a newer manual selection. A replacement rebuilds the adapter and replay scope before dispatch. Failed credentials are not resent in the request; the initial pool size and shared budget bound attempts.
 - **Cooldown:** Only an eligible 429 API-key recovery enters this cooldown path. When no reset time is known, the failed key receives the existing default cooldown. Nonrecoverable quota classifications do not create a key cooldown through this path; no daily reset is inferred.
 - **Regression coverage:** `tests/providers/qoder-adapter.test.ts` covers classification; `tests/server/server-key-failover-e2e.test.ts` covers mocked/local key recovery and replay boundaries; `tests/oauth/generic-oauth-failover.test.ts` guards recovery-site accounting.
+
+## Kiro account-profile hop
+
+`comboFailureDecision` takes an optional `failedAdapter` (the adapter of the target that failed;
+`executeComboResponses` passes `config.providers[target.provider].adapter`). Only `failedAdapter === "kiro"`
+may hop on an HTTP 400 that `isKiroAccountProfileRefusal` recognises (`ValidationException` plus
+"Improperly formed request" in the parsed Kiro body, reached after the account layer has no sibling login
+left to rotate to). Any other provider, or a caller that does not pass the adapter, keeps the generic
+terminal `invalid_request_error` stop, so an invalid payload is never resent to another declared target.
+Coverage: `tests/codex-integration/combos.test.ts` (unit, with non-Kiro and unrelated-field negatives) and
+`tests/server/server-kiro-refusal-e2e.test.ts` (account rotation, combo exhaustion hop, non-Kiro 400 stop,
+malformed-payload stop).

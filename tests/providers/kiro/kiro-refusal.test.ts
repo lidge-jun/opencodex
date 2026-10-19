@@ -43,6 +43,24 @@ describe("Kiro refusal classification", () => {
     expect(isKiroAccountProfileRefusal(400, `Provider error 400: ${improper}`)).toBe(true);
     expect(isKiroAccountProfileRefusal(429, improper)).toBe(false);
     expect(isKiroAccountProfileRefusal(400, "Improperly formed request")).toBe(false);
+    // The adapter's normalized envelope is what the combo layer actually receives.
+    const envelope = JSON.stringify({ error: { message: "Kiro invalid request: ValidationException: Improperly formed request",
+      type: "invalid_request_error", code: "invalid_request_error" } });
+    expect(isKiroAccountProfileRefusal(400, envelope)).toBe(true);
+    expect(isKiroAccountProfileRefusal(400, JSON.stringify({ error: { message: "Kiro invalid request: model not found" } }))).toBe(false);
+    expect(isKiroAccountProfileRefusal(400, JSON.stringify({ error: { metadata: "ValidationException", message: "Improperly formed request" } }))).toBe(false);
+    // The adapter's normalized prose, bare or framed; the same words without its prefix do not count.
+    const prose = "Kiro invalid request: ValidationException: Improperly formed request";
+    expect(isKiroAccountProfileRefusal(400, prose)).toBe(true);
+    expect(isKiroAccountProfileRefusal(400, `Provider error 400: ${prose}`)).toBe(true);
+    expect(isKiroAccountProfileRefusal(400, "Kiro invalid request: model not found")).toBe(false);
+    // Split-field case: both tokens present, but not in the fields the account layer reads.
+    const split = JSON.stringify({ metadata: "ValidationException", message: "Improperly formed request" });
+    expect(classified(400, JSON.parse(split)).kind).toBe("other");
+    expect(isKiroAccountProfileRefusal(400, split)).toBe(false);
+    expect(isKiroAccountProfileRefusal(400, `Provider error 400: ${split}`)).toBe(false);
+    // Unparseable prose that merely contains both tokens is not the vendor's body.
+    expect(isKiroAccountProfileRefusal(400, "upstream said ValidationException: Improperly formed request")).toBe(false);
   });
 
   test("kiro refusal: unknown, nested, malformed and oversized shapes never quarantine", () => {
