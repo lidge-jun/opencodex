@@ -429,6 +429,8 @@ Standart `opencode-zen` sağlayıcısının API anahtarıyla kimlik doğrulanan 
 
 **`opencode-free` desteği kaldırıldı**: OpenCode’un üst kaynak ücretsiz katman kapısı nedeniyle tüm modeller artık `403 permission_denied` döndürüyor ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Mevcut yapılandırma yüklenirken ilgili kayıtlar ve bağımlı model referansları bellekte devre dışı bırakılır, işlem başına bir kez uyarılır ve dosya değiştirilmez. Varsayılan sağlayıcı buysa standart OpenAI OAuth yolu varsayılan olur. `opencode-go`, anahtarlı `opencode-zen` veya başka bir sağlayıcı kullanın. [OpenCode Zen koşulları](https://opencode.ai/docs/zen/).
 
+Geçerli Claude Desktop atamaları ve varsayılanları korunur. Kaynak model izin listesi boşalan kurallar devre dışı bırakılır; enjeksiyon modeli kaldırılırsa yerel alt ajan eşitlemesi de kapatılır. Sonraki yapılandırma kayıtları budanan referansları geri getirmez ve geçerli eşzamanlı düzenlemeleri korur.
+
 Çoğu, taşıyıcı anahtarla `openai-chat` adaptörünü kullanır; **Xiaomi MiMo** (`xiaomi`)
 gibi Anthropic uyumlu önayarlar `anthropic` adaptörünü (`x-api-key`) kullanır.
 Xiaomi'nin ayrıca bir OpenAI Chat önayarı (`xiaomi-mimo`) ve bir token planı önayarı

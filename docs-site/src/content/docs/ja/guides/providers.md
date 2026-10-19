@@ -287,6 +287,8 @@ Chat リクエストは設定済みの Bearer キーを使います。公開一�
 
 **`opencode-free` のサポートは削除されました。** OpenCode の上流無料枠の制限により、すべてのモデルが `403 permission_denied` を返すためです（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。既存設定の読み込み時は該当項目と依存するモデル参照をメモリ上で無効にし、プロセスごとに一度警告します。ファイルは変更しません。既定のプロバイダーだった場合、標準の OpenAI OAuth 経路を既定にします。`opencode-go`、API キー付きの `opencode-zen`、または別のプロバイダーを使用してください。[OpenCode Zen 規約](https://opencode.ai/docs/zen/)。
 
+正常な Claude Desktop の割り当てと既定値は保持されます。ソースモデルの許可リストが空になるルールは無効になり、注入モデルが削除された場合はネイティブサブエージェント同期も無効になります。その後の設定保存では、削除済み参照を復元せず、正常な同時編集を保持します。
+
 大半は bearer キーと共に `openai-chat` アダプターを使い、**Xiaomi MiMo**（`xiaomi`）などの
 Anthropic 互換プリセットは `anthropic` アダプター（`x-api-key`）を使います。Xiaomi には
 OpenAI Chat プリセットの `xiaomi-mimo` とトークンプランのプリセット `mimo` もあります。
