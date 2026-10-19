@@ -286,12 +286,10 @@ export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: Claude
           provider,
           parsed,
           incoming,
-          emit: withClaudeLoginHint(event => {
-            if (event.type === "error") {
-              void Promise.resolve((deps.usageRefusal ?? recordClaudeUsageRefusal)(event.message)).catch(() => {});
-            }
-            emit(event);
-          }),
+          emit: withClaudeLoginHint(emit),
+          onCliOutputError: message => {
+            void Promise.resolve().then(() => (deps.usageRefusal ?? recordClaudeUsageRefusal)(message)).catch(() => {});
+          },
           ...(toolBridge ? { toolBridge } : {}),
           conversationInput: buildStableClaudeConversationInput,
           buildArgs: (profile, req, prov) => buildArgs(profile as ClaudeCliProfile, req, prov, promptFile),
