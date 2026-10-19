@@ -61691,7 +61691,7 @@
 			"input": [
 				"text"
 			],
-			"contextWindow": 1000000,
+			"contextWindow": 1048576,
 			"maxTokens": 384000,
 			"thinking": {
 				"mode": "effort",

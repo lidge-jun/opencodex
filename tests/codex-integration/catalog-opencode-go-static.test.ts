@@ -53,7 +53,8 @@ describe("static opencode-go model metadata additions", () => {
   const ADDED_MODELS = [
     { id: "gemini-4-argon-contributor", contextWindow: 1048576, maxTokens: 65536, reasoning: true },
     { id: "gpt-6-luna", contextWindow: 1050000, maxTokens: 128000, reasoning: true },
-    { id: "deepseek-v4.1-flash", contextWindow: 1000000, maxTokens: 384000, reasoning: true },
+    // The registry declares 1_048_576 (catalog-opencode-go-context-window.test.ts); never undercut it.
+    { id: "deepseek-v4.1-flash", contextWindow: 1048576, maxTokens: 384000, reasoning: true },
     { id: "longcat-2.5-preview-free", contextWindow: 1000000, maxTokens: 131072, reasoning: true },
     { id: "step-5-preview", contextWindow: 256000, maxTokens: 64000, reasoning: true },
     { id: "space-bunny", contextWindow: 1000000, maxTokens: 131072, reasoning: true },
