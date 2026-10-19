@@ -205,6 +205,37 @@ describe("DeepSeek image request body limits", () => {
     } finally { slot?.release(); globalThis.fetch = restoreFetch; resetProviderRequestPacingForTest(); releaseSpend(); }
   });
 
+  test("revoking the opt-in while an upload queues prevents the physical upload", async () => {
+    const restoreFetch = globalThis.fetch;
+    const releaseSpend = acquireOwnedSpendHome();
+    resetProviderRequestPacingForTest();
+    const provider = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "test-consent",
+      modelCapabilities: { "deepseek-flash": { deepseekImageFiles: true } }, requestPacing: { enabled: true, maxConcurrentRequests: 1 } };
+    const config = { providers: { deepseek: provider } } as OcxConfig;
+    const slot = await waitForProviderRequestSlot("deepseek", provider, "deepseek-flash");
+    const seen: string[] = [];
+    globalThis.fetch = (async url => {
+      seen.push(String(url));
+      return String(url).endsWith("/files") ? Response.json({ id: "file-api-revoked" })
+        : Response.json({ id: "resp_revoked", object: "response", status: "completed", output: [] });
+    }) as typeof fetch;
+    const abort = AbortSignal.timeout(4_000);
+    try {
+      const pending = handleResponses(new Request("http://localhost/v1/responses", { method: "POST", signal: abort,
+        headers: { "content-type": "application/json" }, body: request("consent").body }), config, { model: "", provider: "" });
+      void pending.catch(() => {});
+      const deadline = Date.now() + 2_000;
+      while (!providerRequestPacingStatus("deepseek", provider).queued) {
+        if (Date.now() > deadline) throw new Error("upload never queued");
+        await Bun.sleep(5);
+      }
+      provider.modelCapabilities["deepseek-flash"].deepseekImageFiles = false;
+      slot?.release();
+      await expect(pending).rejects.toThrow("DeepSeek image file consent changed before image upload");
+      expect(seen.filter(url => url.endsWith("/files"))).toEqual([]);
+    } finally { slot?.release(); globalThis.fetch = restoreFetch; resetProviderRequestPacingForTest(); releaseSpend(); }
+  });
+
   test("unlisted models bypass occupied image preparation slots", async () => {
     const restoreFetch = globalThis.fetch;
     const releaseSpend = acquireOwnedSpendHome();

@@ -593,6 +593,8 @@ export async function prepareResponsesTransport(
     const build = resolved.buildRequest.bind(resolved);
     const fileProvider = route.provider;
     const fileProviderName = route.providerName;
+    // Persistence consent is configuration: capture its generation with the provider snapshot.
+    const fileConsentGeneration = captureConfigGeneration();
     resolved.buildRequest = async (requestParsed, incoming) => {
       const request = await build(requestParsed, incoming);
       // Capture at adapter creation, never from mutable serving state after an await.
@@ -603,6 +605,7 @@ export async function prepareResponsesTransport(
           .map(([model]) => model)
         : [];
       if (allowedImageFileModels.includes(request.outboundModelId ?? requestParsed.modelId) && needsDeepSeekImageFiles(request)) {
+        const consentModel = request.outboundModelId ?? requestParsed.modelId;
         try {
           // Ordinary uploads use provider pacing. A queued rebuild retains its enclosing
           // fetch lease; reacquiring that same concurrency slot would deadlock at a limit of one.
@@ -610,6 +613,11 @@ export async function prepareResponsesTransport(
             httpOnly: true, providerName: fileProviderName, modelId: requestParsed.modelId,
             beforeDispatch: () => {
               if (!selectionIsCurrent(binding)) throw new Error("Credential selection changed before image upload");
+              // A queued upload must not outlive a revoked opt-in or a configuration reload.
+              if (captureConfigGeneration() !== fileConsentGeneration
+                || fileProvider.modelCapabilities?.[consentModel]?.deepseekImageFiles !== true) {
+                throw new Error("DeepSeek image file consent changed before image upload");
+              }
             },
           });
           const uploadSignal = incoming.abortSignal ?? options.abortSignal ?? req.signal;
