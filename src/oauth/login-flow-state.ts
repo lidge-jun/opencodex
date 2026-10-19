@@ -305,7 +305,11 @@ export function cancelLoginFlow(provider: string, flowId?: string): boolean {
   const active = loginAbort.get(flowKey);
   const existing = loginState.get(flowKey);
   if ((active?.provider ?? loginFlowProvider(flowKey)) !== provider) return false;
-  if (!active && (!existing || existing.done)) return false;
+  if (!active) {
+    if (!existing) return false;
+    dropLoginFlow(flowKey);
+    return true;
+  }
   abandonLoginFlow(flowKey, { error: "Login cancelled", errorCode: "no_pending_login" });
   return true;
 }
