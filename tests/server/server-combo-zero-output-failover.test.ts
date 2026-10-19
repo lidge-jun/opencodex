@@ -13,6 +13,7 @@ import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { clearRequestLogsForTests, type RequestLogContext } from "../../src/server/request-log";
 import { activeRegistryMetrics, getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
+import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import {
   clearResponseStateForTests,
   flushResponseState,
@@ -262,8 +263,12 @@ describe("combo zero-output bare Responses error failover", () => {
     expect(activeRegistryMetrics().activeTurns!.releaseMisses).toBe(misses);
   });
 
+  // Both passthrough relay shapes, on every OS: "linux" selects tee, "win32" plus an explicit
+  // eager-relay mode selects the eager bounded relay that Windows uses by default.
+  for (const relay of ["tee", "eager"] as const)
   for (const exit of ["complete", "cancel", "abort"] as const)
-  test(`accepted fallback keeps its turn lease until stream ${exit}`, async () => {
+  test(`accepted fallback keeps its turn lease until stream ${exit} (${relay} relay)`, async () => {
+    setRelayPlatformForTests(relay === "eager" ? "win32" : "linux");
     const encoder = new TextEncoder();
     const frame = (event: unknown) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
     const a = serve(() => new Response(frame({ type: "response.failed", response: {
@@ -277,13 +282,16 @@ describe("combo zero-output bare Responses error failover", () => {
         controller.close();
       };
     } }), { headers: { "content-type": "text/event-stream" } }));
-    const config = comboConfig({ a: provider("openai-responses", baseUrl(a), "key-a"),
-      b: provider("openai-responses", baseUrl(b), "key-b") });
+    const config = { ...comboConfig({ a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b") }), streamMode: "eager-relay" as const };
     const caller = new AbortController();
     const lease = tryAdmitTurn(undefined, caller.signal);
     if (!lease) throw new Error("test turn admission unavailable");
     let releases = 0;
-    lease.attach({ release() { releases++; } });
+    // Await the release itself: a relay may legitimately settle it after the client's cancel.
+    let released!: () => void;
+    const releasedSignal = new Promise<void>(resolve => { released = resolve; });
+    lease.attach({ release() { releases++; released(); } });
     const misses = activeRegistryMetrics().activeTurns!.releaseMisses;
     try {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
@@ -293,18 +301,28 @@ describe("combo zero-output bare Responses error failover", () => {
       expect(response.status).toBe(200);
       expect(getActiveTurnCount()).toBe(1);
       expect(releases).toBe(0);
-      if (exit === "cancel") await response.body!.cancel();
-      else if (exit === "abort") {
+      if (exit === "cancel") {
+        await response.body!.cancel();
+        if (relay === "eager") {
+          // #44: after a client cancel the eager relay keeps draining upstream, still admitted,
+          // until a terminal or its bounded drain window. A request abort releases at once; a
+          // body cancel alone waits for the drain, which an upstream terminal ends here.
+          expect(getActiveTurnCount()).toBe(1);
+          expect(releases).toBe(0);
+        }
+        try { finish(); } catch { /* the tee relay already cancelled the upstream body */ }
+      } else if (exit === "abort") {
         caller.abort();
         await response.text().catch(() => "");
       } else {
         finish();
         expect(await response.text()).toContain("held fallback");
       }
+      await releasedSignal;
       expect(getActiveTurnCount()).toBe(0);
       expect(releases).toBe(1);
       expect(activeRegistryMetrics().activeTurns!.releaseMisses).toBe(misses);
-    } finally { lease.release(); }
+    } finally { setRelayPlatformForTests(undefined); lease.release(); }
     expect(releases).toBe(1);
   });
 
