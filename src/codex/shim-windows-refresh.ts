@@ -3,10 +3,20 @@ import { closeSync, constants, existsSync, fstatSync, linkSync, lstatSync, openS
 import { dirname, extname, join } from "node:path";
 import { sameFingerprintAfterRename, sameStableShimPathProbe, shimPathFingerprint, stableShimPathProbe, type StableShimPathProbe } from "./shim-fingerprint";
 
-interface FileIdentity { dev: bigint; ino: bigint }
+/**
+ * Identity of a directory entry: device, inode and whether the entry is itself a symbolic link.
+ *
+ * dev/ino alone is not an identity on Linux: ext4 and tmpfs hand a freed inode number straight to the
+ * next file or link created, so a stage unlinked and replaced by a link (or a new file) can carry the
+ * very numbers this refresh recorded. Every identity this module compares therefore belongs to a file
+ * it still holds open (an open inode cannot be freed, so its number cannot be reused), and the link
+ * flag is compared too, so a symlink never matches a regular file whatever the platform's link(2)
+ * does with a symlink source.
+ */
+interface EntryIdentity { dev: bigint; ino: bigint; link: boolean }
 
 /** Identity of the directory entry itself (a link is its own entry); null when absent. */
-function entryIdentity(path: string): (FileIdentity & { link: boolean }) | null {
+function entryIdentity(path: string): EntryIdentity | null {
   try {
     const entry = lstatSync(path, { bigint: true });
     return { dev: entry.dev, ino: entry.ino, link: entry.isSymbolicLink() };
@@ -16,36 +26,61 @@ function entryIdentity(path: string): (FileIdentity & { link: boolean }) | null 
 }
 
 /** Identity of what a path resolves to; null when absent or dangling. */
-function targetIdentity(path: string): FileIdentity | null {
+function targetIdentity(path: string): EntryIdentity | null {
   try {
     const target = statSync(path, { bigint: true });
-    return { dev: target.dev, ino: target.ino };
+    return { dev: target.dev, ino: target.ino, link: false };
   } catch {
     return null;
   }
 }
 
-const same = (left: FileIdentity | null, right: FileIdentity | null): boolean =>
-  !!left && !!right && left.dev === right.dev && left.ino === right.ino;
+const same = (left: EntryIdentity | null, right: EntryIdentity | null): boolean =>
+  !!left && !!right && left.dev === right.dev && left.ino === right.ino && left.link === right.link;
 
-/** A regular, non-link entry at `path` that is exactly `identity`. */
-function entryIs(path: string, identity: FileIdentity): boolean {
-  const entry = entryIdentity(path);
-  return !!entry && !entry.link && same(entry, identity);
+/** The entry at `path` is exactly `identity` (same inode, same link-ness). */
+function entryIs(path: string, identity: EntryIdentity): boolean {
+  return same(entryIdentity(path), identity);
 }
 
-/** Create `path` exclusively (never through an existing entry or link) and return the written file's identity. */
-function createExclusive(path: string, content: string): FileIdentity {
-  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
+/** An open regular file and its identity; the descriptor pins the inode for as long as it is open. */
+interface HeldFile { fd: number; identity: EntryIdentity }
+
+function release(held: HeldFile | null): void {
+  if (held) { try { closeSync(held.fd); } catch { /* already closed */ } }
+}
+
+/** Create `path` exclusively (never through an existing entry or link), write it, and keep it open. */
+function createExclusive(path: string, content: string): HeldFile {
+  const flags = constants.O_RDWR | constants.O_CREAT | constants.O_EXCL
     | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW);
   const fd = openSync(path, flags, 0o644);
   try {
     writeFileSync(fd, content, "utf8");
     const stat = fstatSync(fd, { bigint: true });
-    return { dev: stat.dev, ino: stat.ino };
-  } finally {
-    closeSync(fd);
+    return { fd, identity: { dev: stat.dev, ino: stat.ino, link: false } };
+  } catch (error) {
+    try { closeSync(fd); } catch { /* already closed */ }
+    throw error;
   }
+}
+
+/** Open the regular file at `path` without following a link and confirm the entry is the opened file. */
+function holdExisting(path: string): HeldFile | null {
+  const entry = entryIdentity(path);
+  if (!entry || entry.link) return null;
+  const flags = process.platform === "win32"
+    ? constants.O_RDONLY
+    : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+  let fd: number;
+  try { fd = openSync(path, flags); } catch { return null; }
+  const stat = fstatSync(fd, { bigint: true });
+  const identity: EntryIdentity = { dev: stat.dev, ino: stat.ino, link: false };
+  if (!stat.isFile() || !same(identity, entry) || !entryIs(path, identity)) {
+    try { closeSync(fd); } catch { /* already closed */ }
+    return null;
+  }
+  return { fd, identity };
 }
 
 /**
@@ -54,14 +89,14 @@ function createExclusive(path: string, content: string): FileIdentity {
  * check and the link, the entry this call created is withdrawn; an entry that matches neither the
  * source nor its target belongs to an independent later publisher and stays.
  */
-function linkExpected(source: string, destination: string, expected: FileIdentity): "published" | "occupied" | "refused" {
+function linkExpected(source: string, destination: string, expected: EntryIdentity): "published" | "occupied" | "refused" {
   try {
     linkSync(source, destination);
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "EEXIST" ? "occupied" : "refused";
   }
   const published = entryIdentity(destination);
-  if (published && same(published, expected)) return "published";
+  if (same(published, expected)) return "published";
   if (published && (same(published, entryIdentity(source)) || same(published, targetIdentity(source)))) {
     try { unlinkSync(destination); } catch { /* nothing to withdraw */ }
   }
@@ -72,15 +107,16 @@ function linkExpected(source: string, destination: string, expected: FileIdentit
 function hardLinksWork(directory: string): boolean {
   const probe = join(directory, `.ocx-link-probe-${randomUUID()}`);
   const linked = `${probe}-linked`;
-  let identity: FileIdentity;
-  try { identity = createExclusive(probe, ""); } catch { return false; }
+  let held: HeldFile;
+  try { held = createExclusive(probe, ""); } catch { return false; }
   try {
     linkSync(probe, linked);
-    return entryIs(linked, identity);
+    return entryIs(linked, held.identity);
   } catch {
     return false;
   } finally {
-    for (const path of [linked, probe]) if (entryIs(path, identity)) { try { unlinkSync(path); } catch { /* best effort */ } }
+    for (const path of [linked, probe]) if (entryIs(path, held.identity)) { try { unlinkSync(path); } catch { /* best effort */ } }
+    release(held);
   }
 }
 
@@ -89,15 +125,15 @@ function hardLinksWork(directory: string): boolean {
  * a file someone else published (an npm or version-manager install racing this refresh, or an entry
  * planted beside the wrapper).
  *
- * 1. Move the observed wrapper aside and prove the moved file is the one that was probed; a
- *    different file means a concurrent replacement, which is put back untouched.
- * 2. Create the stage exclusively under an unpredictable name and record its identity.
+ * 1. Move the observed wrapper aside, open it, and prove the moved file is the one that was probed;
+ *    a different file means a concurrent replacement, which is put back untouched.
+ * 2. Create the stage exclusively under an unpredictable name and keep it open.
  * 3. Publish by hard link onto the empty path, keeping the result only if it is that stage file.
  *
- * Every restore, withdrawal and cleanup is bound to identity: only the stage this refresh created
- * and only the moved copy of the observed wrapper are ever published or unlinked. Returns true only
- * when the current wrapper was published; a filesystem that refuses hard links leaves the obsolete
- * wrapper restored and the refresh deferred.
+ * Every restore, withdrawal and cleanup is bound to the identity of a file this refresh holds open:
+ * only the stage it created and only the moved copy of the observed wrapper are ever published or
+ * unlinked. Returns true only when the current wrapper was published; a filesystem that refuses hard
+ * links leaves the obsolete wrapper restored and the refresh deferred.
  */
 export function refreshObsoleteWindowsShim(
   wrapperPath: string,
@@ -109,9 +145,10 @@ export function refreshObsoleteWindowsShim(
   const extension = extname(wrapperPath);
   const aside = `${wrapperPath}.ocx-obsolete-${randomUUID()}${extension}`;
   const staged = stagedPathForTests ?? `${wrapperPath}.ocx-refresh-${randomUUID()}${extension}`;
-  let moved: FileIdentity | null = null;
-  const discard = (path: string, identity: FileIdentity | null): void => {
-    if (identity && entryIs(path, identity)) { try { unlinkSync(path); } catch { /* already gone */ } }
+  let moved: HeldFile | null = null;
+  let stage: HeldFile | null = null;
+  const discard = (path: string, held: HeldFile | null): void => {
+    if (held && entryIs(path, held.identity)) { try { unlinkSync(path); } catch { /* already gone */ } }
   };
   /**
    * Put the moved wrapper back only onto an empty path, and only while the aside is still it. If the
@@ -119,47 +156,51 @@ export function refreshObsoleteWindowsShim(
    * launcher from staying missing.
    */
   const restoreAside = (): void => {
-    if (!moved || existsSync(wrapperPath) || !entryIs(aside, moved)) return;
-    if (linkExpected(aside, wrapperPath, moved) === "published") { discard(aside, moved); return; }
-    if (!existsSync(wrapperPath) && entryIs(aside, moved)) { try { renameSync(aside, wrapperPath); } catch { /* the aside copy stays recoverable */ } }
+    if (!moved || existsSync(wrapperPath) || !entryIs(aside, moved.identity)) return;
+    if (linkExpected(aside, wrapperPath, moved.identity) === "published") { discard(aside, moved); return; }
+    if (!existsSync(wrapperPath) && entryIs(aside, moved.identity)) { try { renameSync(aside, wrapperPath); } catch { /* the aside copy stays recoverable */ } }
   };
 
   // Never displace a working wrapper on a filesystem that cannot publish its replacement.
   if (!hardLinksWork(dirname(wrapperPath))) return false;
   try { renameSync(wrapperPath, aside); } catch { return false; }
-  const movedFingerprint = shimPathFingerprint(aside);
-  const movedEntry = entryIdentity(aside);
-  if (!movedFingerprint || !movedEntry || movedEntry.link || !sameFingerprintAfterRename(observed.fingerprint, movedFingerprint)) {
-    // Not the observed wrapper: hand the path back to whatever was moved, untouched.
-    if (movedEntry && !existsSync(wrapperPath)) {
-      if (linkExpected(aside, wrapperPath, movedEntry) === "published") discard(aside, movedEntry);
-    }
-    return false;
-  }
-  moved = movedEntry;
-  let created: FileIdentity;
   try {
-    created = createExclusive(staged, render());
-  } catch (error) {
-    restoreAside();
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EEXIST" || code === "ELOOP") return false;
-    throw error;
-  }
-  if (!entryIs(staged, created)) {
-    restoreAside();
+    const movedFingerprint = shimPathFingerprint(aside);
+    moved = holdExisting(aside);
+    if (!moved || !movedFingerprint || !sameFingerprintAfterRename(observed.fingerprint, movedFingerprint)) {
+      // Not the observed wrapper: hand the path back to whatever was moved, untouched.
+      const foreign = entryIdentity(aside);
+      if (foreign && !existsSync(wrapperPath) && linkExpected(aside, wrapperPath, foreign) === "published" && entryIs(aside, foreign)) {
+        try { unlinkSync(aside); } catch { /* the restored link keeps the content */ }
+      }
+      return false;
+    }
+    try {
+      stage = createExclusive(staged, render());
+    } catch (error) {
+      restoreAside();
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST" || code === "ELOOP") return false;
+      throw error;
+    }
+    if (!entryIs(staged, stage.identity)) {
+      restoreAside();
+      return false;
+    }
+    const outcome = linkExpected(staged, wrapperPath, stage.identity);
+    discard(staged, stage);
+    if (outcome === "published") {
+      discard(aside, moved);
+      return true;
+    }
+    // Occupied: a concurrent publisher owns the path now; only our obsolete copy is discarded.
+    if (outcome === "occupied") discard(aside, moved);
+    else restoreAside();
     return false;
+  } finally {
+    release(stage);
+    release(moved);
   }
-  const outcome = linkExpected(staged, wrapperPath, created);
-  discard(staged, created);
-  if (outcome === "published") {
-    discard(aside, moved);
-    return true;
-  }
-  // Occupied: a concurrent publisher owns the path now; only our obsolete copy is discarded.
-  if (outcome === "occupied") discard(aside, moved);
-  else restoreAside();
-  return false;
 }
 
 /**
