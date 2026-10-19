@@ -173,6 +173,14 @@ quota epoch, configured row, account incarnation and login identity are unchange
 `src/providers/quota/account-cache.ts` are per instance, so clearing Pool 2 quota never
 invalidates the primary pool.
 
+A probe that yields no quota names one closed `quotaFailure` code from
+`src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could
+be obtained (no request is sent), the HTTP status class (`access_denied`, `rate_limited`,
+`upstream_error`, `redirect_blocked`), `response_unusable` for an unparsable or empty body,
+and `timeout` or `transport_error` for a thrown dispatch. Ownership and cooldown refusals set
+no code. The code is published only while the flight is current, never carries upstream text,
+and never changes account health or `needsReauth`.
+
 `src/providers/anthropic-reset-grant-ledger.ts` names the journal by instance:
 `anthropic-reset-grant-ledger.json` keeps the primary pool's existing bytes and records,
 and Pool 2 uses `anthropic2-reset-grant-ledger.json`.

@@ -999,6 +999,7 @@
   "process-state.test.ts": "service", "project-config-warnings.test.ts": "codex-integration",
   "provider-account-quota-persistence.test.ts": "providers", "provider-account-quota-routes.test.ts": "server",
   "provider-account-quota.test.ts": "providers", "provider-api-keys.test.ts": "providers",
+  "provider-account-quota-failure-reasons.test.ts": "providers",
   "provider-capacity.test.ts": "providers", "provider-config-batch-management.test.ts": "providers",
   "provider-config-validation.test.ts": "providers", "provider-completion-test-authority.test.ts": "providers", "provider-completion-test-ingress.test.ts": "providers", "provider-completion-test.test.ts": "providers", "provider-connection-test.test.ts": "providers",
   "provider-cost-overlay-config.test.ts": "providers", "provider-discovery-log-suppression.test.ts": "providers",

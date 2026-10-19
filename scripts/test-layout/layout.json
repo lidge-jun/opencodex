@@ -1412,6 +1412,7 @@
     "provider-account-quota-persistence.test.ts": "providers",
     "provider-account-quota-routes.test.ts": "server",
     "provider-account-quota.test.ts": "providers",
+    "provider-account-quota-failure-reasons.test.ts": "providers",
     "provider-api-keys.test.ts": "providers",
     "provider-capacity.test.ts": "providers",
     "provider-config-batch-management.test.ts": "providers",

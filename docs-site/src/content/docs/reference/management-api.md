@@ -682,6 +682,12 @@ When Antigravity's quota-summary endpoint has no usable response, quota reports 
 per-model Cloud Code Assist usage windows when the model-discovery response provides them. These
 measurements are diagnostic; an absent model window does not establish that the model is unavailable.
 
+With `quota=1`, an Anthropic or Antigravity account row whose probe returned no quota carries
+`quotaUnavailable: true` and, when the cause is known, a closed `quotaFailure` code:
+`account_unavailable` (sign the account in again), `access_denied`, `rate_limited`, `timeout`,
+`transport_error`, `upstream_error` or `response_unusable` (retry later), among others. The code
+never includes upstream text, and a quota failure never changes the row's `health`.
+
 The provider context-cap response includes `caps` (active limits) and `values` (last selected
 values, retained while disabled). Enabling a provider without `value` restores its selection,
 or uses the global `contextCapValue` on first enable. This also applies to OpenAI: the switch
