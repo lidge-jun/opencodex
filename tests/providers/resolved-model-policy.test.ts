@@ -300,7 +300,7 @@ describe("resolved static model policy parity", () => {
     expect(JSON.stringify(policy)).not.toContain("usable-private-key");
   });
 
-  test("captured unresolved key authority falls back to registry OAuth", () => {
+  test("captured unresolved key authority stays explicit key mode", () => {
     const entry = PROVIDER_REGISTRY.find(candidate => (
       candidate.authKind === "oauth" && candidate.allowKeyAuthOverride === true
     ))!;
@@ -316,7 +316,7 @@ describe("resolved static model policy parity", () => {
         apiKey: reference,
       });
       const authority = routedProviderConfig(entry.id, configured);
-      expect(authority.authMode).toBe("oauth");
+      expect(authority.authMode).toBe("key");
       const policy = resolveModelPolicy({
         providerName: entry.id,
         modelId: entry.defaultModel ?? MODEL,
