@@ -164,8 +164,10 @@ describe("primeCodexPoolQuotas", () => {
           primary_window: { used_percent: 100, reset_at: Math.floor((now + 3_600_000) / 1000), limit_window_seconds: 18_000 },
         }, credits: { has_credits: true, balance: 5, overage_limit_reached: false }, spend_control: { reached: false } });
       }) as typeof fetch;
-      const noMain = () => { throw new Error("credit renewal must not access native main"); };
+      let mainAccesses = 0;
+      const noMain = () => { mainAccesses++; throw new Error("credit renewal must not access native main"); };
       await primeCodexPoolQuotas(config, "credit-renewal", { reconcileMainAccount: noMain, readMainTokens: noMain, fetchMainInfo: noMain });
+      expect(mainAccesses).toBe(0);
       expect(probed).toEqual(["acct-p1"]);
       expect(getAccountQuota("p1")?.credits?.observedAt).toBeGreaterThanOrEqual(now);
       expect(isCodexAccountHeldForCredits(config, "p1", getAccountQuota("p1"), "plus", Date.now())).toBe(false);
