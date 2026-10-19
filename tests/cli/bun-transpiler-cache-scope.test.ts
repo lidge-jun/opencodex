@@ -29,6 +29,18 @@ describe("launcher transpiler cache scope", () => {
     }
   });
 
+  test("Windows matches every spelling of the name and leaves one scoped entry", () => {
+    const env = { Bun_Runtime_Transpiler_Cache_Path: "C:\\cache", OTHER: "kept" };
+    expect(scopeTranspilerCacheToRuntime(env, "1.4.2", join, "win32"))
+      .toEqual({ [TRANSPILER_CACHE_ENV]: join("C:\\cache", "bun-1.4.2"), OTHER: "kept" });
+    const both = { [TRANSPILER_CACHE_ENV]: "C:\\exact", bun_runtime_transpiler_cache_path: "C:\\other" };
+    expect(scopeTranspilerCacheToRuntime(both, "1.4.2", join, "win32"))
+      .toEqual({ [TRANSPILER_CACHE_ENV]: join("C:\\exact", "bun-1.4.2") });
+    // POSIX names are case-sensitive: Bun never reads the lower-case spelling there.
+    const posix = { bun_runtime_transpiler_cache_path: "/cache" };
+    expect(scopeTranspilerCacheToRuntime(posix, "1.4.2", join, "linux")).toBe(posix);
+  });
+
   // CI shares one cache between the test-runner Bun and the bundled Bun the launcher starts.
   // Their .pile formats differ and each deletes the other's entries, so before this scope every
   // launcher child re-transpiled its CLI graph cold (15 s spawnSync timeouts on Windows).
