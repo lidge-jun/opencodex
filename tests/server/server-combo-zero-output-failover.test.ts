@@ -12,7 +12,7 @@ import { clearComboRecallForTests } from "../../src/server/responses/combo-sessi
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { clearRequestLogsForTests, type RequestLogContext } from "../../src/server/request-log";
-import { getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
+import { activeRegistryMetrics, getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
 import {
   clearResponseStateForTests,
   flushResponseState,
@@ -246,6 +246,66 @@ describe("combo zero-output bare Responses error failover", () => {
       expect(await response.text()).toContain("lease backup");
       expect(getActiveTurnCount()).toBe(0);
     } finally { turnAdmissionLease.release(); }
+  });
+
+  test("a plain admission lease does not record an unmatched ladder unbind", async () => {
+    const a = serve(() => Response.json(responsesSuccess("plain lease", "m1")));
+    const config = comboConfig({ a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(a), "key-b") });
+    const misses = activeRegistryMetrics().activeTurns!.releaseMisses;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: false }),
+    }), config, { model: "", provider: "" }, { turnAdmissionLease: { release() {} } });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(activeRegistryMetrics().activeTurns!.releaseMisses).toBe(misses);
+  });
+
+  for (const exit of ["complete", "cancel", "abort"] as const)
+  test(`accepted fallback keeps its turn lease until stream ${exit}`, async () => {
+    const encoder = new TextEncoder();
+    const frame = (event: unknown) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+    const a = serve(() => new Response(frame({ type: "response.failed", response: {
+      id: "ra", status: "failed", error: { type: "server_error", message: "busy" },
+    } }), { headers: { "content-type": "text/event-stream" } }));
+    let finish!: () => void;
+    const b = serve(() => new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(frame({ type: "response.output_text.delta", delta: "held fallback" }));
+      finish = () => {
+        controller.enqueue(frame({ type: "response.completed", response: responsesSuccess("held fallback", "m2") }));
+        controller.close();
+      };
+    } }), { headers: { "content-type": "text/event-stream" } }));
+    const config = comboConfig({ a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b") });
+    const caller = new AbortController();
+    const lease = tryAdmitTurn(undefined, caller.signal);
+    if (!lease) throw new Error("test turn admission unavailable");
+    let releases = 0;
+    lease.attach({ release() { releases++; } });
+    const misses = activeRegistryMetrics().activeTurns!.releaseMisses;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" }, signal: caller.signal,
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+      }), config, { model: "", provider: "" }, { turnAdmissionLease: lease });
+      expect(response.status).toBe(200);
+      expect(getActiveTurnCount()).toBe(1);
+      expect(releases).toBe(0);
+      if (exit === "cancel") await response.body!.cancel();
+      else if (exit === "abort") {
+        caller.abort();
+        await response.text().catch(() => "");
+      } else {
+        finish();
+        expect(await response.text()).toContain("held fallback");
+      }
+      expect(getActiveTurnCount()).toBe(0);
+      expect(releases).toBe(1);
+      expect(activeRegistryMetrics().activeTurns!.releaseMisses).toBe(misses);
+    } finally { lease.release(); }
+    expect(releases).toBe(1);
   });
 
   test("undeclared first adapter tool call hops without changing the request catalog", async () => {

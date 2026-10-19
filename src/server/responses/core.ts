@@ -77,7 +77,7 @@ export async function handleComboResponses(
   try {
     return await executeComboResponses(req, rawBody, comboId, config, logCtx, options, requestDispatchers);
   } finally {
-    if (options.turnAdmissionLease) unregisterTurn(ladder);
+    if (options.turnAdmissionLease && "bindAbortController" in options.turnAdmissionLease) unregisterTurn(ladder);
   }
 }
 const requestDispatchers: ResponsesDispatchers = { handleResponses, handleComboResponses };
