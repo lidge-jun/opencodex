@@ -58,7 +58,7 @@ export async function deepSeekImageFileBody(
     for (const item of body.input) {
       if (!record(item)) continue;
       const parts = item.type === "function_call_output" || item.type === "custom_tool_call_output"
-        ? item.output : item.type === "message" || item.role ? item.content : undefined;
+        ? item.output : item.role === "user" || item.role === "developer" ? item.content : undefined; // DeepSeek rejects other roles' images.
       if (!Array.isArray(parts)) continue;
       for (const part of parts) {
         if (bytes <= TARGET_BYTES) break;

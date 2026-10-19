@@ -173,6 +173,18 @@ describe("DeepSeek image request body limits", () => {
       undefined, optIn)).toBeUndefined();
   });
 
+  test("images in roles DeepSeek rejects are never uploaded", async () => {
+    for (const role of ["system", "assistant"]) {
+      const original = request(role);
+      const body = JSON.parse(original.body);
+      body.input[0].role = role;
+      body.input[1].output[0].detail = "low";
+      original.body = JSON.stringify(body);
+      expect(await deepSeekImageFileBody(original, (async () => { throw new Error("unexpected upload"); }) as typeof fetch,
+        undefined, optIn)).toBeUndefined();
+    }
+  });
+
   test("credential changes while uploads queue prevent stale physical sends", async () => {
     const restoreFetch = globalThis.fetch;
     const releaseSpend = acquireOwnedSpendHome();

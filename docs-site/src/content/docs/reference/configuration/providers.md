@@ -25,6 +25,8 @@ partial uploads remain until expiry even if generation fails. The bounded refere
 credential-isolated and lasts at most 50 minutes (less if the provider reports earlier expiry).
 A retry can reuse successful uploads; another credential uploads its own copy.
 
+Only `user` and `developer` message images and tool-output images are uploaded; DeepSeek rejects
+images in other roles, so those are never persisted.
 Foreign gateways and Chat Completions are unchanged. Explicit `detail: low` stays inline because
 file references ignore it. Failures stop without discarding images or retrying generation. Repairs
 have a 60-second upload deadline, a 128 MiB input cap and at most two simultaneous preparations;
