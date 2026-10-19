@@ -31,7 +31,7 @@ export interface AntigravityImportAdapterDeps {
 export async function verifyAntigravityImportProject(accessToken: string, projectId: string, signal?: AbortSignal): Promise<boolean> {
   if (signal?.aborted) return false;
   try {
-    return (await probeAntigravityUsageQuota(accessToken, projectId)).kind === "available";
+    return (await probeAntigravityUsageQuota(accessToken, projectId, signal)).kind === "available" && !signal?.aborted;
   } catch {
     return false;
   }

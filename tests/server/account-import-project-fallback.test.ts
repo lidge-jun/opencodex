@@ -5,7 +5,8 @@
  * every failure or cancellation path persists nothing. All provider calls are fakes.
  */
 import { describe, expect, test } from "bun:test";
-import { createAntigravityAccountImportAdapter, type AntigravityImportAdapterDeps } from "../../src/oauth/account-import/google-antigravity-adapter";
+import { createAntigravityAccountImportAdapter, verifyAntigravityImportProject, type AntigravityImportAdapterDeps } from "../../src/oauth/account-import/google-antigravity-adapter";
+import { setAntigravityAccountQuotaTransportForTests } from "../../src/providers/quota/antigravity";
 import { parseCockpitAccountDocument } from "../../src/oauth/account-import/parser";
 import { importAccounts } from "../../src/oauth/account-import/service";
 import { ACCOUNT_IMPORT_FORMAT, ACCOUNT_IMPORT_PROVIDER, type ValidatedAntigravityCredential } from "../../src/oauth/account-import/types";
@@ -107,5 +108,38 @@ describe("Antigravity import project fallback", () => {
     const h = harness({ verifyProject: async () => { controller.abort(); return true; } });
     expect(await h.run(doc("aicode-consumers"), controller.signal)).toEqual({ ok: false, status: 408, code: "import_cancelled" });
     expect(h.writes).toEqual([]);
+  });
+});
+
+describe("real project verifier honors import cancellation", () => {
+  const resolveAddresses = async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 as const }], privateNetwork: false });
+
+  test("an already-cancelled import sends no probe request", async () => {
+    const urls: string[] = [];
+    setAntigravityAccountQuotaTransportForTests({ resolveAddresses, pinnedPost: async url => { urls.push(url); return new Response("{}", { status: 200 }); } });
+    try {
+      const controller = new AbortController();
+      controller.abort();
+      expect(await verifyAntigravityImportProject("access-for-user", "aicode-consumers", controller.signal)).toBe(false);
+      expect(urls).toEqual([]);
+    } finally { setAntigravityAccountQuotaTransportForTests(null); }
+  });
+
+  test("cancelling mid-probe aborts the request and skips the retry and models fallback", async () => {
+    const urls: string[] = [];
+    const controller = new AbortController();
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses,
+      pinnedPost: async (url, _pinned, _body, signal) => {
+        urls.push(url);
+        controller.abort();
+        if (signal?.aborted) throw signal.reason;
+        return new Response("{}", { status: 200 });
+      },
+    });
+    try {
+      expect(await verifyAntigravityImportProject("access-for-user", "aicode-consumers", controller.signal)).toBe(false);
+      expect(urls).toHaveLength(1);
+    } finally { setAntigravityAccountQuotaTransportForTests(null); }
   });
 });
