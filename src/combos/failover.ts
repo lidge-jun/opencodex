@@ -666,8 +666,9 @@ function isDefiniteContextOverflowMessage(text: string): boolean {
  * arbitrary field that happens to sit in the first 500 bytes authorize a hop, so it fails closed.
  *
  * Only the exact proxy wrapper is unwrapped, within a fixed envelope budget and 16,384 characters.
+ * Exported for the sidecar loops, which classify their own provider failures with the same rule.
  */
-function isDefiniteContextOverflow(status: number, message: string): boolean {
+export function isDefiniteContextOverflow(status: number, message: string): boolean {
   if (!CONTEXT_VERDICT_STATUSES.has(status) && status < 500) return false;
   if (message.length > 16_384) return false;
   let text = message.trim();

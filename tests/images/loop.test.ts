@@ -8,6 +8,9 @@ import type { AttemptRecoveryKind } from "../../src/usage/log";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { PROVIDER_INPUT_TOO_LARGE_MESSAGE } from "../../src/server/responses/context-overflow";
+import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
+import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { parseStreamWithProgress, type ParseStreamWithProgressOptions } from "../../src/web-search/progress-stream";
 import { TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TRANSLATOR_MAX_TURN_BYTES, translatorLiveBudgetCountForTests } from "../../src/lib/translator-budget";
 
@@ -308,6 +311,75 @@ async function runAndGetSSE(streams: AdapterEvent[][], fulfill?: ImageCallResult
 }
 
 describe("runWithImageBridge", () => {
+  // #7316: once the image turn is streaming, a later iteration's provider overflow must end as the
+  // main path's terminal context_length_exceeded rather than a generic upstream failure.
+  test("a later iteration's HTTP 413 ends as a terminal context_length_exceeded", async () => {
+    streamQueue = [[...imageCallEvents]];
+    let sends = 0;
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: {
+        ...mockAdapter,
+        fetchResponse: async () => (sends++ === 0
+          ? new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+          : new Response("Request body exceeds the 8 MiB limit", { status: 413 })),
+      },
+    });
+    expect(response.status).toBe(200);
+    const sse = await response.text();
+    expect(sse).toContain("response.failed");
+    expect(sse).toContain('"code":"context_length_exceeded"');
+    expect(sse).toContain(PROVIDER_INPUT_TOO_LARGE_MESSAGE);
+    expect(sends).toBe(2);
+  });
+
+  // A non-replayable turn may already have run; neither the loop nor the bridge's wording
+  // heuristics may turn it into an overflow that invites a compacted resend.
+  test("a later iteration's worded non-replayable 413 keeps its own failure", async () => {
+    streamQueue = [[...imageCallEvents]];
+    let sends = 0;
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: {
+        ...mockAdapter,
+        formatErrorBody: (_status, _headers, body) => body,
+        fetchResponse: async () => {
+          if (sends++ === 0) return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+          const failed = new Response("This model's maximum context length is 8192 tokens", { status: 413 });
+          markResponseNonReplayable(failed);
+          return failed;
+        },
+      },
+    });
+    const sse = await response.text();
+    expect(sse).toContain("response.failed");
+    expect(sse).not.toContain("context_length_exceeded");
+    expect(sends).toBe(2);
+  });
+
+  test("a runTurn adapter's own overflow verdict keeps context_length_exceeded", async () => {
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: {
+        ...mockAdapter,
+        runTurn: async (_parsed: OcxParsedRequest, _incoming: IncomingMeta, emit: (event: AdapterEvent) => void) => {
+          emit({ type: "error", code: "context_length_exceeded", message: "adapter overflow" });
+        },
+      },
+    });
+    const sse = await response.text();
+    expect(sse).toContain('"code":"context_length_exceeded"');
+  });
+
+  test("a pacing-queue overload passes through instead of becoming 502 Provider unreachable", async () => {
+    const overload = new RequestPacingQueueOverloadError("image-test", "queue_full", 2);
+    const result = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: { ...mockAdapter, fetchResponse: () => Promise.reject(overload) },
+    }).then(response => response.status, (error: unknown) => error);
+    expect(result).toBe(overload);
+  });
+
   test.each([307, 308])("the direct image-loop send does not follow %i", async status => {
     let targetHits = 0;
     let originHits = 0;
