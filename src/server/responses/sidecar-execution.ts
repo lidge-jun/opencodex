@@ -623,7 +623,7 @@ export async function executeResponsesSidecars(
     const imgScopeRefusal = sidecarScopeRefusal(imgLoopResponse);
     if (imgScopeRefusal) return imgScopeRefusal;
     // A provider overflow on the first iteration answers as the main path's context failure (#7316).
-    const imgResponse = options.comboAttempt ? imgLoopResponse : await sidecarContextOverflowResponse(imgLoopResponse, {
+    const imgResponse = options.comboAttempt ? imgLoopResponse : sidecarContextOverflowResponse(imgLoopResponse, {
       stream: parsed.stream, modelId: parsed._responseModelId ?? parsed.modelId, translatorBudget,
     });
     if (imgResponse.body) {
@@ -740,7 +740,7 @@ export async function executeResponsesSidecars(
     // A provider overflow on the first iteration answers as the main path's context failure (#7316).
     const wsResponse = poolUsageLimit ? anthropicPoolCooldownResponse(poolUsageLimit, { logCtx })
       : options.comboAttempt ? loopResponse
-        : await sidecarContextOverflowResponse(loopResponse, {
+        : sidecarContextOverflowResponse(loopResponse, {
           stream: parsed.stream, modelId: parsed._responseModelId ?? parsed.modelId, translatorBudget,
         });
     // Register the sidecar stream as an active turn so drainAndShutdown waits for (or aborts)

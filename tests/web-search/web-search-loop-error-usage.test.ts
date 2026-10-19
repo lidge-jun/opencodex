@@ -5,6 +5,7 @@ import { runWithWebSearch } from "../../src/web-search/loop";
 import { buildWebSearchTool } from "../../src/web-search/synthetic-tool";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { PROVIDER_INPUT_TOO_LARGE_MESSAGE } from "../../src/server/responses/context-overflow";
+import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -88,7 +89,7 @@ for (const [label, second] of [
 
 // A worded verdict keeps its status and provider wording in-stream: combo stream preflight reads
 // exactly those to decide whether a larger-context target may still serve the turn.
-test("a later iteration's worded 400 overflow keeps its evidence beside context_length_exceeded", async () => {
+function wordedFailureRun(respond: () => Response) {
   spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ results: [] }));
   const passes: AdapterEvent[][] = [[
     { type: "tool_call_start", id: "ws1", name: "web_search" },
@@ -96,23 +97,39 @@ test("a later iteration's worded 400 overflow keeps its evidence beside context_
     { type: "tool_call_end" },
     { type: "done" },
   ]];
-  let sends = 0;
+  const state = { sends: 0 };
   const adapter: ProviderAdapter = {
     name: "worded-overflow",
     buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-    fetchResponse: async () => (sends++ === 0 ? new Response("wire")
-      : new Response("This model's maximum context length is 8192 tokens", { status: 400 })),
+    fetchResponse: async () => (state.sends++ === 0 ? new Response("wire") : respond()),
     formatErrorBody: (_status, _headers, body) => body,
     async *parseStream() { yield* passes.shift()!; },
   };
-  const response = await runWithWebSearch({
+  const response = runWithWebSearch({
     parsed: { modelId: "fixture", stream: true, options: {}, context: { messages: [], tools: [buildWebSearchTool()] } },
     adapter, backend: "exa", exaApiKey: "fixture", hostedTool: { type: "web_search" },
     settings: { model: "fixture", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
     incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
   });
-  const text = await response.text();
+  return { state, text: response.then(r => r.text()) };
+}
+
+test.each([400, 413])("a later iteration's worded %i overflow keeps its evidence beside context_length_exceeded", async status => {
+  const run = wordedFailureRun(() => new Response("This model's maximum context length is 8192 tokens", { status }));
+  const text = await run.text;
   expect(text).toContain('"code":"context_length_exceeded"');
   expect(text).toContain("maximum context length is 8192 tokens");
-  expect(sends).toBe(2);
+  expect(run.state.sends).toBe(2);
+});
+
+// The provider may already have run a non-replayable turn; an overflow would invite a compacted resend.
+test("a later iteration's non-replayable 413 keeps its own failure", async () => {
+  const run = wordedFailureRun(() => {
+    const response = new Response("Request body exceeds the 8 MiB limit", { status: 413 });
+    markResponseNonReplayable(response);
+    return response;
+  });
+  const text = await run.text;
+  expect(text).toContain("response.failed");
+  expect(text).not.toContain("context_length_exceeded");
 });

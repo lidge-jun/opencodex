@@ -43,6 +43,8 @@ const overflow400 = () => Response.json({ error: {
   type: "invalid_request_error",
 } }, { status: 400 });
 const badRequest400 = () => Response.json({ error: { message: "tool schema is invalid", type: "invalid_request_error" } }, { status: 400 });
+/** A rate refusal whose wording alone would read as an overflow; only its code says otherwise. */
+const rateCoded400 = () => Response.json({ error: { message: "too many tokens", type: "rate_limit_error", code: "rate_limit_exceeded" } }, { status: 400 });
 
 type Sidecar = "web-search" | "images";
 
@@ -119,19 +121,24 @@ describe("sidecar provider input overflow (#7316)", () => {
       });
     }
 
-    test(`${sidecar}: an unrelated 400 keeps its own failure`, async () => {
-      const relay = upstream(badRequest400);
-      saveConfig(sidecarConfig(sidecar, relay.server));
-      const server = startServer(0);
-      try {
-        const response = await send(String(server.url), sidecar, true);
-        const text = await response.text();
-        expect(text).not.toContain("context_length_exceeded");
-        expect(text).toContain("tool schema is invalid");
-      } finally {
-        await server.stop(true);
-      }
-    });
+    for (const [label, respond, wording] of [
+      ["an unrelated 400", badRequest400, "tool schema is invalid"],
+      ["a rate_limit_exceeded 400", rateCoded400, "too many tokens"],
+    ] as const) {
+      test(`${sidecar}: ${label} keeps its own failure`, async () => {
+        const relay = upstream(respond);
+        saveConfig(sidecarConfig(sidecar, relay.server));
+        const server = startServer(0);
+        try {
+          const response = await send(String(server.url), sidecar, true);
+          const text = await response.text();
+          expect(text).not.toContain("context_length_exceeded");
+          expect(text).toContain(wording);
+        } finally {
+          await server.stop(true);
+        }
+      });
+    }
   }
 
   test("web-search: a non-streaming 413 keeps HTTP 413 with the context classification", async () => {

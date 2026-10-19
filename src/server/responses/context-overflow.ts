@@ -84,9 +84,54 @@ export function sidecarContextOverflowEvent(
   status: number | undefined,
   message: string,
 ): Extract<AdapterEvent, { type: "error" }> {
-  return status === undefined || status === 413 || !message
+  return status === undefined || !message || (status === 413 && !isDefiniteContextOverflow(413, message))
     ? contextOverflowEvent()
     : { ...contextOverflowEvent(message), status };
+}
+
+/** One sidecar loop failure, with what the loop knew when it raised it. */
+export interface SidecarLoopFailure {
+  status: number;
+  message: string;
+  event?: Extract<AdapterEvent, { type: "error" }>;
+  /** The provider's own `error.code`, read from a bounded display-safe body. */
+  upstreamCode?: string;
+  /** The failed response was marked non-replayable: the provider may already have run the turn. */
+  nonReplayable?: boolean;
+}
+
+/**
+ * The overflow terminal a sidecar loop failure should end with, or `undefined` to keep the
+ * failure as it is. A non-replayable failure keeps its verdict: an overflow would invite a
+ * compacted resend of a turn the provider may already have run. An adapter event marked
+ * `retryable: false` under any other code is that adapter's own verdict and is not reread.
+ */
+export function sidecarLoopOverflowEvent(
+  failure: SidecarLoopFailure,
+): Extract<AdapterEvent, { type: "error" }> | undefined {
+  if (failure.nonReplayable) return undefined;
+  const code = failure.event?.code ?? failure.upstreamCode;
+  if (failure.event?.retryable === false && code !== "context_length_exceeded") return undefined;
+  if (!isSidecarContextOverflow(failure.status, failure.message, code)) return undefined;
+  return sidecarContextOverflowEvent(failure.event?.status ?? failure.status, failure.message);
+}
+
+/** Read a provider's `error.code` from an already bounded, display-safe error body. */
+export function upstreamErrorCode(text: string): string | undefined {
+  try {
+    const code = (JSON.parse(text) as { error?: { code?: unknown } } | null)?.error?.code;
+    return typeof code === "string" && code.length <= 128 ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const sidecarOverflowResponses = new WeakSet<Response>();
+
+/** Tag a loop's first-iteration JSON failure that the sidecar boundary should map to an overflow. */
+export function markSidecarContextOverflow(response: Response, failure: SidecarLoopFailure): Response {
+  if (sidecarLoopOverflowEvent(failure)) sidecarOverflowResponses.add(response);
+  return response;
 }
 
 /**
@@ -94,34 +139,19 @@ export function sidecarContextOverflowEvent(
  *
  * Both loops answer a failed first iteration with their own small JSON error, so the overflow
  * would otherwise reach Codex as a bare non-2xx that it resends unchanged through its retry
- * budget. Any other failure is returned untouched. Combo attempts do not come through here:
- * the combo layer reads the raw failure for its hop decision and maps a final 413 itself.
- * A non-replayable failure (`x-should-retry: false`) also keeps its status and header: the
- * provider may already have run that turn, and an overflow verdict would invite a compacted resend.
+ * budget. The loop classified the failure while it still had the provider's status, wording,
+ * code and replay verdict, and tagged the response; anything untagged is returned untouched.
+ * Combo attempts do not come through here: the combo layer reads the raw failure for its hop
+ * decision and maps a final 413 itself. A failure answered with `x-should-retry: false` keeps
+ * its status and header, so that contract never turns into an invitation to resend.
  */
-export async function sidecarContextOverflowResponse(
+export function sidecarContextOverflowResponse(
   response: Response,
   options: { stream: boolean; modelId: string; translatorBudget: TranslatorBudget },
-): Promise<Response> {
-  if (response.ok || !response.body) return response;
+): Response {
+  if (response.ok || !sidecarOverflowResponses.has(response)) return response;
   if (response.headers.get("x-should-retry") === "false") return response;
-  if (!(response.headers.get("content-type") ?? "").includes("application/json")) return response;
-  // The loop's own small JSON envelope. It is read whole and re-served when it is not an
-  // overflow; the caller re-wraps the body for lifetime tracking either way.
-  let body: string;
-  try { body = await response.text(); } catch { body = ""; }
-  let message = "";
-  let code: string | null | undefined;
-  try {
-    const payload = JSON.parse(body) as { error?: { message?: unknown; code?: unknown } };
-    if (typeof payload?.error?.message === "string") message = payload.error.message;
-    if (typeof payload?.error?.code === "string") code = payload.error.code;
-  } catch {
-    // Not the loop's own envelope; only the status can classify it.
-  }
-  if (!isSidecarContextOverflow(response.status, message, code)) {
-    return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-  }
+  void response.body?.cancel().catch(() => {});
   return options.stream
     ? streamingContextOverflowResponse(options.modelId, options.translatorBudget)
     : jsonContextOverflowResponse();

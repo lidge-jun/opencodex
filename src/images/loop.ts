@@ -1,5 +1,5 @@
 import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
-import { isSidecarContextOverflow, sidecarContextOverflowEvent } from "../server/responses/context-overflow";
+import { markSidecarContextOverflow, sidecarLoopOverflowEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
 /**
  * Media bridge agentic loop — supports both image and video generation sidecars.
@@ -284,10 +284,19 @@ function jsonError(status: number, message: string, event?: Extract<AdapterEvent
 /** Hard provider/parse failure inside an iteration. The eager first iteration converts it to a
  *  non-2xx jsonError; later (already-streaming) iterations surface it as an in-stream error event. */
 class LoopError extends Error {
-  constructor(readonly status: number, message: string, readonly event?: Extract<AdapterEvent, { type: "error" }>) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly event?: Extract<AdapterEvent, { type: "error" }>,
+    readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable">,
+  ) {
     super(message);
     this.name = "LoopError";
   }
+}
+
+function loopFailure(e: LoopError): SidecarLoopFailure {
+  return { status: e.status, message: e.message, ...(e.event ? { event: e.event } : {}), ...e.detail };
 }
 
 /**
@@ -768,9 +777,11 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           body = await readBoundedResponseBody(prepared.response, { signal });
         } catch {
           if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
-          throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`);
+          throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`, undefined,
+            { nonReplayable: isNonReplayableResponse(prepared.response) });
         }
         let formatted = "";
+        let upstreamCode: string | undefined;
         if (body.displaySafe && !body.truncated && body.text.trim() && prepared.responseAdapter.formatErrorBody) {
           try {
             formatted = prepared.responseAdapter.formatErrorBody(
@@ -780,8 +791,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             ).trim();
           } catch { /* formatter hooks are best-effort */ }
         }
+        if (body.displaySafe && !body.truncated) upstreamCode = upstreamErrorCode(body.text);
         const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
-        throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`);
+        throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`, undefined,
+          { upstreamCode, nonReplayable: isNonReplayableResponse(prepared.response) });
       }
       return { ...prepared, retryThinking: async () => {
         cachedRequest = undefined;
@@ -899,7 +912,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       firstPrepared = await prepareIterationDrained(maxRounds <= 0);
     } catch (e) {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-      if (e instanceof LoopError) return jsonError(e.status, e.message, e.event);
+      if (e instanceof LoopError) return markSidecarContextOverflow(jsonError(e.status, e.message, e.event), loopFailure(e));
       if (e instanceof SendBudgetExhaustedError) return jsonError(429, e.message,
         { type: "error", status: 429, errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false });
       throw e;
@@ -1156,8 +1169,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           } else {
             // A later iteration's overflow ends the turn as the main path's terminal
             // context_length_exceeded, so Codex compacts instead of resending (#7316).
-            const overflow = e instanceof LoopError && isSidecarContextOverflow(e.status, e.message, e.event?.code)
-              ? sidecarContextOverflowEvent(e.event?.status ?? e.status, e.message) : undefined;
+            const overflow = e instanceof LoopError ? sidecarLoopOverflowEvent(loopFailure(e)) : undefined;
             yield {
               type: "error",
               ...(overflow ?? {
