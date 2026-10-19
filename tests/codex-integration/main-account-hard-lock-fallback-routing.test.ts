@@ -330,47 +330,47 @@ describe("applyMainHardLockFallbackOverride", async () => {
     expect(await applyMainHardLockFallbackOverride({ model: 42 }, cfg)).toBeNull();
   });
 
-  test("unavailable chosen targets keep the blocked source and reasoning intact", () => {
+  test("unavailable chosen targets keep the blocked source and reasoning intact", async () => {
     observe({ weeklyPercent: 100 });
     const gateway = { adapter: "openai-responses", authMode: "key", baseUrl: "https://gateway.example.test/v1" } as const;
     for (const target of ["private/secret-model", "former/secret-model", "combo/removed", "policy/removed", "retired-account/gpt-5.3"]) {
       for (const providers of [{ gateway }, {}]) {
         const cfg = config({ providers, defaultProvider: "gateway", codexMainAccountHardLockFallback: { model: target, reasoningEffort: "low" } } as Partial<OcxConfig>);
         const body = { model: "gpt-5.3", reasoning: { effort: "high" } };
-        expect(applyMainHardLockFallbackOverride(body, cfg)).toBeNull();
+        expect(await applyMainHardLockFallbackOverride(body, cfg)).toBeNull();
         expect(body).toEqual({ model: "gpt-5.3", reasoning: { effort: "high" } });
       }
     }
     const cfg = config({ providers: { gateway, private: { ...gateway, disabled: true } }, defaultProvider: "gateway", codexMainAccountHardLockFallback: { model: "private/secret-model" } } as Partial<OcxConfig>);
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
   });
 
-  test("target admission is rechecked after provider removal, re-addition and alias changes", () => {
+  test("target admission is rechecked after provider removal, re-addition and alias changes", async () => {
     observe({ weeklyPercent: 100 });
     const provider = { adapter: "openai-responses", authMode: "key", baseUrl: "https://chosen.example.test/v1", alias: "chosen" } as const;
     const cfg = config({ providers: { private: provider }, defaultProvider: "private", codexMainAccountHardLockFallback: { model: "chosen/secret-model" } } as Partial<OcxConfig>);
     const apply = () => applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg);
-    expect(apply()).not.toBeNull();
+    expect(await apply()).not.toBeNull();
     delete cfg.providers.private;
-    expect(apply()).toBeNull();
+    expect(await apply()).toBeNull();
     cfg.providers.private = provider;
-    expect(apply()).not.toBeNull();
+    expect(await apply()).not.toBeNull();
     cfg.providers.private = { ...provider, alias: "renamed" };
-    expect(apply()).toBeNull();
+    expect(await apply()).toBeNull();
     cfg.codexMainAccountHardLockFallback = { model: "private/secret-model" };
-    expect(apply()).not.toBeNull();
+    expect(await apply()).not.toBeNull();
   });
 
-  test("bare fallback and explicitly declared slash model ids stay valid", () => {
+  test("bare fallback and explicitly declared slash model ids stay valid", async () => {
     observe({ weeklyPercent: 100 });
     const provider = { adapter: "openai-responses", authMode: "key", baseUrl: "https://chosen.example.test/v1", models: ["vendor/native-model"] } as const;
     for (const model of ["bare-model", "vendor/native-model", "private/vendor/native-model"]) {
       const cfg = config({ providers: { private: { ...provider, models: [...provider.models] } }, defaultProvider: "private", codexMainAccountHardLockFallback: { model } } as Partial<OcxConfig>);
-      expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)?.targetModel).toBe(model);
+      expect((await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg))?.targetModel).toBe(model);
     }
   });
 
-  test("configured combo aliases, policy profiles and account namespaces keep their admission", () => {
+  test("configured combo aliases, policy profiles and account namespaces keep their admission", async () => {
     observe({ weeklyPercent: 100 });
     const cfg = config({
       providers: { private: { adapter: "openai-responses", authMode: "key", baseUrl: "https://chosen.example.test/v1" },
@@ -381,7 +381,7 @@ describe("applyMainHardLockFallbackOverride", async () => {
     } as Partial<OcxConfig>);
     for (const model of ["combo/rescue", "chosen-combo", "policy/rescue", "chosen-policy", "pinned/gpt-5.3"]) {
       cfg.codexMainAccountHardLockFallback = { model };
-      expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)?.targetModel).toBe(model);
+      expect((await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg))?.targetModel).toBe(model);
     }
   });
 
