@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
 import { startServer } from "../../src/server";
 import { getFilteredUsageAggregate, getUsageAggregate, resetUsageAggregateCacheForTests } from "../../src/server/management/usage-aggregate-cache";
 import { getUsageSummaryCacheEntry, resetUsageSummaryCacheForTests } from "../../src/server/management/usage-summary-cache";
@@ -60,6 +61,10 @@ test("policy-only API writes refresh warm estimate, summary and aggregate caches
   writeFileSync(ledgerPath, ledger);
   const server = startServer(0);
   try {
+    // On Windows startServer's loadConfig starts an unawaited directory ACL harden whose
+    // inherited-ACE rewrite moves usage.jsonl's ChangeTime; the aggregate cache then rightly
+    // rebuilds. Settle it before asserting warm-cache reuse.
+    await flushConfigDirHardeningAndReaps(home);
     const summaryUrl = new URL("/api/usage?range=all", server.url);
     const priceUrl = new URL("/api/providers/openai/model-costs", server.url);
     const summarize = async () => {
