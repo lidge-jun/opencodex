@@ -3,7 +3,7 @@ import type { OcxProviderConfig } from "../types";
 import { isEgressTransparentExecutor, markEgressTransparentExecutor } from "../lib/provider-egress";
 import { configuredOutboundFetch } from "../lib/proxy-env";
 import { waitOutsideProviderHeaderDeadline } from "../lib/provider-admission-wait";
-import { markResponseNonReplayable, sleepWithAbort } from "../lib/upstream-retry";
+import { markSameTargetRetryHold, sleepWithAbort } from "../lib/upstream-retry";
 import { RequestPacingQueueOverloadError } from "./request-pacing";
 import type { OcxProviderTransport } from "./xai-transport";
 
@@ -109,7 +109,10 @@ export class MistralBudgetPacer {
     try {
       for (;;) {
         signal?.throwIfAborted();
-        const readyAt = this.deadlines.get(identity) ?? (this.evictedUntil > this.now() ? this.evictedUntil : undefined);
+        // An evicted identity may have re-entered with a shorter delay; the evicted one still binds.
+        const live = this.evictedUntil > this.now() ? this.evictedUntil : undefined;
+        const own = this.deadlines.get(identity);
+        const readyAt = own === undefined ? live : live === undefined ? own : Math.max(own, live);
         if (readyAt !== undefined && readyAt > deadline) {
           const delay = readyAt - this.now();
           throw new RequestPacingQueueOverloadError("mistral", "queue_expired", Math.ceil(delay / 1000));
@@ -191,9 +194,9 @@ export function resolveMistralTransport(
     if (response.status === 429 && retry?.respectRetryAfter !== false) {
       const delay = retryDelay(response.headers, Date.now());
       if (delay !== undefined && delay > (retry?.maxIntervalMs ?? DEFAULT_MAX_WAIT_MS)) {
-        // The shared retry helper caps waits. Preserve this refusal instead of replaying
-        // sooner than Mistral permits; the original status/body/Retry-After reach the caller.
-        markResponseNonReplayable(response, String(Math.ceil(delay / 1000)));
+        // The shared retry helper caps waits. Stop same-key replays sooner than Mistral permits;
+        // another credential may still serve, and the original status/body/Retry-After reach the caller.
+        markSameTargetRetryHold(response);
       }
     }
     return response;

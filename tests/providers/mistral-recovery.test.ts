@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { saveConfig } from "../../src/config";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { providerConfigSeed } from "../../src/providers/derive";
-import { rateLimitRetryPolicyFor } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, rateLimitRetryPolicyFor } from "../../src/providers/key-failover";
 import { isCanonicalMistralChat, MistralBudgetPacer, mistralMinuteRefusal, resolveMistralTransport } from "../../src/providers/mistral-transport";
-import { isNonReplayableResponse, sleepWithAbort } from "../../src/lib/upstream-retry";
+import { carryReplayRefusal, isNonReplayableResponse, isSameTargetRetryHold, sleepWithAbort } from "../../src/lib/upstream-retry";
 import { resolveProviderTransport } from "../../src/providers/xai-transport";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { routedProviderConfig } from "../../src/providers/routed-config";
@@ -248,6 +252,15 @@ describe("Mistral observed budget pacing", () => {
     expect(waits).toEqual([30_000]);
   });
 
+  test("a shorter fresh delay never overrides an evicted identity's live deadline", async () => {
+    const { pacing, waits } = fixture();
+    pacing.observe("identity-0", budget("0", "600", "10", "60"));
+    for (let index = 1; index <= 128; index++) pacing.observe(`identity-${index}`, budget("0", "600", "10", "30"));
+    pacing.observe("identity-0", budget("0", "600", "10", "10"));
+    await pacing.acquire("identity-0");
+    expect(waits).toEqual([60_000]);
+  });
+
   test("waits for explicit retry times after token or request exhaustion", async () => {
     const { pacing, waits } = fixture();
     pacing.observe("tokens", budget("800", "600", "10", "9"));
@@ -320,7 +333,10 @@ describe("Mistral observed budget pacing", () => {
         method: "POST", headers: { authorization: "Bearer synthetic-key" }, body: JSON.stringify({ model }),
       });
       expect(result).toBe(response);
-      expect(isNonReplayableResponse(result)).toBe(true);
+      // Only same-key replays stop: key rotation and unsanitized error delivery stay available.
+      expect(isSameTargetRetryHold(result)).toBe(true);
+      expect(isNonReplayableResponse(result)).toBe(false);
+      expect(isSameTargetRetryHold(carryReplayRefusal(result, new Response(null, { status: 429 })))).toBe(true);
       expect(await result.text()).toBe("original refusal");
     }
   });
@@ -632,6 +648,43 @@ describe("Mistral native Chat recovery", () => {
     await response.text();
     expect(sends).toBe(1);
     expect(response.status).toBe(429);
+  });
+});
+
+
+describe("Mistral native Chat key rotation", () => {
+  test("an over-budget Retry-After still lets a pooled request rotate to another key", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = (async (_url, init) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      seen.push(auth);
+      return auth.endsWith("first")
+        ? Response.json({ error: { message: "synthetic capacity refusal" } }, { status: 429, headers: { "retry-after": "120" } })
+        : Response.json({ id: "synthetic", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }] });
+    }) as typeof fetch;
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-mistral-rotation-"));
+    process.env.OPENCODEX_HOME = home;
+    releaseSpendHome = acquireOwnedSpendHome();
+    const keys = ["synthetic-rotation-first", "synthetic-rotation-second"];
+    const config = { port: 0, defaultProvider: "fixture", providers: { fixture: {
+      adapter: "openai-chat", baseUrl, authMode: "key", apiKey: keys[0],
+      apiKeyPool: keys.map((key, index) => ({ id: `k${index + 1}`, key, addedAt: index + 1 })),
+    } } } as OcxConfig;
+    try {
+      saveConfig(config);
+      const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture/model", messages: [{ role: "user", content: "Synthetic fixture" }], stream: false }),
+      }), config, { model: "", provider: "" });
+      await response.text();
+      expect(response.status).toBe(200);
+      expect(seen.map(auth => auth.split(" ").at(-1))).toEqual(keys);
+    } finally {
+      clearKeyCooldowns(); releaseSpendHome?.(); releaseSpendHome = undefined;
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

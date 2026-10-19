@@ -29,17 +29,23 @@ import { redactSecretString } from "./redact";
  * marker that survives body re-wrapping (combo failure consumption re-parses the JSON).
  */
 const nonReplayableResponses = new WeakSet<Response>();
-const nonReplayableRetryAfter = new WeakMap<Response, string>();
 
-/** Prevent another send and retain an optional server delay on this response. */
-export function markResponseNonReplayable(response: Response, retryAfter?: string): void {
+export function markResponseNonReplayable(response: Response): void {
   nonReplayableResponses.add(response);
-  if (retryAfter !== undefined) nonReplayableRetryAfter.set(response, retryAfter);
 }
 
-/** Return the server delay retained for a response that must not be replayed. */
-export function nonReplayableRetryAfterFor(response: Response): string | undefined {
-  return nonReplayableRetryAfter.get(response);
+/**
+ * A server-instructed wait longer than the retry budget: same-target 429 replay loops stop and
+ * return the original response, while key rotation and ordinary error delivery are unaffected.
+ */
+const sameTargetRetryHolds = new WeakSet<Response>();
+
+export function markSameTargetRetryHold(response: Response): void {
+  sameTargetRetryHolds.add(response);
+}
+
+export function isSameTargetRetryHold(response: Response): boolean {
+  return sameTargetRetryHolds.has(response);
 }
 
 export function isNonReplayableResponse(response: Response): boolean {
@@ -152,8 +158,7 @@ export function retainReplayRefusal<T extends Response>(response: T): T {
 
 /** Carry the verdict from a response onto the one that replaces it. */
 export function carryReplayRefusal<T extends Response>(source: Response, rewrapped: T): T {
-  const retryAfter = nonReplayableRetryAfterFor(source);
-  if (retryAfter !== undefined) markResponseNonReplayable(rewrapped, retryAfter);
+  if (sameTargetRetryHolds.has(source)) sameTargetRetryHolds.add(rewrapped);
   return isReplayRefusalResponse(source) ? retainReplayRefusal(rewrapped) : rewrapped;
 }
 

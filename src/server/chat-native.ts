@@ -31,7 +31,7 @@ import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
   fetchWithTransientRetry,
-  isNonReplayableResponse,
+  isNonReplayableResponse, isSameTargetRetryHold,
   isReplayRefusalCode,
   isReplayRefusalResponse,
   prepareSameTarget429Wait,
@@ -611,7 +611,7 @@ export async function runNativeChatAttempt(
       // limit: waiting and re-sending here is exactly the duplicate inference the refusal
       // exists to stop. It kept the same shape under the old 502 only because 502 never
       // matched this branch.
-      && !isNonReplayableResponse(response)
+      && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
       && retryPolicy
       && retries < retryPolicy.attempts
       && transientSendAvailable()
