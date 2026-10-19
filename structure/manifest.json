@@ -444,6 +444,13 @@
       "documents": ["src/oauth/"]
     },
     {
+      "path": "providers/antigravity-account-import.md",
+      "tier": 4,
+      "title": "Antigravity Account Import",
+      "scope": "Cockpit Tools import schema, identity check, probe-gated project_id fallback and no-write failure paths.",
+      "documents": ["src/oauth/"]
+    },
+    {
       "path": "providers/claude-cli-replay.md",
       "tier": 4,
       "title": "Claude CLI Replay",

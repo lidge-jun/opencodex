@@ -142,6 +142,7 @@
     "tool-envelope-echo-whole-line.test.ts": "adapters",
     "abort-race.test.ts": "adapters",
     "account-import.test.ts": "server",
+    "account-import-project-fallback.test.ts": "server",
     "account-pool-management-api.test.ts": "server",
     "link-listener-admission.test.ts": "server", "link-management-relay.test.ts": "server",
     "link-listener-lifecycle.test.ts": "server", "link-listener-mutation.test.ts": "server",

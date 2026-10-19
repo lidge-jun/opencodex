@@ -478,6 +478,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 
 Inline JSON and extra positional arguments are rejected. Keep exported files private and delete or store them securely after import.
 
+Each record may carry an optional `project_id` for an account whose Cloud Code Assist project is not discovered automatically. It must be a Google Cloud project id (6–30 lowercase letters, digits or hyphens). OpenCodex uses it only when discovery finds no project, and only after a quota check with that account's own token succeeds for it; otherwise the record fails with `missing_project` and nothing is saved. A discovered project always takes precedence.
+
 ### OAuth reliability
 
 opencodex coordinates token refresh and Codex pool routing so concurrent requests do not race the
