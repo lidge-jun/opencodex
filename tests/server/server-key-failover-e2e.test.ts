@@ -1351,6 +1351,7 @@ function bridgedReplayRequest(callerKey: string | undefined, signal?: AbortSigna
     ...(signal ? { signal } : {}),
     body: JSON.stringify({
       model: "pooled/test", stream: false,
+      tools: [{ type: "web_search" }],
       input: [
         { role: "user", content: [{ type: "input_text", text: "what is the latest release?" }] },
         { type: "web_search_call", id: BRIDGE_CELL, status: "completed",
