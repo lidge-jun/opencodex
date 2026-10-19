@@ -378,9 +378,11 @@ It blocks newly admitted identity-matched main-account requests. Pool alternativ
 explicit main selection and stored Direct substitution do not override it. It neither pauses the
 account nor clears upstream cooldown/reauth state, and management quota refresh remains available.
 Fresh valid usage below the effective threshold, including 0%, or validated WHAM absence retires a measured short block;
-passing a reset timestamp alone does not. The minute sweep waits locally until the latest known blocking reset;
-when no future reset is known or reads remain blocked, main recovery uses the same capped
-5/10/20/40/60-minute delay calculation as usage-query failures. Skipped ticks do not extend it;
+passing a reset timestamp alone does not. A future known reset is a scheduling hint (#7312): recovery
+arms one base delay when the hold is first seen, then reads WHAM metadata on the same capped
+5/10/20/40/60-minute delay calculation as usage-query failures, never scheduling a read past that
+reset, so an early reset redeemed elsewhere is learned without inference or reset-credit use. A paused
+or needs-reauth main gets no hold rechecks. Skipped ticks do not extend the delay;
 the physical bearer is reconciled before checking the delay, and late results cannot charge
 a replacement credential. A longer valid Retry-After from any main usage reader is checked for the
 current credential before the recovery worker takes a profile lease or prepares a token; a replacement
