@@ -1,4 +1,5 @@
 import { getDefaultConfig } from "./proxy-env";
+import { DESKTOP_FAMILIES } from "../claude/desktop-profile";
 
 const REMOVED_PROVIDER = "opencode-free";
 let warned = false;
@@ -21,6 +22,7 @@ export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): void {
       const provider = record(value);
       if (name !== REMOVED_PROVIDER && ![provider?.adapter, provider?.type, provider?.id, provider?.preset, record(provider?.preset)?.id, provider?.presetId, provider?.providerType].includes(REMOVED_PROVIDER)) continue;
       retiredProviders.add(name);
+      if (typeof provider?.alias === "string") retiredProviders.add(provider.alias.trim());
       delete providers[name];
       changed = true;
     }
@@ -41,6 +43,7 @@ export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): void {
     }
     const hadTargets = Array.isArray(row.targets) && row.targets.length > 0;
     const hadCandidates = Array.isArray(row.candidates) && row.candidates.length > 0;
+    const hadSourceModels = Array.isArray(row.sourceModels) && row.sourceModels.length > 0;
     for (const [key, child] of Object.entries(row)) {
       // Descriptions and credential/transport data are not model references.
       if (["note", "description", "displayName", "label", "modelProfile", "headers", "apiKey", "apiKeys", "baseUrl", "modelDisplayNames"].includes(key)) continue;
@@ -50,7 +53,8 @@ export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): void {
     }
     // Empty combos/profiles cannot pass schema validation or execute a request.
     if ((hadTargets && Array.isArray(row.targets) && row.targets.length === 0)
-      || (hadCandidates && Array.isArray(row.candidates) && row.candidates.length === 0)) return undefined;
+      || (hadCandidates && Array.isArray(row.candidates) && row.candidates.length === 0)
+      || (hadSourceModels && Array.isArray(row.sourceModels) && row.sourceModels.length === 0)) return undefined;
     return row;
   }
 
@@ -67,7 +71,7 @@ export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): void {
         if (prune(value) !== undefined) continue;
         delete routes[id];
         retiredRoutes.add(`${namespace}/${id}`);
-        if (typeof alias === "string") retiredRoutes.add(alias);
+        if (typeof alias === "string") retiredRoutes.add(alias.trim());
         changed = removedRoute = true;
       }
     }
@@ -82,16 +86,40 @@ export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): void {
   }
   const depletedFallbacks = new Set(Object.entries(record(config.subagentModelFallbackByModel) ?? {})
     .filter(([, chain]) => Array.isArray(chain) && chain.some(retired)).map(([model]) => model));
+  const desktopProfile = record(record(config.claudeCode)?.desktopProfile);
+  const desktopAssignments = record(desktopProfile?.assignments);
+  const desktopDefaults = record(desktopProfile?.defaults);
+  const retiredDesktopRoute = Object.keys(desktopAssignments ?? {}).some(retired)
+    || Object.values(desktopDefaults ?? {}).some(retired);
+  if (retired(config.injectionModel)) {
+    delete config.syncCodexSubagentDefaults;
+    delete config.injectionEffort;
+  }
   for (const [key, value] of Object.entries(config)) {
-    if (key === "providers" || !/model|provider|combo|routing|claudeCode|fallback|redirect|compaction|autoReview|advisor|tokenGuardian|images/i.test(key)) continue;
+    if (key === "providers" || !/model|provider|combo|routing|claudeCode|fallback|redirect|compaction|autoReview|advisor|tokenGuardian|images|codexRoleTiers|sidecar|shadowCallIntercept/i.test(key)) continue;
     const next = prune(value, key === "claudeCode");
     if (next === undefined) delete config[key];
     else config[key] = next;
   }
+  // Desktop defaults require a member of their family, or null for an empty family.
+  // Repair only profiles affected by this migration; unrelated invalid input still degrades.
+  if (retiredDesktopRoute && desktopAssignments && desktopDefaults) {
+    for (const family of DESKTOP_FAMILIES) {
+      const current = desktopDefaults[family];
+      if (typeof current === "string" && record(desktopAssignments[current])?.family === family) continue;
+      desktopDefaults[family] = Object.keys(desktopAssignments)
+        .filter(route => record(desktopAssignments[route])?.family === family).sort()[0] ?? null;
+    }
+  }
   if (providers) {
     for (const provider of Object.values(providers)) {
       const row = record(provider);
-      if (row && retired(row.defaultModel)) { delete row.defaultModel; changed = true; }
+      if (!row) continue;
+      for (const key of ["defaultModel", "autoReviewModel", "autoReviewModelOverrides"]) {
+        const next = prune(row[key], key === "autoReviewModelOverrides");
+        if (next === undefined) delete row[key];
+        else row[key] = next;
+      }
     }
   }
   const fallbacks = record(config.subagentModelFallbackByModel);
@@ -102,6 +130,6 @@ export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): void {
   }
   if (changed && !warned) {
     warned = true;
-    console.warn("opencode-free support was removed in opencodex 2.89.0 because every free model now returns 403 permission_denied under OpenCode's upstream free-tier gate (#7255); the entry and dependent references are disabled. Use opencode-go, or another provider such as opencode-zen or openrouter.");
+    console.warn("opencode-free support was removed because every free model now returns 403 permission_denied under OpenCode's upstream free-tier gate (#7255); the entry and dependent references are disabled. Use opencode-go, or another provider such as opencode-zen or openrouter.");
   }
 }
