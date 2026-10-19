@@ -86,11 +86,11 @@ function config(on = true): OcxConfig {
   }, combos: { waterfall: { strategy: "failover", targets: [{ provider: "anth", model: "claude-sonnet-4-6" }, { provider: "backup", model: "fallback" }] } },
   protocols: { rollout: { managedMessagesNative: on } } };
 }
-async function send(options: { stream?: boolean; config?: OcxConfig; messages?: unknown } = {}) {
+async function send(options: { stream?: boolean; config?: OcxConfig; messages?: unknown; tools?: unknown } = {}) {
   const requestId = `native-combo-${crypto.randomUUID()}`;
   const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
     method: "POST", headers: { "content-type": "application/json", authorization: "Bearer fixture-admission", "x-api-key": "fixture-caller" },
-    body: JSON.stringify({ ...source, stream: options.stream ?? true, ...(options.messages ? { messages: options.messages } : {}) }),
+    body: JSON.stringify({ ...source, stream: options.stream ?? true, ...(options.messages ? { messages: options.messages } : {}), ...(options.tools ? { tools: options.tools } : {}) }),
   }), options.config ?? config(), { model: "", provider: "" }, { requestId, start: Date.now() });
   const text = await response.text();
   return { response, text, rows: getRequestLogEntries().filter(row => row.requestId === requestId) };
@@ -140,6 +140,14 @@ describe("native Messages candidates in a combo", () => {
       expect(seen).toHaveLength(1);
       expect(rows).toHaveLength(1);
       expect(rows[0]!.status).toBe(503);
+    });
+  }
+  for (const [tool, portable] of [[{ type: "bash_20250124", name: "bash" }, false], [{ type: "web_search_20250305", name: "web_search" }, true]] as const) {
+    test(`${portable ? "portable" : "native-only"} ${tool.name} tool ${portable ? "may" : "never"} fall back to a translated child`, async () => {
+      answer = () => stream(prelude + refusal);
+      const { text } = await send({ tools: [...source.tools, tool] });
+      expect(text).toContain(portable ? "fallback reply" : "fixture overloaded");
+      expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(portable ? ["api.anthropic.com", "backup.fixture.invalid"] : ["api.anthropic.com"]);
     });
   }
   test("non-streaming caller retains exact native body and one final row", async () => {
