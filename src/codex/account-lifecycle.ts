@@ -1,4 +1,5 @@
 import { observeSignedInCodexIdentity } from "./signed-in-identity";
+import { observeMainCodexCollisionIdentity } from "./collision-identity";
 import { existsSync, readFileSync } from "node:fs";
 import {
   deleteConfigTopLevelKey,
@@ -80,6 +81,7 @@ function purgeMainCodexAccountRuntimeState(): void {
  */
 export function reconcileMainCodexAccountRuntimeState(): boolean {
   const read = readCodexTokensResult();
+  if (read.status === "missing") observeMainCodexCollisionIdentity();
   const currentAccountId = read.status === "ok"
     ? extractAccountId(read.tokens.id_token, read.tokens.access_token) ?? (read.tokens.account_id || null)
     : null;
@@ -91,11 +93,13 @@ export function reconcileMainCodexAccountRuntimeState(): boolean {
   observedMainChatgptAccountId = currentAccountId;
   if (previousAccountId === undefined || previousAccountId === currentAccountId) {
     observeMainQuotaIdentity(currentAccountId);
+    if (read.status === "ok") observeMainCodexCollisionIdentity(read.tokens);
     return false;
   }
 
   purgeMainCodexAccountRuntimeState();
   observeMainQuotaIdentity(currentAccountId);
+  if (read.status === "ok") observeMainCodexCollisionIdentity(read.tokens);
   return true;
 }
 
@@ -109,6 +113,7 @@ export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   // Startup observes the pinned owned path inside the exclusive claim: bound the read so a
   // replaced non-regular or oversized file cannot stall startup inside that claim.
   const result = readCodexTokensResult(authPath, { bounded: true });
+  if (result.status === "missing") observeMainCodexCollisionIdentity();
   if (result.status !== "ok") return false;
   const { tokens } = result;
   if (typeof tokens.access_token !== "string" || !tokens.access_token
@@ -129,6 +134,7 @@ export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   if (previousAccountId !== undefined && previousAccountId !== accountId) purgeMainCodexAccountRuntimeState();
   observeSignedInCodexIdentity(tokens);
   observeMainQuotaIdentity(accountId);
+  observeMainCodexCollisionIdentity(tokens);
   return observeMainQuotaCredential(tokens.access_token, accountId) !== undefined;
 }
 
@@ -141,6 +147,7 @@ export function applyConfirmedMainCodexAccountTransition(
   toAccountId: string,
 ): boolean {
   observeSignedInCodexIdentity();
+  observeMainCodexCollisionIdentity();
   if (!fromAccountId || !toAccountId || fromAccountId === toAccountId) {
     if (toAccountId) {
       observedMainChatgptAccountId = toAccountId;
@@ -155,6 +162,7 @@ export function applyConfirmedMainCodexAccountTransition(
 }
 
 export function resetMainCodexAccountIdentityTrackingForTests(): void {
+  observeMainCodexCollisionIdentity();
   observedMainChatgptAccountId = undefined;
   observeSignedInCodexIdentity();
   clearMainAccountCredentialPresence();

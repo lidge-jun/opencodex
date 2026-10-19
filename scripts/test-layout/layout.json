@@ -577,6 +577,8 @@
     "codex-auth-cancel-ownership.test.ts": "codex-integration",
     "codex-auth-collision.test.ts": "codex-integration",
     "codex-auth-context.test.ts": "codex-integration",
+    "codex-stored-main-duplicate.test.ts": "codex-integration",
+    "codex-pool-caller-fallback-policy.test.ts": "codex-integration",
     "codex-auth-modal-status.test.ts": "gui", "codex-set-prompt.test.ts": "gui",
     "codex-catalog-admission.test.ts": "codex-integration",
     "codex-catalog-exclusions.test.ts": "codex-integration",
