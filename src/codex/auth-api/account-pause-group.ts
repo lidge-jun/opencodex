@@ -14,7 +14,7 @@ import { isNativeMainClaimUnavailable, nativeMainProfileBusyResponse } from "./h
 type MainAuth = CodexTokenReadResult | { status: "api-key-only" };
 
 /** A valid API-key login has no ChatGPT identity; anything else unreadable stays unknown. */
-function readMainAuth(authPath: string): MainAuth {
+export function readMainAuth(authPath: string): MainAuth {
   const main = readCodexTokensResult(authPath, { bounded: true });
   if (main.status !== "invalid") return main;
   try {
