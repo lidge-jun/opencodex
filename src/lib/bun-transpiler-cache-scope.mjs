@@ -21,7 +21,20 @@ export const TRANSPILER_CACHE_ENV = "BUN_RUNTIME_TRANSPILER_CACHE_PATH";
 // Semver core, optional prerelease and build metadata (findPathBun accepts `+build`). The
 // alphabet has no separator, drive colon or NUL, so the segment cannot leave the cache.
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-const SCOPED_TAIL = /^(.*?)([\\/]+)(bun-[^\\/]+)[\\/]*$/;
+const SCOPED_TAIL = /^(.*?)([\\/]*)(bun-[^\\/]+)[\\/]*$/;
+const DRIVE = /^[A-Za-z]:$/;
+
+/** The directory a scoped cache lives in, or null when the path is not a bun-<version> scope. */
+function scopeParent(cache) {
+  const tail = SCOPED_TAIL.exec(cache);
+  if (!tail || !validVersion(tail[3].slice(4))) return null;
+  const [, prefix, separator] = tail;
+  // Without a separator the segment must start the path ("bun-1.4.2") or follow a drive
+  // ("C:bun-1.4.2", drive-relative); "xbun-1.4.2" is an ordinary directory name.
+  if (separator === "") return prefix === "" ? "." : DRIVE.test(prefix) ? prefix : null;
+  // At a filesystem or drive root ("/", "C:\\") keep one separator: a bare "C:" is drive-relative.
+  return prefix === "" || DRIVE.test(prefix) ? prefix + separator[0] : prefix;
+}
 
 /** @param {unknown} version */
 function validVersion(version) {
@@ -44,13 +57,12 @@ export function scopeTranspilerCacheToRuntime(env, runtimeVersion, join, platfor
   const cache = name === undefined ? undefined : env[name];
   if (typeof cache !== "string" || cache === "" || cache === "0") return env;
   if (!validVersion(runtimeVersion)) return env;
-  const tail = SCOPED_TAIL.exec(cache);
-  // At a filesystem or drive root ("/", "C:\\") keep one separator: a bare "C:" is drive-relative.
-  const base = !tail || !validVersion(tail[3].slice(4)) ? cache
-    : tail[1] === "" || /^[A-Za-z]:$/.test(tail[1]) ? tail[1] + tail[2][0] : tail[1];
+  const base = scopeParent(cache) ?? cache;
   const scoped = { ...env };
   for (const variant of names) delete scoped[variant];
-  scoped[TRANSPILER_CACHE_ENV] = join(base, `bun-${runtimeVersion}`);
+  const segment = `bun-${runtimeVersion}`;
+  // join("C:", x) yields "C:\\x"; a drive-relative parent must stay drive-relative.
+  scoped[TRANSPILER_CACHE_ENV] = DRIVE.test(base) ? base + segment : join(base, segment);
   return scoped;
 }
 

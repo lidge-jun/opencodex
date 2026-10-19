@@ -55,6 +55,10 @@ describe("launcher transpiler cache scope", () => {
     expect(scoped("/bun-1.4.2/", "1.5.0")).toBe(join("/", "bun-1.5.0"));
     expect(scoped("/bun-1.4.2", "1.5.0")).toBe(join("/", "bun-1.5.0"));
     expect(scoped("C:\\bun-1.4.2\\", "1.5.0")).toBe(join("C:\\", "bun-1.5.0"));
+    // Relative and drive-relative scopes re-scope too; a name merely ending in bun-<v> does not.
+    expect(scoped("bun-1.4.2", "1.5.0")).toBe(join(".", "bun-1.5.0"));
+    expect(scoped(scoped(".", "1.5.0")!, "1.5.0")).toBe(join(".", "bun-1.5.0"));
+    expect(scoped("xbun-1.4.2", "1.5.0")).toBe(join("xbun-1.4.2", "bun-1.5.0"));
   });
 
   test("prerelease and build metadata versions are accepted, oversized ones are not", () => {
