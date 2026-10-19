@@ -1,10 +1,10 @@
 import * as pickerFilesystem from "node:fs";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import * as clientLifecycle from "../../src/client/lifecycle-lock";
 import * as configIO from "../../src/config";
 import * as desktopLibrary from "../../src/claude/desktop-3p-library";
@@ -340,7 +340,11 @@ describe("picker boundary and recovery receipts", () => {
         return realWrite(path, content, io, hooks);
       });
       const renaming = spyOn(pickerFilesystem, "renameSync").mockImplementation((source, destination) => {
-        if (existing && metadataFailed && destination === profile) { recoveryFailed = true; throw new Error("fixture restore failure"); }
+        // The atomic writer renames onto the symlink-resolved target, so on macOS (/var -> /private/var)
+        // the destination is the canonical spelling of the profile path; compare both spellings.
+        const restoring = profile !== undefined
+          && (destination === profile || destination === join(realpathSync(dirname(profile)), basename(profile)));
+        if (existing && metadataFailed && restoring) { recoveryFailed = true; throw new Error("fixture restore failure"); }
         return rename(source, destination);
       });
       const removing = spyOn(pickerFilesystem, "unlinkSync").mockImplementation(path => {
