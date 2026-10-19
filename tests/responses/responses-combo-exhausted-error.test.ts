@@ -301,6 +301,18 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     }
   });
 
+  test("the hop warning never logs an unparsed upstream body", async () => {
+    globalThis.fetch = (async () => new Response("upstream said: session=abc123 private detail", { status: 502 })) as unknown as typeof fetch;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loggedCombo(config, { model: "", provider: "" });
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      expect(line).toMatch(/failed with 502 after \d+ms$/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("a fallback 5xx is still the answer", async () => {
     upstream(502, "bad gateway");
     const response = await handleResponses(request(), config, { model: "", provider: "" } as RequestLogContext);
