@@ -129,6 +129,8 @@ export interface AdapterRequest {
     method: string;
     headers: Record<string, string>;
     body: string;
+    /** Exact final wire model, captured before serialization for model-scoped transport gates. */
+    outboundModelId?: string;
     /** Final upstream wire names of custom tools lowered to functions while building this request. */
     convertedRoutedCustomToolNames?: ReadonlySet<string>;
     /** Native custom-tool wire names authorized for representation-only response repair. */

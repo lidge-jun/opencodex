@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "../../src/server/responses/deepseek-image-files";
 import type { AdapterRequest } from "../../src/adapters/base";
-import { providerRequestPacingStatus, resetProviderRequestPacingForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
+import { providerRequestPacingStatus, resetProviderRequestPacingForTest, setProviderRequestPacingRuntimeForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { handleResponses } from "../../src/server/responses/core";
 import { providerConfigSeed } from "../../src/providers/derive";
@@ -205,12 +205,54 @@ describe("DeepSeek image request body limits", () => {
     } finally { slot?.release(); globalThis.fetch = restoreFetch; resetProviderRequestPacingForTest(); releaseSpend(); }
   });
 
+  test("unlisted models bypass occupied image preparation slots", async () => {
+    const restoreFetch = globalThis.fetch;
+    const releaseSpend = acquireOwnedSpendHome();
+    let finish!: () => void;
+    const waiting = new Promise<void>(resolve => { finish = resolve; });
+    let entered = 0;
+    const upload = (async () => { entered++; await waiting; return Response.json({ id: "file-api-blocked-model-gate" }); }) as typeof fetch;
+    const first = deepSeekImageFileBody(request("model-gate-first"), upload, undefined, optIn);
+    const second = deepSeekImageFileBody(request("model-gate-second"), upload, undefined, optIn);
+    let sends = 0;
+    globalThis.fetch = (async (url, init) => {
+      expect(String(url)).toBe("https://api.deepseek.com/responses");
+      expect(JSON.parse(String(init?.body)).model).toBe("deepseek-flash");
+      sends++;
+      return Response.json({ id: "resp_unlisted", object: "response", status: "completed", output: [] });
+    }) as typeof fetch;
+    try {
+      expect(entered).toBe(2);
+      const provider = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "test-unlisted-model",
+        modelCapabilities: { "deepseek-pro": { deepseekImageFiles: true } } };
+      const body = JSON.stringify({ model: "deepseek-flash", input: [{ type: "message", role: "user", content: [
+        { type: "input_image", image_url: `data:image/png;base64,${Buffer.alloc(31 * 1024 * 1024, 9).toString("base64")}` },
+      ] }] });
+      expect(Buffer.byteLength(body)).toBeGreaterThan(40 * 1024 * 1024);
+      expect(Buffer.byteLength(body)).toBeLessThan(48 * 1024 * 1024);
+      const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST",
+        headers: { "content-type": "application/json" }, body }), { providers: { deepseek: provider } } as OcxConfig,
+        { model: "", provider: "" });
+      await response.text();
+      expect(response.status).toBe(200);
+      expect(sends).toBe(1);
+    } finally { finish(); await Promise.all([first, second]); globalThis.fetch = restoreFetch; releaseSpend(); }
+  });
+
   test("credential change after upload rebuilds safely inside the held inference lease", async () => {
     const restoreFetch = globalThis.fetch;
     const releaseSpend = acquireOwnedSpendHome();
     resetProviderRequestPacingForTest();
+    let pacingNow = 0;
+    setProviderRequestPacingRuntimeForTest({
+      now: () => pacingNow,
+      setTimer: (callback, delayMs) => setTimeout(() => { pacingNow += delayMs; callback(); }, 0),
+      clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      enqueueMicrotask: callback => queueMicrotask(callback),
+    });
+    const uploadTimes: number[] = [];
     const provider = { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "test-rebuild-old",
-      modelCapabilities: { "deepseek-flash": { deepseekImageFiles: true } }, requestPacing: { enabled: true, maxConcurrentRequests: 1 } };
+      modelCapabilities: { "deepseek-flash": { deepseekImageFiles: true } }, requestPacing: { enabled: true, maxConcurrentRequests: 1, minIntervalMs: 1000 } };
     const config = { providers: { deepseek: provider } } as OcxConfig;
     const seen: string[] = [];
     globalThis.fetch = (async (url, init) => {
@@ -218,6 +260,7 @@ describe("DeepSeek image request body limits", () => {
       seen.push(`${String(url)}:${auth}`);
       expect(providerRequestPacingStatus("deepseek", provider).inFlight).toBe(1);
       if (String(url).endsWith("/files")) {
+        uploadTimes.push(pacingNow);
         provider.apiKey = "test-rebuild-new";
         return Response.json({ id: auth?.endsWith("old") ? "file-api-old" : "file-api-new" });
       }
@@ -233,6 +276,8 @@ describe("DeepSeek image request body limits", () => {
       await response.text();
       expect(response.status).toBe(200);
       expect(seen).toHaveLength(3);
+      // Initial upload, inference lease, then a distinct interval for the rebuilt upload.
+      expect(uploadTimes).toEqual([0, 2000]);
     } finally { globalThis.fetch = restoreFetch; resetProviderRequestPacingForTest(); releaseSpend(); }
   });
 

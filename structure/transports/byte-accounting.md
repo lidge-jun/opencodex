@@ -21,7 +21,9 @@ First-party DeepSeek Responses bodies above 40 MiB can use
 `src/server/responses/deepseek-image-files.ts` during credential-bound adapter construction.
 Explicit per-model `modelCapabilities.<id>.deepseekImageFiles: true` declarations give owner consent
 to separately persisted files; absent or `false` disables uploads. Only HTTPS api.deepseek.com
-Responses POSTs for opted-in models qualify.
+Responses POSTs for opted-in models qualify. The adapter captures the exact final wire model
+before serialization, so unlisted models never enter the bounded preparation pool; the helper
+also checks the parsed body model before uploading.
 
 Old inline images become byte-identical Files references until the body is at most 32 MiB.
 Files request one-hour expiry. The 512-entry cache holds credential/image hashes and opaque ids,
@@ -37,7 +39,8 @@ translator collector limits. The original request and final retained wire body r
 
 Uploads use the selected provider transport, pacing and physical credential-generation fence.
 A queued dispatch rebuild already holds its enclosing provider concurrency lease: only that nested
-upload skips a second pacing acquisition, avoiding a limit-one deadlock without admitting a new turn.
+upload skips a second concurrency acquisition but still acquires an interval-only pacing slot,
+avoiding a limit-one deadlock without bypassing upload rate limits or admitting a new turn.
 The existing final physical-send fence still guards inference. Caller cancellation and a 60-second
 upload deadline cover uploads and bounded response reads. Usage and client compaction stay truthful.
 

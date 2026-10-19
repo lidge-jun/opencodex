@@ -602,7 +602,7 @@ export async function prepareResponsesTransport(
           .filter(([, cap]) => cap?.deepseekImageFiles === true)
           .map(([model]) => model)
         : [];
-      if (allowedImageFileModels.length && needsDeepSeekImageFiles(request)) {
+      if (allowedImageFileModels.includes(request.outboundModelId ?? requestParsed.modelId) && needsDeepSeekImageFiles(request)) {
         try {
           // Ordinary uploads use provider pacing. A queued rebuild retains its enclosing
           // fetch lease; reacquiring that same concurrency slot would deadlock at a limit of one.
@@ -612,8 +612,19 @@ export async function prepareResponsesTransport(
               if (!selectionIsCurrent(binding)) throw new Error("Credential selection changed before image upload");
             },
           });
-          const body = await deepSeekImageFileBody(request, incoming.dispatchPacingHeld ? uploadFetch.unpacedFetch! : uploadFetch,
-            incoming.abortSignal ?? options.abortSignal ?? req.signal, {
+          const uploadSignal = incoming.abortSignal ?? options.abortSignal ?? req.signal;
+          const pacedUpload: typeof fetch = incoming.dispatchPacingHeld
+            ? (async (input, init) => {
+              // The inference lease owns concurrency, but each physical upload still
+              // consumes an interval slot, including after a credential rebuild.
+              const slot = await waitForProviderRequestSlot(fileProviderName, fileProvider, requestParsed.modelId,
+                init?.signal ?? uploadSignal, { concurrency: false });
+              try { return await uploadFetch.unpacedFetch!(input, init); }
+              finally { releaseProviderRequestSlot(slot); }
+            }) as typeof fetch
+            : uploadFetch;
+          const body = await deepSeekImageFileBody(request, pacedUpload,
+            uploadSignal, {
               allowedModels: allowedImageFileModels, budget: incoming.translatorBudget,
             });
           if (body !== undefined) {
