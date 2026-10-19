@@ -14,6 +14,7 @@ import { bridgeToResponsesSSE } from "../bridge";
 import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { mergeUsage } from "../server/responses/empty-completion-guard";
+import { contextOverflowEvent, isSidecarContextOverflow } from "../server/responses/context-overflow";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { runXaiWebSearch, type XaiSearchOptions } from "./xai-executor";
@@ -835,7 +836,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       if (terminal.code === "translation_buffer_limit") {
         throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
       }
-      throw new LoopError(502, terminal.message);
+      // Keep an adapter's own overflow verdict; every other terminal stays a generic 502.
+      throw new LoopError(502, terminal.message, terminal.code === "context_length_exceeded" ? terminal : undefined);
     }
     deps.thinkingRecovery?.observeIteration(events);
     return { ...scanEventsForWebSearch(events), streamedPassthroughCount, events, anthropicReplay };
@@ -1138,7 +1140,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           } else {
             if (e instanceof SendBudgetExhaustedError) yield { type: "error", status: 429,
               errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false };
-            else yield e instanceof LoopError && e.event ? e.event
+            // A later iteration's overflow ends the turn as the main path's terminal
+            // context_length_exceeded, so Codex compacts instead of resending (#7316).
+            else if (e instanceof LoopError && isSidecarContextOverflow(e.status, e.message, e.event?.code)) {
+              yield contextOverflowEvent();
+            } else yield e instanceof LoopError && e.event ? e.event
               : e instanceof LoopError && deps.thinkingRecovery
                 ? { type: "error", status: e.status, errorType: "upstream_error", message: e.message }
                 : { type: "error", message: e instanceof Error ? e.message : String(e) };

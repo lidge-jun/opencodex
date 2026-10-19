@@ -1,4 +1,5 @@
 import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
+import { contextOverflowEvent, isSidecarContextOverflow } from "../server/responses/context-overflow";
 import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
 /**
  * Media bridge agentic loop — supports both image and video generation sidecars.
@@ -601,7 +602,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         if (errorEvent.code === "translation_buffer_limit") {
           throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
         }
-        throw new LoopError(502, errorEvent.message);
+        // Keep a runTurn adapter's own overflow verdict; every other error stays a generic 502.
+        throw new LoopError(502, errorEvent.message, errorEvent.code === "context_length_exceeded" ? errorEvent : undefined);
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
 
@@ -1152,10 +1154,15 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               ...(usage ? { usage } : {}),
             };
           } else {
+            // A later iteration's overflow ends the turn as the main path's terminal
+            // context_length_exceeded, so Codex compacts instead of resending (#7316).
+            const overflow = e instanceof LoopError && isSidecarContextOverflow(e.status, e.message, e.event?.code);
             yield {
               type: "error",
-              message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
-              ...(e instanceof LoopError ? { status: e.status, ...(e.event ?? {}) } : {}),
+              ...(overflow ? contextOverflowEvent() : {
+                message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
+                ...(e instanceof LoopError ? { status: e.status, ...(e.event ?? {}) } : {}),
+              }),
               ...(usage ? { usage } : {}),
             };
           }
