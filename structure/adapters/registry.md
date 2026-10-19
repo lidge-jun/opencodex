@@ -259,7 +259,8 @@ explicit `wav`/`mp3` format, and produces an `OcxAudioContent` part. The parser 
 `src/responses/parser-content.ts` preserves that part, and
 `src/adapters/openai-chat/messages.ts` emits it as an `input_audio` content part. A tool-result
 audio part cannot ride the text-only `role:"tool"` message; the adapter promotes it into a
-follow-up user message after the paired tool results. Remote audio, unsupported formats, the
+follow-up user message after the paired tool results, including audio from orphan tool results.
+Remote audio, unsupported formats, the
 top-level `audio` spelling, developer audio, and audio in system or assistant content are
 refused. Native Responses, including both Azure aliases, forwards the original body; native Chat
 keeps its existing wire; the separate Chat-to-Responses projection still rejects audio/file
