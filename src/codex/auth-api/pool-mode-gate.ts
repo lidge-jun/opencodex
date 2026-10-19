@@ -13,7 +13,7 @@ import { isAccountNeedsReauth } from "../account-runtime-state";
 import { getValidMainAccountToken, MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
 import { captureConfigGeneration, registerStateSweepAfterTick } from "../../lib/state-store-sweeper";
 import { observeMainQuotaCredential, getMainQuotaCredentialGeneration, captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive } from "../main-account-cache";
-import { getMainAccountHardLockStatus } from "../main-account-hard-lock";
+import { getMainAccountHardLockStatus, latestMainBlockingResetAt } from "../main-account-hard-lock";
 import type { OcxConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -111,8 +111,10 @@ function predictedMainResetHold(status: ReturnType<typeof getMainAccountHardLock
  * A hold read is due at its backoff deadline, pulled in to the latest known predicted reset (even
  * one that moved earlier or just passed) but never sooner than one base interval after the last read.
  */
-function mainRecoveryDueAt(attempt: MainRecoveryAttempt, holdResetAt: number | undefined): number {
-  const bound = holdResetAt ?? attempt.resetBound;
+function mainRecoveryDueAt(attempt: MainRecoveryAttempt, holdResetAt: number | undefined, config: OcxConfig): number {
+  // Once a hold elapses the status omits its reset; current evidence may still name a revised one.
+  const bound = holdResetAt ?? (attempt.resetBound === undefined ? undefined
+    : Math.min(attempt.resetBound, latestMainBlockingResetAt(config) ?? Infinity));
   return bound === undefined ? attempt.after : Math.max(attempt.floor ?? 0, Math.min(attempt.after, bound));
 }
 
@@ -165,7 +167,7 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
   const sameAttempt = previous?.identity === identity && previous.credential === credential;
   if (sameAttempt && holdResetAt !== undefined) previous.resetBound = holdResetAt;
   const queryAfter = nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${credential}`) ?? 0;
-  if ((sameAttempt && mainRecoveryDueAt(previous, holdResetAt) > Date.now()) || queryAfter > Date.now()) return;
+  if ((sameAttempt && mainRecoveryDueAt(previous, holdResetAt, config) > Date.now()) || queryAfter > Date.now()) return;
   const lease = tryAcquireNativeMainProfileClaim();
   if (!lease) return;
   mainHardLockRecoveryInFlight = (async () => {
@@ -197,7 +199,7 @@ export async function runMainAccountHardLockRecovery(config: OcxConfig): Promise
     }
     // Reconcile the physical bearer before consulting the previous credential's delay.
     if (previous?.identity === identityGeneration && previous.credential === credential
-      && mainRecoveryDueAt(previous, currentHold) > Date.now()) return;
+      && mainRecoveryDueAt(previous, currentHold, config) > Date.now()) return;
     const currentQueryAfter = nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${credential}`) ?? 0;
     if (currentQueryAfter > Date.now()) {
       mainHardLockRecoveryAttempt = { identity: identityGeneration, credential,

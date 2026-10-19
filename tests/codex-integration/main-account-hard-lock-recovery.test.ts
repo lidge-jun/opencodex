@@ -236,6 +236,33 @@ describe("main hard-lock background recovery", () => {
     } finally { clock.mockRestore(); }
   });
 
++  test("a revised reset that expires between sweeps still releases the old reservation (#7312)", async () => {
+    let now = Date.now();
+    const start = now;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: now + 6 * 3_600_000 }, undefined, captureMainQuotaWriter(accountId));
+      const readAt: number[] = [];
+      fetchWith(async () => { readAt.push((now - start) / 60_000); return heldUsage(start + 6 * 3_600_000); });
+      await runMainAccountHardLockRecovery(config());
+      now = start + 5 * 60_000;
+      await runMainAccountHardLockRecovery(config());
+      expect(readAt).toEqual([5]);
+      // Revised to minute 8 at minute 7, with no sweep until after that boundary has passed.
+      now = start + 7 * 60_000;
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: start + 8 * 60_000 }, undefined, captureMainQuotaWriter(accountId));
+      now = start + 9 * 60_000;
+      await runMainAccountHardLockRecovery(config());
+      expect(readAt).toEqual([5]);
+      now = start + 10 * 60_000;
+      await runMainAccountHardLockRecovery(config());
+      expect(readAt).toEqual([5, 10]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+    } finally { clock.mockRestore(); }
+  });
+
   test("a moving near-term reset keeps hold reads at least one base interval apart (#7312)", async () => {
     let now = Date.now();
     const start = now;
