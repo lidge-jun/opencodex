@@ -94,21 +94,53 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
   return unclosed;
 }
 
-/** Finds complete bare blocks outside literal Markdown; ambiguous outer blocks stop the scan. */
-function callsIn(text: string, context: TextContext = { fence: null, lineStart: true }): SerializedToolCall[] {
+/** Finds outer blocks outside literal Markdown, reporting an unresolved enclosing header. */
+export function scanSerializedToolCalls(
+  text: string, context: TextContext = { fence: null, lineStart: true }, allowMidLineBare = false,
+): { calls: SerializedToolCall[]; incomplete: boolean } {
   const calls: SerializedToolCall[] = [];
   let offset = 0;
   while (offset < text.length) {
-    const split = splitAtPossibleSerializedToolCall(text.slice(offset), context, true);
+    const split = splitAtPossibleSerializedToolCall(text.slice(offset), context, true, allowMidLineBare);
     offset += split.emit.length;
     if (!split.hasOpenTag) break;
     const match = blockAt(text, offset);
-    if (!match) break; // An incomplete/ambiguous outer block cannot authorize an inner call.
+    if (!match) return { calls, incomplete: true }; // An unresolved outer block cannot authorize an inner call.
     calls.push(match);
     offset = match.end;
     context = { fence: null, lineStart: false };
   }
-  return calls;
+  return { calls, incomplete: false };
+}
+
+function callsIn(text: string, context?: TextContext, allowMidLineBare = false): SerializedToolCall[] {
+  return scanSerializedToolCalls(text, context, allowMidLineBare).calls;
+}
+
+/** Standalone recovery is separate from identified-wrapper/empty-structured-input reconciliation. */
+export function hasNestedSerializedToolCallHeader(body: string): boolean {
+  return /<(?:tool_call(?:_[a-fA-F0-9]{1,64})?|function=[^>\r\n]+)>/.test(body);
+}
+
+export function recoverStandaloneBareBlocks(
+  text: string,
+  freeformTools: ReadonlyMap<string, FreeformToolIdentity>,
+  context?: TextContext,
+): { name: string; input: string; start: number; end: number }[] {
+  if (freeformTools.size === 0) return [];
+  const blocks = callsIn(text, context, true);
+  // A nested header makes delimiter ownership ambiguous; no later apparent sibling is safe.
+  if (blocks.some(call => hasNestedSerializedToolCallHeader(call.body))) return [];
+  return blocks.flatMap(call => {
+    if (!text.startsWith("<tool_call>", call.start) || !freeformTools.has(call.name)) return [];
+    const wrapped = freeformBody(call.body);
+    const recoveredParameterWrapper = wrapped.startsWith("<parameter=");
+    const input = recoveredParameterWrapper ? freeformBody(wrapped.slice("<parameter=".length)) : wrapped;
+    if (!input.trim()
+        || (recoveredParameterWrapper && /^<parameter=[A-Za-z_$][\w$.-]*>/.test(wrapped))
+        || input.includes("<parameter=") || input.includes("</parameter>")) return [];
+    return [{ name: call.name, input, start: call.start, end: call.end }];
+  });
 }
 
 /**
@@ -138,10 +170,13 @@ export class SerializedToolCallContentBuffer {
   private sawCloser = false;
   private openAfterCloser = false;
   private trailingProseChars = 0;
-  private context: TextContext = { fence: null, lineStart: true };
+  protected context: TextContext = { fence: null, lineStart: true };
   private queued: { offset: number; event: AdapterEvent }[] = [];
 
-  constructor(private readonly budget: TranslatorBudget) {}
+  constructor(private readonly budget: TranslatorBudget, private readonly allowMidLineBare = false) {}
+
+  /** Optional recovery retains bounded candidates before prose is released, never the prose itself. */
+  protected releaseBounded(): AdapterEvent[] { return this.drain([]); }
 
   /** Remembers visible text released before a later structured call can be reconciled. */
   private observeText(events: AdapterEvent[]): AdapterEvent[] {
@@ -221,7 +256,7 @@ export class SerializedToolCallContentBuffer {
       this.append(delta);
       return "";
     }
-    const split = splitAtPossibleSerializedToolCall(this.text + delta, this.context);
+    const split = splitAtPossibleSerializedToolCall(this.text + delta, this.context, false, this.allowMidLineBare);
     this.replace(split.defer, split.hasOpenTag);
     this.context = split.context;
     if (!split.hasOpenTag) this.continuationBreak = deferredContinuationBreak(split.defer, split.context);
@@ -237,7 +272,7 @@ export class SerializedToolCallContentBuffer {
   ingestStreaming(delta: string): AdapterEvent[] {
     const deltaBytes = this.appendedByteLength(delta);
     if (this.hasOpenTag && this.bytes + deltaBytes > MAX_HELD_BYTES) {
-      const released = this.drain([]);
+      const released = this.releaseBounded();
       // A delta that alone passes the bound is delivered as text rather than retained.
       if (Buffer.byteLength(delta) > MAX_HELD_BYTES) {
         this.context = contextAfter(delta, this.context);
@@ -248,7 +283,7 @@ export class SerializedToolCallContentBuffer {
     const text = this.ingest(delta);
     // Checked after ingest too: one delta can open a block and already carry more than a bound.
     if (this.hasOpenTag && (this.bytes > MAX_HELD_BYTES || (this.sawCloser && !this.openAfterCloser && this.trailingProseChars > MAX_TRAILING_CHARS))) {
-      return this.observeText([...textEvents(text), ...this.drain([])]);
+      return this.observeText([...textEvents(text), ...this.releaseBounded()]);
     }
     return this.observeText(textEvents(text));
   }
@@ -267,7 +302,7 @@ export class SerializedToolCallContentBuffer {
     if (!this.hasOpenTag) return [...this.drain([]), event];
     const eventBytes = Buffer.byteLength(JSON.stringify(event));
     // Queued events count toward the same runaway bound as held text.
-    if (this.bytes + eventBytes > MAX_HELD_BYTES) return [...this.drain([]), event];
+    if (this.bytes + eventBytes > MAX_HELD_BYTES) return [...this.releaseBounded(), event];
     this.budget.reserveTransient(eventBytes, { kind: "live_transient" }).commitRetained();
     this.bytes += eventBytes;
     this.queued.push({ offset: this.text.length, event });
@@ -280,7 +315,11 @@ export class SerializedToolCallContentBuffer {
    * duplicate a dispatched call; pass an empty list on failure to preserve everything.
    */
   drain(structuredCalls: readonly StructuredToolCallReference[]): AdapterEvent[] {
-    const removed = duplicatedSerializedToolCallRanges(this.text, structuredCalls, this.context);
+    return this.drainRanges(duplicatedSerializedToolCallRanges(this.text, structuredCalls, this.context));
+  }
+
+  /** Standalone recovery supplies only its own accepted bare ranges, never identified wrappers. */
+  protected drainRanges(removed: readonly { start: number; end: number }[]): AdapterEvent[] {
     const kept = (from: number, to: number): string => {
       let piece = "";
       let cursor = from;

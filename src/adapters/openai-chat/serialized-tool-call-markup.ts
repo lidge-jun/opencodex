@@ -18,6 +18,7 @@ export function splitAtPossibleSerializedToolCall(
   text: string,
   initialContext: TextContext = { fence: null, lineStart: true },
   final = false,
+  allowMidLineBare = false,
 ): {
   emit: string;
   defer: string;
@@ -48,7 +49,7 @@ export function splitAtPossibleSerializedToolCall(
     if (!context.fence && !context.inlineTicks && !context.literalLine && text[index] === "<") {
       const rest = text.slice(index);
       const opening = OPENING.exec(rest)?.[0];
-      if (opening && (context.lineStart || opening !== OPEN_TAG)) {
+      if (opening && (context.lineStart || opening !== OPEN_TAG || allowMidLineBare)) {
         const header = rest.slice(opening.length).trimStart();
         if (/^<function=[^>\r\n]+>/.test(header)) return split(index, true);
         if (!final && (FUNCTION_TAG.startsWith(header)

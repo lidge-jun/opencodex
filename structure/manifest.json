@@ -605,6 +605,13 @@
       ]
     },
     {
+      "path": "providers/mimo-bare-calls.md",
+      "tier": 4,
+      "title": "MiMo Bare Tool Calls",
+      "scope": "Standalone MiMo bare-block recovery into declared freeform calls, separate from identified-wrapper reconciliation.",
+      "documents": ["src/adapters/openai-chat/", "src/adapters/openai-chat.ts"]
+    },
+    {
       "path": "adapters/registry.md",
       "tier": 4,
       "title": "Adapter Registry Authority",

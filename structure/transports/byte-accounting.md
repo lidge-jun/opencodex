@@ -169,6 +169,13 @@ Serialized request and buffered-response observations use byte counts without me
 The same rule applies to Anthropic, Google, and Chat response accounting; serialization itself is
 preserved where the existing metric is the serialized JSON size.
 
+MiMo standalone bare-call recovery in `src/adapters/openai-chat/standalone-bare-tool-calls.ts`
+retains detached candidate inputs across bounded streaming prose release. Candidate records are
+measured without serialization, charged to `live_transient`, bounded to 128 records / 4 MiB total
+and 2 MiB per record, and released after consumption or disposal. Temporary detachment copies
+have their own reservation; trailing prose is never retained by this recovery record.
+Eligibility and already-released markup follow the [MiMo recovery contract](../providers/mimo-bare-calls.md#standalone-bare-call-recovery).
+
 The buffered Chat collector in `src/chat/outbound.ts` computes a split surrogate pair's incremental
 UTF-8 cost from the runtime's measured separate and joined sizes. It does not assume how a Bun
 version prices a lone surrogate, so retained content, reasoning, and refusal fields enforce and
