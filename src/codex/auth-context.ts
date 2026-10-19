@@ -1720,7 +1720,8 @@ async function resolveCodexAuthContextUnannotated(
     releaseTransientProbeGrant();
     if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
     else if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
-    if (cause instanceof CodexPoolAccountCreditsOffError) throw cause;
+    // Post-refresh eligibility refusals do not invalidate a healthy credential.
+    if (cause instanceof CodexPoolAccountCreditsOffError || cause instanceof CodexPoolAuthenticationError) throw cause;
     if (!options.signal?.aborted && shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
       markAccountNeedsReauth(accountId, writerGeneration);
     }

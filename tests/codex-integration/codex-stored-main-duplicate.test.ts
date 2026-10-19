@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential, readCodexAccountRecord } from "../../src/codex/account-store";
 import { codexAccountUnusableReason } from "../../src/codex/account-usability";
-import { resolveCodexAuthContext, isCodexAuthContextUsable } from "../../src/codex/auth-context";
+import { resolveCodexAuthContext, isCodexAuthContextUsable, CodexPoolAuthenticationError } from "../../src/codex/auth-context";
+import { isAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { poolAccountDto, listCodexAuthAccounts } from "../../src/codex/auth-api/account-list";
 import * as authCollision from "../../src/codex/auth-collision";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests, applyConfirmedMainCodexAccountTransition } from "../../src/codex/account-lifecycle";
@@ -219,6 +220,47 @@ describe("stored Pool duplicate of native main", () => {
       expect(fetch).toHaveBeenCalledTimes(1);
       expect(isCodexAuthContextUsable(ctx, config)).toBe(true);
     } finally { fetch.mockRestore(); restore?.(); }
+  });
+  test("a duplicate observed during refresh refuses without quarantining a healthy pool credential", async () => {
+    native("other-account");
+    saveCodexAccountCredential(poolId, { accessToken: jwt("plus", email), refreshToken: "fake-refresh",
+      chatgptAccountId: "shared-account", expiresAt: 0 });
+    let refreshStarted!: () => void;
+    const started = new Promise<void>(resolve => { refreshStarted = resolve; });
+    let finishRefresh!: (response: Response) => void;
+    const response = new Promise<Response>(resolve => { finishRefresh = resolve; });
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => {
+      refreshStarted();
+      return response;
+    });
+    const pending = resolveCodexAuthContext(new Headers(), config, "pool", {
+      accountId: poolId, primeCodexPoolQuotas: async () => {},
+    });
+    const settled = pending.then(() => undefined, cause => cause);
+    try {
+      await started;
+      native();
+      finishRefresh(Response.json({ access_token: jwt("plus", email), refresh_token: "fake-new-refresh", expires_in: 3600 }));
+      const refusal = await settled;
+      expect(refusal).toBeInstanceOf(Error);
+      expect(isAccountNeedsReauth(poolId)).toBe(false);
+      expect(refusal).toBeInstanceOf(CodexPoolAuthenticationError);
+      expect(codexAccountUnusableReason(config, poolId)).toBe("duplicate_main");
+      expect(readCodexAccountRecord(poolId)?.credential?.refreshToken).toBe("fake-new-refresh");
+      native("other-account");
+      expect(codexAccountUnusableReason(config, poolId)).toBeUndefined();
+      const ctx = await resolveCodexAuthContext(new Headers(), config, "pool", {
+        accountId: poolId, primeCodexPoolQuotas: async () => {},
+      });
+      expect(ctx.kind).toBe("pool");
+      expect(isCodexAuthContextUsable(ctx, config)).toBe(true);
+      expect(isAccountNeedsReauth(poolId)).toBe(false);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      finishRefresh(Response.json({ access_token: jwt("plus", email), expires_in: 3600 }));
+      await settled;
+      fetch.mockRestore();
+    }
   });
   test("external relogin is detected only after the next owned observation", () => {
     native("other-account");
