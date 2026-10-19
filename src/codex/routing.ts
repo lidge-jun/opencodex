@@ -220,6 +220,7 @@ export {
   isEffectiveCodexAccountPinned,
 } from "./routing/active-account";
 export { codexAccountPinDrainReason } from "./routing/pin-drain";
+export { codexFailureWindowOutcomeMeta } from "./routing/failure-window";
 export type { CodexPinDrainReason } from "./routing/pin-drain";
 
 // A shared refresh can outlive the request that opened it. Register the affinity
