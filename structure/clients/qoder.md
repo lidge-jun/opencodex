@@ -7,11 +7,14 @@ Qoder follows the shared [client-integration ownership contract](integrations.md
 Qoder IDE / qodercli uses JSON at `settings.json` under `QODER_CONFIG_DIR`, default `~/.qoder`;
 `qoderHomeDir` resolves that directory once for export, writing and detection, and refuses a
 relative override. The Qoder exporter in
-`src/clients/config-export.ts` writes `providers.opencodex` and one
-`modelConfigs.customModels` entry per model. Array ownership selects both `provider` and
-`model`, preserving same-named models belonging to other providers. Apply, refresh and disable
-use the existing recorded-fragment writer; restore uses its snapshots. Model IDs that cannot
-be represented by the shared selector grammar refuse managed contribution construction.
+`src/clients/config-export/qoder.ts` writes only `providers.opencodex`, with each model's
+`displayName` and `contextWindow` in its `models` array. It does not duplicate those keys in
+`modelConfigs.customModels`: Qoder rejects the provider when the legacy catalog already
+contains its keys. Apply, refresh and disable use the existing recorded-fragment writer;
+restore uses its snapshots. On refresh, older ownership records remove their previously
+owned custom-model rows before merging the provider-only contribution. Foreign rows remain
+untouched, and edits to previously owned rows remain conflicts. The legacy selector template
+in `src/integrations/mutation-plan.ts` stays available for previewing that removal.
 The default model is the first normalized model; an empty catalog omits the default.
 Input limits use authoritative context metadata or Qoder's requested 128000 fallback.
 Exports reject non-loopback placeholder use; the writer's existing admission gate protects

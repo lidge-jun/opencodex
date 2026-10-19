@@ -1,7 +1,6 @@
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { isLoopbackHostname, shouldInjectApiAuthHeader } from "../../codex/loopback-target";
-import { formatSelectorConjunction } from "../../integrations/merge";
 import { ClientPathError } from "../config-export";
 import type { ExportContext, ManagedContribution, OpencodeLaunchEnv } from "./contracts";
 import { LOOPBACK_API_KEY_PLACEHOLDER, OPENCODE_PROVIDER_ID } from "./constants";
@@ -30,7 +29,7 @@ export function qoderConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
   return join(qoderHomeDir(env, home), "settings.json");
 }
 
-/** Qoder IDE and qodercli share this provider and custom-model catalog. */
+/** Qoder IDE and qodercli share this custom-provider catalog. */
 export function buildQoderClientConfig(ctx: ExportContext) {
   if (shouldInjectApiAuthHeader(ctx.config) || !isLoopbackHostname(new URL(ctx.baseUrl).hostname)) {
     throw new Error("Qoder's placeholder API key requires a loopback-only listener.");
@@ -49,18 +48,13 @@ function qoderDocument(ctx: ExportContext) {
         baseUrl: ctx.baseUrl,
         apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
         ...(models[0] ? { defaultModel: models[0].namespaced } : {}),
-        models: models.map(model => ({ model: model.namespaced })),
+        // Register each key once; legacy customModels entries shadow this provider.
+        models: models.map(model => ({
+          model: model.namespaced,
+          displayName: model.namespaced,
+          contextWindow: authoritativeContextWindow(model.contextWindow) ?? 128000,
+        })),
       },
-    },
-    modelConfigs: {
-      customModels: models.map(model => ({
-        provider: OPENCODE_PROVIDER_ID,
-        apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
-        model: model.namespaced,
-        baseURL: ctx.baseUrl,
-        displayName: model.namespaced,
-        maxInputTokens: authoritativeContextWindow(model.contextWindow) ?? 128000,
-      })),
     },
   };
 }
@@ -68,7 +62,7 @@ function qoderDocument(ctx: ExportContext) {
 export type QoderGeneratedConfig = ReturnType<typeof buildQoderClientConfig>;
 
 export function summarizeQoder(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
-  const models = (document as QoderGeneratedConfig | undefined)?.modelConfigs?.customModels ?? [];
+  const models = (document as QoderGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
   return { modelCount: models.length, modelsWithoutLimits: 0 };
 }
 
@@ -80,14 +74,6 @@ export function buildQoderContribution(ctx: ExportContext): ManagedContribution 
     clientId: "qoder",
     fragments: [
       { path: ["providers", OPENCODE_PROVIDER_ID], value: doc.providers[OPENCODE_PROVIDER_ID] },
-      ...doc.modelConfigs.customModels.map(model => {
-        const selector = formatSelectorConjunction([
-          { field: "provider", value: OPENCODE_PROVIDER_ID },
-          { field: "model", value: model.model },
-        ]);
-        if (selector === null) throw new Error("Qoder model ID cannot be represented by a managed array selector.");
-        return { path: ["modelConfigs", "customModels", selector], value: model };
-      }),
     ],
   };
 }

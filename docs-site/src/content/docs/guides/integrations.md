@@ -74,11 +74,13 @@ ocx integration client disable --client qoder
 ```
 
 Qoder uses `settings.json` in `QODER_CONFIG_DIR` when that variable is set, and
-`~/.qoder/settings.json` otherwise; a relative `QODER_CONFIG_DIR` is refused. Enable merges `providers.opencodex` and
-OpenCodex entries in `modelConfigs.customModels`, preserving other providers, custom models,
-and settings. Disable removes the recorded OpenCodex entries; restore uses the existing
+`~/.qoder/settings.json` otherwise; a relative `QODER_CONFIG_DIR` is refused. Enable merges only `providers.opencodex`, preserving other providers, custom models,
+and settings. Models appear once in the provider catalog; duplicating them in
+`modelConfigs.customModels` causes Qoder to reject the provider. Refreshing an older managed
+integration removes its recorded duplicate rows; user-edited rows remain conflicts. Disable removes the recorded OpenCodex entries; restore uses the existing
 snapshot workflow. The provider's default model is the first model in the sorted export.
-Custom models use their catalog context window, falling back to 128000 input tokens.
+Provider models use their catalog `contextWindow`, falling back to 128000 input tokens.
+Restart Qoder after refreshing an existing integration to reload the provider registry.
 The generated API key is a non-secret placeholder: Qoder integration requires loopback
 access and refuses an authenticated non-loopback bind. When the dedicated unauthenticated
 loopback listener is enabled, exports point Qoder at that listener. `ocx sync` and catalog
