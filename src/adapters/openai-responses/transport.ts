@@ -23,6 +23,18 @@ export function copyResponsesClientMetadata(target: Headers, incoming: Headers, 
   }
 }
 
+/**
+ * Strip trailing slashes with a linear scan rather than a regex.
+ *
+ * `/\/+$/` retries candidate end positions when a long slash run is not at the end of the
+ * string; the scan walks each character once and produces the same result on every input.
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+  return end === value.length ? value : value.slice(0, end);
+}
+
 /** Shared Responses URL/auth/header construction; capabilities never grant auth authority. */
 export function buildResponsesTransport(provider: OcxProviderConfig, incoming: Pick<IncomingMeta, "headers">): {
   url: string; headers: Record<string, string>;
@@ -31,7 +43,7 @@ export function buildResponsesTransport(provider: OcxProviderConfig, incoming: P
   let url: string;
   if (provider.authMode === "forward") {
     const mayForwardCallerCredentials = isCanonicalOpenAiForwardProvider(provider);
-    const baseUrl = mayForwardCallerCredentials ? CODEX_FORWARD_BASE_URL : provider.baseUrl.replace(/\/+$/, "");
+    const baseUrl = mayForwardCallerCredentials ? CODEX_FORWARD_BASE_URL : stripTrailingSlashes(provider.baseUrl);
     url = `${baseUrl}/responses`;
     if (provider.headers) Object.assign(headers, provider.headers);
     const runtimeProvider = provider as {
