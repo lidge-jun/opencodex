@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
+import { spawnTestChild } from "../helpers/spawn-test-child";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 // Review-lane contracts for ci.yml and enforce-pr-target.yml. They live beside
 // ci-workflows.test.ts because that file sits at its file-size cap.
@@ -245,8 +247,8 @@ describe("CI review lanes", () => {
   });
 
   // The aggregate step runs under bash with jq, as ci-scope-reduction.test.ts guards.
-  test.skipIf(process.platform === "win32" || !Bun.which("jq"))("release-gates aggregate accepts diagnostic skips but rejects producer failures", async () => {
-    const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
+  describe.skipIf(process.platform === "win32" || !Bun.which("jq"))("release-gates aggregate", () => {
+    const ci = Bun.YAML.parse(readFileSync(repoPath(".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, {
         needs?: string[];
         steps?: { name?: string; shell?: string; env?: Record<string, string>; run?: string }[];
@@ -254,10 +256,12 @@ describe("CI review lanes", () => {
     };
     const aggregate = ci.jobs.ci!;
     const step = aggregate.steps?.find(step => step.name === "Assert every job this event requested succeeded");
-    expect(step?.shell).toBe("bash");
-    expect(step?.env?.RESULTS).toBe("${{ toJSON(needs) }}");
-    expect(step?.run).toBeDefined();
-    expect(step?.run).not.toContain("${{");
+    test("runs the checked-in Bash gate", () => {
+      expect(step?.shell).toBe("bash");
+      expect(step?.env?.RESULTS).toBe("${{ toJSON(needs) }}");
+      expect(step?.run).toBeDefined();
+      expect(step?.run).not.toContain("${{");
+    });
     const results: Record<string, { result: string }> = Object.fromEntries(
       (aggregate.needs ?? []).map(job => [job, { result: "success" }]),
     );
@@ -268,48 +272,52 @@ describe("CI review lanes", () => {
     results["privacy-gate"] = { result: "skipped" };
     results["setup-action"] = { result: "skipped" };
     results["remote-helper"] = { result: "skipped" };
-    const run = (value: typeof results, packaging = "true") => spawnSync("bash", ["-c", step!.run!], {
-      encoding: "utf8",
-      env: {
-        ...process.env, RESULTS: JSON.stringify(value),
-        EVENT_NAME: "workflow_dispatch", LANE: "release-gates",
-        CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: packaging,
-        CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
-        CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false",
-      },
-      timeout: 5_000,
-    });
-    for (const packaging of ["success", "skipped"]) {
-      const result = run({ ...results, "npm-global-smoke": { result: packaging } }, packaging === "success" ? "true" : "false");
-      expect(result.error).toBeUndefined();
-      expect(result.status).toBe(0);
-    }
+    const run = async (value: typeof results, packaging = "true") => {
+      const result = await spawnTestChild(["bash", "-c", step!.run!], {
+        cwd: repoPath(),
+        env: {
+          ...process.env, RESULTS: JSON.stringify(value),
+          EVENT_NAME: "workflow_dispatch", LANE: "release-gates",
+          CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: packaging,
+          CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
+          CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false",
+        },
+        deadlineMs: 5_000,
+      });
+      expect(result.timedOut).toBe(false);
+      expect(result.reaped).toBe(true);
+      expect(result.pipesClosed).toBe(true);
+      expect(result.signal).toBeNull();
+      return result;
+    };
+    // Each shell invocation owns its deadline instead of sharing one matrix-wide budget.
+    test.each(["success", "skipped"])("accepts packaging %s with diagnostic skips", async packaging => {
+      const result = await run({ ...results, "npm-global-smoke": { result: packaging } }, packaging === "success" ? "true" : "false");
+      expect(result.exitCode).toBe(0);
+    }, SPAWN_BUDGET_MS);
     // Execute the checked-in Bash/jq gate, not a duplicate JS allowlist. The
     // selector must remain visible even though its Windows consumer is skipped.
-    for (const producer of Object.keys(results)) {
-      for (const status of ["failure", "cancelled"]) {
-        const result = run({ ...results, [producer]: { result: status } });
-        expect(result.error).toBeUndefined();
-        expect(result.status).toBe(1);
-        expect(result.stdout).toContain(producer);
-        expect(result.stdout).toContain(status);
-      }
-    }
-    // A requested producer cannot disappear behind the intentional diagnostic skips.
-    for (const producer of Object.keys(results).filter(job => results[job]!.result === "success")) {
-      const result = run({ ...results, [producer]: { result: "skipped" } });
-      expect(result.error).toBeUndefined();
-      expect(result.status).toBe(1);
+    const failures = Object.keys(results).flatMap(producer =>
+      ["failure", "cancelled"].map(status => [producer, status] as const));
+    test.each(failures)("rejects %s result %s", async (producer, status) => {
+      const result = await run({ ...results, [producer]: { result: status } });
+      expect(result.exitCode).toBe(1);
       expect(result.stdout).toContain(producer);
-    }
-    for (const status of ["timed_out", "unexpected-status"]) {
-      const result = run({ ...results, "select-windows-runner": { result: status } });
-      expect(result.error).toBeUndefined();
-      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(status);
+    }, SPAWN_BUDGET_MS);
+    // A requested producer cannot disappear behind the intentional diagnostic skips.
+    test.each(Object.keys(results).filter(job => results[job]!.result === "success"))("rejects skipped requested producer %s", async producer => {
+      const result = await run({ ...results, [producer]: { result: "skipped" } });
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain(producer);
+    }, SPAWN_BUDGET_MS);
+    test.each(["timed_out", "unexpected-status"])("rejects selector result %s", async status => {
+      const result = await run({ ...results, "select-windows-runner": { result: status } });
+      expect(result.exitCode).toBe(1);
       expect(result.stdout).toContain("select-windows-runner");
       expect(result.stdout).toContain(status);
-    }
-  }, 30_000);
+    }, SPAWN_BUDGET_MS);
+  });
 });
 
 describe("Windows and nightly CI contracts", () => {
