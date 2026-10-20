@@ -242,6 +242,11 @@ function parseWhoamiObject(stdout: string): Record<string, unknown> | undefined 
   return undefined;
 }
 
+/**
+ * Same-session identity reported by `kiro-cli whoami --format json`: the lower-cased user email
+ * and a structurally valid profile ARN. Any failure (non-zero exit, unreadable output, a thrown
+ * runner) yields an empty identity, so a login falls back to the SQLite import instead of failing.
+ */
 async function readKiroCliIdentity(runner: KiroCliRunner, signal?: AbortSignal): Promise<{ email?: string; profileArn?: string }> {
   try {
     const result = await runner(["whoami", "--format", "json"], signal);
