@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fixturePath } from "../helpers/repo-root.ts";
 import {
   FIVE_HOURS_MS, MAX_ATTEMPTS, MAX_COHORT, MINUTE_MS,
   checkOfflineSlot, planIdleStagger, recoverAttempts, transitionAttempt,
@@ -204,7 +205,7 @@ test("A25: migration disabled -> observe-only preserves attempted-window tombsto
   assert.deepEqual(planIdleStagger(x).slots.map(v=>v.accountId),["B"]);
 });
 test("A26: deterministic failure fixtures quarantine affected account without affecting sibling",()=>{
-  const failureCases=JSON.parse(readFileSync(new URL("../fixtures/idle-stagger/failure-cases.json",import.meta.url),"utf8")) as {
+  const failureCases=JSON.parse(readFileSync(fixturePath("idle-stagger", "failure-cases.json"),"utf8")) as {
     cases: Array<{name:string,override:Partial<OfflineAccount>,expectedAccountSlots:number}>
   };
   for(const {name:label,override,expectedAccountSlots} of failureCases.cases) {
