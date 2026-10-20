@@ -6,6 +6,7 @@ import type { DecisionQuotaWindow } from "../providers/quota-decision-snapshot";
 import { readLoadedDecisionKeyQuota, readLoadedDecisionQuotaPool } from "../lib/decision-quota-sink";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
 import { providerCodexAccountMode } from "../providers/registry";
+import { isAntigravityArgonIdentity } from "../providers/antigravity-quota-identity";
 import { NATIVE_RESERVE_MODEL } from "../codex/catalog/native-models";
 import { isSelectableCodexPoolAccount, MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
 import { JEV_QUOTA_DEFAULT_TIERS, jevQuotaRank, jevQuotaTier, type JevQuotaTier, type ResolvedJevQuotaTiers, type JevQuotaDecisionSummary } from "./jev-quota-config";
@@ -21,7 +22,8 @@ const unknown = (): JevQuotaSignal => ({ tier: "unknown" });
 /** Antigravity quota buckets are metered per model family; Gemini and Claude/3P draw from separate counters. */
 function antigravityFamily(model: string): DecisionQuotaWindow["family"] {
   const id = model.toLowerCase();
-  return id.includes("gemini") ? "gem" : id.includes("claude") ? "cla" : undefined;
+  if (isAntigravityArgonIdentity(id)) return undefined;
+  return id.startsWith("gemini-") ? "gem" : id.startsWith("claude-") ? "cla" : undefined;
 }
 /** Reduce decision quota windows to the worst applicable window for a model, ignoring cold, stale, future, invalid or reset-expired rows. */
 export function jevQuotaSignalFromWindows(windows: readonly DecisionQuotaWindow[] | undefined, model: string, now: number, tiers = JEV_QUOTA_DEFAULT_TIERS): JevQuotaSignal {

@@ -320,11 +320,14 @@ interface JevComboChoice {
 function jevChoiceEfforts(
   config: OcxConfig,
   target: NonNullable<ReturnType<typeof getCombo>>["targets"][number],
-): OcxComboDefaultEffort[] | undefined {
+  quotaSignals: boolean,
+): { reasoningEfforts: OcxComboDefaultEffort[]; quotaIdentity?: JevCandidate["quotaIdentity"] } | undefined {
   let ladder: string[] | undefined;
+  let quotaIdentity: JevCandidate["quotaIdentity"] = quotaSignals ? null : undefined;
   try {
     const route = routeConcreteModel(config, targetKey(target));
     ladder = supportedLadderFor({ provider: route.provider, modelId: route.modelId });
+    if (quotaSignals) quotaIdentity = { provider: route.providerName, model: route.modelId };
   } catch {
     // Preserve the existing routing-failure surface. Unknown capability becomes the explicit
     // no-effort choice rather than broadening JEV's effort allowlist.
@@ -337,7 +340,7 @@ function jevChoiceEfforts(
     : configuredEfforts.filter(effort => supportedEfforts.includes(effort));
   // An explicit allowlist is restrictive. If catalog capabilities drift until no configured
   // effort remains supported, omit the target instead of silently broadening JEV's choices.
-  return configuredEfforts !== undefined && reasoningEfforts.length === 0 ? undefined : reasoningEfforts;
+  return configuredEfforts !== undefined && reasoningEfforts.length === 0 ? undefined : { reasoningEfforts, quotaIdentity };
 }
 
 /** Enumerate the current ordinary Combo eligibility set without retaining attempted picks. */
@@ -358,15 +361,15 @@ function eligibleJevComboChoices(
     excluded.add(key);
     // The TypeSafe row owns a decision credential, not an inference transport.
     if (pick.target.provider === JEV_PROVIDER_ID) continue;
-    const reasoningEfforts = jevChoiceEfforts(config, pick.target);
-    if (!reasoningEfforts) continue;
+    const identity = jevChoiceEfforts(config, pick.target, combo.decisionQuotaSignals === true);
+    if (!identity) continue;
     choices.push({
       pick: { ...pick, attempted: [key] },
       candidate: {
         key,
         provider: pick.target.provider,
         model: pick.target.model,
-        reasoningEfforts,
+        ...identity,
         modelProfile: pick.target.modelProfile,
       },
     });
@@ -684,7 +687,7 @@ export async function executeComboResponses(
     const first = choices[0];
     if (!first) {
       return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, target =>
-        targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target) !== undefined));
+        targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target, false) !== undefined));
     }
     const resolvedFailOpenEffort = resolveEffortAtOrBelow(
       "medium",

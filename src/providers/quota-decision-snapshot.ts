@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { getConfigDir } from "../config/paths";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
 import type { OcxProviderConfig } from "../types";
+import { invalidateAntigravityQuota, readAntigravityQuota } from "./quota-decision-antigravity";
+import type { DecisionKeyObservation } from "../lib/decision-quota-sink";
 
 export interface DecisionQuotaWindow {
   window: "5h" | "weekly" | "monthly" | "fable" | "opus" | "sonnet";
@@ -13,13 +15,11 @@ export interface DecisionQuotaWindow {
   family?: DecisionQuotaFamily;
 }
 export type DecisionQuotaFamily = "gem" | "cla";
-/** OAuth providers whose single active account quota may be published as advisory key-style evidence. */
-const OAUTH_QUOTA_PROVIDERS = new Set(["google-antigravity"]);
 /** True when the provider row can carry sole-credential decision evidence under `name`. */
 function keyEvidenceEligible(name: string, provider: OcxProviderConfig): boolean {
   if (provider.disabled || (provider.apiKeyPool?.length ?? 0) > 1) return false;
   const mode = provider.authMode ?? "key";
-  return mode === "key" || mode === "oauth" && OAUTH_QUOTA_PROVIDERS.has(name);
+  return mode === "key";
 }
 export interface DecisionQuotaAccount {
   id: string;
@@ -65,7 +65,12 @@ function keyPolicy(provider: OcxProviderConfig): string {
   ])).digest("hex");
 }
 /** Drop all key-based decision evidence and advance the epoch so earlier publications cannot be read. */
-export function invalidateDecisionKeyQuotas(): void { keyEpoch++; keys.clear(); }
+export function invalidateDecisionKeyQuotas(): void { keyEpoch++; keys.clear(); invalidateAntigravityQuota(); }
+/** Collector replacement does not retire live OAuth producer receipts or their original clocks. */
+export function replaceDecisionKeyQuotas(rows: readonly DecisionKeyObservation[]): void {
+  keyEpoch++; keys.clear();
+  for (const row of rows) publishDecisionKeyQuota(row.name, row.provider, row.windows);
+}
 /** Publish decision windows for a single-key provider; pooled, disabled or non-key providers are never published, and the table is bounded. */
 export function publishDecisionKeyQuota(name: string, provider: OcxProviderConfig, windows: readonly DecisionQuotaWindow[]): void {
   writesForTests++;
@@ -75,6 +80,7 @@ export function publishDecisionKeyQuota(name: string, provider: OcxProviderConfi
 }
 /** Read key-based evidence only when the config root, epoch, generation and provider policy still match what was published. */
 export function readLoadedDecisionKeyQuota(name: string, provider: OcxProviderConfig): readonly DecisionQuotaWindow[] | undefined {
+  if (provider.authMode === "oauth") return readAntigravityQuota(name, provider);
   const row = keys.get(name);
   if (!row || !keyEvidenceEligible(name, provider)
     || row.root !== getConfigDir() || row.epoch !== keyEpoch || row.configGeneration !== captureConfigGeneration()

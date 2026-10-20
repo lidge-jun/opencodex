@@ -506,7 +506,11 @@
         "src/combos/",
         "src/server/",
         "src/usage/",
-        "src/lib/decision-quota-sink.ts"
+        "src/lib/decision-quota-sink.ts",
+        "src/providers/antigravity-quota-identity.ts",
+        "src/providers/quota-decision-antigravity.ts",
+        "src/providers/quota-decision-snapshot.ts",
+        "src/providers/quota-decision-publication.ts"
       ]
     },
     {
