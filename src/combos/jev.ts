@@ -80,6 +80,8 @@ export interface JevCandidate {
   /** Optional operator note sent as decision evidence for this target only. */
   modelProfile?: string;
   quota?: JevQuotaSignal;
+  /** Internal native identity from ordinary routing; never replaces the configured allowlist. */
+  quotaIdentity?: { provider: string; model: string } | null;
 }
 
 /**

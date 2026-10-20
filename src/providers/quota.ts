@@ -1,5 +1,6 @@
 import { listCodexAuthAccountsSnapshot } from "../codex/auth-api";
 import { isAnthropicInstanceId, configuredAnthropicInstance } from "./anthropic-instance";
+import { antigravityQuotaEligible } from "./antigravity-quota-identity";
 import { fetchAnthropicAccountQuota } from "./quota/anthropic-account-quota";
 import { resolveEnvValue } from "../config";
 import { getAccountCredential, getAccountSet } from "../oauth/store";
@@ -123,7 +124,7 @@ async function maybeFetchProviderQuota(
     }
     if (provider.authMode === "oauth" && explicitAccountReader(name)) return await fetchExplicitCurrentQuota(name, provider, config);
     if (provider.authMode === "oauth" && configuredAnthropicInstance(config, name)) return fetchAnthropicQuota(name, config);
-    if (provider.authMode === "oauth" && name === "google-antigravity") return await fetchAntigravityQuota(name);
+    if (provider.authMode === "oauth" && (name === "google-antigravity" || antigravityQuotaEligible(name, provider))) return await fetchAntigravityQuota(name, { ...provider });
     if (provider.authMode === "oauth" && name === "kiro") return fetchKiroQuota(name);
     // meta-muse: a device-logged-in account can be probed at the key endpoint; an
     // imported or pasted one cannot, and falls back to its last in-band observation.

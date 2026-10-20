@@ -6,7 +6,7 @@ import { repoRoot } from "../helpers/repo-root";
 const root = repoRoot();
 const snapshot = "src/providers/quota-decision-snapshot.ts";
 const activation = "src/combos/jev-quota-activation.ts";
-const forbidden = new Set([snapshot, activation]);
+const forbidden = new Set([snapshot, activation, "src/providers/quota-decision-antigravity.ts"]);
 const protectedRoots = [
   "src/oauth/store.ts", "src/codex/account-store.ts", "src/codex/main-account-cache.ts",
   "src/providers/api-key-resolve.ts", "src/router.ts", "src/server/lifecycle.ts",
