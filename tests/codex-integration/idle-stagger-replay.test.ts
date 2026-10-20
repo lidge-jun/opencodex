@@ -1,10 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fixturePath } from "../helpers/repo-root.ts";
 import { compareTraceFixtures, evaluateTrace, type ReplayTrace } from "../../src/codex/idle-stagger-replay.ts";
 
-const fixtureUrl = new URL("../fixtures/idle-stagger/paired-traces.json",import.meta.url);
-const parsed=JSON.parse(readFileSync(fixtureUrl,"utf8")) as {description:string,traces:ReplayTrace[]};
+const parsed=JSON.parse(readFileSync(fixturePath("idle-stagger", "paired-traces.json"),"utf8")) as {description:string,traces:ReplayTrace[]};
 
 test("R01: paired passive, legacy and offline-policy fixture metrics use identical cohorts",()=>{
   const r=compareTraceFixtures(parsed.traces);assert.equal(r.length,3);
