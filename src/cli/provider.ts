@@ -9,13 +9,15 @@
  *   set-default <name>  Change the default provider
  */
 import { readFileSync } from "node:fs";
-import { hasOwnProvider, isValidProviderName, loadConfig, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
+import { hasOwnProvider, isValidProviderName, loadConfig, readConfigAdmissionSnapshot, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
 import { apiKeyTransportConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../config/provider-validation";
 import { hasHelpFlag, printSubcommandUsage } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import { assertAnthropicInstanceLoginConfig } from "../oauth/store-anthropic-instance";
 import { dropProviderCustomModels } from "../providers/provider-id-rewrite";
+import { cleanupRemovedGcpCredentials, commitProviderGcpCredentialRemoval, providerGcpCredentialMarkers } from "../providers/gcp-credential-cleanup";
+import { providerCredentialInputError } from "../providers/api-keys";
 import type { OcxProviderConfig } from "../types";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { syncModelsToCodex } from "../codex/sync";
@@ -224,6 +226,12 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
   if (registryEntry) {
     provConfig = providerConfigSeed(registryEntry);
     if (apiKey) {
+      const candidateError = providerCredentialInputError({ apiKey });
+      if (candidateError) {
+        console.error(`Error: ${candidateError}`);
+        process.exitCode = 2;
+        return;
+      }
       if ((authMode ?? registryEntry.authKind) === "forward") {
         console.warn(`Warning: provider "${name}" uses ChatGPT login (forward auth); --api-key is ignored.`);
       } else if ((authMode ?? registryEntry.authKind) === "oauth") {
@@ -250,6 +258,12 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
   }
 
   if (responsesPath !== undefined) provConfig.responsesPath = responsesPath;
+  const credentialError = providerCredentialInputError(provConfig);
+  if (credentialError) {
+    console.error(`Error: ${credentialError}`);
+    process.exitCode = 2;
+    return;
+  }
   if (authMode !== undefined) provConfig.authMode = authMode as OcxProviderConfig["authMode"];
   if (name === "anthropic2") {
     if (provConfig.adapter !== "anthropic" || provConfig.authMode !== "oauth") delete provConfig.anthropicOAuthInstance;
@@ -329,12 +343,17 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
   }
   const { initializeProviderModelSelection } = await import("../providers/initial-model-selection");
   let markerCollision = false;
+  let removedCredentials: string[] = [];
   withConfigMutationLockSync(() => {
     if (provConfig.anthropicOAuthInstance) {
       try { assertAnthropicInstanceLoginConfig(config, name); }
       catch { markerCollision = true; return; }
     }
     initializeProviderModelSelection(name, provConfig, existingProvider, config);
+    const durable = readConfigAdmissionSnapshot();
+    const durableProvider = durable.kind === "read" && durable.diagnostics.source === "file"
+      && durable.diagnostics.error === null ? durable.diagnostics.config.providers[name] : undefined;
+    removedCredentials = [config.providers[name], durableProvider].flatMap(provider => provider ? providerGcpCredentialMarkers(provider) : []);
     config.providers[name] = provConfig;
     if (setDefault) config.defaultProvider = name;
     validateAndSave(config);
@@ -345,6 +364,7 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
     return;
   }
 
+  cleanupRemovedGcpCredentials(removedCredentials);
   let sync: LocalSyncResult | undefined;
   if (wantsSync) {
     try {
@@ -441,10 +461,12 @@ function handleRemove(args: string[]): void {
     process.exit(1);
   }
 
-  delete config.providers[name];
-  const droppedCustomModels = dropProviderCustomModels(config, name);
-  validateAndSave(config);
-
+  const droppedCustomModels = commitProviderGcpCredentialRemoval(config, name, () => {
+    delete config.providers[name];
+    const dropped = dropProviderCustomModels(config, name);
+    validateAndSave(config);
+    return dropped;
+  });
 
   if (wantsJson) {
     console.log(JSON.stringify({

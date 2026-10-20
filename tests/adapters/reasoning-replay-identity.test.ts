@@ -1,3 +1,6 @@
+import { anthropicOpaqueFingerprint, captureAnthropicRejectionPayloads, bindAnthropicRejectionResponse, rejectedAnthropicPayloads } from "../../src/adapters/anthropic-rejection-memo";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import type { AdapterRequest } from "../../src/adapters/base";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE } from "../../src/bridge";
 import {
@@ -5,6 +8,7 @@ import {
   clearReasoningReplayCacheForTests,
   commitReasoningReplayServingIdentity,
   durableReplayCredentialIdentity,
+  getReasoningReplayOpaqueBlobRejection,
   peekReasoningForCall,
   reasoningReplayCodexCredentialIdentity,
   reasoningReplayCredentialIdentity,
@@ -13,6 +17,7 @@ import {
   reasoningReplayOpaqueBlobRejectionMemoized,
   reasoningReplayOAuthCredentialIdentity,
   reasoningReplayServingIdentityChanged,
+  reasoningReplayServingIdentityChange,
   rememberReasoningForCall,
   rememberReasoningReplayOpaqueBlobRejection,
 } from "../../src/responses/reasoning-replay-cache";
@@ -143,6 +148,22 @@ describe("reasoning replay provider and credential identity", () => {
       ...scope({ modelId: "different-model" }),
       clientThreadId: destinationThreadId,
     })).toBe(false);
+  });
+
+  test("known serving deltas separate model compatibility from credential and destination ownership", () => {
+    commitReasoningReplayServingIdentity(scope());
+    expect(reasoningReplayServingIdentityChange(scope())).toBeUndefined();
+    expect(reasoningReplayServingIdentityChange(scope({ modelId: "other-model" }))).toEqual({
+      providerChanged: false, destinationChanged: false, adapterChanged: false,
+      modelChanged: true, credentialChanged: false,
+    });
+    expect(reasoningReplayServingIdentityChange(scope({
+      modelId: "other-model", credentialDurableIdentity: "credential:other-slot",
+    }))).toMatchObject({ modelChanged: true, credentialChanged: true, destinationChanged: false });
+    expect(reasoningReplayServingIdentityChange(scope({
+      providerDestinationDurableIdentity: "destination:other-backend",
+    }))).toMatchObject({ destinationChanged: true, modelChanged: false, credentialChanged: false });
+    expect(reasoningReplayServingIdentityChange({ clientThreadId: "unknown-thread" })).toBeUndefined();
   });
 
   test("opaque-blob rejection memos use the durable serving identity and refuse incomplete scopes", () => {
@@ -382,5 +403,204 @@ describe("reasoning replay provider and credential identity", () => {
     await pending;
     expect(peekReasoningForCall(CALL_ID, oldScope)).toBe("old reasoning");
     expect(peekReasoningForCall(CALL_ID, holder)).toBe("new reasoning");
+  });
+});
+
+
+describe("selective opaque-blob rejection memos", () => {
+  const digest = (index: number): string => index.toString(16).padStart(64, "0");
+  const fingerprints = (count: number): Set<string> => new Set(Array.from({ length: count }, (_, index) => digest(index)));
+  beforeEach(() => clearReasoningReplayCacheForTests());
+  afterEach(() => clearReasoningReplayCacheForTests());
+
+  test("distinguishes absent, selective and sticky blanket memos while preserving the boolean API", () => {
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toBeUndefined();
+    expect(reasoningReplayOpaqueBlobRejectionMemoized(scope())).toBe(false);
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(1)]));
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "selective", fingerprints: new Set([digest(1)]) });
+    expect(reasoningReplayOpaqueBlobRejectionMemoized(scope())).toBe(true);
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(1), digest(2)]));
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "selective", fingerprints: new Set([digest(1), digest(2)]) });
+    rememberReasoningReplayOpaqueBlobRejection(scope());
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "blanket" });
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(3)]));
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "blanket" });
+  });
+
+  test("allows 256 distinct digests but falls back to blanket when a merge or one input overflows", () => {
+    rememberReasoningReplayOpaqueBlobRejection(scope(), fingerprints(256));
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "selective", fingerprints: fingerprints(256) });
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(255)]));
+    expect(getReasoningReplayOpaqueBlobRejection(scope())?.mode).toBe("selective");
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(256)]));
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "blanket" });
+    const other = { ...scope(), clientThreadId: "overflow-input" };
+    rememberReasoningReplayOpaqueBlobRejection(other, fingerprints(257));
+    expect(getReasoningReplayOpaqueBlobRejection(other)).toEqual({ mode: "blanket" });
+  });
+
+  test.each([
+    new Set(), new Set(["a".repeat(63)]), new Set(["A".repeat(64)]),
+    new Set(["a".repeat(64) + "\n"]), new Set(["g".repeat(64)]), new Set([null]),
+    null, ["a".repeat(64)], { size: 1, [Symbol.iterator]() { throw new Error("untrusted iterator"); } },
+  ].map(value => ({ value })))("invalid or unreliable fingerprint input falls back without throwing: %j", ({ value }) => {
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(1)]));
+    expect(() => rememberReasoningReplayOpaqueBlobRejection(scope(), value as ReadonlySet<string>)).not.toThrow();
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "blanket" });
+  });
+
+  test("caller-owned input and getter output cannot mutate retained fingerprints", () => {
+    const input = new Set([digest(1)]);
+    rememberReasoningReplayOpaqueBlobRejection(scope(), input);
+    input.clear(); input.add("invalid");
+    const observed = getReasoningReplayOpaqueBlobRejection(scope());
+    expect(observed).toEqual({ mode: "selective", fingerprints: new Set([digest(1)]) });
+    if (observed?.mode !== "selective") throw new Error("selective memo missing");
+    (observed.fingerprints as Set<string>).clear();
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "selective", fingerprints: new Set([digest(1)]) });
+  });
+
+  test("uses durable scope dimensions, ignores volatile generations and refuses incomplete scopes", () => {
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(1)]));
+    expect(getReasoningReplayOpaqueBlobRejection(scope({ credentialIdentity: "new-process-token" }))?.mode).toBe("selective");
+    for (const changed of [
+      { ...scope(), clientThreadId: "different-thread" }, scope({ providerName: "different-provider" }),
+      scope({ providerDestinationDurableIdentity: "different-destination" }), scope({ adapterName: "anthropic" }),
+      scope({ modelId: "different-model" }), scope({ credentialDurableIdentity: "different-credential" }),
+    ]) expect(getReasoningReplayOpaqueBlobRejection(changed)).toBeUndefined();
+    for (const incomplete of [undefined, scope({ credentialDurableIdentity: undefined }), scope({ providerDestinationDurableIdentity: undefined })]) {
+      rememberReasoningReplayOpaqueBlobRejection(incomplete, new Set([digest(1)]));
+      expect(getReasoningReplayOpaqueBlobRejection(incomplete)).toBeUndefined();
+    }
+  });
+
+  test("reads do not refresh five-minute expiry, expired memos do not merge, and clear resets both APIs", () => {
+    let clock = 1000;
+    clearReasoningReplayCacheForTests(() => clock);
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(1)]));
+    clock += 5 * 60 * 1000 - 1;
+    expect(getReasoningReplayOpaqueBlobRejection(scope())?.mode).toBe("selective");
+    clock += 1;
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toBeUndefined();
+    expect(reasoningReplayOpaqueBlobRejectionMemoized(scope())).toBe(false);
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(2)]));
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "selective", fingerprints: new Set([digest(2)]) });
+    rememberReasoningReplayOpaqueBlobRejection(scope());
+    clock += 5 * 60 * 1000;
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(3)]));
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "selective", fingerprints: new Set([digest(3)]) });
+    clearReasoningReplayCacheForTests();
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toBeUndefined();
+    expect(reasoningReplayOpaqueBlobRejectionMemoized(scope())).toBe(false);
+  });
+
+  test("merging refreshes the existing expiry without losing earlier selective digests", () => {
+    let clock = 1000;
+    clearReasoningReplayCacheForTests(() => clock);
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(1)]));
+    clock += 200_000;
+    rememberReasoningReplayOpaqueBlobRejection(scope(), new Set([digest(2)]));
+    clock += 100_000;
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "selective", fingerprints: new Set([digest(1), digest(2)]) });
+    clock += 200_000;
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toBeUndefined();
+  });
+
+  test("fingerprint bytes participate in the existing 256 KiB oldest-entry eviction", () => {
+    let clock = 1000;
+    clearReasoningReplayCacheForTests(() => clock);
+    for (let index = 0; index < 16; index++) {
+      rememberReasoningReplayOpaqueBlobRejection({ ...scope(), clientThreadId: `byte-thread-${index}` }, fingerprints(256));
+      clock++;
+    }
+    expect(getReasoningReplayOpaqueBlobRejection({ ...scope(), clientThreadId: "byte-thread-0" })).toBeUndefined();
+    expect(getReasoningReplayOpaqueBlobRejection({ ...scope(), clientThreadId: "byte-thread-1" })?.mode).toBe("selective");
+    expect(getReasoningReplayOpaqueBlobRejection({ ...scope(), clientThreadId: "byte-thread-15" })?.mode).toBe("selective");
+  });
+
+  test("replacing a selective memo with blanket releases its retained fingerprint bytes", () => {
+    let clock = 1000;
+    clearReasoningReplayCacheForTests(() => clock);
+    rememberReasoningReplayOpaqueBlobRejection(scope(), fingerprints(256));
+    rememberReasoningReplayOpaqueBlobRejection(scope());
+    for (let index = 0; index < 15; index++) {
+      clock++;
+      rememberReasoningReplayOpaqueBlobRejection({ ...scope(), clientThreadId: `byte-thread-${index}` }, fingerprints(256));
+    }
+    expect(getReasoningReplayOpaqueBlobRejection(scope())).toEqual({ mode: "blanket" });
+    expect(getReasoningReplayOpaqueBlobRejection({ ...scope(), clientThreadId: "byte-thread-0" })?.mode).toBe("selective");
+  });
+
+  test("falls back to the old blanket entry when a valid set cannot fit beside a near-limit key", () => {
+    const current = scope().current!;
+    const identity = JSON.stringify([current.providerName, current.providerDestinationDurableIdentity, current.adapterName, current.modelId, current.credentialDurableIdentity]);
+    const overhead = Buffer.byteLength(JSON.stringify(["", identity]));
+    const nearLimit = { ...scope(), clientThreadId: "t".repeat(256 * 1024 - overhead - 1) };
+    rememberReasoningReplayOpaqueBlobRejection(nearLimit, new Set([digest(1)]));
+    expect(getReasoningReplayOpaqueBlobRejection(nearLimit)).toEqual({ mode: "blanket" });
+  });
+});
+
+describe("actual Anthropic rejection capture", () => {
+  const body = (count: number) => ({ messages: [{ role: "assistant", content: Array.from({ length: count }, (_, index) => ({ type: "thinking", signature: `SyntheticCapture${index}` })) }] });
+  test("fingerprints exclude text and metadata and separate opaque domains", () => {
+    const signature = "SyntheticOpaqueBytes";
+    expect(anthropicOpaqueFingerprint({ type: "thinking", signature, thinking: "before", ap: "original" }))
+      .toBe(anthropicOpaqueFingerprint({ type: "thinking", signature, thinking: "after", ap: "forged" }));
+    expect(anthropicOpaqueFingerprint({ type: "thinking", signature }))
+      .not.toBe(anthropicOpaqueFingerprint({ type: "redacted_thinking", data: signature }));
+  });
+  test("complete capture is bounded, charged until disposal, and defensively copied", () => {
+    const budget = createTranslatorBudget();
+    const request = {} as AdapterRequest;
+    const response = new Response(null, { status: 400 });
+    try {
+      captureAnthropicRejectionPayloads(request, body(256), budget);
+      bindAnthropicRejectionResponse(request, response);
+      expect(budget.snapshot().currentBytes).toBe(256 * 256);
+      expect(rejectedAnthropicPayloads(response)?.size).toBe(256);
+      (rejectedAnthropicPayloads(response) as Set<string>).clear();
+      expect(rejectedAnthropicPayloads(response)?.size).toBe(256);
+    } finally { budget.dispose(); }
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+  test("overflow and missing budget never narrow the rejection policy", () => {
+    const budget = createTranslatorBudget();
+    const request = {} as AdapterRequest;
+    const response = new Response(null, { status: 400 });
+    try {
+      captureAnthropicRejectionPayloads(request, body(257), budget);
+      bindAnthropicRejectionResponse(request, response);
+      expect(rejectedAnthropicPayloads(response)).toBeUndefined();
+      expect(budget.snapshot().currentBytes).toBe(0);
+      captureAnthropicRejectionPayloads(request, body(1));
+      bindAnthropicRejectionResponse(request, response);
+      expect(rejectedAnthropicPayloads(response)).toBeUndefined();
+    } finally { budget.dispose(); }
+  });
+  test("admission failure refunds only admitted digests", () => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 600 });
+    budget.chargeRetained(123, { kind: "reasoning" });
+    const request = {} as AdapterRequest;
+    const response = new Response(null, { status: 400 });
+    try {
+      captureAnthropicRejectionPayloads(request, body(2), budget);
+      bindAnthropicRejectionResponse(request, response);
+      expect(rejectedAnthropicPayloads(response)).toBeUndefined();
+      expect(budget.snapshot().currentBytes).toBe(123);
+    } finally { budget.dispose(); }
+  });
+  test("failed recapture clears stale request and response ownership", () => {
+    const budget = createTranslatorBudget();
+    const request = {} as AdapterRequest;
+    const response = new Response(null, { status: 400 });
+    try {
+      captureAnthropicRejectionPayloads(request, body(1), budget);
+      bindAnthropicRejectionResponse(request, response);
+      expect(rejectedAnthropicPayloads(response)?.size).toBe(1);
+      captureAnthropicRejectionPayloads(request, { messages: [{ content: null }] }, budget);
+      bindAnthropicRejectionResponse(request, response);
+      expect(rejectedAnthropicPayloads(response)).toBeUndefined();
+    } finally { budget.dispose(); }
   });
 });

@@ -1,4 +1,6 @@
 import type { OcxConfig } from "../types";
+import { connect } from "node:net";
+import { directLocalHttpFetch } from "../server/direct-local-http";
 import {
   readWindowsProxyBypassRegistry,
   readWindowsSystemProxy,
@@ -8,6 +10,7 @@ import {
 } from "../lib/windows-system-proxy";
 import { inspectDesktopFirstParty, observeClaudeDesktopMode } from "./desktop-first-party";
 import { desktopFirstPartyDesired } from "./first-party-settings";
+import { inspectDesktopPickerProfile, type DesktopPickerProfileInspection } from "./desktop-picker-profile";
 
 /**
  * Whether the Windows system proxy silently bypasses Desktop first-party mode.
@@ -17,7 +20,8 @@ import { desktopFirstPartyDesired } from "./first-party-settings";
  * as `HTTPS_PROXY`/`HTTP_PROXY`. That inherited value takes precedence over the `env` block
  * OpenCodex writes into the user's `~/.claude/settings.json` (only Claude Code managed settings
  * override it), so Code-tab traffic goes to the system proxy and never reaches the intercept.
- * Routed subagent models then fail, and nothing else reports why. A system proxy such as Clash or
+ * A selected picker profile with an available fixed egress relay takes precedence instead.
+ * Otherwise routed subagent models fail. A system proxy such as Clash or
  * v2rayN, with no bypass for the API host, is the common case.
  *
  * Observe-only: this reads the registry and never changes it. A PAC script and WPAD automatic
@@ -123,6 +127,39 @@ export interface DesktopSystemProxyDeps {
   firstPartyState?: () => DesktopFirstPartySettingsState;
   readSystemProxy?: () => WindowsSystemProxyResult;
   readBypass?: () => WindowsProxyBypassValues | null;
+  inspectPickerProfile?: () => DesktopPickerProfileInspection;
+  pickerRelayAvailable?: (proxyUrl: string) => boolean | Promise<boolean>;
+}
+
+/** Observe the selected endpoint even in a separate doctor process or a blind-only recovery relay. */
+async function livePickerRelayAvailable(proxyUrl: string): Promise<boolean> {
+  const port = /^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})$/.exec(proxyUrl)?.[1];
+  if (!port || Number(port) > 65535) return false;
+  try {
+    // A listening TCP socket alone is not evidence of an OpenCodex CONNECT relay.
+    const response = await directLocalHttpFetch(proxyUrl, { signal: AbortSignal.timeout(1_000) });
+    if (response.status !== 405 || response.headers.get("allow") !== "CONNECT"
+      || !(await response.text()).startsWith("OpenCodex Claude intercept proxy accepts only CONNECT tunnels.")) return false;
+    // The main intercept proxy has the same HTTP response but requires credentials the Desktop
+    // profile cannot send. A loopback CONNECT is denied before dialing or choosing any tunnel;
+    // 403 proves unauthenticated admission, whereas the credential-bearing proxy returns 407.
+    return await new Promise<boolean>(resolve => {
+      const socket = connect({ host: "127.0.0.1", port: Number(port) });
+      const finish = (available: boolean) => { clearTimeout(timer); socket.destroy(); resolve(available); };
+      const timer = setTimeout(() => finish(false), 1_000);
+      let head = "";
+      socket.once("error", () => finish(false));
+      socket.once("close", () => finish(false));
+      socket.once("connect", () => socket.write("CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\n\r\n"));
+      socket.on("data", bytes => {
+        head += bytes.toString("latin1");
+        if (head.includes("\r\n\r\n")) finish(/^HTTP\/1\.[01] 403 Forbidden\r\n/.test(head));
+        else if (head.length > 8 * 1024) finish(false);
+      });
+    });
+  } catch { // no-excuse-ok: catch -- failed relay probes retain the registry diagnostic.
+    return false;
+  }
 }
 
 function liveFirstPartyState(
@@ -137,15 +174,24 @@ function liveFirstPartyState(
   }
 }
 
-/** Reads the live state. Registry reads run only on Windows with a Desktop first-party env. */
-export function collectDesktopSystemProxy(
+/** Registry reads run only on Windows with a Desktop first-party env and no verified picker relay. */
+export async function collectDesktopSystemProxy(
   config: Pick<OcxConfig, "claudeCode" | "clientIntegrations" | "port" | "runtimeRole">,
   deps: DesktopSystemProxyDeps = {},
-): DesktopSystemProxyAssessment {
+): Promise<DesktopSystemProxyAssessment> {
   const platform = deps.platform ?? process.platform;
   if (platform !== "win32") return { kind: "not-applicable" };
   const firstParty = (deps.firstPartyState ?? (() => liveFirstPartyState(config)))();
   if (firstParty === "off") return { kind: "not-applicable" };
+  if (firstParty === "applied" && config.claudeCode?.intercept?.picker !== false) {
+    try {
+      const profile = (deps.inspectPickerProfile ?? (() => inspectDesktopPickerProfile({ platform })))();
+      if (profile.kind === "applied" && await (deps.pickerRelayAvailable ?? livePickerRelayAvailable)(profile.proxyUrl)) {
+        return { kind: "not-applicable" };
+      }
+    } catch { // no-excuse-ok: catch -- missing profile/relay evidence must not hide a registry conflict.
+    }
+  }
   return assessDesktopSystemProxy({
     platform,
     firstParty,

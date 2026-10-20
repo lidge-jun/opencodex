@@ -264,6 +264,22 @@ describe("ocx provider", () => {
     }
   });
 
+  // `--headless` is the OAuth code-display mode. Codex has none; its headless path is the
+  // device-code login, so the CLI points there instead of forwarding the flag.
+  test.each([["--headless", "codex"], ["codex", "--headless"], ["--headless", "openai"]])(
+    "login %s %s refuses code mode for Codex and points at --device",
+    (a, b) => {
+      const { dir } = freshConfig({});
+      try {
+        const result = runCli(["login", a, b], { OPENCODEX_HOME: dir });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("ocx account login codex --device");
+      } finally {
+        removeTreeWithRetry(dir);
+      }
+    },
+  );
+
   test("provider add custom provider requires --adapter and --base-url", () => {
     const { dir } = freshConfig();
     try {

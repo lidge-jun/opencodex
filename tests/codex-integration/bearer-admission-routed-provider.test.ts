@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import http2 from "node:http2";
 import { tmpdir } from "node:os";
@@ -17,10 +17,13 @@ import { handleNativeProfileAPI } from "../../src/codex/native-profile-api";
 import type { NativeProfileManager } from "../../src/codex/native-profile-manager";
 import type { OcxConfig } from "../../src/types";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { resetVisionDescriptionCache } from "../../src/vision";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+
+// Every case starts a real server; on Windows its config-dir ACL work alone can exceed 5 s.
+setDefaultTimeout(SERVER_BUDGET_MS);
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 
 /**
@@ -195,7 +198,7 @@ beforeEach(() => {
   }) as typeof fetch;
 });
 
-afterEach(() => {
+afterEach(async () => {
   resetVisionDescriptionCache();
   closeRequestHistoryIndex();
   clearComboTargetCooldowns();
@@ -209,8 +212,9 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousDataToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
-  if (ocxHome) removeTreeWithRetry(ocxHome);
-  if (codexHome) removeTreeWithRetry(codexHome);
+  // Startup's config-dir ACL hardening may still hold the homes on Windows; settle it first.
+  if (ocxHome) await removeTreeAfterBackgroundWork(ocxHome);
+  if (codexHome) await removeTreeAfterBackgroundWork(codexHome);
   ocxHome = "";
   codexHome = "";
 });

@@ -27,6 +27,7 @@ import {
   internalCallCapability,
 } from "../lib/local-internal-call-capability";
 import { configuredPort } from "../server/auth-cors";
+import { readAdvisorReasoning } from "../server/inference/advisor-diagnostics";
 import { ADVISOR_SYSTEM_INSTRUCTION, buildAdvisorUserPrompt, type AdvisorContextInput } from "./context";
 
 /**
@@ -53,6 +54,7 @@ export interface AdvisorConsultationResult {
   durationMs: number;
   /** Token usage reported by the chat completion, when the adapter surfaced it. */
   usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+  effectiveEffort?: string | null;
 }
 
 export function advisorDestinationOrigin(
@@ -89,7 +91,7 @@ function extractUsage(payload: unknown): AdvisorConsultationResult["usage"] {
   if (!payload || typeof payload !== "object") return undefined;
   const usage = (payload as { usage?: unknown }).usage;
   if (!usage || typeof usage !== "object") return undefined;
-  const num = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  const num = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
   const inputTokens = num((usage as { prompt_tokens?: unknown }).prompt_tokens);
   const outputTokens = num((usage as { completion_tokens?: unknown }).completion_tokens);
   const totalTokens = num((usage as { total_tokens?: unknown }).total_tokens);
@@ -195,6 +197,7 @@ export async function consultAdvisor(
         advice: content.length > MAX_ADVICE_CHARS ? `${content.slice(0, MAX_ADVICE_CHARS)}… [truncated]` : content,
         advisorModel: input.advisorModel,
         durationMs,
+        effectiveEffort: readAdvisorReasoning(res.headers),
         ...(extractUsage(payload) ? { usage: extractUsage(payload) } : {}),
       };
     } finally {

@@ -28,6 +28,7 @@ const USAGE = `Usage:
   ocx system codex-cli-update check [--json]
   ocx system codex-cli-update attest [--json]
   ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
+  ocx system codex-cli-update plan [--channel latest] [--json]
   ocx system update check [--channel <latest|preview>] [--json]
   ocx system update run [--channel <latest|preview>] [--restart <on|off>] --yes [--json]
   ocx system update status <job-id> [--json]
@@ -270,24 +271,55 @@ export async function handleSystemCommand(argv: string[], deps: RuntimeApiDeps =
       const args = [...rest]; const wantsJson = takeFlag(args, "--json"); rejectArgs(args, USAGE);
       printData(await runtimeRequest("/api/system/codex-app-server", {}, deps), wantsJson);
     } else if (sub === "codex-restart") {
-      // --yes required: this fully quits and relaunches the user's Codex desktop app as well as
-      // restarting app-servers, which can discard unsaved drafts, selections, and approval prompts.
+      // --yes required: this interrupts running Codex turns, and when the desktop picker predates
+      // the catalog it also quits and relaunches the app, which can discard unsaved client state.
       const args = [...rest];
       const wantsJson = takeFlag(args, "--json");
       const yes = takeFlag(args, "--yes");
       if (!yes) throw new CliUsageError(
-        "system codex-restart requires --yes: this fully quits and relaunches the Codex desktop app, so unsaved composer drafts, model-picker selections, and pending approval prompts may be lost; it also restarts the app-servers",
+        "system codex-restart requires --yes: this restarts the Codex app-servers, interrupting running turns, and when the desktop app's model picker predates the current catalog (or that cannot be determined) it fully quits and relaunches the Codex desktop app, so unsaved composer drafts, model-picker selections, and pending approval prompts may be lost",
         USAGE,
       );
       rejectArgs(args, USAGE);
-      printData(
-        await runtimeRequest("/api/system/codex-restart", { method: "POST" }, deps),
-        wantsJson,
-        ["Codex desktop app and app-server restart requested. Unsaved composer drafts, model-picker selections, and pending approval prompts may be lost."],
-      );
+      const result = await runtimeRequest("/api/system/codex-restart", { method: "POST" }, deps);
+      printData(result, wantsJson, codexRestartLines(result));
     } else if (sub === "update") await update(rest, deps);
     else throw new CliUsageError(`unknown system command ${sub}`, USAGE);
   });
+}
+
+/**
+ * Operator text for a codex-restart outcome. It reports what happened to the desktop app,
+ * because whether unsaved client state survived is the one thing the operator needs to know.
+ */
+export function codexRestartLines(result: unknown): string[] {
+  const view = recordValue(result);
+  const desktop = recordValue(view?.desktopApp);
+  const reason = typeof desktop?.reason === "string" ? desktop.reason : undefined;
+  // Only a reported `stale` reading may claim the picker predated the catalog; an unreadable
+  // reading also takes the full restart, and an older proxy reports no reading at all.
+  const why = desktop?.pickerState === "stale"
+    ? "its model picker predated the current catalog"
+    : "its model picker could not be confirmed current";
+  const stopped = Array.isArray(view?.stopped) ? view.stopped.length : 0;
+  const appServers = view?.code === "stopped"
+    ? `Stopped ${stopped} Codex app-server(s); their owners start replacements.`
+    : view?.code === "partially_stopped"
+      ? "Some Codex app-servers did not exit; stop them manually if Codex stays stale."
+      : view?.code === "enumeration_unavailable"
+        ? "Could not list Codex app-servers, so none were stopped."
+        : "No Codex app-server needed stopping.";
+  if (reason === "picker_current") {
+    return [appServers, "The Codex desktop app was left running: its model picker already shows the current catalog, so unsaved drafts and pending approvals were kept."];
+  }
+  if (reason === "no_targets") return [appServers, "The Codex desktop app is not running."];
+  if (desktop?.relaunch === "started") {
+    return [appServers, `The Codex desktop app was quit and relaunched because ${why}. Unsaved composer drafts, model-picker selections, and pending approval prompts may have been lost.`];
+  }
+  if (desktop?.attempted === true) {
+    return [appServers, `The Codex desktop app restart did not complete (${reason ?? "no outcome reported"}). Unsaved composer drafts, model-picker selections, and pending approval prompts may have been lost.`];
+  }
+  return [appServers, `The Codex desktop app was not restarted (${reason ?? "no outcome reported"}).`];
 }
 
 export const SYSTEM_USAGE = USAGE;

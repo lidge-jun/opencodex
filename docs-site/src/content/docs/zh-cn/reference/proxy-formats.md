@@ -40,6 +40,8 @@ Chat Completions 和 Messages 端点支持延迟提供的工具目录：客户�
 
 此外，在所有入站协议中，提供方返回的 `default.` 命名空间调用都会规范化为客户端声明的裸名称，即使延迟目录规则关闭了上述拒绝检查。
 
+原生 Messages 也会识别与 `tools: []` 一同提供的系统消息内联工具定义。这些名称在被永久移除前仍可调用，但不会授权其他客户端工具。托管 MCP 调用和服务器工具的参数流保留原生格式。
+
 ## 端点总览
 
 | 客户端表面 | 端点 | 成功的非流式结果 | 成功的流式或套接字结果 |
@@ -260,7 +262,13 @@ Compaction 会为需要缩短长 Responses 会话的客户端返回替换历史�
 | 路由类型 | 行为 |
 | --- | --- |
 | Canonical ChatGPT 或官方 OpenAI 路由 | 将请求转发到原生 `/responses/compact` 端点，并使用已解析的账号和模型认证 |
+| Explicitly opted-in custom `openai-responses` gateway | `supportsNativeCompactEndpoint: true` tries the native v1 endpoint for key/local/forward auth using the provider's normal Responses transport; HTTP 404 uses portable fallback; OAuth retains routed compaction and credential resolution |
 | 其他路由模型 | 运行一次内部的、非流式、无工具的 compaction 轮次，并带 `compaction_trigger`；要求且只允许一个 synthetic `compaction` 项，其 `encrypted_content` 是一个 `ocx1:` 封装；把该摘要解码为 v1 替换历史 |
+
+The custom v1 capability is independent of v2 `supportsNativeCompactionTrigger` and
+`decodesNativeCompactionBlobs` for replay. None grants canonical identity or caller credential
+forwarding; cross-provider overrides remain portable. See the canonical
+[provider configuration](/reference/configuration/providers/) before opting in.
 
 原生 compact 响应会被缓冲，最大 32 MiB，即使其声明的 `Content-Length` 已经超过该限制也是如此。compact 专用失败包括：
 
@@ -326,3 +334,13 @@ Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方�
 重放的推理项携带的 `encrypted_content` 只有生成它的 provider 和凭据才能读取。如果 opencodex 知道该对话上一次由另一个 provider 处理，它会在发送前移除这个 blob，并保留该项的摘要。如果那个 provider 还使用了不同的 endpoint 或凭据，该项的 `rs_…` id 也会被移除，因为它指向新目标无法查到的项。如果 opencodex 无从得知，例如代理重启之后，新目标会拒绝这个 blob：OpenAI 和 Azure OpenAI 返回 `400 invalid_encrypted_content`。此时 opencodex 会去掉上一个 provider 的推理状态（blob 和 `rs_…` id）后只重发一次请求；保留 id 会导致 `Item with id 'rs_…' not found`。
 
 这项恢复适用于所有使用 Responses 协议的 adapter，因此 `openai-responses` 和 `azure-openai` 的行为相同。恢复成功后，该对话在同一目标上的后续轮次会在接下来五分钟内于首次发送前移除这些状态。重发计入请求的常规发送预算。普通的 400 和 429 不会以这种方式重发，5xx 也不会，只有一个狭窄的例外：对于携带加密工具输出的请求，响应体恰好是该解密拒绝的 502 会得到同样的一次重发。第二次拒绝会原样返回给客户端。遇到这种情况，请在目标 provider 上开始新的对话。
+
+## Codex 原生普通 Lite 请求的搜索历史
+
+当最终发出的请求未声明任何 hosted 搜索工具时（`tools` 或 Lite `additional_tools` 中都没有 `web_search` 或 `web_search_preview`，包括移除 provider 不支持的 hosted 工具之后），所有 Responses 目的地都会把未被同输入引用的回放 `web_search_call` 历史转为下文所述的带标签 assistant 参考说明，与是否启用该选项无关。原生 Sol 对这类历史会返回通用 `server_error`（#7250），因此在其他模型上搜索过的对话可以在当前请求没有搜索工具的路由上继续。名为 `web_search` 的 function 工具不算 hosted 声明。不会添加搜索工具、重新搜索或编造结果；被同输入 `item_reference` 引用的项保持结构化。已声明 hosted 搜索的请求保留结构化历史，除非下述选项生效。
+
+已声明 hosted 搜索的普通请求默认保留结构化 hosted-search 历史，Responses Lite 请求也一样。若要选择有损参考说明，请在 `config.json` 中设置 `providers.openai.projectResponsesLiteHostedSearchHistory: true`（必须是布尔值，不能是字符串 `"true"`）。该设置按 provider 配置且默认关闭；省略或设为 `false` 时保留结构化历史。即使已启用，也只有最终目的地精确为标准 ChatGPT Codex `/responses` 且当前有效意图明确选择 Responses Lite 的普通请求及原生 v2 `compaction_trigger` 压缩请求，才会把未被同输入引用的剩余 `web_search_call` 历史转为带标签的 assistant 参考说明。最终 `x-openai-internal-codex-responses-lite` header 值精确为 `true` 时选择 Lite；明确的 `false` 优先于 frame metadata。没有可识别 header 值时，采用有效字符串 map 中 `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite` 的 `true` 值，沿用既有 WS metadata 语义。最终有效意图为非 Lite 或无法识别时保留结构化历史；格式无效的 metadata 不会覆盖明确的 HTTP `true`。模型名、订阅鉴权、hosted 声明缺失或仅有 `additional_tools` 都不能选择这项策略；不会为触发转换而改写 header 或 metadata。启用后适用于新 thread、fork、跨模型续聊、缓存未命中或重启，不依赖诊断设置。只有有效同 scope bridge memo 能证明并先恢复原函数调用及结果；ID 前缀、模型名或 memo 缺失不能判断来源。若同输入的 `item_reference.id` 精确指向某 hosted cell，该 cell 保留；`store:false` 会先移除引用，剩余 hosted 历史可投影。工具声明、Lite `additional_tools`、选择、call/result 配对、推理/原生密文、非 hosted 顺序及调用方 raw 历史保持原契约。
+
+这是仅在上述显式启用的 Lite 边界内采用的**有损历史策略**，不是 hosted schema 非法或所有上游错误已修复的断言。说明标为不可信参考数据，复制 status/action 及 action 或顶层 sources 中允许的 URL/title/type，不是指令或网页正文；每字符串最多 2,048 个 UTF-16 单元、每列表 20 项、全部已投影说明共 65,536 字节，超出的 action 用省略说明替代，转换项不复制 ID 或未知字段。HTTP/SSE 与 WS 共用普通请求的最终 builder。
+
+公开 OpenAI API 及其他目的地不新增普通或 native compact 投影。原生 `/responses/compact` 保持既有端点、账户清理及官方 opaque 输出路径，保留结构化 hosted 历史。portable/routed 摘要仍沿用原有触发条件与默认引用行为；共享 renderer 在这些既有路径中也补充顶层 sources 白名单保留。本次不增加重试、来源分类或新的 compaction summarizer。

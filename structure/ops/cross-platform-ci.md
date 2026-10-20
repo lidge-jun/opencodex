@@ -88,6 +88,15 @@ must be evaluated without raising test deadlines or weakening assertions. An exp
 including "" or "0" to disable caching, is preserved and remains the operator's protected-path
 responsibility. `tests/ci-workflows/test-runner.test.ts` covers isolation, legacy-path refusal,
 cleanup ownership, overrides and actual Bun children with different homes.
+The published launcher (`bin/ocx.mjs`) starts the bundled Bun, which is not the test-runner Bun.
+Bun keys `.pile` entries by source hash and deletes an entry written in another release's format,
+so the two versions sharing one cache evict each other on every start, and each launcher child
+loaded its CLI graph cold (a 15 s Windows `spawnSync` timeout in run 38697651428). The launcher
+therefore passes its child `<cache>/bun-<version>` (`src/lib/bun-transpiler-cache-scope.mjs`);
+`tests/cli/bun-transpiler-cache-scope.test.ts` covers it.
+Server children started on the bundled runtime from a different Bun (startup-health probe,
+dashboard startup install, Windows tray) get the same scope through `durableBunChildEnv` in
+`src/lib/bun-runtime.ts`; an already scoped path is re-scoped in place, never nested.
 Startup ACL reads use .NET, never module-autoloaded `Get-Acl`/`Set-Acl`
 (`tests/ci-workflows/ci-review-lanes.test.ts` scans `src/`).
 Across the jobs, the workflow runs:

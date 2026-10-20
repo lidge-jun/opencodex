@@ -56,10 +56,12 @@ describe("selection capture dependency boundary", () => {
     expect(runtimeImports(readFileSync(repoPath("src/providers/api-key-selection-capture.ts"), "utf8"))).toEqual([]);
   });
 
-  test("the router consumes capture without a direct import of the stateful selection module", () => {
-    const imports = runtimeImports(readFileSync(repoPath("src/router.ts"), "utf8"));
-    expect(imports).toContain("./providers/api-key-selection-capture");
-    expect(imports).not.toContain("./providers/api-key-selection");
+  test("the request-time resolver consumes capture without a direct import of the stateful selection module", () => {
+    // The resolver moved out of router.ts (it must not import the routing graph); this is the
+    // module on the request path now, so the boundary is asserted where the import lives.
+    const imports = runtimeImports(readFileSync(repoPath("src/providers/routed-config.ts"), "utf8"));
+    expect(imports).toContain("./api-key-selection-capture");
+    expect(imports).not.toContain("./api-key-selection");
   });
 
   test("the boundary scanner distinguishes erased types from a runtime dependency", () => {

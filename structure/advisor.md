@@ -23,18 +23,37 @@ Management loads `advisor-routes.ts` only for the Advisor namespace. The guard i
 `_advisorGuard`. `tests/advisor/advisor-core-boundary.test.ts` enforces the transitive load-time
 boundary from router, lifecycle, Responses core and management API, including direct dynamic imports.
 
+`src/server/responses/advisor-retention.ts` bounds guard-owned retention independently of provider
+parser leases: 32 MiB across raw legs, reconstruction copies and appended replay history, 2 MiB
+per Advisor call's JSON-encoded argument fragments, 4,096 retained events and 1,024 calls per leg.
+Non-empty text/thinking deltas consume bytes but no event slots, because the 16 KiB per-leg
+character caps already bound them; empty ones are not retained. Other empty fragments count;
+signatures, redacted blocks and opaque tool metadata consume bytes. Real
+tool arguments pass through without a retained copy and end replay retention for that leg.
+Reconstruction reserves space before joining or parsing admitted sources; raw and replay owners
+overlap until the replacement is admitted. Appended history remains charged through the guard's
+final exit. Accumulated usage has a separate retained owner across legs; replacement admits the
+new usage while raw terminal data and prior usage remain charged. An optional request translator
+budget receives separate local charges, never shared
+event/call leases or disposal. All exits, including iterator close, release only the guard's own
+charges. Refusals use content-free 502 `upstream_error` / `translation_buffer_limit` events.
+`tests/advisor/advisor-retention.test.ts` covers aggregate/count admission, representations,
+multi-call pairing, overlap and lifecycle release.
+
 ## Execution paths
 
 - Translated (non-passthrough, non-run-turn) fetch path: full support — synthetic tool injection,
   guard interception of `advisor` tool calls, advice reinjection as a paired
   assistant-toolCall/toolResult message pair, and worker re-dispatch through the same
   continuation machinery the terminal guard uses (`adapter-continuation.ts`). Consultations are
-  bounded at three per request, with at most four Advisor-owned worker continuations. The tool
+  bounded at three per request including automatic calls, with at most four Advisor-owned worker continuations. The tool
   is removed when consultations are exhausted. A repeated call gets one final paired limit result;
   a further call ends with typed 502 `advisor_continuation_limit`, without another worker send.
   Counters are shared with empty-completion retries. Usage includes the terminal rejected leg.
   `tests/advisor/advisor-continuation-limit.test.ts` covers a worker that never stops calling;
   `tests/advisor/advisor-responses-wiring.test.ts` exercises real streaming and buffered delivery.
+  Client catalog checks wrap the Advisor guard, so synthetic calls are consumed internally before
+  final worker output is checked against current client declarations, including direct encoders.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a
@@ -178,6 +197,21 @@ worker model; a client with no stable identity is excluded from it on purpose. A
 restart the table is empty, so a task in progress may receive one more preflight attempt —
 fail-open for correctness and only one extra expert call.
 
+Adaptive spending state is separate: `src/advisor/budget.ts` reserves attempts in private
+`advisor-budget.sqlite` under the resolved config home, with a SQLite immediate transaction.
+The task digest omits worker identity so changing workers does not reset its allowance. The
+original task key is captured before automatic user-role injection and reused by continuations.
+Reservations count dispatched failures and cancellations, expire 24 hours from the first
+attempt, survive restarts, and never evict live tasks (512-task capacity). A locked, unavailable
+or full database refuses the expert call while the worker continues. No database is opened
+until an adaptive consultation with stable identity is actually admitted. Manual and preflight
+policies retain request limits and the existing preflight ledger without the durable task cap.
+Activity and worker results distinguish a request consultation `limit` from a durable task `budget` refusal.
+
+## Dashboard model selection
+
+`gui/src/components/AdvisorModelSelect.tsx` loads `/api/models` independently of the settings editor and uses the shared `Select`. Values are exact `namespaced` routing selectors, never display names or lowercased input. Disabled and initial-selection-pending rows are excluded from new choices. A current value outside the selectable catalog remains visible with a warning; load failures preserve it and expose retry. Clearing saves the existing empty-model state. The catalog provides no text-consultation eligibility guarantee; the operator chooses a text-capable model. API and CLI model-string validation remains unchanged.
+
 ## Policies
 
 - `manual` (default): only an explicit worker `advisor()` call consults.
@@ -203,11 +237,32 @@ fail-open for correctness and only one extra expert call.
   A failed attempt is recorded under its own ledger key (no retry storm within the TTL)
   and injected with the `<opencodex_advisor_unavailable>` wrapper, which
   historyHasManualAdvisorResult deliberately does not match: a failure is not advice and does not permanently suppress the
-  policy. No semantic stagnation detection exists in PR1. Both policies require current
+  policy. No semantic stagnation detection exists. Both policies require current
   `contextSharingConsent` before any task context is sent. Without it, preflight does not run
   and a manual call returns a consent-required result. Consent is re-read from the live config
   immediately before dispatch; a revocation after plan creation (or after a preflight claim)
   blocks outbound transfer, releases any claim, and adds no cooldown or injection.
+
+- `adaptive`: retains the initial preflight attempt and additionally consults after a failed
+  repair. `src/advisor/evidence.ts` scans at most the latest 512 messages after the current user
+  task for paired validation calls/results with explicit exit codes, a completed successful
+  file-edit tool after the first failure, and a newly started execution of the same validation
+  in the same directory failing again. A successful validation clears the failure. Polling a
+  command started before the edit is not a post-repair retry. Unknown/compound shell commands,
+  shell-based edits and ambiguous output do not qualify. `src/advisor/evidence-tool.ts` accepts
+  single Code Mode helpers with static JSON arguments; it never evaluates worker JavaScript.
+  The bounded failure/repair/retry evidence, including message references and output excerpts,
+  precedes the clipped general transcript in the Advisor prompt.
+
+  The preflight ledger key and each failed-repair event key are independent, so initial advice
+  or a successful manual consultation cannot suppress a later repair event. A claim still
+  serializes concurrent consultations of the same event and failure uses the existing cooldown.
+  Event identity uses the paired tool-call IDs; shifting history positions changes source
+  references without granting the same failed repair a second consultation.
+  Automatic adaptive calls require stable conversation identity; clients without it retain only
+  request-bounded manual access. All adaptive attempts, including manual calls, use the durable
+  `maxConsultationsPerTask` allowance (integer 1–3, default 3). The worker's three-consultation
+  request cap and four-continuation cap remain hard bounds.
 
 ## Observability
 
@@ -215,3 +270,16 @@ Every consultation writes one structured `[advisor]` log line (trigger, worker m
 model, duration, status, usage) and the loopback call lands in usage accounting as its own
 request under the advisor model. Consultation usage is never merged into the worker's terminal
 usage; intercepted worker legs are, via the same usage-merge rule the terminal guard applies.
+
+`src/advisor/activity.ts` holds config-scoped process memory: at most 100 records, at most 24
+hours old, with pruning on access and no timer. `GET /api/advisor/activity` and `ocx advisor
+activity` expose trigger, status, models, requested/mapped effort, duration and reported tokens.
+There are no task bodies, commands, advice, conversation identifiers or provider error bodies
+in these records. Dashboard polling runs only while its page is visible. Restart clears activity,
+independently of the durable budget; no adoption score or exact monetary cost is inferred.
+
+`src/server/inference/advisor-diagnostics.ts` carries bounded serialization evidence in the
+loopback response only for the process-capability-authenticated Advisor caller. Translated
+paths use adapter-owned `effectiveEffort`; native Chat observes the finalized request body.
+No requested value is substituted for missing wire evidence. The activity UI displays unknown
+when unreported and does not claim verification of a provider's internal reasoning.

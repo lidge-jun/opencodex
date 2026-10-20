@@ -15,6 +15,7 @@ import {
   resolveMetadataProvider,
 } from "../generated/model-metadata";
 import type { AttemptTierOutcome, OcxUsage } from "../types";
+import type { PromptLengthPricing } from "../types/provider";
 import { canonicalFastTierMarker } from "../providers/fastwire";
 import { baseProviderLabel } from "../providers/label";
 import type { PersistedUsageAttempt, UsageStatus } from "./log";
@@ -64,6 +65,8 @@ export interface CostTokens {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** The 1-hour-TTL subset of `cacheWrite`, when the provider reports the split. */
+  cacheWrite1h?: number;
 }
 
 export interface CostBreakdown {
@@ -79,6 +82,7 @@ export interface MatchedPrice {
   modelId: string;
   jawcodeProvider?: string;
   cost4: Cost4;
+  promptLengthPricing?: PromptLengthPricing;
   source: "jawcode" | "expected" | "user";
   sourceRef?: string;
   verifiedAt?: string;
@@ -97,6 +101,8 @@ export interface AttemptCostEstimate {
   priorityMultiplier?: number;
   /** Set when the published long-context rate was applied (#908). */
   contextTier?: ContextTierName;
+  /** User absolute rates selected for this attempt, separate from catalog tiers. */
+  customThresholdApplied?: true;
   /** The numeric estimate is a known floor because the exact Priority price is unavailable. */
   priorityLowerBound?: boolean;
 }
@@ -111,6 +117,8 @@ export interface CostEstimate {
   priorityMultiplier?: number;
   /** Set when any priced attempt used the published long-context rate (#908). */
   contextTier?: ContextTierName;
+  /** At least one request/attempt selected the user threshold rates. */
+  customThresholdApplied?: true;
   /** The aggregate is a known floor because every priced attempt is a lower bound. */
   priorityLowerBound?: boolean;
 }
@@ -157,22 +165,35 @@ export function normalizeCostTokens(usage: OcxUsage): CostTokens | null {
   for (const cacheRead of candidates) {
     if (![input, output, cacheRead, cacheWrite].every(finiteNonNegative)) return null;
     if (cacheRead + cacheWrite > input) continue;
+    const cacheWrite1h = usage.cacheCreation1hInputTokens;
     return {
       input: Math.max(0, input - cacheRead - cacheWrite),
       output,
       cacheRead,
       cacheWrite,
+      ...(typeof cacheWrite1h === "number" && finiteNonNegative(cacheWrite1h) && cacheWrite1h > 0
+        ? { cacheWrite1h: Math.min(cacheWrite1h, cacheWrite) } : {}),
     };
   }
   return null;
 }
+
+/**
+ * Price of a 1-hour cache write relative to the 5-minute rate that Cost4.cacheWrite records.
+ * Anthropic bills 5m writes at 1.25x and 1h writes at 2x base input, so 2 / 1.25. Scaling the
+ * 5m rate (rather than input) keeps every tier multiplier already applied to the Cost4 and keeps
+ * a free-write row (cacheWrite 0) free.
+ */
+export const CACHE_WRITE_1H_OVER_5M = 2 / 1.25;
 
 /** jawcode unit convention: USD per 1M tokens (jawcode stats/db.ts calculateCatalogCost). */
 export function calculateCost(tokens: CostTokens, cost4: Cost4): CostBreakdown {
   const input = cost4.input * tokens.input / 1_000_000;
   const output = cost4.output * tokens.output / 1_000_000;
   const cacheRead = cost4.cacheRead * tokens.cacheRead / 1_000_000;
-  const cacheWrite = cost4.cacheWrite * tokens.cacheWrite / 1_000_000;
+  const write1h = Math.min(tokens.cacheWrite1h ?? 0, tokens.cacheWrite);
+  const cacheWrite = (cost4.cacheWrite * (tokens.cacheWrite - write1h)
+    + cost4.cacheWrite * CACHE_WRITE_1H_OVER_5M * write1h) / 1_000_000;
   return { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite };
 }
 
@@ -343,6 +364,7 @@ function userOverlayMatch(
     modelId,
     cost4: overlay.cost4,
     source: "user",
+    ...(overlay.promptLengthPricing ? { promptLengthPricing: overlay.promptLengthPricing } : {}),
     sourceRef: overlay.source,
     verifiedAt: overlay.verifiedAt,
     status: "verified",
@@ -395,6 +417,15 @@ function vendorPrefixedCost(modelId: string): ReturnType<typeof findVendorCostBy
   if (!found) return undefined;
   const normalize = (value: string): string => value.toLowerCase().replaceAll("-", "");
   return normalize(found.provider) === normalize(claimedVendor) ? found : undefined;
+}
+
+/**
+ * Only measured usage is priced. An `unreported` or `unsupported` row can still carry tokens — a
+ * combo whose first leg failed without usage keeps the second leg's — and pricing them reports an
+ * understated cost as if it were complete.
+ */
+export function isMeasuredStatus(usageStatus: UsageStatus): boolean {
+  return usageStatus === "reported" || usageStatus === "estimated";
 }
 
 function isEstimated(usage: OcxUsage, usageStatus: UsageStatus, priceStatus: ExpectedPriceStatus | "verified"): boolean {
@@ -475,8 +506,8 @@ function isConfirmedFast(tier?: ServiceTierInput): boolean {
 }
 
 /**
- * Apply the published long-context rate when raw prompt size crosses the vendor
- * threshold. Returns [effectiveCost4, tierName].
+ * Select user prompt-length rates, or apply the published context rule in automatic mode.
+ * Returns [effectiveCost4, catalogTier, priorityLowerBound, customThresholdApplied].
  *
  * `rawInputTokens` MUST be `usage.inputTokens` (total prompt size), never the
  * normalized billable input — normalization subtracts cache read/write, so a
@@ -486,13 +517,27 @@ function isConfirmedFast(tier?: ServiceTierInput): boolean {
  * API rows can stack the bands. xAI publishes neither a combined rate nor an exclusion,
  * so its long-context rate remains the known lower bound instead of inventing a stacked multiplier.
  */
-function applyContextTier(
+function applyPromptLengthPricing(
   cost4: Cost4,
   provider: string,
   modelId: string,
   rawInputTokens: number | undefined,
   tier?: ServiceTierInput,
-): [Cost4, ContextTierName | undefined, boolean] {
+  policy?: PromptLengthPricing,
+): [Cost4, ContextTierName | undefined, boolean, true?] {
+  // A user policy replaces the catalog rule on BOTH sides of its threshold.
+  // Keep custom provenance separate while honoring the published Priority relation.
+  if (policy?.mode === "flat") return [cost4, undefined, false];
+  if (policy?.mode === "custom") {
+    const crossed = rawInputTokens !== undefined && Number.isFinite(rawInputTokens)
+      && (policy.comparison === "gte"
+        ? rawInputTokens >= policy.thresholdTokens : rawInputTokens > policy.thresholdTokens);
+    if (!crossed) return [cost4, undefined, false];
+    const relation = findContextTier(provider, modelId)?.confirmedPriorityRelation;
+    const confirmedFast = isConfirmedFast(tier);
+    if (confirmedFast && relation === "exclusive") return [cost4, undefined, false];
+    return [policy.rates, undefined, confirmedFast && relation === "lower-bound", true];
+  }
   if (rawInputTokens === undefined) return [cost4, undefined, false];
   const rule = findContextTier(provider, modelId);
   if (!rule || !isLongContext(rule, rawInputTokens)) return [cost4, undefined, false];
@@ -520,9 +565,12 @@ function applyPriorityMultiplier(
   modelId: string,
   serviceTier?: ServiceTierInput,
   contextTier?: ContextTierName,
+  customThresholdApplied?: true,
 ): [Cost4, number] {
   if (canonicalFastTierMarker(tierScalar(serviceTier)) !== "priority") return [cost4, 1];
   if (contextTier && findContextTier(provider, modelId)?.confirmedPriorityRelation !== "stack") return [cost4, 1];
+  if (customThresholdApplied && isConfirmedFast(serviceTier)
+    && findContextTier(provider, modelId)?.confirmedPriorityRelation === "lower-bound") return [cost4, 1];
   const rule = findPriorityPricingRule(provider, modelId);
   if (rule?.requiresResponseConfirmation && !isConfirmedFast(serviceTier)) return [cost4, 1];
   const multiplier = rule?.multiplier ?? 1;
@@ -568,7 +616,7 @@ export function estimateAttemptCost(
   serviceTier?: ServiceTierInput,
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
 ): AttemptCostEstimate | null {
-  if (!attempt.usage) return null;
+  if (!isMeasuredStatus(attempt.usageStatus) || !attempt.usage) return null;
   const tokens = normalizeCostTokens(attempt.usage);
   if (!tokens) return null;
   const price = resolveMatchedPrice(attempt.provider, attempt.model, overlays, userOverlays, attempt);
@@ -576,11 +624,11 @@ export function estimateAttemptCost(
   const attemptServiceTier = attempt.tierOutcome
     ? serviceTierContextFromOutcome(attempt.tierOutcome)
     : serviceTier;
-  const [tieredCost4, contextTier, contextPriorityLowerBound] = applyContextTier(
-    price.cost4, price.provider, attempt.model, attempt.usage.inputTokens, attemptServiceTier,
+  const [tieredCost4, contextTier, contextPriorityLowerBound, customThresholdApplied] = applyPromptLengthPricing(
+    price.cost4, price.provider, attempt.model, attempt.usage.inputTokens, attemptServiceTier, price.promptLengthPricing,
   );
   const [effectiveCost4, multiplier] = applyPriorityMultiplier(
-    tieredCost4, price.provider, attempt.model, attemptServiceTier, contextTier,
+    tieredCost4, price.provider, attempt.model, attemptServiceTier, contextTier, customThresholdApplied,
   );
   const priorityLowerBound = contextPriorityLowerBound
     || isOpenRouterPriorityLowerBound(price.provider, attempt.tierOutcome);
@@ -594,6 +642,7 @@ export function estimateAttemptCost(
     estimated: isEstimated(attempt.usage, attempt.usageStatus, price.status),
     ...(multiplier !== 1 ? { priorityMultiplier: multiplier } : {}),
     ...(contextTier ? { contextTier } : {}),
+    ...(customThresholdApplied ? { customThresholdApplied } : {}),
     ...(priorityLowerBound ? { priorityLowerBound: true } : {}),
   };
 }
@@ -622,6 +671,7 @@ export function estimateComboCost(
     tokens.output += est.tokens.output;
     tokens.cacheRead += est.tokens.cacheRead;
     tokens.cacheWrite += est.tokens.cacheWrite;
+    if (est.tokens.cacheWrite1h) tokens.cacheWrite1h = (tokens.cacheWrite1h ?? 0) + est.tokens.cacheWrite1h;
     cost.input += est.cost.input;
     cost.output += est.cost.output;
     cost.cacheRead += est.cost.cacheRead;
@@ -637,6 +687,7 @@ export function estimateComboCost(
       ? { priorityMultiplier: estimates.find(est => est.priorityMultiplier)?.priorityMultiplier }
       : {}),
     ...(estimates.some(est => est.contextTier) ? { contextTier: "long" as const } : {}),
+    ...(estimates.some(est => est.customThresholdApplied) ? { customThresholdApplied: true as const } : {}),
     ...(estimates.every(est => est.priorityLowerBound === true)
       ? { priorityLowerBound: true as const }
       : {}),
@@ -656,16 +707,16 @@ export function estimateRequestCost(
   overlays: readonly ExpectedPriceOverlay[] = EXPECTED_PRICE_OVERLAYS,
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
 ): CostEstimate | null {
-  if (!input.usage) return null;
+  if (!isMeasuredStatus(input.usageStatus) || !input.usage) return null;
   const tokens = normalizeCostTokens(input.usage);
   if (!tokens) return null;
   const price = resolveMatchedPrice(input.provider, input.model, overlays, userOverlays, input);
   if (!price) return null;
-  const [tieredCost4, contextTier, contextPriorityLowerBound] = applyContextTier(
-    price.cost4, price.provider, input.model, input.usage.inputTokens, input.serviceTier,
+  const [tieredCost4, contextTier, contextPriorityLowerBound, customThresholdApplied] = applyPromptLengthPricing(
+    price.cost4, price.provider, input.model, input.usage.inputTokens, input.serviceTier, price.promptLengthPricing,
   );
   const [effectiveCost4, multiplier] = applyPriorityMultiplier(
-    tieredCost4, price.provider, input.model, input.serviceTier, contextTier,
+    tieredCost4, price.provider, input.model, input.serviceTier, contextTier, customThresholdApplied,
   );
   const priorityLowerBound = contextPriorityLowerBound || isOpenRouterPriorityLowerBound(
     price.provider,
@@ -678,6 +729,7 @@ export function estimateRequestCost(
     estimated: isEstimated(input.usage, input.usageStatus, price.status),
     ...(multiplier !== 1 ? { priorityMultiplier: multiplier } : {}),
     ...(contextTier ? { contextTier } : {}),
+    ...(customThresholdApplied ? { customThresholdApplied } : {}),
     ...(priorityLowerBound ? { priorityLowerBound: true } : {}),
   };
 }

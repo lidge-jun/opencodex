@@ -4,6 +4,7 @@ import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { PROVIDER_REGISTRY } from "../../providers/registry";
 import { fastPolicyForModel, serviceTierSupportFromPolicy } from "../../providers/service-tier";
 import { resolveProviderAuthTransport } from "../../providers/fastwire";
+import { defaultAnthropicCacheRetention } from "../../adapters/anthropic/cache-retention";
 import { localFingerprint } from "../../lab/digest";
 import type { LabBehaviorSource, LabBehaviorValues } from "../../lab/live/types";
 
@@ -237,7 +238,9 @@ export function resolveProductionBehaviorValues(
     }),
     "tools.builtinNameEscaping": behaviorRow("provider_config", effective.escapeBuiltinToolNames === true),
     "cache.forwarding": behaviorRow("provider_config", effective.promptCacheKey === true),
-    "cache.retention": behaviorRow("global_config", config.cacheRetention ?? "short"),
+    // The wire TTL, not just the setting: an omitted value means 1h on first-party Anthropic.
+    "cache.retention": behaviorRow("global_config", config.cacheRetention
+      ?? (adapter === "anthropic" ? defaultAnthropicCacheRetention(effective) : "short")),
     "anthropic.eofPolicy": behaviorRow("provider_config", effective.anthropicEofTolerance === true ? "tolerant" : "strict"),
     "openai-chat.eofPolicy": behaviorRow("provider_config", effective.openaiChatEofTolerance === true ? "tolerant" : "strict"),
     "google.mode": behaviorRow("provider_config", effective.googleMode ?? null),

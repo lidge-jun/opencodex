@@ -2,8 +2,9 @@
 
 `src/messaging/` contains command-owned local Codex discovery and queued peer
 submission. `src/cli/message-command.ts` activates it only for `ocx message`.
-There is no management API, startup hook, enabled setting, listener, persistent
-store or skill installation. Ordinary proxy startup does not activate messaging.
+The local path has no management API, startup hook, enabled setting, listener,
+persistent store or skill installation. Ordinary proxy startup does not activate
+messaging. Explicit enrolled peers belong to [remote messaging](remote-messaging.md).
 
 > Decision record: [ADR-6478](decisions/ADR-6478-local-messaging-foundation.md)
 
@@ -57,7 +58,7 @@ guarantee that a session stays loaded after discovery.
 parent cancellation. Callers create and dispose that budget around input, home
 selection, connection, discovery, revalidation and submission. Individual RPCs
 are also capped at 10 seconds. Modules allocate no resources at import time.
-Messaging launches no subprocess. SIGINT/SIGTERM cancel only command-owned work;
+Local messaging launches no subprocess. SIGINT/SIGTERM cancel only command-owned work;
 no recipient, daemon or proxy is stopped.
 
 ## Command-local CLI
@@ -68,7 +69,9 @@ no recipient, daemon or proxy is stopped.
 `src/cli/message-args.ts` rejects malformed, duplicate and remote/Claude options
 before any command resource or home selection. `src/cli/codex-shim-autorestore.ts`
 skips repair for the whole namespace. Registry, capability and help declarations
-describe sessions/send; no management route is claimed.
+describe sessions/send; no management route is claimed. The separate pure remote
+parser selects a dynamic remote-command import only for explicit remote operations;
+local operations do not read peer state or start an owner.
 
 `src/cli/message-runtime.ts` reuses effective Codex-home resolution without
 persistence. Messaging needs no selected CLI binary or version pin. The existing
@@ -143,6 +146,7 @@ UUID; the daemon's submission ID remains separate. Neither is a processing recei
   root carries the repository stale-root marker. It needs no user daemon or API.
 
 Offline fixtures establish request/response contracts, not receiving-model
-obedience or a real daemon's atomic loaded-target enforcement. Remote authentication,
-enrollment, Claude, isolation and idle notices are absent. Independent review and
+obedience or a real daemon's atomic loaded-target enforcement. Remote authentication
+and enrollment have a [separate owner](remote-messaging.md); Claude, isolation and
+idle notices are absent. Independent review and
 architecture acceptance remain separate from this contribution implementation.

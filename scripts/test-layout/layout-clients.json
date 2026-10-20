@@ -1,4 +1,6 @@
 {
+  "gentle-shell-path.test.ts": "clients",
+  "gentle-shell-client.test.ts": "clients",
   "droid-managed-reasoning-defaults.test.ts": "clients",
   "droid-normalized-reasoning-defaults.test.ts": "clients",
   "desktop-app-server-shim.test.ts": "clients",
@@ -41,6 +43,7 @@
   "desktop-3p-guard.test.ts": "clients",
   "desktop-3p-removal.test.ts": "clients",
   "desktop-3p.test.ts": "clients",
+  "desktop-3p-write-files.test.ts": "clients",
   "desktop-app-restart.test.ts": "clients",
   "desktop-cli-contracts.test.ts": "clients",
   "desktop-compatibility-authority.test.ts": "clients",

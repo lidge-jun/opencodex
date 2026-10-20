@@ -42,6 +42,14 @@ try {
     throw new Error("Writer requires an explicitly owned B seed before runtime imports");
   }
 
+  // AUTH-11 measures cross-process registration admission. On Windows every secret write and
+  // the exit drain spawn icacls (30 s budget each), which the parent's completion deadline would
+  // otherwise bill to registration. ACL policy has its own suites; keep it out of this budget.
+  phase = "disable-acl";
+  const { setPlatformForTests }: typeof import("../../src/lib/windows-secret-acl")
+    = await import(repoPath("src", "lib", "windows-secret-acl.ts"));
+  setPlatformForTests("linux");
+
   phase = "import-store";
   const { getAuthStorePath, loadAuthStore, saveCredentialWithReceipt }: typeof import("../../src/oauth/store")
     = await import(repoPath("src", "oauth", "store.ts"));

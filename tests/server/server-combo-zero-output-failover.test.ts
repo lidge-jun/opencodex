@@ -12,6 +12,8 @@ import { clearComboRecallForTests } from "../../src/server/responses/combo-sessi
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { clearRequestLogsForTests, type RequestLogContext } from "../../src/server/request-log";
+import { activeRegistryMetrics, getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
+import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import {
   clearResponseStateForTests,
   flushResponseState,
@@ -218,6 +220,110 @@ describe("combo zero-output bare Responses error failover", () => {
         { ordinal: 2, provider: "b", model: "m2" },
       ],
     });
+  });
+
+  test("a refused child relay does not settle the parent turn's admission lease", async () => {
+    // Each passthrough child binds the parent's lease to its own relay controller. Cancelling the
+    // refused first stream unbinds that controller; it must not settle the turn the next target
+    // still runs in, or the second child is aborted on arrival ("turn already settled").
+    const sse = (...events: unknown[]) => new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join(""),
+      { headers: { "content-type": "text/event-stream" } });
+    const a = serve(() => sse({ type: "response.created", response: { id: "ra", status: "in_progress" } }, { type: "response.failed",
+      response: { id: "ra", status: "failed", error: { type: "server_error", code: "upstream_server_error", message: "busy" } } }));
+    const b = serve(() => sse({ type: "response.completed", response: responsesSuccess("lease backup", "m2") }));
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b"),
+    });
+    const turnAdmissionLease = tryAdmitTurn();
+    if (!turnAdmissionLease) throw new Error("test turn admission unavailable");
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+      }), config, { model: "", provider: "" }, { turnAdmissionLease });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("lease backup");
+      expect(getActiveTurnCount()).toBe(0);
+    } finally { turnAdmissionLease.release(); }
+  });
+
+  test("a plain admission lease does not record an unmatched ladder unbind", async () => {
+    const a = serve(() => Response.json(responsesSuccess("plain lease", "m1")));
+    const config = comboConfig({ a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(a), "key-b") });
+    const misses = activeRegistryMetrics().activeTurns!.releaseMisses;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: false }),
+    }), config, { model: "", provider: "" }, { turnAdmissionLease: { release() {} } });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(activeRegistryMetrics().activeTurns!.releaseMisses).toBe(misses);
+  });
+
+  // Both passthrough relay shapes, on every OS: "linux" selects tee, "win32" plus an explicit
+  // eager-relay mode selects the eager bounded relay that Windows uses by default.
+  for (const relay of ["tee", "eager"] as const)
+  for (const exit of ["complete", "cancel", "abort"] as const)
+  test(`accepted fallback keeps its turn lease until stream ${exit} (${relay} relay)`, async () => {
+    setRelayPlatformForTests(relay === "eager" ? "win32" : "linux");
+    const encoder = new TextEncoder();
+    const frame = (event: unknown) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+    const a = serve(() => new Response(frame({ type: "response.failed", response: {
+      id: "ra", status: "failed", error: { type: "server_error", message: "busy" },
+    } }), { headers: { "content-type": "text/event-stream" } }));
+    let finish!: () => void;
+    const b = serve(() => new Response(new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(frame({ type: "response.output_text.delta", delta: "held fallback" }));
+      finish = () => {
+        controller.enqueue(frame({ type: "response.completed", response: responsesSuccess("held fallback", "m2") }));
+        controller.close();
+      };
+    } }), { headers: { "content-type": "text/event-stream" } }));
+    const config = { ...comboConfig({ a: provider("openai-responses", baseUrl(a), "key-a"),
+      b: provider("openai-responses", baseUrl(b), "key-b") }), streamMode: "eager-relay" as const };
+    const caller = new AbortController();
+    const lease = tryAdmitTurn(undefined, caller.signal);
+    if (!lease) throw new Error("test turn admission unavailable");
+    let releases = 0;
+    // Await the release itself: a relay may legitimately settle it after the client's cancel.
+    let released!: () => void;
+    const releasedSignal = new Promise<void>(resolve => { released = resolve; });
+    lease.attach({ release() { releases++; released(); } });
+    const misses = activeRegistryMetrics().activeTurns!.releaseMisses;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" }, signal: caller.signal,
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
+      }), config, { model: "", provider: "" }, { turnAdmissionLease: lease });
+      expect(response.status).toBe(200);
+      expect(getActiveTurnCount()).toBe(1);
+      expect(releases).toBe(0);
+      if (exit === "cancel") {
+        await response.body!.cancel();
+        if (relay === "eager") {
+          // #44: after a client cancel the eager relay keeps draining upstream, still admitted,
+          // until a terminal or its bounded drain window. A request abort releases at once; a
+          // body cancel alone waits for the drain, which an upstream terminal ends here.
+          expect(getActiveTurnCount()).toBe(1);
+          expect(releases).toBe(0);
+        }
+        try { finish(); } catch { /* the tee relay already cancelled the upstream body */ }
+      } else if (exit === "abort") {
+        caller.abort();
+        await response.text().catch(() => "");
+      } else {
+        finish();
+        expect(await response.text()).toContain("held fallback");
+      }
+      await releasedSignal;
+      expect(getActiveTurnCount()).toBe(0);
+      expect(releases).toBe(1);
+      expect(activeRegistryMetrics().activeTurns!.releaseMisses).toBe(misses);
+    } finally { setRelayPlatformForTests(undefined); lease.release(); }
+    expect(releases).toBe(1);
   });
 
   test("undeclared first adapter tool call hops without changing the request catalog", async () => {

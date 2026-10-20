@@ -30,6 +30,7 @@ import {
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   upstreamHttpVersionConfigError,
+  credentialPinnedProviderConfigError,
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { providerEgressConfigError } from "../lib/provider-egress";
@@ -39,6 +40,7 @@ import { DECLARABLE_HOSTED_TOOL_TYPES } from "../responses/hosted-tool-policy";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import { anthropicOAuthInstanceConfigError } from "../config/schema/anthropic-account-pool";
+import { accountAutoPausePolicySchema } from "../config/schema/account-auto-pause";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { modelAutoCompactTokenLimitsConfigError } from "../providers/auto-compact-budget";
@@ -739,6 +741,9 @@ export function providerManagementConfigError(
     return "provider must be a plain object";
   }
   const raw = provider as Record<string, unknown>;
+  if (raw.accountAutoPause !== undefined && !accountAutoPausePolicySchema.safeParse(raw.accountAutoPause).success) {
+    return "accountAutoPause must be an object with optional boolean enabled and integer consecutiveFailures (1-100)";
+  }
   const contextTiersError = contextTierRecordConfigError(raw.modelContextTiers);
   if (contextTiersError) return contextTiersError;
   const capabilitiesError = modelCapabilitiesConfigError(raw.modelCapabilities);
@@ -784,6 +789,8 @@ export function providerManagementConfigError(
     delete canonicalCandidate.pinnedReasoningEffort;
     delete canonicalCandidate.modelPinnedReasoningEfforts;
     delete canonicalCandidate.responsesSnapshotRepair;
+    // Explicit history-loss opt-in changes request content, never auth or transport identity.
+    delete canonicalCandidate.projectResponsesLiteHostedSearchHistory;
     // modelCosts is a user-owned display overlay, not part of the canonical
     // forward seed; it is validated separately below (providerModelCostsConfigError).
     delete canonicalCandidate.modelCosts;
@@ -793,6 +800,8 @@ export function providerManagementConfigError(
     // sends recover, not what the canonical forward seed is. Validated below
     // (retryOnResetPolicyConfigError).
     delete canonicalCandidate.retryOnReset;
+    // Validated account eligibility policy is independent of the canonical transport.
+    delete canonicalCandidate.accountAutoPause;
     // Context windows are the same kind of user-owned overlay as requestPacing: the operator
     // narrowing what their own native rows advertise. They can only ever LOWER the measured
     // window (see nativeOpenAiContextWindow), so admitting them cannot widen what the proxy
@@ -912,6 +921,8 @@ export function providerManagementConfigError(
   if (reasoningSummaryDeliveryError) return `provider ${name} ${reasoningSummaryDeliveryError}`;
   const modelAdaptersError = modelAdapterRecordConfigError(raw.modelAdapters, "modelAdapters", name, typed);
   if (modelAdaptersError) return `provider ${name} ${modelAdaptersError}`;
+  const credentialPinError = credentialPinnedProviderConfigError(name, typed);
+  if (credentialPinError) return `provider ${name} ${credentialPinError}`;
   const preferHostedToolsError = modelPreferHostedToolsConfigError(
     raw.modelPreferHostedTools,
     "modelPreferHostedTools",
@@ -919,6 +930,9 @@ export function providerManagementConfigError(
     typed,
   );
   if (preferHostedToolsError) return `provider ${name} ${preferHostedToolsError}`;
+  if (raw.projectResponsesLiteHostedSearchHistory !== undefined && typeof raw.projectResponsesLiteHostedSearchHistory !== "boolean") {
+    return `provider ${name} projectResponsesLiteHostedSearchHistory must be a boolean`;
+  }
   if (raw.responsesSnapshotRepair !== undefined && typeof raw.responsesSnapshotRepair !== "boolean") {
     return `provider ${name} responsesSnapshotRepair must be a boolean`;
   }
@@ -1053,9 +1067,12 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   preserveResponsesReasoningContent: "editor",
   preserveResponsesInputItemIds: "editor",
   preserveResponsesMessageMetadata: "editor",
+  projectResponsesLiteHostedSearchHistory: "editor",
   dropResponsesReasoningItems: "editor",
   modelReasoningEffortsAuthoritative: "editor",
   decodesNativeCompactionBlobs: "editor",
+  supportsNativeCompactionTrigger: "editor",
+  supportsNativeCompactEndpoint: "editor",
   allowEncryptedV2AgentTasks: "editor",
   allowPrivateNetwork: "editor",
   // A proxy URL routinely embeds `user:password@`, so it never reaches the dashboard DTO and
@@ -1076,6 +1093,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   apiKeyPool: "redacted",
   // Ordering preference only; it names no key material, so an editor may read and set it.
   apiKeyPoolStrategy: "editor",
+  accountAutoPause: "editor",
   apiKeySelectionRevision: "runtime",
   _apiKeyAttempt: "runtime",
   defaultModel: "editor",

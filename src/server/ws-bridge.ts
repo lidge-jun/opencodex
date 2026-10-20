@@ -11,6 +11,7 @@ import { BoundedSseFrameBuffer } from "./sse-frame-buffer";
 import { sseDataPayload as parseSseBlock } from "./sse-payload-rewrite";
 import { safeResponseHeaders } from "./safe-response-headers";
 import type { AudioSocketTarget } from "./audio-dictation";
+import type { CodexWebSocketActivity } from "../codex/websocket-activity";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -19,6 +20,7 @@ type ResponsesTerminalReporter = (status: ResponsesTerminalStatus) => void;
 type ResponsesPayloadObserver = (payload: string) => void;
 
 export interface WsData {
+  responsesActivity?: CodexWebSocketActivity;
   nativeControl?: NativeResponseControl;
   /** Content-free per-turn explanation; never a model capability assertion. */
   nativeSteeringUnavailable?: string;

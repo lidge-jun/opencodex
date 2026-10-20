@@ -288,6 +288,7 @@ export default function ProviderDetails({
             preset={preset}
             apiBase={apiBase}
             connectionIdentity={connectionIdentity}
+            availableModels={availableModels}
             usageTotals={usageTotals}
             quotaReport={quotaReport}
             currentQuotaReading={currentQuotaReading}

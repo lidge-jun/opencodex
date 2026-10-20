@@ -1,4 +1,5 @@
 import type { UpstreamHttpVersion, ReasoningSummaryDelivery, CodexAccountMode } from "./wire";
+import type { AccountAutoPausePolicy, AccountPauseDetails } from "./account-auto-pause";
 import type { AnthropicAccountPoolConfig } from "./anthropic-account-pool";
 
 /**
@@ -14,6 +15,8 @@ export interface ProviderApiKeySelection {
   entryId?: string;
   reference?: string;
   revision?: string;
+  /** Request-local allocation; does not replace the saved active key. */
+  distributed?: boolean;
 }
 
 export interface OpenRouterProviderRouting {
@@ -164,16 +167,25 @@ export interface ProviderWebSearchBridgeConfig {
   endpoint?: string;
 }
 
-/**
- * User-configured display price for one model (USD per 1M tokens).
- * Mirrors the `Cost4` shape used by the usage cost estimator; structurally
- * compatible so config rows can be lifted directly into price overlays.
- */
+/** Optional user-owned prompt-length policy; rates are USD per 1M tokens. */
+export type PromptLengthPricing =
+  | { mode: "automatic" }
+  | { mode: "flat" }
+  | {
+    mode: "custom";
+    thresholdTokens: number;
+    comparison: "gt" | "gte";
+    rates: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  };
+
+/** Complete base rates for one model, with automatic pricing when policy is absent. */
 export interface ProviderCostOverlay {
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Absent means automatic vendor prompt-length pricing. */
+  promptLengthPricing?: PromptLengthPricing;
 }
 
 export interface RequestPacingRule {
@@ -190,6 +202,10 @@ export interface ProviderRequestPacingConfig extends RequestPacingRule {
   enabled: boolean;
   /** Exact upstream model-id overrides; other models inherit the provider rule. */
   models?: Record<string, RequestPacingRule>;
+  /** Normal request allocation, separate from cooldown recovery ordering. */
+  keySelection?: "active" | "round-robin";
+  /** Additional uniform limits per pool credential, across all models. */
+  keys?: RequestPacingRule;
 }
 
 export interface FastWire {
@@ -433,6 +449,12 @@ export interface OcxProviderConfig {
    */
   preserveResponsesMessageMetadata?: boolean;
   /**
+   * Opt in to lossy hosted-search history notes on canonical Codex Lite ordinary turns and
+   * native v2 compaction triggers, even when search is declared. Default off; only literal true
+   * enables it. History without a search declaration is always projected, independent of this.
+   */
+  projectResponsesLiteHostedSearchHistory?: boolean;
+  /**
    * Treat this provider's `modelReasoningEfforts` as authoritative at the wire, not only in the
    * catalog. Adapters that ship their own per-model effort table (currently `command-code`)
    * otherwise let that table win for models it knows, so a widened row is advertised in the
@@ -453,6 +475,10 @@ export interface OcxProviderConfig {
    * compaction blobs. Absent or false degrades foreign blobs to an opaque note.
    */
   decodesNativeCompactionBlobs?: boolean;
+  /** Accept native Responses v2 `input` compaction_trigger items. Responses adapter only. */
+  supportsNativeCompactionTrigger?: boolean;
+  /** Serve native Responses v1 /responses/compact. Responses adapter only; no auth authority. */
+  supportsNativeCompactEndpoint?: boolean;
   /**
    * Trust this direct key-auth Responses provider to consume or relay opaque encrypted
    * V2 agent tasks. OpenCodex does not decrypt, translate, or recover an eligible task.
@@ -543,7 +569,9 @@ export interface OcxProviderConfig {
    * entry so routing stays single-key; managed via /api/providers/keys. A legacy bare
    * `apiKey` seeds a one-entry pool on first management touch.
    */
-  apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number }>;
+  apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number; disabled?: boolean; pauseDetails?: AccountPauseDetails; pauseRevision?: string }>;
+  /** Explicit opt-in permanent account refusal policy; default off. */
+  accountAutoPause?: AccountAutoPausePolicy;
   /**
    * Optional proactive ordering for `apiKeyPool` when the committed key is already
    * cooling. Deliberately NOT named like the OAuth `accountPoolStrategy`: an API key
@@ -712,12 +740,14 @@ export interface OcxProviderConfig {
     /** Kiro OAuth only: active serving requests per account, 1..100. */
     maxConcurrentPerAccount?: number;
     enabled?: boolean;
+    /** Opt-in process-local conversation ownership; requires proactive enablement. */
+    sessionAffinity?: "conversation" | "none";
     /**
      * Generic OAuth pool selection strategy (#695). Persisted through the pool-settings
      * contract. Consumed by the selector only while `pool.kernel` is on; with the flag off
      * it is still merely persisted, so omitted and set behave the same.
      */
-    strategy?: "quota" | "round-robin" | "fill-first" | "least-loaded";
+    strategy?: "quota" | "round-robin" | "fill-first" | "reset-first" | "least-loaded";
     /**
      * 0-100 usage percent at which fill-first advances off the active account (#695).
      * Read only under `pool.kernel` with `strategy: "fill-first"`; 80 when unset, matching
@@ -1084,9 +1114,9 @@ export interface OcxProviderConfig {
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   /** Google tool-schema compatibility policy. Omitted preserves compatible report-only behavior. */
   googleToolSchemaPolicy?: "compatible" | "reject-lossy";
-  /** Vertex AI GCP project id (or GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env). */
+  /** Vertex AI GCP project id. API keys use it to select the project endpoint; ADC falls back to GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env. */
   project?: string;
-  /** Vertex AI location, e.g. "us-central1" or "global" (or GOOGLE_CLOUD_LOCATION env). */
+  /** Vertex AI location, e.g. "us-central1" or "global". API-key project endpoints default to "global"; ADC falls back to GOOGLE_CLOUD_LOCATION env. */
   location?: string;
   /**
    * Cursor adapter only: MCP servers opencodex starts/connects and exposes to the Cursor agent

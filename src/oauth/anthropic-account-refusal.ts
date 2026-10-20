@@ -1,3 +1,4 @@
+import { wasAccountAutoPaused } from "./account-auto-pause";
 import { anthropicModelFamily } from "./anthropic-model-quota";
 /** Narrow pre-output account recovery, fenced to the bearer that physically sent the turn. */
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -31,6 +32,22 @@ export function bindAnthropicRefusalCredentialForSend(response: Response, owner:
   responseCredentials.set(response, Object.freeze({ ...owner, providerAccountUuid, checkProviderUuid: arguments.length >= 3 }));
 }
 
+/** Preserve the original send proof across internal error normalization, without renewing it. */
+export function carryAnthropicRefusalCredential(source: Response, target: Response): void {
+  const sent = responseCredentials.get(source);
+  if (sent) responseCredentials.set(target, sent);
+}
+
+/** Recheck after body consumption: a late refusal cannot acquire a replacement login's authority. */
+export function anthropicRefusalCredentialIsCurrent(response: Response, instance: AnthropicInstanceId, accountId: string): boolean {
+  const sent = responseCredentials.get(response);
+  if (!sent || sent.provider !== instance || sent.accountId !== accountId
+    || !anthropicPhysicalSendOwnershipIsCurrent(sent)) return false;
+  const row = getAccountCredentialWithStatus(instance, accountId);
+  return !!row && !row.paused && !row.needsReauth
+    && (!sent.checkProviderUuid || row.credential.accountId === sent.providerAccountUuid);
+}
+
 async function isRevokedOAuthToken(response: Response, signal?: AbortSignal): Promise<boolean> {
   if (response.status !== 401) return false;
   try {
@@ -59,9 +76,11 @@ async function isAccountRefusal(response: Response, signal?: AbortSignal): Promi
     // Whole-message patterns: request-policy/model/resource refusals and quoted diagnostics
     // must not acquire account authority merely by containing entitlement keywords.
     if ("code" in error && error.code != null
-      && (typeof error.code !== "string" || !["subscription_required", "insufficient_quota", "permission_denied"].includes(error.code))) return false;
+      && (typeof error.code !== "string" || !["subscription_required", "insufficient_quota", "permission_denied", "oauth_org_not_allowed"].includes(error.code))) return false;
+    // The organization disabled subscription access: an account-scoped verdict, cooled like its siblings.
+    if (error.type === "oauth_org_not_allowed" || ("code" in error && error.code === "oauth_org_not_allowed")) return true;
     const message = error.message.trim();
-    if (error.type === "permission_error" && /^(?:Your account does not have access to Claude Code|Your (?:Claude )?subscription (?:has expired|is (?:expired|inactive))|Your account does not have an active subscription)[.!]?$/i.test(message)) return true;
+    if (error.type === "permission_error" && /^(?:Your account does not have access to Claude Code|Your (?:Claude )?subscription (?:has expired|is (?:expired|inactive))|Your account does not have an active subscription|(?:Your|This) organization has disabled Claude subscription access for Claude Code(?:\. Use an Anthropic API key instead, or ask your admin to enable access)?)[.!]?$/i.test(message)) return true;
     return (error.type === "billing_error" || error.type === "permission_error")
       && /^Your credit balance is too low to access the Anthropic API\.(?: Please go to Plans & Billing to upgrade or purchase credits\.)?$/i.test(message);
   } catch {
@@ -99,6 +118,11 @@ export async function rotateAnthropicAccountOnResponseForInstance(
   const { pauseAnthropicRateAdmission, anthropicRatePauseUntil } = anthropicRatePolicyFor(instance);
   const { recordAnthropicAccountRefusal, rotateAnthropicAccountOnRefusal,
     hasAnthropicFailoverQuorum, isAnthropicAccountPoolEnabled, pickAlternateAnthropicAccount } = routing;
+  if (wasAccountAutoPaused(response)) {
+    if (!options.canRetry || options.signal?.aborted) return null;
+    return pickAlternateAnthropicAccount(options.config, sent.accountId, Date.now(),
+      options.currentDecision ? options.currentDecision() : options.decision ?? null, options.model, options.excludedAccountIds);
+  }
   const ownedCurrent = () => {
     if (configuredAnthropicInstance(options.config, instance) !== instance
       || !anthropicPhysicalSendOwnershipIsCurrent(sent)) return undefined;

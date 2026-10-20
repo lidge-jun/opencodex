@@ -1,6 +1,8 @@
+import { openCodeZenGeminiEndpoint } from "../types/opencode-zen";
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
+import { openCodeGoGeminiEndpoint } from "../types/opencode-go";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
 import type {
   AdapterEvent,
@@ -17,7 +19,7 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
 import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
-import { getVertexAccessToken } from "../lib/gcp-adc";
+import { GCP_CREDENTIAL_MARKER_PREFIX, gcpCredentialMarkerAccount, getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
 import { safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage } from "./google-errors";
 import { isVertexTruncatedTurn, vertexTruncationErrorEvent } from "./google-truncation";
@@ -34,7 +36,7 @@ import {
   observeAntigravityReplay,
 } from "./google-antigravity-replay";
 import { canonicalAntigravityUsageModel, resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
-import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
+import { selectVertexEndpoint, vertexInferenceUrl, vertexReplayModelKey } from "./google-vertex-endpoint";
 import { forgetThoughtSignatureForReplay, lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
 import {
   isTranslatorBudgetExceededError,
@@ -42,6 +44,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
+import { geminiProgressLead, trimsGeminiProgressHistory } from "./google-progress-history";
 import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
@@ -174,7 +177,15 @@ function resolveDirectGeminiWireModelId(modelId: string, applyRenames: boolean):
 
 /** Vertex API key: provider.apiKey if it looks real (not a sentinel), else GOOGLE_CLOUD_API_KEY env. */
 function resolveVertexApiKey(optKey?: string): string | undefined {
-  const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A" ? optKey : undefined;
+  // A `gcp-sa:` marker is the keychain-backed credential reference (see gcp-adc): it is not
+  // API-key material, so it must not be sent as x-goog-api-key — the ADC branch below handles it.
+  // AND the marker means the operator named one credential explicitly: the GOOGLE_CLOUD_API_KEY
+  // env fallback must NOT fire (it would silently route this provider's inference through the
+  // ambient env key instead of the configured service account).
+  if (optKey && optKey.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) return undefined;
+  const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A"
+    ? optKey
+    : undefined;
   return realKey || process.env.GOOGLE_CLOUD_API_KEY;
 }
 
@@ -322,13 +333,20 @@ function geminiToolResultParts(
   msg: OcxToolResultMessage,
   wireName: string,
   wireCallId: string,
+  nestToolResultImages: boolean,
 ): unknown[] {
   const functionResponse: Record<string, unknown> = {
     name: wireName,
     response: { result: geminiToolResultText(msg.content) },
     id: wireCallId,
   };
-  return [{ functionResponse }, ...toolResultImageParts(msg.content)];
+  const images = toolResultImageParts(msg.content);
+  // Vertex Argon rejects image siblings beside a functionResponse as an unsupported model tail.
+  if (nestToolResultImages && images.length > 0) {
+    functionResponse.parts = images;
+    return [{ functionResponse }];
+  }
+  return [{ functionResponse }, ...images];
 }
 
 function geminiMissingToolResultPart(wireName: string, wireCallId: string): unknown {
@@ -359,6 +377,7 @@ function messagesToGeminiFormat(
   identityModelId: string,
   stripRejectedClaudeSdkParagraph = false,
   isCloudCodeAssist = false,
+  nestToolResultImages = false,
 ): { systemInstruction?: unknown; contents: unknown[]; replayedCallIds: string[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -456,11 +475,26 @@ function messagesToGeminiFormat(
         const aMsg = msg as OcxAssistantMessage;
         const parts: unknown[] = [];
         const toolCalls: Array<{ wireCallId: string; wireName: string }> = [];
+        // Progress text before a Gemini tool call replays as its lead sentence, so planning the
+        // model leaked into visible text is not copied forward (google-progress-history.ts).
+        const trimProgress = trimsGeminiProgressHistory(identityModelId)
+          && aMsg.phase !== "final_answer"
+          && aMsg.content.some(part => part.type === "toolCall");
+        let progressLeadKept = false;
+        let afterToolCall = false;
         for (const p of aMsg.content) {
           if (p.type === "text") {
-            const textPart = geminiTextPart((p as OcxTextContent).text);
+            let text: unknown = (p as OcxTextContent).text;
+            if (trimProgress && !afterToolCall) {
+              if (progressLeadKept || typeof text !== "string") continue;
+              text = geminiProgressLead(text);
+              if (text === undefined) continue;
+              progressLeadKept = true;
+            }
+            const textPart = geminiTextPart(text);
             if (textPart) parts.push(textPart);
           } else if (p.type === "toolCall") {
+            afterToolCall = true;
             const tc = p as OcxToolCall;
             // Preserve the thought signature on the function-call part so Antigravity/Gemini-3
             // reasoning continuity survives history-driven (stateless) turns, not just same-process
@@ -525,13 +559,17 @@ function messagesToGeminiFormat(
           const responseParts: unknown[] = [];
           for (const call of toolCalls) {
             const result = resultsById.get(call.wireCallId);
-            if (result) responseParts.push(...geminiToolResultParts(result, call.wireName, call.wireCallId));
+            if (result) responseParts.push(...geminiToolResultParts(result, call.wireName, call.wireCallId, nestToolResultImages));
             else responseParts.push(geminiMissingToolResultPart(call.wireName, call.wireCallId));
           }
-          for (const orphan of orphanResults) {
-            responseParts.push(...geminiOrphanToolResultParts(orphan));
-          }
+          const orphanParts = orphanResults.flatMap(geminiOrphanToolResultParts);
           contents.push({ role: "user", parts: responseParts });
+          // Orphan images cannot share Argon's response batch or claim another call's ownership.
+          if (nestToolResultImages && orphanParts.some(part => typeof part === "object" && part !== null && "inline_data" in part)) {
+            contents.push({ role: "user", parts: orphanParts });
+          } else {
+            responseParts.push(...orphanParts);
+          }
           i = j - 1;
         }
         break;
@@ -864,6 +902,7 @@ function invalidGoogleShapeEvent(
   };
 }
 
+/** Build Gemini transport and response parsing for AI Studio, Vertex, Cloud Code Assist or Go. */
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const toolSchemaPolicy = provider.googleToolSchemaPolicy ?? "compatible";
   const toolSchemaProfile = {
@@ -945,6 +984,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
       : {}),
 
+    /** Compile an admitted request into the selected Gemini endpoint, body and authentication. */
     async buildRequest(parsed: OcxParsedRequest) {
       // Structured-output admission runs FIRST, before messagesToGeminiFormat writes
       // lastInjectedCallIds/lastReasoningReplayScope: a refused request must not leave
@@ -983,7 +1023,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
             provider.baseUrl,
           ).wireModelId
-        : provider.googleMode === "vertex"
+        : provider.googleMode === "vertex" || openCodeZenGeminiEndpoint(provider, parsed.modelId) !== undefined
           ? parsed.modelId
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       returnsThoughtSummaries = provider.googleMode === "cloud-code-assist"
@@ -998,6 +1038,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         identityModelId,
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
+        provider.googleMode === "vertex" && parsed.modelId === "gemini-4-argon",
       );
       lastInjectedCallIds = [...replayedCallIds];
       lastReasoningReplayScope = parsed._reasoningReplayScope;
@@ -1164,9 +1205,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
         reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;
-        const vertexProject = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "api-key";
-        const vertexLocation = provider.location || process.env.GOOGLE_CLOUD_LOCATION || "global";
-        vertexReplayModel = `vertex:${vertexProject}:${vertexLocation}:${parsed.modelId}`;
+        const apiKey = resolveVertexApiKey(provider.apiKey);
+        const vertexEndpoint = selectVertexEndpoint(provider, Boolean(apiKey));
+        const url = vertexInferenceUrl(vertexEndpoint, parsed.modelId, method, streamParam);
+        vertexReplayModel = vertexReplayModelKey(vertexEndpoint, parsed.modelId);
         vertexReplaySession = vertexReplaySessionId(parsed);
         // Compile names before replay so the cache matches the exact provider-visible
         // functionCall identity. This is the same bounded TTL/LRU store used by CCA, with the
@@ -1182,35 +1224,42 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             (compiled.body as { contents: unknown[] }).contents,
           );
         }
-        // Vertex AI: project/location endpoint with GCP ADC, or x-goog-api-key fast path.
-        const apiKey = resolveVertexApiKey(provider.apiKey);
-        if (apiKey) {
-          const url = `https://aiplatform.googleapis.com/v1/publishers/google/models/${parsed.modelId}:${method}${streamParam}`;
-          headers["x-goog-api-key"] = apiKey;
-          return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
+        // Endpoint, location and model path were validated above, before any credential is attached.
+        if (apiKey) headers["x-goog-api-key"] = apiKey;
+        else {
+          // Resolve each marker per request; never share a process-global active account.
+          const markerAccount = gcpCredentialMarkerAccount(provider.apiKey);
+          headers["Authorization"] = `Bearer ${await getVertexAccessToken({ markerAccount })}`;
         }
-        const project = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
-        if (!project) throw new Error("Vertex AI requires a project id (provider.project or GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT).");
-        const location = provider.location || process.env.GOOGLE_CLOUD_LOCATION;
-        if (!location) throw new Error("Vertex AI requires a location (provider.location or GOOGLE_CLOUD_LOCATION).");
-        const locationError = googleVertexLocationConfigError(location);
-        if (locationError) throw new Error(locationError);
-        const host = location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
-        const url = `https://${host}/v1/projects/${project}/locations/${location}/publishers/google/models/${parsed.modelId}:${method}${streamParam}`;
-        const token = await getVertexAccessToken();
-        headers["Authorization"] = `Bearer ${token}`;
         return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
       }
 
-      // ai-studio (default): Generative Language API + x-goog-api-key.
-      const url = `${provider.baseUrl}/v1beta/models/${routedModelId}:${method}${streamParam}`;
+      // Go and Zen use separate guarded Gemini endpoints; AI Studio retains /v1beta.
+      const goEndpoint = openCodeGoGeminiEndpoint(provider, routedModelId);
+      const zenEndpoint = openCodeZenGeminiEndpoint(provider, routedModelId);
+      const endpoint = goEndpoint ?? zenEndpoint ?? `${provider.baseUrl}/v1beta/models/${routedModelId}`;
+      const url = `${endpoint}:${method}${streamParam}`;
       const apiKey = provider.apiKey?.trim();
-      if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
-      headers["x-goog-api-key"] = apiKey;
+      if (!apiKey) throw new Error(`${goEndpoint ? "OpenCode Go" : zenEndpoint ? "OpenCode Zen" : "google (AI Studio)"} requires a non-empty API key`);
+      if (goEndpoint) {
+        // Console inference documents Bearer auth. Send only the selected Go key.
+        for (const name of Object.keys(headers)) {
+          if (["authorization", "x-goog-api-key", "x-api-key"].includes(name.toLowerCase())) delete headers[name];
+        }
+        headers["Authorization"] = `Bearer ${apiKey}`;
+      } else {
+        headers["x-goog-api-key"] = apiKey;
+      }
 
       const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
       reportToolSchemaLoss(compiled.toolSchemaLossReport);
       restoreGoogleToolName = compiled.restoreToolName;
+      // A functionCall issued by another model (a combo hop, #7298) has no Gemini signature, and
+      // Gemini 3 refuses the turn without one. The same Gemini-only sentinel CCA and Vertex
+      // apply; a real signature carried by history always wins.
+      if (Array.isArray((compiled.body as { contents?: unknown[] }).contents)) {
+        applyAntigravityThoughtSignatureFallback(routedModelId, (compiled.body as { contents: unknown[] }).contents);
+      }
       return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
     },
 

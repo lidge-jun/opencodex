@@ -19,6 +19,7 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
 import { WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../lib/windows-user-principal";
+import { resolveWindowsLocalAppData } from "./windows-local-appdata";
 
 import type {
   ResolveCodexCoordinatorDatabasePath,
@@ -209,10 +210,11 @@ export function decodeWindowsIdentityPowerShellOutputForTests(output: Uint8Array
 /**
  * Per-process memo for the Windows lookups.
  *
- * Both values -- the effective token's SID and its known-folder local AppData --
+ * Both helper values -- the effective token's SID and its known-folder local AppData --
  * are fixed for the lifetime of a process: neither can change without a new logon
  * token, and the lookups deliberately ignore the environment, so nothing a caller
- * does between two calls can alter the answer. Each call otherwise spawns a fresh
+ * does between two calls can alter the answer. The native x64 known-folder path
+ * avoids this helper entirely. Each fallback call otherwise spawns a fresh
  * PowerShell, roughly 150ms for the SID and 310ms for the folder, and the
  * coordinator asks for both on every config write and lock acquisition. That cost
  * pushed real multi-process injection tests past their budget while proving
@@ -263,6 +265,15 @@ function resolveWindowsSid(): string {
   );
   if (!SID_PATTERN.test(sid)) refuse("Windows effective-account lookup returned an invalid SID.");
   return sid.toUpperCase();
+}
+
+function windowsLocalAppData(): string {
+  try {
+    return resolveWindowsLocalAppData(() => powershellValue(windowsLocalAppDataExpression()));
+  } catch (cause) {
+    if (cause instanceof CodexUserIdentityRefusal) throw cause;
+    refuse("Windows LocalAppData resolution failed.", cause);
+  }
 }
 
 export const resolveEffectiveUserIdentity: ResolveEffectiveUserIdentity = () => {
@@ -374,7 +385,7 @@ export function probeCodexCoordinatorNamespace(identity: UserIdentity): Coordina
   }
 
   if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
-  const localAppData = powershellValue(windowsLocalAppDataExpression());
+  const localAppData = windowsLocalAppData();
   if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
   const root = resolve(localAppData, "OpenCodex", "Runtime", "v1", identity.sid.toUpperCase());
   let entry;
@@ -404,10 +415,10 @@ export function probeCodexCoordinatorNamespace(identity: UserIdentity): Coordina
 
 function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "win32" }>): string {
   if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
-  const localAppData = powershellValue(windowsLocalAppDataExpression());
+  const localAppData = windowsLocalAppData();
   if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
 
-  // The SID and known-folder values come from the effective token/.NET OS APIs,
+  // The SID and known-folder values come from effective-token OS APIs,
   // never USERPROFILE or LOCALAPPDATA. WP11 adds descriptor/reparse/ACL checks at
   // the stable-database open boundary where those checks can cover SQLite too.
   const root = resolve(localAppData, "OpenCodex", "Runtime", "v1", identity.sid.toUpperCase());

@@ -1,6 +1,6 @@
 ---
 title: Conseiller
-description: Le sidecar de consultation experte d'OpenCodex — un modèle expert configuré conseille les workers routés, avec les politiques manual et preflight.
+description: Consultation indépendante avec les politiques manual, preflight et adaptive fondée sur des preuves.
 ---
 
 Le conseiller est un modèle expert indépendant qui examine la tâche du worker et renvoie des
@@ -15,6 +15,8 @@ délégation initiée par le worker via les outils de collaboration de Codex. Le
 sidecar côté proxy invisible du client — même un worker qui ne spawn jamais peut être conseillé.
 
 ## Configuration
+
+Sur la page **Advisor**, choisissez le modèle dans le catalogue. Le sélecteur conserve exactement les identifiants natifs, de fournisseur, de compte, personnalisés et de combo. Les modèles désactivés ou en attente de sélection initiale ne sont pas proposés. Un identifiant enregistré absent du catalogue reste visible avec un avertissement, jusqu’à son remplacement ou sa suppression. Un échec de chargement conserve la sélection et propose de réessayer. Choisissez un modèle capable de fournir des conseils textuels : le catalogue ne garantit pas la compatibilité des consultations. La CLI et l’API acceptent toujours les chaînes de modèle prises en charge par le routeur.
 
 ```json
 {
@@ -33,12 +35,13 @@ sidecar côté proxy invisible du client — même un worker qui ne spawn jamais
 | `enabled?` | `boolean` | `false` | Interrupteur principal. Désactivé : aucun comportement conseiller sur le chemin de requête. |
 | `model?` | `string` | — | Le modèle expert. Toute chaîne de modèle acceptée par le routeur : modèle natif seul (`gpt-6-astra`), `provider/model` explicite (`anthropic/claude-sonnet-4-6`, `xai/grok-...`) ou modèle natif qualifié par compte. Inter-fournisseurs entièrement pris en charge. |
 | `effort?` | `string` | `"max"` | Intensité de raisonnement de l'appel conseiller (`low`–`ultra`). |
-| `policy?` | `"manual" \| "preflight"` | `"manual"` | Quand consulter le conseiller. |
+| `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | Quand consulter le conseiller. |
+| `maxConsultationsPerTask?` | `integer` | `3` | Budget adaptatif par tâche (1 à 3 tentatives, appels manuels compris). |
 | `timeoutMs?` | `number` | `120000` | Délai de la consultation en boucle locale. |
 | `contextSharingConsent?` | `"v1"` | absent | Consentement de l'opérateur pour envoyer le contexte de la tâche au fournisseur conseiller configuré. Seul `"v1"` est courant. Une valeur absente, périmée ou autre n'autorise aucun envoi. `enabled: true` n'est pas ce consentement. |
 
 Gérez-le via la page **Advisor** du tableau de bord ou
-`ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight>`.
+`ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>`.
 
 Sans consentement courant, `ocx advisor on` n'active pas le partage inter-fournisseurs : il affiche cette divulgation et s'arrête. `ocx advisor on --ack-context-sharing` et `ocx advisor consent` enregistrent `v1`. `ocx advisor consent --revoke` retire le consentement et arrête immédiatement l'envoi. `ocx advisor set` n'accorde pas le consentement. La case du tableau de bord n'est pas précochée.
 
@@ -105,7 +108,14 @@ codage, et une consultation ne change jamais le modèle principal de la session.
 - Les tours natifs OpenAI en passthrough (workers du pool ChatGPT) ne reçoivent pas l'outil
   synthétique ; le conseiller couvre les fournisseurs routés (traduits). La consultation
   preflight s'applique aux adaptateurs run-turn ; l'outil non.
-- Pas de déclencheur adaptatif : pas de détection de blocage, d'analyse d'échecs répétés, de
-  niveaux d'escalade, de conseillers multiples ni de vote. `manual` et `preflight` seulement.
+- Pas de détection sémantique de blocage, de revue finale, de niveaux d’escalade, de conseillers multiples ou de vote.
 - Le registre de déduplication preflight vit dans le processus ; après un redémarrage du proxy,
   une tâche en cours peut recevoir une tentative preflight de plus.
+
+## Consultation adaptative et activité
+
+`adaptive` ajoute à la consultation initiale une consultation lorsque la même vérification, dans le même répertoire, échoue, qu’une modification de fichier ultérieure réussit, puis qu’une nouvelle exécution échoue encore. Une réussite efface l’échec ; une vérification démarrée avant la modification ne compte pas comme une nouvelle tentative après réparation. Les étapes initiale et réparation ont des revendications distinctes. Une identité de conversation stable est requise pour l’automatisation. Les appels/résultats doivent être appariés avec un code de sortie explicite. Scripts complexes, lots, modifications shell et sorties ambiguës ne déclenchent rien.
+
+Configurez `ocx advisor set --policy adaptive --max-consultations 2`. Les tentatives manuelles et automatiques partagent un budget de 1 à 3 par tâche, réservé avant envoi dans `OPENCODEX_HOME/advisor-budget.sqlite`. Un redémarrage ou un changement de worker ne le remet pas à zéro. Seuls les condensats, compteurs et expirations sont conservés, pendant 24 heures après la première tentative (512 tâches au maximum). Si le budget est inaccessible ou épuisé, le worker continue. Les appels envoyés puis échoués ou annulés restent réservés car ils peuvent coûter. Sans identité stable, seuls les appels manuels limités par requête restent disponibles.
+
+La page Advisor et `ocx advisor activity --json` (`GET /api/advisor/activity`) montrent jusqu’à 100 entrées de métadonnées du processus sur 24 heures ; la page visible s’actualise toutes les cinq secondes. Elles incluent motif, état, modèles, durée, tokens d’entrée/sortie signalés et efforts demandé et traduit par l’adaptateur. Aucun texte, commande, conseil ou identifiant de conversation n’est conservé ; un redémarrage efface ces entrées. La traduction décrit les paramètres envoyés et ne garantit pas le raisonnement interne. Les données absentes restent inconnues ; adoption et coût exact ne sont pas déduits.

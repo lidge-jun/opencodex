@@ -33,6 +33,7 @@ type ServiceTierCapabilityProvider = Pick<
   | "modelAdapters"
   | "baseUrl"
   | "authMode"
+  | "googleMode"
   | "apiKeyTransport"
   | "chatServiceTier"
   | "fastWire"
@@ -119,7 +120,7 @@ function buildFastPolicyAuthority(
           : {}),
     }),
     modelAdapters: Object.freeze({ ...(provider.modelAdapters ?? {}) }),
-    hardPins: captureWireAdapterHardPins(providerName),
+    hardPins: captureWireAdapterHardPins(providerName, provider),
     hardPinPrefixes: captureWireAdapterHardPinPrefixes(providerName, provider),
     registryWireDefaults: cloneRegistryWireDefaults(registry?.modelWireDefaults),
   });

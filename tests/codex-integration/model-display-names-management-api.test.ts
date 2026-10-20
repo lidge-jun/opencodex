@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { buildCatalogEntries, gatherRoutedModels } from "../../src/codex/catalog";
 import { clearModelCache, getFreshCached, setCached } from "../../src/codex/model-cache";
 import type { CatalogDisposition } from "../../src/codex/convergence-types";
 import { listManagementModelRows, toExportModel } from "../../src/server/management/model-rows";
@@ -32,6 +33,38 @@ afterEach(() => {
 });
 
 describe("model display name management rows", () => {
+  test("OpenAI API labels survive trusted reconstruction into the Codex catalog", async () => {
+    const apiConfig: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai-apikey",
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          liveModels: false,
+          modelDisplayNames: { "gpt-6-astra": "6 Astra", "gpt-6.1-sol": "6.1 Sol" },
+        },
+      },
+    };
+    const catalog = async () => buildCatalogEntries(null, [], await gatherRoutedModels(apiConfig));
+    const labeled = await catalog();
+    for (const [slug, displayName] of [
+      ["openai-apikey/gpt-6-astra", "6 Astra"],
+      ["openai-apikey/gpt-6.1-sol", "6.1 Sol"],
+    ]) {
+      expect(labeled.filter(entry => entry.slug === slug)).toHaveLength(1);
+      expect(labeled.find(entry => entry.slug === slug)?.display_name).toBe(displayName);
+    }
+
+    delete apiConfig.providers["openai-apikey"]!.modelDisplayNames;
+    const original = await catalog();
+    for (const entry of labeled) {
+      const baseline = original.find(row => row.slug === entry.slug);
+      expect(baseline).toBeDefined();
+      expect({ ...entry, display_name: baseline!.display_name }).toEqual(baseline);
+    }
+  });
+
   test("reports operator, provider, and fallback display name sources without provider secrets", async () => {
     const operatorConfig = config({ "model-a": "Operator Name" });
     operatorConfig.providers[DISPLAY_PROVIDER].apiKey = "sk-secret-not-for-rows";

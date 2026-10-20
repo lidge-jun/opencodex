@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ComboWorkspace from "../components/ComboWorkspace";
+import { comboVisionSidecarTargets } from "../combo-capabilities";
 import {
   type ComboItem,
   comboModelId,
@@ -29,7 +30,15 @@ type ProviderOption = {
   defaultModel?: string;
   models?: string[];
 };
-type ModelOption = { provider: string; id: string; namespaced?: string; reasoningEfforts?: string[]; inputModalities?: string[] };
+type ModelOption = {
+  provider: string;
+  id: string;
+  namespaced?: string;
+  reasoningEfforts?: string[];
+  inputModalities?: string[];
+  inputModalitiesDeclared?: string[];
+  visionSidecarConsumer?: boolean;
+};
 type ProviderDto = {
   adapter: string;
   baseUrl: string;
@@ -83,7 +92,7 @@ export default function Combos({
   onCountChange?: (count: number) => void;
 }) {
   const t = useT();
-  const cacheKey = `ocx.combos.workspace.v1:${apiBase}`;
+  const cacheKey = `ocx.combos.workspace.v2:${apiBase}`;
   const cached = useMemo(() => seedCombos(cacheKey), [cacheKey]);
 
   /*
@@ -172,6 +181,13 @@ export default function Combos({
     const models: ModelOption[] = [];
     const capabilityModels: ModelOption[] = [];
     const catalogued = new Set<string>();
+    const parseModalities = (raw: unknown): string[] | undefined =>
+      Array.isArray(raw)
+        ? raw.flatMap((modality) => {
+          const trimmed = typeof modality === "string" ? modality.trim() : "";
+          return trimmed ? [trimmed] : [];
+        })
+        : undefined;
     for (const row of modelRows) {
       if (!row || typeof row !== "object") continue;
       const model = row as {
@@ -181,6 +197,8 @@ export default function Combos({
         disabled?: unknown;
         reasoningEfforts?: unknown;
         inputModalities?: unknown;
+        inputModalitiesDeclared?: unknown;
+        visionSidecarConsumer?: unknown;
       };
       if (typeof model.provider !== "string" || typeof model.id !== "string") continue;
       const provider = model.provider.trim();
@@ -193,21 +211,19 @@ export default function Combos({
       const reasoningEfforts = Array.isArray(model.reasoningEfforts)
         ? model.reasoningEfforts.filter((effort): effort is string => typeof effort === "string")
         : undefined;
-      const inputModalities = Array.isArray(model.inputModalities)
-        ? model.inputModalities.flatMap((modality) => {
-          const trimmed = typeof modality === "string" ? modality.trim() : "";
-          return trimmed ? [trimmed] : [];
-        })
-        : undefined;
+      const inputModalities = parseModalities(model.inputModalities);
+      const inputModalitiesDeclared = parseModalities(model.inputModalitiesDeclared);
       const option: ModelOption = {
         provider,
         id,
         namespaced: typeof model.namespaced === "string" ? model.namespaced : undefined,
         ...(reasoningEfforts ? { reasoningEfforts } : {}),
         ...(inputModalities && inputModalities.length > 0 ? { inputModalities } : {}),
+        ...(inputModalitiesDeclared && inputModalitiesDeclared.length > 0 ? { inputModalitiesDeclared } : {}),
+        visionSidecarConsumer: model.visionSidecarConsumer === true,
       };
       capabilityModels.push(option);
-      if (model.disabled !== true) models.push(option);
+      models.push(option); // Catalog visibility does not restrict internal Combo selection.
     }
 
     // Add a default placeholder only when the catalog has no row, including disabled rows.
@@ -246,6 +262,28 @@ export default function Combos({
     },
   );
   const { state } = resource;
+
+  /*
+   * Vision Sidecar enabled state for the enrollment warning. Deliberately
+   * separate from the workspace payload: a failure here must never block or
+   * fail the combo workspace, so errors are swallowed and `undefined`
+   * (unknown) renders no warning.
+   */
+  const [visionEnabled, setVisionEnabled] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    fetch(`${apiBase}/api/sidecar-settings`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: unknown) => {
+        if (cancelled || !data || typeof data !== "object") return;
+        const vision = (data as { vision?: { enabled?: unknown } }).vision;
+        if (!vision || typeof vision !== "object") return;
+        setVisionEnabled(vision.enabled !== false);
+      })
+      .catch(() => { /* unknown stays warning-free */ });
+    return () => { cancelled = true; };
+  }, [active, apiBase]);
 
   const [quotaNow, setQuotaClock] = useState(() => Date.now());
   const loadProviderQuotas = useCallback(async (signal?: AbortSignal): Promise<ProviderQuotasDto> => {
@@ -307,7 +345,14 @@ export default function Combos({
       const res = await fetch(`${apiBase}/api/combos`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(toPutBody(item, renameFrom ? { renameFrom } : {})),
+        body: JSON.stringify(toPutBody(item, {
+          ...(renameFrom ? { renameFrom } : {}),
+          // Enabling images declares text-only members for the Vision Sidecar so the
+          // operator never has to hand-edit provider config for a multimodal combo.
+          ...(item.imageInput !== "disabled"
+            ? { visionSidecarTargets: comboVisionSidecarTargets(item.targets, capabilityModels) }
+            : {}),
+        })),
       });
       const data = res.ok
         ? await res.json() as unknown
@@ -403,6 +448,7 @@ export default function Combos({
           models={models}
           capabilityModels={capabilityModels}
           cataloguedComboIds={cataloguedComboIds}
+          visionEnabled={visionEnabled}
           loading={false}
           onRefresh={() => { resource.refresh(); quotaResource.refresh(); }}
           onSave={saveCombo}

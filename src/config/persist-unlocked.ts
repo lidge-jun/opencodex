@@ -1,3 +1,4 @@
+import { normalizeAccountAutoPauseRevisions, observeAccountAutoPauseRevisions, snapshotAutoPauseFingerprints } from "./account-auto-pause-revisions";
 import { existsSync, readFileSync } from "node:fs";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import type { OcxConfig } from "../types";
@@ -78,6 +79,8 @@ export function persistConfigUnlocked(config: OcxConfig): boolean {
   const persisted = withPreservedDiskOnlyProviders(config);
   if (provenanceProjection.configRebaseProvenance === undefined) delete persisted.configRebaseProvenance;
   else persisted.configRebaseProvenance = provenanceProjection.configRebaseProvenance;
+  normalizeAccountAutoPauseRevisions(rawBeforeWrite, persisted);
+  const beforeFingerprints = snapshotAutoPauseFingerprints(rawBeforeWrite ?? {});
   const bytes = JSON.stringify(persisted, null, 2) + "\n";
   let unchanged = false;
   try {
@@ -90,6 +93,7 @@ export function persistConfigUnlocked(config: OcxConfig): boolean {
   // the same bytes (e.g. before a proxy notification), and Logs/Usage must
   // adopt the overlay without waiting for a changed save or restart.
   let published = unchanged;
+  let observedPublication = false;
   try {
     if (!unchanged) {
       atomicWriteFile(configPath, bytes, undefined, { afterRename: () => { published = true; } });
@@ -97,10 +101,15 @@ export function persistConfigUnlocked(config: OcxConfig): boolean {
     }
     // Publication, not successful cache refresh, is the rollback boundary. A
     // byte-identical save already has the requested state on disk as well.
+    observeAccountAutoPauseRevisions(persisted, persisted, beforeFingerprints);
+    observedPublication = true;
     refreshConfigDerivedRegistries(persisted);
     return !unchanged;
   } catch (error) {
-    if (published) throw new ConfigWritePublishedError(error);
+    if (published) {
+      if (!observedPublication) observeAccountAutoPauseRevisions(persisted, persisted, beforeFingerprints);
+      throw new ConfigWritePublishedError(error);
+    }
     throw error;
   }
 }

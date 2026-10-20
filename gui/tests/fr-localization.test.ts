@@ -125,6 +125,7 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "integrations.cursor.baseUrl",
   "integrations.tab.opencode",
   "integrations.tab.pi",
+  "integrations.tab.gentleShell", // Product name, retained in the original spelling.
   "integrations.tab.omp",
   "integrations.tab.hermes",
   "integrations.tab.openclaw",

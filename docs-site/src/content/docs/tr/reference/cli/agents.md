@@ -302,10 +302,15 @@ Başsız çalışma zamanı ayarlarını, başlatmayı, senkronizasyonu, tanıla
 güncellemeleri yönetin.
 
 `ocx system codex-restart --yes`, `ocx sync --restart-codex` ile aynı modül
-üzerinden Codex app-server'larını yeniden başlatır ve Codex masaüstü
-uygulamasını tamamen kapatıp yeniden başlatır. Proxy'nin kendisi Codex
-uygulamasının içinde çalışıyorsa, tamamlayamayacağı bir devri vaat etmek
-yerine eyleme geçirilebilir bir iletiyle reddeder.
+üzerinden Codex app-server'larını yeniden başlatır. Model seçici uygulama
+açılırken oluşturulduğu için Codex masaüstü uygulamasını güncel model kataloğu yazılmadan önce başlatılmışsa veya bu istek `model_catalog_json` bağını değiştirdiyse tamamen kapatıp yeniden başlatır. Aksi
+halde uygulama açık kalır, kendi app-server'ını yeniden başlatır ve
+gönderilmemiş taslakları ve bekleyen onayları korur. Uygulama veya katalog
+durumu okunamazsa tam yeniden başlatma yapılır. Proxy'nin kendisi Codex
+uygulamasının içinde çalışıyorsa masaüstü yeniden başlatması, tamamlayamayacağı
+bir devri vaat etmek yerine eyleme geçirilebilir bir iletiyle reddeder.
+
+Bu isteğin `model_catalog_json` bağını değiştirmesi de kabuk katalog dosyası yazıldıktan sonra başlamış olsa bile masaüstünün yeniden başlatılmasını gerektirir.
 
 ```bash
 ocx system settings --stream-mode eager-relay
@@ -317,7 +322,7 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check` paket kayıt defterine istek göndermez ve yapılandırmada belirtilen kurulum adayına ilişkin provenance kanıtını, maskelenmiş yürütülebilir dosya konumu ve sahiplik kanıtı dâhil, sınırlı biçimde inceler. Yayımlanmış başlatıcıdan gelen güvenilir bağlam aday anlık görüntüsünü doğrular; Codex'in başarıyla çalıştırıldığını doğrulamaz. Bu tek seferlik komut Codex'i hiçbir zaman çalıştırmadığından, ortamdan ve kalıcı kayıtlardan gelen adaylar yalnızca raporlanır (`managed: false`, genellikle `selection_unattested`). JSON çıktısında `candidateAvailable`, `candidateVersion` ve `candidateSource` alanları bulunur; `selectionAttested` değeri ise `false` kalır. Yapılandırmada belirtilen kurulum adayını incelemek için yayımlanmış başlatıcıdan gelen güvenilir bağlam gerekir; Bun ile veya kaynak koddan doğrudan başlatıldığında bu kanıt bulunmadığından ortamdaki ve kalıcı kayıtlardaki aday durumu yok sayılır ve POSIX sistemlerinde `candidate_unavailable` bildirilebilir. Windows'ta bu ilk parça, aday veya yapılandırma yollarında hiçbir dosya sistemi G/Ç işlemi yapmaz. Yalnızca güvenilir başlatıcının yakaladığı mutlak bir ortam adayı sözcüksel olarak uygulama paketi ya da sürüm yöneticisi etiketi alabilir; diğer tüm Windows adayları kapalı başarısızlıkla reddedilir. Bu parça kalıcı seçim durumunu hiç okumadığından, ortam adayı yakalanmamış olan Windows çalıştırmaları `candidate_unavailable` yerine `windows_inspection_deferred` bildirir: komut bir Codex CLI'nin kurulu olup olmadığını gözlemleyemez, bu yüzden aday bulunmadığını iddia etmek yerine incelemenin ertelendiğini bildirir. Komut Codex veya bir paket yöneticisi çalıştırmaz, shim'i onarmaz, yapılandırmaya ya da önbellek durumuna yazmaz, hiçbir süreci durdurmaz ve hiçbir şey kurmaz. Uygulamayla birlikte paketlenmiş adaylar, tanınan sürüm yöneticisi yollarında bulunan adaylar, doğrulanmamış bağımsız adaylar ve belirsiz shim durumları `unmanaged` veya `unknown` olarak raporlanır; hiçbir zaman `managed` olarak sınıflandırılmaz.
+`check` kayıt defterini sorgulamaz ve Codex’i çalıştırmaz. POSIX üzerinde çözümleyicinin seçtiği kanonik yol, yayımlanmış başlatıcının yakaladığı ortam adayıyla aynıysa `selectionAttested: true` olabilir. Bağlantılı npm-global paket bildirimi sahipliği doğrularsa ve aday sürüm bildirildiyse bu sürüm bildirimdeki sürümle eşleşirse `managed: true` olabilir; kalıcı adaylar doğrulanmaz. Windows, aday veya yapılandırma dosyalarını okumadan incelemeyi erteler. Doğrudan Bun/kaynak çalıştırması başlatıcı kanıtı sağlamaz. `plan`, yalıtılmış geçici npm yapılandırması, önbelleği ve günlükleriyle resmî kayıt defterini sorgular; etkin oturumları veya eksik süreç gözlemini reddeder. Yazılım kurmaz ve süreçlere sinyal göndermez. [Komutların ve ret nedenlerinin tam açıklamasına (İngilizce)](/reference/cli/agents/#read-only-codex-cli-update-plan) bakın.
 
 Windows üzerinde `CODEX_CLI_PATH=codex` gibi yalın bir komut, uzak yol veya aygıt yolu aday olarak yakalanırsa `candidate_path_unavailable` bildirilir. Aday yakalanmıştır; ancak yolu bu inceleme için uygun değildir.
 

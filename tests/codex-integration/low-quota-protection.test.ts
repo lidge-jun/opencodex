@@ -21,10 +21,12 @@ import { applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuot
 import type { CodexAccount } from "../../src/types/accounts";
 import type { CodexLowQuotaProtectionConfig, OcxConfig } from "../../src/types/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { resolveLowQuotaDesktopSink, type LowQuotaNotice, type LowQuotaNoticeSink } from "../../src/codex/low-quota-desktop-notifier";
+import { fallbackCodexAccountLogLabel } from "../../src/codex/account-label";
 
 const ACCOUNT_A = "low-quota-a";
 const ACCOUNT_B = "low-quota-b";
-type Notice = { window: "short" | "weekly"; percentUsed: number; threshold: number };
+type Notice = LowQuotaNotice;
 
 let home = "";
 let previousHome: string | undefined;
@@ -56,7 +58,8 @@ function configWith(policy?: CodexLowQuotaProtectionConfig): OcxConfig {
 
 function register(config: OcxConfig, deps: {
   persist?: (next: OcxConfig) => void;
-  notify?: (notice: Notice) => void | Promise<void>;
+  notify?: (notice: Notice, signal: AbortSignal) => void | Promise<void>;
+  desktopSink?: () => LowQuotaNoticeSink | undefined;
 } = {}): LowQuotaRegistration {
   const cleanup = registerCodexLowQuotaProtection(config, deps);
   cleanups.push(cleanup);
@@ -127,7 +130,7 @@ describe("low quota protection", () => {
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 10, weeklyResetAt: secondReset });
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90, weeklyResetAt: secondReset });
     expect(notices).toHaveLength(5);
-    expect(notices.at(-1)).toEqual({ window: "weekly", percentUsed: 90, threshold: 80 });
+    expect(notices.at(-1)).toMatchObject({ window: "weekly", percentUsed: 90, threshold: 80 });
     observeCodexLowQuota(ACCOUNT_A, { shortPercent: 95, shortResetAt: firstReset });
     observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 95, weeklyResetAt: firstReset });
     expect(notices).toHaveLength(5);
@@ -171,7 +174,7 @@ describe("low quota protection", () => {
     setAccountQuotaFromParsed(ACCOUNT_A, accepted, undefined, undefined, accepted);
     await registration.flush();
     expect(persisted[0]?.pausedCodexAccountIds).toEqual([ACCOUNT_A]);
-    expect(notices).toEqual([{ window: "weekly", percentUsed: 99, threshold: 80 }]);
+    expect(notices).toEqual([{ accountLabel: fallbackCodexAccountLogLabel(ACCOUNT_A), window: "weekly", percentUsed: 99, threshold: 80, resetAt: null }]);
   });
 
   test("stops acting after unregister", () => {
@@ -485,13 +488,19 @@ describe("low quota protection", () => {
     await registration.flush();
   });
 
-  test("notice failure retries on a later observation and only then reports delivery", async () => {
+  test("notice failure retries on an observation after the backoff and only then reports delivery", async () => {
     const config = configWith(protection({ actions: { pause: false, notify: true } }));
     let calls = 0;
     const registration = register(config, { notify: async () => { if (++calls === 1) throw new Error("sink failed"); } });
+    const start = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(start);
+    cleanups.push(() => clock.mockRestore());
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 80 });
     await Promise.resolve();
     expect(registration.listEvents(1)[0]?.status).toBe("failed");
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 81 });
+    expect(calls).toBe(1);
+    clock.mockReturnValue(start + 5 * 60_000 + 1);
     observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 82 });
     await Promise.resolve();
     expect(registration.listEvents(1)[0]?.status).toBe("delivered");
@@ -631,5 +640,240 @@ describe("low quota protection", () => {
     setCodexAccountPaused(config, ACCOUNT_A, false);
     await registration.flush();
     expect(registration.listEvents(1)[0]).toMatchObject({ accountId: ACCOUNT_A, delivery: "pause-save", status: "cancelled" });
+  });
+});
+
+type DeferredCall = { notice: Notice; signal: AbortSignal; resolve(): void; reject(error: Error): void };
+
+function deferredDesktop(): { sink: () => LowQuotaNoticeSink; calls: DeferredCall[]; resolves: () => number } {
+  const calls: DeferredCall[] = [];
+  let resolved = 0;
+  const sink: LowQuotaNoticeSink = (notice, signal) => new Promise<void>((resolve, reject) => {
+    calls.push({ notice, signal, resolve, reject });
+  });
+  return { sink: () => { resolved++; return sink; }, calls, resolves: () => resolved };
+}
+
+function desktopPolicy(desktop: boolean | undefined, overrides: Partial<CodexLowQuotaProtectionConfig> = {}): CodexLowQuotaProtectionConfig {
+  return protection({ actions: { pause: false, notify: true, ...(desktop === undefined ? {} : { desktop }) }, ...overrides });
+}
+
+function noticeStatuses(registration: LowQuotaRegistration): string[] {
+  return registration.listEvents(100).filter(event => event.delivery === "notice").map(event => event.status).reverse();
+}
+
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+describe("low quota desktop delivery", () => {
+  test("without the desktop opt-in the alert stays logged and no notifier is resolved", () => {
+    const desktop = deferredDesktop();
+    for (const flag of [undefined, false]) {
+      const config = configWith(desktopPolicy(flag));
+      const registration = register(config, { desktopSink: desktop.sink });
+      observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+      expect(noticeStatuses(registration)).toEqual(["logged"]);
+      registration();
+    }
+    expect(desktop.resolves()).toBe(0);
+  });
+
+  test("the desktop opt-in delivers one pseudonymous notice per episode", async () => {
+    const config = configWith(desktopPolicy(true));
+    config.codexAccounts = [{ ...account(ACCOUNT_A), alias: "secret alias", logLabel: "p0a1b2c" }];
+    const desktop = deferredDesktop();
+    const registration = register(config, { desktopSink: desktop.sink });
+    const resetAt = Date.now() + 60_000;
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85, weeklyResetAt: resetAt });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90, weeklyResetAt: resetAt });
+    expect(desktop.calls).toHaveLength(1);
+    expect(desktop.calls[0]!.notice).toEqual({ accountLabel: "p0a1b2c", window: "weekly", percentUsed: 85, threshold: 80, resetAt });
+    const text = JSON.stringify(desktop.calls[0]!.notice);
+    for (const secret of ["secret alias", "@example.test", ACCOUNT_A]) expect(text).not.toContain(secret);
+    desktop.calls[0]!.resolve();
+    await settle();
+    expect(noticeStatuses(registration)).toEqual(["pending", "delivered"]);
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 95, weeklyResetAt: resetAt });
+    expect(desktop.calls).toHaveLength(1);
+  });
+
+  test("an account without a stored log label gets the fallback pseudonym", () => {
+    const config = configWith(desktopPolicy(true));
+    const desktop = deferredDesktop();
+    register(config, { desktopSink: desktop.sink });
+    observeCodexLowQuota(ACCOUNT_B, { shortPercent: 81 });
+    expect(desktop.calls[0]!.notice.accountLabel).toBe(fallbackCodexAccountLogLabel(ACCOUNT_B));
+  });
+
+  test("a failed desktop notice is recorded, logged once, and retried only after the backoff", async () => {
+    const config = configWith(desktopPolicy(true));
+    const desktop = deferredDesktop();
+    const registration = register(config, { desktopSink: desktop.sink });
+    const start = Date.now();
+    const clock = spyOn(Date, "now").mockReturnValue(start);
+    cleanups.push(() => clock.mockRestore());
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    cleanups.push(() => warn.mockRestore());
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    desktop.calls[0]!.reject(new Error("notifier exited 1"));
+    await settle();
+    expect(noticeStatuses(registration)).toEqual(["pending", "failed"]);
+    for (const percent of [86, 87, 88]) observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: percent });
+    expect(desktop.calls).toHaveLength(1);
+    clock.mockReturnValue(start + 5 * 60_000 - 1);
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 89 });
+    expect(desktop.calls).toHaveLength(1);
+    clock.mockReturnValue(start + 5 * 60_000 + 1);
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 90 });
+    expect(desktop.calls).toHaveLength(2);
+    desktop.calls[1]!.resolve();
+    await settle();
+    expect(noticeStatuses(registration)).toEqual(["pending", "failed", "pending", "delivered"]);
+    expect(warn.mock.calls.filter(call => String(call[0]).startsWith("[codex-low-quota] weekly quota reached"))).toHaveLength(1);
+  });
+
+  test("an unsupported host keeps the opted-in alert logged", () => {
+    const config = configWith(desktopPolicy(true));
+    let resolved = 0;
+    const registration = register(config, { desktopSink: () => { resolved++; return undefined; } });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    expect(resolved).toBe(1);
+    expect(noticeStatuses(registration)).toEqual(["logged"]);
+  });
+
+  const cancellations: Array<{ name: string; trigger: (config: OcxConfig, registration: LowQuotaRegistration) => void | Promise<void> }> = [
+    { name: "a new reset boundary", trigger: () => { observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85, weeklyResetAt: Date.now() + 120_000 }); } },
+    { name: "a below-threshold recovery", trigger: () => { observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 10, weeklyResetAt: Date.now() + 60_000 }); } },
+    { name: "account removal", trigger: config => {
+      config.codexAccounts = [account(ACCOUNT_B)];
+      observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 5 });
+    } },
+    { name: "disabling the policy", trigger: config => {
+      config.codexPool = { lowQuotaProtection: desktopPolicy(true, { enabled: false }) };
+      observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    } },
+    { name: "turning desktop delivery off", trigger: config => {
+      config.codexPool = { lowQuotaProtection: desktopPolicy(false) };
+      observeCodexLowQuota(ACCOUNT_B, { weeklyPercent: 5 });
+    } },
+    { name: "shutdown through flush", trigger: async (_config, registration) => { await registration.flush(); } },
+  ];
+
+  for (const { name, trigger } of cancellations) {
+    test("an in-flight desktop notice is cancelled once by " + name, async () => {
+      const config = configWith(desktopPolicy(true));
+      const desktop = deferredDesktop();
+      const registration = register(config, { desktopSink: desktop.sink });
+      observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85, weeklyResetAt: Date.now() + 60_000 });
+      const first = desktop.calls[0]!;
+      expect(first.signal.aborted).toBe(false);
+      await trigger(config, registration);
+      expect(first.signal.aborted).toBe(true);
+      first.resolve();
+      await settle();
+      const statuses = noticeStatuses(registration);
+      expect(statuses.filter(status => status === "cancelled")).toHaveLength(1);
+      expect(statuses.slice(0, 2)).toEqual(["pending", "cancelled"]);
+      expect(statuses).not.toContain("delivered");
+    });
+  }
+
+  test("turning desktop delivery on and off takes effect without re-registration", async () => {
+    const config = configWith(desktopPolicy(false));
+    const desktop = deferredDesktop();
+    const registration = register(config, { desktopSink: desktop.sink });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    expect(desktop.resolves()).toBe(0);
+    config.codexPool = { lowQuotaProtection: desktopPolicy(true) };
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 86 });
+    expect(desktop.resolves()).toBe(1);
+    desktop.calls[0]!.resolve();
+    await settle();
+    config.codexPool = { lowQuotaProtection: desktopPolicy(false) };
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 87 });
+    expect(desktop.resolves()).toBe(1);
+    expect(noticeStatuses(registration)).toEqual(["logged", "pending", "delivered", "logged"]);
+  });
+
+  test("desktop delivery requires notify even while the policy is disabled", () => {
+    for (const enabled of [true, false]) {
+      const policy = protection({ enabled, actions: { pause: true, notify: false, desktop: true } });
+      const result = validateConfigCandidate({ ...configWith(), codexPool: { lowQuotaProtection: policy } });
+      expect(result.ok, String(enabled)).toBe(false);
+    }
+    for (const desktop of [true, false]) {
+      expect(validateConfigCandidate(configWith(protection({ actions: { pause: true, notify: true, desktop } }))).ok).toBe(true);
+    }
+    const typo = { ...protection(), actions: { pause: true, notify: true, desktop: "yes" } };
+    expect(validateConfigCandidate({ ...configWith(), codexPool: { lowQuotaProtection: typo } } as unknown as OcxConfig).ok).toBe(false);
+  });
+});
+
+describe("low quota desktop delivery through the platform adapter", () => {
+  type Child = { killed: number; exit(code: number): void };
+  function adapter(timeoutMs = 60_000) {
+    const children: Child[] = [];
+    const sink = resolveLowQuotaDesktopSink({
+      platform: "darwin", exists: () => true, timeoutMs,
+      spawn: () => {
+        let done!: (code: number) => void;
+        const exited = new Promise<number>(resolve => { done = resolve; });
+        const child: Child = { killed: 0, exit: code => done(code) };
+        children.push(child);
+        return { exited, kill: () => { child.killed++; } };
+      },
+    })!;
+    return { sink: () => sink, children };
+  }
+
+  test("a timed-out notifier is recorded as failed", async () => {
+    const config = configWith(desktopPolicy(true));
+    const host = adapter(5);
+    const registration = register(config, { desktopSink: host.sink });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(host.children[0]!.killed).toBe(1);
+    expect(noticeStatuses(registration)).toEqual(["pending", "failed"]);
+  });
+
+  test("a reset boundary kills the old child once and the replacement is delivered", async () => {
+    const config = configWith(desktopPolicy(true));
+    const host = adapter();
+    const registration = register(config, { desktopSink: host.sink });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85, weeklyResetAt: Date.now() + 60_000 });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 86, weeklyResetAt: Date.now() + 120_000 });
+    expect(host.children.map(child => child.killed)).toEqual([1, 0]);
+    host.children[0]!.exit(0);
+    host.children[1]!.exit(0);
+    await settle();
+    expect(noticeStatuses(registration)).toEqual(["pending", "cancelled", "pending", "delivered"]);
+  });
+
+  test("shutdown kills an in-flight child once and records no late delivery", async () => {
+    const config = configWith(desktopPolicy(true));
+    const host = adapter();
+    const registration = register(config, { desktopSink: host.sink });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    await registration.flush();
+    expect(host.children[0]!.killed).toBe(1);
+    host.children[0]!.exit(0);
+    await settle();
+    expect(noticeStatuses(registration)).toEqual(["pending", "cancelled"]);
+  });
+
+  test("an injected notify sink takes precedence over desktop delivery", async () => {
+    const config = configWith(desktopPolicy(true));
+    const host = adapter();
+    let resolved = 0;
+    const notices: Notice[] = [];
+    const registration = register(config, {
+      notify: notice => { notices.push(notice); },
+      desktopSink: () => { resolved++; return host.sink(); },
+    });
+    observeCodexLowQuota(ACCOUNT_A, { weeklyPercent: 85 });
+    await settle();
+    expect(notices).toHaveLength(1);
+    expect(resolved).toBe(0);
+    expect(host.children).toHaveLength(0);
+    expect(noticeStatuses(registration)).toEqual(["pending", "delivered"]);
   });
 });

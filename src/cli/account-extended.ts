@@ -260,7 +260,7 @@ function resetIso(value: number | undefined): string | null {
 
 function refreshLine(row: FamilyRows["rows"][number]): string {
   const parts = [row.id === MAIN_ID ? "main" : row.id, row.email, row.plan];
-  if (row.paused) parts.push("paused");
+  if (row.paused) parts.push(row.pauseDetails ? `paused(${row.pauseDetails.reason})` : "paused");
   // Was a second quota dialect: it gated the whole block on weekly/monthly, so an account
   // reporting only a 5h window printed `quota: unknown` while `quotaParts` five lines below
   // rendered the same data correctly for the provider path (#2703). Two halves of one file
@@ -786,7 +786,7 @@ export async function cmdPriority(args: string[], deps: AccountDeps): Promise<nu
   return 0;
 }
 
-function resolveGenericOAuthAccountTarget(accounts: unknown[], requested: string): { id: string } | { error: string } {
+function resolveGenericOAuthAccountTarget(accounts: unknown[], requested: string, kind: "OAuth" | "API key" = "OAuth"): { id: string } | { error: string } {
   const rows = accounts.filter((value): value is { id: string; alias?: unknown } =>
     typeof value === "object" && value !== null && typeof (value as { id?: unknown }).id === "string",
   );
@@ -797,10 +797,10 @@ function resolveGenericOAuthAccountTarget(accounts: unknown[], requested: string
     : rows.filter(account => typeof account.alias === "string" && account.alias.toLowerCase() === requested.toLowerCase());
   if (matches.length === 1) return { id: matches[0]!.id };
   if (matches.length > 1) return { error: `alias "${requested}" names ${matches.length} accounts; use the account id` };
-  return { error: `Account not found: no OAuth account has the id or alias "${requested}"` };
+  return { error: `Account not found: no ${kind} account has the id or alias "${requested}"` };
 }
 
-/** Pause or resume a Codex or OAuth provider account, including Anthropic. */
+/** Pause or resume a Codex, OAuth, or API-key pool account. */
 export async function cmdPause(args: string[], deps: AccountDeps, paused: boolean): Promise<number> {
   const wantsJson = flag(args, "--json");
   const name = args.shift();
@@ -839,8 +839,20 @@ export async function cmdPause(args: string[], deps: AccountDeps, paused: boolea
     return 0;
   }
 
+  if (classified.type === "api-key") {
+    const rows = await fetchRows(deps, baseUrl, name, "api-key");
+    if (rows.status === 0) return proxyUnreachable(rows.transportError);
+    if (rows.status !== 200) return apiError(rows.errorJson ?? {}, "failed to list API key accounts", rows.status);
+    const target = resolveGenericOAuthAccountTarget(rows.rows.map(row => ({ id: row.id, alias: row.label })), requestedId, "API key");
+    if ("error" in target) return usage(`Error: ${target.error}`);
+    const result = await apiJson(deps, baseUrl, "PUT", "/api/providers/keys/pause", { name, id: target.id, paused });
+    if (result.status === 0) return proxyUnreachable(result.transportError);
+    if (result.status !== 200) return apiError(result.json, `failed to ${verb} account`, result.status);
+    console.log(wantsJson ? JSON.stringify({ ok: true, provider: name, id: target.id, paused }, null, 2) : `${name}: account ${paused ? "paused" : "resumed"}`);
+    return 0;
+  }
   if (classified.type !== "codex") {
-    return usage(`Error: ${verb} applies to the openai Codex account pool or a generic OAuth provider`);
+    return usage(`Error: ${verb} applies to the openai Codex account pool, a generic OAuth provider, or an API-key pool`);
   }
   const target = await resolveCodexAccountTarget(deps, baseUrl, requestedId);
   if ("networkDown" in target) return proxyUnreachable(target.transportError);

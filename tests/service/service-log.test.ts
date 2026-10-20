@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { closeSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoPath, repoRoot } from "../helpers/repo-root";
@@ -7,7 +8,7 @@ import { rotateServiceLog } from "../../src/service/logging";
 
 const roots: string[] = [];
 function sandbox(): string {
-  const root = mkdtempSync(join(tmpdir(), "ocx-service-log-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-service-log-")));
   roots.push(root);
   return root;
 }
@@ -104,6 +105,219 @@ describe("managed service log", () => {
     expect(rotateServiceLog(path, 8)).toBe(false);
     expect(readFileSync(path, "utf8")).toBe("over the cap");
     expect(rotateServiceLog(path, 0)).toBe(false);
+  });
+
+  for (const suffix of ["", ".1", ".2"]) {
+    test(`hardlinked ${suffix || "active"} leaf is rejected without changing any file`, () => {
+      const root = sandbox();
+      const path = join(root, "service.log");
+      const target = join(root, "unrelated.txt");
+      writeFileSync(target, "unrelated contents");
+      for (const leaf of ["", ".1", ".2"]) {
+        if (leaf === suffix) linkSync(target, `${path}${leaf}`);
+        else writeFileSync(`${path}${leaf}`, `original ${leaf || "active"}`);
+      }
+      const before = ["", ".1", ".2"].map(leaf => readFileSync(`${path}${leaf}`, "utf8"));
+      expect(rotateServiceLog(path, 4)).toBe(false);
+      expect(["", ".1", ".2"].map(leaf => readFileSync(`${path}${leaf}`, "utf8"))).toEqual(before);
+      expect(readFileSync(target, "utf8")).toBe("unrelated contents");
+    });
+
+    test.skipIf(process.platform === "win32")(`symlinked ${suffix || "active"} leaf is rejected`, () => {
+      const root = sandbox();
+      const path = join(root, "service.log");
+      const target = join(root, "unrelated.txt");
+      writeFileSync(target, "unrelated contents");
+      if (suffix) writeFileSync(path, "active contents");
+      symlinkSync(target, `${path}${suffix}`);
+      expect(rotateServiceLog(path, 4)).toBe(false);
+      expect(readFileSync(target, "utf8")).toBe("unrelated contents");
+      if (suffix) expect(readFileSync(path, "utf8")).toBe("active contents");
+    });
+  }
+
+  test("a non-regular active leaf is rejected", () => {
+    const path = join(sandbox(), "service.log");
+    mkdirSync(path);
+    expect(rotateServiceLog(path, 4)).toBe(false);
+    expect(existsSync(`${path}.1`)).toBe(false);
+  });
+
+  test("an allowed parent directory alias still rotates", () => {
+    const root = sandbox();
+    const actual = join(root, "actual");
+    const alias = join(root, "alias");
+    mkdirSync(actual);
+    symlinkSync(actual, alias, process.platform === "win32" ? "junction" : "dir");
+    const path = join(alias, "service.log");
+    writeFileSync(path, "oldest latest");
+    expect(rotateServiceLog(path, 6)).toBe(true);
+    expect(readFileSync(join(actual, "service.log.1"), "utf8")).toBe("latest");
+  });
+
+  test("parent aliases use canonical exclusive creation without weakening flags", () => {
+    const root = sandbox();
+    const actual = join(root, "actual");
+    const alias = join(root, "alias");
+    mkdirSync(actual);
+    symlinkSync(actual, alias, process.platform === "win32" ? "junction" : "dir");
+    const path = join(alias, "service.log");
+    writeFileSync(path, "oldest latest");
+    const open = fs.openSync;
+    let exclusiveOpens = 0;
+    const hook = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, flags: number, ...args: unknown[]) => {
+      if (String(file).endsWith(".1")) {
+        exclusiveOpens++;
+        expect(file).toBe(join(realpathSync(actual), "service.log.1"));
+        expect(flags & fs.constants.O_EXCL).toBe(fs.constants.O_EXCL);
+        expect(flags & fs.constants.O_CREAT).toBe(fs.constants.O_CREAT);
+        expect(flags & fs.constants.O_TRUNC).toBe(0);
+      }
+      return Reflect.apply(open, fs, [file, flags, ...args]);
+    }) as typeof fs.openSync);
+    try { expect(rotateServiceLog(path, 6)).toBe(true); }
+    finally { hook.mockRestore(); }
+    expect(exclusiveOpens).toBe(1);
+    expect(readFileSync(join(actual, "service.log.1"), "utf8")).toBe("latest");
+  });
+
+  for (const boundary of ["resolve", "copy"] as const) {
+    test(`parent alias retargeted during ${boundary} preserves both source files`, () => {
+      const root = sandbox();
+      const actual = join(root, "actual");
+      const other = join(root, "other");
+      const alias = join(root, "alias");
+      mkdirSync(actual); mkdirSync(other);
+      writeFileSync(join(actual, "service.log"), "original contents");
+      writeFileSync(join(other, "service.log"), "replacement contents");
+      symlinkSync(actual, alias, process.platform === "win32" ? "junction" : "dir");
+      const method = boundary === "resolve" ? "realpathSync" : "readSync";
+      const original = fs[method];
+      let changed = false;
+      const hook = spyOn(fs, method).mockImplementation(((...args: unknown[]) => {
+        const result = Reflect.apply(original, fs, args);
+        if (!changed) {
+          changed = true;
+          renameSync(alias, `${alias}.saved`);
+          symlinkSync(other, alias, process.platform === "win32" ? "junction" : "dir");
+        }
+        return result;
+      }) as typeof original);
+      try { expect(rotateServiceLog(join(alias, "service.log"), 4)).toBe(false); }
+      finally { hook.mockRestore(); }
+      expect(changed).toBe(true);
+      expect(readFileSync(join(actual, "service.log"), "utf8")).toBe("original contents");
+      expect(readFileSync(join(other, "service.log"), "utf8")).toBe("replacement contents");
+      expect(existsSync(join(other, "service.log.1"))).toBe(false);
+    });
+  }
+
+  test("an archive inserted through a parent alias still fails exclusive creation", () => {
+    const root = sandbox();
+    const actual = join(root, "actual");
+    const alias = join(root, "alias");
+    mkdirSync(actual);
+    symlinkSync(actual, alias, process.platform === "win32" ? "junction" : "dir");
+    const path = join(alias, "service.log");
+    writeFileSync(path, "original contents");
+    const open = fs.openSync;
+    const hook = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) => {
+      if (file === join(actual, "service.log.1")) writeFileSync(`${path}.1`, "inserted contents");
+      return Reflect.apply(open, fs, [file, ...args]);
+    }) as typeof fs.openSync);
+    try { expect(rotateServiceLog(path, 4)).toBe(false); }
+    finally { hook.mockRestore(); }
+    expect(readFileSync(path, "utf8")).toBe("original contents");
+    expect(readFileSync(`${path}.1`, "utf8")).toBe("inserted contents");
+  });
+
+  test("replacement between leaf inspection and source open is not truncated", () => {
+    const path = join(sandbox(), "service.log");
+    writeFileSync(path, "original contents");
+    const open = fs.openSync;
+    const hook = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) => {
+      if (file === path) {
+        renameSync(path, `${path}.saved`);
+        writeFileSync(path, "replacement contents");
+      }
+      return Reflect.apply(open, fs, [file, ...args]);
+    }) as typeof fs.openSync);
+    try { expect(rotateServiceLog(path, 4)).toBe(false); }
+    finally { hook.mockRestore(); }
+    expect(readFileSync(path, "utf8")).toBe("replacement contents");
+    expect(readFileSync(`${path}.saved`, "utf8")).toBe("original contents");
+    expect(existsSync(`${path}.1`)).toBe(false);
+  });
+
+  test("an archive inserted after rename is not opened destructively", () => {
+    const path = join(sandbox(), "service.log");
+    writeFileSync(path, "active contents");
+    writeFileSync(`${path}.1`, "previous archive");
+    const open = fs.openSync;
+    const hook = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, ...args: unknown[]) => {
+      if (file === `${path}.1`) writeFileSync(`${path}.1`, "inserted contents");
+      return Reflect.apply(open, fs, [file, ...args]);
+    }) as typeof fs.openSync);
+    try { expect(rotateServiceLog(path, 4)).toBe(false); }
+    finally { hook.mockRestore(); }
+    expect(readFileSync(path, "utf8")).toBe("active contents");
+    expect(readFileSync(`${path}.1`, "utf8")).toBe("inserted contents");
+    expect(readFileSync(`${path}.2`, "utf8")).toBe("previous archive");
+  });
+
+  for (const change of ["replace-source", "link-source", "replace-archive", "link-archive", "read-failure"] as const) {
+    test(`copy boundary refuses ${change} and preserves the source`, () => {
+      const path = join(sandbox(), "service.log");
+      writeFileSync(path, "original contents");
+      const read = fs.readSync;
+      let changed = false;
+      const hook = spyOn(fs, "readSync").mockImplementation(((...args: unknown[]) => {
+        const count = Reflect.apply(read, fs, args);
+        if (!changed) {
+          changed = true;
+          const leaf = change.endsWith("archive") ? `${path}.1` : path;
+          if (change.startsWith("replace")) {
+            renameSync(leaf, `${leaf}.saved`);
+            writeFileSync(leaf, "replacement contents");
+          } else if (change.startsWith("link")) linkSync(leaf, `${leaf}.linked`);
+          else throw new Error("synthetic copy failure");
+        }
+        return count;
+      }) as typeof fs.readSync);
+      try { expect(rotateServiceLog(path, 4)).toBe(false); }
+      finally { hook.mockRestore(); }
+      expect(readFileSync(change === "replace-source" ? `${path}.saved` : path, "utf8")).toBe("original contents");
+      if (change.startsWith("replace")) {
+        expect(readFileSync(change.endsWith("archive") ? `${path}.1` : path, "utf8")).toBe("replacement contents");
+      }
+      if (change === "link-archive") expect(readFileSync(`${path}.1.linked`, "utf8")).toBe("");
+    });
+  }
+
+  test("a write failure after a partial archive leaves the active log intact", () => {
+    const path = join(sandbox(), "service.log");
+    const contents = "x".repeat(128 * 1024 + 1);
+    writeFileSync(path, contents);
+    const write = fs.writeSync;
+    let writes = 0;
+    const hook = spyOn(fs, "writeSync").mockImplementation(((...args: unknown[]) => {
+      if (++writes === 2) throw new Error("synthetic disk failure");
+      return Reflect.apply(write, fs, args);
+    }) as typeof fs.writeSync);
+    try { expect(rotateServiceLog(path, 128 * 1024)).toBe(false); }
+    finally { hook.mockRestore(); }
+    expect(writes).toBe(2);
+    expect(readFileSync(path, "utf8")).toBe(contents);
+    expect(statSync(`${path}.1`).size).toBe(64 * 1024);
+  });
+
+  test("archive flush failure preserves the active source", () => {
+    const path = join(sandbox(), "service.log");
+    writeFileSync(path, "original contents");
+    const hook = spyOn(fs, "fsyncSync").mockImplementation(() => { throw new Error("synthetic flush failure"); });
+    try { expect(rotateServiceLog(path, 4)).toBe(false); }
+    finally { hook.mockRestore(); }
+    expect(readFileSync(path, "utf8")).toBe("original contents");
   });
 
   test("rotation checks at startup and periodically only for service processes", async () => {

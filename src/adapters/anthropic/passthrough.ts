@@ -30,14 +30,17 @@ import {
 import { applyAnthropicClientIdentity, hasObservedAnthropicClientIdentity, type AnthropicClientIdentity } from "./client-identity";
 import { bindAnthropicAccountMetadata } from "./account-metadata";
 import { shouldPreserveNativeClientPreamble } from "./native-client-preamble";
-import { allowlistAnthropicBetas, CONTEXT_MANAGEMENT_BETA } from "./beta-allowlist";
+import { allowlistAnthropicBetas } from "./beta-allowlist";
+import { pairAnthropicBetaBody } from "./beta-body-pairs";
+import { applyAnthropicNativeCacheTtlDefault, resolveAnthropicCacheRetention } from "./cache-retention";
+export { contextManagementForWire } from "./beta-body-pairs";
 
 /**
  * Top-level Messages fields the native lane forwards. Everything else is dropped: an unknown or
  * beta-gated field would otherwise reach the provider unchecked. None of the dropped fields has
  * a name in the protocol feature vocabulary, so no feature effect is recorded for them.
- * `context_management` is the one beta-gated field the builder adds back, and only together
- * with its forwarded beta (see {@link CONTEXT_MANAGEMENT_BETA}).
+ * Beta-gated top-level and nested fields are reconciled with the final header through
+ * `beta-body-pairs.ts`, which also restores admitted top-level schemas.
  */
 export const ANTHROPIC_MESSAGES_PASSTHROUGH_FIELDS = [
   "model",
@@ -246,23 +249,6 @@ export function anthropicOAuthWireBody(body: Rec, clientIdentity?: AnthropicClie
 }
 
 /**
- * `context_management` for the wire. Under OAuth, declared client tools travel with the OAuth
- * prefix, so an edit's `exclude_tools` must name the same wire spelling or the tools it means to
- * protect stop matching and their context can be cleared. Copy-on-write; anything else is opaque.
- */
-export function contextManagementForWire(value: unknown, oauthToolNames?: ReadonlyMap<string, string>): unknown {
-  if (!oauthToolNames || oauthToolNames.size === 0 || !isRec(value) || !Array.isArray(value.edits)) return value;
-  const callerToWire = new Map([...oauthToolNames].map(([wire, caller]) => [caller, wire]));
-  const edits = mapPreservingIdentity(value.edits as unknown[], edit => {
-    if (!isRec(edit) || !Array.isArray(edit.exclude_tools)) return edit;
-    const excludeTools = mapPreservingIdentity(edit.exclude_tools as unknown[],
-      name => typeof name === "string" ? callerToWire.get(name) ?? name : name);
-    return excludeTools === edit.exclude_tools ? edit : { ...edit, exclude_tools: excludeTools };
-  });
-  return edits === value.edits ? value : { ...value, edits };
-}
-
-/**
  * What the native lane sends for this provider, without a credential: the allowlisted body,
  * opaque state kept only for first-party Anthropic, and the OAuth request shape for an OAuth
  * provider. `count_tokens` counts this; the builder below sends it.
@@ -283,14 +269,14 @@ export function anthropicMessagesNativeWireBody(
 /**
  * Build the upstream request. Throws the adapter's own errors for a missing credential or a
  * malformed or unresolved base URL, and refuses an OAuth credential for any destination other
- * than first-party Anthropic. `config` is accepted for parity with the other passthrough
- * builders; no config key changes the wire today.
+ * than first-party Anthropic. `config.cacheRetention` decides the TTL of caller breakpoints
+ * that carry none (see applyAnthropicNativeCacheTtlDefault).
  */
 export function buildAnthropicMessagesPassthroughRequest(
   provider: OcxProviderConfig,
   modelId: string,
   body: Readonly<Record<string, unknown>>,
-  _config?: OcxConfig,
+  config?: OcxConfig,
   options: AnthropicMessagesPassthroughOptions = {},
 ): AnthropicMessagesPassthroughRequest {
   const oauth = provider.authMode === "oauth";
@@ -309,7 +295,9 @@ export function buildAnthropicMessagesPassthroughRequest(
   const url = resolveAnthropicMessagesUrl(provider);
   const native = anthropicMessagesNativeWireBody(provider, modelId, body, options);
   const { strippedOpaqueState, oauthToolNames } = native;
-  const wireBody = oauth ? bindAnthropicAccountMetadata(native.wireBody, options.providerAccountUuid) : native.wireBody;
+  const ttlBody = applyAnthropicNativeCacheTtlDefault(
+    native.wireBody, resolveAnthropicCacheRetention(config?.cacheRetention, provider));
+  const wireBody = oauth ? bindAnthropicAccountMetadata(ttlBody, options.providerAccountUuid) : ttlBody;
   const headers = anthropicBaseRequestHeaders(wireBody.stream === true);
   if (oauth) applyAnthropicOAuthAuth(headers, provider.apiKey);
   else applyAnthropicKeyAuth(headers, provider);
@@ -330,9 +318,8 @@ export function buildAnthropicMessagesPassthroughRequest(
     { inlineTools: hasInlineToolChanges(wireBody), observedNativeClient: hasObservedAnthropicClientIdentity(options.clientIdentity) });
   mergeAnthropicBetaHeader(headers, betas.betas);
   // Header and body travel as a pair: the field goes out only when its beta does.
-  const sentBody = betas.betas.includes(CONTEXT_MANAGEMENT_BETA) && body.context_management !== undefined
-    ? { ...wireBody, context_management: contextManagementForWire(body.context_management, oauthToolNames) }
-    : wireBody;
+  const sentBody = pairAnthropicBetaBody(wireBody, body, headers["anthropic-beta"],
+    domain?.firstPartyAnthropic === true, oauthToolNames);
   return {
     url,
     headers,

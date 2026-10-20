@@ -245,7 +245,7 @@ intended.
 
 Repair one thread that was compacted through a routed provider before resuming it through native
 Codex. The command reads the exact thread selected by UUID, saves a private byte-for-byte backup,
-then converts only OpenCodeX-owned `ocx1:` compaction state into a plain summary that native Codex
+then converts only OpenCodeX-owned `ocx1:`/`ocx2:` compaction state into a plain summary that native Codex
 can replay. Native encrypted content and other threads are left unchanged. Close the selected
 thread before running the command; a concurrent rollout change makes recovery stop without
 replacing the file.
@@ -492,6 +492,8 @@ for target, scope and spending boundaries. A reset-grant status read can contact
 upstream status but never consumes or resumes a grant.
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
+
+An explicitly requested restart also runs after a successful committed `config.toml` change, even if the catalog and cache bytes are unchanged. A configuration-only no-op, refusal, preflight, or rolled-back write does not trigger it. Without a restart flag, sync never automatically restarts Codex.
 
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
 Run it after adding a provider or to refresh available models.
@@ -1139,3 +1141,13 @@ Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, 
 On Linux, `ocx service install` checks `loginctl show-user <current-user> -p Linger` before printing boot advice. Enabled linger is reported as already enabled. Disabled linger gets the `loginctl enable-linger $USER` hint; missing or unreadable diagnostics state the uncertainty and do not fail installation.
 
 On macOS, `ocx service status` distinguishes a loaded Desktop login item from a valid enabled registration awaiting the next login. `ocx status` credits the latter in restart safety when the same Desktop app currently supervises the proxy. An incorrect plist label or command, a disabled entry, an unverified load probe, or changed process identity still cannot earn protection.
+
+## Custom Codex provider consent
+
+`ocx codex-provider status` lists the provider IDs approved for the selected Codex home.
+`ocx codex-provider allow <id>` asks before allowing URL-only management on start/sync;
+`--yes` is explicit noninteractive consent for that named provider.
+`ocx codex-provider revoke <id>` restores an unchanged managed URL and revokes permission.
+These commands are local and do not require a running proxy. See
+[custom provider routing](/guides/codex-integration/#opt-in-a-custom-provider-to-managed-local-routing)
+for eligibility, restore behavior and transport preservation.

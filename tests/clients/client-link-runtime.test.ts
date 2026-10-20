@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
-import { bindClientListener, startClientRuntime } from "../../src/client/runtime";
+import { bindClientListener, scheduleStandaloneRecycle, startClientRuntime } from "../../src/client/runtime";
 import type { MachineListenerDeps } from "../../src/client/machine-listener";
 import type { OcxClientConnectionConfig } from "../../src/types";
 import { clientLinkStatePath, writeClientLinkState } from "../../src/client/link-state";
@@ -190,7 +190,7 @@ test("an ended link recycles a connected sibling after listener cleanup", async 
 }, watchdogMs(60_000));
 
 describe("link runtime waits for its configured port like a hard-pinned start", () => {
-  test("the bind helper forwards link status, cached key, and tunnel gate", async () => {
+  test("the bind helper forwards the runtime recycle scheduler, link status, cached key, and tunnel gate", async () => {
     const port = freePort();
     const linkStatus = () => ({ kind: "stopped" as const });
     const linkKeySource = () => "link-key";
@@ -209,6 +209,7 @@ describe("link runtime waits for its configured port like a hard-pinned start", 
           return (bound = servePlain(listenPort!));
         },
       });
+      expect(received?.machineApi?.scheduleStandaloneRecycle).toBe(scheduleStandaloneRecycle);
       expect(received?.linkStatus).toBe(linkStatus);
       expect(received?.linkKeySource).toBe(linkKeySource);
       expect(received?.linkTunnel).toBe(linkTunnel);

@@ -289,13 +289,8 @@ function isConfigLockError(error: unknown): boolean {
  */
 let grokToggleFlight: Promise<Response> | null = null;
 
-/**
- * Dynamic import, never static: management-api.ts statically imports THIS
- * module, so a static import of fetchAllModels back from it would close a
- * cycle. sync.ts:18-21 dodges the same cycle the same way.
- */
 async function defaultFetchAllModels(config: OcxConfig) {
-  const { fetchAllModels } = await import("../management-api");
+  const { fetchAllModels } = await import("./shared");
   return fetchAllModels(config);
 }
 
@@ -665,7 +660,7 @@ function pickerStateNote(picker: DesktopPickerStatus): string {
     return "Picker mode is on: fully quit and reopen Claude Desktop to see OpenCodex models in the Code tab.";
   }
   if (picker.reason === "trust_pending" || picker.reason === "trust_declined") {
-    return `Picker mode is waiting for the keychain step: run ${picker.hint ?? "ocx claude desktop picker trust"}.`;
+    return `Picker mode is waiting for certificate trust: run ${picker.hint ?? "ocx claude desktop picker trust"}.`;
   }
   return `Picker mode is off (${picker.reason}).`;
 }

@@ -1,15 +1,16 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, Gentle Shell, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline CLI, Kilo, Command Code and Factory Droid from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Connect** page writes opencodex's provider block into a client's own config
-file, and removes it again. Nineteen clients work this way, each with a switch:
+file, and removes it again. Twenty clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | next direct launch | `OPENCODEX_OPENCODE_API_KEY` |
 | Pi | `~/.pi/agent/models.json` | JSON | new sessions | loopback placeholder |
+| Gentle Shell | `~/.gentle-shell/agent/models.json` (persistent selected home) | JSON | after restarting Gentle Shell | loopback placeholder |
 | OMP | `~/.omp/agent/models.yml` | YAML | after restarting OMP | `opencodex-loopback` placeholder |
 | Hermes | `~/.hermes/config.yaml` | YAML | new sessions | `OPENCODEX_HERMES_API_KEY` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `OPENCODEX_OPENCLAW_API_KEY` |
@@ -27,6 +28,36 @@ file, and removes it again. Nineteen clients work this way, each with a switch:
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
 | Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
+
+## Gentle Shell
+
+Choose **Connect → Gentle Shell**, or use the same managed-integration commands:
+
+```bash
+ocx export --client gentle-shell --json
+ocx integration client enable --client gentle-shell
+ocx integration client disable --client gentle-shell
+```
+
+Gentle Shell has a separate destination and rollback history from Pi. Only
+`providers.opencodex` is managed; other providers and preferences stay intact.
+Catalog changes refresh an already connected, unchanged block. An existing manually
+copied block is a conflict, not permission to overwrite it: inspect the preview and
+use the explicit overwrite confirmation only if you intend to replace it.
+
+The saved `home` in `~/.gentle-shell/config.json` selects the destination. A saved
+custom path wins; isolated/default mode uses `GENTLE_SHELL_HOME` or
+`~/.gentle-shell/agent`. `GENTLE_SHELL_CONFIG` selects an alternate launcher config.
+These environment variables must be set on the **OpenCodex process**, not just in a
+later shell. Selectors must be absolute paths; literal `~` and relative paths refuse.
+One-off `gentle-shell --home` flags cannot be discovered by a background proxy.
+
+Link mode or a home aliasing Pi refuses with a Pi-integration remedy; use **Connect → Pi**
+for that shared file instead. OpenCodex does not change launcher preferences. An
+unreadable/unsafe launcher config refuses; malformed JSON falls back to isolated,
+matching the launcher. If you move a connected home, disable it using its original
+selectors before reconnecting the new one. Restart Gentle Shell after a catalog update.
+This integration retains Pi’s loopback-only export policy and stores no real API key.
 
 "omo" names three products that share the `~/.omo` folder. The **omo** tab manages Pi-based omo
 (the senpi engine) through `~/.omo/agent/models.json`, as in the table above. Codex-based omo

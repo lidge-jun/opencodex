@@ -9,7 +9,6 @@ describe("routed catalog compatibility exclusions", () => {
     expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "mimo-v2-pro" })).toBe(false);
     expect(shouldExposeRoutedModel({ provider: "deepseek", id: "deepseek-v4-pro" })).toBe(false);
     expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "deepseek-v4-pro" })).toBe(false);
-    expect(shouldExposeRoutedModel({ provider: "opencode-free", id: "deepseek-v4-flash-free" })).toBe(true);
     expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "grok-4.6" })).toBe(true);
     expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "glm-5.2" })).toBe(true);
   });

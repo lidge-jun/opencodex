@@ -1,0 +1,251 @@
+name: Windows signing test
+
+# A non-publishing, end-to-end exercise of Windows Authenticode signing through SignPath (#7207).
+# It builds the standalone ocx.exe and the desktop MSI on GitHub-hosted Windows runners exactly as
+# the release workflow does, submits both with the test-signing policy, and verifies the returned
+# signatures. Nothing is tagged, published or attached to a release: the test-signed files are kept
+# only as short-lived workflow artifacts, so the run can be shown to SignPath for review.
+#
+# The policy is fixed to test-signing here on purpose. release-signing requests need a
+# maintainer's manual approval and belong to real releases (release.yml); this workflow must never
+# spend one. Unlike the release workflow, every failure here is a red run, because a green run is
+# the evidence this workflow exists to produce.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: windows-signing-test
+  cancel-in-progress: false
+
+env:
+  SIGNPATH_TEST_POLICY: test-signing
+
+jobs:
+  standalone:
+    name: sign ocx.exe (test-signing)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      # actions: read lets the SignPath action read this job and download the unsigned artifact.
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Require the SignPath configuration
+        shell: bash
+        env:
+          SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ "$SIGNPATH_CONFIGURED" = "true" ] || missing="$missing SIGNPATH_API_TOKEN"
+          [ -n "$SIGNPATH_ORGANIZATION_ID" ] || missing="$missing SIGNPATH_ORGANIZATION_ID"
+          [ -n "$SIGNPATH_PROJECT_SLUG" ] || missing="$missing SIGNPATH_PROJECT_SLUG"
+          if [ -n "$missing" ]; then
+            echo "::error::This signing test needs the SignPath configuration. Missing:$missing"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --os=win32 --cpu=x64
+
+      - name: Build dashboard
+        run: bun run build:gui
+
+      - name: Build standalone binary
+        run: bun run build:standalone --target bun-windows-x64
+
+      - name: Smoke test the unsigned binary
+        shell: pwsh
+        run: |
+          & dist/standalone/bun-windows-x64/ocx.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "ocx.exe --version failed (exit code $LASTEXITCODE)" }
+
+      - name: Upload the unsigned Windows binary for signing
+        id: unsigned-ocx
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signpath-unsigned-bun-windows-x64
+          path: dist/standalone/bun-windows-x64/ocx.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign the Windows binary through SignPath
+        id: sign-ocx
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        timeout-minutes: 20
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_TEST_POLICY }}
+          artifact-configuration-slug: windows-standalone-zip
+          github-artifact-id: ${{ steps.unsigned-ocx.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 900
+          output-artifact-directory: ${{ runner.temp }}/signpath-signed-ocx
+
+      - name: Link the SignPath signing request
+        if: always() && steps.sign-ocx.outputs.signing-request-web-url != ''
+        shell: bash
+        env:
+          SIGNING_REQUEST_URL: ${{ steps.sign-ocx.outputs.signing-request-web-url }}
+        run: echo "- SignPath signing request $SIGNING_REQUEST_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Swap in and verify the signed Windows binary
+        shell: pwsh
+        run: |
+          ./scripts/ci/apply-signed-windows-artifact.ps1 `
+            -Target "dist/standalone/bun-windows-x64/ocx.exe" `
+            -SignedDirectory (Join-Path $env:RUNNER_TEMP "signpath-signed-ocx") `
+            -Trust test `
+            -FailOnError
+
+      - name: Keep the test-signed binary for review
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-signed-ocx-bun-windows-x64
+          path: dist/standalone/bun-windows-x64/ocx.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  installer:
+    name: sign the MSI (test-signing)
+    runs-on: windows-latest
+    timeout-minutes: 75
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Require the SignPath configuration
+        shell: bash
+        env:
+          SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ "$SIGNPATH_CONFIGURED" = "true" ] || missing="$missing SIGNPATH_API_TOKEN"
+          [ -n "$SIGNPATH_ORGANIZATION_ID" ] || missing="$missing SIGNPATH_ORGANIZATION_ID"
+          [ -n "$SIGNPATH_PROJECT_SLUG" ] || missing="$missing SIGNPATH_PROJECT_SLUG"
+          if [ -n "$missing" ]; then
+            echo "::error::This signing test needs the SignPath configuration. Missing:$missing"
+            exit 1
+          fi
+
+      - name: Install project dependencies
+        run: bun install --frozen-lockfile --os=win32 --cpu=x64
+
+      - name: Build dashboard
+        run: bun run build:gui
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Prepare sidecar
+        run: bun desktop/scripts/prepare-sidecar.ts --target x86_64-pc-windows-msvc
+
+      # The MSI version comes from the desktop configuration, as in a release. Updater artifacts
+      # are switched off: this run holds no updater key and publishes no manifest, and the release
+      # workflow is where the updater signature over the signed MSI is regenerated.
+      - name: Prepare Windows installer configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(bun -e 'console.log(JSON.parse(await Bun.file("desktop/src-tauri/tauri.conf.json").text()).version)')"
+          bun desktop/scripts/windows-installer-config.ts "$version" "$RUNNER_TEMP/opencodex-msi-base.json"
+          bun -e 'const dir = process.env.RUNNER_TEMP; const config = JSON.parse(await Bun.file(dir + "/opencodex-msi-base.json").text()); config.bundle.createUpdaterArtifacts = false; await Bun.write(dir + "/opencodex-msi.json", JSON.stringify(config));'
+
+      - name: Build the Windows installer
+        working-directory: desktop
+        run: bunx tauri build --ci --target x86_64-pc-windows-msvc --bundles msi --config "${{ runner.temp }}/opencodex-msi.json"
+
+      - name: Locate the Windows installer
+        id: windows-msi
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          installers=(desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi)
+          if [ "${#installers[@]}" -ne 1 ]; then
+            echo "::error::Expected one MSI, found ${#installers[@]}"
+            exit 1
+          fi
+          echo "path=${installers[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the unsigned Windows installer for signing
+        id: unsigned-msi
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signpath-unsigned-x86_64-pc-windows-msvc
+          path: ${{ steps.windows-msi.outputs.path }}
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign the Windows installer through SignPath
+        id: sign-msi
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        timeout-minutes: 20
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_TEST_POLICY }}
+          artifact-configuration-slug: windows-msi-zip
+          github-artifact-id: ${{ steps.unsigned-msi.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 900
+          output-artifact-directory: ${{ runner.temp }}/signpath-signed-msi
+
+      - name: Link the SignPath signing request
+        if: always() && steps.sign-msi.outputs.signing-request-web-url != ''
+        shell: bash
+        env:
+          SIGNING_REQUEST_URL: ${{ steps.sign-msi.outputs.signing-request-web-url }}
+        run: echo "- SignPath signing request $SIGNING_REQUEST_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Swap in and verify the signed Windows installer
+        shell: pwsh
+        env:
+          MSI_PATH: ${{ steps.windows-msi.outputs.path }}
+        run: |
+          ./scripts/ci/apply-signed-windows-artifact.ps1 `
+            -Target "$env:MSI_PATH" `
+            -SignedDirectory (Join-Path $env:RUNNER_TEMP "signpath-signed-msi") `
+            -Trust test `
+            -Installer `
+            -FailOnError
+
+      - name: Keep the test-signed installer for review
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-signed-msi-x86_64-pc-windows-msvc
+          path: ${{ steps.windows-msi.outputs.path }}
+          if-no-files-found: error
+          retention-days: 7

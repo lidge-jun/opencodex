@@ -170,7 +170,7 @@ export function failedTailFrame(encoder: TextEncoder, err: unknown, maskCredenti
  * its fatal set (codex-rs/codex-api/src/sse/responses.rs:423-450), so stamping
  * `upstream_server_error` on a refusal delivered it as a retryable disconnect
  * and drove the reconnect loop in #5176. Without a refusal code the terminal
- * carries only recognized rate-limit/overload classes; unknown codes stay generic.
+ * carries only recognized client-refusal/rate-limit/overload classes; unknown codes stay generic.
  */
 export function upstreamErrorTailFrame(
   encoder: TextEncoder,

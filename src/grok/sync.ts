@@ -18,7 +18,7 @@ export interface GrokSyncDeps {
 }
 
 async function defaultFetchAllModels(config: OcxConfig): Promise<CatalogModel[]> {
-  const { fetchAllModels } = await import("../server/management-api");
+  const { fetchAllModels } = await import("../server/management/shared");
   return fetchAllModels(config);
 }
 

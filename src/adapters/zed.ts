@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { createAnthropicAdapter } from "./anthropic";
+import type { AnthropicCacheRetention } from "./anthropic/cache-retention";
 import { createGoogleAdapter } from "./google";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
@@ -53,7 +54,9 @@ function delegateProvider(provider: OcxProviderConfig, zedProvider: ZedProvider)
     return { ...common, adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", googleMode: "ai-studio" };
   }
   if (zedProvider === "open_ai") {
-    return { ...common, adapter: "openai-responses", baseUrl: "https://api.openai.com/v1" };
+    // The builder targets Zed's /completions envelope. Keep its destination set to Zed as well,
+    // so OpenAI-private Responses fields are stripped instead of being sent through to Zed.
+    return { ...common, adapter: "openai-responses", baseUrl: provider.baseUrl };
   }
   return { ...common, adapter: "openai-chat", baseUrl: "https://api.x.ai/v1" };
 }
@@ -216,15 +219,17 @@ export function zedEventStream(
   return body.pipeThrough(output);
 }
 
-function createDelegate(provider: OcxProviderConfig, zedProvider: ZedProvider): ProviderAdapter {
+function createDelegate(provider: OcxProviderConfig, zedProvider: ZedProvider, cacheRetention?: AnthropicCacheRetention): ProviderAdapter {
   const config = delegateProvider(provider, zedProvider);
-  if (zedProvider === "anthropic") return createAnthropicAdapter(config);
+  // The delegate only borrows the api.anthropic.com body builder; the wire goes to Zed's
+  // gateway, which does not document the 1h TTL, so an omitted retention stays 5m here.
+  if (zedProvider === "anthropic") return createAnthropicAdapter(config, cacheRetention ?? "short");
   if (zedProvider === "google") return createGoogleAdapter(config);
   if (zedProvider === "open_ai") return createResponsesPassthroughAdapter(config);
   return createOpenAIChatAdapter(config);
 }
 
-export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
+export function createZedAdapter(provider: OcxProviderConfig, cacheRetention?: AnthropicCacheRetention): ProviderAdapter {
   let delegate: ZedDelegate | undefined;
   let credentials: ZedCredentials | undefined;
 
@@ -244,7 +249,7 @@ export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
       /* Model inference fallback below; a transient catalog outage must not block passthrough. */
     }
     const zedProvider = providerFromCatalog(catalog, parsed.modelId);
-    const selected = createDelegate(provider, zedProvider);
+    const selected = createDelegate(provider, zedProvider, cacheRetention);
     const safeIncoming: IncomingMeta = {
      headers: incoming?.headers ?? new Headers(),
      translatorBudget: incoming?.translatorBudget ?? createTranslatorBudget(),
@@ -300,6 +305,29 @@ export function createZedAdapter(provider: OcxProviderConfig): ProviderAdapter {
       }
     }
     if (!isRecord(providerRequest)) throw new Error("Zed delegate produced a non-object request body");
+    if (zedProvider === "open_ai" && Array.isArray(providerRequest.input)) {
+      // Zed's OpenAI Responses parser accepts user/assistant/system/tool roles but rejects
+      // OpenAI's newer developer role. System is the closest supported role for instructions.
+      providerRequest.input = providerRequest.input.map(item =>
+        isRecord(item) && item.type === "message" && item.role === "developer"
+          ? { ...item, role: "system" }
+          : item,
+      );
+    }
+    if (zedProvider === "open_ai" && Array.isArray(providerRequest.tools)) {
+      // Zed's Responses decoder supports function/custom tools, not Codex's built-in web_search.
+      const supported = (tool: unknown) => isRecord(tool) && (tool.type === "function" || tool.type === "custom");
+      const tools = providerRequest.tools.filter(supported);
+      providerRequest.tools = tools;
+      const choice = providerRequest.tool_choice;
+      if (isRecord(choice) && choice.type === "allowed_tools" && Array.isArray(choice.tools)) {
+        const allowed = choice.tools.filter(supported);
+        providerRequest.tool_choice = allowed.length ? { ...choice, tools: allowed } : "none";
+      } else if ((isRecord(choice) && !supported(choice)) || (choice === "required" && tools.length === 0)) {
+        // Match the shared hosted-tool policy when no supported selection remains.
+        providerRequest.tool_choice = "none";
+      }
+    }
     delegate = { provider: zedProvider, adapter: selected };
     const requestUrl = `${provider.baseUrl.replace(/\/+$/, "")}/completions`;
     return {

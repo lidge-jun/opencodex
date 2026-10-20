@@ -39,7 +39,7 @@
  * Scope is deliberately one entry. The Go gateway's `deepseek-v4.1-flash` was declared text-only
  * from jawcode metadata and was measured natively multimodal on 2026-09-19 (see the note at that
  * entry in `registry/entries-core.ts`). Its sibling `deepseek-v4-flash` still rejects images
- * upstream, and the sibling Zen tiers (`opencode-zen`, `opencode-free`) could not be probed at
+ * upstream, and the keyed Zen tier (`opencode-zen`) could not be probed at
  * all — an unverified tier is not evidence, so neither is touched here.
  */
 import { PROVIDER_REGISTRY, providerMatchesRegistryTransport } from "./registry";

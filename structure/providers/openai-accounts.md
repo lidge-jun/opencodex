@@ -37,6 +37,8 @@ preserving a stale one would block every later migration.
 
 ## Model and wire identity
 
+The optional [native reasoning retention policy](../transports/native-reasoning-retention.md#runtime-boundary) can permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT destination. It does not change account selection, entitlement, cache isolation, continuation-id ownership or uploaded-file retention; cross-account acceptance is not guaranteed.
+
 Native Spark membership and its model-specific request/tool exceptions are removed; the shared
 [catalog retirement policy](../catalog.md#shared-catalog) preserves historical user selections.
 
@@ -316,6 +318,11 @@ as the writer. `"opencodex"`, a missing binary, or an older binary keeps the
 guarded writer above. While the test home guard is armed, auto resolution
 never spawns Codex. `ocx doctor` prints the active mode and its reason.
 
+## Preserve signed-in quota
+
+The opt-in preference that spends other pool accounts before the signed-in identity is
+described in [`openai-signed-in-preservation.md`](openai-signed-in-preservation.md).
+
 ## Manual account pause and resume
 
 Manual pause/resume in `src/codex/auth-api/account-pause-group.ts` resolves existing native-main
@@ -392,7 +399,7 @@ The credits module beside `src/codex/quota-types.ts` retains validated WHAM cred
 
 ## Low-quota protection
 
-`src/codex/quota.ts` sends accepted usage observations through `src/codex/low-quota-observer.ts`; credits-only updates never replay carried usage into protection, and pool WHAM/header observations reach the policy only after raw percentages pass validation and the captured credential writer is still live; clamped display bars and responses from retired credentials cannot authorize a pause. The pool-account-only [configuration policy](../config.md#codex-pool-low-quota-protection) pauses live selection immediately, defers a bounded config save, and deduplicates account/window notices. Manual resume is respected across every qualifying window already active for that account until recovery or a new reset episode. Native main keeps its separate per-window hard lock. Each server registration owns a bounded status ledger; its authenticated management route exposes only its own account ids. The default alert is a log line plus a `logged` event, with no OS notification. A pool response that could not capture a writer at dispatch (credential already replaced, or the store unreadable) fails closed the same way: its snapshot still refreshes the display cache, but it never authorizes a policy pause. Writer-free legacy and login paths are explicitly distinct from that pool contract and keep their existing observation behavior.
+`src/codex/quota.ts` sends accepted usage observations through `src/codex/low-quota-observer.ts`; credits-only updates never replay carried usage into protection, and pool WHAM/header observations reach the policy only after raw percentages pass validation and the captured credential writer is still live; clamped display bars and responses from retired credentials cannot authorize a pause. The pool-account-only [configuration policy](../config.md#codex-pool-low-quota-protection) pauses live selection immediately, defers a bounded config save, and deduplicates account/window notices. Manual resume is respected across every qualifying window already active for that account until recovery or a new reset episode. Native main keeps its separate per-window hard lock. Each server registration owns a bounded status ledger; its authenticated management route exposes only its own account ids. The default alert is a log line plus a `logged` event; the opt-in `actions.desktop` sink in `src/codex/low-quota-desktop-notifier.ts` hands the notice, labelled only by the account's pseudonymous log label, to the host's OS notifier. A pool response that could not capture a writer at dispatch (credential already replaced, or the store unreadable) fails closed the same way: its snapshot still refreshes the display cache, but it never authorizes a policy pause. Writer-free legacy and login paths are explicitly distinct from that pool contract and keep their existing observation behavior.
 
 ## Bounded pool quota observations
 
@@ -535,6 +542,16 @@ false. Exact-account and Direct routes are unchanged.
 
 Opted-in main-account credit renewal follows the [spendable credit contract](openai-tiers.md#spendable-codex-credits). An unpaused, non-quarantined main identity with an exhausted included window keeps discovering credits even when its evidence is missing or unavailable; fresh positive evidence waits until three minutes of age for renewal. Admission remains blocked until fresh spendable evidence arrives, with the consented credit refusal's Retry-After bounded to five minutes. The existing background sweep prepares a token before WHAM, rechecks eligibility, and uses a passive probe that neither sets nor clears needs-reauth, including after identity retries. Other probes keep their existing auth behavior. A non-passive caller joining renewal applies terminal-auth quarantine, or clears it on a successful explicit refresh, only while its credential and configuration fences remain current; shared evidence does not inherit the owner's passive intent.
 
+`src/codex/account-use-remaining.ts` owns the persistent, default-off
+`codexUseRemainingQuotaAccountIds` opt-in. Effective auto-switch thresholds resolve to zero
+for listed accounts; main protection resolves to 100% in both governing windows.
+Underlying thresholds remain stored, and disabling restores their current values.
+Account deletion removes its opt-in. No cooldown, pause, eligibility or credit-spending
+permission is removed. Selected-main and caller-owned Direct materialization use the same policy.
+`src/codex/auth-api/use-remaining-route.ts` exposes authenticated GET/PUT and rolls back
+the live preference when persistence fails; GET never saves. Coverage is in
+`tests/codex-integration/codex-use-remaining-quota.test.ts` and the existing main-auth suite.
+
 The main-account admission policy defaults to 90% for short windows and 98% for long windows;
 `codexMainAccountHardLockThresholds` permits ordered integer thresholds from 80 through 100.
 Policy evidence retention uses the minimum configurable 80%, so a partial update or elapsed reset
@@ -568,3 +585,16 @@ replacement drops that window's warning. Main/all quota cleanup forgets the base
 expire at reset or six hours after detection. Main-card/settings DTOs and live CLI projections expose
 only window kind, previous/current percentage and observation time; the notice says possible usage
 outside opencodex because a long-running request can also explain the rise.
+
+**JEV advisory publication.** Codex account-store load/persist, native-main cache transitions and accepted quota producers feed [loaded advisory quota](jev-decision.md#loaded-advisory-quota) only through the opt-in slot `src/lib/decision-quota-sink.ts`, a no-op unless a live JEV combo enables signals; these owner-observed generations stay separate from display caches and serving-account selection, and Codex header/WHAM parsers keep an explicit invalid reset invalid without changing display, durable history or hard-policy parsing.
+
+## Permanent refusal auto-pause
+
+The opt-in `providers.openai.accountAutoPause` observer in
+`src/oauth/account-auto-pause.ts` uses the sent pool credential generation or main quota
+writer, not the active account at response time. It persists exclusions in
+`pausedCodexAccountIds` with revision/reason/time in `codexAccountPauseState`, clears
+affinities and reconciles selection. `src/codex/account-pause.ts` changes the revision
+on resume. The physical guard in `src/codex/auth-context.ts` also rejects newly paused
+queued sends. Confirmed permanent refusals preserve credentials instead of forcing token
+refresh; threshold-triggered retries retain fixed-selector, file and send-budget guards.

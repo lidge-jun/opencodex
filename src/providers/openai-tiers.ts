@@ -1,9 +1,9 @@
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { OPENAI_PROVIDER_TIER_VERSION } from "../types";
 import { openaiResponsesUrl } from "../adapters/openai-responses-url";
-import { MAX_COST4_RATE } from "../usage/expected-prices";
+import { COST4_RATE_KEYS, validCost4 } from "../usage/user-cost-validation";
 import { OPENAI_CODEX_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, LEGACY_CHATGPT_PROVIDER_ID, CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "./openai-tiers-destination";
-export { OPENAI_CODEX_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, LEGACY_CHATGPT_PROVIDER_ID, CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint, isOpenAiOperatedResponsesDestination, destinationDecodesNativeCompactionBlob } from "./openai-tiers-destination";
+export { OPENAI_CODEX_PROVIDER_ID, LEGACY_OPENAI_MULTI_PROVIDER_ID, OPENAI_API_PROVIDER_ID, LEGACY_CHATGPT_PROVIDER_ID, CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint, supportsNativeResponsesCompactionTrigger, isOpenAiOperatedResponsesDestination, destinationDecodesNativeCompactionBlob } from "./openai-tiers-destination";
 
 const LEGACY_OPENAI_MULTI_PREFIX = `${LEGACY_OPENAI_MULTI_PROVIDER_ID}/`;
 
@@ -54,19 +54,12 @@ function managedLegacyMultiOverlay(
   };
 }
 
-/** Shape check for a legacy overlay: a plain record of complete non-negative finite Cost4 rows. */
+/** Use the shared rate/policy contract while rejecting unknown legacy row fields. */
 function validLegacyOverlayCosts(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const fields = ["input", "output", "cacheRead", "cacheWrite"] as const;
+  const allowed = new Set<string>([...COST4_RATE_KEYS, "promptLengthPricing"]);
   return Object.values(value as Record<string, unknown>).every(entry => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-    const rates = entry as Record<string, unknown>;
-    return Object.keys(rates).length === fields.length
-      && fields.every(key => Object.hasOwn(rates, key)
-        && typeof rates[key] === "number"
-        && Number.isFinite(rates[key])
-        && (rates[key] as number) >= 0
-        && (rates[key] as number) <= MAX_COST4_RATE);
+    return validCost4(entry) && Object.keys(entry).every(key => allowed.has(key));
   });
 }
 

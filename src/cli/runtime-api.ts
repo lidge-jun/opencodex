@@ -279,13 +279,15 @@ export function takeBooleanOption(args: string[], flag: string): boolean | undef
 }
 
 /** Parse a decimal safe integer, allowing separators only between digits. */
-export function takeIntegerOption(args: string[], flag: string, options: { min?: number } = {}): number | undefined {
+export function takeIntegerOption(args: string[], flag: string, options: { min?: number; max?: number } = {}): number | undefined {
   const raw = takeOption(args, flag);
   if (raw === undefined) return undefined;
   const decimal = raw.trim();
   const value = /^[+-]?\d+(?:[_,]\d+)*$/.test(decimal) ? Number(decimal.replace(/[_,]/g, "")) : NaN;
-  if (!Number.isSafeInteger(value) || value < (options.min ?? Number.MIN_SAFE_INTEGER)) {
-    throw new CliUsageError(`${flag} must be an integer${options.min !== undefined ? ` >= ${options.min}` : ""}`);
+  const { min, max } = options;
+  if (!Number.isSafeInteger(value) || value < (min ?? Number.MIN_SAFE_INTEGER) || value > (max ?? Number.MAX_SAFE_INTEGER)) {
+    const bound = min !== undefined && max !== undefined ? ` between ${min} and ${max}` : min !== undefined ? ` >= ${min}` : max !== undefined ? ` <= ${max}` : "";
+    throw new CliUsageError(`${flag} must be an integer${bound}`);
   }
   return value;
 }

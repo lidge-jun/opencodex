@@ -201,9 +201,13 @@ describe("Umans provider", () => {
 
     const events = await collect(createAnthropicAdapter(umansProvider()).parseStream(new Response(stream)));
 
-    expect(events[0]).toEqual({ type: "tool_call_start", id: "toolu_1", name: "web_search" });
-    expect(events[1]).toEqual({ type: "tool_call_delta", arguments: "{\"query\":\"umans\"}" });
-    expect(events[2]).toEqual({ type: "tool_call_end" });
+    expect(events).toEqual([
+      { type: "heartbeat", replayUnsafe: true },
+      { type: "tool_call_start", id: "toolu_1", name: "web_search" },
+      { type: "tool_call_delta", arguments: "{\"query\":\"umans\"}" },
+      { type: "tool_call_end" },
+      { type: "done", usage: undefined, stopReason: undefined },
+    ]);
   });
 
   test("Anthropic adapter strips Umans compatibility prefix from non-streaming tool calls", async () => {

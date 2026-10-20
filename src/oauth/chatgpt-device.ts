@@ -1,5 +1,5 @@
 import type { OAuthController, OAuthCredentials } from "./types";
-import { CHATGPT_CLIENT_ID, CHATGPT_TOKEN_URL, credsFromToken } from "./chatgpt";
+import { CHATGPT_CLIENT_ID, CHATGPT_TOKEN_URL, credsFromToken } from "./chatgpt-shared";
 
 /**
  * OpenAI deviceauth (device-code) grant for the ChatGPT/Codex provider.

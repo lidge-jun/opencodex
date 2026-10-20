@@ -26,6 +26,7 @@ import {
   isCompactionItemType,
   SUMMARY_PREFIX,
 } from "../responses/compaction";
+import { decodeRetainedCompaction } from "../responses/retained-compaction";
 import { resolveCodexHomeDir } from "./home";
 import { resolveCodexStateDbPath } from "./paths";
 
@@ -96,21 +97,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function lowerCompactionItem(item: unknown): { item: unknown; changed: boolean } {
+function lowerCompactionItem(item: unknown): { items: unknown[]; changed: boolean } {
   if (!isRecord(item) || !isCompactionItemType(item.type)) {
-    return { item, changed: false };
+    return { items: [item], changed: false };
   }
   if (typeof item.encrypted_content !== "string") {
-    return { item, changed: false };
+    return { items: [item], changed: false };
   }
-  const summary = decodeCompactionSummary(item.encrypted_content);
-  if (summary === null) return { item, changed: false };
+  const retained = decodeRetainedCompaction(item.encrypted_content);
+  const summary = retained?.summary ?? decodeCompactionSummary(item.encrypted_content);
+  if (summary === null) return { items: [item], changed: false };
   return {
-    item: {
+    items: [{
       type: "message",
       role: "user",
       content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n${summary}` }],
-    },
+    }, ...(retained?.reasoning ?? []).map(text => ({ type: "message", role: "user", content: [{ type: "input_text", text }] }))],
     changed: true,
   };
 }
@@ -129,10 +131,10 @@ function rewriteJsonlLine(line: string): { line: string; replaced: number } {
   if (!Array.isArray(history)) return { line, replaced: 0 };
 
   let replaced = 0;
-  const replacementHistory = history.map(item => {
+  const replacementHistory = history.flatMap(item => {
     const lowered = lowerCompactionItem(item);
     if (lowered.changed) replaced += 1;
-    return lowered.item;
+    return lowered.items;
   });
   if (replaced === 0) return { line, replaced: 0 };
 
@@ -146,7 +148,7 @@ function rewriteJsonlLine(line: string): { line: string; replaced: number } {
 }
 
 /**
- * Convert OpenCodeX-owned `ocx1:` compaction items into ordinary replayable user messages.
+ * Convert OpenCodeX-owned `ocx1:`/`ocx2:` compaction items into ordinary replayable user messages.
  *
  * Only the authoritative `compacted.payload.replacement_history` snapshot is changed. Earlier
  * response-item events are historical output and are deliberately preserved byte-for-byte.

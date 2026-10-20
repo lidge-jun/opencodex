@@ -292,13 +292,14 @@ describe("test runner captured output", () => {
 
 describe("test runner isolation", () => {
   test("redirects user homes to a disposable root", () => {
-    const isolated = createIsolatedTestEnvironment({ PATH: "/test/bin", HOME: "/real/home" });
+    const isolated = createIsolatedTestEnvironment({ PATH: "/test/bin", HOME: "/real/home", OCX_OWNER_REGISTRY_DIR: "/real/registry" });
     try {
       expect(isolated.env).toMatchObject({
         PATH: "/test/bin",
         HOME: isolated.root,
         USERPROFILE: isolated.root,
         OPENCODEX_HOME: join(isolated.root, ".opencodex"),
+        OCX_OWNER_REGISTRY_DIR: join(isolated.root, ".opencodex", "ocx-homes"),
         CODEX_HOME: join(isolated.root, ".codex"),
         TEMP: join(isolated.root, "tmp"),
         TMP: join(isolated.root, "tmp"),
@@ -401,6 +402,7 @@ describe("test runner transpiler cache isolation", () => {
         expect(entry.uid).toBe(process.geteuid!());
         expect(entry.mode & 0o777).toBe(0o700);
         expect(lstatSync(isolated.root).mode & 0o777).toBe(0o700);
+        expect(lstatSync(isolated.env.TMPDIR!).mode & 0o777).toBe(0o700);
       }
     } finally { isolated.cleanup(); }
     expect(existsSync(isolated.root)).toBe(false);

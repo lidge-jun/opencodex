@@ -468,6 +468,13 @@ describe("codebuddy stream-json event mapping", () => {
     expect(usageFromResult({ type: "result" })).toBeUndefined();
   });
 
+  test("usageFromResult carries the 1-hour share of a cache write", () => {
+    expect(usageFromResult({ type: "result", usage: {
+      input_tokens: 1, output_tokens: 2, cache_creation_input_tokens: 10,
+      cache_creation: { ephemeral_5m_input_tokens: 4, ephemeral_1h_input_tokens: 6 },
+    } })).toMatchObject({ cacheCreationInputTokens: 10, cacheCreation1hInputTokens: 6 });
+  });
+
   test("Anthropic cache-exclusive input becomes the inclusive OpenCodex input, so the turn keeps its cost", () => {
     // Reported shape (carried from #6566): 12 fresh, 150,000 cache-read and 4,000 cache-write
     // tokens used to surface as inputTokens 12, and normalizeCostTokens then returned null.

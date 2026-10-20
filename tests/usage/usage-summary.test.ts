@@ -1958,7 +1958,7 @@ describe("UsageSummaryAccumulator modes", () => {
       attemptCount: 2,
       measuredRequests: 0,
       reportedRequests: 0,
-      pricedRequests: 1,
+      pricedRequests: 0,
       unpricedRequests: 1,
     });
     const dayOther = compactSummary.days.find(day => day.requests > 0)?.models

@@ -1,10 +1,11 @@
+import { isKeyInCooldown } from "./api-key-cooldowns";
 import { randomUUID } from "node:crypto";
 import { mutatePersistedConfig } from "../config";
 import { publishAccountSelection } from "../lib/account-selection-events";
 import { clearModelCache } from "../codex/model-cache";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { ProviderApiKeySelection } from "../types/provider";
-import { routedProviderConfig } from "../router";
+import { routedProviderConfig } from "./routed-config";
 import { OPENCODE_GO_SESSION_HEADER } from "./opencode-go-transport";
 import { resolveProviderTransport, XAI_GROK_COMPATIBILITY, type OcxProviderTransport } from "./xai-transport";
 import { captureProviderApiKeySelection } from "./api-key-selection-capture";
@@ -12,15 +13,27 @@ import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 export { captureProviderApiKeySelection } from "./api-key-selection-capture";
 
 function matchesSelection(provider: OcxProviderConfig, expected: ProviderApiKeySelection): boolean {
+  if (expected.distributed) return provider.apiKeySelectionRevision === expected.revision
+    && provider.requestPacing?.enabled === true && provider.requestPacing.keySelection === "round-robin"
+    && !!provider.apiKeyPool?.some(entry => !entry.disabled && entry.id === expected.entryId && entry.key === expected.reference);
   const current = captureProviderApiKeySelection(provider);
   return current.entryId === expected.entryId && current.reference === expected.reference
     && current.revision === expected.revision;
 }
 
-function currentKeyProvider(config: OcxConfig, name: string): OcxProviderConfig | null {
+function currentKeyProvider(config: OcxConfig, name: string, selection?: ProviderApiKeySelection, allowCooling = false): OcxProviderConfig | null {
   const configured = config.providers[name];
   if (!configured || configured.disabled) return null;
-  const current = routedProviderConfig(name, { ...configured, _apiKeyAttempt: undefined });
+  let row = configured;
+  if (selection?.distributed) {
+    const entry = configured.apiKeyPool?.find(key => key.id === selection.entryId && key.key === selection.reference);
+    if (!entry || entry.disabled || (!allowCooling && isKeyInCooldown(name, entry.id)) || configured.apiKeySelectionRevision !== selection.revision
+      || !configured.requestPacing?.enabled || configured.requestPacing.keySelection !== "round-robin") return null;
+    row = { ...configured, apiKey: entry.key, _apiKeyAttempt: selection };
+  }
+  if (row.apiKeyPool?.some(entry => entry.disabled && entry.key === row.apiKey)
+    || row.apiKeyPool?.length && row.apiKeyPool.every(entry => entry.disabled)) return null;
+  const current = routedProviderConfig(name, { ...row, _apiKeyAttempt: selection?.distributed ? selection : undefined });
   if (current.authMode === "oauth" || current.authMode === "forward") return null;
   if (current.authMode === "key" && !current.keyOptional && !current.apiKey?.trim()) return null;
   return current;
@@ -32,10 +45,23 @@ export function providerApiKeySelectionIsCurrent(
   name: string,
   routedProvider: OcxProviderConfig,
 ): boolean {
-  const current = currentKeyProvider(config, name);
+  return matchesConfiguredSelection(config, name, routedProvider, false);
+}
+
+/** An already sent failure can extend cooldown, but cannot authorize another dispatch. */
+export function providerApiKeySelectionOwnsFailure(
+  config: OcxConfig, name: string, routedProvider: OcxProviderConfig,
+): boolean {
+  return matchesConfiguredSelection(config, name, routedProvider, true);
+}
+
+function matchesConfiguredSelection(
+  config: OcxConfig, name: string, routedProvider: OcxProviderConfig, allowCooling: boolean,
+): boolean {
   const expected = routedProvider._apiKeyAttempt;
+  const current = currentKeyProvider(config, name, expected, allowCooling);
   return current !== null && expected !== undefined
-    && matchesSelection(config.providers[name]!, expected)
+    && (expected.distributed === true || matchesSelection(config.providers[name]!, expected))
     && current.apiKey === routedProvider.apiKey
     && current.authMode === routedProvider.authMode
     && current.baseUrl === routedProvider.baseUrl;
@@ -47,7 +73,11 @@ export function resolveCurrentProviderApiKeyTransport(
   name: string,
   routedProvider: OcxProviderConfig,
 ): OcxProviderConfig | null {
-  const current = currentKeyProvider(config, name);
+  // A permit acquired for one key cannot authorize a different key after a manual edit.
+  if (routedProvider.requestPacing?.enabled && routedProvider.requestPacing.keys
+    && routedProvider._apiKeyAttempt && config.providers[name]
+    && !routedProvider._apiKeyAttempt.distributed && !matchesSelection(config.providers[name]!, routedProvider._apiKeyAttempt)) return null;
+  const current = currentKeyProvider(config, name, routedProvider._apiKeyAttempt);
   if (!current) return null;
   const runtime = routedProvider as OcxProviderTransport;
   const headers = { ...current.headers };

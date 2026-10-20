@@ -10,6 +10,7 @@ import { ConfigMutationLockError, mutatePersistedConfig } from "../../config";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
 import { isCodexAccountPaused, setCodexAccountPaused } from "../account-pause";
 import { codexAccountUsesCreditsAfterLimit } from "../account-credit-use";
+import { codexAccountUsesRemainingQuota } from "../account-use-remaining";
 import { getCodexAccountPriority } from "../account-priority";
 import { getCodexAccountAutoSwitchThresholdOverride } from "../account-auto-switch";
 import { clearThreadAccountMapForAccount, isCodexAccountPlanExcluded, reconcileCodexActiveAfterExclusion } from "../routing";
@@ -140,9 +141,11 @@ export function poolAccountDto(
     logLabel: codexAccountLogLabel(account),
     isMain: false,
     paused,
+    ...(config.codexAccountPauseState?.[account.id]?.details ? { pauseDetails: config.codexAccountPauseState[account.id]!.details } : {}),
     priority,
     autoSwitchThresholdOverride: getCodexAccountAutoSwitchThresholdOverride(config, account.id),
     creditsAfterLimit: codexAccountUsesCreditsAfterLimit(config, account.id),
+    useRemainingQuota: codexAccountUsesRemainingQuota(config, account.id),
     quota: quota ? { ...quota } : null,
     ...codexCreditsDtoField(config, account.id, poolQuotaHistoryIdentity(account.id) ?? null),
     needsReauth: needsReauth || health.status === "reauth_required",
@@ -165,12 +168,14 @@ export interface CodexAuthAccountDto {
   logLabel?: string;
   isMain: boolean;
   paused: boolean;
+  pauseDetails?: import("../../types/account-auto-pause").AccountPauseDetails;
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
   /** Null inherits the global usage-switch threshold; 0 disables it for this account. */
   autoSwitchThresholdOverride: number | null;
   /** False keeps the account out of selection while one of its usage windows is full. */
   creditsAfterLimit?: boolean;
+  useRemainingQuota?: boolean;
   quota: (StoredAccountQuota | (Omit<StoredAccountQuota, "updatedAt"> & { updatedAt: number })) | null;
   credits?: CodexCredits;
   needsReauth?: boolean;
@@ -400,11 +405,13 @@ export async function listCodexAuthAccountsSnapshot(
       logLabel: "main",
       isMain: true,
       paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+      ...(runtimeConfig.codexAccountPauseState?.[MAIN_CODEX_ACCOUNT_ID]?.details ? { pauseDetails: runtimeConfig.codexAccountPauseState[MAIN_CODEX_ACCOUNT_ID]!.details } : {}),
       mainAccountHardLock: { ...getMainAccountHardLockStatus(runtimeConfig),
         externalUsage: getMainAccountExternalUsageWarning(getObservedMainQuotaIdentityKey()) },
       priority: getCodexAccountPriority(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
       autoSwitchThresholdOverride: getCodexAccountAutoSwitchThresholdOverride(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
       creditsAfterLimit: codexAccountUsesCreditsAfterLimit(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
+      useRemainingQuota: codexAccountUsesRemainingQuota(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
       hasCredential: hasMainCredential,
       needsReauth: mainNeedsReauth,
       ...(mainReauthReason !== undefined ? { reauthReason: mainReauthReason } : {}),

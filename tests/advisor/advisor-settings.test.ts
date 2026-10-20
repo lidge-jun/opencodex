@@ -96,7 +96,7 @@ describe("resolveAdvisorSettings", () => {
     expect(isValidAdvisorEffort("max")).toBe(true);
     expect(isValidAdvisorEffort("minimal")).toBe(false);
     expect(isValidAdvisorPolicy("preflight")).toBe(true);
-    expect(isValidAdvisorPolicy("adaptive")).toBe(false);
+    expect(isValidAdvisorPolicy("adaptive")).toBe(true);
   });
 
   test("timeoutMs is bounded to a sane window", () => {
@@ -208,4 +208,20 @@ describe("ocx advisor set — clearing the model", () => {
     // Not one of them reached the settings route.
     expect(requests).toHaveLength(0);
   });
+});
+
+test("Advisor CLI exposes activity and adaptive task allowance without granting consent", async () => {
+  const requests: Array<{ path: string; body: unknown }> = [];
+  const deps = { baseUrl: "http://proxy.test", fetchImpl: (async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({ path: new URL(String(input)).pathname, body: init?.body ? JSON.parse(String(init.body)) : null });
+    return Response.json({ entries: [] });
+  }) as typeof fetch };
+  expect(await handleAdvisorCommand(["activity", "--json"], deps)).toBe(0);
+  expect(await handleAdvisorCommand(["set", "--policy", "adaptive", "--max-consultations", "2", "--json"], deps)).toBe(0);
+  expect(requests).toEqual([
+    { path: "/api/advisor/activity", body: null },
+    { path: "/api/advisor/settings", body: { policy: "adaptive", maxConsultationsPerTask: 2 } },
+  ]);
+  expect(await handleAdvisorCommand(["set", "--max-consultations", "4"], deps)).toBe(2);
+  expect(requests).toHaveLength(2);
 });

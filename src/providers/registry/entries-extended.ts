@@ -54,7 +54,7 @@ import {
   DEEPSEEK_VISION_PREVIEW_MODEL,
   COMMAND_CODE_MIMO_CONTEXT_WINDOWS,
   COMMAND_CODE_MODEL_INPUT_MODALITIES,
-  OPENCODE_FREE_DEEPSEEK_MODELS,
+  OPENCODE_ZEN_FREE_DEEPSEEK_MODELS,
   OPENCODE_ZEN_TEXT_ONLY_MODELS,
   OPENCODE_ZEN_IMAGE_MODELS,
   deepseekThinkingEffortsFor,
@@ -1089,20 +1089,20 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   },
   {
     id: "opencode-zen", label: "opencode zen", baseUrl: "https://opencode.ai/zen/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://opencode.ai/auth",
-    // Same opencode.ai/zen/v1 gateway as `opencode-free` (keyed tier): DeepSeek thinking mode
+    // Keyed opencode.ai/zen/v1 gateway: DeepSeek thinking mode
     // requires the assistant's original reasoning_content to be replayed on tool-call
     // continuations, or the gateway answers HTTP 400 (issues #950/#994). Mirror the DeepSeek
     // reasoning + thinking metadata so `opencode-zen/deepseek-v4-flash-free` — and the other
     // Zen DeepSeek thinking models — never serialize a bare tool-call turn.
-    note: "Keyed OpenCode Zen gateway. Free models on this tier are often short-window rate-limited at roughly 15-20 requests/minute (community-measured; OpenCode does not publish RPM). Zen may return generic 429s without Retry-After / X-RateLimit headers; when Retry-After is omitted, opencodex adds a synthetic backoff hint (upstream Retry-After still wins). Distinct from the keyless opencode-free desktop quota (~200 Big Pickle/free-model requests per 5 hours). Docs: https://opencode.ai/docs/zen/. Free-model prompts may be retained for training — do not send confidential material.",
+    note: "Keyed OpenCode Zen gateway. Free models on this tier are often short-window rate-limited at roughly 15-20 requests/minute (community-measured; OpenCode does not publish RPM). Zen may return generic 429s without Retry-After / X-RateLimit headers; when Retry-After is omitted, opencodex adds a synthetic backoff hint (upstream Retry-After still wins). Docs: https://opencode.ai/docs/zen/. Free-model prompts may be retained for training — do not send confidential material.",
     modelReasoningEfforts: Object.fromEntries(
-      [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS].map(id => [id, deepseekThinkingEffortsFor(id)]),
+      [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_ZEN_FREE_DEEPSEEK_MODELS].map(id => [id, deepseekThinkingEffortsFor(id)]),
     ),
     modelReasoningEffortMap: Object.fromEntries(
-      [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS].map(id => [id, deepseekReasoningMapFor(id)]),
+      [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_ZEN_FREE_DEEPSEEK_MODELS].map(id => [id, deepseekReasoningMapFor(id)]),
     ),
-    preserveReasoningContentModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
-    // Same Zen gateway as opencode-free: the DeepSeek vision preview id
+    preserveReasoningContentModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_ZEN_FREE_DEEPSEEK_MODELS],
+    // The DeepSeek vision preview id
     // (merges into deepseek-v4-flash later).
     modelContextWindows: {
       [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576,
@@ -1114,7 +1114,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noVisionModels: [...OPENCODE_ZEN_TEXT_ONLY_MODELS, ...DEEPSEEK_GATEWAY_THINKING_MODELS],
     // Same DeepSeek routes as the Go preset above, behind the same vendor, so they carry
     // the same json_schema rejection (#1338 / #1415).
-    noJsonSchemaModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
+    noJsonSchemaModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_ZEN_FREE_DEEPSEEK_MODELS],
     // Muse Spark on Zen can sit silent during prolonged reasoning and close without a protocol terminal.
     modelResponsesTerminalRepair: {
       "muse-spark-1.2-contributor-free": { graceMs: 5_000 },
@@ -1265,50 +1265,6 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     defaultModel: "glm-5.3-flash",
     models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "deepseek-v4-flash"],
     note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The seeded models were verified with chat, streaming and tool calls; deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches all seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
-  },
-  {
-    id: "opencode-free",
-    label: "OpenCode Free",
-    adapter: "openai-chat",
-    baseUrl: "https://opencode.ai/zen/v1",
-    authKind: "key",
-    keyOptional: true,
-    featured: true,
-    liveModels: true,
-    note: "No key needed, but OpenCode now gates this tier to its own client: Zen refuses any request that arrives without an x-opencode-session header (error type MissingSessionID, \"OpenCode's free tier can only be used in OpenCode\"). opencodex does not mint that header or claim an OpenCode client identity, because no upstream contract authorizes a third-party agent to present itself as OpenCode. Until OpenCode publishes a third-party integration path for the keyless tier, use the keyed opencode-zen provider instead (https://opencode.ai/auth). Quota figures for when the tier admitted a request: OpenCode advertises about 200 Big Pickle/free-model requests per 5 hours, and the same Zen gateway can short-window rate-limit free models at roughly 15-20 requests/minute, and may return generic 429s without Retry-After (opencodex synthesizes backoff only when that header is omitted). Free models are discovered live from Zen. Data use: per OpenCode's Zen docs (https://opencode.ai/docs/zen/), prompts sent to free models may be retained and used for training/improvement — do not send confidential material through this provider.",
-    dashboardUrl: "https://opencode.ai",
-    staticHeaders: {
-      // Zen answers a bare runtime User-Agent (Bun/x.y.z) more aggressively than a client
-      // that identifies itself, which is what the 429 in #2067 traced to. The value is
-      // deliberately unversioned: a pinned "opencode-cli/<version>" is a claim about an
-      // install we do not have and goes stale on the vendor's schedule, not ours.
-      // Corroboration, not authority: OmniRoute — an independent open-source broker against
-      // the same Zen upstream — defaults to exactly this pair (userAgent "opencode", client
-      // "desktop") in open-sse/executors/opencode.ts, and got there by RETREATING from its
-      // own earlier "opencode-cli/1.0.0" pin. An operator can still override either value
-      // through the provider headers API; user headers win case-insensitively at route time.
-      "User-Agent": "opencode",
-      "x-opencode-client": "desktop",
-    },
-    modelReasoningEfforts: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),
-    modelReasoningEffortMap: Object.fromEntries(OPENCODE_FREE_DEEPSEEK_MODELS.map(id => [id, deepseekReasoningMapFor(id)])),
-    preserveReasoningContentModels: OPENCODE_FREE_DEEPSEEK_MODELS,
-    // The DeepSeek vision preview id is preemptive metadata for when Zen starts
-    // serving it (merges into v4-flash later).
-    modelContextWindows: {
-      [DEEPSEEK_VISION_PREVIEW_MODEL]: 1_048_576,
-    },
-    modelInputModalities: {
-      [DEEPSEEK_VISION_PREVIEW_MODEL]: ["text", "image"],
-      ...Object.fromEntries(OPENCODE_ZEN_IMAGE_MODELS.map(id => [id, ["text", "image"] as string[]])),
-    },
-    // Same Zen roster behind the same base URL, so it carries the same measured
-    // text-only list rather than only its DeepSeek member (#1043).
-    noVisionModels: OPENCODE_ZEN_TEXT_ONLY_MODELS,
-    // Same reasoning: the free tier is the same Zen roster, so its DeepSeek members get
-    // the keyed tier's json_schema treatment and its reasoning contract rather than a
-    // narrower table that silently falls behind whenever the keyed one is updated.
-    noJsonSchemaModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
   },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.

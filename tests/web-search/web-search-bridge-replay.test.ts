@@ -145,6 +145,8 @@ async function runBridgedMixedLeg(baseUrl: string, result = "opencodex 2.50.0 sh
 function nextTurnBody(cellId: string): Record<string, unknown> {
   return {
     model: "glm-4.7",
+    // Codex declares hosted search on every turn; without it the cell is projected to a note (#7250).
+    tools: [{ type: "web_search" }],
     input: [
       { role: "user", content: [{ type: "input_text", text: "what is the latest release?" }] },
       {

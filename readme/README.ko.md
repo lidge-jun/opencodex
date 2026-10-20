@@ -112,7 +112,7 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 | 플랫폼 | 파일 | 참고 |
 |---|---|---|
 | macOS 13+ (Apple Silicon 및 Intel) | `OpenCodex-<version>-macos.dmg` | 유니버설 빌드, Developer ID로 서명 및 공증됨 |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | 아직 코드 서명되지 않음: SmartScreen이 한 번 물으면 **추가 정보 → 실행**을 선택 |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | SignPath Foundation을 통한 코드 서명 도입 중 ([코드 서명 정책](https://opencodex.me/ko/reference/code-signing/)). 서명되기 전 릴리스는 SmartScreen이 한 번 물으면 **추가 정보 → 실행**을 선택 |
 | Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` 또는 `-linux-amd64.deb` | 트레이는 AppIndicator를 지원하는 데스크톱이 필요 |
 
 릴리스 페이지에서 모든 파일 옆에 `.sha256`이 함께 있습니다. macOS 14 이상에서는 프록시 상태,
@@ -454,6 +454,16 @@ bun run test
 
 메인테이너가 대신 올리거나 다시 구현해서 들어왔는데 커밋에 원저자가 적히지 않은 기여자 작업은
 **[CREDITS.md](../CREDITS.md)**에 기록해 둡니다.
+
+## 코드 서명 정책 (Code signing policy)
+
+Windows 바이너리에 Authenticode 서명을 도입하고 있습니다 ([#7207](https://github.com/lidge-jun/opencodex/issues/7207)). 도입 현황, 서명 확인 방법, 전체 정책은 [Windows 코드 서명 가이드](https://opencodex.me/ko/reference/code-signing/)에 있습니다.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## 면책 조항
 

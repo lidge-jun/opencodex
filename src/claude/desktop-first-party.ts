@@ -25,7 +25,7 @@ import type { OcxConfig } from "../types";
 import { claudeConfigDir } from "./auth-detect";
 import { inspectDesktop3pConfigLibrary } from "./desktop-3p";
 import { claudeInterceptCaCertPath, ensureLocalInterceptCa } from "./intercept/local-ca";
-import { claudeInterceptEnabled, claudeInterceptProxyPort } from "./intercept/runtime";
+import { claudeInterceptEnabled, claudeInterceptProxyPort } from "./intercept/port-policy";
 import { ensureClaudeInterceptProxyToken, readClaudeInterceptProxyToken } from "./intercept/proxy-auth";
 import {
   applyClaudeInterceptSettings,

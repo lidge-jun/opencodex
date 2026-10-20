@@ -1,3 +1,4 @@
+import { restoreApprovedCodexProviders } from "../provider-routing";
 import { beginCodexWriteSection, cleanExternalProviderJournal, publishCodexArtifact } from "./config-write-section";
 import { assertCodexHomeOwner, codexHomeIsAbsent, codexHomeOwnerBlocksCompensation, CodexHomeOwnerRefusal, type CodexHomeOwnerRefusalReason } from "../codex-home-owner";
 import { loadConfig } from "../../config";
@@ -115,6 +116,7 @@ export interface CodexRestoreConfigResult {
     | "owned-fields-stripped"
     | "routing-restored-provider-retained"
     | "external-provider-preserved"
+    | "approved-provider-restored"
     | "failed";
   message: string;
   retained?: RetainedCodexProviderTable;
@@ -234,6 +236,26 @@ export function failedHistoryRestoreFromOutcome(
     return failedHistoryRestore("integrity", undefined, { rows: outcome.rows, files: outcome.files });
   }
   return failedHistoryRestore(undefined, describeHistoryJobFailure(outcome, "restore"));
+}
+
+export function finishApprovedProviderRestore(result: CodexNativeRestoreResult, revalidateDesiredState = false): CodexNativeRestoreResult {
+  if (!result.success || revalidateDesiredState && shouldSyncCodexOnStart(loadConfig())) return result;
+  try {
+    if (!restoreApprovedCodexProviders()) return result;
+  } catch (error) {
+    if (error instanceof CodexHomeOwnerRefusal) throw error;
+    const message = `Approved Codex provider URL restoration failed: ${error instanceof Error ? error.message : String(error)}`;
+    return { ...result, success: false, message: `${result.message} ${message}`, artifacts: {
+      ...result.artifacts, config: { ...result.artifacts.config, state: "failed", action: "failed", message },
+    } };
+  }
+  const message = "Approved Codex provider URLs restored; identity, other settings and history preserved.";
+  return { ...result, message: result.externalProvider ? message : `${result.message} ${message}`, artifacts: {
+    ...result.artifacts,
+    config: { ...result.artifacts.config, state: result.artifacts.config.state === "partial" ? "partial" : "ok", changed: true,
+      action: result.artifacts.config.changed ? result.artifacts.config.action : "approved-provider-restored",
+      message: result.artifacts.config.state === "partial" ? `${result.artifacts.config.message} ${message}` : message },
+  } };
 }
 
 function externalProviderRestoreResult(activeProvider: string): CodexNativeRestoreResult {
@@ -553,7 +575,7 @@ export async function restoreNativeCodexAsync(
   if (sibling) return sibling;
   try {
     assertCodexHomeOwner(getCodexHome());
-    return await restoreNativeCodexAsyncImpl(options);
+    return finishApprovedProviderRestore(await restoreNativeCodexAsyncImpl(options), options.revalidateDesiredState);
   } catch (error) {
     if (error instanceof CodexHomeOwnerRefusal) return homeOwnerRestoreRefusal(error);
     if (!(error instanceof CodexRestoreRefusal)) throw error;
@@ -782,7 +804,7 @@ export function restoreNativeCodex(
   if (sibling) return sibling;
   try {
     assertCodexHomeOwner(getCodexHome());
-    return restoreNativeCodexImpl(options);
+    return finishApprovedProviderRestore(restoreNativeCodexImpl(options), options.revalidateDesiredState);
   } catch (error) {
     if (error instanceof CodexHomeOwnerRefusal) return homeOwnerRestoreRefusal(error);
     throw error;

@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket } from "bun";
+import { modelAliasIdPromoter } from "./model-alias-id";
 import type { StartServerDeps } from "./startup-warnings";
 import { isLinkManagementPath } from "../../link/management-routes";
 import {
@@ -1252,6 +1253,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             effortRowKnownIds,
           ));
         };
+        const promoteAliasId = modelAliasIdPromoter(config);
         const routedRows = await Promise.all(uniqueCatalogModelsForRawPublicList(goOrdered)
           .filter(m => listAllows(m.provider, m.id))
           .map(async m => {
@@ -1269,8 +1271,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
                 knownModelIdsForProvider(m.provider, provider, config),
               ).get(m.id)
             : undefined;
+          const effectiveId = !isCombo && !fastModelId && effective
+            ? promoteAliasId(m.provider, m.id, effective.alias, catalogRowFastEligible(m)) ?? publicId
+            : publicId;
           const row = {
-            id: publicId,
+            id: effectiveId,
             object: "model",
             created: 0,
             // This endpoint is an OpenAI-compatible inbound contract. Some clients use
@@ -1279,6 +1284,9 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             owned_by: isCombo ? "openai" : (m.owned_by ?? m.provider),
             ...(isCombo ? { is_combo: true } : {}),
             ...(effective ? { alias_of: `${provider?.alias || m.provider}/${effective.alias}` } : {}),
+            // When preferModelAliasIds promotes the alias to `id`, retain the original
+            // provider/nativeId so clients that need the upstream identity can read it.
+            ...(effectiveId !== publicId ? { native_id: publicId } : {}),
             ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
             ...modelCapabilityFields({
               reasoningEfforts: m.reasoningEfforts,
@@ -1610,11 +1618,17 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // Promote a caller `x-session-id` before admission, as Responses and Messages do (#6520):
         // the ChatGPT bridge forwards only canonical session headers, so the raw marker is lost.
         const sessionReq = withCallerSessionIdentity(req, admission);
-        return runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => withCors(
-          await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
-          req,
-          policy,
-        ), { requestId, start, logCtx });
+        // Only expose an id when the handler or a logged refusal owns its history row.
+        let ownsRequestLog = false;
+        const response = await runAdmittedHttpTurn(sessionReq, policy, async turnAdmissionLease => {
+          ownsRequestLog = true;
+          return withCors(
+            await handleChatCompletions(sessionReq, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
+            req,
+            policy,
+          );
+        }, { requestId, start, logCtx, onLogged: () => { ownsRequestLog = true; } });
+        return ownsRequestLog ? withRequestLogId(response, requestId) : response;
       }
 
       if (url.pathname === "/v1/audio/transcriptions" && req.method === "POST") {

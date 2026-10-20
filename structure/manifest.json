@@ -48,6 +48,13 @@
   ],
   "docs": [
     {
+      "path": "providers/generic-account-pool.md",
+      "tier": 4,
+      "title": "Generic OAuth Account Pool",
+      "scope": "Opt-in conversation ownership, request-local selection receipts and bounded release for generic OAuth pools.",
+      "documents": ["src/oauth/", "src/server/", "src/types/"]
+    },
+    {
       "path": "overview.md",
       "tier": 1,
       "title": "Overview",
@@ -120,6 +127,13 @@
       ]
     },
     {
+      "path": "codex-provider-routing.md",
+      "tier": 2,
+      "title": "Custom Codex Provider Routing",
+      "scope": "Explicit provider-ID routing consent, URL-only publication and recovery.",
+      "documents": ["src/codex/provider-routing.ts", "src/cli/codex-provider.ts"]
+    },
+    {
       "path": "codex-home.md",
       "tier": 2,
       "title": "Codex Home",
@@ -139,6 +153,13 @@
       ]
     },
     {
+      "path": "remote-messaging.md",
+      "tier": 3,
+      "title": "Remote Codex Messaging",
+      "scope": "Explicit peer enrollment, connection-bound capabilities, bounded foreground SSH ownership and queued remote replies.",
+      "documents": ["src/messaging/", "src/cli/", "src/link/"]
+    },
+    {
       "path": "local-messaging.md",
       "tier": 3,
       "title": "Local Codex Messaging",
@@ -146,6 +167,16 @@
       "documents": [
         "src/messaging/",
         "src/cli/"
+      ]
+    },
+    {
+      "path": "codex-cli-update.md",
+      "tier": 2,
+      "title": "Codex CLI Update Plan",
+      "scope": "Read-only update planning, isolated npm environment, and complete process observation.",
+      "documents": [
+        "src/codex/cli-update-plan.ts",
+        "src/codex/app-server-processes.ts"
       ]
     },
     {
@@ -180,6 +211,13 @@
       "documents": ["src/codex/runtime.ts", "src/codex/catalog/effort.ts"]
     },
     {
+      "path": "catalog-routed-ownership.md",
+      "tier": 2,
+      "title": "Routed-row authorship",
+      "scope": "Generated routed-row ownership signals and combo catalog description overrides.",
+      "documents": ["src/codex/catalog/ownership.ts"]
+    },
+    {
       "path": "subagents.md",
       "tier": 2,
       "title": "Subagents And Multi-Agent Surface",
@@ -191,14 +229,24 @@
       ]
     },
     {
+      "path": "subagent-capacity.md",
+      "tier": 2,
+      "title": "Subagent Surface And Capacity",
+      "scope": "Surface mode, hybrid global flag, concurrent child limits and canonical Codex setting ownership.",
+      "documents": [
+        "src/codex/"
+      ]
+    },
+    {
       "path": "advisor.md",
       "tier": 2,
       "title": "Advisor Sidecar",
-      "scope": "The OpenCodex-owned expert consultation sidecar: synthetic advisor tool, preflight policy, loopback consultation through the routing authority, and the optional-subsystem seam.",
+      "scope": "The optional expert consultation sidecar: manual/preflight/adaptive policies, evidence, durable task allowance, metadata activity, and loopback routing.",
       "documents": [
         "src/advisor/",
         "src/server/responses/advisor-slot.ts",
         "src/server/responses/advisor-plan-slot.ts",
+        "src/server/inference/advisor-diagnostics.ts",
         "src/lib/advisor-activation.ts"
       ]
     },
@@ -216,6 +264,19 @@
       ]
     },
     {
+      "path": "transports/anthropic-thinking-recovery.md",
+      "tier": 3,
+      "title": "Anthropic Thinking-Signature Recovery",
+      "scope": "One-shot exact signature-binding recovery before output, and successful-retry memo boundaries.",
+      "documents": [
+        "src/server/responses/anthropic-thinking-recovery.ts",
+        "src/adapters/anthropic-rejection-memo.ts",
+        "src/adapters/anthropic-replay.ts",
+        "src/adapters/anthropic-tool-catalog.ts",
+        "src/responses/reasoning-replay-cache.ts"
+      ]
+    },
+    {
       "path": "transports/responses.md",
       "tier": 3,
       "title": "Responses Transport",
@@ -225,6 +286,20 @@
         "src/bridge/",
         "src/responses/",
         "src/server/"
+      ]
+    },
+    {
+      "path": "transports/native-reasoning-retention.md",
+      "tier": 3,
+      "title": "Native Reasoning Retention",
+      "scope": "Optional native reasoning ciphertext forwarding on model/account switches, configuration and management controls.",
+      "documents": [
+        "src/config/",
+        "src/types/",
+        "src/responses/",
+        "src/server/",
+        "src/adapters/",
+        "gui/"
       ]
     },
     {
@@ -252,16 +327,25 @@
       ]
     },
     {
-        "path": "transports/policy-fallback.md",
-        "tier": 3,
-        "title": "Policy Candidate Fallback",
-        "scope": "Original policy authorization, concrete candidate retries and physical destination deduplication.",
-        "documents": [
-          "src/server/"
-        ]
-      },
-      {
-        "path": "transports/responses-spend.md",
+      "path": "transports/responses-combo-boundaries.md",
+      "tier": 3,
+      "title": "Combo Streaming Boundaries",
+      "scope": "Combo preflight output commitment, turn lease lifetime, and bounded hop warnings.",
+      "documents": [
+        "src/server/"
+      ]
+    },
+    {
+      "path": "transports/policy-fallback.md",
+      "tier": 3,
+      "title": "Policy Candidate Fallback",
+      "scope": "Original policy authorization, concrete candidate retries and physical destination deduplication.",
+      "documents": [
+        "src/server/"
+      ]
+    },
+    {
+      "path": "transports/responses-spend.md",
       "tier": 3,
       "title": "Responses Spend Reservations",
       "scope": "Credential-hop and durable spend reservations, and what a spent budget tells the client.",
@@ -330,11 +414,41 @@
       ]
     },
     {
+      "path": "providers/anthropic-progress.md",
+      "tier": 4,
+      "title": "Anthropic progress updates",
+      "scope": "Opus 5.5 progress display, visible commentary, and exact signed-block replay.",
+      "documents": ["src/adapters/", "src/bridge/", "src/responses/", "src/claude/", "src/types/", "src/server/", "src/web-search/", "src/images/"]
+    },
+    {
       "path": "providers/anthropic-account-thresholds.md",
       "tier": 4,
       "title": "Anthropic Account Thresholds",
       "scope": "Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes.",
+      "documents": [
+        "src/oauth/"
+      ]
+    },
+    {
+      "path": "providers/meta-muse.md",
+      "tier": 4,
+      "title": "Meta Muse Login",
+      "scope": "CLI credential import, approval lifecycle, explicit recovery and account-free login diagnostics.",
+      "documents": ["src/oauth/meta-muse.ts", "src/oauth/meta-muse-keychain.ts", "src/oauth/meta-muse-errors.ts", "src/oauth/login-cli.ts"]
+    },
+    {
+      "path": "providers/oauth-reconciliation.md",
+      "tier": 4,
+      "title": "OAuth Preset Reconciliation",
+      "scope": "Operator limits and per-model declarations across startup reconciliation and OAuth upsert.",
       "documents": ["src/oauth/"]
+    },
+    {
+      "path": "providers/claude-cli-replay.md",
+      "tier": 4,
+      "title": "Claude CLI Replay",
+      "scope": "Claude CLI stable replay, canonical tool schemas, capture-only client tool ownership and subscription usage admission.",
+      "documents": ["src/adapters/"]
     },
     {
       "path": "providers-and-adapters.md",
@@ -361,7 +475,8 @@
       "documents": [
         "src/combos/",
         "src/server/",
-        "src/usage/"
+        "src/usage/",
+        "src/lib/decision-quota-sink.ts"
       ]
     },
     {
@@ -377,6 +492,18 @@
       ]
     },
     {
+      "path": "providers/dsh-account.md",
+      "tier": 4,
+      "title": "DeepSeek Harness Account Provider",
+      "scope": "Explicit read-only DSH credential import, verified account identity, disabled refresh, pinned inference and probe destinations, and authoritative-empty quota.",
+      "documents": [
+        "src/oauth/dsh.ts",
+        "src/adapters/dsh-account.ts",
+        "src/providers/dsh-account-destination.ts",
+        "src/providers/quota/dsh-account.ts"
+      ]
+    },
+    {
       "path": "providers/anthropic-account-pool.md",
       "tier": 4,
       "title": "Anthropic Account Pool",
@@ -388,6 +515,13 @@
         "src/server/management/anthropic-pool-settings.ts",
         "src/sidecar/anthropic-binding.ts"
       ]
+    },
+    {
+      "path": "providers/oauth-code-display-login.md",
+      "tier": 4,
+      "title": "OAuth Code-Display Login",
+      "scope": "Headless code-display OAuth login: flow ownership, expiry, unsupported providers, single-operator store.",
+      "documents": ["src/oauth/", "src/server/management/"]
     },
     {
       "path": "providers/openai-tiers.md",
@@ -407,6 +541,13 @@
         "src/codex/",
         "src/config.ts"
       ]
+    },
+    {
+      "path": "providers/openai-signed-in-preservation.md",
+      "tier": 4,
+      "title": "Preserve Signed-In Codex Quota",
+      "scope": "Opt-in effective priority bands that spend other pool accounts before the signed-in identity, its identity observation and management API.",
+      "documents": ["src/codex/account-preservation.ts", "src/codex/signed-in-identity.ts", "src/codex/auth-api/account-preservation.ts", "src/cli/account-preservation.ts"]
     },
     {
       "path": "providers/cursor.md",
@@ -513,6 +654,17 @@
       ]
     },
     {
+      "path": "provider-completion-diagnostic.md",
+      "tier": 5,
+      "title": "Provider Completion Diagnostic",
+      "scope": "Explicit single-model completion test: consent, applicability gate, send-time authority fingerprint, bounded streaming and metadata comparison.",
+      "documents": [
+        "gui/",
+        "src/cli/",
+        "src/server/"
+      ]
+    },
+    {
       "path": "dashboard-and-usage.md",
       "tier": 5,
       "title": "Dashboard Surfaces And Usage",
@@ -525,6 +677,23 @@
         "src/routing/history/",
         "src/server/",
         "src/usage/"
+      ]
+    },
+    {
+      "path": "pricing.md",
+      "tier": 5,
+      "title": "Model Price Overrides",
+      "scope": "User price policies, prompt-length rate selection, persistence and estimate cache invalidation.",
+      "documents": [
+        "src/config/live-reconcile.ts",
+        "src/cli/models-runtime.ts",
+        "src/types/provider.ts",
+        "src/config/schema/leaf-validators.ts",
+        "src/server/management/model-routes.ts",
+        "src/usage/cost.ts",
+        "src/usage/user-cost-overlays.ts",
+        "src/usage/user-cost-validation.ts",
+        "gui/src/components/ModelPriceDialog.tsx"
       ]
     },
     {
@@ -652,6 +821,7 @@
       "documents": [
         "src/service/health-sentinel-launch.ts",
         "src/service/health-sentinel-main.ts",
+        "src/service/health-sentinel-linux.ts",
         "src/service/health-sentinel-policy.ts",
         "src/service/health-sentinel-probe.ts",
         "src/service/health-sentinel-windows.ts"
@@ -765,6 +935,27 @@
       "scope": "Test-runner home and case-scoped lifecycle teardown ordering.",
       "documents": [
         "tests/"
+      ]
+    },
+    {
+      "path": "account-auto-pause.md",
+      "tier": 2,
+      "title": "Account Auto-Pause",
+      "scope": "Opt-in permanent account refusal classification, credential fences, durable pause metadata, bounded recovery and resume.",
+      "documents": [
+        "src/oauth/account-auto-pause.ts",
+        "src/oauth/account-auto-pause-policy.ts",
+        "src/providers/api-key-pause.ts",
+        "src/types/account-auto-pause.ts",
+        "src/lib/account-auto-pause-response.ts",
+        "src/server/responses/request-transport.ts",
+        "src/server/responses/account-auto-pause-recovery.ts",
+        "src/codex/account-pause.ts",
+        "src/config/schema/account-auto-pause.ts",
+        "gui/src/hooks/useProviderAccountPools.ts",
+        "src/config/account-auto-pause-revisions.ts",
+        "src/oauth/api-key-pool-preserve.ts",
+        "gui/src/account-pause-display.ts"
       ]
     }
   ],

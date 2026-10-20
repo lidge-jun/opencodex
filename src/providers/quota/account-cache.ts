@@ -1,3 +1,6 @@
+import { rawAnthropicHeaderWindows } from "./anthropic-decision-windows";
+import { clearDecisionAccountQuotas, decisionQuotaSinkActive } from "../../lib/decision-quota-sink";
+import { bindRawDecisionWindows, publishAnthropicDecisionQuota } from "../quota-decision-publication";
 import { parseAnthropicFamilyHeaders, mergeAnthropicFamilyWindows } from "./anthropic-family-headers";
 import { anthropicModelQuotaFor, ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS } from "../../oauth/anthropic-model-quota";
 import { createHash } from "node:crypto";
@@ -200,7 +203,7 @@ export function supportsPerAccountQuota(provider: string): boolean {
 
 export function explicitAccountReader(provider: string): boolean {
   return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code"
-    || provider === "devin";
+    || provider === "devin" || provider === "dsh-account";
 }
 
 export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
@@ -289,6 +292,7 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
   writerGeneration: number,
   status?: number,
   model?: string,
+  decisionCredentialGeneration?: string,
 ): void {
   if (!accountId) return;
   const key = accountCacheKey(instance, accountId);
@@ -318,14 +322,20 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
       ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previous?.quota?.customWindows, observed.customWindows) } : {}),
     }, observed.updatedAt),
   });
+  // Advisory evidence is published for the primary pool only; Pool 2 stays unknown to decisions.
+  if (instance === "anthropic" && generation && generation === decisionCredentialGeneration && decisionQuotaSinkActive()) {
+    bindRawDecisionWindows(observed, rawAnthropicHeaderWindows(headers, observed.updatedAt));
+    publishAnthropicDecisionQuota(accountId, generation, observed, true);
+  }
   persistAccountQuotaCache();
 }
 
 /** Legacy recorder: config/roster generation is numeric and distinct from bearer ownership. */
 export function recordAnthropicAccountQuotaFromHeaders(
   accountId: string, headers: Headers, writerGeneration: number, status?: number, model?: string,
+  decisionCredentialGeneration?: string,
 ): void {
-  recordAnthropicAccountQuotaFromHeadersForInstance("anthropic", accountId, headers, writerGeneration, status, model);
+  recordAnthropicAccountQuotaFromHeadersForInstance("anthropic", accountId, headers, writerGeneration, status, model, decisionCredentialGeneration);
 }
 
 /**
@@ -446,6 +456,7 @@ export function resetProviderQuotaReconcileStateForTests(): void {
 
 /** Drop cached per-account rows (all, or just one provider's). */
 export function clearAccountQuotaCache(provider?: string): void {
+  clearDecisionAccountQuotas(provider);
   // Anthropic readers use provider-owned epochs; B cannot revoke an A flight.
   if (provider !== "anthropic2") explicitAccountEpoch += 1;
   if (!provider) {
@@ -475,6 +486,9 @@ export function clearAccountQuotaCache(provider?: string): void {
 
 /** Drop one account's cached bars and any joined probe so a reset is not ranked from the old window. */
 export function forgetCachedProviderAccountQuota(provider: string, accountId: string): void {
+  // Advisory decision evidence of the same account is a copy of the dropped bars; it must not
+  // keep ranking the account from the pre-reset window while the reread is pending or fails.
+  clearDecisionAccountQuotas(provider, accountId);
   hydrateAccountQuotaCache();
   const key = accountCacheKey(provider, accountId);
   accountQuotaCache.delete(key);
@@ -499,9 +513,9 @@ export async function getTokenForAccountQuotaProbe(provider: string, accountId: 
   const row = getAccountCredentialWithStatus(provider, accountId);
   if (!row) throw new Error("account credential missing");
   // An operator-paused account is excluded from every automatic upstream use, quota reads included.
-  // Anthropic instances also skip a needs-reauth row; other providers keep their probe behavior.
+  // Anthropic instances and DSH (whose grant never refreshes) also skip a needs-reauth row.
   if (row.paused) throw new Error("account is paused; quota probe skipped");
-  if (row.needsReauth && isAnthropicInstanceId(provider)) throw new Error("account needs sign-in; quota probe skipped");
+  if (row.needsReauth && (isAnthropicInstanceId(provider) || provider === "dsh-account")) throw new Error("account needs sign-in; quota probe skipped");
   const stored = row.credential;
   if (stored.expires > Date.now() + ACCOUNT_TOKEN_SKEW_MS) return stored.access;
   const activeId = getAccountSet(provider)?.activeAccountId;
@@ -519,7 +533,8 @@ export async function getTokenForAccountQuotaProbe(provider: string, accountId: 
 export function accountQuotaProbeSkip(provider: string, accountId: string): AccountQuotaCacheEntry | undefined {
   if (!supportsPerAccountQuota(provider)) return { ts: Date.now(), quota: null, unavailable: true };
   if (getAccountCredentialWithStatus(provider, accountId)?.paused !== true) return undefined;
-  return accountQuotaCache.get(accountCacheKey(provider, accountId)) ?? { ts: Date.now(), quota: null, unavailable: true };
+  const cached = accountQuotaCache.get(accountCacheKey(provider, accountId));
+  return cached && cached.isCurrent?.() !== false ? cached : { ts: Date.now(), quota: null, unavailable: true };
 }
 
 export function explicitQuotaConfig(provider: string, configured?: OcxProviderConfig): OcxProviderConfig | undefined {
@@ -552,5 +567,5 @@ export function explicitQuotaDestination(provider: string, config: OcxProviderCo
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
   // These readers use fixed canonical billing origins, never config.baseUrl. Devin reads
   // the credential's own allowlisted api-server host instead (fetchDevinQuota revalidates it).
-  return provider === "xai" || provider === "cursor" || provider === "devin";
+  return provider === "xai" || provider === "cursor" || provider === "devin" || provider === "dsh-account";
 }

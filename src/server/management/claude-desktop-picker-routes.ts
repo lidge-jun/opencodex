@@ -44,7 +44,7 @@ export function pickerPreferenceOn(config: Pick<OcxConfig, "claudeCode">): boole
 }
 
 const PICKER_BODY_KEYS = new Set(["enabled", "persist", "trustedLocally", "callerAddedTrust"]);
-/** Enable outcomes that are progress, not refusal: on, waiting for a Desktop restart, or for the keychain step. */
+/** Enable outcomes that are progress, not refusal: on, waiting for a Desktop restart, or for certificate trust. */
 const ENABLE_ACCEPTED = new Set(["active", "restart_required", "trust_pending"]);
 
 interface PickerRequestBody { enabled: boolean; persist: boolean; trustedLocally?: boolean; callerAddedTrust?: boolean }

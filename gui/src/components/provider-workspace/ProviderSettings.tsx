@@ -24,6 +24,7 @@ import { providerSupportsLiveModelDiscovery } from "../../provider-workspace/cat
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import { authModeLabel } from "./ProviderRail";
 import { ProviderProtocolPanel } from "./ProviderProtocolPanel";
+import { ProviderKeyPacing, type KeyPacingDraft, type KeyPacingStatus } from "./ProviderKeyPacing";
 import type { WorkspaceItem, ProviderUpdatePatch, ProviderUpdateResult } from "./types";
 
 const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azure-openai", "cursor"] as const;
@@ -31,7 +32,7 @@ const EMPTY_MODELS: string[] = [];
 
 type ChoicesStatus = "idle" | "loading" | "ready" | "error";
 type PacingRule = { requestsPerMinute?: number; minIntervalMs?: number; maxConcurrentRequests?: number };
-type PacingStatus = { enabled: boolean; queued: number; nextSlotInMs: number; lastStartedAt?: number; lastModelId?: string };
+type PacingStatus = { enabled: boolean; queued: number; nextSlotInMs: number; lastStartedAt?: number; lastModelId?: string; keys?: KeyPacingStatus[] };
 type CursorHttpVersion = "http2" | "http1.1";
 
 function effectiveCursorHttpVersion(value: WorkspaceItem["upstreamHttpVersion"]): CursorHttpVersion {
@@ -58,6 +59,8 @@ function pacingSignature(value: WorkspaceItem["requestPacing"] | undefined): str
     value?.requestsPerMinute ?? null,
     value?.minIntervalMs ?? null,
     value?.maxConcurrentRequests ?? null,
+    value?.keySelection ?? "active",
+    [value?.keys?.requestsPerMinute ?? null, value?.keys?.minIntervalMs ?? null, value?.keys?.maxConcurrentRequests ?? null],
     models,
   ]);
 }
@@ -98,6 +101,7 @@ export default function ProviderSettings({
   const [choicesStatus, setChoicesStatus] = useState<ChoicesStatus>(apiBase ? "loading" : "idle");
   const [endpointChoice, setEndpointChoice] = useState(() => "custom");
   const [pacingEnabled, setPacingEnabled] = useState(item.requestPacing?.enabled === true);
+  const [keyPacing, setKeyPacing] = useState<KeyPacingDraft>({ keySelection: item.requestPacing?.keySelection, keys: item.requestPacing?.keys });
   const [pacingRpm, setPacingRpm] = useState(() => numberDraft(item.requestPacing?.requestsPerMinute));
   const [pacingDelay, setPacingDelay] = useState(() => numberDraft(item.requestPacing?.minIntervalMs));
   const [pacingConcurrency, setPacingConcurrency] = useState(() => numberDraft(item.requestPacing?.maxConcurrentRequests));
@@ -121,6 +125,7 @@ export default function ProviderSettings({
     setLiveModels(savedLiveModels);
     setCursorHttpVersion(savedCursorHttpVersion);
     setPacingEnabled(item.requestPacing?.enabled === true);
+    setKeyPacing({ keySelection: item.requestPacing?.keySelection, keys: item.requestPacing?.keys });
     setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
     setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs));
     setPacingConcurrency(numberDraft(item.requestPacing?.maxConcurrentRequests));
@@ -192,11 +197,12 @@ export default function ProviderSettings({
 
   const pacingDraft = useMemo(() => ({
     enabled: pacingEnabled,
+    ...keyPacing,
     ...(positiveRpm(pacingRpm) !== undefined ? { requestsPerMinute: positiveRpm(pacingRpm) } : {}),
     ...(positiveInteger(pacingDelay) !== undefined ? { minIntervalMs: positiveInteger(pacingDelay) } : {}),
     ...(positiveInteger(pacingConcurrency) !== undefined ? { maxConcurrentRequests: positiveInteger(pacingConcurrency) } : {}),
     ...(Object.keys(pacingModels).length > 0 ? { models: pacingModels } : {}),
-  }), [pacingConcurrency, pacingDelay, pacingEnabled, pacingModels, pacingRpm]);
+  }), [keyPacing, pacingConcurrency, pacingDelay, pacingEnabled, pacingModels, pacingRpm]);
 
   const supportsReasoningReplay = !isCatalogProviderId(item.name)
     && canConfigureResponsesReasoningReplay({ adapter, baseUrl, authMode });
@@ -250,7 +256,14 @@ export default function ProviderSettings({
       if (pacingConcurrency.trim() !== "" && positiveInteger(pacingConcurrency) === undefined) {
         setMsg({ ok: false, text: t("pws.pacingCapInvalid") }); return false;
       }
-      if (pacingEnabled && !pacingDraft.requestsPerMinute && !pacingDraft.minIntervalMs && !pacingDraft.maxConcurrentRequests && !pacingDraft.models) {
+      if (Object.entries(keyPacing.keys ?? {}).some(([field, value]) =>
+        !Number.isFinite(value) || value <= 0
+        || (field !== "requestsPerMinute" && !Number.isSafeInteger(value))
+        || (field === "requestsPerMinute" && (value < 1 / 60 || value > 60_000))
+        || (field === "minIntervalMs" && value > 3_600_000))) {
+        setMsg({ ok: false, text: t("pws.keyLimitInvalid") }); return false;
+      }
+      if (pacingEnabled && !pacingDraft.requestsPerMinute && !pacingDraft.minIntervalMs && !pacingDraft.maxConcurrentRequests && !pacingDraft.models && !pacingDraft.keys && pacingDraft.keySelection !== "round-robin") {
         setMsg({ ok: false, text: t("pws.pacingRuleRequired") }); return false;
       }
       const pacingOnly = pacingDirty && !dirty;
@@ -339,6 +352,7 @@ export default function ProviderSettings({
     setPreserveReasoningReplay(item.preserveResponsesReasoningContent === true);
     setCursorHttpVersion(savedCursorHttpVersion); setMsg(null);
     setPacingEnabled(item.requestPacing?.enabled === true); setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
+    setKeyPacing({ keySelection: item.requestPacing?.keySelection, keys: item.requestPacing?.keys });
     setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs));
     setPacingConcurrency(numberDraft(item.requestPacing?.maxConcurrentRequests));
     setPacingModels({ ...(item.requestPacing?.models ?? {}) });
@@ -540,6 +554,7 @@ export default function ProviderSettings({
           <span><strong>{pacingStatus?.nextSlotInMs ?? 0} ms</strong> {t("pws.pacingNextSlot")}</span>
           <span><strong>{pacingStatus?.lastModelId ?? t("pws.pacingNone")}</strong> {t("pws.pacingLastModel")}</span>
         </div>
+        {authMode !== "oauth" && authMode !== "forward" && <ProviderKeyPacing value={keyPacing} onChange={setKeyPacing} status={pacingStatus?.keys} />}
         <h4>{t("pws.pacingModelOverrides")}</h4>
         <div className="pwi-pacing-grid pwi-pacing-grid--model">
           <label className="pwi-settings-field"><span className="pwi-settings-label">{t("pws.pacingModel")}</span><input className="input" list={`pacing-models-${item.name}`} value={pacingModelId} onChange={e => setPacingModelId(e.target.value)} /><datalist id={`pacing-models-${item.name}`}>{availableModels.map(model => <option key={model} value={model} />)}</datalist></label>

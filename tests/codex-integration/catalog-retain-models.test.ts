@@ -99,7 +99,6 @@ describe("shouldRetainConfiguredProviderModel", () => {
     // Mirrors the canonical compatibility allow-list; ensures the new branch is purely additive.
     expect(shouldRetainConfiguredProviderModel("kimi", "k3[1m]")).toBe(true);
     expect(shouldRetainConfiguredProviderModel("xai", "grok-4.3")).toBe(true);
-    expect(shouldRetainConfiguredProviderModel("opencode-free", "big-pickle")).toBe(true);
   });
 });
 

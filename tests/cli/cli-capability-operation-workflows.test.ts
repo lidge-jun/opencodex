@@ -80,11 +80,43 @@ describe("operation capability workflows use existing handlers", () => {
     expect(await handleObserveCommand(["logs", "explain", "req/1", "--json"], explain.deps)).toBe(0);
     expect(explain.requests).toEqual([{ method: "GET", path: "/api/request-history/req%2F1/route-decision", body: null }]);
   });
+  test("logs history pages the index and get reads one canonical row", async () => {
+    const io = transport({ entries: [], hasMore: false, index: { indexedRows: 0 } });
+    expect(capability("logs history").routes).toEqual([{ method: "GET", path: "/api/request-history" }]);
+    expect(await handleObserveCommand(["logs", "history", "--provider", "xai", "--limit", "10", "--json"], io.deps)).toBe(0);
+    expect(io.requests).toEqual([{ method: "GET", path: "/api/request-history?provider=xai&limit=10", body: null }]);
+    const get = transport({ requestId: "req/1" });
+    expect(capability("logs get").routes).toEqual([{ method: "GET", path: "/api/request-history/{id}" }]);
+    expect(await handleObserveCommand(["logs", "get", "req/1", "--json"], get.deps)).toBe(0);
+    expect(get.requests).toEqual([{ method: "GET", path: "/api/request-history/req%2F1", body: null }]);
+  });
   test("usage keeps surface and custom bounds in the actual request", async () => {
     const io = transport({ customWindow: true, since: 1000, until: 2000 });
     expect(capability("observe usage").flags.map(flag => flag.name)).toContain("--surface");
     expect(await handleObserveCommand(["usage", "--range", "7d", "--surface", "claude", "--since", "1000", "--until", "2000", "--json"], io.deps)).toBe(0);
     expect(io.requests).toEqual([{ method: "GET", path: "/api/usage?range=7d&surface=claude&since=1000&until=2000", body: null }]);
+  });
+  test("usage compare reads current then previous equal windows", async () => {
+    expect(capability("usage compare").routes).toEqual([{ method: "GET", path: "/api/usage" }]);
+    const requests: string[] = [];
+    const deps = {
+      baseUrl: "http://capability.invalid",
+      now: () => Date.UTC(2026, 9, 15, 15, 30, 0),
+      fetchImpl: async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        requests.push(url.pathname + url.search);
+        return Response.json({
+          customWindow: true,
+          since: Number(url.searchParams.get("since")),
+          until: Number(url.searchParams.get("until")),
+          summary: { requests: 1, totalTokens: 1, estimatedCostUsd: 1 },
+        });
+      },
+    };
+    expect(await handleObserveCommand(["usage", "compare", "--range", "today", "--json"], deps)).toBe(0);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]!.startsWith("/api/usage?range=today&")).toBe(true);
+    expect(requests[1]!.startsWith("/api/usage?range=today&")).toBe(true);
   });
   test("system settings distinguishes read from submitted field writes", async () => {
     const leaf = capability("system settings");

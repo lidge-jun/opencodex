@@ -175,6 +175,8 @@ test("an abandoned response body releases its lease when the request aborts", as
 test("cancellation during Kiro credential recovery cannot install a replacement lease", async () => {
   const [id] = await seed();
   const controller = new AbortController();
+  let inferenceSends = 0;
+  let refreshCalls = 0;
   let refreshStarted!: () => void;
   let finishRefresh!: () => void;
   const started = new Promise<void>(resolve => { refreshStarted = resolve; });
@@ -182,10 +184,12 @@ test("cancellation during Kiro credential recovery cannot install a replacement 
   globalThis.fetch = (async input => {
     const url = input instanceof Request ? input.url : String(input);
     if (url.endsWith("/refreshToken")) {
+      refreshCalls++;
       refreshStarted();
       await refreshGate;
       return Response.json({ accessToken: "refreshed-access", refreshToken: "load-refresh-0", expiresIn: 3600 });
     }
+    inferenceSends++;
     return new Response("expired", { status: 401 });
   }) as typeof fetch;
 
@@ -196,8 +200,14 @@ test("cancellation during Kiro credential recovery cannot install a replacement 
   expect(accountInFlight("kiro", id!)).toBe(0);
   finishRefresh();
   const response = await pending;
-  expect(response.status).toBe(401);
+  expect(response.status).toBe(499);
   expect(accountInFlight("kiro", id!)).toBe(0);
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(await response.json()).toMatchObject({ error: {
+    type: "client_cancelled", code: "client_cancelled", message: "Client cancelled request",
+  } });
+  expect(inferenceSends).toBe(1);
+  expect(refreshCalls).toBe(1);
 });
 
 test("a reactive rotation onto a full account leaves the store selection and request state unchanged", async () => {

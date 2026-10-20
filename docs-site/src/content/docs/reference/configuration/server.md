@@ -23,6 +23,7 @@ runs helper features around provider requests.
 | `websockets?` | `boolean` | `false` | Advertise and admit the client-facing Responses WebSocket path. False keeps clients on HTTP/SSE; it does not disable an eligible canonical ChatGPT upstream WS optimization. Complete-input requests may reuse an upstream connection within the same selected credential, account, thread and turn; changed handshake policy or missing identity keeps requests on separate connections. This does not trim HTTP input or create previous-response IDs. |
 | `codexNativeSteering?` | `boolean` | `false` | Experimental, native-only mid-turn steering on the Responses WebSocket endpoint. Requires `websockets: true`, a compatible upstream/client, and a pinned account/model/tool surface. Validated generation settings can change in explicit saved-result continuations. Does not enable translated models or HTTP fallback. See [native steering](/guides/codex-integration/#experimental-native-mid-turn-steering). |
 | `codexNativeInjection?` | `boolean` | `false` | Experimental saved function-result injection on compatible native multi-agent WebSocket turns. Requires `websockets: true`, explicit `multi_agent.enabled`, and an eligible provider. Separate from steering; no automatic tool rerun or recovery create. See [native injection](/guides/codex-integration/#experimental-native-function-result-injection). |
+| `nativeReasoningRetention?` | `{ modelSwitch?: boolean; accountSwitch?: boolean }` | both `false` | Permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT backend. Account retention is experimental. See [Native reasoning retention](#native-reasoning-retention). |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` data-plane admission credentials on non-loopback binds. They do not authorize management APIs; management access uses the separate credential documented in the [management reference](/reference/management-api/). Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
@@ -41,6 +42,7 @@ runs helper features around provider requests.
 | `codexProviderDisplayName?` | `string` | `"OpenCodex Proxy"` | Label Codex shows for the injected `opencodex` provider, written as its `name` field in `config.toml` and the reference profile. Presentation only: routing resolves through the provider id `opencodex`, so a rename never moves `model_provider = "opencodex"` or the `[model_providers.opencodex]` header and cannot orphan threads already tagged with that id. Codex refuses to load a provider with no name, so there is no way to omit the field — choose a neutral label instead. A blank, over-128-character, or control-character value is ignored and the default label is written. |
 | `codexMainAccountHardLock?` | `boolean` | `true` | Block new identity-matched main-account requests at their per-window threshold. Only explicit `false` opts out. See [main-account protection](/reference/cli/providers-accounts/#main-account-quota-protection). |
 | `codexMainAccountHardLockThresholds?` | `{ short?: number; long?: number }` | `{ short: 90, long: 98 }` | Independent 5h and weekly/monthly thresholds. Integers 80–100, with `short <= long`. Invalid persisted fields fall back to defaults; the settings API rejects invalid writes before mutation. |
+| `codexMainAccountHardLockFallback?` | `{ enabled?: boolean; model?: string; reasoningEffort?: string }` | off | Extended hard-lock settings: while the lock blocks and no Codex account can serve the request, qualifying native-Codex-model requests reroute to `model` with `reasoningEffort` instead of failing. `enabled: false` pauses the reroute and keeps the model. An absent section or model keeps the refusal behavior; a usable Pool account still serves first. `reasoningEffort` must be a declared effort; invalid persisted sections degrade to off and the settings API rejects invalid writes before mutation. See [main-account protection](/reference/cli/providers-accounts/#main-account-quota-protection). |
 | `nativeMainRefresh?` | `"codex" \| "opencodex"` | auto | Who refreshes the native main ChatGPT login in `CODEX_HOME`. `"codex"` asks the Codex binary (app-server `getAuthStatus`, Codex 0.130.0 or newer, found through the same runtime resolution as `ocx sync`, including the ChatGPT app bundle) and never writes `auth.json`; this also works when Codex stores its login in the OS keyring. `"opencodex"` keeps OpenCodex's guarded `auth.json` writer. Unset picks `"codex"` when a supported binary is found; without one, both unset and `"codex"` fall back to the guarded writer. `ocx doctor` shows the active mode under Native main refresh. |
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Servers sharing this configuration directory coordinate reservations and settlements so one process does not replace another's request record. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
@@ -50,6 +52,32 @@ runs helper features around provider requests.
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
+
+On Linux x64/arm64 with pidfd support, service health recovery binds termination to the proxy's
+kernel process identity, so PID reuse cannot redirect it. The sentinel's watching log ends in
+`(pidfd)`. Unsupported kernels or architectures retain the existing live-parent PID check and log
+that fallback; other binding failures disable recovery for that proxy. macOS retains the live-parent
+check, and Windows retains its process handle binding.
+## Native reasoning retention
+
+The dashboard overview exposes two independent opt-ins: retain reasoning when switching models, and retain it when switching accounts. Both default off. The same policy can be saved in `config.json`:
+
+```jsonc
+{
+  "nativeReasoningRetention": {
+    "modelSwitch": true,
+    "accountSwitch": false
+  }
+}
+```
+
+This example retains reasoning `encrypted_content` on a known model switch within the same native ChatGPT destination and credential. Set `accountSwitch` to `true` only to opt into experimental cross-account forwarding. When both model and account change, both switches must be enabled. The policy applies to each actual native Combo target and pool retry; it does not grant retention to third-party or API-key destinations.
+
+Retention means that OpenCodex may forward the carried ciphertext. It cannot confirm that the upstream accepts or reuses that reasoning. A detected decrypt rejection still enters the existing bounded cleanup recovery, and the rejection memo takes precedence over either switch. Response and conversation references, foreign reasoning item ids, uploaded-file account restrictions and cache isolation continue using their own ownership rules. Native compaction blocks keep their existing cleanup behavior; direct native `/v1/responses/compact` sanitization is unchanged.
+
+Use `GET /api/native-reasoning-retention` to read the resolved booleans and `PUT` with a partial boolean object to update them. `PUT` with JSON `null` restores both defaults. Invalid fields or unknown keys are rejected; a malformed file block disables retention with a warning. Dashboard/API changes apply to subsequent requests. Local `ocx config set/unset` edits require a restart to converge the running proxy.
+
+## Upstream transport recovery
 
 While the canonical ChatGPT upstream WebSocket waits for the first Responses event after
 sending the create frame, it watches for liveness rather than a fixed deadline. When the socket
@@ -672,6 +700,21 @@ Auto auth selects subscription when stored Claude auth is found, proxy when none
 subscription with a warning when detection is inconclusive. See
 [Claude Code auth mode](/guides/claude-code/#auth-mode).
 
+## Retained requests after compaction
+
+For translated providers and routed Responses gateways, OpenCodex automatically frames
+plain-text user requests before the latest readable Codex checkpoint as historical context.
+Requests the checkpoint reports as completed should not be repeated; retained text remains
+available for unfinished work within its existing authorization. Later user input takes priority,
+including pauses, cancellations and changes of scope. A checkpoint grants no new permission.
+
+This is enabled by default and needs no setting. Original request text and canonical thread/replay
+history are preserved. Native OpenAI Responses passthrough, summarizer turns, context wrappers,
+images/files and assistant/tool items are unchanged. The framing applies to plaintext checkpoints
+beginning with Codex's summary prefix; decoded OpenCodex checkpoints retain their existing
+continuation guidance. Client-side summarizer turns using Codex's standard compaction prompt
+also bypass framing. Framing is a prompt instruction, so model behavior can vary.
+
 ## Compaction routing
 
 In **Dashboard → Overview → Compaction routing**, choose a model, which triggers it applies to,
@@ -756,6 +799,68 @@ available. Lite requests retain `parallel_tool_calls=false`, which the upstream 
 without tool declarations. This changes only the summary request, not stored history or native
 compaction; a failed summary does not replace the history. Restart the proxy after editing
 `config.json` by hand. Dashboard saves apply immediately.
+
+### Reasoning retention during compaction
+
+Readable reasoning retention is an advanced, explicit opt-in and is **off by default**.
+Only `reasoningRetention.enabled: true` enables it; an omitted block, `enabled: false`,
+or legacy limits without `enabled: true` leave ordinary compaction behavior unchanged.
+When enabled for routed v1 `POST /v1/responses/compact` and routed v2 `compaction_trigger` requests, readable reasoning stays local while the selected
+model summarizes other context. After a readable summary succeeds, exact retained text returns
+alongside it in framed historical context messages, not as new assistant reasoning or instructions.
+Repeated compaction withholds those messages again. Ordinary subsequent turns replay them as history.
+
+```json
+{
+  "reasoningRetention": {
+    "enabled": true,
+    "maxContextPercent": 20,
+    "maxTokens": 100000
+  }
+}
+```
+
+Both limit fields are optional and, **when enabled**, default at runtime to `20` percent and `100000` estimated tokens.
+The effective limit is the smaller of the percentage of the compacting model's context window
+and the absolute token cap; when the context window is unknown, only the absolute cap applies.
+The estimate includes each retained message's historical-context frame, not just its reasoning text.
+Above the limit, readable text is written verbatim under the resolved OpenCodex home's
+`reasoning-archive/` (normally `~/.opencodex/reasoning-archive/`). The summarizer receives a
+path note instead of the text, and the finished readable summary includes a notice naming that file.
+New archives are private to the user on POSIX. An archive is provisional until successful replacement history
+returns its path, either in a readable summary or in a separate notice alongside a native result
+after routed v1 Combo failover. Failures, cancellation, and invalid summaries remove
+the current attempt's file. Internal retries reuse it; previously successful archives are preserved.
+Failed compaction returns no replacement history.
+
+The percentage/token limits bound reasoning returned in context, **not cumulative archive storage**.
+Each archive contains only readable reasoning admitted in that request; request admission is bounded
+by `maxInboundBodyBytes` (256 MiB by default, configurable up to 512 MiB), plus small block separators.
+There is **no aggregate archive byte/file limit, automatic expiry, or background archive cleanup**.
+Successful archives remain until you manually delete their files, including after disabling retention
+or resetting the setting. They are plaintext, contain potentially sensitive conversation reasoning,
+and share the resolved OpenCodex home of that proxy instance. Deleting an archive makes any existing
+path notice unable to recover its contents; save anything you need first. A process crash or failed
+filesystem write/cleanup can also leave a provisional file requiring manual cleanup.
+
+**Dashboard → Overview → Advanced settings → Reasoning retention** provides the explicit switch
+and both limits; **Reset and turn off** removes the override and switches retention off. GET/PUT `/api/settings` exposes `reasoningRetention`: null clears the block,
+and omission preserves it. `enabled` must be a boolean when present. Percentages must be greater than 0 and at most 100; token caps must
+be positive integers, and unknown fields are rejected. Invalid hand edits disable only this
+block with a warning, keeping unrelated providers and settings.
+
+Private provider ciphertext and signatures are not decrypted or copied into portable retained
+messages. An upstream native opaque compaction response retains its exact output item and
+ciphertext. If routed v1 Combo failover reaches a native result after withholding readable reasoning,
+replacement history also includes the retained historical messages or a notice naming their archive.
+Native compact endpoints keep their existing behavior.
+
+Routed v2 still returns exactly one compaction item. Its proxy-owned `ocx2:` envelope stores
+the summary and retained historical reasoning separately as JSON/Base64; this is encoding,
+not provider encryption. Subsequent requests restore separate historical messages, and
+repeated compaction withholds the reasoning again. Old `ocx1:` summaries remain supported.
+Opt-in emergency compaction recovery also preserves this separation for JSON and SSE.
+Explicit native-history recovery restores separate summary and historical reasoning messages too.
 
 ## Memory routing
 

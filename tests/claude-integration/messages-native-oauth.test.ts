@@ -475,7 +475,7 @@ describe("native pooled Messages dispatch", () => {
       expect(entry.headers.has("x-api-key")).toBe(false);
       expect(JSON.parse((entry.body.metadata as typeof metadata).user_id).account_uuid).toBe(uuids[index]);
       expect(entry.body.messages).toEqual(body.messages.map(message => message.role !== "assistant" ? message : { ...message, content: (message.content as Record<string, unknown>[]).map(block => block.type === "tool_use" ? { ...block, name: "custom_lookup" } : block) }));
-      expect((entry.body.system as Record<string, unknown>[])[1]).toEqual(body.system[0]);
+      expect((entry.body.system as Record<string, unknown>[])[1]).toEqual({ ...body.system[0], cache_control: { type: "ephemeral", ttl: "1h" } });
     }
     expect(getAnthropicAccountHealthSnapshot(ids[0]!)).not.toBeNull();
     expect(JSON.parse(metadata.user_id).account_uuid).toBe(uuids[0]);

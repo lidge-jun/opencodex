@@ -4,6 +4,7 @@ const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   assessCarryAttribution,
+  carryWindow,
   referencedCarryNumbers,
 } = require("./pr-carry-attribution.cjs");
 
@@ -289,6 +290,38 @@ describe("assessCarryAttribution", () => {
       }),
     );
     assert.deepEqual(failures[0].paths, ["#3193"]);
+  });
+
+  it("keeps the complete references from the #7223 subject", () => {
+    const subject = "carry Combo visibility, workspace panes, Windows picker and Gentle Shell (#7195, #6767";
+    assert.deepEqual([...referencedCarryNumbers(subject)], [7195, 6767]);
+  });
+
+  it("finishes a number or hash at the cap without admitting the next reference", () => {
+    for (const reference of ["#6767", "other/repo#6767"]) {
+      for (let included = 1; included <= 5; included++) {
+        const padding = " ".repeat(80 - reference.length + 5 - included);
+        const text = padding + reference + " #3192";
+        assert.equal(carryWindow(text, 0), padding + reference);
+        assert.deepEqual(
+          [...referencedCarryNumbers("carry" + text)],
+          reference.startsWith("#") ? [6767] : [],
+        );
+      }
+    }
+  });
+
+  it("excludes references starting at or beyond the cap and after a newline", () => {
+    for (const padding of [80, 81]) {
+      assert.deepEqual([...referencedCarryNumbers("carry" + " ".repeat(padding) + "#3192")], []);
+    }
+    assert.deepEqual([...referencedCarryNumbers("carry #3193\n#3192")], [3193]);
+  });
+
+  it("completes a long numeric suffix without scanning the following text", () => {
+    const digits = "7".repeat(100_000);
+    const text = " ".repeat(79) + "#" + digits;
+    assert.equal(carryWindow(text + " #3192", 0), text);
   });
 
   it("reads a trailer that only exists on a branch commit", () => {

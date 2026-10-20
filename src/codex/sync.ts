@@ -1,3 +1,4 @@
+import { approvedCodexProviders } from "./provider-routing";
 import { currentExternalCodexModelProvider, injectCodexConfig } from "./inject";
 import { FOREIGN_CODEX_HOME_OWNER_MESSAGE, UNKNOWN_CODEX_HOME_OWNER_MESSAGE, unbackedRoutedRemovalMessage } from "./catalog/routed-removal";
 import { printProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath, type ProjectCodexConfigWarning } from "./project-config-warnings";
@@ -33,6 +34,8 @@ export interface CodexSyncResult {
   catalogPath: string | null;
   catalogExists: boolean;
   catalogWritten: boolean;
+  /** Committed configuration-byte change, never inferred from a successful no-op. */
+  configChanged?: boolean;
   cacheSynced: boolean;
   /**
    * Whether the catalog owner committed a validated catalog or refused the
@@ -188,7 +191,7 @@ export async function syncModelsToCodex(
     };
   }
 
-  if (externalProvider) {
+  if (externalProvider && !approvedCodexProviders().includes(externalProvider)) {
     if (catalogEvenWhenNotInjected) {
       // External providers own config.toml, and the injector removes the OpenCodex
       // journal for external providers (inject.ts). This explicit catalog-only sync
@@ -214,6 +217,7 @@ export async function syncModelsToCodex(
     return {
       status: "applied",
       ok: result.success,
+      ...(result.success && result.configChanged === true ? { configChanged: true } : {}),
       added: 0,
       catalogPath: null,
       catalogExists: false,
@@ -332,6 +336,7 @@ export async function syncModelsToCodex(
   return {
     status: "applied",
     ok: result.success,
+    ...(result.success && result.configChanged === true ? { configChanged: true } : {}),
     added,
     ...(refreshOutcome ? { refreshOutcome } : {}),
     catalogPath,

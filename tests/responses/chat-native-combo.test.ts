@@ -74,7 +74,7 @@ afterEach(async () => {
 });
 
 /** A loopback upstream that records every body it receives. */
-function upstream(answer: (body: Rec, hit: number) => Response | Promise<Response>) {
+function upstream(answer: (body: Rec, hit: number, headers: Headers) => Response | Promise<Response>) {
   const bodies: Rec[] = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -82,7 +82,7 @@ function upstream(answer: (body: Rec, hit: number) => Response | Promise<Respons
     async fetch(request) {
       const body = await request.json() as Rec;
       bodies.push(body);
-      return answer(body, bodies.length);
+      return answer(body, bodies.length, request.headers);
     },
   });
   servers.push(server);
@@ -148,6 +148,25 @@ async function send(config: OcxConfig, body: Rec) {
 }
 
 describe("native Chat candidates in a combo", () => {
+  test("distributed 401 recovery stays bounded and avoids the failed key on subsequent requests", async () => {
+    const keys: string[] = [];
+    const a = upstream((_body, hit, headers) => {
+      keys.push(headers.get("authorization")!);
+      return hit === 1 ? Response.json({ error: { message: "invalid key" } }, { status: 401 }) : twoChoiceCompletion();
+    });
+    const row = provider("openai-chat", a.baseUrl, { apiKey: "synthetic-first",
+      apiKeyPool: [{ id: "first", key: "synthetic-first" }, { id: "second", key: "synthetic-second" }],
+      requestPacing: { enabled: true, keySelection: "round-robin" } });
+    const config = comboConfig({ a: row }, [{ provider: "a", model: "m1" }], NATIVE_ON);
+    const first = await send(config, { stream: false });
+    expect(first.response.status).toBe(200);
+    expect(a.bodies).toHaveLength(2);
+    const second = await send(config, { stream: false });
+    expect(second.response.status).toBe(200);
+    expect(a.bodies).toHaveLength(3);
+    expect(keys).toEqual(["Bearer synthetic-first", "Bearer synthetic-second", "Bearer synthetic-second"]);
+    expect(config.providers.a!.apiKey).toBe("synthetic-first");
+  });
   test("a native candidate receives the caller's own Chat body, n and logprobs included", async () => {
     const a = upstream(() => twoChoiceCompletion());
     const b = upstream(() => responsesStream("bridge"));

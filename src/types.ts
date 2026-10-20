@@ -41,6 +41,7 @@ export {
 export type {
   OcxReasoningReplayIdentity,
   OcxReasoningReplayScopeRef,
+  OcxReplayedWebSearchCell,
   OcxParsedRequest,
   OcxContext,
   OcxMessage,
@@ -61,6 +62,7 @@ export type {
   OcxProviderContinuationOwner,
   OcxProviderContinuationState,
   AdapterEvent,
+  AnthropicServerBlocks,
   OcxUrlCitation,
   OcxUsage,
 } from "./types/request";
@@ -122,6 +124,7 @@ export type {
   ProviderWebSearchBridgeBackend,
   ProviderWebSearchBridgeConfig,
   ProviderCostOverlay,
+  PromptLengthPricing,
   RequestPacingRule,
   ProviderRequestPacingConfig,
   FastWire,

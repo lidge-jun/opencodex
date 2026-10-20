@@ -96,8 +96,29 @@ function acquire(configPath: string): ConfigWriteAcquireResult {
     throw error;
   }
   const acquired = tryAcquire(`${target.canonical}.ocx-write.lock`);
-  if (acquired.ok) destinations.set(acquired.handle, target);
-  return acquired;
+  if (!acquired.ok) return acquired;
+  try {
+    // A preceding writer may atomically replace the file before releasing the lock.
+    // Capture the inode only after acquisition, while retaining the canonical-path gate.
+    const current = destination(configPath);
+    if (current.canonical !== target.canonical || !stillHeld(acquired.handle)) {
+      release(acquired.handle);
+      return { ok: false, error: "unsafe", detail: acquired.handle.path };
+    }
+    // Preserve caller-owned unreadable/non-regular errors, but do not mistake a
+    // dangling link (realpath's fallback) or a fresh replacement for proven absence.
+    try {
+      const entry = lstatSync(current.canonical, { bigint: true });
+      if (entry.isSymbolicLink() || `${entry.dev}:${entry.ino}` !== current.inode) throw new ConfigWriteDestinationChanged();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || current.inode !== null) throw error;
+    }
+    destinations.set(acquired.handle, current);
+    return acquired;
+  } catch (error) {
+    release(acquired.handle);
+    throw error;
+  }
 }
 export function withConfigWriteLock<T>(configPath: string, run: (handle: LockHandle) => T): ConfigWriteLockOutcome<T> {
   const acquired = acquire(configPath);

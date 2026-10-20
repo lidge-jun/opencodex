@@ -170,7 +170,7 @@ provenance collapses onto four public sources in `protocolAdapterSource`: `hard-
 
 Model overrides are resolved for a Responses client. The candidates are the explicit
 `modelAdapters` keys, the registry's `modelWireDefaults` keys, the exact-id hard pins
-(`captureWireAdapterHardPins`), the default model and the listed models, at most 1024 of them; a
+(`captureWireAdapterHardPins`, using the historically pinned canonical destination for the Go preset), the default model and the listed models, at most 1024 of them; a
 model is listed when its source is not `provider-default` or its adapter differs from the
 provider's. The list is sorted, capped at `PROTOCOL_PROVIDER_OVERRIDE_LIMIT` (64) and marked
 `modelOverridesTruncated` past it. Prefix pins cannot be enumerated, so only a listed model they
@@ -229,7 +229,7 @@ converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/ou
 `chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
 `anthropicIncompleteOutcome`, `anthropicFailedStatus`, the message snapshot, the web-search pair),
 so the frames a client receives are the converters' frames. A fold is the encoded stream read by
-the existing collector.
+the existing collector. Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
 
 Deliberate equivalences, pinned by the parity tests: a Chat function call is delivered as one
 complete tool-call chunk when it completes, as the converter always did; Messages streams
@@ -389,7 +389,7 @@ managed-client steps already applied to the body (alias/modelMap resolution, `oc
 directives). The caller-forward passthrough is decided earlier, on the caller's own credential,
 and returns before this point; the two branches share no credential and no header. The body sent
 is `envelope.freshBody()` when a source envelope exists, otherwise the ingress's own body.
-`src/server/messages-native.ts` is imported lazily, only for an eligible route.
+`src/server/messages-native.ts` is imported lazily, only for an eligible route. Native Messages errors reuse the shared OpenCode Zen guidance before resolving client retry headers. A Zen rate-limit 429, identified by message or explicit `rate_limit_error` type, without an upstream retry hint receives the same 15-second hint as the translated path; quota/billing and spent-usage-limit errors remain unchanged and valid upstream retry headers retain precedence. Both native Messages and `src/server/responses/adapter-dispatch.ts` forward parsed error types and codes to the shared guidance.
 
 Configured admission-key model scope also applies to separately billed Advisor models before
 managed native key or OAuth dispatch. `src/server/messages-native-scope.ts` resolves active
@@ -415,20 +415,13 @@ placement the Anthropic adapter uses (`resolveAnthropicMessagesUrl`, `anthropicB
 builder never mutates its input. A dropped field has no name in the feature vocabulary, so it
 records no feature effect.
 
-Caller betas. The ingress hands over `anthropic-beta` explicitly; caller `Authorization` and
-`x-api-key` never reach the managed provider.
-`src/adapters/anthropic/beta-allowlist.ts` keeps a value only when it is on the list for the
-destination's class and re-emits it in the list's own spelling: `interleaved-thinking-2025-05-14`
-for generic callers to `api.anthropic.com`, plus the native-client allowance described below for
-recognized native clients; nothing for an Anthropic-compatible host. Independently of client
-recognition, a caller-requested `inline-tools-2026-09-15` is retained when outgoing system-message
-content directly contains typed inline definitions or tool references in additions/removals.
-Arguments, schemas and nested/unknown containers do not activate that feature allowance; no beta
-is injected. Proxy-owned betas (the OAuth
-pair) are set by the builder, and an operator's configured beta is merged, not replaced. Any
-dropped value adds `anthropic-beta-dropped` to the trace; the trace never records the value. The
-proxy log names dropped values once per distinct set (`anthropic-beta-dropped=<names>`), and only
-values on the file's closed list of known beta names are named; any other value is a count.
+Caller betas. The ingress hands over `anthropic-beta` explicitly; caller credentials never reach
+the managed provider. `src/adapters/anthropic/beta-allowlist.ts` emits only canonical allowlisted
+values: interleaved thinking and thinking-binding controls for generic first-party callers, plus
+the native-client allowance below. Typed outgoing inline-tool changes independently admit their
+beta; arguments and unknown containers do not. Compatible hosts receive no caller beta. Proxy-owned
+OAuth betas and operator-configured betas are merged. Drops add only `anthropic-beta-dropped` to
+the trace; logs name only closed-list published betas, once per distinct set, counting unknowns.
 
 Opaque state and credential domains. `src/protocols/opaque-state.ts` defines a credential domain
 as the provider's base host plus its credential class (`key`, `oauth`, ...); first-party means
@@ -504,10 +497,16 @@ Observed native CLI and Desktop Code compatibility bundles preserve an existing 
 and known identity preamble through `src/adapters/anthropic/native-client-preamble.ts`; the proxy
 does not generate or sign billing text. Counting uses the same observed bundle. The first-party
 native beta allowance retains the source-listed inline-tool, per-turn control, thinking display,
-advisor, scoped-cache and context-management schemas. `context-management-2025-06-27` travels with
-the caller's top-level `context_management` field: the builder forwards that field only when the
-beta survives the allowlist, so header and body never disagree, and under OAuth rewrites each edit's
-`exclude_tools` to the prefixed wire names of declared client tools. Advisor may perform sub-inference
+advisor, scoped-cache and context-management schemas. The table in
+`src/adapters/anthropic/beta-body-pairs.ts` owns admission and final-header pairing for
+`context_management` and `thinking.block_binding`. First-party key and OAuth requests admit
+`thinking-binding-controls-2026-08-01` for every caller; `context-management-2025-06-27` retains
+its observed-native-client requirement. After caller and operator betas merge, the builder removes
+unsupported or unpaired fields copy-on-write; binding also requires adaptive or enabled thinking.
+Operator betas can enable first-party fields; compatible and cloud destinations receive neither caller
+beta nor paired field. Header-only thinking controls remain valid for transformation diagnostics. OAuth rewrites context edits' `exclude_tools`
+to the prefixed wire names of declared client tools. Translated Responses constructs its own thinking
+configuration and never copies these native-only fields. Advisor may perform sub-inference
 already requested by the caller; no feature or beta-gated body is injected. Generic managed callers keep the narrower allowance,
 and compatible destinations receive no first-party allowance. These handles grant no credential authority.
 
@@ -525,12 +524,13 @@ guard and the tool-call-id repair the caller-forward passthrough runs. A streami
 upstream SSE relayed through `tapAnthropicSseForLog`, which records usage and the
 terminal and applies the body stall and size guards; a non-streaming caller gets the upstream JSON
 (or a folded stream). Either way `model` is rewritten to the selector the client sent, as the
-translated lane answers (`message_start.message.model` on a stream, found within the first 64 KiB;
-everything else is relayed as is). Upstream errors answer in Anthropic shape with the translated lane's status
+translated lane answers (`message_start.message.model` in the first 64 KiB); explicit empty catalogs apply the
+[declared-tool guard](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire). Upstream errors answer in Anthropic shape with the translated lane's status
 policy (transient 5xx as 529, replay refusals kept non-retryable). `count_tokens` estimates the
 body the builder would send when the route is eligible, and sends nothing.
 `tests/adapters/anthropic/anthropic-messages-passthrough.test.ts`,
 `tests/adapters/anthropic/anthropic-beta-allowlist.test.ts`,
+`tests/adapters/anthropic/anthropic-beta-body-pairs.test.ts`,
 `tests/adapters/anthropic/anthropic-messages-passthrough-oauth.test.ts`,
 `tests/responses/protocol-opaque-state.test.ts`,
 `tests/responses/messages-native-oauth-eligibility.test.ts`,

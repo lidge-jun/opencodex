@@ -1,4 +1,4 @@
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, type BigIntStats } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, type BigIntStats } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { claudeDesktopConfigLibraryDir, resolveConfigLibraryDir } from "./desktop-3p-paths";
@@ -84,9 +84,20 @@ export function readDesktopLibraryText(path: string): string {
   return readDesktopLibraryBytes(path).toString("utf8");
 }
 
+/** Only an absent directory entry is optional; dangling links and failed reads still refuse. */
+export function readOptionalDesktopLibraryBytes(path: string): Buffer | undefined {
+  try { return readDesktopLibraryBytes(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+/** Read optional verified metadata; a present file must contain an entries array. */
 export function parseMetadata(path: string): Desktop3pMetadata {
-  if (!existsSync(path)) return { entries: [] };
-  const parsed = JSON.parse(readDesktopLibraryText(path)) as Partial<Desktop3pMetadata>;
+  const bytes = readOptionalDesktopLibraryBytes(path);
+  if (bytes === undefined) return { entries: [] };
+  const parsed = JSON.parse(bytes.toString("utf8")) as Partial<Desktop3pMetadata>;
   if (!Array.isArray(parsed.entries)) throw new Error("Claude Desktop 3P _meta.json has no entries array");
   return { ...parsed, entries: parsed.entries };
 }
@@ -120,11 +131,25 @@ export const OPENCODEX_DESKTOP_PROFILE_KEYS = new Set([
   "inferenceModels",
 ]);
 
-export function readDesktopProfileForeignKeys(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {};
-  const parsed = JSON.parse(readDesktopLibraryText(path)) as unknown;
+export interface DesktopProfileSnapshot {
+  /** Verified bytes of the existing profile; undefined only when the entry is absent. */
+  bytes?: Buffer;
+  foreign: Record<string, unknown>;
+}
+
+/** Capture verified bytes for key preservation, backup and rollback; publication revalidates them. */
+export function readDesktopProfileSnapshot(path: string): DesktopProfileSnapshot {
+  const bytes = readOptionalDesktopLibraryBytes(path);
+  if (bytes === undefined) return { foreign: {} };
+  const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
   if (!isRecord(parsed)) throw new Error("Claude Desktop 3P profile is not a JSON object");
-  return Object.fromEntries(
+  const foreign = Object.fromEntries(
     Object.entries(parsed).filter(([key]) => !OPENCODEX_DESKTOP_PROFILE_KEYS.has(key)),
   );
+  return { bytes, foreign };
+}
+
+/** Preserve settings outside the gateway-owned keys from a verified profile. */
+export function readDesktopProfileForeignKeys(path: string): Record<string, unknown> {
+  return readDesktopProfileSnapshot(path).foreign;
 }

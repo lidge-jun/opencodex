@@ -5,12 +5,12 @@
  * key) instead of the Responses replay. Everything here is a local fixture: no real credential
  * or service is reached.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
-import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../src/providers/key-failover";
 import { estimateClaudeRequestTokens, handleClaudeCountTokens, handleClaudeMessages } from "../../src/server/claude-messages";
 import { getRequestLogEntries } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
@@ -363,6 +363,30 @@ describe("managed native Messages", () => {
     expect(seen[1]!.body).toEqual(seen[0]!.body);
   });
 
+  test("round-robin native sends preserve per-request keys and the saved active key", async () => {
+    const config = fixtureConfig(startUpstream(), { pool: true });
+    config.providers.anth!.requestPacing = { enabled: true, keySelection: "round-robin", keys: { maxConcurrentRequests: 1 } };
+    forgetApiKeyRotationCursor("anth"); saveConfig(config);
+    const results = await Promise.all(Array.from({ length: 4 }, () => send(config, { ...SOURCE_BODY, stream: false })));
+    expect(results.map(result => result.response.status)).toEqual([200, 200, 200, 200]);
+    expect(seen.map(entry => entry.headers.get("x-api-key")).sort()).toEqual([
+      "fixture-key-alpha", "fixture-key-alpha", "fixture-key-beta", "fixture-key-beta",
+    ]);
+    expect(config.providers.anth!.apiKey).toBe("fixture-key-alpha");
+  });
+
+  test("an exhausted distributed pool refuses the next native request without an upstream send", async () => {
+    const config = fixtureConfig(startUpstream(() => Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture cooldown" } },
+      { status: 429, headers: { "retry-after": "30" } })), { pool: true });
+    config.providers.anth!.requestPacing = { enabled: true, keySelection: "round-robin" };
+    forgetApiKeyRotationCursor("anth"); saveConfig(config);
+    expect((await send(config, { ...SOURCE_BODY, stream: false })).response.status).toBe(429);
+    expect(seen).toHaveLength(2);
+    const next = await send(config, { ...SOURCE_BODY, stream: false });
+    expect(next.response.status).toBe(429); expect(seen).toHaveLength(2);
+    expect(Number(next.response.headers.get("retry-after"))).toBeGreaterThan(0);
+  });
+
   test("a 429 on the first pooled key fails over to the next key", async () => {
     const config = fixtureConfig(startUpstream((entry, index) => index === 0
       ? Response.json({ type: "error", error: { type: "rate_limit_error", message: "slow down" } },
@@ -373,6 +397,57 @@ describe("managed native Messages", () => {
     expect(seen.map(entry => entry.headers.get("x-api-key"))).toEqual(["fixture-key-alpha", "fixture-key-beta"]);
   });
 
+  for (const { providerName, upstreamRetryAfter, expectedRetryAfter, upstreamMessage = "Rate limit exceeded", upstreamCode, expectedGuidance = providerName === "opencode-zen" } of [
+    { providerName: "opencode-zen", upstreamRetryAfter: undefined, expectedRetryAfter: "15" },
+    { providerName: "opencode-zen", upstreamRetryAfter: "37", expectedRetryAfter: "37" },
+    { providerName: "anth", upstreamRetryAfter: undefined, expectedRetryAfter: "2" },
+    { providerName: "opencode-zen", upstreamRetryAfter: undefined, expectedRetryAfter: "15", upstreamMessage: "Too Many Requests" },
+    { providerName: "opencode-zen", upstreamRetryAfter: undefined, expectedRetryAfter: "2", upstreamMessage: "The usage limit has been reached", expectedGuidance: false },
+    { providerName: "opencode-zen", upstreamRetryAfter: undefined, expectedRetryAfter: "2", upstreamCode: "insufficient_quota", expectedGuidance: false },
+  ]) test(`native ${providerName} 429 preserves pacing policy with Retry-After ${upstreamRetryAfter ?? "absent"} and ${upstreamMessage}`, async () => {
+    const config = fixtureConfig(1);
+    if (providerName !== "anth") {
+      config.providers[providerName] = config.providers.anth!;
+      delete config.providers.anth;
+      config.defaultProvider = providerName;
+      config.providers[providerName]!.baseUrl = "https://opencode.ai/zen/v1";
+    }
+    saveConfig(config);
+    // The Zen preset pins its public URL; intercept fetch so no external service is contacted.
+    const fetchMock = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      seen.push({ path: new URL(request.url).pathname, headers: request.headers, body: await request.json() as Record<string, unknown> });
+      return Response.json({ type: "error", error: { type: "rate_limit_error", code: upstreamCode, message: upstreamMessage } },
+        { status: 429, headers: upstreamRetryAfter ? { "retry-after": upstreamRetryAfter } : {} });
+    });
+    let result: Awaited<ReturnType<typeof send>>;
+    try {
+      result = await send(config, { ...SOURCE_BODY, model: `${providerName}/claude-x`, stream: false });
+    } finally {
+      fetchMock.mockRestore();
+    }
+    const { requestId, response, text } = result;
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe(expectedRetryAfter);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.path).toBe(providerName === "opencode-zen" ? "/zen/v1/messages" : "/v1/messages");
+    const row = rowFor(requestId);
+    expect(row.protocolTrace?.mode).toBe("native");
+    const envelope = JSON.parse(text);
+    expect(envelope).toMatchObject({ type: "error", error: { type: "rate_limit_error" } });
+    const message = envelope.error.message;
+    if (expectedGuidance) {
+      expect(message).toContain("15-20 requests per minute");
+      expect(message).toContain("Slow the request pace");
+      expect(message).toContain("providers.opencode-zen.retryOn429");
+      if (upstreamRetryAfter) expect(message).not.toContain("Try again in 15s");
+      else expect(message).toContain("Try again in 15s");
+    } else {
+      expect(message).toBe(upstreamMessage);
+    }
+    expect(row.upstreamError).toBe(message);
+    expect(text).not.toContain("fixture-key-alpha");
+  });
   test("an upstream error answers in Anthropic shape without the key", async () => {
     const config = fixtureConfig(startUpstream(() => Response.json(
       { type: "error", error: { type: "invalid_request_error", message: "bad fixture" } }, { status: 400 })));

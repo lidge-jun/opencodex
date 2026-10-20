@@ -206,6 +206,27 @@ export function listCodexDesktopAppPids(io: DesktopAppRestartIo = {}): number[] 
   return processes === null ? null : processes.map(entry => entry.pid);
 }
 
+/**
+ * Pids of the running desktop-app ROOT shells, or null when discovery or the probe failed.
+ *
+ * Read-only. The shell is the process whose renderer built the model picker, so its start
+ * time is what tells `performCodexRestart` whether the picker predates the catalog (#4761).
+ * `[]` means the probe ran and the app is not running.
+ */
+export function listCodexDesktopShellPids(io: DesktopAppRestartIo = {}): number[] | null {
+  const platform = io.platform ?? process.platform;
+  const selected = ADAPTERS[platform];
+  const adapter = io.adapter ?? selected?.adapter;
+  if (!adapter) return null;
+  const exec = io.execFile ?? selected?.exec;
+  if (!exec) return null;
+  const install = adapter.discover(exec);
+  if (!install) return null;
+  const processes = adapter.listProcesses(exec, install);
+  if (processes === null) return null;
+  return rootShells(processes, install, adapter).map(entry => entry.pid);
+}
+
 export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopAppRestartResult {
   const skipped = (reason: DesktopAppRestartReason): DesktopAppRestartResult => ({
     attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason,

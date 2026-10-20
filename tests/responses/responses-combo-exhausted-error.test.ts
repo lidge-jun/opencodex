@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget, snapshotComboQuotaCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { clearCachedProviderQuotas, setCachedProviderQuotaForTests } from "../../src/providers/quota-routing-cache";
+import type { ProviderQuota } from "../../src/providers/quota-types";
 import { handleComboResponses, handleResponses } from "../../src/server/responses/core";
 import { executeComboResponses } from "../../src/server/responses/core-combo";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -282,9 +284,95 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
     expect(logCtx.attempts).toHaveLength(2);
   });
 
+  test("the hop warning names the upstream refusal on one redacted line", async () => {
+    const key = "sk-proj-" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
+    globalThis.fetch = (async () => Response.json(
+      { error: { code: "invalid_api_key", message: `Incorrect API key provided: ${key}.\nRotate it.` } },
+      { status: 401 },
+    )) as unknown as typeof fetch;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loggedCombo(config, { model: "", provider: "" });
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      expect(line).toMatch(/failed with 401 after \d+ms: invalid_api_key: Incorrect API key provided: .* Rotate it\.$/);
+      expect(line).not.toContain(key);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("the hop warning redacts credential framing before flattening parsed codes", async () => {
+    const credential = "synthetic-multipart-credential";
+    globalThis.fetch = (async () => Response.json({ error: {
+      code: `name="authorization"\r\n\r\n${credential}`,
+      message: "upstream refused",
+    } }, { status: 502 })) as unknown as typeof fetch;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loggedCombo(config, { model: "", provider: "" });
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      expect(line).toBeDefined();
+      expect(line!.includes(credential)).toBe(false);
+      expect(line).toContain("[REDACTED]");
+      expect(line).not.toMatch(/[\r\n]/);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("the hop warning never logs an unparsed upstream body", async () => {
+    globalThis.fetch = (async () => new Response("upstream said: session=abc123 private detail", { status: 502 })) as unknown as typeof fetch;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loggedCombo(config, { model: "", provider: "" });
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      expect(line).toMatch(/failed with 502 after \d+ms$/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("a fallback 5xx is still the answer", async () => {
     upstream(502, "bad gateway");
     const response = await handleResponses(request(), config, { model: "", provider: "" } as RequestLogContext);
     expect(response.status).toBe(502);
+  });
+});
+
+describe("zero-attempt combo refusal names why each target was excluded", () => {
+  afterEach(() => clearCachedProviderQuotas());
+
+  test("missing, disabled, quota-spent, cooling and request-ineligible targets each carry a reason", async () => {
+    setCachedProviderQuotaForTests("spent", { updatedAt: Date.now(), weeklyPercent: 100 } as ProviderQuota);
+    coolComboTarget("all", { provider: "cooling", model: "model-cooling" }, { retryAfter: "42", status: 429 });
+    const cfg = {
+      defaultProvider: "spent",
+      providers: {
+        off: { ...provider("off"), disabled: true },
+        spent: provider("spent"),
+        cooling: provider("cooling"),
+        metered: provider("metered"),
+      },
+      combos: {
+        all: {
+          strategy: "failover",
+          targets: [
+            { provider: "gone", model: "model-gone" },
+            { provider: "off", model: "model-off" },
+            { provider: "spent", model: "model-spent" },
+            { provider: "cooling", model: "model-cooling" },
+            { provider: "metered", model: "model-metered", metered: true },
+          ],
+        },
+      },
+    } as unknown as OcxConfig;
+    globalThis.fetch = (async () => { throw new Error("no target may be dispatched"); }) as unknown as typeof fetch;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/all", stream: false, input: "hello" }),
+    }), cfg, { model: "", provider: "" } as RequestLogContext);
+    expect(response.status).toBe(503);
+    const { error } = await response.json() as { error: { code: string; message: string } };
+    expect(error.code).toBe("combo_unavailable");
+    expect(error.message).toMatch(/^No available targets for combo: all \(gone\/model-gone: provider missing; off\/model-off: provider disabled; spent\/model-spent: quota exhausted; cooling\/model-cooling: cooldown 4[12]s; metered\/model-metered: ineligible for this request\)$/);
   });
 });

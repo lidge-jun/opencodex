@@ -715,12 +715,6 @@ describe("server local API auth", () => {
     const dto = safeConfigDTO({
       ...config("127.0.0.1"),
       providers: {
-        "opencode-free": {
-          adapter: "openai-chat",
-          baseUrl: "https://opencode.ai/zen/v1",
-          authMode: "key",
-          keyOptional: true,
-        },
         "mimo-free": {
           adapter: "mimo-free",
           baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
@@ -732,13 +726,6 @@ describe("server local API auth", () => {
       providers: Record<string, Record<string, unknown>>;
     };
 
-    expect(dto.providers["opencode-free"]).toMatchObject({
-      adapter: "openai-chat",
-      authMode: "key",
-      keyOptional: true,
-      hasApiKey: false,
-    });
-    expect(dto.providers["opencode-free"].note).toBeTruthy();
     expect(dto.providers["mimo-free"]).toMatchObject({
       adapter: "mimo-free",
       authMode: "key",

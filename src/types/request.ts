@@ -2,6 +2,7 @@ import type { KiroOAuthMetadata } from "../oauth/types";
 import type { NativeReasoningOwner } from "../responses/reasoning-replay-cache";
 import type { OcxTool, OcxToolChoice } from "./tools";
 import type { TierDecision, TierObservationContext } from "./provider";
+import type { TranslatorBudget } from "../lib/translator-budget";
 
 /** Exact provider/credential namespace for process-local reasoning replay. */
 export interface OcxReasoningReplayIdentity {
@@ -45,6 +46,14 @@ export interface OcxReasoningReplayScopeRef {
   current?: Readonly<OcxReasoningReplayIdentity>;
 }
 
+/** One replayed hosted search cell, rebuilt as the `web_search` call/result pair `callId`. */
+export interface OcxReplayedWebSearchCell {
+  /** The client-visible cell id; absent when the cell carried no usable id (no recorded result). */
+  cellId?: string;
+  callId: string;
+  failed: boolean;
+}
+
 export interface OcxParsedRequest {
   modelId: string;
   /** Client-facing model selector retained for Anthropic routes after wire-model normalization. */
@@ -62,6 +71,16 @@ export interface OcxParsedRequest {
   _nativeReasoningReplay?: ReadonlyMap<string, string>;
   _nativeReasoningBoundOwner?: NativeReasoningOwner;
   _nativeReasoningMint?: { owner?: NativeReasoningOwner };
+  /**
+   * The Claude client's typed Anthropic web tools, as declared. Only the anthropic adapter reads
+   * them, and only for api.anthropic.com; every other destination never sees them.
+   */
+  _anthropicServerTools?: readonly Record<string, unknown>[];
+  /**
+   * Completed server-tool exchanges from the Claude client's history, keyed by the block that
+   * followed them (`call:<tool_use id>` / `text:<text>`). Same audience as `_anthropicServerTools`.
+   */
+  _anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
   /**
    * Boundary between replayed history and this turn's newly appended input. Usually the
    * items the proxy restored from local previous_response_id state; also set when the
@@ -92,11 +111,17 @@ export interface OcxParsedRequest {
   _cursorClientThreadId?: string;
   /** Conversation/provider/account/model-bound namespace for reasoning replay state. */
   _reasoningReplayScope?: OcxReasoningReplayScopeRef;
+  /** Trusted configuration snapshot; never read from the client's request body. */
+  _nativeReasoningRetention?: Readonly<{ modelSwitch: boolean; accountSwitch: boolean }>;
   /**
    * Set by bindRouteReasoningReplayScope after a proven serving-identity change, or by
    * prepareOpaqueBlobRecovery after an authoritative rejection; consumers strip replayed blobs.
    */
   _stripReasoningEncryptedContent?: boolean;
+  /** Native compaction remains nonportable even when reasoning-only retention is enabled. */
+  _stripNativeCompactionEncryptedContent?: boolean;
+  /** Retention kept reasoning ciphertext across a model/account change; arms streamed rejection recovery. */
+  _nativeReasoningRetainedAcrossRoute?: boolean;
   /**
    * Set when replayed reasoning item ids name items in a store this destination cannot read: by
    * prepareOpaqueBlobRecovery before the one recovery rebuild, and by bindRouteReasoningReplayScope
@@ -135,6 +160,12 @@ export interface OcxParsedRequest {
    * executes searches via the gpt-5.6-luna sidecar (see src/web-search). Absent when not requested.
    */
   _webSearch?: Record<string, unknown>;
+  /**
+   * Replayed hosted `web_search_call` cells the parser rebuilt as `web_search` call/result pairs
+   * (src/responses/web-search-replay.ts). The web-search sidecar swaps in the result it recorded for
+   * a cell, or removes the pairs when it does not run (src/web-search/sidecar-search-replay.ts).
+   */
+  _replayedWebSearchCells?: OcxReplayedWebSearchCell[];
   /** Hosted image_generation tool config stashed for the image bridge sidecar (see src/images). */
   _imageGeneration?: { toolNames: Set<string>; originalTool?: Record<string, unknown> };
   /**
@@ -150,6 +181,8 @@ export interface OcxParsedRequest {
    * (see src/responses/compaction.ts).
    */
   _compactionRequest?: boolean;
+  /** Request-owned encoding of readable routed v2 retention; never used for native ciphertext. */
+  _compactionRetention?: { encode(summary: string): string; commit(): void };
   /** Manual compaction moved to another provider: summarize portably even on a canonical ChatGPT target. */
   _portableCompaction?: boolean;
   /**
@@ -173,6 +206,7 @@ export interface OcxParsedRequest {
    */
   _advisorGuard?: (options: {
     parsed: OcxParsedRequest;
+    translatorBudget?: TranslatorBudget;
     firstEvents: AsyncIterable<AdapterEvent>;
     /** One bounded worker continuation re-dispatch (same machinery as the terminal guard). */
     continuation: (parsed: OcxParsedRequest) => AsyncIterable<AdapterEvent> | Promise<AsyncIterable<AdapterEvent>>;
@@ -399,9 +433,14 @@ export interface OcxProviderContinuationState {
   [provider: string]: Record<string, unknown> | undefined;
 }
 
+/** One Anthropic server-side call as the API returned it: `server_tool_use` + its `*_tool_result`. */
+export interface AnthropicServerBlocks { use: Record<string, unknown>; result: Record<string, unknown> }
+
 export type AdapterEvent =
   | { type: "heartbeat"; replayUnsafe?: true; preflightReady?: true }
-  | { type: "text_delta"; text: string; phase?: OcxMessagePhase }
+  | { type: "text_delta"; text: string; phase?: OcxMessagePhase;
+      /** Complete documented Anthropic progress block: text remains signed thinking on replay. */
+      anthropicThinkingSignature?: string }
   | { type: "thinking_delta"; thinking: string }
   // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and
   // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.
@@ -423,8 +462,13 @@ export type AdapterEvent =
   // "Searching the web" spinner, then `end` once it resolves. The bridge maps begin → an
   // output_item.added(in_progress) and end → the matching output_item.done(completed|failed) under
   // the SAME output index, so the activity animates instead of flashing completed instantly.
-  | { type: "web_search_call_begin"; id: string }
-  | { type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[] }
+  // `itemId` lets the loop name the client-visible cell so it can record the result for replay.
+  | { type: "web_search_call_begin"; id: string; itemId?: string }
+  | {
+      type: "web_search_call_end"; id: string; itemId?: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[];
+      /** Anthropic's server-side call (adapters/anthropic.ts): its `server_tool_use` and result block, verbatim. */
+      anthropic?: AnthropicServerBlocks;
+    }
   | {
       type: "done";
       usage?: OcxUsage;
@@ -481,6 +525,8 @@ export interface OcxUrlCitation {
  * - `cachedInputTokens` is cache READ tokens only (a subset of `inputTokens`).
  * - `cacheReadInputTokens`/`cacheCreationInputTokens` carry the read/write split when
  *   the provider reports both; reads mirror `cachedInputTokens`.
+ * - `cacheCreation1hInputTokens` is the 1-hour-TTL subset of `cacheCreationInputTokens`
+ *   (Anthropic `cache_creation.ephemeral_1h_input_tokens`), priced at the 1h write tier.
  * - `totalTokens` = inputTokens + outputTokens. Never re-add cache detail on top.
  */
 export interface OcxUsage {
@@ -498,6 +544,7 @@ export interface OcxUsage {
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  cacheCreation1hInputTokens?: number;
   reasoningOutputTokens?: number;
   estimated?: boolean;
   /**
