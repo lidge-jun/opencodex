@@ -145,7 +145,11 @@ export function createResponsesPhaseInferenceBlockRewrite(): SseBlockRewrite {
         // An explicit upstream phase needs no inference: forward immediately
         // instead of buffering a message that an abnormal teardown would
         // otherwise drop before it was ever emitted.
-        return [...releasePending("commentary"), block];
+        const released = releasePending("commentary");
+        if (typeof item.id === "string" && (item.phase === "commentary" || item.phase === "final_answer")) {
+          inferred.set(item.id, item.phase);
+        }
+        return [...released, block];
       }
       // A following message done means the turn continued past the buffered
       // one (a phase change or a guarded continuation): commentary. Buffer

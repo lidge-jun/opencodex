@@ -27,7 +27,7 @@ namespace scrubbing remain shared compatibility behavior. Codex quota/reset evid
 
 ### Passthrough message phase inference
 
-Opt-in `messagePhaseInference` gives native passthrough Responses streams the commentary/final_answer semantics the Chat bridge owns under [ADR-0069](../decisions/ADR-0069-chat-to-responses-message-phase-inference.md). The block rewrite in `src/server/responses-phase-inference.ts`, wired through the `src/server/responses/passthrough-delivery.ts` chain, buffers each phase-less completed message exactly one protocol event — a following tool call, reasoning, or message proves the buffered message was commentary, and only a terminal event or a clean `[DONE]` close proves final_answer — while explicitly phased messages forward immediately without buffering and SSE keepalive comments keep the buffer pending. Messages already carrying an upstream phase are never rewritten. The terminal snapshot repeats the same per-item decision keyed by output item id, so `response.output_item.done` and the final `response.output` always agree for clients that reconcile against the terminal body — a snapshot message never observed on the wire falls back to final_answer, and explicit upstream phases win in the snapshot too. The per-item decision map is bounded by the response's own message count and is released at the terminal event and relay teardown (`tests/responses/responses-phase-inference.test.ts`).
+Opt-in `messagePhaseInference` gives native passthrough Responses streams the commentary/final_answer semantics the Chat bridge owns under [ADR-0069](../decisions/ADR-0069-chat-to-responses-message-phase-inference.md). The block rewrite in `src/server/responses-phase-inference.ts`, wired through the `src/server/responses/passthrough-delivery.ts` chain, buffers each phase-less completed message exactly one protocol event — a following tool call, reasoning, or message proves the buffered message was commentary, and only a terminal event or a clean `[DONE]` close proves final_answer — while explicitly phased messages forward immediately without buffering and SSE keepalive comments keep the buffer pending. Messages already carrying an upstream phase are never rewritten; valid explicit phases are retained by item id so snapshots that omit phase reuse them, while explicit snapshot phases still take precedence. The terminal snapshot repeats the same per-item decision keyed by output item id, so `response.output_item.done` and the final `response.output` always agree for clients that reconcile against the terminal body — a snapshot message never observed on the wire falls back to final_answer, and explicit upstream phases win in the snapshot too. The per-item decision map is bounded by the response's own message count and is released at the terminal event and relay teardown (`tests/responses/responses-phase-inference.test.ts`).
 
 ### Credential-bearing HTTP redirects
 
@@ -80,13 +80,9 @@ semantic no-progress budget. The turn lease in `src/server/lifecycle.ts` subscri
 > Decision record: [ADR-0031](../decisions/ADR-0031-responses-http-sse.md)
 > Decision record: [ADR-0032](../decisions/ADR-0032-responses-http-sse.md)
 > Decision record: [ADR-0033](../decisions/ADR-0033-responses-http-sse.md)
-
 > Decision record: [ADR-0034](../decisions/ADR-0034-responses-http-sse.md)
-
 > Decision record: [ADR-0035](../decisions/ADR-0035-responses-http-sse.md)
-
 > Decision record: [ADR-0036](../decisions/ADR-0036-responses-http-sse.md)
-
 > Decision record: [ADR-0037](../decisions/ADR-0037-responses-http-sse.md)
 
 Two coordinates that lower to the same wire name are treated as one tool when they denote one:

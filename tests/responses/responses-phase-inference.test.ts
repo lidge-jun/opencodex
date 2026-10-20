@@ -108,6 +108,32 @@ describe("Responses phase inference block rewrite", () => {
     rewrite.dispose?.();
   });
 
+  test.each(["commentary", "final_answer"])("snapshot mirrors explicit %s when its phase is omitted", phase => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const out = [
+      messageDone(0, "explicit message", phase),
+      completed([{ type: "message", id: "msg_0", role: "assistant" }]),
+    ].flatMap(b => rewrite(b));
+    expect(out.map(phaseOf)).toEqual([phase, phase]);
+    rewrite.dispose?.();
+  });
+
+  test("explicit and inferred phases stay associated with their own snapshot items", () => {
+    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const out = [
+      messageDone(0, "inferred narration"),
+      messageDone(1, "explicit narration", "commentary"),
+      messageDone(2, "answer"),
+      completed([
+        { type: "message", id: "msg_2", role: "assistant" },
+        { type: "message", id: "msg_0", role: "assistant" },
+        { type: "message", id: "msg_1", role: "assistant" },
+      ]),
+    ].flatMap(b => rewrite(b));
+    expect(out.map(phaseOf)).toEqual(["commentary", "commentary", "final_answer", "final_answer,commentary,commentary"]);
+    rewrite.dispose?.();
+  });
+
   test("snapshot messages never seen as item-done fall back to final_answer", () => {
     const rewrite = createResponsesPhaseInferenceBlockRewrite();
     const out = [
