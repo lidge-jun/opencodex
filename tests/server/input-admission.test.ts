@@ -184,6 +184,17 @@ describe("estimateInputTokens", () => {
     expect(estimateInputTokens(parsed, "test-model")).toBe(Math.ceil(decoded / 750));
   });
 
+  test("charges inline audio by decoded size rather than its short marker", () => {
+    const base64 = "A".repeat(75_000);
+    const parsed = request([{
+      role: "user",
+      timestamp: 0,
+      content: [{ type: "audio", data: base64, format: "wav", text: "[audio: wav]" }],
+    }]);
+    const decoded = Math.floor((75_000 * 3) / 4);
+    expect(estimateInputTokens(parsed, "test-model")).toBe(Math.ceil(decoded / 256));
+  });
+
   test("charges a remote image a flat cost, not its URL length", () => {
     const short = request([{
       role: "user",

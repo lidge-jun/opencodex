@@ -248,12 +248,25 @@ variant; unrelated model families retain their existing suffix precedence.
 ## Untranslated input media
 
 `src/responses/input-media.ts` inspects actual content blocks and typed tool-output arrays
-without parsing text or function arguments, copying attachment payloads, resolving file IDs,
-or fetching URLs. Audio and file-ID-only images have no lossless normalized carrier, and
-neither does a file or document reference that carries no bytes. The scanner returns only an
-input-kind name, never client content.
+without parsing text or function arguments, resolving file IDs, or fetching URLs. It returns only
+an input-kind name, never client content. For the Chat audio path it calls the same
+`audioContentFromRaw` predicate as the parser to decide whether an inline attachment has a
+lossless carrier; the payload is not returned, logged, or included in an error.
 
-A document that carries its own base64 bytes is the one exception, and only in user or
+Inline WAV/MP3 audio is supported only on the effective `openai-chat` wire, in user message
+content and tool output. `src/responses/audio.ts` accepts a data URL, or raw base64 with an
+explicit `wav`/`mp3` format, and produces an `OcxAudioContent` part. The parser in
+`src/responses/parser-content.ts` preserves that part, and
+`src/adapters/openai-chat/messages.ts` emits it as an `input_audio` content part. A tool-result
+audio part cannot ride the text-only `role:"tool"` message; the adapter promotes it into a
+follow-up user message after the paired tool results, including audio from orphan tool results.
+Remote audio, unsupported formats, the
+top-level `audio` spelling, developer audio, and audio in system or assistant content are
+refused. Native Responses, including both Azure aliases, forwards the original body; native Chat
+keeps its existing wire; the separate Chat-to-Responses projection still rejects audio/file
+parts, as described in the inbound compatibility contract.
+
+A document that carries its own base64 bytes is the other lossless carrier, and only in user or
 developer message content: `src/responses/inline-document.ts` decodes it into the
 `OcxDocumentContent` part, which the Anthropic, OpenAI Chat and Gemini wires emit as a native
 document, file part and `inline_data` respectively. Every other position — tool output, system
@@ -263,11 +276,12 @@ the decoder share one predicate so a request cannot be exempted here and reduced
 there.
 
 `src/adapters/input-media-guard.ts` guards adapters created by the registry after effective
-wire selection. A translated `buildRequest` refuses these inputs through the existing 400
-error path; `runTurn` emits one nonretryable `unsupported_input_modality` error without
-starting its underlying transport. `localTerminal` declines a success shortcut for such a
-request, letting the guarded builder return the error instead. The original raw body stays
-unchanged, including when another final adapter is selected after a failed attempt.
+wire selection. It enables the audio exemption only for `openai-chat`. A translated
+`buildRequest` refuses unsupported inputs through the existing 400 error path; `runTurn` emits
+one nonretryable `unsupported_input_modality` error without starting its underlying transport.
+`localTerminal` declines a success shortcut for such a request, letting the guarded builder
+return the error instead. The original raw body stays unchanged, including when another final
+adapter is selected after a failed attempt.
 
 The effective Responses wire, including both Azure aliases, is excluded: it forwards the
 original body and leaves native media acceptance to its upstream. This exception does not
@@ -276,9 +290,16 @@ existing wire; only an actual Chat-to-Responses projection rejects audio/file bl
 losing them. Legacy function-result images fail explicitly because that projection does not
 implement legacy call/result pairing. Modern tool-image carriers are unchanged.
 
-`tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, error events and
+`src/server/responses/input-admission.ts` charges supported inline audio by decoded payload
+size at a conservative 256-bytes-per-token proxy. That is an admission estimate, not an
+upstream token formula; base64 inflation is not charged, and the scanner and guard never log
+the payload.
+
+`tests/adapters/openai/openai-chat-audio.test.ts` covers user and tool-result audio mapping;
+`tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, refusal positions and
 raw passthrough; `tests/responses/chat-media-translation.test.ts` reaches the real HTTP
-translation boundary and verifies that rejection sends no upstream request.
+translation boundary and verifies that supported audio is forwarded while unsupported media
+sends no upstream request; `tests/server/input-admission.test.ts` covers decoded-byte charging.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.

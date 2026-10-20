@@ -121,6 +121,8 @@ export interface CodingAgentTurnInput {
   parsed: OcxParsedRequest;
   incoming: IncomingMeta;
   emit: (event: AdapterEvent) => void;
+  /** Observes accepted CLI result/stderr failures, before client-side error decoration. */
+  onCliOutputError?: (message: string) => void;
   /** Family-specific headless argument builder (tools disabled, model, reasoning, system prompt). */
   buildArgs: (profile: CodingAgentProviderProfile, parsed: OcxParsedRequest, provider: OcxProviderConfig) => string[];
   /** Family-specific scoped env builder (credential + region switch on top of baseScopedEnv). */
@@ -368,10 +370,17 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   });
 
   let terminalEmitted = false;
-  const emitOnce = (event: AdapterEvent): void => {
+  const emitOnce = (event: AdapterEvent, cliOutputError?: string): void => {
     if (event.type === "done" || event.type === "error" || event.type === "incomplete") {
       if (terminalEmitted) return;
       terminalEmitted = true;
+    }
+    if (event.type === "error" && cliOutputError !== undefined) {
+      try {
+        input.onCliOutputError?.(cliOutputError);
+      } catch {
+        // An observer failure must never drop the client's terminal event or turn it into a rejection.
+      }
     }
     emit(event);
   };
@@ -648,7 +657,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           }
           emitOnce(event.type === "error"
             ? { ...event, message: redactSecrets(event.message, profile.tokenEnv, apiKey) }
-            : event);
+            : event, event.type === "error" && message.type === "result"
+              ? redactSecrets(event.message, profile.tokenEnv, apiKey) : undefined);
         }
         if (failClosed) break;
         const sawToolTurnStop = sawSelectedToolTurnStop();
@@ -762,7 +772,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       };
       emitOnce(input.classifyFailure
         ? input.classifyFailure({ source: "process-exit", exitCode: child.exitCode, stderr, error, profile })
-        : error);
+        : error, stderr || undefined);
     } else if (toolBridge && deferredResultDone !== undefined && !sawSelectedToolTurnStop()) {
       emitOnce({
         type: "error",
@@ -783,7 +793,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         errorType: "upstream_error",
         code: "protocol_error",
         retryable: false,
-      });
+      }, stderr || undefined);
     }
   }
   } finally {

@@ -129,7 +129,7 @@ describe("initial provider model switches", () => {
     expect(config.providers.xai.initialModelSelection).toBeUndefined();
   });
 
-  test("an unresolved mixed-auth key follows the router's OAuth exemption", () => {
+  test("an unresolved mixed-auth key stays a key connection pending selection", () => {
     const env = "OCX_INITIAL_SELECTION_KEY_FIXTURE";
     const previous = process.env[env];
     delete process.env[env];
@@ -138,7 +138,9 @@ describe("initial provider model switches", () => {
       provider.authMode = "key";
       provider.apiKey = `\${${env}}`;
       initializeProviderModelSelection("xai", provider);
-      expect(provider.initialModelSelection).toBeUndefined();
+      // Explicit key mode is a key connection even while its reference cannot resolve:
+      // the provider registers as pending instead of being treated as an OAuth login.
+      expect(provider.initialModelSelection?.status).toBe("pending");
       process.env[env] = "fixture-key";
       initializeProviderModelSelection("xai", provider);
       expect(provider.initialModelSelection?.status).toBe("pending");

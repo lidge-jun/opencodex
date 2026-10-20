@@ -26,7 +26,7 @@ import { bridgeToResponsesSSE } from "../bridge";
 import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import { releaseProviderRequestSlot, RequestPacingQueueOverloadError, sendTrackingRequestSlot, type ProviderRequestSlot } from "../providers/request-pacing";
 import {
@@ -713,7 +713,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       // Same-target 429 wait-and-retry (opt-in `retryOn429`) BEFORE key rotation: a primary-key
       // rate-limit blip replays on the SAME key; rotation only runs after attempts exhaust.
       while (
-        prepared.response.status === 429
+        prepared.response.status === 429 && !isSameTargetRetryHold(prepared.response)
         && rateLimitRetryPolicy !== null
         && rateLimitRetries < rateLimitRetryPolicy.attempts
       ) {

@@ -16,7 +16,12 @@ import {
 import { saveConfig } from "../../src/config";
 import { saveCredential, getAccountSet } from "../../src/oauth/store";
 import { startServer } from "../../src/server";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { stopServerListener } from "../../src/server/lifecycle";
+import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
+import { currentServerFixtureConfig } from "../helpers/server-auth-fixture";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { resolveAdapter, resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import { credentialPinnedProviderConfigError, modelAdapterRecordConfigError } from "../../src/config/provider-validation";
@@ -29,6 +34,29 @@ import { resolveModelsAuthToken } from "../../src/oauth";
 import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
 import { parseRequest } from "../../src/responses/parser";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+
+// Runner timeouts do not finish a case's finally block before teardown starts.
+// Keep listener ownership outside the case so teardown can release its spend lease.
+const trackedServers = new Set<ReturnType<typeof startServer>>();
+
+function startTrackedServer(): ReturnType<typeof startServer> {
+  const server = startServer(0);
+  trackedServers.add(server);
+  return server;
+}
+
+async function removeDshFixtureHomes(...homes: string[]): Promise<void> {
+  const stopFailures: unknown[] = [];
+  for (const server of trackedServers) {
+    trackedServers.delete(server);
+    try { await stopServerListener(server); } catch (error) { stopFailures.push(error); }
+  }
+  if (stopFailures.length) throw new AggregateError(stopFailures, "DSH fixture server stop failed");
+  await flushNativeMainStartupReleases();
+  await flushConfigDirHardeningForTests();
+  // Yield to in-process producers and reap Windows ACL children before removal.
+  for (const home of homes) await removeTreeAfterBackgroundWork(home);
+}
 
 describe("dsh-account provider registry entry", () => {
   const entry = getProviderRegistryEntry("dsh-account");
@@ -214,20 +242,24 @@ describe("dsh-account 401 server/router lifecycle", () => {
   });
 
   afterEach(async () => {
-    globalThis.fetch = originalFetch;
-    if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
-    else delete process.env.OPENCODEX_HOME;
-    if (originalDshHome !== undefined) process.env.DSH_HOME = originalDshHome;
-    else delete process.env.DSH_HOME;
-    removeTreeWithRetry(tmpHome);
-    removeTreeWithRetry(tmpDsh);
-  });
+    try {
+      await removeDshFixtureHomes(tmpHome, tmpDsh);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
+      else delete process.env.OPENCODEX_HOME;
+      if (originalDshHome !== undefined) process.env.DSH_HOME = originalDshHome;
+      else delete process.env.DSH_HOME;
+    }
+  }, SERVER_BUDGET_MS);
 
   test("upstream 401 marks account needsReauth, blocks subsequent requests without fallback to deepseek API-key, and leaves credentials file untouched", async () => {
     // 1. Configure both dsh-account and deepseek (API-key)
-    saveConfig({
+    saveConfig(currentServerFixtureConfig({
       port: 0,
       hostname: "127.0.0.1",
+      // Provider retirement does not exercise native Codex synchronization.
+      clientIntegrations: { codex: false },
       defaultProvider: "dsh-account",
       providers: {
         "dsh-account": {
@@ -242,7 +274,7 @@ describe("dsh-account 401 server/router lifecycle", () => {
           authMode: "key",
         },
       },
-    } as OcxConfig);
+    } as OcxConfig));
 
     // 2. Seed imported account into OpenCodeX auth store
     await saveCredential("dsh-account", {
@@ -260,9 +292,11 @@ describe("dsh-account 401 server/router lifecycle", () => {
     let deepseekApiCalls = 0;
 
     globalThis.fetch = async (input, init) => {
-      const url = String(input);
-      if (url.includes("/anthropic/v1/messages")) {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://api.deepseek.com/anthropic/v1/messages") {
         dshWireCalls += 1;
+        expect(new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).get("x-dsh-auth-token"))
+          .toBe("dsh_desktop_local_token_123");
         // Upstream returns 401 token invalid
         return new Response(JSON.stringify({
           type: "error",
@@ -272,14 +306,18 @@ describe("dsh-account 401 server/router lifecycle", () => {
           headers: { "Content-Type": "application/json" },
         });
       }
-      if (url.includes("/v1/chat/completions")) {
+      if (url === "https://api.deepseek.com/v1/chat/completions") {
         deepseekApiCalls += 1;
         return new Response(JSON.stringify({ choices: [] }), { status: 200 });
       }
-      return originalFetch(input, init);
+      const destination = new URL(url);
+      if (destination.protocol === "http:" && ["127.0.0.1", "localhost"].includes(destination.hostname)) {
+        return originalFetch(input, init);
+      }
+      throw new Error("Unmocked external request in DSH lifecycle fixture");
     };
 
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       // 3. Send initial request for dsh-account/deepseek-flash
       const resp1 = await fetch(new URL("/v1/messages", server.url), {
@@ -336,9 +374,9 @@ describe("dsh-account 401 server/router lifecycle", () => {
       expect(currentAccount?.needsReauth).toBe(true);
       expect(currentAccount?.credential.access).toBe("dsh_desktop_local_token_123");
     } finally {
-      await server.stop(true);
+      await stopServerListener(server);
     }
-  });
+  }, SERVER_BUDGET_MS); // Real auth-store ACL writes and listener startup exceed 5s on Windows.
 });
 
 describe("dsh-account wire pin keeps the account token on the DSH adapter", () => {
@@ -351,12 +389,15 @@ describe("dsh-account wire pin keeps the account token on the DSH adapter", () =
     process.env.OPENCODEX_HOME = tmpHome;
   });
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
-    else delete process.env.OPENCODEX_HOME;
-    removeTreeWithRetry(tmpHome);
-  });
+  afterEach(async () => {
+    try {
+      await removeDshFixtureHomes(tmpHome);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
+      else delete process.env.OPENCODEX_HOME;
+    }
+  }, SERVER_BUDGET_MS);
 
   test("config validation rejects a per-model wire override, even with a custom baseUrl", () => {
     for (const baseUrl of ["https://api.deepseek.com/anthropic", "https://evil.example/v1"]) {
@@ -400,14 +441,15 @@ describe("dsh-account wire pin keeps the account token on the DSH adapter", () =
     "https://api.deepseek.com/v1",
     "https://evil.example/v1",
   ])("a hand-edited openai-chat row at %s is rejected at load and sends nothing", async (rowBaseUrl) => {
-    saveConfig({
+    saveConfig(currentServerFixtureConfig({
       port: 0,
       hostname: "127.0.0.1",
+      clientIntegrations: { codex: false },
       defaultProvider: "dsh-account",
       providers: {
         "dsh-account": { adapter: "openai-chat", baseUrl: rowBaseUrl, authMode: "oauth" },
       },
-    } as OcxConfig);
+    } as OcxConfig));
     await saveCredential("dsh-account", {
       access: "dsh_pinned_wire_token",
       refresh: "dsh_pinned_wire_token",
@@ -429,7 +471,7 @@ describe("dsh-account wire pin keeps the account token on the DSH adapter", () =
       return originalFetch(input, init);
     }) as typeof fetch;
 
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const resp = await fetch(new URL("/v1/messages", server.url), {
         method: "POST",
@@ -440,9 +482,9 @@ describe("dsh-account wire pin keeps the account token on the DSH adapter", () =
       expect(loadConfig().providers["dsh-account"]).toBeUndefined();
       expect(sends).toEqual([]);
     } finally {
-      await server.stop(true);
+      await stopServerListener(server);
     }
-  });
+  }, SERVER_BUDGET_MS); // These two load-rejection cases also start a real listener.
 });
 
 describe("dsh-account token stays out of discovery and retires on a quota 401", () => {
@@ -455,11 +497,14 @@ describe("dsh-account token stays out of discovery and retires on a quota 401", 
     process.env.OPENCODEX_HOME = tmpHome;
   });
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
-    else delete process.env.OPENCODEX_HOME;
-    removeTreeWithRetry(tmpHome);
+  afterEach(async () => {
+    try {
+      await removeDshFixtureHomes(tmpHome);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
+      else delete process.env.OPENCODEX_HOME;
+    }
   });
 
   const seed = (access: string) => saveCredential("dsh-account", {
@@ -511,10 +556,13 @@ describe("dsh-account row stays pinned for every helper that resolves its token"
     process.env.OPENCODEX_HOME = tmpHome;
   });
 
-  afterEach(() => {
-    if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
-    else delete process.env.OPENCODEX_HOME;
-    removeTreeWithRetry(tmpHome);
+  afterEach(async () => {
+    try {
+      await removeDshFixtureHomes(tmpHome);
+    } finally {
+      if (originalHome !== undefined) process.env.OPENCODEX_HOME = originalHome;
+      else delete process.env.OPENCODEX_HOME;
+    }
   });
 
   test("validation accepts the canonical row and rejects an edited adapter or destination", () => {

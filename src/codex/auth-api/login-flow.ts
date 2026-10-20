@@ -5,7 +5,7 @@ import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import { ConfigMutationLockError, withConfigMutationLockSync } from "../../config";
 import { appendDefaultCodexAccountNamespace, codexAccountPickerEnabled } from "../account-namespaces";
 import { catalogRefreshIsPending, normalizeCatalogDisposition } from "../catalog-refresh-status";
-import { checkAccountIdCollision } from "../auth-collision";
+import { checkAccountIdCollisionWithNativeMain as checkAccountIdCollision, CodexCollisionReadBusyError } from "./login-collision";
 import { extractChatgptPlanType } from "../plan";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
 import { clearCodexPoolRefreshFailure } from "../pool-refresh-backoff";
@@ -323,7 +323,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
               }
 
               // 1.2: Duplicate check is scoped by personal vs workspace plan bucket.
-              const collision = checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined);
+              const collision = await checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined);
               if (collision.collision) {
                 setCodexLoginState(flowId, {
                   status: "error", error: collision.reason, doneAt: Date.now(),
@@ -473,7 +473,9 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
           });
         }
       } catch (error) {
-        const message = error instanceof ConfigMutationLockError
+        const message = error instanceof CodexCollisionReadBusyError
+          ? "Native Codex login is busy or unreadable; retry login shortly."
+          : error instanceof ConfigMutationLockError
           || error instanceof CodexCredentialRefreshLockTimeoutError
           ? "Configuration is busy; retry login shortly."
           : error instanceof CodexCredentialRefreshBusyError || error instanceof CodexCredentialRefreshStaleError

@@ -147,12 +147,14 @@ An explicit reasoning effort of `none` survives Chat conversion. Output limits a
 controls are preserved for generic API-key Responses targets; the canonical ChatGPT target
 still applies its own restrictions. This does not make all providers' controls equivalent.
 
-**Audio and most file attachments need a native input wire that supports them.** A document
-that carries its own base64 bytes in a user message is the exception: it survives translation
-and reaches the Anthropic, OpenAI Chat and Google wires as a native document, file part and
-inline data part. Everything else still returns an explicit error rather than succeeding
-without the attachment — audio, a file-ID or remote reference the proxy cannot dereference, an
-attachment in a tool output or a system message, and a document routed to a wire with no byte
+Inline WAV/MP3 audio in a user message or tool result survives translation to OpenAI Chat as an
+`input_audio` content part; tool-result audio is promoted into a follow-up user message after
+the paired tool results because Chat tool messages are text-only. A document that carries its
+own base64 bytes in a user message is also carried: it reaches the Anthropic, OpenAI Chat and
+Google wires as a native document, file part and inline data part. Everything else still
+returns an explicit error rather than succeeding without the attachment — remote or
+unsupported audio, a file-ID or remote reference the proxy cannot dereference, an attachment
+in a system message, a document in a tool result, and a document routed to a wire with no byte
 carrier. File-ID-only images have the same restriction because translated adapters cannot
 resolve those IDs. Convert the attachment to text first, or use a native wire and model that
 support it. Native Chat and raw Responses (including Azure) retain their existing behavior;

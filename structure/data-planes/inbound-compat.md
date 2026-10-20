@@ -512,6 +512,8 @@ also return an explicit error; their call/result pairing is not implemented by t
 Modern `tool` images continue through the existing following-user carrier. These errors state
 an OpenCodex conversion limit, not a provider capability claim. Final Responses-to-adapter
 admission follows the [registry contract](../adapters/registry.md#untranslated-input-media).
+The opposite Responses-to-Chat direction supports inline WAV/MP3 audio under the same
+contract; this Chat-to-Responses projection still has no lossless audio carrier.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.

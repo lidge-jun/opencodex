@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { providerManagementConfigError } from "../../src/server/auth-cors";
 import { providerConfigSchema } from "../../src/config/schema/leaf-validators";
 import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
+  mergeModelCapabilities,
   modelAdapterRecordConfigError,
+  modelCapabilitiesConfigError,
   modelDisplayNamesConfigError,
   nonBlankStringArrayConfigError,
   normalizeNonBlankStringArray,
@@ -13,10 +16,50 @@ import {
   providerHeadersConfigError,
   projectContextConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  sanitizeModelCapabilitiesForLoad,
   upstreamHttpVersionConfigError,
 } from "../../src/config/provider-validation";
 
 describe("provider config validation leaf", () => {
+  test("DeepSeek upload consent is a bounded exact-model allowlist at load and write boundaries", () => {
+    const base = { adapter: "openai-responses", baseUrl: "https://api.deepseek.com", authMode: "key" };
+    for (const value of [
+      undefined,
+      { "deepseek-flash": { deepseekImageFiles: true } },
+      { "deepseek-future-vision": { deepseekImageFiles: false } },
+    ]) {
+      const candidate = { ...base, modelCapabilities: value };
+      expect(providerConfigSchema.safeParse(candidate).success).toBe(true);
+      expect(providerManagementConfigError("deepseek", candidate)).toBeNull();
+    }
+    for (const value of [
+      { "deepseek-flash": { deepseekImageFiles: "yes" } },
+      { "deepseek-flash": { deepseekImageFiles: null } },
+      { " deepseek-flash ": { deepseekImageFiles: true } },
+    ]) {
+      const candidate = { ...base, modelCapabilities: value };
+      expect(providerConfigSchema.safeParse(candidate).success).toBe(false);
+      expect(providerManagementConfigError("deepseek", candidate)).toContain("modelCapabilities");
+    }
+    expect(modelCapabilitiesConfigError({ "deepseek-flash": { deepseekImageFiles: null } }, true)).toBeNull();
+    const merged = mergeModelCapabilities(
+      { "deepseek-flash": { inputModalities: ["text", "image"], deepseekImageFiles: true } },
+      { "deepseek-flash": { deepseekImageFiles: null } },
+    );
+    expect(merged).toEqual({ "deepseek-flash": { inputModalities: ["text", "image"] } });
+    expect(mergeModelCapabilities(
+      { "deepseek-flash": { deepseekImageFiles: true } },
+      { "deepseek-flash": { deepseekImageFiles: null } },
+    )).toBeUndefined();
+    expect(sanitizeModelCapabilitiesForLoad({
+      "deepseek-flash": { deepseekImageFiles: true },
+      "broken": { deepseekImageFiles: "yes", contextTier: "long_context" },
+    })).toEqual({
+      "deepseek-flash": { deepseekImageFiles: true },
+      "broken": { contextTier: "long_context" },
+    });
+  });
+
   test("accepts only credential-free HTTP(S) base URLs", () => {
     expect(providerBaseUrlConfigError("https://example.test/v1")).toBeNull();
     expect(providerBaseUrlConfigError("file:///tmp/provider")).toBe("baseUrl must be an http(s) URL");

@@ -9,6 +9,7 @@ import { hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount } from "./a
 import type { OcxConfig } from "../types";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 import { isMainAccountHardLocked } from "./main-account-hard-lock";
+import { configuredCodexMainDuplicate } from "./collision-identity";
 
 export interface CodexAccountUsabilityOptions {
   /** Route using cached runtime state only; the caller must reject selected main before auth. */
@@ -64,7 +65,8 @@ export type CodexAccountUnusableReason =
   | "not_in_pool"
   | "missing_credential"
   | "deleted"
-  | "validation_pending";
+  | "validation_pending"
+  | "duplicate_main";
 
 /**
  * The single source of truth for both selection and its explanation. `isCodexAccountUsable()` is
@@ -110,6 +112,7 @@ export function codexAccountUnusableReason(
   if (!record?.credential) return "missing_credential";
   if (record.deletedAt != null) return "deleted";
   if (record.codexValidationPending) return "validation_pending";
+  if (configuredCodexMainDuplicate(config, accountId)) return "duplicate_main";
   return undefined;
 }
 

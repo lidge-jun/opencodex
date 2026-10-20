@@ -31,7 +31,7 @@ import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
   fetchWithTransientRetry,
-  isNonReplayableResponse,
+  isNonReplayableResponse, isSameTargetRetryHold,
   isReplayRefusalCode,
   isReplayRefusalResponse,
   prepareSameTarget429Wait,
@@ -85,6 +85,7 @@ import { workflowRefusalResponse } from "./workflow-refusal";
 import type { ComboProtocolSource } from "./responses/core-combo-native";
 import type { ProtocolEnvelope } from "../protocols/envelope";
 import { nativeChatReplayScope, bindNativeChatReplayScope, nativeChatReasoningCapture } from "./chat-native-reasoning";
+import { resolveMistralTransport } from "../providers/mistral-transport";
 
 export { isNativeChatRouteEligible, nativeChatDeclineReason } from "./chat-native-eligibility";
 
@@ -332,7 +333,8 @@ export async function runNativeChatAttempt(
     refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
     return refusal;
   }
-  let activeProvider: OcxProviderConfig = route.provider;
+  // Key selection re-resolves the transport; a single-key route still needs canonical Mistral pacing.
+  let activeProvider: OcxProviderConfig = resolveMistralTransport(route.provider);
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
   const spendTracker = sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
   const physicalBudget = sendBudget ?? createInferenceSendBudget(req, logCtx);
@@ -609,7 +611,7 @@ export async function runNativeChatAttempt(
       // limit: waiting and re-sending here is exactly the duplicate inference the refusal
       // exists to stop. It kept the same shape under the old 502 only because 502 never
       // matched this branch.
-      && !isNonReplayableResponse(response)
+      && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
       && retryPolicy
       && retries < retryPolicy.attempts
       && transientSendAvailable()

@@ -254,6 +254,12 @@ Claude Desktop can use OpenCodex in one of two mutually exclusive modes. Pick it
 **Connect → Claude Desktop → Connection mode** in the dashboard or with `ocx claude desktop apply
 --first-party|--gateway`.
 
+> Desktop library profiles and `_meta.json` must be regular files of at most
+> 4 MiB. OpenCodex also refuses generated profile or metadata output above that
+> limit before replacing files. Back up and reduce oversized configuration
+> manually; a size refusal does not truncate the existing data. Connection-owned
+> stores retain their existing tighter limits.
+
 ### Gateway (default)
 
 New installs use **gateway** by default. Its third-party profile, described below, switches the

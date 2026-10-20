@@ -1,7 +1,9 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCodexAccountCredential } from "../../src/codex/account-store";
+import * as authCollision from "../../src/codex/auth-collision";
+import { acquireNativeMainProfileDrain } from "../../src/server/lifecycle";
 import { saveConfig } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 
@@ -22,6 +24,23 @@ export function registerMainCollisionCases(
     state: { status: string; error?: string };
   }>,
 ): void {
+  test("fenced OAuth collision check retries without reading native main", async () => {
+    const config = makeConfig();
+    saveConfig(config);
+    const drain = acquireNativeMainProfileDrain("collision-regression");
+    const read = spyOn(authCollision, "readCodexTokensResult");
+    let warmups = 0;
+    try {
+      const result = await completeOAuth({ config, requestBody: { id: "collision-candidate" },
+        oauthAccountId: "candidate-account", email: "candidate@example.test", accessToken: "fake-access",
+        onWarmup: () => { warmups += 1; }, usageResponse: () => new Response(null, { status: 503 }) });
+      expect(result.state.status).toBe("error");
+      expect(result.state.error).toContain("retry login");
+      expect(read).not.toHaveBeenCalled();
+      expect(warmups).toBe(0);
+      expect(getCodexAccountCredential("collision-candidate")).toBeNull();
+    } finally { read.mockRestore(); drain.release(); }
+  });
   const cases = [
     { name: "workspace duplicate with failed WHAM", plan: "team", email: "main@example.test", usage: "error", blocked: true },
     { name: "workspace duplicate with timed-out WHAM", plan: "business", email: "main@example.test", usage: "timeout", blocked: true },

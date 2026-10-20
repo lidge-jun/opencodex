@@ -1,6 +1,7 @@
 import { listCodexAuthAccountsSnapshot } from "../codex/auth-api";
 import { isAnthropicInstanceId, configuredAnthropicInstance } from "./anthropic-instance";
 import { fetchAnthropicAccountQuota } from "./quota/anthropic-account-quota";
+import { thrownQuotaFailure } from "./quota/failure-codes";
 import { resolveEnvValue } from "../config";
 import { getAccountCredential, getAccountSet } from "../oauth/store";
 import { apiKeyPoolEntryId } from "./api-keys";
@@ -515,7 +516,10 @@ async function fetchAccountQuota(
       }
       return entry;
     } catch (error) {
-      if (provider === "google-antigravity") quotaFailure = "account_unavailable";
+      // The probe itself reports HTTP and transport failures as results; what throws here is the
+      // credential side (missing/paused account, failed refresh, no project). A refresh that hit
+      // its deadline is a timeout to retry, not an account the operator must re-sign.
+      if (provider === "google-antigravity") quotaFailure = thrownQuotaFailure(error) === "timeout" ? "timeout" : "account_unavailable";
       return unavailable();
     }
   })().finally(() => {

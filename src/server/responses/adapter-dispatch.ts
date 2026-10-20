@@ -9,7 +9,7 @@ import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthrop
 import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
 import { transientSendCapFor } from "./request-send-budget";
-import { isNonReplayableResponse } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, isSameTargetRetryHold } from "../../lib/upstream-retry";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
@@ -1239,7 +1239,7 @@ export async function prepareAdapterExchange(
       // replay is lossless. Runs before key failover so "primary-first" setups keep the same
       // key on rate-limit blips; only after the attempts are exhausted does failover run.
       while (
-        upstreamResponse.status === 429
+        upstreamResponse.status === 429 && !isSameTargetRetryHold(upstreamResponse)
         && rateLimitPolicy !== null
         && rateLimitRetries < rateLimitPolicy.attempts
         && !sendBudgetExhausted()

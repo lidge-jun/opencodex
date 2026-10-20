@@ -288,6 +288,8 @@ export interface ModelCapabilities {
   /** Requested tier only; does not imply an upstream window or activate an unverified wire. */
   contextTier?: "default" | "long_context";
   video?: { processing?: "static" | "agentic" };
+  /** Opt in exact first-party DeepSeek models to one-hour image file persistence. */
+  deepseekImageFiles?: boolean;
 }
 
 export interface OcxProviderConfig {

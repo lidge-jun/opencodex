@@ -53,6 +53,7 @@ import {
 import { restoreRoutedCustomCalls, RoutedCustomToolCompatError } from "../../responses/custom-tool-compat";
 import { XaiToolSchemaCompatibilityError } from "../../adapters/xai-tool-schema";
 import { MuseToolChoiceCompatibilityError } from "../../adapters/openai-responses/muse-tool-choice";
+import { OpenGatewayInputCompatibilityError } from "../../adapters/openai-responses/opengateway-input";
 import { formatErrorResponse } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
 import {
@@ -172,6 +173,7 @@ import { upstreamErrorMessageFromPayload, ENCRYPTED_FUNCTION_OUTPUT_REJECTION } 
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
+import { guardPassthroughCompletion, parseOutboundRequestBody } from "./passthrough-completion";
 
 /** Transfer an uncommitted Copilot exchange to the existing translated pipeline without new admission. */
 export interface PassthroughAdapterHandoff { kind: "adapter-handoff" }
@@ -386,6 +388,7 @@ export async function preparePassthroughExchange(
         || error instanceof XaiToolSchemaCompatibilityError
         || error instanceof RoutedCustomToolCompatError
         || error instanceof MuseToolChoiceCompatibilityError
+        || error instanceof OpenGatewayInputCompatibilityError
       ) {
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(error.message));
       }
@@ -434,16 +437,6 @@ export async function preparePassthroughExchange(
     // `{model, input, stream}` with no tools and Copilot answers with a `custom_tool_call` for
     // `apply_patch`. Policing an absent catalog truncates that turn. An unreadable body lands there
     // too because the proxy cannot establish the caller's declared authorization boundary.
-    const parseOutboundRequestBody = (bodyText: string): Record<string, unknown> | undefined => {
-      try {
-        const body = JSON.parse(bodyText) as unknown;
-        return body && typeof body === "object" && !Array.isArray(body)
-          ? body as Record<string, unknown>
-          : undefined;
-      } catch {
-        return undefined;
-      }
-    };
     let outboundRequestBody: Record<string, unknown> | undefined;
     const declaredWireToolNames = new Set<string>();
     const declaredBareWireToolNames = new Set<string>();
@@ -1158,6 +1151,7 @@ export async function preparePassthroughExchange(
         `${route.providerName}|${route.modelId}|${recovery}`,
         { allowFinalRecoveryReserve: transientSendPolicy() === null },
       );
+      if (recovery === "empty-completion") allowance.attempts = Math.min(1, allowance.attempts);
       try {
         return await fetchWithTransientRetry(
           innerRecovery => {
@@ -1189,7 +1183,8 @@ export async function preparePassthroughExchange(
               .then(adoptObservedResponse);
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), attempts: allowance.attempts,
-            onSendsConsumed: transientSendReporter(allowance.permit), claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: transientSendReporter(allowance.permit),
+            claimAmbiguousResend: recovery === "empty-completion" ? undefined : claimPreHeaderResend },
         );
       } catch (err) {
         return { failed: transportFailureResponse(err) };
@@ -1944,6 +1939,9 @@ export async function preparePassthroughExchange(
     break;
     }
 
+  upstreamResponse = await guardPassthroughCompletion(
+    upstreamResponse, request, config, upstream.signal, logCtx, rebuildAndRefetch,
+  );
   // Where this relay dials upstream. Local infrastructure (loopback / private / `.local` / `.lan`)
   // is operator-trusted and its silent phases are normal, so an unset stall budget resolves to
   // disabled for it. Provider rotation above keeps the same endpoint origin, so the routed

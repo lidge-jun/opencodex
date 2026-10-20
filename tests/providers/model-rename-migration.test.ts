@@ -233,7 +233,7 @@ describe("registry model rename migration (#1610)", () => {
     const stale = { defaultProvider: "kimi-code", providers: { "kimi-code": {
       adapter: "openai-chat", baseUrl: "https://api.kimi.com/coding/v1", apiKey: "fixture-key",
       models: [from], modelAliases: { [from]: "work" },
-      modelAdapters: { [from]: "openai-responses" }, modelCapabilities: { [from]: { inputModalities: ["text"] } },
+      modelAdapters: { [from]: "openai-responses" }, modelCapabilities: { [from]: { inputModalities: ["text"], deepseekImageFiles: true } },
       modelMaxInputTokens: { [from]: 12345 }, modelPinnedReasoningEfforts: { [from]: "high" },
       autoReviewModelOverrides: { [from]: "reviewer/model" },
       requestPacing: { enabled: true, models: { [from]: { minIntervalMs: 125 } } },
@@ -246,6 +246,7 @@ describe("registry model rename migration (#1610)", () => {
     expect(route.modelId).toBe(to);
     expect(route.staticPolicy.model.adapter).toBe("openai-responses");
     expect(route.staticPolicy.model.inputModalities).toEqual(["text"]);
+    expect(prov.modelCapabilities?.[to]?.deepseekImageFiles).toBe(true);
     expect(route.staticPolicy.model.maxInputTokens).toBe(12345);
     expect(prov.modelPinnedReasoningEfforts).toEqual({ [to]: "high" });
     expect(prov.autoReviewModelOverrides).toEqual({ [to]: "reviewer/model" });

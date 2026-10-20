@@ -55,6 +55,7 @@ import { observeOutbound } from "../../usage/cache-diagnostic";
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
 import { declaresHostedWebSearch, projectHostedSearchHistory, renderCompactionSearchHistoryItems } from "./compaction-search-history";
 import { stripKimiEmptyAssistantMessages } from "./empty-assistant";
+import { normalizeOpenGatewayResponsesInput } from "./opengateway-input";
 
 /**
  * Identifies DeepSeek's strict Responses replay contract: tool-bearing continuations need
@@ -508,11 +509,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           || !declaresHostedWebSearch(finalBody))) {
         finalBody = projectHostedSearchHistory(finalBody);
       }
+      finalBody = normalizeOpenGatewayResponsesInput(finalBody, url);
       observeOutbound(parsed._rawBody, finalBody, headers);
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);
       }
-      const body = JSON.stringify(applyGithubCopilotContextTier(finalBody, provider, parsed.modelId, incoming.providerName));
+      const wireBody = applyGithubCopilotContextTier(finalBody, provider, parsed.modelId, incoming.providerName);
+      const body = JSON.stringify(wireBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
         "passthrough_serialization",
         Buffer.byteLength(body, "utf8"),
@@ -522,6 +525,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         method: "POST",
         headers,
         body,
+        ...(isPlainObject(wireBody) && typeof wireBody.model === "string" ? { outboundModelId: wireBody.model } : {}),
         releaseBodyObservation,
         ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
         ...(routedCustomToolRepairNames ? { routedCustomToolRepairNames } : {}),

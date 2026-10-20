@@ -29,7 +29,7 @@ export function providerQuotaRoutingBinding(
   // A key probe must not constrain that later account selection.
   const entry = getProviderRegistryEntry(name);
   if (entry && (entry.authKind === "oauth" || entry.authKind === "forward")
-    && !providerUsesKeyAuthOverride(entry, provider, credential)) return null;
+    && !providerUsesKeyAuthOverride(entry, provider)) return null;
   // Static auth headers can replace or combine with the probed API-key header.
   // Its semantics belong to the adapter, so it is not provider-wide quota evidence.
   if (Object.keys(provider.headers ?? {}).some(header =>

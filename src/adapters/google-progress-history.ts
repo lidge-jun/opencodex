@@ -27,6 +27,7 @@ const SENTENCE_END = /[.!?]["'\u201D\u2019)\]*_`]*(?=\s|$)|[\u3002\uFF01\uFF1F\u
 
 /** A boundary that only closes a leading list marker ("1.", "a.") or a common abbreviation ("e.g."). */
 const NOT_A_SENTENCE = /^(?:\d{1,3}|[a-z])\.$|(?:^|\s)(?:e\.g|i\.e|etc|vs)\.$/i;
+const WHITESPACE = /\s/;
 
 /** Whether replayed progress text for this model is trimmed to its lead sentence. */
 export function trimsGeminiProgressHistory(modelId: string): boolean {
@@ -42,9 +43,26 @@ export function geminiProgressLead(text: string): string | undefined {
   if (trimmed.length === 0) return undefined;
   SENTENCE_END.lastIndex = 0;
   let end = trimmed.length;
+  let checked = 0;
+  let contentEnd = 0;
   for (let match = SENTENCE_END.exec(trimmed); match; match = SENTENCE_END.exec(trimmed)) {
     const boundary = match.index + match[0].length;
-    if (!NOT_A_SENTENCE.test(trimmed.slice(0, boundary).trim())) { end = boundary; break; }
+    // Only a newline boundary can end in whitespace. Scan its new interval once; repeated
+    // blank lines retain the previous content end without rescanning the preceding text.
+    if (match[0] === "\n") {
+      for (let index = checked; index < boundary; index++) {
+        if (!WHITESPACE.test(trimmed[index])) contentEnd = index + 1;
+      }
+    } else {
+      contentEnd = boundary;
+    }
+    checked = boundary;
+    // The longest exception is four characters plus its preceding whitespace. The list
+    // marker alternative is anchored to the whole prefix, so allow it only at the start.
+    const start = Math.max(0, contentEnd - 5);
+    const suffix = trimmed.slice(start, contentEnd);
+    const exception = NOT_A_SENTENCE.exec(suffix);
+    if (!exception || (exception.index === 0 && start > 0 && !/^\s/.test(suffix))) { end = boundary; break; }
   }
   const lead = trimmed.slice(0, end).trim();
   // A code-fence opener is not a sentence; replaying it alone would leave an unclosed fence.

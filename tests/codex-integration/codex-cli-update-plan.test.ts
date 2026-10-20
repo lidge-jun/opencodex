@@ -564,6 +564,55 @@ describe("registry configuration isolation", () => {
     }
   });
 
+  test.each([
+    "OPENSSL_CONF", "OPENSSL_CONF_INCLUDE", "OPENSSL_MODULES", "OPENSSL_ENGINES",
+    "openssl_conf", "openssl_modules",
+  ])("ambient OpenSSL startup control %s cannot reach the spawned npm", key => {
+    const previous = process.env[key];
+    process.env[key] = join(tmpdir(), "ocx-ambient-openssl.cnf");
+    try {
+      // Capture only: no child process, native provider or network is invoked.
+      const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(calls.length).toBe(3);
+      for (const call of calls) {
+        const env = call.options.env as NodeJS.ProcessEnv;
+        expect(Object.keys(env).some(name => name.toLowerCase() === key.toLowerCase())).toBe(false);
+      }
+    } finally {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    }
+  });
+
+  test("supported proxy and CA channels still reach the spawned npm", () => {
+    const sentinels = {
+      HTTP_PROXY: "http://127.0.0.1:9/ocx-proxy-sentinel",
+      NO_PROXY: "registry.npmjs.org.invalid,127.0.0.1",
+      NODE_EXTRA_CA_CERTS: join(tmpdir(), "ocx-corporate-ca.pem"),
+    };
+    const previous = Object.fromEntries(Object.keys(sentinels).map(key => [key, process.env[key]]));
+    try {
+      Object.assign(process.env, sentinels);
+      const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
+      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      for (const call of calls) {
+        const env = call.options.env as NodeJS.ProcessEnv;
+        for (const [key, value] of Object.entries(sentinels)) {
+          // Match case-insensitively: the child env is a plain object, so a
+          // Windows-normalized casing must not make a supported channel look absent.
+          const entry = Object.entries(env).find(([name]) => name.toLowerCase() === key.toLowerCase());
+          expect(entry?.[1]).toBe(value);
+        }
+      }
+    } finally {
+      for (const key of Object.keys(sentinels)) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+    }
+  });
+
   test("real Node cannot write output sentinels outside the owned npm root", () => {
     const fixture = fs.realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-update-node-output-")));
     const sentinels = {

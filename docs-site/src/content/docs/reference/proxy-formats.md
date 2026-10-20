@@ -20,6 +20,15 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## MiMo bare tool-call recovery
+
+On translated OpenAI Chat routes, `mimo-v2` and dotted `mimo-v2.*` model IDs can recover a
+complete bare `<tool_call>` block as a call to an exact declared freeform tool when the response
+contains no structured tool calls. Prose around the block is preserved; fenced and inline-code
+examples, nested headers, undeclared tools and identified wrappers remain literal. Recovery is
+bounded to 128 calls, 4 MiB total and 2 MiB per candidate. Long streamed prose may release the
+original markup before terminal recovery; errors never dispatch recovered calls.
+
 ## Upstream redirects
 
 Credential-bearing model, image, video, and search requests do not automatically follow HTTP redirects, including same-origin redirects. Configure the final upstream API URL instead of a redirecting alias. A redirect does not cause the server to resend credentials or the request body to its destination. The response owner retains its existing error or relay behavior; native Responses and compact routes can return the original 3xx and `Location` to the client. Client redirect behavior is separate from this server transport policy.

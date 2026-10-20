@@ -97,6 +97,7 @@ import type { DataPlaneAdmission } from "../server/auth-cors";
 import { getMainReserveAuthorization, isMainReserveAuthorizationLive, nativeUserIdClaims, type MainReserveAuthorization } from "./reserve-availability";
 import { UpstreamRetryEvidenceError } from "../lib/upstream-retry";
 import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
+import { CODEX_MAIN_DUPLICATE_ACTION, configuredCodexMainDuplicate } from "./collision-identity";
 
 /**
  * A request-owned bearer cannot inspect the physical main credential for its plan, but cached
@@ -1450,7 +1451,9 @@ async function resolveCodexAuthContextUnannotated(
     // cool down. Hand back any trial first -- no Pool account is being sent to.
     if (selected === MAIN_CODEX_ACCOUNT_ID && requestScopedMainCredential) {
       releaseTransientProbeGrant();
-      return await resolveCallerOwnedMainContext();
+      const context = await resolveCallerOwnedMainContext();
+      console.info("[codex] Pool selected caller-owned main credential.");
+      return context;
     }
     if (!selected) {
       // A retry that excluded a failed Pool account may still use the validated caller-owned
@@ -1463,7 +1466,9 @@ async function resolveCodexAuthContextUnannotated(
         && !(callerMatchesObservedMain(headers) && policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID))
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
       ) {
-        return await resolveCallerOwnedMainContext();
+        const context = await resolveCallerOwnedMainContext();
+        console.info("[codex] Pool used caller-owned main credential: no selectable stored account.");
+        return context;
       }
       if (fixedAccountId !== undefined) {
         if (modelEligibleAccountIds && !modelEligibleAccountIds.has(fixedAccountId)) {
@@ -1562,6 +1567,7 @@ async function resolveCodexAuthContextUnannotated(
   // deferred credential must never become request auth through that fallback.
   try {
     assertCodexAccountValidationReady(accountId);
+    if (configuredCodexMainDuplicate(config, accountId)) throw new CodexPoolAuthenticationError(CODEX_MAIN_DUPLICATE_ACTION);
     assertPoolAccountCredits(accountId, poolCreditHoldResetAt(policy, accountId, config));
   } catch (cause) {
     // Nothing will reach upstream, so give the trial back instead of leaving the held account
@@ -1622,7 +1628,9 @@ async function resolveCodexAuthContextUnannotated(
         && !(callerMatchesObservedMain(headers) && policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID))
         && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
         && !callerIsCooledPoolAccount(headers, config, accountId)) {
-        return await resolveCallerOwnedMainContext();
+        const context = await resolveCallerOwnedMainContext();
+        console.info("[codex] Pool used caller-owned main credential: stored account cooldown.");
+        return context;
       }
       throw new CodexAccountCooldownError(accountId, cooldownUntil, cooldown?.cooldownSource, cooldown?.quotaScope);
     }
@@ -1690,6 +1698,7 @@ async function resolveCodexAuthContextUnannotated(
   try {
     const token = await getValidCodexToken(accountId, { signal: options.signal });
     assertCodexAccountValidationReady(accountId);
+    if (configuredCodexMainDuplicate(config, accountId)) throw new CodexPoolAuthenticationError(CODEX_MAIN_DUPLICATE_ACTION);
     assertPoolAccountCredits(accountId, poolCreditHoldResetAt(policy, accountId, config));
     return bindPoolCreditPolicy({
       kind: "pool",
@@ -1711,7 +1720,8 @@ async function resolveCodexAuthContextUnannotated(
     releaseTransientProbeGrant();
     if (probeLeaseId && probeQuotaScope) releaseCodexQuotaScopeProbeLease(accountId, probeQuotaScope, probeLeaseId);
     else if (probeLeaseId) releaseCodexQuotaProbeLease(accountId, probeLeaseId);
-    if (cause instanceof CodexPoolAccountCreditsOffError) throw cause;
+    // Post-refresh eligibility refusals do not invalidate a healthy credential.
+    if (cause instanceof CodexPoolAccountCreditsOffError || cause instanceof CodexPoolAuthenticationError) throw cause;
     if (!options.signal?.aborted && shouldMarkAccountNeedsReauthForCodexAuthFailure(cause)) {
       markAccountNeedsReauth(accountId, writerGeneration);
     }
