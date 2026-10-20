@@ -124,6 +124,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     return {
       ...provider,
       apiKey: usableResolvedApiKey(provider.apiKey),
+      ...(destination?.noStructuredOutputModels?.length ? {
+        noStructuredOutputModels: [...new Set([...(provider.noStructuredOutputModels ?? []), ...destination.noStructuredOutputModels])],
+      } : {}),
       ...(provider.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined
         ? { dropResponsesReasoningItems: destination.dropResponsesReasoningItems }
         : {}),

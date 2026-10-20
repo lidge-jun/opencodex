@@ -20,7 +20,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { routeModel } from "../../src/router";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat/passthrough";
-import { providerConfigSeed } from "../../src/providers/derive";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import { handleResponses } from "../../src/server/responses/core";
@@ -213,4 +213,42 @@ describe("1017 exact-ID Token Plan adapter policy", () => {
       expect(JSON.parse(request.body as string).response_format).toEqual({ type: "json_object" });
     });
   }
+});
+
+
+describe("custom Beijing destination structured-output policy", () => {
+  const model = "deepseek-v4.1-flash-1017";
+  for (const baseUrl of [
+    "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
+    "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+  ]) {
+    for (const enriched of [false, true]) {
+      test(`${baseUrl} enriched=${enriched} preserves destination opt-outs`, () => {
+        const provider: OcxProviderConfig = {
+          adapter: "openai-chat", authMode: "key", apiKey: "test-key", baseUrl,
+          noStructuredOutputModels: ["operator-model"],
+        };
+        if (enriched) enrichProviderFromRegistry("custom-beijing", provider);
+        const resolved = routeModel({ port: 10100, defaultProvider: "custom-beijing",
+          providers: { "custom-beijing": provider } } as OcxConfig, `custom-beijing/${model}`);
+        expect(resolved.provider.noStructuredOutputModels).toContain("operator-model");
+        expect(resolved.provider.noStructuredOutputModels).toContain(model);
+        const native = buildOpenAIChatPassthroughRequest(resolved.provider, {
+          messages: [{ role: "user", content: "hi" }], response_format: { type: "json_object" },
+        }, model, false);
+        expect(JSON.parse(native.body as string).response_format).toBeUndefined();
+        const translated = createOpenAIChatAdapter(resolved.provider).buildRequest({
+          modelId: model, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+          options: { textFormat: { type: "json_object" } }, stream: false,
+        });
+        expect(JSON.parse(translated.body as string).response_format).toBeUndefined();
+      });
+    }
+  }
+  test("unrelated custom destinations do not inherit the restriction", () => {
+    const provider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
+    enrichProviderFromRegistry("custom-beijing", provider);
+    const resolved = routeModel({ port: 10100, providers: { custom: provider } } as OcxConfig, `custom/${model}`);
+    expect(resolved.provider.noStructuredOutputModels).toBeUndefined();
+  });
 });

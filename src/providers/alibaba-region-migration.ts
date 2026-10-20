@@ -1,4 +1,3 @@
-import { ALIBABA_INTL_BASE_URL_CHOICES } from "./base-url-choices";
 import { providerConfigSeed } from "./derive";
 import { rewriteProviderReferences } from "./provider-id-rewrite";
 import { PROVIDER_REGISTRY } from "./registry";
@@ -16,7 +15,7 @@ const INTL_ID = "alibaba-token-plan-intl";
  * while advertising the six-model Beijing Personal Edition catalog.
  *
  * `baseUrl` is carried deliberately: the migration only fires for a URL that
- * `ALIBABA_INTL_BASE_URL_CHOICES` recognises, so it is nonblank and
+ * the International registry entry recognises, so it is nonblank and
  * placeholder-free and satisfies the override guard in the router.
  * `liveModels` is carried because it is directly user-editable, so resetting it
  * to the seed's `false` would silently undo a deliberate choice.
@@ -36,10 +35,11 @@ const normalize = (url: string): string => url.trim().replace(/\/+$/, "").toLowe
 
 /** True when the saved URL is one the international entry actually serves. */
 function isInternationalEndpoint(baseUrl: string): boolean {
-  return normalize(baseUrl) === "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
-    || ALIBABA_INTL_BASE_URL_CHOICES.some(
-    choice => choice.baseUrl && normalize(choice.baseUrl) === normalize(baseUrl),
-  );
+  const entry = PROVIDER_REGISTRY.find(row => row.id === INTL_ID);
+  if (!entry) return false;
+  const candidates = [entry.baseUrl, ...(entry.baseUrlChoices ?? []).map(choice => choice.baseUrl),
+    ...(entry.destinationAliases ?? []).filter(alias => alias.adapter === entry.adapter).map(alias => alias.baseUrl)];
+  return candidates.some(url => url && normalize(url) === normalize(baseUrl));
 }
 
 /**
