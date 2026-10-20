@@ -86,7 +86,7 @@ describe("stale model roster migration", () => {
     for (const entry of STALE_MODEL_ROSTERS) {
       const registry = PROVIDER_REGISTRY.find(row => row.id === entry.provider);
       expect(registry?.models).toEqual([...entry.to]);
-      expect(entry.to.length).toBeGreaterThan(entry.from.length);
+      expect(entry.to.some(id => !entry.from.includes(id))).toBe(true);
     }
   });
 });
@@ -103,5 +103,121 @@ describe("MiniMax preview catalog retention", () => {
       expect(models.map(model => model.id)).toContain(PREVIEW);
       expect(droppedConfiguredIds).toEqual([]);
     }
+  });
+});
+
+describe("Token Plan saved roster refresh", () => {
+  describe("alibaba-token-plan", () => {
+    const before = [
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
+  "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
+];
+    const entry = STALE_MODEL_ROSTERS.find(row => row.provider === "alibaba-token-plan")!;
+    const makeConfig = (models: string[]) => ({ providers: { [entry.provider]: {
+      adapter: "openai-chat", baseUrl: "https://example.com/v1", models,
+      defaultModel: "qwen3.8-max", liveModels: false,
+      modelContextWindows: { "deepseek-v4.1-flash-1017": 123 },
+      modelDefaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "low" },
+    } } } as unknown as OcxConfig);
+    test("refreshes only the exact previous seed through startup and is idempotent", () => {
+      const config = makeConfig([...before]);
+      const first = projectStartupConfigRepairs(config);
+      expect(first.changed).toBe(true);
+      const row = first.config.providers![entry.provider]!;
+      expect(row.models).toEqual([...entry.to]);
+      expect(row.models).toContain("deepseek-v4.1-flash-1017");
+      expect(row.modelContextWindows!["deepseek-v4.1-flash-1017"]).toBe(123);
+      expect(row.modelDefaultReasoningEfforts!["deepseek-v4.1-flash-1017"]).toBe("low");
+      expect(row.defaultModel).toBe("qwen3.8-max");
+      expect(row.liveModels).toBe(false);
+      expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
+    });
+    test("preserves trimmed, extended, reordered, duplicated and empty operator lists", () => {
+      for (const models of [before.slice(1), [...before, "custom-model"], [...before].reverse(), [...before, before[0]!], []]) {
+        const config = makeConfig(models);
+        const original = structuredClone(config);
+        expect(projectStaleModelRosters(config).changed).toBe(false);
+        expect(config).toEqual(original);
+      }
+    });
+    test("fills existing metadata containers but never creates absent containers", () => {
+      const config = makeConfig([...before]);
+      const row = config.providers![entry.provider]!;
+      row.modelContextWindows = {};
+      row.modelDefaultReasoningEfforts = {};
+      expect(projectStaleModelRosters(config).changed).toBe(true);
+      expect(row.modelContextWindows["deepseek-v4.1-flash-1017"]).toBe(1_000_000);
+      expect(row.modelDefaultReasoningEfforts["deepseek-v4.1-flash-1017"]).toBe("high");
+      const absent = makeConfig([...before]);
+      delete absent.providers![entry.provider]!.modelContextWindows;
+      delete absent.providers![entry.provider]!.modelDefaultReasoningEfforts;
+      projectStaleModelRosters(absent);
+      expect(absent.providers![entry.provider]!.modelContextWindows).toBeUndefined();
+      expect(absent.providers![entry.provider]!.modelDefaultReasoningEfforts).toBeUndefined();
+    });
+    test("preserves a custom adapter", () => {
+      const config = makeConfig([...before]);
+      config.providers![entry.provider]!.adapter = "anthropic";
+      expect(projectStaleModelRosters(config).changed).toBe(false);
+      expect(config.providers![entry.provider]!.models).toEqual(before);
+    });
+  });
+  describe("alibaba-token-plan-intl", () => {
+    const before = [
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
+  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v3.2",
+  "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
+  "glm-5.2", "glm-5.3", "glm-5.1", "glm-5",
+  "MiniMax-M2.5",
+];
+    const entry = STALE_MODEL_ROSTERS.find(row => row.provider === "alibaba-token-plan-intl")!;
+    const makeConfig = (models: string[]) => ({ providers: { [entry.provider]: {
+      adapter: "openai-chat", baseUrl: "https://example.com/v1", models,
+      defaultModel: "qwen3.8-max", liveModels: false,
+      modelContextWindows: { "deepseek-v4.1-flash-1017": 123 },
+      modelDefaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "low" },
+    } } } as unknown as OcxConfig);
+    test("refreshes only the exact previous seed through startup and is idempotent", () => {
+      const config = makeConfig([...before]);
+      const first = projectStartupConfigRepairs(config);
+      expect(first.changed).toBe(true);
+      const row = first.config.providers![entry.provider]!;
+      expect(row.models).toEqual([...entry.to]);
+      expect(row.models).toContain("deepseek-v4.1-flash-1017");
+      expect(row.modelContextWindows!["deepseek-v4.1-flash-1017"]).toBe(123);
+      expect(row.modelDefaultReasoningEfforts!["deepseek-v4.1-flash-1017"]).toBe("low");
+      expect(row.defaultModel).toBe("qwen3.8-max");
+      expect(row.liveModels).toBe(false);
+      expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
+    });
+    test("preserves trimmed, extended, reordered, duplicated and empty operator lists", () => {
+      for (const models of [before.slice(1), [...before, "custom-model"], [...before].reverse(), [...before, before[0]!], []]) {
+        const config = makeConfig(models);
+        const original = structuredClone(config);
+        expect(projectStaleModelRosters(config).changed).toBe(false);
+        expect(config).toEqual(original);
+      }
+    });
+    test("fills existing metadata containers but never creates absent containers", () => {
+      const config = makeConfig([...before]);
+      const row = config.providers![entry.provider]!;
+      row.modelContextWindows = {};
+      row.modelDefaultReasoningEfforts = {};
+      expect(projectStaleModelRosters(config).changed).toBe(true);
+      expect(row.modelContextWindows["deepseek-v4.1-flash-1017"]).toBe(1_000_000);
+      expect(row.modelDefaultReasoningEfforts["deepseek-v4.1-flash-1017"]).toBe("high");
+      const absent = makeConfig([...before]);
+      delete absent.providers![entry.provider]!.modelContextWindows;
+      delete absent.providers![entry.provider]!.modelDefaultReasoningEfforts;
+      projectStaleModelRosters(absent);
+      expect(absent.providers![entry.provider]!.modelContextWindows).toBeUndefined();
+      expect(absent.providers![entry.provider]!.modelDefaultReasoningEfforts).toBeUndefined();
+    });
+    test("preserves a custom adapter", () => {
+      const config = makeConfig([...before]);
+      config.providers![entry.provider]!.adapter = "anthropic";
+      expect(projectStaleModelRosters(config).changed).toBe(false);
+      expect(config.providers![entry.provider]!.models).toEqual(before);
+    });
   });
 });
