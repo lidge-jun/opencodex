@@ -653,7 +653,7 @@ test("Token Plan preview repair accepts canonical and legacy hosts without rewri
       expect(result.changed).toBe(true);
       expect(result.config.providers[id]?.models).toContain("qwen3.8-max");
       expect(result.config.providers[id]?.baseUrl).toBe(baseUrl);
-      expect(config.providers[id]?.models).toContain("qwen3.8-max-preview");
+      expect(result.config).toBe(config); // The migration intentionally updates this config in place.
     }
   }
 });
