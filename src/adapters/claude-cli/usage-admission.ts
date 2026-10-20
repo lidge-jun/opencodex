@@ -188,11 +188,23 @@ export function claudeUsagePreflight(model: string): Promise<ClaudeAdmission> {
   return (preflightOverride ?? checkClaudeUsageAdmission)(model);
 }
 
+// Claude prints "resets 3pm (Europe/Paris)" or "resets 3:30pm (...)"; minutes are optional.
+const CLAUDE_RESET_CLOCK = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i;
+
+/**
+ * Whether text carries the reset-clock wording the refusal parser honors. The check is lexical
+ * only — no "limit" keyword and no clock resolution against the current time — because the phrase
+ * matters wherever it appears: a caller-controlled model id can carry the clock while the CLI's
+ * own error wording supplies the limit keyword around it.
+ */
+export function containsClaudeResetClock(text: string): boolean {
+  return CLAUDE_RESET_CLOCK.test(text);
+}
+
 /** Parse Claude's explicit next-clock reset, including its IANA timezone. */
 export function parseClaudeReset(message: string, now = Date.now()): number | undefined {
   if (!/hit.*limit|usage limit|rate limit/i.test(message)) return;
-  // Claude prints "resets 3pm (Europe/Paris)" or "resets 3:30pm (...)"; minutes are optional.
-  const match = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i.exec(message);
+  const match = CLAUDE_RESET_CLOCK.exec(message);
   if (!match) return;
   const hour = Number(match[1]); const minute = Number(match[2] ?? 0);
   if (hour < 1 || hour > 12 || minute > 59) return;
