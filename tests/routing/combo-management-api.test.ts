@@ -1084,6 +1084,7 @@ describe("combo management API", () => {
           model: "combo/old",
           smallFastModel: "old-public",
           tierModels: { opus: "combo/old", sonnet: "a/m1", haiku: "old-public" },
+          tierRoutes: { opus: "combo/old", sonnet: "a/m1", haiku: "old-public", fable: "b/m2" },
           modelMap: { inbound: "combo/old", stable: "a/m1" },
         },
         combos: {
@@ -1135,6 +1136,7 @@ describe("combo management API", () => {
         model: "new-public",
         smallFastModel: "new-public",
         tierModels: { opus: "new-public", sonnet: "a/m1", haiku: "new-public" },
+        tierRoutes: { opus: "new-public", sonnet: "a/m1", haiku: "new-public", fable: "b/m2" },
         modelMap: { inbound: "new-public", stable: "a/m1" },
       });
       const agentBodies = readdirSync(join(process.env.CLAUDE_CONFIG_DIR!, "agents"))
@@ -1159,6 +1161,7 @@ describe("combo management API", () => {
         model: "new-public",
         smallFastModel: "new-public",
         tierModels: { opus: "new-public", sonnet: "a/m1", haiku: "new-public" },
+        tierRoutes: { opus: "new-public", sonnet: "a/m1", haiku: "new-public", fable: "b/m2" },
         modelMap: { inbound: "new-public", stable: "a/m1" },
       });
     });
@@ -1202,6 +1205,7 @@ describe("combo management API", () => {
           model: "gpt-5.6-sol",
           smallFastModel: "gpt-5.6-sol",
           tierModels: { opus: "gpt-5.6-sol", sonnet: "combo/old" },
+          tierRoutes: { opus: "gpt-5.6-sol", sonnet: "combo/old" },
           modelMap: { native: "gpt-5.6-sol", combo: "combo/old" },
         },
         combos: {
@@ -1235,6 +1239,7 @@ describe("combo management API", () => {
         model: "gpt-5.6-sol",
         smallFastModel: "gpt-5.6-sol",
         tierModels: { opus: "gpt-5.6-sol", sonnet: "combo/new" },
+        tierRoutes: { opus: "gpt-5.6-sol", sonnet: "combo/new" },
         modelMap: { native: "gpt-5.6-sol", combo: "combo/new" },
       });
       expect(routeModel(config, "gpt-5.6-terra")).toMatchObject({
@@ -1278,6 +1283,7 @@ describe("combo management API", () => {
       const config = baseConfig({
         disabledModels: ["combo/free"],
         subagentModels: ["combo/free"],
+        claudeCode: { tierRoutes: { sonnet: "combo/free" } },
       });
       saveConfig(config);
       const response = await comboApi(config, "PUT", "/api/combos", {
@@ -1287,6 +1293,8 @@ describe("combo management API", () => {
       expect(response?.status).toBe(200);
       expect(config.disabledModels).toEqual(["free-public"]);
       expect(config.subagentModels).toEqual(["free-public"]);
+      expect(config.claudeCode?.tierRoutes).toEqual({ sonnet: "free-public" });
+      expect(JSON.parse(readFileSync(getConfigPath(), "utf8")).claudeCode.tierRoutes).toEqual({ sonnet: "free-public" });
     });
   });
 

@@ -166,7 +166,7 @@ their own files. `src/grok/inject.ts` holds the shared canonical config-write lo
 ## Claude ingress tier routing
 
 `src/claude/inbound-model-options.ts` resolves optional `claudeCode.tierRoutes` after discovery aliases, exact/date-stripped `modelMap` (including intercept bindings), and explicit classifier routes. Only bare current or historical Claude tier IDs participate. Unset tiers and qualified selectors retain existing behavior.
-Targets enter the normal router once. The same resolver prevents caller native passthrough when a tier rewrites the ID. Launch `tierModels` and non-Claude ingresses are independent. `tests/claude-integration/claude-tier-routing.test.ts` covers the contract.
+Targets enter the normal router once. The same resolver prevents caller native passthrough when a tier rewrites the ID. Launch `tierModels` and non-Claude ingresses are independent. Provider/account-qualified effort rows retain their destination; existing ingress parsing removes a bare synthetic effort suffix before tier resolution and preserves the effort. Future numeric versions of known tiers match; unknown families and nonstandard suffixes pass through. `src/protocols/plan-snapshot.ts` previews the selected target without dispatch or combo selection. `src/server/messages-native.ts` leaves combo/policy `count_tokens` on its local estimate without advancing selection. `tests/claude-integration/claude-tier-routing.test.ts` covers these boundaries.
 
 ## Lifecycle
 

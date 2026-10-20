@@ -901,6 +901,17 @@ normal router, not fed back through tier routing. A tier redirected away from it
 uses the routed path rather than caller-credential native passthrough. Responses and Chat
 Completions model selection is unchanged.
 
+Provider/account-qualified selectors, including their `--high` effort rows, retain their
+explicit destination. A bare synthetic effort row is decoded by the existing ingress first;
+its bare base can use tier routing while the requested effort is preserved. Future numeric
+versions of the four known tiers are recognized; unknown tier names and nonstandard suffixes
+pass through unchanged.
+
+Protocol preview resolves the same tier target without dispatching. `count_tokens` retains its
+local estimate for combo/policy targets and does not select a combo member. Combo renames and
+public-alias changes migrate saved tier routes in the same transaction as `modelMap` and
+launcher `tierModels`, preserving unrelated routes.
+
 See [Desktop alias resolution](#desktop-alias-resolution) for the rejection policy.
 
 ## Sidecar matrix: web search and image understanding

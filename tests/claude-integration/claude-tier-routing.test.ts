@@ -8,6 +8,7 @@ import { DesktopModelMappingUnavailableError } from "../../src/claude/inbound-re
 import { getConfigPath, getDefaultConfig, loadConfig, saveConfig, validateConfigCandidate } from "../../src/config";
 import { routeModel } from "../../src/router";
 import { startServer } from "../../src/server";
+import { buildProtocolPlanSnapshot } from "../../src/protocols/plan-snapshot";
 import type { OcxClaudeCodeConfig, OcxConfig } from "../../src/types";
 import { managementFetch } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -40,7 +41,7 @@ describe("Claude ingress tier routing", () => {
     expect(resolveInboundModel("claude-sonnet-5-5", { tierModels: { sonnet: "mock/launch-only" } })).toBe("claude-sonnet-5-5");
   });
 
-  test.each(["anthropic/claude-sonnet-5-5", "combo/claude-sonnet-5-5", "policy/claude-sonnet-5-5", "gpt-5.5", "sonnet", "claude-sonnet-custom", "claude-not-sonnet-5"])("preserves explicit or non-tier selector %s", model => {
+  test.each(["anthropic/claude-sonnet-5-5", "combo/claude-sonnet-5-5", "policy/claude-sonnet-5-5", "pool/claude-sonnet-5-5", "anthropic/claude-sonnet-5-5--high", "pool/claude-sonnet-5-5--high", "gpt-5.5", "sonnet", "claude-sonnet-custom", "claude-not-sonnet-5", "claude-nebula-1", "claude-sonnet-5-5-preview"])("preserves explicit or non-tier selector %s", model => {
     expect(resolveInboundModel(model, cc)).toBe(model);
   });
 
@@ -115,7 +116,7 @@ test("generic router does not apply Claude ingress tier policy", () => {
   expect(routeModel(config, "mock/claude-sonnet-5-5").modelId).toBe("claude-sonnet-5-5");
 });
 
-test("Messages tier routing bypasses caller native passthrough and uses the selected provider", async () => {
+test.each(["mock/sonnet-target", "combo/tier-balanced"])("Messages, preview and count_tokens share tier target %s without extra dispatch", async target => {
   const captured: Array<{ model: string; authorization: string | null }> = [];
   let nativeCalls = 0;
   const upstream = Bun.serve({ port: 0, async fetch(req) {
@@ -128,11 +129,23 @@ test("Messages tier routing bypasses caller native passthrough and uses the sele
   const config = {
     ...getDefaultConfig(), port: 0, defaultProvider: "mock",
     providers: { mock: { adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).toString(), apiKey: "test-provider-key", authMode: "key", allowPrivateNetwork: true, liveModels: false, models: ["sonnet-target"] } },
-    claudeCode: { tierRoutes: { sonnet: "mock/sonnet-target" }, anthropicBaseUrl: new URL("/native", upstream.url).toString() },
+    combos: { "tier-balanced": { strategy: "failover", targets: [{ provider: "mock", model: "sonnet-target" }] } },
+    claudeCode: { tierRoutes: { sonnet: target }, anthropicBaseUrl: new URL("/native", upstream.url).toString() },
   } as OcxConfig;
   saveConfig(config);
   const server = startServer(0);
   try {
+    const preview = buildProtocolPlanSnapshot(config, { model: "claude-sonnet-5-5", inbound: "messages", features: [] });
+    expect(preview.routeKind).toBe(target.startsWith("combo/") ? "combo" : "direct");
+    expect(preview.candidates.map(candidate => [candidate.provider, candidate.model])).toEqual([["mock", "sonnet-target"]]);
+    const count = await managementFetch(new URL("/v1/messages/count_tokens", server.url), {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer sk-ant-oat01-tst" },
+      body: JSON.stringify(requestBody("claude-sonnet-5-5")),
+    });
+    expect(count.status).toBe(200);
+    expect((await count.json() as { input_tokens: number }).input_tokens).toBeGreaterThan(0);
+    expect(captured).toEqual([]);
+    expect(nativeCalls).toBe(0);
     const response = await managementFetch(new URL("/v1/messages", server.url), {
       method: "POST", headers: { "content-type": "application/json", authorization: "Bearer sk-ant-oat01-tst" },
       body: JSON.stringify(requestBody("claude-sonnet-5-5")),

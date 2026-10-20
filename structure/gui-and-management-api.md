@@ -572,7 +572,7 @@ Pairing-grant source limiting applies only to invalid guesses from an allowed br
 
 ## Durable provider PATCH
 
-`PUT /api/combos` shares this transaction for combo changes, rename references, disabled selectors and request-only Vision Sidecar enrollment; see `tests/routing/combo-vision-enrollment.test.ts`.
+`PUT /api/combos` shares this transaction for combo changes, rename references, disabled selectors and request-only Vision Sidecar enrollment; see `tests/routing/combo-vision-enrollment.test.ts`. `src/server/management/combo-routes.ts` includes sparse Claude ingress `tierRoutes` in the same reference migration as launcher `tierModels` and `modelMap`; canonical and public-alias references follow the rename while unrelated/native selectors retain their meaning. `tests/routing/combo-management-api.test.ts` covers in-memory and persisted tier-route migration.
 
 `src/server/management/provider-routes.ts` commits every provider PATCH variant through
 `src/server/management/provider-patch-transaction.ts`, including standalone default-provider
