@@ -45,7 +45,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper", "opengateway", "tokenlab", "modelflare",
-  "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
+  "xiaomi", "xiaomi-mimo", "kilo", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
   "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun", "claude-cli",
 ];
 
@@ -62,6 +62,20 @@ describe("provider registry parity", () => {
   test("registry ids are unique", () => {
     const ids = PROVIDER_REGISTRY.map(entry => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("deprecated entries stay resolvable but are hidden from every new-provider surface", () => {
+    const deprecated = PROVIDER_REGISTRY.filter(entry => entry.deprecated);
+    expect(deprecated.length).toBeGreaterThan(0);
+    const presets = deriveProviderPresets();
+    const featured = deriveFeaturedProviderIds();
+    const keyLogins = Object.keys(deriveKeyLoginMap());
+    for (const entry of deprecated) {
+      expect(providerConfigSeed(entry).adapter).toBe(entry.adapter);
+      expect(presets.find(preset => preset.id === entry.id)).toBeUndefined();
+      expect(featured).not.toContain(entry.id);
+      expect(keyLogins).not.toContain(entry.id);
+    }
   });
 
   test("every field carried by the shipped registry has a model-id role classification", () => {
@@ -1402,7 +1416,6 @@ describe("provider registry parity", () => {
     expect(featured).toEqual([
       "openai", "xai", "command-code", "orcarouter-oauth", "anthropic", "anthropic2", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio",
-      "mimo-free",
     ]);
 
     const presets = deriveProviderPresets();

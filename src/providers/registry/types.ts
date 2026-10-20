@@ -160,6 +160,14 @@ export interface ProviderRegistryEntry {
    */
   sponsor?: { tier: "main" | "standard"; url: string };
   dashboardPreset?: boolean;
+  /**
+   * The upstream route or service this entry depends on is gone. Deprecated entries stay in the
+   * registry so saved providers keep resolving and a pinned adapter keeps loading, but they are
+   * excluded from the add-provider picker, the init menu, the featured list, and new key logins.
+   * The value is the operator-facing reason; it is registry-only and never seeded into saved
+   * config.
+   */
+  deprecated?: string;
   note?: string;
   dashboardUrl?: string;
   defaultModel?: string;

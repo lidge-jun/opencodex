@@ -312,6 +312,9 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
   const out: Record<string, DerivedKeyLoginProvider> = {};
   for (const entry of PROVIDER_REGISTRY) {
     if (entry.authKind !== "key") continue;
+    // A deprecated route cannot complete a login, but its entry must stay resolvable for
+    // configs saved while it still worked.
+    if (entry.deprecated) continue;
     if (!entry.dashboardUrl) throw new Error(`Registry key provider missing dashboardUrl: ${entry.id}`);
     const liveModels = registryEntrySupportsLiveModelDiscovery(entry) ? entry.liveModels : false;
     out[entry.id] = {
@@ -364,7 +367,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
 }
 
 export function deriveInitProviders(): DerivedInitProvider[] {
-  return PROVIDER_REGISTRY.map(entry => ({
+  return PROVIDER_REGISTRY.filter(entry => !entry.deprecated).map(entry => ({
     id: entry.id,
     label: formatInitLabel(entry),
     adapter: entry.adapter,
@@ -391,6 +394,7 @@ export function deriveOAuthIds(): string[] {
 
 export function deriveProviderPresets(): DerivedProviderPreset[] {
   const presets = PROVIDER_REGISTRY
+    .filter(entry => !entry.deprecated)
     .filter(entry => entry.featured || entry.authKind === "key" || entry.dashboardPreset)
     .map(entryToPreset);
   return [...dedupePresets(presets), customPreset()];
@@ -633,7 +637,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
 }
 
 export function deriveFeaturedProviderIds(): string[] {
-  return PROVIDER_REGISTRY.filter(entry => entry.featured).map(entry => entry.id);
+  return PROVIDER_REGISTRY.filter(entry => entry.featured && !entry.deprecated).map(entry => entry.id);
 }
 
 export function deriveJawcodeAliases(): Record<string, string> {
