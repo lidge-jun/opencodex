@@ -12,7 +12,8 @@ let cached: string | null = null;
  */
 export function repoRoot(): string {
   if (cached) return cached;
-  let dir = import.meta.dir;
+  const originDir = import.meta.dir ?? import.meta.dirname;
+  let dir = originDir;
   for (let hops = 0; hops < 8; hops += 1) {
     const candidate = join(dir, "package.json");
     if (existsSync(candidate)) {
@@ -26,7 +27,7 @@ export function repoRoot(): string {
     if (parent === dir) break;
     dir = parent;
   }
-  throw new Error(`tests/helpers/repo-root: package.json for ${PACKAGE_NAME} not found above ${import.meta.dir}`);
+  throw new Error(`tests/helpers/repo-root: package.json for ${PACKAGE_NAME} not found above ${originDir}`);
 }
 
 /** Absolute path under the repository, for source-oracle reads. */
