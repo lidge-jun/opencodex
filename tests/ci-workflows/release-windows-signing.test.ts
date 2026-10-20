@@ -642,9 +642,11 @@ $global:LASTEXITCODE = $code
       const missing = f.run(config, ["-Msi", f.msi, "-RequireInnerExe", "daemon.exe", "-Trust", "test"]);
       expect(missing.exitCode).not.toBe(0);
       expect(missing.output).toContain("daemon.exe is missing from the administrative image");
+      expect(missing.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi"]);
       const few = f.run(config, ["-Msi", f.msi, "-MinimumInnerExe", "3", "-Trust", "test"]);
       expect(few.exitCode).not.toBe(0);
       expect(few.output).toContain("expected at least 3");
+      expect(few.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi"]);
     } finally { removeTreeWithRetry(f.dir); }
   }, PWSH_TIMEOUT_MS);
 
@@ -660,6 +662,7 @@ $global:LASTEXITCODE = $code
       expect(result.output).toContain("fake msiexec failure log");
       expect(result.output).toContain("could not expand");
       expect(eventIndex(result.events, "process|msiexec.exe")).toBeGreaterThan(0);
+      expect(result.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi"]);
     } finally { removeTreeWithRetry(f.dir); }
   }, PWSH_TIMEOUT_MS);
 });
