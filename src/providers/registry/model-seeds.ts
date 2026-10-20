@@ -573,9 +573,9 @@ export const deepseekReasoningMapFor = (modelId: string): Record<string, string>
 // text-only input, strict json_schema accepted. glm-5.3-flash REMAINS OUT:
 // still never served by the Token Plan gateway (docs.z.ai VLM id, not plan
 // entitlement).
-// Both regions support Personal and Team subscriptions. These presets deliberately curate
-// a Personal subset for Beijing and a Team subset for international accounts; geography
-// does not determine tier. Keep liveModels false: discovery includes non-chat models.
+// Both regions support Personal and Team subscriptions. Keep the existing Beijing
+// Personal and International Team model rosters. Discovery stays disabled because
+// the upstream list includes non-chat models.
 // 261020: 0813 is now listed on Global Personal/Team and CN Team, and the CN Personal
 // overview documents entitlement. Add it to the existing Personal curation without
 // claiming new Personal inference. Retired 261011: deepseek-v3.2 and bare v4-flash.
@@ -610,7 +610,7 @@ export const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
 };
 
 // 260721 Alibaba Token Plan International (ap-southeast-1 / Singapore, hardened 260721).
-// Team-curated multi-vendor lineup, not a region-specific entitlement difference.
+// International Team model roster; tier and region are independent.
 // Evidence: https://www.alibabacloud.com/help/en/model-studio/token-plan-overview
 //           https://qwencloud.com/pricing/token-plan (qwen3.8 metadata)
 // The Team Edition roster (Singapore), verified identical to the CN Team set on 260909.

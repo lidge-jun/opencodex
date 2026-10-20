@@ -754,6 +754,26 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
+**Alibaba Token Plan** provides Beijing Personal Edition and International Team Edition
+presets. Both regions offer both subscription tiers. The presets keep static chat-model
+lists because upstream discovery also includes non-chat models. Existing selections and
+explicit International endpoint overrides are preserved.
+
+Both presets include `deepseek-v4.1-flash-1017` with text/image input, text output,
+1,000,000 context and `low`/`high`/`max` reasoning (default `high`). Its 393,216 output
+budget follows the existing published-budget normalization, not a measured boundary;
+the lab lists 384,000. Strict schemas reject and `json_object` is unverified for this
+exact ID, so Chat requests omit `response_format`. This is best-effort text, not
+guaranteed JSON. The bare model's verified JSON downgrade and existing Responses
+pins are unchanged. Beijing also includes now-listed `deepseek-v4-pro-0813`;
+International omits retired `deepseek-v3.2` and bare `deepseek-v4-flash` but retains
+`deepseek-v4-flash-0731`. The canonical Beijing host is
+`https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1`; International uses the
+Qwen Cloud Token Plan host above. Historical saved hosts remain recognized.
+See the [1017 model card](https://www.qianwenai.com/models/deepseek-v4.1-flash-1017),
+[Chat reference](https://docs.qwencloud.com/api-reference/chat/openai-chat) and
+[Personal overview](https://help.aliyun.com/en/model-studio/token-plan-personal-overview).
+
 **OpenGateway** is an OpenAI-compatible gateway operated by Sionic AI at
 `https://apis.opengateway.ai/v1`. Its public catalog contains about 80 active models
 (as verified on 2026-10-02); the preset automatically refreshes the live model list from
@@ -1678,34 +1698,3 @@ An access-denied result does not by itself prove an expired login or an ineligib
 ## Large inline images on Chat providers
 
 Translated OpenAI-compatible Chat requests shrink inline images when their combined base64 data exceeds 3.5 MiB. Older images lose detail first. This is a best-effort image budget, so large text, schemas, or images that cannot be processed may still exceed an upstream request limit. Remote image URLs are not downloaded, and images that cannot be shrunk remain attached. Native Chat passthrough keeps its original image bytes.
-
-
-### Alibaba Token Plan dated catalogue (2026-10-20)
-
-The Beijing preset curates Personal chat models; the International preset curates Team
-chat models. Both regions offer both subscription tiers. Discovery remains disabled by
-default because the upstream list also includes non-chat models. Saved model selections
-and explicit International endpoint overrides are not rewritten by this catalogue refresh.
-
-Both presets include `deepseek-v4.1-flash-1017`: text and image input, text output,
-1,000,000 context, documented `low`/`high`/`max` efforts (default `high`). The 393,216
-output budget follows the existing plan normalization of the vendor's 393K/384K display;
-it is not a measured exact boundary and differs from the lab's 384,000 value.
-The existing structured-output opt-out omits `response_format` for this exact ID:
-strict schemas were rejected, and `json_object` is unverified. This is best-effort text,
-not guaranteed JSON. Validate any structured response in the client. The bare model's
-verified JSON downgrade is unchanged. Historical Beijing destinations retain this
-restriction even when the provider is saved under a custom name; operator opt-outs
-are combined with it, not replaced. A direct Responses success does not add a new
-Responses default pin or prove reasoning replay.
-
-`deepseek-v4-pro-0813` now joins the existing Personal curation based on current listing
-and documented entitlement. The International active catalogue removes retired
-`deepseek-v3.2` and bare `deepseek-v4-flash`; `deepseek-v4-flash-0731` remains available.
-The canonical Beijing endpoint is
-`https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1`; the International endpoint is
-`https://token-plan.maas.qwencloudapi.com/compatible-mode/v1`.
-
-Sources checked 2026-10-20: [model card](https://www.qianwenai.com/models/deepseek-v4.1-flash-1017),
-[Chat API reference](https://docs.qwencloud.com/api-reference/chat/openai-chat), and
-[Personal overview](https://help.aliyun.com/en/model-studio/token-plan-personal-overview).
