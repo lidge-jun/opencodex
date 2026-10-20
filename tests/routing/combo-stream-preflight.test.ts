@@ -116,7 +116,35 @@ describe("combo stream preflight", () => {
     }
   });
 
-  test("does not replay semantic incompletes that another provider cannot safely repair", async () => {
+  test("converts a zero-output incomplete without a stated reason into a retryable failure", async () => {
+    for (const response of [
+      { id: "r1", status: "incomplete" },
+      { id: "r1", status: "incomplete", incomplete_details: null },
+    ]) {
+      const result = await preflightComboStreamResponse(sse(
+        { type: "response.created", response: { id: "r1", status: "in_progress" } },
+        { type: "response.incomplete", response },
+      ), { model: "m1", provider: "a" });
+      expect(result.kind).toBe("failed");
+      expect(result.response.status).toBe(502);
+    }
+  });
+
+  for (const item of [
+    { type: "message", role: "assistant", content: [{ type: "output_text", text: "already answered" }] },
+    { type: "function_call", name: "lookup", call_id: "call-snapshot", arguments: "{}" },
+  ]) test(`does not replay a reasonless incomplete carrying terminal snapshot output (${item.type})`, async () => {
+    const source = sse({ type: "response.incomplete", response: {
+      id: "r1", status: "incomplete", output: [item],
+    } });
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  for (const reason of ["max_output_tokens", "content_filter", "future_semantic_reason", "", null])
+  test(`does not replay semantic or explicit unknown incomplete reasons (${JSON.stringify(reason)})`, async () => {
     const source = sse(
       { type: "response.created", response: { id: "r1", status: "in_progress" } },
       {
@@ -124,7 +152,7 @@ describe("combo stream preflight", () => {
         response: {
           id: "r1",
           status: "incomplete",
-          incomplete_details: { reason: "max_output_tokens" },
+          incomplete_details: { reason },
         },
       },
     );
@@ -134,7 +162,8 @@ describe("combo stream preflight", () => {
     expect(await result.response.text()).toBe(expected);
   });
 
-  test("does not replay transport incompletes after output commits the target", async () => {
+  for (const reason of ["adapter_eof", undefined])
+  test(`does not replay incompletes after output commits the target (${reason ?? "missing reason"})`, async () => {
     const source = sse(
       { type: "response.created", response: { id: "r1", status: "in_progress" } },
       { type: "response.output_text.delta", delta: "visible" },
@@ -143,7 +172,7 @@ describe("combo stream preflight", () => {
         response: {
           id: "r1",
           status: "incomplete",
-          incomplete_details: { reason: "adapter_eof" },
+          incomplete_details: { reason },
         },
       },
     );

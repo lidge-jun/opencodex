@@ -17,7 +17,7 @@ const REASONING = "I need to inspect files before answering.";
 const SCOPE: OcxReasoningReplayScopeRef = {
   clientThreadId: "thread-empty-delta",
   current: {
-    providerName: "opencode-free",
+    providerName: "opencode-zen",
     providerDestinationIdentity: "destination:provider",
     adapterName: "openai-chat",
     modelId: "deepseek-v4-flash-free",
@@ -42,7 +42,7 @@ async function consumeStreaming(events: AdapterEvent[]): Promise<void> {
   }
   const reader = bridgeToResponsesSSE(
     replay(),
-    "opencode-free/deepseek-v4-flash-free",
+    "opencode-zen/deepseek-v4-flash-free",
     undefined,
     undefined,
     undefined,
@@ -74,7 +74,7 @@ describe("reasoning replay empty-delta robustness", () => {
   test("batch: an empty thinking delta preserves reasoning for the following tool call", () => {
     buildResponseJSON(
       reasoningToolRound({ type: "thinking_delta", thinking: "" }),
-      "opencode-free/deepseek-v4-flash-free",
+      "opencode-zen/deepseek-v4-flash-free",
       { replayCacheScope: SCOPE },
     );
 
@@ -90,7 +90,7 @@ describe("reasoning replay empty-delta robustness", () => {
   test("non-empty thinking still consumes the pending raw-reasoning candidate", () => {
     buildResponseJSON(
       reasoningToolRound({ type: "thinking_delta", thinking: "A visible summary." }),
-      "opencode-free/deepseek-v4-flash-free",
+      "opencode-zen/deepseek-v4-flash-free",
       { replayCacheScope: SCOPE },
     );
 

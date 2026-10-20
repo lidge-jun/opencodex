@@ -340,7 +340,7 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 105 yerleşik önayar ile birlikte gelir: 85 anahtar tabanlı, 16
+opencodex 104 yerleşik önayar ile birlikte gelir: 84 anahtar tabanlı, 16
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
@@ -423,37 +423,13 @@ yeniler ve etkin Chat Completions modellerini (ve yalnızca Responses ile sunulu
 `ocx provider add opengateway` çalıştırın veya panelde **OpenGateway** seçin. Chat istekleri
 yapılandırılmış Bearer anahtarını kullanır; genel model listesi anahtarı doğrulamaz.
 
-**OpenCode Zen** (`opencode-zen`) ve anahtarsız **OpenCode Free** önayarı
-`https://opencode.ai/zen/v1` adresini paylaşır. Bu ağ geçidindeki ücretsiz
-modeller genellikle yaklaşık 15–20 istek/dakika civarında kısa pencereli bir
-patlama sınırına ulaşır (topluluk tarafından ölçülmüştür; OpenCode RPM
-yayınlamaz). Zen, `Retry-After` / `X-RateLimit-*` başlıkları olmadan genel hız
-sınırı 429 yanıtları döndürebilir. Bu, OpenCode'un tanıttığı anahtarsız masaüstü
-kotasından ayrıdır (`opencode-free` üzerinde 5 saatte yaklaşık 200 Big
-Pickle/ücretsiz model isteği). Zen böyle bir 429'da `Retry-After`'ı atladığında
-opencodex istemci hatasına sağlayıcı rehberliği ve sentetik bir `Retry-After`
-ekler; bir yukarı akış `Retry-After`'ı yine de önceliklidir. Aynı anahtarla
-bekle ve yeniden dene özelliği [`retryOn429`](/tr/reference/configuration/)
-aracılığıyla isteğe bağlı kalır.
+**OpenCode Zen** (`opencode-zen`), [opencode.ai/auth](https://opencode.ai/auth) üzerinden alınan API anahtarıyla `https://opencode.ai/zen/v1` kullanır. Ücretsiz modeller yaklaşık 15–20 istek/dakika kısa pencere sınırına takılabilir (topluluk ölçümü; OpenCode RPM yayımlamaz). Hız sınırı 429 yanıtında `Retry-After` yoksa opencodex açıklama ve sentetik `Retry-After` ekler; geçerli üst kaynak başlıkları önceliklidir. Aynı anahtarla yeniden deneme [`retryOn429`](/tr/reference/configuration/) ile isteğe bağlıdır.
 
 Standart `opencode-zen` sağlayıcısının API anahtarıyla kimlik doğrulanan resmi `https://opencode.ai/zen/v1` ve `https://opencode.ai/inference/v1` yollarında Gemini, varsayılan `googleMode: ai-studio` modunda Google'ın yerel API'sini otomatik kullanır. Zen model kimlikleri, `-tiered` eki olmayan Flash kimlikleri dahil korunur. Claude, `googleMode` değerinden bağımsız olarak Anthropic Messages kullanır. Kaydedilmiş yapılandırmalar yüklenirken yalnızca bu yerel modellerin uygun eski Chat/Responses geçersiz kılmaları ve uygun, yalnızca Responses'a özgü `image_generation` barındırılan araç tercihleri yok sayılır. Özel sağlayıcılar, anahtar kimlik doğrulaması kullanmayan yollar ve diğer tercihler değişmez.
 
-**Anahtarsız `opencode-free` katmanı şu anda üçüncü taraf istemcilere kapalıdır.** Zen,
-`x-opencode-session` başlığı olmadan gelen her isteği reddeder ve `MissingSessionID` hata
-tipiyle "OpenCode's free tier can only be used in OpenCode" mesajını döndürür. Kapıda
-yalnızca başlığın varlığı denetlenir; yani bir proxy uydurma bir değerle geçebilirdi,
-opencodex bunu yapmaz. Bir oturum kimliği ile sürüm taşıyan `opencode/<version>`
-User-Agent üretmek, kendini OpenCode istemcisi ilan etmek demektir ve OpenCode bu
-anahtarsız katman için üçüncü taraf entegrasyon sözleşmesi yayımlamamıştır; böyle elde
-edilen bir HTTP 200, izin değil atlatılmış bir kabul denetimidir. Bu yüzden opencodex
-kısıtlamayı aşmak yerine bildirir: `opencode-free` sağlayıcısına giden bir istek, yukarı
-akıştaki kapıyı açıklayan bir hata döndürür.
+**`opencode-free` desteği kaldırıldı**: OpenCode’un üst kaynak ücretsiz katman kapısı nedeniyle tüm modeller artık `403 permission_denied` döndürüyor ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Mevcut yapılandırma yüklenirken ilgili kayıtlar ve bağımlı model referansları bellekte devre dışı bırakılır, işlem başına bir kez uyarılır ve dosya değiştirilmez. Varsayılan sağlayıcı buysa standart OpenAI OAuth yolu varsayılan olur. `opencode-go`, anahtarlı `opencode-zen` veya başka bir sağlayıcı kullanın. [OpenCode Zen koşulları](https://opencode.ai/docs/zen/).
 
-Aynı modellere giden desteklenen yol, [opencode.ai/auth](https://opencode.ai/auth)
-üzerinden alınan bir OpenCode Zen API anahtarıyla kullanılan anahtarlı
-**`opencode-zen`** sağlayıcısıdır. OpenCode ileride anahtarsız katman için desteklenen
-bir üçüncü taraf yolu yayımlarsa opencodex bunu izleyebilir; o zamana kadar önayar
-kısıtlamayı belgeler. Yukarı akış koşulları: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
+Geçerli Claude Desktop atamaları ve varsayılanları korunur. Kaynak model izin listesi boşalan kurallar devre dışı bırakılır; enjeksiyon modeli kaldırılırsa yerel alt ajan eşitlemesi de kapatılır. Sonraki yapılandırma kayıtları budanan referansları geri getirmez ve geçerli eşzamanlı düzenlemeleri korur.
 
 Çoğu, taşıyıcı anahtarla `openai-chat` adaptörünü kullanır; **Xiaomi MiMo** (`xiaomi`)
 gibi Anthropic uyumlu önayarlar `anthropic` adaptörünü (`x-api-key`) kullanır.

@@ -7,6 +7,7 @@ import {
   appendRetentionNotice,
   applyReasoningRetention,
   collectReasoningTexts,
+  ReasoningArchiveError,
 } from "../../src/responses/reasoning-retention";
 import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 import { estimateTokens } from "../../src/lib/token-estimate";
@@ -35,7 +36,11 @@ describe("collectReasoningTexts", () => {
 describe("applyReasoningRetention", () => {
   let dir = "";
   afterEach(() => {
-    if (dir) rmSync(dir, { recursive: true, force: true });
+    if (dir) {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir + ".lock", { force: true });
+      for (const suffix of ["-journal", "-wal", "-shm"]) rmSync(dir + ".lock" + suffix, { force: true });
+    }
     dir = "";
   });
 
@@ -132,7 +137,12 @@ describe("applyReasoningRetention", () => {
       throw new Error("fixture ENOSPC");
     });
     try {
-      expect(() => applyReasoningRetention([reasoningItem("full reasoning")], { archiveDir, maxTokens: 1 })).toThrow("fixture ENOSPC");
+      let failure: unknown;
+      try { applyReasoningRetention([reasoningItem("full reasoning")], { archiveDir, maxTokens: 1 }); }
+      catch (error) { failure = error; }
+      expect(failure).toBeInstanceOf(ReasoningArchiveError);
+      expect((failure as Error).cause).toBeInstanceOf(Error);
+      expect(((failure as Error).cause as Error).message).toBe("fixture ENOSPC");
       expect(readdirSync(archiveDir)).toEqual([]);
     } finally { write.mockRestore(); }
   });

@@ -24,6 +24,11 @@ unchanged.
   lookup is provider-scoped (`loginFlowKeys` matches `(state.provider ?? key) === provider`), so
   status, cancellation, clearing and the admission cap never see another provider's flows. A
   cancel naming a `flowId` that belongs to a different provider is refused.
+- **Failed-flow dismissal.** The public cancellation endpoint opts into dismissing a settled failed attempt after its
+  controller is gone. It drops only the selected provider-owned flow and its paste slot, so status
+  returns to the remaining flow or idle. Active-account credentials and successful terminal
+  outcomes remain untouched; cancelling a pending attempt still records its cancelled outcome.
+  The internal default still reports only live cancellation, preserving Codex flow ownership.
 - **Expiry and limits.** A code flow's paste window is `CODE_LOGIN_TTL_MS` (10 minutes); an expired
   flow is reaped as `no_pending_login` the next time that provider starts a login. At most
   `MAX_LOGIN_FLOWS_PER_PROVIDER` (64) rows per provider are kept; settled rows are evicted first
@@ -53,3 +58,5 @@ unchanged.
 
 Tests: `tests/oauth/oauth-code-login.test.ts` (flow keying, cross-provider isolation, error
 classification, paste contract) and the `--headless` cases in `tests/cli/cli-provider.test.ts`.
+
+> Decision record: [ADR-7378](../decisions/ADR-7378-oauth-failed-flow-dismissal.md)

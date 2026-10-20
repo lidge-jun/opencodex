@@ -156,6 +156,8 @@ export function anthropicUsage(usage: unknown, webSearchRequests = 0): Rec {
   const details = isRec(u.input_tokens_details) ? u.input_tokens_details : {};
   const cached = typeof details.cached_tokens === "number" ? details.cached_tokens : 0;
   const cacheWrite = typeof details.cache_write_tokens === "number" ? details.cache_write_tokens : 0;
+  const cacheWrite1h = typeof details.cache_write_1h_tokens === "number"
+    ? Math.max(0, Math.min(details.cache_write_1h_tokens, cacheWrite)) : undefined;
   const input = typeof u.input_tokens === "number" ? u.input_tokens : 0;
   const output = typeof u.output_tokens === "number" ? u.output_tokens : 0;
   return {
@@ -163,6 +165,9 @@ export function anthropicUsage(usage: unknown, webSearchRequests = 0): Rec {
     output_tokens: output,
     cache_read_input_tokens: cached,
     cache_creation_input_tokens: cacheWrite,
+    ...(cacheWrite1h !== undefined
+      ? { cache_creation: { ephemeral_5m_input_tokens: cacheWrite - cacheWrite1h, ephemeral_1h_input_tokens: cacheWrite1h } }
+      : {}),
     // Only successful searches are billed/counted (Anthropic contract; Claude Code cost accounting).
     ...(webSearchRequests > 0 ? { server_tool_use: { web_search_requests: webSearchRequests } } : {}),
   };

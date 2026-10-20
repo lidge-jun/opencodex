@@ -119,7 +119,7 @@ describe("translated Claude lane carries typed web tools to Anthropic", () => {
     expect(tools[1]).toMatchObject(WEB_SEARCH);
     // The caller's own breakpoint is dropped; the adapter's tools breakpoint lands on the last tool.
     expect(tools[2]).toMatchObject({ type: "web_fetch_20250910", name: "web_fetch", max_uses: 2 });
-    expect(tools[2]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(tools[2]!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
   });
 
   test("an Anthropic-compatible third party does not receive them", async () => {

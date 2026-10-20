@@ -238,6 +238,11 @@ export interface ServiceInstallPreparationDeps extends RuntimePreflightDeps {
   supervisionLatch?: SupervisionLatch;
   diagnose?: () => ServiceDiagnostic;
   managerOps?: (backend: ServiceBackend) => ServiceInstallCleanupOps | null;
+  /**
+   * Task Scheduler only: ends surviving launcher/wrapper processes of THIS
+   * installation. Scoped to canonical script/launcher tokens, never a bare PID.
+   */
+  killServiceWrappers?: () => void;
   stopTrackedProxy?: () => Promise<unknown>;
   platform?: NodeJS.Platform;
 }
@@ -278,6 +283,18 @@ export async function prepareServiceInstall(
     const manager = resolveOps(backend);
     if (!manager) throw new Error(`Background service manager is unavailable for ${backend}.`);
     if (manager.status() !== null) manager.stop();
+  }
+  if (platform === "win32") {
+    // `schtasks /end` ends the task instance but leaves the cmd `:loop` wrapper
+    // alive to respawn the proxy mid-install — the same survivor
+    // `ocx stop` kills via killWindowsServiceWrapperProcesses. Run it
+    // after every manager has been asked to stop and before the tracked-proxy
+    // kill so a child respawned in that gap is still caught below. It also runs
+    // when no manager stop happened: a registration deleted mid-uninstall can
+    // leave the detached wrapper looping. A manager stop that refused propagates
+    // above before this runs, so the respawner of a still-running service is
+    // never killed.
+    (deps.killServiceWrappers ?? killWindowsServiceWrapperProcesses)();
   }
   await (deps.stopTrackedProxy ?? stopTrackedProxyIfRunning)();
 }

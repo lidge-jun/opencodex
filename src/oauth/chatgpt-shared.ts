@@ -46,7 +46,16 @@ export function extractEmail(idToken?: string, accessToken?: string): string | u
     if (!token) continue;
     const payload = decodeJwtPayload(token);
     if (!payload) continue;
-    if (typeof payload.email === "string") return payload.email.toLowerCase();
+    if (typeof payload.email === "string" && payload.email.trim()) {
+      return payload.email.trim().toLowerCase();
+    }
+    const profile = payload["https://api.openai.com/profile"];
+    if (profile && typeof profile === "object" && !Array.isArray(profile)) {
+      const email = (profile as Record<string, unknown>).email;
+      if (typeof email === "string" && email.trim()) {
+        return email.trim().toLowerCase();
+      }
+    }
   }
   return undefined;
 }

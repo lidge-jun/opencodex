@@ -27,8 +27,8 @@ const VIDEO_UNSUPPORTED_MARKER = "[video omitted: the translated Chat route has 
 /**
  * Chat-completions image_url parts for images carried inside a tool result (issue #888). role:"tool"
  * content is text-only on every chat provider, so these ride in a follow-up user message instead of
- * being flattened to the "[image]" marker the model can't actually see. Data URLs and remote https
- * URLs are both valid in image_url.url, unlike Gemini inline_data which needs base64.
+ * being flattened to the "[image]" marker the model can't actually see. The same follow-up carries
+ * inline audio as input_audio, which is also user-content-only on this wire.
  */
 export function toolResultTextForWire(content: string | OcxContentPart[], annotateEmpty = false): string {
   // An empty content array is a present-but-empty result; `contentPartsToText` would
@@ -61,6 +61,14 @@ export function toolResultImageChatParts(content: string | OcxContentPart[]): un
     parts.push({ type: "image_url", image_url: { url: p.imageUrl, ...(p.detail ? { detail: p.detail } : {}) } });
   }
   return parts;
+}
+
+/** Chat input_audio parts for audio carried inside a tool result. */
+export function toolResultAudioChatParts(content: string | OcxContentPart[]): unknown[] {
+  if (typeof content === "string") return [];
+  return content
+    .filter((p): p is Extract<OcxContentPart, { type: "audio" }> => p.type === "audio")
+    .map(p => ({ type: "input_audio", input_audio: { data: p.data, format: p.format } }));
 }
 
 /**
@@ -98,6 +106,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
   let pendingToolCalls: PendingToolCall[] = [];
   let deferredBarrierMessages: unknown[] = [];
   let pendingToolResultImageParts: unknown[] = [];
+  let pendingToolResultAudioParts: unknown[] = [];
   let mintedIdSeq = 0;
   const seenWireCallIds = new Set<string>();
 
@@ -128,6 +137,18 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
     pendingToolResultImageParts = [];
   };
 
+  const flushToolResultAudio = (): void => {
+    if (pendingToolResultAudioParts.length === 0) return;
+    out.push({
+      role: "user",
+      content: [
+        { type: "text", text: "[ocx] audio output from the preceding tool result(s):" },
+        ...pendingToolResultAudioParts,
+      ],
+    });
+    pendingToolResultAudioParts = [];
+  };
+
   const flushPendingToolCalls = (): void => {
     if (pendingToolCalls.length === 0) return;
     for (const call of pendingToolCalls) {
@@ -139,6 +160,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
     }
     pendingToolCalls = [];
     flushToolResultImages();
+    flushToolResultAudio();
     releaseDeferredBarriers();
   };
 
@@ -185,9 +207,10 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
       case "developer": {
         const parts = typeof msg.content === "string" ? undefined : msg.content as OcxContentPart[];
         const hasImages = parts?.some(p => p.type === "image") ?? false;
+        const hasAudio = parts?.some(p => p.type === "audio") ?? false;
         // A document has a structured counterpart on this wire, so it needs the parts array for
         // the same reason an image does: flattening it to a string would drop the bytes.
-        const hasStructured = hasImages || (parts?.some(p => p.type === "document") ?? false);
+        const hasStructured = hasImages || hasAudio || (parts?.some(p => p.type === "document") ?? false);
         let chatMsg: Record<string, unknown>;
         if (msg.role === "developer" && !hasStructured) {
           const text = typeof msg.content === "string"
@@ -219,6 +242,9 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             if (p.type === "image") {
               return { type: "image_url", image_url: { url: p.imageUrl, ...(p.detail ? { detail: p.detail } : {}) } };
             }
+            if (p.type === "audio") {
+              return { type: "input_audio", input_audio: { data: p.data, format: p.format } };
+            }
             // Chat Completions carries an attached document as a file part with inline bytes,
             // the direct counterpart of the Anthropic document block the caller sent.
             if (p.type === "document") {
@@ -240,7 +266,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           // this wire. One carrying only a document has no such precedent, and demoting it would
           // undo the role this adapter just finished preserving.
           chatMsg = {
-            role: msg.role === "developer" && !hasImages ? developerWireRole : "user",
+            role: msg.role === "developer" && !hasImages && !hasAudio ? developerWireRole : "user",
             content: chatParts,
           };
         }
@@ -330,9 +356,11 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             content: toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
           });
           pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
+          pendingToolResultAudioParts.push(...toolResultAudioChatParts(msg.content));
           pendingToolCalls.splice(matchIdx, 1);
           if (pendingToolCalls.length === 0) {
             flushToolResultImages();
+            flushToolResultAudio();
             releaseDeferredBarriers();
           }
         } else {
@@ -380,7 +408,9 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             content: toolResultTextForWire(msg.content, provider.annotateEmptyToolOutputs === true),
           });
           pendingToolResultImageParts.push(...toolResultImageChatParts(msg.content));
+          pendingToolResultAudioParts.push(...toolResultAudioChatParts(msg.content));
           flushToolResultImages();
+          flushToolResultAudio();
         }
         break;
       }

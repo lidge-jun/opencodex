@@ -75,12 +75,13 @@ these fixtures do not attest live upstream availability.
 ## Google thought-text visibility boundary
 
 Google-family parts with `thought: true` stay separate from assistant output. After a CCA
-Gemini request is built, the shared streaming/buffered classifier emits `thinking_delta` for
-these provider-authored summaries. Other Google wires, non-Gemini CCA models and uninitialized
-adapters retain `reasoning_raw_delta`. Model provenance is refreshed on every build.
+Gemini request or a `showThinkingSummary`-opted-in Gemini request is built, the shared
+streaming/buffered classifier emits `thinking_delta` for these provider-authored summaries.
+Other Google wires without the opt-in, non-Gemini models and uninitialized adapters retain
+`reasoning_raw_delta`. Model provenance is refreshed on every build.
 `showThinkingSummary` defaults on only for the Antigravity preset; explicit provider false and
-explicit wire summary none win. Eligible CCA Gemini requests use `includeThoughts: true` only
-when provider opt-in and per-request display both allow it. Thought signatures remain attached
+explicit wire summary none win. Eligible CCA, Vertex and direct Gemini requests use
+`includeThoughts: true` only when provider opt-in and per-request display both allow it. Thought signatures remain attached
 to their tool calls independently; they never become Anthropic thinking signatures.
 
 The visibility marker is the boolean `thought: true`, not the presence of a `thoughtSignature`
@@ -115,6 +116,10 @@ Vertex prefers Codex's opaque `prompt_cache_key` for session identity and falls 
 first-user-message derivation for clients that omit it; only the fixed hash is retained.
 Both streaming and non-streaming responses feed the store; request compilation happens before replay
 so matching uses the provider-visible tool name.
+A first `functionCall` that still has no real signature after replay receives the Gemini-only
+`skip_thought_signature_validator` sentinel through `applyAntigravityThoughtSignatureFallback`, on
+Antigravity, Vertex and AI Studio alike. AI Studio gained it for combo hops that hand Gemini a call
+another model issued (#7298); non-Gemini model ids never receive it.
 
 `src/adapters/openai-responses/passthrough.ts` removes item-level `extra_content` through
 `stripProviderInputItemMetadata` in `src/adapters/openai-responses/request-strips.ts` only for
@@ -132,6 +137,13 @@ Google-family requests serialize a model tool-call turn and its results as one a
 `model -> user` pair. The user turn contains exactly one `functionResponse` for every representable
 call in original call order. Missing results use an explicit unknown-history marker; duplicate,
 mismatched, and standalone results become marked text instead of unpaired function responses.
+For Cloud Code Assist routed `claude-*` models, the complete matched `functionResponse` batch
+precedes its sibling images in the same user turn; images keep call order, MIME types and bytes.
+Interleaving an image before the remaining responses makes CCA Claude reject the batch as missing
+later tool results. Single-call and text-only batches keep their existing shape. CCA Gemini,
+non-Claude CCA models, AI Studio and non-Argon Vertex retain interleaved image siblings.
+`tests/adapters/google/google-tool-result-adjacency.test.ts` checks the final compiled request
+for three parallel calls, reversed results, distinct images and route isolation.
 For Vertex `gemini-4-argon`, matched results carry representable data-URL images inside
 `functionResponse.parts`, preserving each image's call ownership. Sibling images on that route can
 produce a misleading "Requests ending with a model turn are not supported" error even when the
@@ -172,7 +184,8 @@ tool call and turns with Responses `phase: "final_answer"` are replayed whole.
 whitespace, a script's own sentence terminator (CJK, Devanagari, Arabic, Armenian, Ethiopic,
 Myanmar), or a line break, with trailing closing quotes,
 brackets and Markdown emphasis kept. Boundaries that only close a leading list marker or
-`e.g.`/`i.e.`/`etc.`/`vs.` are skipped. It never matches wording.
+`e.g.`/`i.e.`/`etc.`/`vs.` are skipped. Boundary checks use a fixed-size suffix and scan
+intervening whitespace intervals once, keeping the split linear in text length. It never matches wording.
 
 Final answers (assistant turns without tool calls), non-Gemini models such as Claude on
 Antigravity, tool calls, their signatures and client-visible output are unchanged. A leak in the

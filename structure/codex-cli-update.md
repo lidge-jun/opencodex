@@ -11,7 +11,8 @@ The read-only CLI update plan binds npm executable selection to the inspected la
 Registry integrity requires a canonical base64 SHA-512 digest of exactly 64 bytes; malformed or truncated tokens refuse the target.
 Selection observation uses the runtime resolver with provenance's bounded no-follow, nonblocking state reader and local executable-path policy. Windows returns before invoking the resolver; its deferred inspection performs no candidate or configuration I/O.
 Its child environment drops npm configuration overrides, named Node startup/output controls,
-and the `LD_*`/`DYLD_*` loader families; proxy settings and `NODE_EXTRA_CA_CERTS` remain supported.
+the `LD_*`/`DYLD_*` loader families and the OpenSSL startup configuration and
+provider/engine search variables; proxy settings and `NODE_EXTRA_CA_CERTS` remain supported.
 Distinct npm config files, cache and logs stay under the owned temporary root with best-effort
 cleanup; a cleanup error does not replace the computed plan/refusal. The POSIX update
 scan includes all readable users by default, retaining an explicitly injected UID scope.

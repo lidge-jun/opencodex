@@ -134,6 +134,7 @@ describe("openai-chat adapter wire model normalization", () => {
     const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter(provider));
     const req = await adapter.buildRequest(parseRequest({ model: "glm-5.2[1m]", input: "hi" }));
     expect((JSON.parse(req.body as string) as { model?: unknown }).model).toBe("glm-5.2");
+    expect(req.outboundModelId).toBe("glm-5.2");
     expect(req.url).toBe("https://api.z.ai/api/v1/responses");
   });
 });

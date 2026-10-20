@@ -22,6 +22,11 @@ signature recovery. Empty-completion retries in `src/server/responses/adapter-co
 rebuild through their existing pacing/send owner. Ordinary continuations after output cannot
 recover signatures. Anthropic has no `runTurn` recovery.
 
+Combo signature repairs share the [physical-send allowance](responses-spend.md#prepaid-initial-sends)
+with initial sends and later targets, including generic providers without an opt-in retry policy.
+The HTTP and initial-stream repair paths settle each physical send once; a pacing refusal leaves
+the unsent repair uncharged. Recovery preserves the original thinking classification and stripping.
+
 Only a delivery-validated completed response with actual text/tool output and an observed
 successful terminal can memoize the rejection. Errors, incomplete/empty responses, missing
 terminals, cancellation and changed serving identity cannot memoize it. The existing thread and

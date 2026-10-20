@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyKiroRefusal } from "../../../src/adapters/kiro-refusal";
+import { classifyKiroRefusal, isKiroAccountProfileRefusal } from "../../../src/adapters/kiro-refusal";
 import { kiroEvidenceIdentity } from "../../../src/providers/kiro-account-state-disk";
 import type { ProviderAccount } from "../../../src/oauth/types";
 
@@ -21,6 +21,46 @@ describe("Kiro refusal classification", () => {
       expect(classified(403, { message: `Your account was ${message} pending review` }).kind).toBe("suspended");
       expect(classified(400, { message }).kind).toBe("other");
     }
+  });
+
+  test("kiro refusal: a 400 the vendor's validator calls improperly formed convicts the account", () => {
+    const improper = "ValidationException: Improperly formed request";
+    for (const body of [
+      { message: improper },
+      { reason: "ValidationException", message: "Improperly formed request." },
+    ]) expect(classified(400, body).kind).toBe("profile");
+    expect(classified(429, { message: improper }).kind).toBe("rate");
+    expect(classified(403, { message: improper }).kind).toBe("other");
+    // Both tokens are required, so a bad payload and a caller echoing one token stay terminal.
+    expect(classified(400, { message: "Improperly formed request" }).kind).toBe("other");
+    expect(classified(400, { message: "ValidationException: model not found" }).kind).toBe("other");
+    expect(classified(400, { message: improper, padding: "x".repeat(70_000) }).kind).toBe("other");
+  });
+
+  test("kiro refusal: the combo layer recognises the same shape through a wrapped frame", () => {
+    const improper = JSON.stringify({ message: "ValidationException: Improperly formed request" });
+    expect(isKiroAccountProfileRefusal(400, improper)).toBe(true);
+    expect(isKiroAccountProfileRefusal(400, `Provider error 400: ${improper}`)).toBe(true);
+    expect(isKiroAccountProfileRefusal(429, improper)).toBe(false);
+    expect(isKiroAccountProfileRefusal(400, "Improperly formed request")).toBe(false);
+    // The adapter's normalized envelope is what the combo layer actually receives.
+    const envelope = JSON.stringify({ error: { message: "Kiro invalid request: ValidationException: Improperly formed request",
+      type: "invalid_request_error", code: "invalid_request_error" } });
+    expect(isKiroAccountProfileRefusal(400, envelope)).toBe(true);
+    expect(isKiroAccountProfileRefusal(400, JSON.stringify({ error: { message: "Kiro invalid request: model not found" } }))).toBe(false);
+    expect(isKiroAccountProfileRefusal(400, JSON.stringify({ error: { metadata: "ValidationException", message: "Improperly formed request" } }))).toBe(false);
+    // The adapter's normalized prose, bare or framed; the same words without its prefix do not count.
+    const prose = "Kiro invalid request: ValidationException: Improperly formed request";
+    expect(isKiroAccountProfileRefusal(400, prose)).toBe(true);
+    expect(isKiroAccountProfileRefusal(400, `Provider error 400: ${prose}`)).toBe(true);
+    expect(isKiroAccountProfileRefusal(400, "Kiro invalid request: model not found")).toBe(false);
+    // Split-field case: both tokens present, but not in the fields the account layer reads.
+    const split = JSON.stringify({ metadata: "ValidationException", message: "Improperly formed request" });
+    expect(classified(400, JSON.parse(split)).kind).toBe("other");
+    expect(isKiroAccountProfileRefusal(400, split)).toBe(false);
+    expect(isKiroAccountProfileRefusal(400, `Provider error 400: ${split}`)).toBe(false);
+    // Unparseable prose that merely contains both tokens is not the vendor's body.
+    expect(isKiroAccountProfileRefusal(400, "upstream said ValidationException: Improperly formed request")).toBe(false);
   });
 
   test("kiro refusal: unknown, nested, malformed and oversized shapes never quarantine", () => {

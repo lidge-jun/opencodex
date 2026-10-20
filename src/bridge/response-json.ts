@@ -42,7 +42,7 @@ import {
   type TranslatorBudget,
   type TranslatorBufferKind,
 } from "../lib/translator-budget";
-import { adapterFailureFromEvent, emptyChunks, joinChunks, responsesUsage, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
+import { adapterFailureFromEvent, emptyChunks, joinChunks, responsesUsage, toolCallArgumentsUsable, uuid, webSearchAction, webSearchCellItemId } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
 import { bridgeToResponsesSSE } from "./sse";
 
@@ -546,7 +546,7 @@ function buildResponseJSONWithBudget(
         flushToolCall();
         const safeSources = safeWebSearchSources(e.sources);
         pushOutput({
-          type: "web_search_call", id: `ws_${uuid()}`, status: e.status ?? "completed",
+          type: "web_search_call", id: webSearchCellItemId(e.itemId), status: e.status ?? "completed",
           action: webSearchAction(e.queries, e.anthropic),
           ...(safeSources.length > 0 ? { sources: safeSources } : {}),
           ...(e.anthropic ? { anthropic_blocks: e.anthropic } : {}),

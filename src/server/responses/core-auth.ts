@@ -2,6 +2,7 @@ import type { OcxProviderConfig, OcxConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { CodexAuthContext } from "../../codex/auth-context";
 import type { RouteResult } from "../../router";
+import { routeConcreteModel } from "../../router";
 import type { HandleResponsesOptions } from "./core-options";
 import {
   hasForwardableCodexBearer,
@@ -24,6 +25,7 @@ import {
   CodexAuthContextError,
   applyCodexAuthContextToProvider,
   stripCodexRuntimeProviderFields,
+  mainAccountHardLockCallerProof,
 } from "../../codex/auth-context";
 import { codexAccountSelectionForTurn, tryClaimNativeMainProfileForTurn } from "../lifecycle";
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
@@ -589,4 +591,22 @@ export async function refreshNativeMainForwardAuth(args: {
       now: Date.now(), accountSelector: route.codexAccountNamespace,
     }) ?? nativeMainRefreshFailureResponse(error) };
   }
+}
+
+/** Inspect the original credential domain, before fallback changes the route or drops headers. */
+export function mainHardLockFallbackCallerCheck(
+  req: Request, config: OcxConfig, options: HandleResponsesOptions,
+): (sourceModel: string) => Promise<(() => boolean) | null> {
+  return async sourceModel => {
+    let sourceRoute: ReturnType<typeof routeConcreteModel>;
+    try { sourceRoute = routeConcreteModel(config, sourceModel); }
+    // This preview cannot replace the normal routing phase's existing error response.
+    catch { return null; }
+    const headers = codexRouteCredentialDomainHeaders(req, sourceRoute, options, false, config);
+    const { substituteMainCredential } = codexRouteCredentialOwnership(headers, config, sourceRoute, options);
+    return mainAccountHardLockCallerProof(headers, options.codexAuthPolicy ?? config, {
+      substituteMainCredentialForDirect: substituteMainCredential,
+      signal: options.abortSignal ?? req.signal,
+    });
+  };
 }

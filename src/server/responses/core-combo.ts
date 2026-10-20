@@ -45,6 +45,7 @@ import {
 } from "../../combos";
 import { formatErrorResponse } from "../../bridge";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
+import { redactSecretString, sanitizeLogMetadataString } from "../../lib/redact";
 import {
   expandPreviousResponseInput,
   previousResponseReplayFailure,
@@ -98,6 +99,7 @@ import type { CodexAuthContext } from "../../codex/auth-context";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { beginRequestAttempt, sealRequestAttemptIdentity, finishRequestAttempt } from "../request-log";
 import { rememberComboForLane } from "./combo-session-recall";
+import { COMBO_TOOL_LOOP_PIN_REASON, toolLoopPinnedPick } from "./combo-tool-loop-pin";
 import { runTurnAdapterSseResponses } from "./core-lifetime";
 import { normalizePersistedJevDecision } from "../../usage/jev-stats";
 import {
@@ -589,7 +591,19 @@ export async function executeComboResponses(
     waitForCooldownMs: combo.waitForCooldownMs,
     abortSignal: options.abortSignal,
   });
-  let pick = await pickWithWait({
+  // An in-flight tool loop stays on the target that issued its calls while that target is still
+  // selectable (#7298). Override routes never record a lane target, so they never pin either.
+  const toolLoopPin = options.compactionRoutingOverride || options.mainHardLockFallbackOverride
+    ? undefined
+    : toolLoopPinnedPick({
+      config,
+      comboId,
+      lane: sessionLaneIdFromRequest(req.headers),
+      body,
+      eligible: target => (meteredAllowed || !target.metered) && targetEligible(target),
+      now: initialNow,
+    });
+  let pick = toolLoopPin ?? await pickWithWait({
     eligible: targetEligible,
     now: initialNow,
   });
@@ -625,7 +639,7 @@ export async function executeComboResponses(
       : comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, targetEligible));
   }
   let jevDecision: JevDecision | undefined;
-  if (combo.strategy === "jev") {
+  if (combo.strategy === "jev" && !toolLoopPin) {
     const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now());
     const first = choices[0];
     if (!first) {
@@ -715,8 +729,11 @@ export async function executeComboResponses(
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.
   const decision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
-  logCtx.routeDecision = options.memoryModelPhase
-    ? { ...decision, selected: { ...decision.selected, reason: memoryModelRouteReason(options.memoryModelPhase) } }
+  const selectedReason = options.memoryModelPhase
+    ? memoryModelRouteReason(options.memoryModelPhase)
+    : toolLoopPin ? COMBO_TOOL_LOOP_PIN_REASON : undefined;
+  logCtx.routeDecision = selectedReason
+    ? { ...decision, selected: { ...decision.selected, reason: selectedReason } }
     : decision;
 
   const originalReasoning = body && typeof body === "object" && !Array.isArray(body)
@@ -1148,6 +1165,9 @@ export async function executeComboResponses(
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
         codexModelRefusal: failure.codexModelRefusal,
+        // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
+        // model through another wire via `modelAdapters`, and an unresolved leg grants no hop.
+        failedAdapter: childLog.providerAdapter,
       });
     const wantsStream = (rawBody as { stream?: unknown } | null)?.stream === true;
     // Local byte admission has its own diagnostic; do not relabel it as an upstream refusal.
@@ -1195,8 +1215,15 @@ export async function executeComboResponses(
       }
       return lastFailure;
     }
+    // A bare status made a revoked credential read as a provider outage. Log only the parsed
+    // code and message, never the raw envelope, as one redacted, bounded line.
+    const failureReason = sanitizeLogMetadataString(
+      redactSecretString([failure.upstreamCode, failure.upstreamMessage].filter(Boolean).join(": ")).replace(/\s+/g, " "),
+      200,
+    );
     console.warn(
-      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status} after ${Date.now() - started}ms`,
+      `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${failure.response.status}`
+        + ` after ${Date.now() - started}ms${failureReason ? `: ${failureReason}` : ""}`,
     );
     const failureNow = Date.now();
     const attemptedTargets = pick.attempted;

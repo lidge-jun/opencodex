@@ -39,6 +39,7 @@ import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admi
 import { noteKiroMonthlyRefusal, noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { anthropicPoolCooldownResponse, readDisplaySafeErrorText } from "./core-errors";
+import { sidecarContextOverflowResponse } from "./context-overflow";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   anthropicRoutingFor,
@@ -56,6 +57,7 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
 import { createSidecarSendBudget } from "./sidecar-send-budget";
+import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesSidecars(
@@ -216,6 +218,8 @@ export async function executeResponsesSidecars(
     })
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
+  // Replayed search pairs call the synthetic web_search tool only the sidecar declares (#7269).
+  if (!wsPlan) stripReplayedSearchPairs(parsed);
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !transportState.adapter.runTurn;
   let sidecarOutputStarted = false;
@@ -548,7 +552,7 @@ export async function executeResponsesSidecars(
       options.codexWsRuntimeIdentity,
       { providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(transportState.adapter) },
     );
-    const imgResponse = await runWithImageBridge({
+    const imgLoopResponse = await runWithImageBridge({
       parsed, adapter: transportState.adapter,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
@@ -619,8 +623,12 @@ export async function executeResponsesSidecars(
         notifyResponseComplete(response);
       },
     });
-    const imgScopeRefusal = sidecarScopeRefusal(imgResponse);
+    const imgScopeRefusal = sidecarScopeRefusal(imgLoopResponse);
     if (imgScopeRefusal) return imgScopeRefusal;
+    // A provider overflow on the first iteration answers as the main path's context failure (#7316).
+    const imgResponse = options.comboAttempt ? imgLoopResponse : sidecarContextOverflowResponse(imgLoopResponse, {
+      stream: parsed.stream, modelId: parsed._responseModelId ?? parsed.modelId, translatorBudget,
+    });
     if (imgResponse.body) {
       const imgTurnAc = new AbortController();
       imgTurnAc.signal.addEventListener("abort", cancelResponseCompletion, { once: true });
@@ -732,7 +740,12 @@ export async function executeResponsesSidecars(
       ? anthropicRoutingFor(anthropicInstance).anthropicPoolUsageLimitAfterRefusal(Date.now(), transportState.anthropicRouteDecision, route.modelId)
       : null;
     if (poolUsageLimit) void loopResponse.body?.cancel().catch(() => {});
-    const wsResponse = poolUsageLimit ? anthropicPoolCooldownResponse(poolUsageLimit, { logCtx }) : loopResponse;
+    // A provider overflow on the first iteration answers as the main path's context failure (#7316).
+    const wsResponse = poolUsageLimit ? anthropicPoolCooldownResponse(poolUsageLimit, { logCtx })
+      : options.comboAttempt ? loopResponse
+        : sidecarContextOverflowResponse(loopResponse, {
+          stream: parsed.stream, modelId: parsed._responseModelId ?? parsed.modelId, translatorBudget,
+        });
     // Register the sidecar stream as an active turn so drainAndShutdown waits for (or aborts)
     // in-flight web-search turns instead of skipping them during graceful shutdown.
     if (wsResponse.body) {

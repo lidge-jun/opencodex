@@ -512,6 +512,8 @@ also return an explicit error; their call/result pairing is not implemented by t
 Modern `tool` images continue through the existing following-user carrier. These errors state
 an OpenCodex conversion limit, not a provider capability claim. Final Responses-to-adapter
 admission follows the [registry contract](../adapters/registry.md#untranslated-input-media).
+The opposite Responses-to-Chat direction supports inline WAV/MP3 audio under the same
+contract; this Chat-to-Responses projection still has no lossless audio carrier.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
@@ -542,6 +544,14 @@ Explicit preserve lists (including `[]`) remain authoritative, and an explicit p
 can disable fabricated placeholders while allowing original cached reasoning.
 For tool-enabled DeepSeek requests the configured placeholder also repairs earlier assistant
 answers without tool calls. Those turns have no call-id replay entry; supplied reasoning wins.
+Before copying replay into the request, native passthrough measures the exact escaped-JSON net
+change and checks the final request size (`baseBytes + serializedBytes`) against the fixed
+`maxSerializedBytes` cap. For a changed replay, it then reserves that full size as transient
+`request_copies` against the translator budget remaining after other retained copies, before
+applying replay and serializing the body. The transient reservation is released in `finally`.
+Exceeding either limit returns the standard 413 `translation_buffer_limit` response; history is
+never silently truncated. Key rotation and retry rebuild and charge the request after releasing
+the previous body, preserving the same scope and normal replay behavior within budget.
 
 `src/server/chat-native-reasoning.ts` records upstream JSON and fragmented SSE reasoning under
 all parallel call ids, separately for each choice. Replay requires a sanitized `thread-id`,

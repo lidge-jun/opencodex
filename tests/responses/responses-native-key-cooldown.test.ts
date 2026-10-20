@@ -225,3 +225,11 @@ test("a synthetic replay refusal retains the preceding genuine key rejection", a
   expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThan(Date.now());
   unchanged(config);
 });
+test("native Responses rotates a non-distributed key pool on 429 before output", async () => {
+  const config = fixture(); delete config.providers[NAME]!.requestPacing; saveConfig(config);
+  intercept(headers => headers.get("authorization") === `Bearer ${KEYS[0]}`
+    ? Response.json({ error: { message: "fixture capacity" } }, { status: 429, headers: { "retry-after": "45" } }) : completed());
+  expect((await start(config)).response.status).toBe(200);
+  expect(seen).toEqual([`Bearer ${KEYS[0]}`, `Bearer ${KEYS[1]}`]);
+  expect(getKeyCooldownUntil(NAME, "k1")).toBeGreaterThan(Date.now());
+});

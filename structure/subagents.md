@@ -235,7 +235,10 @@ catalogs and model candidates withhold those providers' models; the provider its
 stays active. At 20 or more canonical Models switch rows, initialization appends
 all corresponding disabled selectors once. Existing registrations and later manual
 choices are not reinitialized. OAuth/ChatGPT forwarding is exempt using the same
-usable-key override predicate as routing. Display aliases do not add switch rows.
+key-mode override predicate as routing: a persisted `authMode: "key"` on an
+opted-in OAuth preset is honored even while its credential cannot be resolved
+(paused last key, missing env reference, disabled pool), so that row registers
+as pending rather than as an OAuth login. Display aliases do not add switch rows.
 
 `src/providers/initial-model-selection-runtime.ts` commits the decision against a
 matching registration/inventory snapshot before catalog authority is captured.

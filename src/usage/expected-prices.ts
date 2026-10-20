@@ -125,7 +125,9 @@ const GLM_52: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 
 const GLM_53: Cost4 = { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 };
 const GLM_53_FLASH: Cost4 = { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 };
 const QWEN38_MAX: Cost4 = { input: 2, output: 6, cacheRead: 0, cacheWrite: 0 };
-// Anthropic official list prices (USD / 1M tokens). Cache write uses the published 5-minute rate.
+// Anthropic official list prices (USD / 1M tokens). Cache write uses the published 5-minute rate;
+// writes the usage reports as 1-hour (cache_creation.ephemeral_1h_input_tokens) are priced at
+// 2x base input through CACHE_WRITE_1H_OVER_5M in cost.ts.
 const CLAUDE_SONNET_46: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 const CLAUDE_OPUS_46: Cost4 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
 // Claude Fable 5.1: 10 / 50, 5m cache write 12.50. Cache hits are 0.025x base input

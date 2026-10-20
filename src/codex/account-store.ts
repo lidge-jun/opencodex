@@ -136,25 +136,37 @@ export function peekCodexAccountRecordStore(): Record<string, CodexAccountCreden
 
 /** Read the Codex account record store from disk with hardened permissions, and hand it to the opt-in decision-quota slot (a no-op unless JEV quota signals are active). */
 function loadCodexAccountRecordStore(): CodexAccountStore {
+  const result = loadCodexAccountRecordStoreResult();
+  return result.status === "ok" ? result.records : {};
+}
+
+type CodexAccountRecordStoreResult = { status: "ok"; records: CodexAccountStore } | { status: "failed" };
+
+/** Retain read/parse failure separately for consumers that must preserve existing evidence. */
+function loadCodexAccountRecordStoreResult(): CodexAccountRecordStoreResult {
   const path = codexAccountsPath();
   hardenConfigDir();
   hardenExistingSecret(path);
-  if (!existsSync(path)) { notifyCodexStoreLoaded({}); return {}; }
   const normalized: CodexAccountStore = {};
   try {
     const raw = JSON.parse(readFileSync(path, "utf-8")) as RawCodexAccountStore;
+    if (!isObject(raw)) throw new Error("invalid Codex account store shape");
     for (const [id, value] of Object.entries(raw)) {
       const record = normalizeRecord(value);
       if (record) normalized[id] = record;
     }
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      notifyCodexStoreLoaded({});
+      return { status: "ok", records: {} };
+    }
     backupInvalidConfig(path);
     notifyCodexStoreLoaded({});
-    return {};
+    return { status: "failed" };
   }
   // Outside the parse try: roster publication is advisory and must never route a loaded store into the invalid-config backup path.
   notifyCodexStoreLoaded(normalized);
-  return normalized;
+  return { status: "ok", records: normalized };
 }
 
 /** Atomically write the Codex account store, then hand it to the opt-in decision-quota slot so active advisory evidence tracks the persisted credentials. */
@@ -400,6 +412,10 @@ export function isCodexAccountGenerationLive(id: string, generation: number): bo
   return !!record?.credential && record.deletedAt == null && record.generation === generation;
 }
 
+/** Callable for existing liveness consumers; stateful consumers can distinguish unknown snapshots. */
+export type CodexAccountGenerationLiveCheck = ((id: string, generation: number) => boolean)
+  & { readonly snapshotStatus: "ok" | "failed" };
+
 /**
  * The same verdict as {@link isCodexAccountGenerationLive}, over ONE store load.
  *
@@ -409,12 +425,15 @@ export function isCodexAccountGenerationLive(id: string, generation: number): bo
  * several accounts in one synchronous pass on the request path, so it opens one checker and
  * closes over the snapshot instead.
  */
-export function beginCodexAccountGenerationLiveCheck(): (id: string, generation: number) => boolean {
-  const snapshot = loadCodexAccountRecordSnapshot();
-  return (id, generation) => {
+export function beginCodexAccountGenerationLiveCheck(): CodexAccountGenerationLiveCheck {
+  let result: CodexAccountRecordStoreResult;
+  try { result = loadCodexAccountRecordStoreResult(); }
+  catch { result = { status: "failed" }; }
+  const snapshot = result.status === "ok" ? result.records : {};
+  return Object.assign((id: string, generation: number) => {
     const record = snapshot[id];
     return !!record?.credential && record.deletedAt == null && record.generation === generation;
-  };
+  }, { snapshotStatus: result.status });
 }
 
 export function saveCodexAccountCredentialIfGeneration(

@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  cancelLoginFlow,
   clearLoginState,
   getLoginStatus,
   getValidAccessToken,
@@ -17,6 +18,7 @@ import {
   publicOAuthAuthenticationErrorMessage,
   UnsupportedOAuthProviderError,
 } from "../../src/oauth";
+import { loginState } from "../../src/oauth/login-flow-state";
 import { getAccountSet, OAuthMutationBusyError, saveCredential, setAccountPaused } from "../../src/oauth/store";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { handleResponses } from "../../src/server/responses";
@@ -51,6 +53,47 @@ describe("OAuth status privacy", () => {
     setAsyncIcaclsRunnerForTests(null);
     if (TEST_DIR) removeTreeWithRetry(TEST_DIR);
     TEST_DIR = "";
+  });
+
+  test("a settled failed login can be dismissed without changing the active credential (#7378)", async () => {
+    await saveCredential("xai", { access: "fixture-access", refresh: "fixture-refresh",
+      expires: Date.now() + 60_000, email: "person@example.test", accountId: "fixture-account" });
+    const before = getAccountSet("xai");
+    const authBytes = readFileSync(join(TEST_DIR, "auth.json"));
+    loginState.set("failed-xai", { provider: "xai", flowId: "failed-xai", done: true, error: PUBLIC_OAUTH_ERROR });
+    expect(getLoginStatus("xai")).toMatchObject({ loggedIn: true, status: "error", error: PUBLIC_OAUTH_ERROR });
+    const request = new ManagementRequest("http://localhost/api/oauth/login/cancel", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "xai" }),
+    });
+    const response = await handleManagementAPI(request, new URL(request.url), {
+      defaultProvider: "xai", providers: { xai: { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1", authMode: "oauth" } },
+    } as OcxConfig);
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toEqual({ ok: true, cancelled: true });
+    expect(getLoginStatus("xai")).toMatchObject({ loggedIn: true, status: "idle", error: undefined });
+    expect(getAccountSet("xai")).toEqual(before);
+    expect(readFileSync(join(TEST_DIR, "auth.json"))).toEqual(authBytes);
+    expect(cancelLoginFlow("xai")).toBe(false);
+  });
+
+  test("failed-flow dismissal is exact and provider scoped", () => {
+    loginState.set("failed-xai", { provider: "xai", flowId: "failed-xai", done: true, error: PUBLIC_OAUTH_ERROR });
+    loginState.set("pending-xai", { provider: "xai", flowId: "pending-xai", done: false });
+    expect(cancelLoginFlow("anthropic", "failed-xai")).toBe(false);
+    expect(loginState.has("failed-xai")).toBe(true);
+    expect(cancelLoginFlow("xai", "failed-xai")).toBe(false);
+    expect(cancelLoginFlow("xai", "failed-xai", { dismissSettledFailure: true })).toBe(true);
+    expect(loginState.get("pending-xai")?.done).toBe(false);
+    expect(getLoginStatus("xai").status).toBe("pending");
+  });
+
+  test("successful terminal state remains available and pending cancellation keeps its outcome", () => {
+    loginState.set("completed-xai", { provider: "xai", flowId: "completed-xai", done: true });
+    expect(cancelLoginFlow("xai", "completed-xai")).toBe(false);
+    expect(getLoginStatus("xai", true, "completed-xai").status).toBe("complete");
+    loginState.set("pending-xai", { provider: "xai", flowId: "pending-xai", done: false });
+    expect(cancelLoginFlow("xai", "pending-xai")).toBe(true);
+    expect(getLoginStatus("xai", true, "pending-xai")).toMatchObject({ status: "error", error: "Login cancelled" });
   });
 
   test("getLoginStatus returns a masked provider email", async () => {

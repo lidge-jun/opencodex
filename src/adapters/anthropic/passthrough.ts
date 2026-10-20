@@ -32,6 +32,7 @@ import { bindAnthropicAccountMetadata } from "./account-metadata";
 import { shouldPreserveNativeClientPreamble } from "./native-client-preamble";
 import { allowlistAnthropicBetas } from "./beta-allowlist";
 import { pairAnthropicBetaBody } from "./beta-body-pairs";
+import { applyAnthropicNativeCacheTtlDefault, resolveAnthropicCacheRetention } from "./cache-retention";
 export { contextManagementForWire } from "./beta-body-pairs";
 
 /**
@@ -268,14 +269,14 @@ export function anthropicMessagesNativeWireBody(
 /**
  * Build the upstream request. Throws the adapter's own errors for a missing credential or a
  * malformed or unresolved base URL, and refuses an OAuth credential for any destination other
- * than first-party Anthropic. `config` is accepted for parity with the other passthrough
- * builders; no config key changes the wire today.
+ * than first-party Anthropic. `config.cacheRetention` decides the TTL of caller breakpoints
+ * that carry none (see applyAnthropicNativeCacheTtlDefault).
  */
 export function buildAnthropicMessagesPassthroughRequest(
   provider: OcxProviderConfig,
   modelId: string,
   body: Readonly<Record<string, unknown>>,
-  _config?: OcxConfig,
+  config?: OcxConfig,
   options: AnthropicMessagesPassthroughOptions = {},
 ): AnthropicMessagesPassthroughRequest {
   const oauth = provider.authMode === "oauth";
@@ -294,7 +295,9 @@ export function buildAnthropicMessagesPassthroughRequest(
   const url = resolveAnthropicMessagesUrl(provider);
   const native = anthropicMessagesNativeWireBody(provider, modelId, body, options);
   const { strippedOpaqueState, oauthToolNames } = native;
-  const wireBody = oauth ? bindAnthropicAccountMetadata(native.wireBody, options.providerAccountUuid) : native.wireBody;
+  const ttlBody = applyAnthropicNativeCacheTtlDefault(
+    native.wireBody, resolveAnthropicCacheRetention(config?.cacheRetention, provider));
+  const wireBody = oauth ? bindAnthropicAccountMetadata(ttlBody, options.providerAccountUuid) : ttlBody;
   const headers = anthropicBaseRequestHeaders(wireBody.stream === true);
   if (oauth) applyAnthropicOAuthAuth(headers, provider.apiKey);
   else applyAnthropicKeyAuth(headers, provider);

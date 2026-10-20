@@ -59,6 +59,7 @@ function fixture(supervised: boolean, passes: boolean) {
       ...admission, inspectSupervision,
       diagnose: () => { order.push("diagnose"); return diagnostic; },
       managerOps: () => ({ status: () => "present", stop: () => { order.push("stop"); } }),
+      killServiceWrappers: () => { order.push("wrappers"); },
       stopTrackedProxy: async () => { order.push("proxy"); },
     });
     if (action === "fresh install") return installFreshWindowsSchedulerSafely({

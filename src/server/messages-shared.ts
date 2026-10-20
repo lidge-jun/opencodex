@@ -13,6 +13,7 @@
  * other.
  */
 import { sniffImageDimensions } from "../adapters/anthropic-image-guard";
+import { anthropicCacheWrite1hTokens } from "../adapters/anthropic/cache-retention";
 import { createToolCallIdAllocator } from "../adapters/tool-call-id";
 import { idleDeadline } from "../lib/abort";
 import {
@@ -29,12 +30,13 @@ import type { RequestLogContext } from "./request-log";
 import { recordGenerationEvent } from "./request-log-generation-window";
 import type { OcxConfig } from "../types";
 
-export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } | undefined {
+export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number; cacheCreation1hInputTokens?: number } | undefined {
   if (!usage) return undefined;
   const num = (v: unknown) => typeof v === "number" ? v : 0;
   const hasCache = usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined;
   const read = num(usage.cache_read_input_tokens);
   const write = num(usage.cache_creation_input_tokens);
+  const write1h = anthropicCacheWrite1hTokens(usage, write);
   // Anthropic input_tokens excludes cache read/write; normalize to the canonical
   // inclusive convention (types.ts OcxUsage / devlog 070). cached = READS only.
   return {
@@ -44,6 +46,7 @@ export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: numb
       cachedInputTokens: read,
       cacheReadInputTokens: read,
       cacheCreationInputTokens: write,
+      ...(write1h !== undefined ? { cacheCreation1hInputTokens: write1h } : {}),
     } : {}),
   };
 }

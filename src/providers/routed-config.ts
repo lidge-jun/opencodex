@@ -134,7 +134,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const repairLegacyMimoFreeAuth = providerName === "mimo-free"
     && staticModelCatalog
     && (provider.authMode === undefined || provider.authMode === "local");
-  const explicitKeyOverride = providerUsesKeyAuthOverride(registryEntry, provider, resolvedApiKey);
+  const explicitKeyOverride = providerUsesKeyAuthOverride(registryEntry, provider);
   const canonicalAuthMode = explicitKeyOverride
     ? "key"
     : repairLegacyMimoFreeAuth

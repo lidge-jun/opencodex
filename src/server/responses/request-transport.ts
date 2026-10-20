@@ -71,7 +71,8 @@ import {
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { codexWsExecutorBinding, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
@@ -590,10 +591,62 @@ export async function prepareResponsesTransport(
       };
     }
     const build = resolved.buildRequest.bind(resolved);
+    const fileProvider = route.provider;
+    const fileProviderName = route.providerName;
+    // Persistence consent is configuration: capture its generation with the provider snapshot.
+    const fileConsentGeneration = captureConfigGeneration();
     resolved.buildRequest = async (requestParsed, incoming) => {
       const request = await build(requestParsed, incoming);
       // Capture at adapter creation, never from mutable serving state after an await.
       if (binding) requestBindings.set(request, binding);
+      const allowedImageFileModels = fileProvider.modelCapabilities
+        ? Object.entries(fileProvider.modelCapabilities)
+          .filter(([, cap]) => cap?.deepseekImageFiles === true)
+          .map(([model]) => model)
+        : [];
+      if (allowedImageFileModels.includes(request.outboundModelId ?? requestParsed.modelId) && needsDeepSeekImageFiles(request)) {
+        const consentModel = request.outboundModelId ?? requestParsed.modelId;
+        try {
+          // Ordinary uploads use provider pacing. A queued rebuild retains its enclosing
+          // fetch lease; reacquiring that same concurrency slot would deadlock at a limit of one.
+          const uploadFetch = providerFetch(fileProvider, options.codexWsRuntimeIdentity, {
+            httpOnly: true, providerName: fileProviderName, modelId: requestParsed.modelId,
+            beforeDispatch: () => {
+              if (!selectionIsCurrent(binding)) throw new Error("Credential selection changed before image upload");
+              // A queued upload must not outlive a revoked opt-in or a configuration reload.
+              if (captureConfigGeneration() !== fileConsentGeneration
+                || fileProvider.modelCapabilities?.[consentModel]?.deepseekImageFiles !== true) {
+                throw new Error("DeepSeek image file consent changed before image upload");
+              }
+            },
+          });
+          const uploadSignal = incoming.abortSignal ?? options.abortSignal ?? req.signal;
+          const pacedUpload: typeof fetch = incoming.dispatchPacingHeld
+            ? (async (input, init) => {
+              // The inference lease owns concurrency, but each physical upload still
+              // consumes an interval slot, including after a credential rebuild.
+              const slot = await waitForProviderRequestSlot(fileProviderName, fileProvider, requestParsed.modelId,
+                init?.signal ?? uploadSignal, { concurrency: false });
+              try { return await uploadFetch.unpacedFetch!(input, init); }
+              finally { releaseProviderRequestSlot(slot); }
+            }) as typeof fetch
+            : uploadFetch;
+          const body = await deepSeekImageFileBody(request, pacedUpload,
+            uploadSignal, {
+              allowedModels: allowedImageFileModels, budget: incoming.translatorBudget,
+            });
+          if (body !== undefined) {
+            request.releaseBodyObservation?.();
+            request.body = body;
+            const headers = new Headers(request.headers);
+            headers.delete("content-length");
+            request.headers = Object.fromEntries(headers);
+            request.releaseBodyObservation = incoming.translatorBudget.observeExternallyCapped(
+              "passthrough_serialization", Buffer.byteLength(body, "utf8"),
+            );
+          }
+        } catch (error) { request.releaseBodyObservation?.(); throw error; }
+      }
       return request;
     };
     if (resolved.runTurn) {
@@ -758,7 +811,8 @@ export async function prepareResponsesTransport(
           pacingChanged = false;
         }
         if (selectionIsCurrent(requestBindings.get(wireRequest)) && copilotSessionExpiresAt > Date.now() + 1000) {
-          const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? execute;
+          const ws = codexWsExecutorBinding(execute);
+          const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? ws?.http ?? execute;
           const binding = requestBindings.get(wireRequest);
           const snapshot = anthropicInstance !== undefined && binding?.kind === "oauth"
             ? binding.snapshot : undefined;
@@ -798,7 +852,10 @@ export async function prepareResponsesTransport(
               passiveQuotaWriterGeneration = writerGeneration;
             }
             commitKeyAttemptSend();
-            response = await sendWithConnectionPolicy(
+            // The WS executor dials its own socket: HTTP connection policy and body coding do not apply.
+            // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
+            // provider reselected above was not, so it takes the HTTP fallback under its own route.
+            response = ws?.provider === route.provider ? await execute(destination, dispatchInit) : await sendWithConnectionPolicy(
               distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
               destination,
               { ...dispatchInit, redirect: "manual",
@@ -843,6 +900,7 @@ export async function prepareResponsesTransport(
           adapterName: nextAdapter.name, oauthCredentialSnapshot: replayOAuthCredentialSnapshot });
         const rebuilt = await nextAdapter.buildRequest(requestParsed, {
           headers: requestState.selectedForwardHeaders, providerName: route.providerName, translatorBudget,
+          dispatchPacingHeld: true,
           ...(imageTierBias > 0 ? { imageTierBias } : {}),
         });
         const bodySize = checkOutboundBodySize(rebuilt.body, config.maxUpstreamBodyBytes);

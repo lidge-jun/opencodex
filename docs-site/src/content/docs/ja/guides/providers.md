@@ -206,7 +206,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 105 個含まれています。キー方式 85、OAuth 16、ローカル 3、
+opencodex には組み込みプリセットが 104 個含まれています。キー方式 84、OAuth 16、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -281,14 +281,13 @@ Chat Completions モデル（および Responses 専用で Responses にルー�
 `ocx provider add opengateway` を実行するか、ダッシュボードで **OpenGateway** を選択してください。
 Chat リクエストは設定済みの Bearer キーを使います。公開一覧はキーの有効性を検証しません。
 
-**OpenCode Zen**（`opencode-zen`）とキー不要の **OpenCode Free** プリセットは
-`https://opencode.ai/zen/v1` を共有します。このゲートウェイ上の無料モデルは、しばしばおおよそ毎分 15–20 リクエストの短時間レート制限に当たります（コミュニティ計測。OpenCode は RPM を公表しません）。Zen は `Retry-After` / `X-RateLimit-*` ヘッダーなしの汎用 429 を返すことがあります。これはキー不要デスクトップ枠（`opencode-free` で Big Pickle/無料モデル約 200 回 / 5 時間）とは別です。Zen がそのような 429 で `Retry-After` を省略した場合、opencodex はクライアント向けエラーに案内を足し、合成 `Retry-After` を付けます（上流の `Retry-After` があればそれが優先されます）。同一キーの待機再試行は [`retryOn429`](/ja/reference/configuration/) でオプトインします。
+**OpenCode Zen**（`opencode-zen`）は [opencode.ai/auth](https://opencode.ai/auth) の API キーで `https://opencode.ai/zen/v1` を使用します。無料モデルは毎分約 15–20 リクエストの短時間レート制限に当たることがあります（コミュニティ計測。OpenCode は RPM を公表していません）。レート制限 429 に `Retry-After` がない場合、opencodex は案内と合成 `Retry-After` を追加し、有効な上流ヘッダーを優先します。同一キーの再試行は [`retryOn429`](/ja/reference/configuration/) で有効にします。
 
 正規の `opencode-zen` プロバイダーで API キー認証と公式ルート `https://opencode.ai/zen/v1` または `https://opencode.ai/inference/v1` を使用すると、Gemini は既定の `googleMode: ai-studio` で Google ネイティブ API を自動的に使用します。Zen のモデル ID は、`-tiered` 接尾辞のない Flash ID もそのまま保持します。Claude は `googleMode` に関係なく Anthropic Messages を使用します。保存済み設定の読み込み時、これらのネイティブモデルの適格な旧 Chat/Responses オーバーライドと、適格な Responses 専用 `image_generation` ホストツール設定のみを無視します。カスタムプロバイダー、キー認証以外のルート、その他の設定は変更しません。
 
-**キー不要の `opencode-free` 枠は、現在サードパーティのクライアントに閉じられています。** Zen は `x-opencode-session` ヘッダーを伴わないリクエストをすべて拒否し、エラータイプ `MissingSessionID` と "OpenCode's free tier can only be used in OpenCode" というメッセージを返します。関門はヘッダーの有無だけを見るため、プロキシは値をでっち上げれば通過できますが、opencodex はそうしません。セッション識別子とバージョン付きの `opencode/<version>` User-Agent を作って送ることは、自分が OpenCode クライアントであると主張することであり、OpenCode はこのキー不要の枠についてサードパーティ連携の契約を公開していません。その方法で得た HTTP 200 は許可ではなく、突破された関門にすぎません。そこで opencodex は回避せずに制限を報告します。`opencode-free` へのリクエストは、上流の関門を説明するエラーを返します。
+**`opencode-free` のサポートは削除されました。** OpenCode の上流無料枠の制限により、すべてのモデルが `403 permission_denied` を返すためです（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。既存設定の読み込み時は該当項目と依存するモデル参照をメモリ上で無効にし、プロセスごとに一度警告します。ファイルは変更しません。既定のプロバイダーだった場合、標準の OpenAI OAuth 経路を既定にします。`opencode-go`、API キー付きの `opencode-zen`、または別のプロバイダーを使用してください。[OpenCode Zen 規約](https://opencode.ai/docs/zen/)。
 
-同じモデルに至るサポートされた経路は、[opencode.ai/auth](https://opencode.ai/auth) で発行した OpenCode Zen API キーを使う **`opencode-zen`** プリセットです。OpenCode が後にキー不要の枠へのサードパーティ経路を公開すれば、opencodex もそれに従えます。それまでこのプリセットは制限を記録する役割を担います。上流の規約: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
+正常な Claude Desktop の割り当てと既定値は保持されます。ソースモデルの許可リストが空になるルールは無効になり、注入モデルが削除された場合はネイティブサブエージェント同期も無効になります。その後の設定保存では、削除済み参照を復元せず、正常な同時編集を保持します。
 
 大半は bearer キーと共に `openai-chat` アダプターを使い、**Xiaomi MiMo**（`xiaomi`）などの
 Anthropic 互換プリセットは `anthropic` アダプター（`x-api-key`）を使います。Xiaomi には

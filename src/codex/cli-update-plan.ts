@@ -213,9 +213,15 @@ function npmTarget(args: readonly string[], env?: NodeJS.ProcessEnv): NpmTarget 
  * reverse: they are output paths, so ambient values would write Node artifacts to
  * arbitrary external directories on exit. ELF/Darwin loader controls (LD_* and
  * DYLD_*) are also removed: they can load code or redirect loader output before
- * npm runs. This is a denylist for process-startup/output channels, not a claim
- * that every ambient variable is allowlisted. Ordinary OS environment, proxy
- * settings and the supported NODE_EXTRA_CA_CERTS extension remain available.
+ * npm runs. OpenSSL's startup inputs are removed with them: OPENSSL_CONF names
+ * a configuration file the crypto library reads at startup, OPENSSL_CONF_INCLUDE
+ * resolves relative includes inside that configuration, and OPENSSL_MODULES /
+ * OPENSSL_ENGINES name the directories its provider and engine search loads
+ * shared modules from. None of these is input the updater child needs, so
+ * ambient values stay out of the spawned npm. This is a denylist for
+ * process-startup/output channels, not a claim that every ambient variable is
+ * allowlisted. Ordinary OS environment, proxy settings and the supported
+ * NODE_EXTRA_CA_CERTS extension remain available.
  */
 const NPM_ENV_DROP_KEYS: ReadonlySet<string> = new Set([
   "node_options",
@@ -227,6 +233,15 @@ const NPM_ENV_DROP_KEYS: ReadonlySet<string> = new Set([
   // escaping the owned temp root regardless of the isolated --cache.
   "node_v8_coverage",
   "node_redirect_warnings",
+  // OpenSSL startup inputs: OPENSSL_CONF points the library at an ambient
+  // startup configuration file (OPENSSL_CONF_INCLUDE resolves that config's
+  // relative includes); OPENSSL_MODULES and OPENSSL_ENGINES point its
+  // provider/engine search at ambient directories that supply loadable
+  // shared modules.
+  "openssl_conf",
+  "openssl_conf_include",
+  "openssl_modules",
+  "openssl_engines",
 ]);
 
 function codexCliUpdateNpmEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {

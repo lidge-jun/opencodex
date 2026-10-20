@@ -8,6 +8,7 @@ import {
   isContentEvent,
   observeEmptyCompletion,
 } from "../../src/server/responses/empty-completion-guard";
+import { bridgeToResponsesSSE } from "../../src/bridge/sse";
 import type { AdapterEvent } from "../../src/types";
 
 function collect(source: AsyncIterable<AdapterEvent>): Promise<AdapterEvent[]> {
@@ -115,10 +116,29 @@ describe("empty-completion guard retry", () => {
     expect(withoutHeartbeats(events)).toEqual([
       { type: "thinking_delta", thinking: "first attempt" },
       { type: "reasoning_raw_delta", text: "raw" },
+      { type: "assistant_boundary" },
       { type: "thinking_delta", thinking: "second attempt" },
       { type: "text_delta", text: "finally an answer" },
       { type: "done", usage: { inputTokens: 30, outputTokens: 5, totalTokens: 35 } },
     ]);
+  });
+
+  test("the discarded attempt's reasoning stays out of the retry's reasoning item", async () => {
+    const guarded = guardEmptyCompletionEventStream({
+      firstEvents: eventsOf({ type: "thinking_delta", thinking: "discarded" }, { type: "done" }),
+      continuation: () => eventsOf(
+        { type: "thinking_delta", thinking: "retry" },
+        { type: "text_delta", text: "answer" },
+        { type: "done" },
+      ),
+    });
+    const sse = await new Response(bridgeToResponsesSSE(guarded, "fixture-model")).text();
+    const reasoning = sse.split("\n")
+      .filter(line => line.startsWith("data: {"))
+      .map(line => JSON.parse(line.slice(6)) as { type: string; item?: { type: string; summary?: { text: string }[] } })
+      .filter(event => event.type === "response.output_item.done" && event.item?.type === "reasoning")
+      .map(event => event.item!.summary!.map(part => part.text).join(""));
+    expect(reasoning).toEqual(["discarded", "retry"]);
   });
 
   test("usage is merged across attempts", async () => {
@@ -321,7 +341,7 @@ describe("empty-completion guard retry", () => {
 
     expect(continuations).toBe(1);
     expect(events.map(event => event.type)).toEqual([
-      "heartbeat", "heartbeat", "thinking_delta", "text_delta", "done",
+      "heartbeat", "heartbeat", "thinking_delta", "assistant_boundary", "text_delta", "done",
     ]);
   });
 
@@ -341,6 +361,7 @@ describe("empty-completion guard retry", () => {
     expect(continuations).toBe(1);
     expect(withoutHeartbeats(events)).toEqual([
       { type: "thinking_delta", thinking: "..." },
+      { type: "assistant_boundary" },
       { type: "text_delta", text: "recovered" },
       { type: "done" },
     ]);

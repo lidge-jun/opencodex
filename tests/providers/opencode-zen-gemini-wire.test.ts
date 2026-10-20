@@ -124,7 +124,7 @@ describe("OpenCode Zen Gemini destination and wire policy", () => {
       expectWire("opencode-zen", zen(), model, "openai-chat");
       expectWire("opencode-zen", zen({ modelAdapters: { [model]: "openai-responses" } }), model, "openai-responses");
     }
-    for (const name of ["my-zen", "opencode-free", "opencode-go"]) {
+    for (const name of ["my-zen", "opencode-go"]) {
       expectWire(name, zen({ modelAdapters: { "gemini-3.7-flash": "openai-chat" } }), "gemini-3.7-flash", "openai-chat");
     }
     const go = providerConfigSeed(getProviderRegistryEntry("opencode-go")!);

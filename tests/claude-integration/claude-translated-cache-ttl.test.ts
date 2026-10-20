@@ -9,7 +9,8 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // A combo route declines the native Messages lane, so the anthropic adapter places its own
-// breakpoints. Their TTL must follow the caller's own `ttl: "1h"` unless the operator set one.
+// breakpoints. Their TTL follows the operator setting, then the caller's explicit TTLs, then the
+// first-party default (1h on api.anthropic.com).
 const MODEL = "claude-opus-5-5";
 let previousHome: string | undefined;
 let home = "";
@@ -105,19 +106,21 @@ describe("translated Claude lane cache TTL", () => {
     expect(new Set(await wireTtls("1h"))).toEqual(new Set(["1h"]));
   });
 
-  test("caller without ttl keeps the 5m default", async () => {
-    expect(new Set(await wireTtls(undefined))).toEqual(new Set([undefined]));
+  test("caller without ttl gets the first-party 1h default", async () => {
+    expect(new Set(await wireTtls(undefined))).toEqual(new Set(["1h"]));
   });
 
   test("explicit operator cacheRetention wins over the caller hint", async () => {
     expect(new Set(await wireTtls("1h", "short"))).toEqual(new Set([undefined]));
+    expect(new Set(await wireTtls(undefined, "short"))).toEqual(new Set([undefined]));
   });
 
-  test("a caller mixing a 1h prefix with a 5m tail is not upgraded to 1h everywhere", async () => {
+  test("a caller pinning any breakpoint to 5m stays at 5m; TTL-less breakpoints take the default", async () => {
     expect(new Set(await wireTtls("1h", undefined, "5m"))).toEqual(new Set([undefined]));
-    expect(new Set(await wireTtls("1h", undefined, "unset"))).toEqual(new Set([undefined]));
+    expect(new Set(await wireTtls(undefined, undefined, "5m"))).toEqual(new Set([undefined]));
+    expect(new Set(await wireTtls("1h", undefined, "unset"))).toEqual(new Set(["1h"]));
     // Top-level automatic caching counts as a caller breakpoint.
-    expect(new Set(await wireTtls("1h", undefined, "1h", "unset"))).toEqual(new Set([undefined]));
+    expect(new Set(await wireTtls("1h", undefined, "1h", "unset"))).toEqual(new Set(["1h"]));
     expect(new Set(await wireTtls("1h", undefined, "1h", "5m"))).toEqual(new Set([undefined]));
     expect(new Set(await wireTtls("1h", undefined, "1h", "1h"))).toEqual(new Set(["1h"]));
     // Breakpoints nested in a tool_result's content count too.
@@ -134,11 +137,11 @@ describe("callerCacheRetention walks every block container", () => {
     messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t", content: [nested] }] }],
   });
 
-  test("a 5m breakpoint deep inside search_result or document content keeps the default", () => {
+  test("a 5m breakpoint deep inside search_result or document content maps to short", () => {
     expect(callerCacheRetention(body({ type: "search_result", source: "s", title: "t",
-      content: [{ type: "text", text: "x", cache_control: m5 }] }))).toBeUndefined();
+      content: [{ type: "text", text: "x", cache_control: m5 }] }))).toBe("short");
     expect(callerCacheRetention(body({ type: "document",
-      source: { type: "content", content: [{ type: "text", text: "x", cache_control: m5 }] } }))).toBeUndefined();
+      source: { type: "content", content: [{ type: "text", text: "x", cache_control: m5 }] } }))).toBe("short");
     expect(callerCacheRetention(body({ type: "search_result", source: "s", title: "t",
       content: [{ type: "text", text: "x", cache_control: h1 }] }))).toBe("long");
   });

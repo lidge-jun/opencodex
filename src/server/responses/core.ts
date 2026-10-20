@@ -12,6 +12,7 @@ import { createInferenceSendBudget } from "../inference/context";
 import { finalizeOwnedTranslatorBudget, finalizeAccountLease } from "./core-lifetime";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { executeComboResponses } from "./core-combo";
+import { registerTurn, unregisterTurn } from "../lifecycle";
 import { runWithCompactionRecovery } from "./compaction-recovery";
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
@@ -67,15 +68,17 @@ export async function handleComboResponses(
   logCtx: RequestLogContext,
   options: HandleResponsesOptions & { translatorBudget: TranslatorBudget },
 ): Promise<Response> {
-  return executeComboResponses(
-    req,
-    rawBody,
-    comboId,
-    config,
-    logCtx,
-    options,
-    requestDispatchers,
-  );
+  // Each child relay binds the turn's lease and unbinds it when its stream ends; the lease is
+  // released once nothing is bound. Hold it for the whole ladder so a refused child's relay
+  // cannot settle the turn the next target still runs in ("turn already settled"). An accepted
+  // child's stream is bound before this returns and keeps the lease until it ends.
+  const ladder = new AbortController();
+  registerTurn(ladder, options.turnAdmissionLease);
+  try {
+    return await executeComboResponses(req, rawBody, comboId, config, logCtx, options, requestDispatchers);
+  } finally {
+    if (options.turnAdmissionLease && "bindAbortController" in options.turnAdmissionLease) unregisterTurn(ladder);
+  }
 }
 const requestDispatchers: ResponsesDispatchers = { handleResponses, handleComboResponses };
 export { adapterNeedsForcedContinuation } from "./core-replay";

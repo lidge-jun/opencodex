@@ -138,7 +138,7 @@ export const ADAPTER_REGISTRY = {
   zed: {
     wire: "zed",
     mutation: "codex-owned",
-    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createZedAdapter(provider),
+    create: (provider: OcxProviderConfig, context: AdapterFactoryContext) => createZedAdapter(provider, context.cacheRetention),
   },
   "mimo-free": {
     contractParent: "openai-chat",

@@ -34,6 +34,20 @@ export function markResponseNonReplayable(response: Response): void {
   nonReplayableResponses.add(response);
 }
 
+/**
+ * A server-instructed wait longer than the retry budget: same-target 429 replay loops stop and
+ * return the original response, while key rotation and ordinary error delivery are unaffected.
+ */
+const sameTargetRetryHolds = new WeakSet<Response>();
+
+export function markSameTargetRetryHold(response: Response): void {
+  sameTargetRetryHolds.add(response);
+}
+
+export function isSameTargetRetryHold(response: Response): boolean {
+  return sameTargetRetryHolds.has(response);
+}
+
 export function isNonReplayableResponse(response: Response): boolean {
   return nonReplayableResponses.has(response);
 }
@@ -144,6 +158,7 @@ export function retainReplayRefusal<T extends Response>(response: T): T {
 
 /** Carry the verdict from a response onto the one that replaces it. */
 export function carryReplayRefusal<T extends Response>(source: Response, rewrapped: T): T {
+  if (sameTargetRetryHolds.has(source)) sameTargetRetryHolds.add(rewrapped);
   return isReplayRefusalResponse(source) ? retainReplayRefusal(rewrapped) : rewrapped;
 }
 

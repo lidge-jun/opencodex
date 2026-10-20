@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget, snapshotComboQuotaCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearCachedProviderQuotas, setCachedProviderQuotaForTests } from "../../src/providers/quota-routing-cache";
@@ -282,6 +282,52 @@ describe("combo exhaustion reports the primary's quota refusal", () => {
       { provider: "fallback", status: 401, sendCount: 1 },
     ]);
     expect(logCtx.attempts).toHaveLength(2);
+  });
+
+  test("the hop warning names the upstream refusal on one redacted line", async () => {
+    const key = "sk-proj-" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6";
+    globalThis.fetch = (async () => Response.json(
+      { error: { code: "invalid_api_key", message: `Incorrect API key provided: ${key}.\nRotate it.` } },
+      { status: 401 },
+    )) as unknown as typeof fetch;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loggedCombo(config, { model: "", provider: "" });
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      expect(line).toMatch(/failed with 401 after \d+ms: invalid_api_key: Incorrect API key provided: .* Rotate it\.$/);
+      expect(line).not.toContain(key);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("the hop warning redacts credential framing before flattening parsed codes", async () => {
+    const credential = "synthetic-multipart-credential";
+    globalThis.fetch = (async () => Response.json({ error: {
+      code: `name="authorization"\r\n\r\n${credential}`,
+      message: "upstream refused",
+    } }, { status: 502 })) as unknown as typeof fetch;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loggedCombo(config, { model: "", provider: "" });
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      expect(line).toBeDefined();
+      expect(line!.includes(credential)).toBe(false);
+      expect(line).toContain("[REDACTED]");
+      expect(line).not.toMatch(/[\r\n]/);
+    } finally { warn.mockRestore(); }
+  });
+
+  test("the hop warning never logs an unparsed upstream body", async () => {
+    globalThis.fetch = (async () => new Response("upstream said: session=abc123 private detail", { status: 502 })) as unknown as typeof fetch;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await loggedCombo(config, { model: "", provider: "" });
+      const line = warn.mock.calls.map(call => String(call[0])).find(text => text.includes("primary/model-primary failed with"));
+      expect(line).toMatch(/failed with 502 after \d+ms$/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("a fallback 5xx is still the answer", async () => {

@@ -463,7 +463,7 @@ export function modelCapabilitiesConfigError(value: unknown, allowTombstones = f
     if (allowTombstones && row === null) continue;
     if (!capabilityRecord(row)) return "modelCapabilities rows must be plain objects";
     for (const [axis, declaration] of Object.entries(row)) {
-      if (!["inputModalities", "contextTier", "video"].includes(axis)) return "modelCapabilities contains an unknown axis";
+      if (!["inputModalities", "contextTier", "video", "deepseekImageFiles"].includes(axis)) return "modelCapabilities contains an unknown axis";
       if (allowTombstones && declaration === null) continue;
       if (axis === "inputModalities") {
         if (!Array.isArray(declaration) || declaration.length === 0
@@ -472,6 +472,8 @@ export function modelCapabilitiesConfigError(value: unknown, allowTombstones = f
         }
       } else if (axis === "contextTier") {
         if (declaration !== "default" && declaration !== "long_context") return "modelCapabilities contextTier must be default or long_context";
+      } else if (axis === "deepseekImageFiles") {
+        if (typeof declaration !== "boolean") return "modelCapabilities deepseekImageFiles must be a boolean";
       } else {
         if (!capabilityRecord(declaration) || Object.keys(declaration).some(key => key !== "processing")) {
           return "modelCapabilities video must be a plain object containing only processing";
@@ -501,6 +503,9 @@ export function mergeModelCapabilities(
       } else if (axis === "contextTier") {
         if (value === null) delete row.contextTier;
         else row.contextTier = value as ModelCapabilities["contextTier"];
+      } else if (axis === "deepseekImageFiles") {
+        if (value === null) delete row.deepseekImageFiles;
+        else row.deepseekImageFiles = value as boolean;
       } else if (axis === "video") {
         if (value === null) delete row.video;
         else {
@@ -528,7 +533,7 @@ export function sanitizeModelCapabilitiesForLoad(value: unknown): Record<string,
   for (const [id, raw] of Object.entries(value).slice(0, MODEL_DISCOVERY_MAX_MODELS)) {
     if (!capabilityRecord(raw) || !isValidModelDiscoveryModelId(id) || ["__proto__", "prototype", "constructor"].includes(id)) continue;
     const row: Record<string, unknown> = {};
-    for (const axis of ["inputModalities", "contextTier", "video"] as const) {
+    for (const axis of ["inputModalities", "contextTier", "video", "deepseekImageFiles"] as const) {
       if (!Object.hasOwn(raw, axis)) continue;
       const declaration = raw[axis];
       if (modelCapabilitiesConfigError({ [id]: { [axis]: declaration } }) === null) row[axis] = declaration;

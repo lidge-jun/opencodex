@@ -248,12 +248,9 @@ cleanup uses the dependency-free quota-auto-refresh state leaf, avoiding a recon
 
 ### Offline idle staggering evidence slice (#7206 PR A)
 
-`src/codex/idle-stagger-planner.ts` owns only the pure `PlannerInput` -> `PlannerResult` diagnostic model: verified comparable 5-hour evidence, foreground/quiet/observe-only modes, stable 300/N target slots and conservative epoch/generation revalidation.
-Its pure attempt ledger transitions and crash recovery model a single reservation per physical operation (including shared short/weekly effects); unknown send outcomes fail closed rather than retry.
-The model bounds the eligible cohort at 1024 accounts and the attempt ledger at 4096 entries, refusing further planning at capacity; no attempt state is persisted by this module.
-`src/codex/idle-stagger-replay.ts` separately evaluates read-only synthetic `ReplayTrace` inputs into `ReplayMetrics` for passive, legacy and hypothetical policy fixtures, reporting known-unusable time and unknown coverage separately with bounded trace size.
-Both modules have no imports from live account-pool workers and do not perform HTTP, authentication, timer scheduling, file I/O or runtime quota activation; `OfflineSlot` is not an upstream send permit.
-Tests: `tests/codex-integration/idle-stagger-planner.test.ts` and `tests/codex-integration/idle-stagger-replay.test.ts` use the shared fixture-path authority; no runtime routing or the existing `codexQuotaAutoRefresh` policy is changed.
+`src/codex/idle-stagger-planner.ts` is a pure `PlannerInput` → `PlannerResult` diagnostic planner for positively verified comparable five-hour accounts: active/quiet/observe-only modes, stable 300/N phase targets and epoch/credential/window-generation revalidation; outputs are never send permits.
+Its pure attempt ledger models one reservation per physical short/weekly operation, fail-closed ambiguous outcomes and restart recovery; it caps eligible accounts at 1024 and ledger entries at 4096, with no persistence or live worker import.
+`src/codex/idle-stagger-replay.ts` turns bounded synthetic `ReplayTrace` inputs into `ReplayMetrics` for passive, legacy and hypothetical-policy cases; known-unusable time remains distinct from unknown coverage. Neither module performs I/O, network requests, authentication, timers, config/routing mutations or quota activation; tests are in `tests/codex-integration/idle-stagger-planner.test.ts` and `tests/codex-integration/idle-stagger-replay.test.ts`.
 
 The account-pool dashboard exposes one bulk control under Advanced settings, not per-card
 rows. It applies both reported 5-hour and weekly windows to every current main/added account;
@@ -343,7 +340,7 @@ identity retries: WHAM success and terminal 401/403 responses never set or clear
 this mode. Native token preparation also preserves the traffic quarantine. Other callers retain
 the existing auth behavior. Failed or incomplete observations never renew the credit clock;
 refreshing usage does not redeem reset credits or validate pending accounts through inference.
-Coverage: `tests/codex-integration/main-account-credit-renewal.test.ts`.
+Coverage: `tests/codex-integration/main-account-credit-renewal.test.ts`. Pool accounts use the separate [pool credit renewal](pool-credit-renewal.md) contract; their fresh spendable-evidence requirement is identical.
 
 Credit parsing, expiry, partial updates and reset-ticket separation are covered in
 `tests/codex-integration/codex-quota-parser-parity.test.ts`; selection and bulk-pause behavior
@@ -387,9 +384,13 @@ It blocks newly admitted identity-matched main-account requests. Pool alternativ
 explicit main selection and stored Direct substitution do not override it. It neither pauses the
 account nor clears upstream cooldown/reauth state, and management quota refresh remains available.
 Fresh valid usage below the effective threshold, including 0%, or validated WHAM absence retires a measured short block;
-passing a reset timestamp alone does not. The minute sweep waits locally until the latest known blocking reset;
-when no future reset is known or reads remain blocked, main recovery uses the same capped
-5/10/20/40/60-minute delay calculation as usage-query failures. Skipped ticks do not extend it;
+passing a reset timestamp alone does not. A future known reset is a scheduling hint (#7312): recovery
+arms one base delay the first time an identity/credential sees the hold (including a hold that appears
+during token preparation), then reads WHAM metadata on the same capped 5/10/20/40/60-minute delay
+calculation as usage-query failures. The due time is pulled in to the latest known reset, including one
+that moved earlier or just passed, but hold reads stay at least one base interval apart; a nonterminal
+401/403 retry does not re-arm the first-hold delay. An early reset redeemed elsewhere is thus learned
+without inference or reset-credit use. A paused or needs-reauth main gets no hold rechecks. Skipped ticks do not extend the delay;
 the physical bearer is reconciled before checking the delay, and late results cannot charge
 a replacement credential. A longer valid Retry-After from any main usage reader is checked for the
 current credential before the recovery worker takes a profile lease or prepares a token; a replacement

@@ -4,7 +4,8 @@ import { bindRawDecisionWindows } from "./quota-decision-publication";
 import { decisionQuotaSinkActive } from "../lib/decision-quota-sink";
 import { CLAUDE_CLI_USER_AGENT } from "./claude-cli-identity";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS } from "./quota-wire";
-import type { ProviderQuota, ProviderQuotaWindow } from "./quota-types";
+import type { ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "./quota-types";
+import { httpQuotaFailure } from "./quota/failure-codes";
 const hasQuotaRows = (q: ProviderQuota) => q.fiveHourPercent !== undefined || q.weeklyPercent !== undefined || Boolean(q.customWindows?.length);
 
 function parseClaudeBucket(value: unknown): { percent?: number; resetAt?: number } | null {
@@ -46,6 +47,16 @@ function parseClaudeLimit(value: unknown): ProviderQuotaWindow | null {
 
 /** Read the Anthropic OAuth usage endpoint for an access token and return the parsed quota, or null on a non-OK or malformed response. */
 export async function readAnthropicUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
+  return (await probeAnthropicUsageQuota(accessToken)).quota;
+}
+
+/** A usage read plus, when it yields no quota, the closed reason why. A thrown fetch still throws. */
+export interface AnthropicUsageProbe {
+  quota: ProviderQuota | null;
+  failure?: QuotaFailureCode;
+}
+
+export async function probeAnthropicUsageQuota(accessToken: string): Promise<AnthropicUsageProbe> {
   const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
     headers: {
       Accept: "application/json, text/plain, */*",
@@ -56,9 +67,12 @@ export async function readAnthropicUsageQuota(accessToken: string): Promise<Prov
     },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  if (!response.ok) return null;
+  if (!response.ok) {
+    try { await response.body?.cancel(); } catch { /* Best-effort release; the status is the diagnosis. */ }
+    return { quota: null, failure: httpQuotaFailure(response.status) };
+  }
   const body = asRecord(await readQuotaJson(response));
-  if (!body) return null;
+  if (!body) return { quota: null, failure: "response_unusable" };
   const fiveHour = parseClaudeBucket(body.five_hour);
   const sevenDay = parseClaudeBucket(body.seven_day);
   const fable = parseClaudeBucket(body.seven_day_fable);
@@ -93,9 +107,10 @@ export async function readAnthropicUsageQuota(accessToken: string): Promise<Prov
   };
   if (decisionQuotaSinkActive()) bindRawDecisionWindows(quota, rawAnthropicUsageWindows(body, quota.updatedAt));
   // Empty / schema-changed payloads must not cache as "success with no bars".
-  return hasQuotaRows(quota) ? markAnthropicFamilyEnumeration(quota, Array.isArray(body.limits) && body.limits.every(raw => {
+  if (!hasQuotaRows(quota)) return { quota: null, failure: "response_unusable" };
+  return { quota: markAnthropicFamilyEnumeration(quota, Array.isArray(body.limits) && body.limits.every(raw => {
     const kind = asRecord(raw)?.kind;
     return kind === "session" || kind === "weekly_all" || kind === "weekly_scoped" && parseClaudeLimit(raw) !== null;
-  })) : null;
+  })) };
 }
 

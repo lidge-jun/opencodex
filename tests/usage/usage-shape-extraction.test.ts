@@ -32,6 +32,9 @@ describe("usageFromResponsesPayload", () => {
   });
 
   test("returns undefined for null / wrong types / missing token pairs", () => {
+    expect(usageFromResponsesPayload({ input_tokens: 30, output_tokens: 1,
+      input_tokens_details: { cache_write_tokens: 10, cache_write_1h_tokens: 6 } }))
+      .toMatchObject({ cacheCreationInputTokens: 10, cacheCreation1hInputTokens: 6 });
     expect(usageFromResponsesPayload(undefined)).toBeUndefined();
     expect(usageFromResponsesPayload(null)).toBeUndefined();
     expect(usageFromResponsesPayload("not-an-object")).toBeUndefined();

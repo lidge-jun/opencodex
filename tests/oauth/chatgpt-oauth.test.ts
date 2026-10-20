@@ -111,6 +111,21 @@ describe("ChatGPT OAuth JWT helpers", () => {
     const access = fakeJwt({ email: "access@test.com" });
     expect(extractEmail(id, access)).toBe("id@test.com");
   });
+
+  test("extractEmail extracts and lowercases email from profile claim", () => {
+    const jwt = fakeJwt({
+      "https://api.openai.com/profile": { email: " ProfileUser@Example.COM " },
+    });
+    expect(extractEmail(jwt)).toBe("profileuser@example.com");
+  });
+
+  test("extractEmail falls back to access_token profile claim if id_token has no email", () => {
+    const id = fakeJwt({ sub: "id-without-email" });
+    const access = fakeJwt({
+      "https://api.openai.com/profile": { email: "access-profile@example.com" },
+    });
+    expect(extractEmail(id, access)).toBe("access-profile@example.com");
+  });
 });
 
 describe("ChatGPT OAuth constants", () => {

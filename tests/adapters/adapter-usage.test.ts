@@ -140,11 +140,11 @@ describe("adapter reasoning and usage details", () => {
     const body = JSON.parse(request.body) as { system: unknown; messages: Array<{ content: unknown }>; cache_control?: unknown };
 
     // Native Anthropic gets top-level automatic caching plus stable explicit breakpoints.
-    expect(body.cache_control).toEqual({ type: "ephemeral" });
+    expect(body.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
     expect(body.system).toEqual([{
       type: "text",
       text: "stable project instructions",
-      cache_control: { type: "ephemeral" },
+      cache_control: { type: "ephemeral", ttl: "1h" },
     }]);
     // The moving final user block is handled by top-level automatic caching.
     expect(body.messages[0].content).toBe("hi");
@@ -168,14 +168,14 @@ describe("adapter reasoning and usage details", () => {
     });
     const body = JSON.parse(request.body) as { system: Record<string, unknown>[]; cache_control?: unknown };
 
-    expect(body.cache_control).toEqual({ type: "ephemeral" });
+    expect(body.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
     expect(body.system[0]).toMatchObject({ type: "text" });
     expect(body.system[0].cache_control).toBeUndefined();
     // The last system block (user system prompt) gets the cache breakpoint.
     expect(body.system[1]).toEqual({
       type: "text",
       text: "stable project instructions",
-      cache_control: { type: "ephemeral" },
+      cache_control: { type: "ephemeral", ttl: "1h" },
     });
   });
 
@@ -205,11 +205,11 @@ describe("adapter reasoning and usage details", () => {
     });
     const body = JSON.parse(request.body) as { tools: Record<string, unknown>[]; cache_control?: unknown; system?: Array<Record<string, unknown>>; messages: Array<{ content: unknown }> };
 
-    expect(body.cache_control).toEqual({ type: "ephemeral" });
+    expect(body.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
     expect(body.system?.[0]?.text).toContain("Valid tool names for this turn are exactly `codex__read_file`, `codex__write_file`.");
-    expect(body.system?.[0]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(body.system?.[0]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
     expect(body.tools[0].cache_control).toBeUndefined();
-    expect(body.tools[1].cache_control).toEqual({ type: "ephemeral" });
+    expect(body.tools[1].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
     // Native automatic caching consumes the final-turn slot, so the last user block stays plain.
     expect(body.messages[0].content).toBe("hi");
   });
@@ -241,13 +241,56 @@ describe("adapter reasoning and usage details", () => {
       messages: Array<{ content: unknown }>;
     };
 
-    expect(body.cache_control).toEqual({ type: "ephemeral" });
-    expect(body.tools[0].cache_control).toEqual({ type: "ephemeral" });
-    expect(body.system?.[0]?.cache_control).toEqual({ type: "ephemeral" });
+    expect(body.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(body.tools[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(body.system?.[0]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
     expect(body.messages[0].content).toEqual([
-      { type: "text", text: "previous turn", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "previous turn", cache_control: { type: "ephemeral", ttl: "1h" } },
     ]);
     expect(body.messages[1].content).toBe("current turn");
+  });
+
+  test("Anthropic cache TTL: 1h by default only on api.anthropic.com, explicit retention wins", async () => {
+    const ttlsOf = async (baseUrl: string, retention?: "none" | "short" | "long") => {
+      const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic", baseUrl }, retention);
+      const request = await adapter.buildRequest({
+        modelId: "claude-opus-4-1",
+        context: { systemPrompt: ["stable"], messages: [{ role: "user", content: "a" }, { role: "user", content: "b" }] },
+        stream: true,
+        options: {},
+      });
+      const ttls: unknown[] = [];
+      JSON.parse(request.body, (key, value) => {
+        if (key === "cache_control") ttls.push(value.ttl ?? "5m");
+        return value;
+      });
+      return ttls;
+    };
+    const compatible = "https://compatible.example.test/anthropic";
+    expect(new Set(await ttlsOf("https://api.anthropic.com"))).toEqual(new Set(["1h"]));
+    // Anthropic-compatible endpoints do not document ttl:"1h", so the omitted default stays 5m.
+    expect(new Set(await ttlsOf(compatible))).toEqual(new Set(["5m"]));
+    expect(new Set(await ttlsOf("https://api.anthropic.com", "short"))).toEqual(new Set(["5m"]));
+    expect(new Set(await ttlsOf(compatible, "long"))).toEqual(new Set(["1h"]));
+    expect(await ttlsOf("https://api.anthropic.com", "none")).toEqual([]);
+  });
+
+  test("Anthropic usage carries the 1-hour share of a cache write", async () => {
+    const adapter = createAnthropicAdapter({ ...provider, adapter: "anthropic" });
+    const events = await adapter.parseResponse?.(new Response(JSON.stringify({
+      content: [{ type: "text", text: "answer" }],
+      usage: {
+        input_tokens: 20,
+        output_tokens: 8,
+        cache_read_input_tokens: 4,
+        cache_creation_input_tokens: 6,
+        cache_creation: { ephemeral_5m_input_tokens: 2, ephemeral_1h_input_tokens: 4 },
+      },
+    })));
+    expect(events?.at(-1)).toMatchObject({
+      type: "done",
+      usage: { inputTokens: 30, cacheCreationInputTokens: 6, cacheCreation1hInputTokens: 4 },
+    });
   });
 
   test("Google usage maps cached and thoughts tokens when present", async () => {

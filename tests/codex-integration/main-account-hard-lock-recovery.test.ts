@@ -70,6 +70,13 @@ function usage(percent = 0): Response {
   } });
 }
 
+/** A metadata read that still reports the block with a future predicted reset. */
+function heldUsage(resetAt: number): Response {
+  return Response.json({ plan_type: "plus", rate_limit: {
+    primary_window: { used_percent: 99, limit_window_seconds: 18_000, reset_at: Math.floor(resetAt / 1000) },
+  } });
+}
+
 /**
  * Stub recovery HTTP calls, requiring a known metadata/token URL and an active native-main drain.
  * Return the captured URL list so tests can verify the requests made by background recovery.
@@ -136,27 +143,156 @@ afterEach(async () => {
 });
 
 describe("main hard-lock background recovery", () => {
-  test("known reset waits locally, then verifies recovery instead of unlocking by time", async () => {
+  test("known reset rechecks metadata on a capped schedule and never unlocks by time (#7312)", async () => {
     let now = Date.now();
     const clock = spyOn(Date, "now").mockImplementation(() => now);
     try {
-      const deadline = now + 3_600_000;
+      const deadline = now + 6 * 3_600_000;
       setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
         shortResetAt: deadline }, undefined, captureMainQuotaWriter(accountId));
-      const calls = fetchWith(async () => usage(99));
-      for (let tick = 0; tick < 60; tick++, now += 60_000) await runMainAccountHardLockRecovery(config());
-      expect(calls).toEqual([]);
+      const readAt: number[] = [];
+      const calls = fetchWith(async (_url, init) => {
+        // Metadata only: a GET of WHAM usage, never inference or reset redemption.
+        expect(init?.method ?? "GET").toBe("GET");
+        readAt.push(now);
+        return heldUsage(deadline);
+      });
+      const start = now;
+      for (; now < deadline; now += 60_000) {
+        await runMainAccountHardLockRecovery(config());
+        expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+      }
+      expect(new Set(calls)).toEqual(new Set([whamUrl]));
+      // The block was just observed, so the first recheck waits one base interval.
+      expect(readAt[0]! - start).toBeGreaterThanOrEqual(5 * 60_000);
+      const gaps = readAt.slice(1).map((at, i) => at - readAt[i]!);
+      expect(gaps.every(gap => gap >= 5 * 60_000 && gap <= 60 * 60_000)).toBe(true);
+      expect(gaps).toEqual([...gaps].sort((a, b) => a - b));
+      // Six hours of one-minute sweeps stay within the hourly cap plus the ramp.
+      expect(readAt.length).toBeGreaterThanOrEqual(6);
+      expect(readAt.length).toBeLessThanOrEqual(10);
+      // Reaching the predicted reset is not proof: a still-blocked read keeps the lock.
+      await runMainAccountHardLockRecovery(config());
       expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
-      await runMainAccountHardLockRecovery(config());
-      expect(calls).toEqual([whamUrl]);
-      now += 60_000;
-      await runMainAccountHardLockRecovery(config());
-      expect(calls).toHaveLength(1);
-      now += 240_000;
+      now += 60 * 60_000;
       const recovery = fetchWith(async () => usage(0));
       await runMainAccountHardLockRecovery(config());
       expect(recovery).toEqual([whamUrl]);
       expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
+    } finally { clock.mockRestore(); }
+  });
+
+  test("an early reset redeemed elsewhere is learned from metadata before the predicted reset (#7312)", async () => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: now + 5 * 3_600_000 }, undefined, captureMainQuotaWriter(accountId));
+      const calls = fetchWith(async () => usage(0));
+      for (let tick = 0; tick < 5; tick++, now += 60_000) await runMainAccountHardLockRecovery(config());
+      expect(calls).toEqual([]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+      await runMainAccountHardLockRecovery(config());
+      expect(calls).toEqual([whamUrl]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
+    } finally { clock.mockRestore(); }
+  });
+
+  test.each(["paused", "needs-reauth"])("a %s main receives no predicted-reset rechecks (#7312)", async kind => {
+    let now = Date.now();
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    const cfg = { ...config(), ...(kind === "paused" ? { pausedCodexAccountIds: [MAIN] } : {}) };
+    try {
+      const deadline = now + 3 * 3_600_000;
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: deadline }, undefined, captureMainQuotaWriter(accountId));
+      if (kind === "needs-reauth") markAccountNeedsReauth(MAIN);
+      const calls = fetchWith(async () => usage(0));
+      for (; now < deadline; now += 60_000) await runMainAccountHardLockRecovery(cfg);
+      expect(calls).toEqual([]);
+      expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+    } finally { clock.mockRestore(); }
+  });
+
++  test("a predicted reset that moves earlier pulls the next hold read in, never under one base interval (#7312)", async () => {
+    let now = Date.now();
+    const start = now;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: now + 6 * 3_600_000 }, undefined, captureMainQuotaWriter(accountId));
+      const readAt: number[] = [];
+      fetchWith(async () => { readAt.push((now - start) / 60_000); return heldUsage(start + 6 * 3_600_000); });
+      for (; now - start <= 6 * 60_000; now += 60_000) await runMainAccountHardLockRecovery(config());
+      expect(readAt).toEqual([5]);
+      // Same-identity evidence now predicts the reset at minute 8; the old reservation was minute 15.
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: start + 8 * 60_000 }, undefined, captureMainQuotaWriter(accountId));
+      const recovered = fetchWith(async () => { readAt.push((now - start) / 60_000); return usage(0); });
+      for (; now - start <= 12 * 60_000; now += 60_000) await runMainAccountHardLockRecovery(config());
+      expect(readAt).toEqual([5, 10]);
+      expect(recovered).toEqual([whamUrl]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
+    } finally { clock.mockRestore(); }
+  });
+
++  test("a revised reset that expires between sweeps still releases the old reservation (#7312)", async () => {
+    let now = Date.now();
+    const start = now;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: now + 6 * 3_600_000 }, undefined, captureMainQuotaWriter(accountId));
+      const readAt: number[] = [];
+      fetchWith(async () => { readAt.push((now - start) / 60_000); return heldUsage(start + 6 * 3_600_000); });
+      await runMainAccountHardLockRecovery(config());
+      now = start + 5 * 60_000;
+      await runMainAccountHardLockRecovery(config());
+      expect(readAt).toEqual([5]);
+      // Revised to minute 8 at minute 7, with no sweep until after that boundary has passed.
+      now = start + 7 * 60_000;
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: start + 8 * 60_000 }, undefined, captureMainQuotaWriter(accountId));
+      now = start + 9 * 60_000;
+      await runMainAccountHardLockRecovery(config());
+      expect(readAt).toEqual([5]);
+      now = start + 10 * 60_000;
+      await runMainAccountHardLockRecovery(config());
+      expect(readAt).toEqual([5, 10]);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+    } finally { clock.mockRestore(); }
+  });
+
+  test("a moving near-term reset keeps hold reads at least one base interval apart (#7312)", async () => {
+    let now = Date.now();
+    const start = now;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: now + 2 * 60_000 }, undefined, captureMainQuotaWriter(accountId));
+      const readAt: number[] = [];
+      fetchWith(async () => { readAt.push(now - start); return heldUsage(now + 2 * 60_000); });
+      for (; now - start < 3_600_000; now += 60_000) await runMainAccountHardLockRecovery(config());
+      const gaps = readAt.slice(1).map((at, i) => at - readAt[i]!);
+      expect(readAt.length).toBeGreaterThan(1);
+      expect(gaps.every(gap => gap >= 5 * 60_000)).toBe(true);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+    } finally { clock.mockRestore(); }
+  });
+
+  test.each([401, 403])("a nonterminal HTTP %s during a predicted-reset hold retries on the next sweep (#7312)", async status => {
+    let now = Date.now();
+    const start = now;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000,
+        shortResetAt: now + 6 * 3_600_000 }, undefined, captureMainQuotaWriter(accountId));
+      const readAt: number[] = [];
+      fetchWith(async () => { readAt.push((now - start) / 60_000); return Response.json({}, { status }); });
+      for (; now - start <= 6 * 60_000; now += 60_000) await runMainAccountHardLockRecovery(config());
+      expect(readAt).toEqual([5, 6]);
+      expect(isAccountNeedsReauth(MAIN)).toBe(false);
+      expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
     } finally { clock.mockRestore(); }
   });
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../../../src/adapters/google";
-import type { OcxContentPart, OcxMessage, OcxParsedRequest } from "../../../src/types";
+import type { OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 
 const provider = { adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", apiKey: "key" };
 
@@ -48,6 +48,89 @@ function functionResponses(turn: GeminiTurn): Array<Record<string, unknown>> {
     .filter(part => "functionResponse" in part)
     .map(part => part.functionResponse as Record<string, unknown>);
 }
+
+describe("CCA Claude tool-result image ordering", () => {
+  const cca: OcxProviderConfig = { ...provider, googleMode: "cloud-code-assist",
+    baseUrl: "https://cloudcode-pa.googleapis.com", project: "test-project" };
+  const imageA = { inline_data: { mime_type: "image/png", data: "YQ==" } };
+  const imageB = { inline_data: { mime_type: "image/jpeg", data: "Yg==" } };
+  const responseA = { functionResponse: { name: "first", id: "call_A", response: { result: "screen A[image]" } } };
+  const responseB = { functionResponse: { name: "second", id: "call_B", response: { result: "screen B[image]" } } };
+  const responseC = { functionResponse: { name: "third", id: "call_C", response: { result: "text C" } } };
+
+  function parallelHistory(reversed: boolean): OcxMessage[] {
+    const results = [
+      result("call_A", "first", [{ type: "text", text: "screen A" },
+        { type: "image", imageUrl: "data:image/png;base64,YQ==" }]),
+      result("call_B", "second", [{ type: "text", text: "screen B" },
+        { type: "image", imageUrl: "data:image/jpeg;base64,Yg==" }]),
+      result("call_C", "third", "text C"),
+    ];
+    return [user("inspect"), assistant([
+      { id: "call_A", name: "first" }, { id: "call_B", name: "second" }, { id: "call_C", name: "third" },
+    ]), ...(reversed ? results.reverse() : results)];
+  }
+
+  async function build(messages: OcxMessage[], config = cca, modelId = "claude-sonnet-4-6", stream = false) {
+    const original = structuredClone(messages);
+    const built = await createGoogleAdapter(config).buildRequest({
+      modelId, stream, options: {}, context: { messages },
+    } as OcxParsedRequest);
+    expect(messages).toEqual(original);
+    const body = JSON.parse(built.body);
+    return { contents: (body.request ?? body).contents as GeminiTurn[], built, body };
+  }
+
+  for (const model of ["claude-sonnet-4-6", "claude-opus-5-5-high"]) {
+    for (const stream of [false, true]) {
+      test.each([false, true])(`${model} puts all three responses before both images (stream=${stream}, reversed=%p)`, async reversed => {
+        const { contents, built, body } = await build(parallelHistory(reversed), cca, model, stream);
+        expect(built.url).toContain(stream ? ":streamGenerateContent?alt=sse" : ":generateContent");
+        expect(body.model).toBe(model);
+        expect(contents.map(turn => turn.role)).toEqual(["user", "model", "user"]);
+        expect(contents[1].parts.map(part => part.functionCall)).toEqual([
+          { name: "first", id: "call_A", args: {} },
+          { name: "second", id: "call_B", args: {} },
+          { name: "third", id: "call_C", args: {} },
+        ]);
+        // Assert the final compiled envelope, not a filtered list that hides interleaving.
+        expect(contents[2].parts).toEqual([responseA, responseB, responseC, imageA, imageB]);
+      });
+    }
+  }
+
+  test("single image result keeps its sibling and text-only parallel results keep their shape", async () => {
+    const history = parallelHistory(false);
+    const single = await build([history[0], assistant([{ id: "call_A", name: "first" }]), history[2]]);
+    expect(single.contents.at(-1)?.parts).toEqual([responseA, imageA]);
+    const textOnly = await build([history[0], history[1],
+      result("call_C", "third", "text C"), result("call_B", "second", "text B"), result("call_A", "first", "text A")]);
+    expect(textOnly.contents.at(-1)?.parts).toEqual([
+      { functionResponse: { name: "first", id: "call_A", response: { result: "text A" } } },
+      { functionResponse: { name: "second", id: "call_B", response: { result: "text B" } } }, responseC,
+    ]);
+  });
+
+  test.each([
+    ["cloud-code-assist", "gemini-4-argon"],
+    ["cloud-code-assist", "gpt-oss-120b-medium"],
+    ["ai-studio", "gemini-4-argon"],
+    ["ai-studio", "claude-sonnet-4-6"],
+    ["vertex", "gemini-3.1-pro"],
+    ["vertex", "claude-sonnet-4-6"],
+  ] as const)("other routes keep interleaved siblings (%s, %s)", async (googleMode, model) => {
+    const { contents } = await build(parallelHistory(true), { ...cca, googleMode }, model);
+    expect(contents.at(-1)?.parts).toEqual([responseA, imageA, responseB, imageB, responseC]);
+  });
+
+  test("Vertex Argon keeps each image nested in its matching response", async () => {
+    const { contents } = await build(parallelHistory(true), { ...cca, googleMode: "vertex" }, "gemini-4-argon");
+    expect(contents.at(-1)?.parts).toEqual([
+      { functionResponse: { ...responseA.functionResponse, parts: [imageA] } },
+      { functionResponse: { ...responseB.functionResponse, parts: [imageB] } }, responseC,
+    ]);
+  });
+});
 
 describe("Google adapter tool-result adjacency repair (#2199)", () => {
   test("normal call/result history stays one adjacent model/user pair", async () => {

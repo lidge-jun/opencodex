@@ -308,7 +308,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 105 préréglages intégrés : 85 à clé, 16 OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 104 préréglages intégrés : 84 à clé, 16 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
@@ -385,33 +385,13 @@ sont affichés en premier. Créez une clé dans le [tableau de bord OpenGateway]
 puis lancez `ocx provider add opengateway` ou sélectionnez **OpenGateway** dans le tableau de bord.
 Les requêtes chat utilisent la clé Bearer configurée ; la liste publique ne valide pas cette clé.
 
-**OpenCode Zen** (`opencode-zen`) et le préréglage sans clé **OpenCode Free** utilisent tous deux
-`https://opencode.ai/zen/v1`. Sur cette passerelle, les modèles gratuits atteignent souvent une limite de
-rafale sur une courte fenêtre, d'environ 15 à 20 requêtes par minute (mesure de la communauté ; OpenCode ne publie
-pas de valeur RPM). Zen peut renvoyer des erreurs génériques 429 de limitation de débit sans en-têtes
-`Retry-After` / `X-RateLimit-*`. Cette limite est distincte du quota sans clé pour application de bureau
-annoncé par OpenCode (environ 200 requêtes Big Pickle ou vers des modèles gratuits toutes les 5 heures sur
-`opencode-free`). Lorsque Zen omet `Retry-After` sur une telle réponse 429, opencodex ajoute à l'erreur client
-des indications propres au fournisseur ainsi qu'un `Retry-After` synthétique ; un `Retry-After` reçu en amont
-reste prioritaire. L'attente et la nouvelle tentative avec la même clé restent facultatives et s'activent avec
-[`retryOn429`](/fr/reference/configuration/).
+**OpenCode Zen** (`opencode-zen`) utilise `https://opencode.ai/zen/v1` avec une clé API obtenue sur [opencode.ai/auth](https://opencode.ai/auth). Les modèles gratuits peuvent subir une limite courte d’environ 15–20 requêtes/minute (mesure communautaire ; OpenCode ne publie pas de RPM). Si une réponse 429 de limitation omet `Retry-After`, opencodex ajoute des indications et un `Retry-After` synthétique ; les en-têtes valides en amont restent prioritaires. Les tentatives avec la même clé restent facultatives via [`retryOn429`](/fr/reference/configuration/).
 
 Sur les routes officielles `https://opencode.ai/zen/v1` et `https://opencode.ai/inference/v1` du fournisseur canonique `opencode-zen` avec authentification par clé API, Gemini utilise automatiquement l’API native Google en mode `googleMode: ai-studio` (par défaut). Les identifiants Zen sont conservés, y compris Flash sans suffixe `-tiered`. Claude utilise automatiquement Anthropic Messages, quel que soit `googleMode`. Au chargement des configurations enregistrées, seules les anciennes surcharges Chat/Responses admissibles de ces modèles natifs sont ignorées, ainsi que les préférences admissibles de l’outil hébergé `image_generation` propres à Responses. Les fournisseurs personnalisés, les routes sans authentification par clé et les autres préférences restent inchangés.
 
-**Le niveau sans clé `opencode-free` est actuellement fermé aux clients tiers.** Zen refuse toute requête
-qui arrive sans en-tête `x-opencode-session` et répond avec le type d'erreur `MissingSessionID` et le message
-« OpenCode's free tier can only be used in OpenCode ». Le contrôle porte uniquement sur la présence de
-l'en-tête : un proxy pourrait donc le franchir en inventant une valeur, ce que opencodex ne fait pas.
-Fabriquer un identifiant de session et un User-Agent versionné `opencode/<version>` revient à se déclarer
-client OpenCode, alors qu'OpenCode ne publie aucun contrat d'intégration tierce pour ce niveau sans clé ;
-une réponse HTTP 200 obtenue ainsi est un contrôle d'admission contourné, pas une autorisation. opencodex
-signale donc la restriction au lieu de la contourner : une requête vers `opencode-free` renvoie une erreur
-qui explique le blocage en amont.
+**La prise en charge de `opencode-free` a été supprimée** : tous les modèles renvoient désormais `403 permission_denied` à cause du contrôle du niveau gratuit en amont chez OpenCode ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Le chargement d’une configuration existante désactive en mémoire les entrées concernées et leurs références de modèles, avertit une fois par processus et ne modifie pas le fichier. Si ce fournisseur était le défaut, la route OpenAI OAuth standard devient le défaut. Utilisez `opencode-go`, `opencode-zen` avec clé ou un autre fournisseur. [Conditions OpenCode Zen](https://opencode.ai/docs/zen/).
 
-La voie prise en charge vers les mêmes modèles est le fournisseur **`opencode-zen`** avec une clé d'API
-OpenCode Zen obtenue sur [opencode.ai/auth](https://opencode.ai/auth). Si OpenCode publie plus tard un accès
-tiers pour le niveau sans clé, opencodex pourra le suivre ; d'ici là, le préréglage sert à documenter la
-restriction. Conditions en amont : [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
+Les affectations et valeurs par défaut valides de Claude Desktop sont conservées. Les règles dont la liste de modèles sources autorisés devient vide sont désactivées, ainsi que la synchronisation native des sous-agents si son modèle d’injection est supprimé. Les sauvegardes suivantes ne rétablissent pas les références supprimées et préservent les modifications simultanées valides.
 
 La plupart utilisent l'adaptateur `openai-chat` avec une clé Bearer ; les préréglages compatibles
 Anthropic, comme **Xiaomi MiMo** (`xiaomi`), utilisent l'adaptateur `anthropic` (`x-api-key`). Xiaomi propose

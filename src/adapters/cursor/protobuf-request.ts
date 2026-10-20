@@ -869,6 +869,9 @@ function decodeResultParts(message: OcxToolResultMessage): DecodedResultPart[] |
     // Without this the document falls through to decodeInlineImage(part.imageUrl) below and is
     // treated as an image it is not.
     if (part.type === "document") return { kind: "text", text: part.text };
+    // The translated-adapter guard rejects audio before this wire; retain its marker if this
+    // decoder is ever called directly.
+    if (part.type === "audio") return { kind: "text", text: part.text };
     const decoded = decodeInlineImage(part.imageUrl);
     return decoded ? { kind: "image", ...decoded } : { kind: "undecodable" };
   });

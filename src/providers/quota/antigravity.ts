@@ -306,13 +306,16 @@ function antigravityUnavailableFailure(
   return fallbackFailure;
 }
 
-export async function probeAntigravityUsageQuota(accessToken: string, projectId: string): Promise<AntigravityQuotaProbeResult> {
+export async function probeAntigravityUsageQuota(accessToken: string, projectId: string, signal?: AbortSignal): Promise<AntigravityQuotaProbeResult> {
+  // An optional caller signal (account import) cancels every request of this probe, including the
+  // 403 retry and the models fallback, alongside the per-request deadline.
+  const requestSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const fetchQuota = (url: string, userAgent = antigravityUserAgent()) => providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
     headers: {
       Accept: "application/json", "Content-Type": "application/json",
       "User-Agent": userAgent, Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ project: projectId }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    body: JSON.stringify({ project: projectId }), signal: requestSignal(),
   }, antigravityOutboundDependencies);
   let summaryFailure: QuotaFailureCode | undefined;
   try {
@@ -332,6 +335,7 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
     // Existing behavior: summary transport/parse failure may recover through the models probe.
     summaryFailure = quotaTransportFailure(error);
   }
+  if (signal?.aborted) return unavailableAntigravityQuota(summaryFailure ?? "transport_error");
   try {
     const response = await fetchQuota(ANTIGRAVITY_QUOTA_MODELS_URL);
     if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_MODELS_URL)) {

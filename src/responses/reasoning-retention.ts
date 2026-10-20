@@ -4,14 +4,21 @@
  * Provider ciphertext and signatures are never included in the portable retained items.
  */
 
+import { Database } from "bun:sqlite";
 import { expandRetainedCompactionInput } from "./retained-compaction";
-import { closeSync, mkdirSync, openSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, closeSync, lstatSync, mkdirSync, openSync, opendirSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { getConfigDir } from "../config/paths";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { estimateTokens } from "../lib/token-estimate";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 
 export const DEFAULT_REASONING_RETENTION_PERCENT = 20;
 export const DEFAULT_MAX_REASONING_TOKENS = 100_000;
+/** Compiled-in aggregate ceiling for the on-disk reasoning archive directory. */
+export const DEFAULT_ARCHIVE_MAX_BYTES = 512 * 1024 * 1024;
+export const DEFAULT_ARCHIVE_MAX_FILES = 256;
 
 export interface ReasoningRetentionOptions {
   /** Directory that receives archived reasoning files. */
@@ -24,6 +31,10 @@ export interface ReasoningRetentionOptions {
   maxTokens?: number;
   /** Clock injection for tests. */
   now?: number;
+  /** Aggregate archive byte ceiling. Defaults to 512 MiB; smaller values are a test seam. */
+  archiveMaxBytes?: number;
+  /** Aggregate archive file-count ceiling. Defaults to 256; smaller values are a test seam. */
+  archiveMaxFiles?: number;
 }
 
 export interface ReasoningArchive {
@@ -100,6 +111,183 @@ function retentionTokenCap(value: number | undefined): number {
     : DEFAULT_MAX_REASONING_TOKENS;
 }
 
+/** Aggregate-capacity refusal: the archive directory is at or over its compiled-in ceiling. */
+export class ReasoningArchiveQuotaError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ReasoningArchiveQuotaError";
+  }
+}
+
+/** The sibling archive lock is held by another cooperating writer. */
+export class ReasoningArchiveBusyError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ReasoningArchiveBusyError";
+  }
+}
+
+/** Unsafe or uninspectable archive state; the attempt is refused without touching anything. */
+export class ReasoningArchiveError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ReasoningArchiveError";
+  }
+}
+
+const ARCHIVE_SEPARATOR = "\n\n---\n\n";
+const ARCHIVE_SEPARATOR_BYTES = Buffer.byteLength(ARCHIVE_SEPARATOR, "utf8");
+const ARCHIVE_LOCK_SIDECARS = ["-journal", "-wal", "-shm"] as const;
+
+function archiveCap(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+/** lstat that treats a vanished path as absent and refuses anything it cannot classify. */
+function archiveLstat(path: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new ReasoningArchiveError(`reasoning archive path is not inspectable: ${path}`, { cause: error });
+  }
+}
+
+function assertRegularArchiveDirectory(archiveDir: string): void {
+  const entry = archiveLstat(archiveDir);
+  if (!entry?.isDirectory() || entry.isSymbolicLink()) {
+    throw new ReasoningArchiveError(`reasoning archive directory is not a regular directory: ${archiveDir}`);
+  }
+}
+
+function assertRegularArchiveLockPath(lockPath: string): void {
+  const entry = archiveLstat(lockPath);
+  if (entry !== undefined && (!entry.isFile() || entry.isSymbolicLink())) {
+    throw new ReasoningArchiveError(`reasoning archive lock path is not a regular file: ${lockPath}`);
+  }
+}
+
+/** Exact UTF-8 byte total of the would-be archive payload, computed before any joined string exists. */
+function archivePayloadBytes(texts: string[]): number {
+  let bytes = texts.length > 0 ? (texts.length - 1) * ARCHIVE_SEPARATOR_BYTES : 0;
+  for (const text of texts) {
+    const next = bytes + Buffer.byteLength(text, "utf8");
+    if (!Number.isSafeInteger(next)) {
+      throw new ReasoningArchiveError("reasoning archive payload byte size is not representable");
+    }
+    bytes = next;
+  }
+  return bytes;
+}
+
+interface ArchiveUsage {
+  files: number;
+  bytes: number;
+}
+
+/**
+ * Non-recursive accounting of every committed, remnant and foreign file. Anything that is not a
+ * plain regular file refuses closed; an entry vanishing mid-scan is already gone and skipped.
+ */
+function scanArchiveUsage(archiveDir: string, maxBytes: number, maxFiles: number): ArchiveUsage {
+  let directory: ReturnType<typeof opendirSync> | undefined;
+  let files = 0;
+  let bytes = 0;
+  let inspected = 0;
+  let failure: ReasoningArchiveError | undefined;
+  try {
+    // One entry per read: a legacy over-capacity directory must not first become an array
+    // or an unbounded read-ahead buffer on this synchronous request path.
+    directory = opendirSync(archiveDir, { bufferSize: 1 });
+    let entry;
+    while ((entry = directory.readSync()) !== null) {
+      inspected += 1;
+      if (!entry.isFile()) {
+        throw new ReasoningArchiveError(`reasoning archive entry is not a regular file: ${entry.name}`);
+      }
+      const stat = archiveLstat(join(archiveDir, entry.name));
+      if (stat === undefined) {
+        if (inspected >= maxFiles) throw new ReasoningArchiveError("reasoning archive scan changed beyond its inspection limit");
+        continue;
+      }
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw new ReasoningArchiveError(`reasoning archive entry is not a regular file: ${entry.name}`);
+      }
+      files += 1;
+      bytes += Number(stat.size);
+      if (files >= maxFiles || bytes > maxBytes) break; // refusal is already certain
+      if (inspected >= maxFiles) throw new ReasoningArchiveError("reasoning archive scan changed beyond its inspection limit");
+    }
+  } catch (error) {
+    failure = error instanceof ReasoningArchiveError ? error
+      : new ReasoningArchiveError("reasoning archive directory cannot be scanned", { cause: error });
+  } finally {
+    try { directory?.closeSync(); } catch (error) {
+      failure ??= new ReasoningArchiveError("reasoning archive directory could not be closed", { cause: error });
+    }
+  }
+  if (failure !== undefined) throw failure;
+  return { files, bytes };
+}
+
+function isSqliteBusy(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : "";
+  const message = error instanceof Error ? error.message : "";
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED" || /database (?:is|table is) locked/i.test(message);
+}
+
+/**
+ * Serialize usage scan, exclusive create, write and close for one physical archive directory
+ * across cooperating processes. The sibling SQLite write transaction is the lock: the OS
+ * releases it on process exit, so no stale-owner reclamation is needed. busy_timeout=0 keeps
+ * the synchronous request path fail-fast instead of freezing the event loop.
+ */
+function withArchiveQuotaLockSync<T>(archiveDir: string, fn: () => T): T {
+  const normalized = archiveDir.replace(/[/\\]+$/, "");
+  const base = basename(normalized);
+  if (!base || base === "." || base === "..") {
+    throw new ReasoningArchiveError(`reasoning archive directory is not a usable path: ${archiveDir}`);
+  }
+  const parent = dirname(normalized);
+  assertNotRealHomeUnderTest(parent);
+  const lockPath = `${normalized}.lock`;
+  // The lock lives beside the archive inside the config home; foreign parents need no manifest entry.
+  if (parent === getConfigDir()) {
+    recordOwnedConfigPath(parent, lockPath);
+    for (const suffix of ARCHIVE_LOCK_SIDECARS) recordOwnedConfigPath(parent, `${lockPath}${suffix}`);
+  }
+  assertRegularArchiveLockPath(lockPath);
+  let database: Database;
+  try {
+    database = new Database(lockPath, { create: true });
+  } catch (error) {
+    throw new ReasoningArchiveError(`reasoning archive lock could not be opened: ${lockPath}`, { cause: error });
+  }
+  try {
+    try { chmodSync(lockPath, 0o600); } catch { /* platform may ignore chmod */ }
+    assertRegularArchiveLockPath(lockPath);
+    database.exec("PRAGMA locking_mode = NORMAL; PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+  } catch (error) {
+    try { database.close(); } catch { /* acquisition already failed */ }
+    if (error instanceof ReasoningArchiveError) throw error;
+    if (isSqliteBusy(error)) {
+      throw new ReasoningArchiveBusyError(
+        `reasoning archive lock is held by another writer: ${lockPath}`,
+        { cause: error },
+      );
+    }
+    throw new ReasoningArchiveError(`reasoning archive lock could not be acquired: ${lockPath}`, { cause: error });
+  }
+  try {
+    return fn();
+  } finally {
+    try { database.exec("ROLLBACK"); } catch { /* close below still releases the OS lock */ }
+    try { database.close(); } catch { /* the OS lock is released with the handle */ }
+  }
+}
+
 /** Separate reasoning locally before dispatch; unknown windows enforce the absolute cap. */
 export function applyReasoningRetention(
   input: unknown,
@@ -130,17 +318,36 @@ export function applyReasoningRetention(
       content: [{ type: "input_text", text }] })),
   };
 
-  mkdirSync(options.archiveDir, { recursive: true, mode: 0o700 });
+  const archiveBytes = archiveCap(options.archiveMaxBytes, DEFAULT_ARCHIVE_MAX_BYTES);
+  const archiveFiles = archiveCap(options.archiveMaxFiles, DEFAULT_ARCHIVE_MAX_FILES);
+  const incomingBytes = archivePayloadBytes(texts);
   const stamp = new Date(options.now ?? Date.now()).toISOString().replace(/[:.]/g, "-");
   const path = join(options.archiveDir, "reasoning-" + stamp + "-" + Math.random().toString(36).slice(2, 8) + ".md");
-  // Only a successful exclusive open grants ownership; an occupied path is never removed.
-  const fd = openSync(path, "wx", 0o600);
-  let failure: unknown;
-  try { writeFileSync(fd, texts.join("\n\n---\n\n"), "utf-8"); } catch (error) { failure = error; }
-  try { closeSync(fd); } catch (error) { failure ??= error; }
-  if (failure !== undefined) {
-    try { rmSync(path); } catch { /* preserve the original I/O error; cleanup is best-effort */ }
-    throw failure;
+  try {
+    mkdirSync(options.archiveDir, { recursive: true, mode: 0o700 });
+    assertRegularArchiveDirectory(options.archiveDir);
+    withArchiveQuotaLockSync(options.archiveDir, () => {
+      assertRegularArchiveDirectory(options.archiveDir);
+      const usage = scanArchiveUsage(options.archiveDir, archiveBytes, archiveFiles);
+      if (usage.files >= archiveFiles || incomingBytes > archiveBytes - usage.bytes) {
+        throw new ReasoningArchiveQuotaError(
+          `reasoning archive is at capacity: ${usage.files} file(s), ${usage.bytes} byte(s) under ${options.archiveDir}; delete older archives to archive more`,
+        );
+      }
+      // Only a successful exclusive open grants ownership; an occupied path is never removed.
+      const fd = openSync(path, "wx", 0o600);
+      let failure: unknown;
+      try { writeFileSync(fd, texts.join(ARCHIVE_SEPARATOR), "utf-8"); } catch (error) { failure = error; }
+      try { closeSync(fd); } catch (error) { failure ??= error; }
+      if (failure !== undefined) {
+        try { rmSync(path); } catch { /* preserve the original I/O error; cleanup is best-effort */ }
+        throw failure;
+      }
+    });
+  } catch (error) {
+    if (error instanceof ReasoningArchiveQuotaError || error instanceof ReasoningArchiveBusyError
+      || error instanceof ReasoningArchiveError) throw error;
+    throw new ReasoningArchiveError("reasoning archive could not be written", { cause: error });
   }
 
   const limitDescription = windowKnown

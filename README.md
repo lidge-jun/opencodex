@@ -113,7 +113,7 @@ platform from the [latest release](https://github.com/lidge-jun/opencodex/releas
 | Platform | File | Notes |
 |---|---|---|
 | macOS 13+ (Apple Silicon and Intel) | `OpenCodex-<version>-macos.dmg` | Universal build, signed with a Developer ID and notarized |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Not code-signed yet: SmartScreen asks once, choose **More info → Run anyway** |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Code signing via SignPath Foundation is rolling out ([code signing policy](https://opencodex.me/reference/code-signing/)); until a release is signed, SmartScreen asks once: choose **More info → Run anyway** |
 | Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` or `-linux-amd64.deb` | The tray needs an AppIndicator-capable desktop |
 
 Every file has a `.sha256` next to it on the release page. On macOS 14+ the app also ships a
@@ -470,6 +470,16 @@ See **[Contributing](./CONTRIBUTING.md)**.
 Contributor work that landed through a maintainer carry or reimplementation,
 where the commit does not name its original author, is recorded in
 **[CREDITS.md](./CREDITS.md)**.
+
+## Code signing policy
+
+Windows binaries are moving to Authenticode signing ([#7207](https://github.com/lidge-jun/opencodex/issues/7207)). The [Windows Code Signing guide](https://opencodex.me/reference/code-signing/) covers the rollout, how to verify a signature, and the full policy.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## Disclaimer
 

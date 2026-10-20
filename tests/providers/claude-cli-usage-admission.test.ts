@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
+import { Readable, Writable } from "node:stream";
 import { buildChildEnv, createClaudeCliAdapter } from "../../src/adapters/claude-cli/adapter";
 import { CLAUDE_CLI_PROFILE } from "../../src/adapters/claude-cli/profiles";
 import {
@@ -157,6 +158,98 @@ describe("Claude-reported limits", () => {
 describe("claude-cli adapter admission", () => {
   const provider = { adapter: "claude-cli", baseUrl: CLAUDE_CLI_PROFILE.canonicalBaseUrl } as OcxProviderConfig;
   const parsed = { modelId: "claude-sonnet-5-5", stream: true, options: {}, context: { messages: [{ role: "user", content: "hello", timestamp: 0 }] } } as OcxParsedRequest;
+
+  const limit = "You've hit your limit · resets 3pm (UTC)";
+  const now = Date.UTC(2026, 9, 8, 12, 0);
+  const child = (lines: unknown[], stderr = "", exitCode = 0, failure?: "spawn" | "stream" | "stdin") => {
+    const proc = new EventEmitter() as unknown as ChildProcess;
+    proc.stdout = failure === "stream" ? Readable.from((async function* () { throw new Error(limit); })())
+      : Readable.from(lines.map(line => new TextEncoder().encode(JSON.stringify(line) + "\n")));
+    proc.stderr = Readable.from(stderr ? [stderr] : []);
+    proc.stdin = new Writable({ write(_chunk, _encoding, done) { done(); } });
+    if (failure === "stdin") proc.stdin.write = () => { throw new Error(limit); };
+    proc.kill = () => true;
+    proc.exitCode = null;
+    setTimeout(() => {
+      if (failure === "spawn") proc.emit("error", new Error(limit));
+      proc.exitCode = exitCode;
+      proc.emit("close", exitCode);
+    }, 3);
+    return proc;
+  };
+
+  for (const failure of ["spawn", "stream", "stdin"] as const) {
+    test(`local ${failure} errors do not persist a CLI refusal`, async () => {
+      const statePath = tempState();
+      const writes: Promise<void>[] = [];
+      const adapter = createClaudeCliAdapter(provider, {
+        usageAdmission: async () => ({ state: "available", checkedAt: now }),
+        usageRefusal: message => { writes.push(recordClaudeUsageRefusal(message, { now: () => now, identity, statePath })); },
+        which: () => process.execPath,
+        spawn: () => child([], "", 0, failure),
+        killGraceMs: 10,
+        reapTimeoutMs: 50,
+      });
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn!(parsed,
+        { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+      await Promise.all(writes);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "error", message: expect.stringContaining("hit your limit") });
+      expect(existsSync(statePath)).toBe(false);
+      expect(writes).toHaveLength(0);
+    });
+  }
+
+  for (const source of ["result", "exit-stderr", "eof-stderr"] as const) {
+    test(`a CLI ${source} refusal still persists its reset`, async () => {
+      const statePath = tempState();
+      const writes: Promise<void>[] = [];
+      const adapter = createClaudeCliAdapter(provider, {
+        usageAdmission: async () => ({ state: "available", checkedAt: now }),
+        usageRefusal: message => { writes.push(recordClaudeUsageRefusal(message, { now: () => now, identity, statePath })); },
+        which: () => process.execPath,
+        spawn: () => child(source === "result" ? [{ type: "result", is_error: true, result: limit }] : [],
+          source === "result" ? "" : limit, source === "exit-stderr" ? 1 : 0),
+        killGraceMs: 10,
+        reapTimeoutMs: 50,
+      });
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn!(parsed, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+      await Promise.all(writes);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "error", message: expect.stringContaining(limit) });
+      expect(JSON.parse(readFileSync(statePath, "utf8")).refusalUntil).toBe(Date.UTC(2026, 9, 8, 15, 0));
+      expect((await checkClaudeUsageAdmission(parsed.modelId, { now: () => now, identity, probe: async () => freshQuota, statePath })).state).toBe("exhausted");
+    });
+  }
+
+  test("successful output and a bridge rejection do not promote stderr into a refusal", async () => {
+    for (const bridge of [false, true]) {
+      const statePath = tempState();
+      const writes: Promise<void>[] = [];
+      const adapter = createClaudeCliAdapter(provider, {
+        usageAdmission: async () => ({ state: "available", checkedAt: now }),
+        usageRefusal: message => { writes.push(recordClaudeUsageRefusal(message, { now: () => now, identity, statePath })); },
+        which: () => process.execPath,
+        spawn: () => child(bridge
+          ? [{ type: "system", subtype: "init", mcp_servers: [] }, { type: "result", is_error: true, result: limit }]
+          : [{ type: "result", result: limit }], limit),
+        killGraceMs: 10,
+        reapTimeoutMs: 50,
+      });
+      const events: AdapterEvent[] = [];
+      const request: OcxParsedRequest = bridge ? { ...parsed, context: { ...parsed.context,
+        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+      } } : parsed;
+      await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+      await Promise.all(writes);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject(bridge ? { type: "error", code: "tool_bridge_init_mismatch" } : { type: "done" });
+      expect(writes).toHaveLength(0);
+      expect(existsSync(statePath)).toBe(false);
+    }
+  });
 
   test("an exhausted subscription is refused with a 429 cooldown before any spawn", async () => {
     let spawned = 0;
