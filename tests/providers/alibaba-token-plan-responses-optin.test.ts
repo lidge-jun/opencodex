@@ -190,8 +190,8 @@ describe("1017 exact-ID Token Plan adapter policy", () => {
     });
 
     test(`${id} omits unknown structured-output formats on both Chat paths`, () => {
-      const resolved = route();
-      expect(resolved.provider.noStructuredOutputModels).toContain(model);
+      const resolved = route({ noStructuredOutputModels: ["operator-model", model] });
+      expect(resolved.provider.noStructuredOutputModels).toEqual([model, "operator-model"]);
       expect(resolved.provider.noJsonSchemaModels).not.toContain(model);
       for (const format of [schema, { type: "json_object" }]) {
         const request = createOpenAIChatAdapter(resolved.provider).buildRequest({
@@ -233,22 +233,33 @@ describe("custom Beijing destination structured-output policy", () => {
           providers: { "custom-beijing": provider } } as OcxConfig, `custom-beijing/${model}`);
         expect(resolved.provider.noStructuredOutputModels).toContain("operator-model");
         expect(resolved.provider.noStructuredOutputModels).toContain(model);
-        const native = buildOpenAIChatPassthroughRequest(resolved.provider, {
-          messages: [{ role: "user", content: "hi" }], response_format: { type: "json_object" },
-        }, model, false);
-        expect(JSON.parse(native.body as string).response_format).toBeUndefined();
-        const translated = createOpenAIChatAdapter(resolved.provider).buildRequest({
-          modelId: model, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
-          options: { textFormat: { type: "json_object" } }, stream: false,
-        });
-        expect(JSON.parse(translated.body as string).response_format).toBeUndefined();
+        for (const format of [{ type: "json_object" }, { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true }]) {
+          const native = buildOpenAIChatPassthroughRequest(resolved.provider, {
+            messages: [{ role: "user", content: "hi" }], response_format: format,
+          }, model, false);
+          expect(JSON.parse(native.body as string).response_format).toBeUndefined();
+          const translated = createOpenAIChatAdapter(resolved.provider).buildRequest({
+            modelId: model, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+            options: { textFormat: format }, stream: false,
+          });
+          expect(JSON.parse(translated.body as string).response_format).toBeUndefined();
+        }
+        expect(resolved.provider.noStructuredOutputModels).toEqual([model, "operator-model"]);
       });
     }
   }
-  test("unrelated custom destinations do not inherit the restriction", () => {
-    const provider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
-    enrichProviderFromRegistry("custom-beijing", provider);
+  test.each([
+    { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+    { adapter: "anthropic", baseUrl: "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1" },
+    { adapter: "anthropic", baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" },
+    { adapter: "openai-chat", baseUrl: "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1" },
+    { adapter: "openai-chat", baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" },
+  ])("nonmatching custom destination keeps operator policy: $adapter $baseUrl", ({ adapter, baseUrl }) => {
+    const provider: OcxProviderConfig = { adapter, baseUrl, noStructuredOutputModels: ["operator-model"] };
+    enrichProviderFromRegistry("custom", provider);
     const resolved = routeModel({ port: 10100, providers: { custom: provider } } as OcxConfig, `custom/${model}`);
-    expect(resolved.provider.noStructuredOutputModels).toBeUndefined();
+    expect(resolved.provider.noStructuredOutputModels).toEqual(["operator-model"]);
+    expect(resolved.provider.baseUrl).toBe(baseUrl);
+    expect(resolved.provider.adapter).toBe(adapter);
   });
 });

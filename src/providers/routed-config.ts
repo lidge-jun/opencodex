@@ -21,6 +21,7 @@ import {
   providerSupportsLiveModelDiscovery,
 } from "./static-model-discovery";
 import { resolveModelPolicy } from "./resolved-model-policy";
+import { stableUnion } from "./resolved-model-policy-merge";
 
 /** Same endpoint modulo surrounding space and trailing slashes — matches `matchBaseUrlChoice`. */
 function isSameEndpoint(a: string, b: string): boolean {
@@ -125,7 +126,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       ...provider,
       apiKey: usableResolvedApiKey(provider.apiKey),
       ...(destination?.noStructuredOutputModels?.length ? {
-        noStructuredOutputModels: [...new Set([...(provider.noStructuredOutputModels ?? []), ...destination.noStructuredOutputModels])],
+        noStructuredOutputModels: stableUnion(destination.noStructuredOutputModels, provider.noStructuredOutputModels)[0],
       } : {}),
       ...(provider.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined
         ? { dropResponsesReasoningItems: destination.dropResponsesReasoningItems }

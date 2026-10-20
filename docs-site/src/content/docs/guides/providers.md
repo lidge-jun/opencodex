@@ -1694,7 +1694,9 @@ it is not a measured exact boundary and differs from the lab's 384,000 value.
 The existing structured-output opt-out omits `response_format` for this exact ID:
 strict schemas were rejected, and `json_object` is unverified. This is best-effort text,
 not guaranteed JSON. Validate any structured response in the client. The bare model's
-verified JSON downgrade is unchanged. A direct Responses success does not add a new
+verified JSON downgrade is unchanged. Historical Beijing destinations retain this
+restriction even when the provider is saved under a custom name; operator opt-outs
+are combined with it, not replaced. A direct Responses success does not add a new
 Responses default pin or prove reasoning replay.
 
 `deepseek-v4-pro-0813` now joins the existing Personal curation based on current listing

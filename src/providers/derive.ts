@@ -3,6 +3,7 @@ import { COST_VENDOR_PRIORITY, getModelMetadata, getModelMetadataCaseInsensitive
 import { cloneFastWire } from "./fastwire";
 import { isAzureModelMetadataDestination, publishedAzureModelMetadata, type AzureModelMetadata } from "./azure-model-metadata";
 import { resolveModelPolicy } from "./resolved-model-policy";
+import { stableUnion } from "./resolved-model-policy-merge";
 import {
   PROVIDER_REGISTRY,
   registryEntryForProviderDestination,
@@ -478,7 +479,7 @@ function enrichReasoningMetadataByDestination(prov: OcxProviderConfig): void {
   const destination = registryEntryForProviderDestination(prov);
   applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
   if (destination?.noStructuredOutputModels?.length) {
-    prov.noStructuredOutputModels = [...new Set([...(prov.noStructuredOutputModels ?? []), ...destination.noStructuredOutputModels])];
+    prov.noStructuredOutputModels = stableUnion(destination.noStructuredOutputModels, prov.noStructuredOutputModels)[0];
   }
   if (prov.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined) {
     prov.dropResponsesReasoningItems = destination.dropResponsesReasoningItems;
