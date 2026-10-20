@@ -511,7 +511,7 @@ $global:LASTEXITCODE = $code
         const result = f.run(config, ["-Msi", f.msi, "-Trust", trust]);
         expect(result.exitCode).not.toBe(0);
         expect(result.output).toContain(fragment);
-        expect(result.events).toContain("signature|installer.msi");
+        expect(result.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi"]);
         expect(result.events.some(line => line.startsWith("process|"))).toBe(false);
       } finally { removeTreeWithRetry(f.dir); }
     }, PWSH_TIMEOUT_MS);
@@ -527,6 +527,7 @@ $global:LASTEXITCODE = $code
       expect(result.exitCode).not.toBe(0);
       expect(result.output).toContain("signtool verify /pa rejected");
       expect(result.events).toContain("signtool|installer.msi");
+      expect(result.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi"]);
       expect(result.events.some(line => line.startsWith("process|"))).toBe(false);
     } finally { removeTreeWithRetry(f.dir); }
   }, PWSH_TIMEOUT_MS);
@@ -565,6 +566,25 @@ $global:LASTEXITCODE = $code
       expect(extract).toBe(2);
       expect(eventIndex(result.events, "signature|ocx.exe")).toBeGreaterThan(extract);
       expect(eventIndex(result.events, "signtool|ocx.exe")).toBeGreaterThan(extract);
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("an inner executable from the wrong release signer fails after extraction", () => {
+    const f = fixture();
+    try {
+      const result = f.run({
+        signatures: {
+          "installer.msi": releaseSigned,
+          "ocx.exe": { ...releaseSigned, signer: "CN=somebody else" },
+        },
+        innerExes: ["ocx.exe"],
+      }, ["-Msi", f.msi, "-Trust", "release"]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toContain("not SignPath Foundation");
+      const extract = eventIndex(result.events, "process|msiexec.exe");
+      expect(extract).toBeGreaterThanOrEqual(0);
+      expect(result.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi", "signature|ocx.exe"]);
+      expect(eventIndex(result.events, "signature|ocx.exe")).toBeGreaterThan(extract);
     } finally { removeTreeWithRetry(f.dir); }
   }, PWSH_TIMEOUT_MS);
 
