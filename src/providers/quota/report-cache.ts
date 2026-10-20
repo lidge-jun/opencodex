@@ -1,5 +1,5 @@
 import { decisionQuotaSinkActive, invalidateDecisionKeyQuotas, publishDecisionKeyQuota } from "../../lib/decision-quota-sink";
-import { providerDecisionWindows } from "../quota-decision-publication";
+import { antigravityDecisionWindows, providerDecisionWindows } from "../quota-decision-publication";
 import { createHash } from "node:crypto";
 import { effectiveCodexAuthAccountId, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { withoutRetiredCodexQuota, type StoredAccountQuota } from "../../codex/quota";
@@ -353,6 +353,11 @@ export function publishCollectedDecisionQuota(reports: ProviderQuotaReport[], co
   invalidateDecisionKeyQuotas();
   for (const report of reports) {
     const provider = config.providers[report.provider];
+    // Antigravity is one OAuth account; its family buckets are measured by the same probe that feeds the dashboard.
+    if (provider && report.provider === "google-antigravity" && provider.authMode === "oauth") {
+      publishDecisionKeyQuota(report.provider, provider, antigravityDecisionWindows(report.quota));
+      continue;
+    }
     const evidence = routingEvidence.get(report);
     if (provider && evidence && evidence.binding === providerQuotaRoutingBinding(report.provider, provider))
       publishDecisionKeyQuota(report.provider, provider, providerDecisionWindows(evidence.quota));

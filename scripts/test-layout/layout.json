@@ -1067,7 +1067,7 @@
     "key-login-preserves-model-costs.test.ts": "oauth",
     "jev-decision.test.ts": "routing", "jev-decision-destination.test.ts": "routing", "jev-service-exchange.test.ts": "routing",
     "jev-decision-provider-combo.test.ts": "routing",
-    "jev-typesafe-golden.test.ts": "routing", "jev-quota-activation.test.ts": "routing", "jev-quota-core-boundary.test.ts": "routing", "jev-quota-signals.test.ts": "routing", "jev-quota-config.test.ts": "routing", "jev-quota-publication.test.ts": "routing", "jev-quota-codex-reset.test.ts": "routing", "jev-quota-anthropic2.test.ts": "routing",
+    "jev-typesafe-golden.test.ts": "routing", "jev-quota-activation.test.ts": "routing", "jev-quota-core-boundary.test.ts": "routing", "jev-quota-signals.test.ts": "routing", "jev-quota-config.test.ts": "routing", "jev-quota-publication.test.ts": "routing", "jev-quota-codex-reset.test.ts": "routing", "jev-quota-anthropic2.test.ts": "routing", "jev-quota-antigravity.test.ts": "routing",
     "jev-model-backend.test.ts": "routing",
     "jev-provider.test.ts": "providers",
     "keyring-smoke.test.ts": "ci-workflows",
