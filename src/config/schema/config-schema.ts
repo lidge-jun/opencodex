@@ -84,15 +84,6 @@ import { isInterceptBindingId, isInterceptBindingRoute } from "../../claude/inte
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES, MAX_APP_OWNED_MEMORY_BUDGET_MB, MIN_APP_OWNED_MEMORY_BUDGET_MB } from "../../lib/app-owned-memory";
 
 
-export const optimizeSchema = z.object({
-  rtkEnabled: z.boolean().optional(),
-  headroomEnabled: z.boolean().optional(),
-  headroomUrl: z.string().trim().optional(),
-  headroomTimeoutMs: z.number().int().positive().optional(),
-  ponytailEnabled: z.boolean().optional(),
-  ponytailLevel: z.enum(["lite", "full", "ultra"]).optional(),
-}).strict();
-
 /** Strict write contract; file-load recovery is applied only by the enclosing schema. */
 export const protocolConfigSchema = z.object({
   unrepresentable: z.enum(["legacy", "reject"]).optional(),
@@ -380,7 +371,6 @@ export const configSchema = z.object({
   // parse: a hand-edited typo must never trip the backup-and-defaults repair
   // path below and wipe providers/pool accounts. Warning emitted in loadConfig.
   streamMode: z.enum(["auto", "legacy-tee", "eager-relay"]).optional().catch(undefined),
-  optimize: optimizeSchema.optional().catch(undefined),
   blockedModelRedirects: blockedModelRedirectsSchema.optional().catch(undefined),
   // Degrade malformed hand edits locally; candidate writes reject them before parsing.
   // An invalid native preference retains the legacy route instead of enabling native by default.

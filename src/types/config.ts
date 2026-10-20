@@ -899,17 +899,6 @@ export interface OcxConfig {
    * model at the shared routing layer with routeReason "blocked-model-redirect".
    * Unset or omitted by default.
    */
-  /**
-   * Token optimization configuration: RTK tool compression, Headroom context compression, and Ponytail system prompt.
-   */
-  optimize?: {
-    rtkEnabled?: boolean;
-    headroomEnabled?: boolean;
-    headroomUrl?: string;
-    headroomTimeoutMs?: number;
-    ponytailEnabled?: boolean;
-    ponytailLevel?: "lite" | "full" | "ultra";
-  };
   blockedModelRedirects?: Record<string, string>;
   /**
    * 3-state multi-agent surface override:

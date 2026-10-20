@@ -1988,11 +1988,6 @@
     "ckey-provider.test.ts": "providers",
     "json-import.test.ts": "providers",
     "opencode-free-provider.test.ts": "providers",
-    "optimize-headroom.test.ts": "routing",
-    "optimize-pipeline.test.ts": "routing",
-    "optimize-ponytail.test.ts": "routing",
-    "optimize-routes.test.ts": "server",
-    "optimize-rtk.test.ts": "routing",
     "provider-import.test.ts": "server",
     "xpiki-provider.test.ts": "providers"
   }

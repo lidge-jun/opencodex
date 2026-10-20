@@ -16,8 +16,7 @@ export type Page =
   | "remote-workspace"
   | "codex-set"
   | "integrations"
-  | "claude"
-  | "optimize";
+  | "claude";
 
 export const VALID_PAGES = new Set<Page>([
   "dashboard",
@@ -34,7 +33,6 @@ export const VALID_PAGES = new Set<Page>([
   "codex-set",
   "integrations",
   "claude",
-  "optimize",
 ]);
 
 export function readPageFromHash(hash?: string): Page {

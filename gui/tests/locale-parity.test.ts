@@ -60,7 +60,6 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "logs.protocol.hop.ir",
   "api.protocolResponses",
   "api.responsesEndpoint",
-  "optimize.headroom.urlPlaceholder",
   // Provider proper nouns (Taiwan keeps the English brand; "火山方舟" is Mainland usage)
   "provider.name.volcengine",
   // JEV decision method named after the TypeSafe product.

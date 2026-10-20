@@ -15,7 +15,7 @@
  */
 import type { Page } from "./app-routing";
 import type { TKey } from "./i18n/shared";
-import { IconActivity, IconBot, IconBoxes, IconCodex, IconGrid, IconLink, IconMonitor, IconServer, IconZap } from "./icons";
+import { IconActivity, IconBot, IconBoxes, IconCodex, IconGrid, IconLink, IconMonitor, IconServer } from "./icons";
 
 export type NavGroupId =
   | "dashboard"
@@ -24,7 +24,6 @@ export type NavGroupId =
   | "providers"
   | "models"
   | "subagents"
-  | "optimize"
   | "usage-logs"
   | "remote";
 
@@ -45,7 +44,6 @@ export const NAV_GROUPS: readonly NavGroup[] = [
   // Advisor is another way a worker reaches a second model, so it sits beside Subagents
   // in the switcher instead of taking a sidebar row of its own.
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot, pages: ["subagents", "advisor"] },
-  { id: "optimize", tkey: "nav.optimize", Icon: IconZap, pages: ["optimize"] },
   { id: "usage-logs", tkey: "nav.usageLogs", Icon: IconActivity, pages: ["usage", "logs", "storage"] },
   { id: "remote", tkey: "nav.remote", Icon: IconMonitor, pages: ["remote", "remote-workspace"] },
 ];

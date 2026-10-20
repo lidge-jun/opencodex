@@ -5,7 +5,6 @@ import Providers from "./pages/Providers";
 import Models from "./pages/Models";
 import Advisor from "./pages/Advisor";
 import Subagents from "./pages/Subagents";
-import Optimize from "./pages/Optimize";
 import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
 import Storage from "./pages/Storage";
@@ -59,7 +58,6 @@ const PAGE_TKEY: Record<Page, TKey> = {
   "codex-set": "nav.codexSet",
   integrations: "nav.connect",
   claude: "nav.claude",
-  optimize: "nav.optimize",
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
@@ -617,7 +615,6 @@ export default function App() {
                 {page === "providers" && <Providers apiBase={sharedBase} />}
                 {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} connected={targets.connected} catalogSyncedAt={targets.catalogSyncedAt} reportRestart={report} />}
                 {page === "subagents" && <Subagents key={sharedBase} apiBase={sharedBase} />}
-                {page === "optimize" && <Optimize key={sharedBase} apiBase={sharedBase} />}
                 {page === "advisor" && <Advisor key={sharedBase} apiBase={sharedBase} />}
                 {page === "logs" && <Logs apiBase={sharedBase} />}
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />}

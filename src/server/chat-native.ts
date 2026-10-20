@@ -297,10 +297,6 @@ export async function runNativeChatAttempt(
   };
 
   normalizePinnedChatEffort(execution);
-  if (config.optimize) {
-    const { applyOptimizationsToRawBody } = await import("../optimize/pipeline");
-    await applyOptimizationsToRawBody(execution.chatBody, config, route.modelId, logCtx);
-  }
   logCtx.requestedServiceTier = typeof execution.chatBody.service_tier === "string"
     ? execution.chatBody.service_tier
     : undefined;

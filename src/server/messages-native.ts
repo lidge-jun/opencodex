@@ -477,10 +477,6 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   // Every rebuild reads the same `body`; the builder copies and never mutates it, so no
   // credential, header or stripped block from an earlier build reaches the next one, and a build
   // for another credential domain decides opaque state from the full source again.
-  if (config.optimize) {
-    const { applyOptimizationsToRawBody } = await import("../optimize/pipeline");
-    await applyOptimizationsToRawBody(body, config, route.modelId, logCtx);
-  }
   const rejectUnrepresentable = resolveProtocolSettings(config).unrepresentable === "reject";
   const buildActiveRequest = () => {
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, "anthropic");
