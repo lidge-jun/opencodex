@@ -9,6 +9,17 @@ export interface DecisionQuotaWindow {
   percent: number;
   observedAt: number;
   resetAt?: number;
+  /** Model family this window meters (Antigravity Gemini vs Claude/3P buckets); absent means every model of the provider. */
+  family?: DecisionQuotaFamily;
+}
+export type DecisionQuotaFamily = "gem" | "cla";
+/** OAuth providers whose single active account quota may be published as advisory key-style evidence. */
+const OAUTH_QUOTA_PROVIDERS = new Set(["google-antigravity"]);
+/** True when the provider row can carry sole-credential decision evidence under `name`. */
+function keyEvidenceEligible(name: string, provider: OcxProviderConfig): boolean {
+  if (provider.disabled || (provider.apiKeyPool?.length ?? 0) > 1) return false;
+  const mode = provider.authMode ?? "key";
+  return mode === "key" || mode === "oauth" && OAUTH_QUOTA_PROVIDERS.has(name);
 }
 export interface DecisionQuotaAccount {
   id: string;
@@ -58,14 +69,14 @@ export function invalidateDecisionKeyQuotas(): void { keyEpoch++; keys.clear(); 
 /** Publish decision windows for a single-key provider; pooled, disabled or non-key providers are never published, and the table is bounded. */
 export function publishDecisionKeyQuota(name: string, provider: OcxProviderConfig, windows: readonly DecisionQuotaWindow[]): void {
   writesForTests++;
-  if (name.length > 1024 || provider.disabled || (provider.authMode ?? "key") !== "key" || (provider.apiKeyPool?.length ?? 0) > 1) return;
+  if (name.length > 1024 || !keyEvidenceEligible(name, provider)) return;
   if (keys.size >= 256 && !keys.has(name)) keys.delete(keys.keys().next().value!);
   keys.set(name, { root: getConfigDir(), epoch: keyEpoch, configGeneration: captureConfigGeneration(), policy: keyPolicy(provider), windows: copyWindows(windows) });
 }
 /** Read key-based evidence only when the config root, epoch, generation and provider policy still match what was published. */
 export function readLoadedDecisionKeyQuota(name: string, provider: OcxProviderConfig): readonly DecisionQuotaWindow[] | undefined {
   const row = keys.get(name);
-  if (!row || provider.disabled || (provider.authMode ?? "key") !== "key" || (provider.apiKeyPool?.length ?? 0) > 1
+  if (!row || !keyEvidenceEligible(name, provider)
     || row.root !== getConfigDir() || row.epoch !== keyEpoch || row.configGeneration !== captureConfigGeneration()
     || row.policy !== keyPolicy(provider)) return undefined;
   return row.windows.map(row => ({ ...row }));
@@ -141,5 +152,5 @@ export function clearDecisionAccountQuotas(provider?: string, id?: string): void
 /** Copy only known window kinds into the bounded evidence table, so callers cannot retain a mutable reference. */
 function copyWindows(windows: readonly DecisionQuotaWindow[]): DecisionQuotaWindow[] {
   if (windows.length > MAX_WINDOWS) return [];
-  return windows.filter(row => ["5h", "weekly", "monthly", "fable", "opus", "sonnet"].includes(row.window)).map(row => ({ window: row.window, percent: row.percent, observedAt: row.observedAt, ...(row.resetAt !== undefined ? { resetAt: row.resetAt } : {}) }));
+  return windows.filter(row => ["5h", "weekly", "monthly", "fable", "opus", "sonnet"].includes(row.window)).map(row => ({ window: row.window, percent: row.percent, observedAt: row.observedAt, ...(row.resetAt !== undefined ? { resetAt: row.resetAt } : {}), ...(row.family === "gem" || row.family === "cla" ? { family: row.family } : {}) }));
 }
