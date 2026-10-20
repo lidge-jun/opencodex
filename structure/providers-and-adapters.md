@@ -589,3 +589,12 @@ remains authoritative. No raw body is retained in that field, serialized into cl
 Presence of both `detail` and `error` across the original root and its own non-array `response` record is ambiguous, regardless of values; null counts and deeper quoted objects do not. This is checked before selecting an error carrier.
 For complete bounded HTTP errors, the text wrapper selects root `detail`/`error` when present; otherwise it selects the own `response` record for the same exact `detail` or `error.message` match. It never searches another carrier after a nonmatch or descends further. Policy-fallback and direct callers share this wrapper; SSE message parsing disables nested HTTP selection. The same bounded HTTP parser retains allowlisted dedicated `code` fields from root and response before display truncation; diagnostic `type` is never promoted, including when code is absent or malformed. Policy/direct classification inspects full text only without authoritative carrier metadata; SSE never borrows hard codes from quoted message JSON.
 Committed output, cancellation, hard policy refusals and resend limits remain stronger than model fallback.
+
+
+Token Plan dated-model policy (2026-10-20): both curated presets include exact
+`deepseek-v4.1-flash-1017` metadata without changing live discovery or Responses pins.
+The registry may seed `noStructuredOutputModels` at route resolution, unioned with
+operator opt-outs, just as it seeds `noJsonSchemaModels`. The full opt-out wins on
+both translated and native Chat paths. For 1017 this deliberately omits JSON requests:
+strict schemas are rejected and a `json_object` fallback has not been verified.
+The bare model's independently verified downgrade remains separate.

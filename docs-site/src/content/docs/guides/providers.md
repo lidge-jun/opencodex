@@ -739,7 +739,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Z.AI (GLM Coding) | `https://api.z.ai` — Responses at `/api/v1/responses` by default; Chat Completions at `/api/coding/paas/v4/chat/completions` per model through `modelAdapters` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
 | BigModel Coding Plan (Responses, static roster) | `https://open.bigmodel.cn/api/v1` |
-| Qwen Cloud | Token plan (default): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · or Custom |
+| Qwen Cloud | Token plan (default): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · or Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
@@ -1678,3 +1678,32 @@ An access-denied result does not by itself prove an expired login or an ineligib
 ## Large inline images on Chat providers
 
 Translated OpenAI-compatible Chat requests shrink inline images when their combined base64 data exceeds 3.5 MiB. Older images lose detail first. This is a best-effort image budget, so large text, schemas, or images that cannot be processed may still exceed an upstream request limit. Remote image URLs are not downloaded, and images that cannot be shrunk remain attached. Native Chat passthrough keeps its original image bytes.
+
+
+### Alibaba Token Plan dated catalogue (2026-10-20)
+
+The Beijing preset curates Personal chat models; the International preset curates Team
+chat models. Both regions offer both subscription tiers. Discovery remains disabled by
+default because the upstream list also includes non-chat models. Saved model selections
+and explicit International endpoint overrides are not rewritten by this catalogue refresh.
+
+Both presets include `deepseek-v4.1-flash-1017`: text and image input, text output,
+1,000,000 context, documented `low`/`high`/`max` efforts (default `high`). The 393,216
+output budget follows the existing plan normalization of the vendor's 393K/384K display;
+it is not a measured exact boundary and differs from the lab's 384,000 value.
+The existing structured-output opt-out omits `response_format` for this exact ID:
+strict schemas were rejected, and `json_object` is unverified. This is best-effort text,
+not guaranteed JSON. Validate any structured response in the client. The bare model's
+verified JSON downgrade is unchanged. A direct Responses success does not add a new
+Responses default pin or prove reasoning replay.
+
+`deepseek-v4-pro-0813` now joins the existing Personal curation based on current listing
+and documented entitlement. The International active catalogue removes retired
+`deepseek-v3.2` and bare `deepseek-v4-flash`; `deepseek-v4-flash-0731` remains available.
+The canonical Beijing endpoint is
+`https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1`; the International endpoint is
+`https://token-plan.maas.qwencloudapi.com/compatible-mode/v1`.
+
+Sources checked 2026-10-20: [model card](https://www.qianwenai.com/models/deepseek-v4.1-flash-1017),
+[Chat API reference](https://docs.qwencloud.com/api-reference/chat/openai-chat), and
+[Personal overview](https://help.aliyun.com/en/model-studio/token-plan-personal-overview).

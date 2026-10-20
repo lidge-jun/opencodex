@@ -36,7 +36,8 @@ const normalize = (url: string): string => url.trim().replace(/\/+$/, "").toLowe
 
 /** True when the saved URL is one the international entry actually serves. */
 function isInternationalEndpoint(baseUrl: string): boolean {
-  return ALIBABA_INTL_BASE_URL_CHOICES.some(
+  return normalize(baseUrl) === "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    || ALIBABA_INTL_BASE_URL_CHOICES.some(
     choice => choice.baseUrl && normalize(choice.baseUrl) === normalize(baseUrl),
   );
 }

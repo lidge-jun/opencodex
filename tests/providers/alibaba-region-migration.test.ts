@@ -47,7 +47,7 @@ test("moves a Beijing entry holding an international endpoint", () => {
   // so a Team-Edition-only model is present and routes.
   expect(moved.models).toContain("kimi-k2.7-code");
   expect(routeModel(projection.config, "alibaba-token-plan-intl/kimi-k2.7-code").provider.baseUrl)
-    .toContain("ap-southeast-1");
+    .toBe(INTL_URL);
 });
 
 test("the migrated config survives a reload", () => {
@@ -176,4 +176,15 @@ test("carries liveModels, modelCosts, and a user-authored note, but not the Beij
   expect(moved.modelCosts).toEqual(costs);
   expect(moved.note).toBe("my own note");
   expect(moved.models).toContain("kimi-k2.7-code");
+});
+
+
+test("canonical international host is recognized while preserving the saved destination", () => {
+  const config = migratableConfig();
+  const canonical = "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1";
+  config.providers["alibaba-token-plan"]!.baseUrl = canonical;
+  const projection = projectAlibabaRegionMigration(config);
+  expect(projection.changed).toBe(true);
+  expect(projection.config.providers["alibaba-token-plan-intl"]?.baseUrl).toBe(canonical);
+  expect(config.providers["alibaba-token-plan"]?.baseUrl).toBe(canonical);
 });

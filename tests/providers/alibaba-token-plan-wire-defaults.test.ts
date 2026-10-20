@@ -78,7 +78,7 @@ describe("the Token Plan default is isolated to the registry provider", () => {
     const resolved = resolveWireProtocolOverride("alibaba-token-plan", "qwen3.8-flash", tokenPlanProvider(), "responses");
     expect(resolved.adapter).toBe("openai-responses");
     expect(resolved.apiKey).toBe("sk-test");
-    expect(resolved.baseUrl).toBe("https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1");
+    expect(resolved.baseUrl).toBe("https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1");
   });
 });
 
@@ -133,7 +133,7 @@ describe("the Token Plan wire default survives the handleResponses replay", () =
 
   test("qwen3.8-flash reaches the Responses upstream, never /chat/completions", async () => {
     const url = await drive("qwen3.8-flash", "responses");
-    expect(url).toContain("token-plan.cn-beijing.maas.aliyuncs.com");
+    expect(url).toContain("token-plan.maas.qianwenaiapi.com");
     expect(url).toContain("/responses");
     expect(url).not.toContain("chat/completions");
   });
@@ -144,7 +144,7 @@ describe("the Token Plan wire default survives the handleResponses replay", () =
   // with the other two.
   test("qwen3.7-plus reaches the Responses upstream, never /chat/completions", async () => {
     const url = await drive("qwen3.7-plus", "responses");
-    expect(url).toContain("token-plan.cn-beijing.maas.aliyuncs.com");
+    expect(url).toContain("token-plan.maas.qianwenaiapi.com");
     expect(url).toContain("/responses");
     expect(url).not.toContain("chat/completions");
   });
@@ -163,14 +163,14 @@ describe("the Token Plan wire default survives the handleResponses replay", () =
 
   test("glm-5.3 reaches the Responses upstream on a responses inbound", async () => {
     const url = await drive("glm-5.3", "responses");
-    expect(url).toContain("token-plan.cn-beijing.maas.aliyuncs.com");
+    expect(url).toContain("token-plan.maas.qianwenaiapi.com");
     expect(url).toContain("/responses");
     expect(url).not.toContain("chat/completions");
   });
 
   test("qwen3.8-flash keeps the chat upstream on a chat inbound replay", async () => {
     const url = await drive("qwen3.8-flash", "chat");
-    expect(url).toContain("token-plan.cn-beijing.maas.aliyuncs.com");
+    expect(url).toContain("token-plan.maas.qianwenaiapi.com");
     expect(url).toContain("chat/completions");
   });
 

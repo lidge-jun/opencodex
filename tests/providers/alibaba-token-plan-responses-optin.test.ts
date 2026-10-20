@@ -17,6 +17,9 @@
  * a Responses wire default must carry the Responses-side preservation beside it.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { routeModel } from "../../src/router";
+import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat/passthrough";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
@@ -58,7 +61,7 @@ describe("the documented Responses opt-in resolves and reaches the native wire",
       const resolved = resolveWireProtocolOverride("alibaba-token-plan", model, provider, "responses");
       expect(resolved.adapter).toBe("openai-responses");
       expect(resolved.apiKey).toBe("sk-test");
-      expect(resolved.baseUrl).toBe("https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1");
+      expect(resolved.baseUrl).toBe("https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1");
     });
   }
 
@@ -110,20 +113,20 @@ describe("the opt-in survives the handleResponses replay", () => {
 
   test("qwen3.8-flash reaches /responses once opted in", async () => {
     const url = await drive("qwen3.8-flash", { "qwen3.8-flash": "openai-responses" });
-    expect(url).toContain("token-plan.cn-beijing.maas.aliyuncs.com");
+    expect(url).toContain("token-plan.maas.qianwenaiapi.com");
     expect(url).toContain("/responses");
     expect(url).not.toContain("chat/completions");
   });
 
   test("an unpinned family member reaches /chat/completions without the opt-in", async () => {
     const url = await drive("qwen3.8-max");
-    expect(url).toContain("token-plan.cn-beijing.maas.aliyuncs.com");
+    expect(url).toContain("token-plan.maas.qianwenaiapi.com");
     expect(url).toContain("chat/completions");
   });
 
   test("an unpinned family member reaches /responses once opted in", async () => {
     const url = await drive("qwen3.8-max", { "qwen3.8-max": "openai-responses" });
-    expect(url).toContain("token-plan.cn-beijing.maas.aliyuncs.com");
+    expect(url).toContain("token-plan.maas.qianwenaiapi.com");
     expect(url).toContain("/responses");
     expect(url).not.toContain("chat/completions");
   });
@@ -152,4 +155,62 @@ describe("a Responses default flip must carry Responses-side reasoning preservat
     }
     expect(entry.preserveResponsesReasoningContent).toBe(true);
   });
+});
+
+
+describe("1017 exact-ID Token Plan adapter policy", () => {
+  const model = "deepseek-v4.1-flash-1017";
+  const schema = { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true };
+  for (const id of ["alibaba-token-plan", "alibaba-token-plan-intl"]) {
+    const entry = getProviderRegistryEntry(id)!;
+    const route = (overrides: Partial<OcxProviderConfig> = {}, requestedModel = model) => routeModel({
+      port: 10100, defaultProvider: id,
+      providers: { [id]: { ...providerConfigSeed(entry), apiKey: "sk-test", ...overrides } },
+    } as OcxConfig, `${id}/${requestedModel}`);
+
+    test(`${id} routes the documented ladder and high default without a Responses pin`, () => {
+      const resolved = route();
+      expect(resolved.provider.modelReasoningEfforts?.[model]).toEqual(["low", "high", "max"]);
+      expect(resolved.provider.modelDefaultReasoningEfforts?.[model]).toBe("high");
+      expect(resolved.provider.modelInputModalities?.[model]).toEqual(["text", "image"]);
+      expect(resolved.provider.modelContextWindows?.[model]).toBe(1_000_000);
+      expect(resolved.provider.modelMaxOutputTokens?.[model]).toBe(393_216);
+      for (const inbound of INBOUNDS) {
+        expect(resolveWireProtocolOverride(id, model, resolved.provider, inbound).adapter).toBe("openai-chat");
+      }
+      for (const [effort, expected] of [["low", "low"], ["medium", "high"], ["xhigh", "high"], ["max", "max"]]) {
+        const request = createOpenAIChatAdapter(resolved.provider).buildRequest({
+          modelId: model, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+          options: { reasoning: effort }, stream: false,
+        });
+        const body = JSON.parse(request.body as string);
+        expect(body.reasoning_effort).toBe(expected);
+        expect(body.thinking_budget).toBeUndefined();
+      }
+    });
+
+    test(`${id} omits unknown structured-output formats on both Chat paths`, () => {
+      const resolved = route();
+      expect(resolved.provider.noStructuredOutputModels).toContain(model);
+      expect(resolved.provider.noJsonSchemaModels).not.toContain(model);
+      for (const format of [schema, { type: "json_object" }]) {
+        const request = createOpenAIChatAdapter(resolved.provider).buildRequest({
+          modelId: model, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+          options: { textFormat: format }, stream: false,
+        });
+        expect(JSON.parse(request.body as string).response_format).toBeUndefined();
+        const native = buildOpenAIChatPassthroughRequest(resolved.provider, {
+          messages: [{ role: "user", content: "hi" }], response_format: format,
+        }, model, false);
+        expect(JSON.parse(native.body as string).response_format).toBeUndefined();
+      }
+      // Existing bare-ID evidence stays separate: its verified JSON fallback still applies.
+      const bare = route({}, "deepseek-v4.1-flash");
+      const request = createOpenAIChatAdapter(bare.provider).buildRequest({
+        modelId: bare.modelId, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+        options: { textFormat: schema }, stream: false,
+      });
+      expect(JSON.parse(request.body as string).response_format).toEqual({ type: "json_object" });
+    });
+  }
 });

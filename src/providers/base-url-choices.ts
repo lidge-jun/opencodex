@@ -3,7 +3,7 @@
  * Token plan is the GUI default; pay-as-you-go and custom are selectable.
  */
 export const QWEN_CLOUD_TOKEN_PLAN_BASE_URL =
-  "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+  "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1";
 export const QWEN_CLOUD_PAYG_BASE_URL =
   "https://dashscope.aliyuncs.com/compatible-mode/v1";
 
@@ -23,13 +23,13 @@ export const QWEN_CLOUD_BASE_URL_CHOICES: readonly ProviderBaseUrlChoice[] = [
 
 /**
  * Alibaba Token Plan International (ap-southeast-1) endpoint presets.
- * Same product as the Beijing Token Plan but for international accounts.
+ * Separate regional account and billing destination; both regions offer both tiers.
  * Note: ALIBABA_INTL_TOKEN_PLAN_BASE_URL intentionally duplicates
  * QWEN_CLOUD_TOKEN_PLAN_BASE_URL — same host, different product branding
- * and model lineup. Kept as a separate constant for clarity.
+ * and preset curation. Kept as a separate constant for clarity.
  */
 export const ALIBABA_INTL_TOKEN_PLAN_BASE_URL =
-  "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
+  "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1";
 export const ALIBABA_INTL_PAYG_BASE_URL =
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
 

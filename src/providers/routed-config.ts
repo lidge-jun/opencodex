@@ -172,6 +172,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const noStopModels = staticPolicy.noStopModels;
   const noPenaltyModels = staticPolicy.noPenaltyModels;
   const noJsonSchemaModels = staticPolicy.noJsonSchemaModels;
+  const noStructuredOutputModels = staticPolicy.noStructuredOutputModels;
   const autoToolChoiceOnlyModels = staticPolicy.autoToolChoiceOnlyModels;
   const preserveReasoningContentModels = staticPolicy.preserveReasoningContentModels;
   const requiresReasoningPlaceholderModels = staticPolicy.requiresReasoningPlaceholderModels;
@@ -325,6 +326,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(noStopModels ? { noStopModels } : {}),
     ...(noPenaltyModels ? { noPenaltyModels } : {}),
     ...(noJsonSchemaModels ? { noJsonSchemaModels } : {}),
+    ...(noStructuredOutputModels ? { noStructuredOutputModels } : {}),
     ...(autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels } : {}),
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
     ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),
