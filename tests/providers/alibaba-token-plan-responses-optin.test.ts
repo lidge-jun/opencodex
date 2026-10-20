@@ -231,6 +231,17 @@ describe("custom Beijing destination structured-output policy", () => {
         if (enriched) enrichProviderFromRegistry("custom-beijing", provider);
         const resolved = routeModel({ port: 10100, defaultProvider: "custom-beijing",
           providers: { "custom-beijing": provider } } as OcxConfig, `custom-beijing/${model}`);
+        expect(resolved.provider.modelDefaultReasoningEfforts?.[model]).toBe("high");
+        expect(resolved.provider.modelReasoningEffortMap?.[model]?.medium).toBe("high");
+        if (enriched) {
+          expect(provider.modelDefaultReasoningEfforts?.[model]).toBe("high");
+          expect(provider.modelReasoningEffortMap?.[model]?.medium).toBe("high");
+        }
+        const effort = createOpenAIChatAdapter(resolved.provider).buildRequest({
+          modelId: model, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+          options: { reasoning: "medium" }, stream: false,
+        });
+        expect(JSON.parse(effort.body as string).reasoning_effort).toBe("high");
         expect(resolved.provider.noStructuredOutputModels).toContain("operator-model");
         expect(resolved.provider.noStructuredOutputModels).toContain(model);
         for (const format of [{ type: "json_object" }, { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true }]) {
@@ -245,6 +256,16 @@ describe("custom Beijing destination structured-output policy", () => {
           expect(JSON.parse(translated.body as string).response_format).toBeUndefined();
         }
         expect(resolved.provider.noStructuredOutputModels).toEqual([model, "operator-model"]);
+        const overridden: OcxProviderConfig = {
+          ...provider,
+          modelDefaultReasoningEfforts: { [model]: "max" },
+          modelReasoningEffortMap: { [model]: { medium: "low" } },
+        };
+        if (enriched) enrichProviderFromRegistry("custom-beijing", overridden);
+        const explicit = routeModel({ port: 10100, providers: { "custom-beijing": overridden } } as OcxConfig, `custom-beijing/${model}`);
+        expect(explicit.provider.modelDefaultReasoningEfforts?.[model]).toBe("max");
+        expect(explicit.provider.modelReasoningEffortMap?.[model]?.medium).toBe("low");
+
       });
     }
   }

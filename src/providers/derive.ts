@@ -3,7 +3,7 @@ import { COST_VENDOR_PRIORITY, getModelMetadata, getModelMetadataCaseInsensitive
 import { cloneFastWire } from "./fastwire";
 import { isAzureModelMetadataDestination, publishedAzureModelMetadata, type AzureModelMetadata } from "./azure-model-metadata";
 import { resolveModelPolicy } from "./resolved-model-policy";
-import { stableUnion } from "./resolved-model-policy-merge";
+import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-merge";
 import {
   PROVIDER_REGISTRY,
   registryEntryForProviderDestination,
@@ -478,6 +478,12 @@ function applyVerbosityDefaults(prov: OcxProviderConfig, entry: ProviderRegistry
 function enrichReasoningMetadataByDestination(prov: OcxProviderConfig): void {
   const destination = registryEntryForProviderDestination(prov);
   applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
+  if (destination?.modelDefaultReasoningEfforts) {
+    prov.modelDefaultReasoningEfforts = mapFill(destination.modelDefaultReasoningEfforts, prov.modelDefaultReasoningEfforts)[0];
+  }
+  if (destination?.modelReasoningEffortMap) {
+    prov.modelReasoningEffortMap = nestedMapFill(destination.modelReasoningEffortMap, prov.modelReasoningEffortMap)[0];
+  }
   if (destination?.noStructuredOutputModels?.length) {
     prov.noStructuredOutputModels = stableUnion(destination.noStructuredOutputModels, prov.noStructuredOutputModels)[0];
   }
