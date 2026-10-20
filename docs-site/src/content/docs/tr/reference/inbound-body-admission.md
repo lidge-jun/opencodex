@@ -11,13 +11,39 @@ okuyucuların aynı sınırı kullanması için proxy'yi yeniden başlatın.
 
 ## Sınırı artırmak eşzamanlılığı değiştirir
 
-Çözümlenen sınır 256 MiB'ı aştığında kapsanan her HTTP isteği, yapılandırılmış
-alanının tamamını süreç genelinde paylaşılan 512 MiB kabul bütçesinden ayırır.
-Bu, birden çok dinleyici aynı süreci paylaşsa bile aynı anda en fazla bir böyle
-isteğin çalışacağı anlamına gelir. Küçük gövdeler de alanın tamamını ayırır;
-küçük bir Content-Length veya sıkıştırma kabulü atlatmaz. Rezervasyon, JSON
-ayrıştırılır ayrıştırılmaz değil; yanıt akışı bitene, hata verene veya iptal
-tamamlanana kadar sürer.
+Etkin sınır 256 MiB'ı aştığında kapsanan her HTTP isteği, **gövdeden herhangi
+bir veri okunmadan önce** istek başına etkin payın tamamını ayırmalıdır. Süreç
+genelinde paylaşılan kabul bütçesi 512 MiB'dan **2 GiB**'a çıkarılmıştır; aynı
+süreçteki birden çok dinleyici de bu bütçeyi paylaşır. Bu bütçe
+`appOwnedMemoryBudgetMb` ayarından ayrıdır.
+
+Boyut denetimli JSON ayrıştırması tamamlanmadan önce küçük bir `Content-Length`
+veya küçük bir sıkıştırılmış aktarım gövdesi rezervasyonu azaltmaz. Kabul
+denetimi bu değerleri çözülmüş ya da normalleştirilmiş JSON boyutunun güvenilir
+kanıtı olarak kullanmaz.
+
+Boyut sınırları içinde başarılı JSON ayrıştırmasından sonra okuyucu,
+rezervasyonu aktarımda gözlenen bayt sayısı, çözülmüş bayt sayısı ve çevirici
+ölçüm için bir bütçe sağladığında mevcut normalleştirilmiş JSON ölçümünün en
+büyüğüne indirir. Mevcut UTF-8 ve yeniden serileştirilmiş JSON denetimleri
+korunur; girdi bayt uzunluğu daha büyük olabilen normalleştirilmiş JSON
+boyutunun yerine geçmez. Rezervasyon yalnızca azalır ve başlangıçta ayrılan
+istek başına payı aşmaz; daha büyük bir normalleştirilmiş JSON ölçümü bile
+rezervasyonu artırmaz.
+
+İstek başına sınır 512 MiB olduğunda bütçe, rezervasyonlar ölçülüp azaltılmadan
+önce **her biri tam 512 MiB ayıran en fazla 4 yüklemeyi** kabul edebilir.
+Ayrıştırma sonrasında eşzamanlılık 4 istekle sabitlenmez: örneğin azalan
+rezervasyonlar sonraki kabullere yer açtığında, paylaşılan bütçe ve diğer
+sınırlar izin verdiği sürece **8 çok küçük istek aynı anda yanıt akışı
+iletebilir**.
+
+Azaltılan rezervasyon, asenkron çalışma ve sağlayıcı beklemeleri boyunca,
+yanıt akışının sonuna (EOF), hataya veya iptal işleminin tamamlanmasına kadar
+tutulur. Yalnızca ayrıştırmanın bitmesi onu serbest bırakmaz. İstemci
+bağlantısı kesilirse üretici tarafındaki iptal tamamlanana kadar tutulur.
+Hata, durdurma ve iptal aynı anda gerçekleşse bile tam olarak bir kez serbest
+bırakılır.
 
 Kapsanan POST uç noktaları `/v1/responses`, `/v1/responses/compact`,
 `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`,
@@ -26,31 +52,50 @@ Görseller, arama ve belirteç sayımı mevcut yapılandırılabilir gövde baş
 sınırlarını korur. İç doğrudan çeviri ve kombo çağrıları ikinci bir HTTP alanı
 ayırmaz. Yönetim, ses, bağlam geçmişi ve WebSocket sınırları değişmez.
 
-Atlanan/sıfır ayarı veya 256 MiB ya da altında çözümlenen sınır, bu ek
+Atlanan/sıfır ayarı veya 256 MiB ya da altındaki etkin sınır, bu ek
 eşzamanlılık kapısını etkinleştirmez. Mevcut istek sayısı ve diğer kaynak
 sınırları yine uygulanır.
 
 ## Geçici ret ile büyük gövde arasındaki fark
 
-Geçici olarak kullanılamayan alan, protokol ayrıştırması veya sağlayıcıya
-göndermeden önce HTTP **503**, `Retry-After: 1` ve `server_busy` hata kodunu
-üretir. Messages ve belirteç sayan istemciler `overloaded_error` türünde
-Anthropic biçimli hata; OpenAI uyumlu istemciler `server_error` alır. Yeniden
-deneme başlığına ve istemci geri çekilmesine uyarak mevcut istek tamamlandıktan
-sonra yeniden deneyin. Gövde sınırını daha da yükseltmek dolu alanı çözmez.
+Payın tamamı geçici olarak ayrılamıyorsa istek, **en fazla 32 bekleyen istek
+tutan FIFO kuyruğuna** girebilir; **bekleme sınırı 120 saniyedir**. Bekleme
+sırasında gövdeler okunmaz. Ölçümle rezervasyon azalması veya son serbest
+bırakma yer açtığında istekler kuyruk sırasıyla kabul edilir. Beklerken
+durdurulan istek kuyruktan çıkarılır ve okunmamış gövdesi tüketilmeden iptal
+edilir.
+
+Kuyruk doluysa veya bekleme süresi dolarsa gövde ayrıştırılmadan ya da
+sağlayıcıya gönderilmeden önce HTTP **503**, `Retry-After: 1` ve `server_busy`
+hata kodu döner. Ret sırasında okunmamış gövdeler iptal edilir. Messages ve
+belirteç sayan istemciler `overloaded_error` türünde Anthropic biçimli hata;
+OpenAI uyumlu istemciler `server_error` alır. Kimlik doğrulaması ve kaynak
+denetimleri kabulden ve kuyruğa girişten önce çalışır.
+
+Yeniden deneme başlığına ve istemci geri çekilmesine uyun. Sınırlı bekleme ve
+ölçülen rezervasyonlar önlenebilir kapasite retlerini azaltır, ancak tüm 503
+yanıtlarını ortadan kaldırmaz. İstek başına sınırı daha da yükseltmek sürekli
+kapasite tükenmesini çözmez.
 
 İstek başına sınırından büyük gövde mevcut HTTP **413** işlemesini izler.
-Bildirilen büyük boyut, meşgul ret yerine bu yolu korur. Bağlantı kopması
-mevcut iptal davranışını korur. Kimlik doğrulaması ve kaynak denetimleri bu
-eşzamanlılık kapısından önce çalışır.
+Bildirilen büyük boyut, meşgul ret yerine bu yolu korur.
 
 ## Bütçe neyi ölçer?
 
-512 MiB, kabul edilen istek başına alanların toplamıdır; **süreç belleğinin
-512 MiB altında kalacağının garantisi değildir**. Çözümleme, dizeler, nesne
-grafları, istek kopyaları ve diğer uygulama durumu ek bellek kullanır. Mevcut
-UTF-8 ve yeniden serileştirilmiş JSON ölçümleri korunur; girdi bayt uzunluğu,
-daha büyük olabilen normalleştirilmiş JSON boyutunun yerine geçmez.
+**2 GiB** bütçesi kabul birimlerini sayar: ayrıştırma öncesinde tam payları,
+sonrasında ölçülen rezervasyonları. **Süreç RSS'sinin veya ayrıştırılmış nesne
+yığınının sınırı değildir** ve bellek kullanımının 2 GiB altında kalacağını
+garanti etmez. Çözümleme, dizeler, nesne grafikleri, istek kopyaları ve diğer
+uygulama durumu ek bellek kullanır.
 
-Paralel küçük istekler için mümkünse varsayılan sınırı koruyun. Büyük geçmiş
-iş akışı için artırırken ek eşzamanlılık kısıtını kabul edin.
+Paylaşılan bütçenin 512 MiB'dan 2 GiB'a çıkarılması toplam rezervasyon payını
+dört katına çıkarır. Sınırı 256 MiB'ın üzerine çıkarmayı seçen kurulumlar,
+her biri tam 512 MiB ayıran bir yükleme yerine artık en fazla 4 yüklemeyi kabul
+edebilir; dolayısıyla olası en yüksek bellek kullanımı artar. Ayrıştırılmış
+nesneler ve kopyalar gerçek bellek kullanımını kabul bütçesinin üzerine
+çıkarabilir. Varsayılan ve daha küçük sınırlar bu kapıyı etkinleştirmez ve
+mevcut davranışlarını korur.
+
+Mümkünse istek başına varsayılan sınırı koruyun. Büyük geçmiş gerektiren bir
+iş akışı için artırırken olası bellek tepe değerinin büyümesini ve sınırlı
+beklemeyi hesaba katın.
