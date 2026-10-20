@@ -246,6 +246,15 @@ completion markers nor retry delay; quota reads remain available. Main refresh c
 shared credential ownership, then prepared credentials and restrictions are rechecked. Lifecycle
 cleanup uses the dependency-free quota-auto-refresh state leaf, avoiding a reconciliation cycle.
 
+### Offline idle staggering evidence slice (#7206 PR A)
+
+`src/codex/idle-stagger-planner.ts` owns only the pure `PlannerInput` -> `PlannerResult` diagnostic model: verified comparable 5-hour evidence, foreground/quiet/observe-only modes, stable 300/N target slots and conservative epoch/generation revalidation.
+Its pure attempt ledger transitions and crash recovery model a single reservation per physical operation (including shared short/weekly effects); unknown send outcomes fail closed rather than retry.
+The model bounds the eligible cohort at 1024 accounts and the attempt ledger at 4096 entries, refusing further planning at capacity; no attempt state is persisted by this module.
+`src/codex/idle-stagger-replay.ts` separately evaluates read-only synthetic `ReplayTrace` inputs into `ReplayMetrics` for passive, legacy and hypothetical policy fixtures, reporting known-unusable time and unknown coverage separately with bounded trace size.
+Both modules have no imports from live account-pool workers and do not perform HTTP, authentication, timer scheduling, file I/O or runtime quota activation; `OfflineSlot` is not an upstream send permit.
+Tests: `tests/codex-integration/idle-stagger-planner.test.ts` and `tests/codex-integration/idle-stagger-replay.test.ts` use the shared fixture-path authority; no runtime routing or the existing `codexQuotaAutoRefresh` policy is changed.
+
 The account-pool dashboard exposes one bulk control under Advanced settings, not per-card
 rows. It applies both reported 5-hour and weekly windows to every current main/added account;
 new accounts do not inherit opt-in. The existing granular settings API remains authoritative.
