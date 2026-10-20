@@ -150,7 +150,7 @@ test("stays silent for a non-string baseUrl (control: unchanged pre-existing beh
  * the international Team Edition is a separate provider that honors its configured endpoint.
  * Locking it here means a change to either registry entry has to face this test.
  */
-const ALIBABA_BEIJING_BASE_URL = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
+const ALIBABA_BEIJING_BASE_URL = "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1";
 const ALIBABA_INTL_BASE_URL = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
 
 test("alibaba-token-plan is pinned to Beijing and warns about a saved international URL", () => {

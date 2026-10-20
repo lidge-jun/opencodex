@@ -256,7 +256,14 @@ function providerStillMatchesRegistry(name: string, prov: OcxProviderConfig): bo
   if (!entry) return false;
   if (!prov.baseUrl || !entry.baseUrl) return true;
   const choices = entry.baseUrlChoices?.map(choice => choice.baseUrl) ?? [];
-  const known = [entry.baseUrl, ...choices]
+  // Retain the historical Token Plan destinations for configs saved before the
+  // canonical-host update. Matching them must not rewrite the operator's baseUrl.
+  const legacy = name === "alibaba-token-plan-intl"
+    ? ["https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"]
+    : name === "alibaba-token-plan"
+      ? ["https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"]
+      : [];
+  const known = [entry.baseUrl, ...choices, ...legacy]
     .filter((url): url is string => typeof url === "string")
     .map(normalizedProviderEndpoint);
   return known.includes(normalizedProviderEndpoint(prov.baseUrl));

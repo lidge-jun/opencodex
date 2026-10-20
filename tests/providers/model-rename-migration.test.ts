@@ -637,3 +637,23 @@ describe("registry-seeded metadata does not re-arm the rename (#5066)", () => {
     expect(changed).toBe(false);
   });
 });
+
+
+test("Token Plan preview repair accepts canonical and legacy hosts without rewriting destinations", () => {
+  for (const [id, urls] of [
+    ["alibaba-token-plan-intl", [INTL_BASE_URL, "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1"]],
+    ["alibaba-token-plan", ["https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1"]],
+  ] as const) {
+    for (const baseUrl of urls) {
+      const config = staleConfig();
+      const row = config.providers["alibaba-token-plan-intl"]!;
+      config.providers = { [id]: { ...row, baseUrl } };
+      const result = projectModelRenames(config, [{ ...RENAME, provider: id }]);
+      expect(result.changed).toBe(true);
+      expect(result.config.providers[id]?.models).toContain("qwen3.8-max");
+      expect(result.config.providers[id]?.baseUrl).toBe(baseUrl);
+      expect(config.providers[id]?.models).toContain("qwen3.8-max-preview");
+    }
+  }
+});
