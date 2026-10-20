@@ -774,6 +774,8 @@
   "identity-subagent.test.ts": "adapters", "init-backup-cleanup.test.ts": "service",
   "init-eof.test.ts": "service", "initial-model-selection.test.ts": "providers",
   "initial-selection-write-fence.test.ts": "providers", "injection-model-api.test.ts": "codex-integration",
+  "inbound-body-admission.test.ts": "server",
+  "inbound-body-budget.test.ts": "server",
   "inline-think-boundaries.test.ts": "adapters/openai", "input-admission.test.ts": "server",
   "install-scripts.test.ts": "ci-workflows", "installed-gate-drivers.test.ts": "ci-workflows",
   "integrations-current-store.test.ts": "clients", "integrations-dsh-profile-patch.test.ts": "clients", "integrations-hermes-affinity.test.ts": "clients",
