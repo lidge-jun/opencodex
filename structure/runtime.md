@@ -163,6 +163,11 @@ server infrastructure (`src/lib/bun-stream-caps.ts` owns the Bun stream-capabili
 static GUI, WebSocket bridge, port/liveness, decompression, and adapter-resolution helpers live in
 their own files. `src/grok/inject.ts` holds the shared canonical config-write lock across injection and cleanup. It validates the locked destination before backup and every publication, preserves refresh-only admission and no-follow checks, and distinguishes retryable contention from an unsafe namespace. A refresh-only destination change before rename preserves files and returns the existing refresh skip result. Native Grok and manual editors do not participate in this advisory lock. `src/server/management/link-routes.ts` and `src/server/index/link-listener.ts` put their link-store read/decide/write sections under the existing config mutation transaction; SSH and other asynchronous work stays outside it. Link-store coordination follows [Remote Link](remote-link.md).
 
+## Claude ingress tier routing
+
+`src/claude/inbound-model-options.ts` resolves optional `claudeCode.tierRoutes` after discovery aliases, exact/date-stripped `modelMap` (including intercept bindings), and explicit classifier routes. Only bare current or historical Claude tier IDs participate. Unset tiers and qualified selectors retain existing behavior.
+Targets enter the normal router once. The same resolver prevents caller native passthrough when a tier rewrites the ID. Launch `tierModels` and non-Claude ingresses are independent. `tests/claude-integration/claude-tier-routing.test.ts` covers the contract.
+
 ## Lifecycle
 
 Cross-home discovery in `src/cli/cross-home-owner.ts` checks concrete loopback address availability through `src/cli/loopback-family.ts` before probing each family. A synchronous ephemeral bind is immediately closed; only address/family-unavailable errors exclude that address. This prevents a disabled IPv6 loopback's off-host `::1` connect timeout from blocking startup. Other bind errors retain discovery, and a timeout on an available or unknown family still produces an indeterminate owner verdict. Live owners on either available family retain identity and attestation checks.

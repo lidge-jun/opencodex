@@ -693,7 +693,7 @@ express fall back to the hashed alias. Model ids MAY contain `--` (resolution sp
 `--` only); native slugs containing `--` fall back to the hashed form.
 
 **Model resolution order:** `[1m]` marker stripped → readable alias decoded → Desktop hashed
-alias decoded → `modelMap` exact match → date-stripped match (`-20250514` removed) → passthrough.
+alias decoded → `modelMap` exact match → date-stripped match (`-20250514` removed) → explicit classifier route → `tierRoutes` → passthrough.
 
 <a id="desktop-alias-resolution"></a>
 
@@ -867,7 +867,39 @@ entirely). The stub keeps tool call/result pairing intact.
 }
 ```
 
-Lookup order: discovery alias → exact id → id with date suffix stripped (`-20250514`) → passthrough.
+Lookup order: discovery alias → exact id → id with date suffix stripped (`-20250514`) → explicit
+classifier route (`classifierModel`, then `classifierFallbacks`) → tier route → passthrough.
+
+### Opt-in tier routing
+
+`claudeCode.tierRoutes` selects a route from the tier of a bare incoming Claude model ID.
+Unlike `tierModels`, it runs in the proxy for requests already arriving through Claude ingress;
+it does not change launcher defaults or Claude Code settings.
+
+```json
+{
+  "claudeCode": {
+    "tierRoutes": {
+      "opus": "openai/gpt-5.5",
+      "sonnet": "gemini/gemini-3-pro",
+      "haiku": "gemini/gemini-3-flash"
+    }
+  }
+}
+```
+
+The optional keys are `opus`, `sonnet`, `haiku`, and `fable`. Targets use the same route selectors
+as `modelMap`, including provider/model, combo, and policy routes. Configure only the tiers you
+want to redirect. Unset tiers and an absent policy preserve existing behavior.
+
+Both current IDs (`claude-sonnet-5-5`) and older version-first IDs
+(`claude-3-5-sonnet-20241022`) are recognized, as are `-latest` IDs and a trailing `[1m]` marker.
+Discovery aliases and provider-qualified IDs such as `anthropic/claude-sonnet-5-5` retain their
+explicit destination. Exact and date-stripped `modelMap` entries (including intercept bindings)
+and explicit classifier routes take precedence. A selected target is resolved once by the
+normal router, not fed back through tier routing. A tier redirected away from its incoming ID
+uses the routed path rather than caller-credential native passthrough. Responses and Chat
+Completions model selection is unchanged.
 
 See [Desktop alias resolution](#desktop-alias-resolution) for the rejection policy.
 
