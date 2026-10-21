@@ -67,6 +67,6 @@ export function applyRestartMessage(outcome: ApplyRestartOutcome): string {
     case "not-running": return "No client runtime is running; the applied settings take effect when it starts.";
     case "connection-changed": return "The connection changed during sync; the client runtime was not restarted. Run 'ocx sync' again.";
     case "restarted": return "Client runtime restarted after applying the Home's settings.";
-    case "failed": return "The client runtime restart did not complete; the previous runtime keeps serving. Retry with 'ocx restart' or 'ocx sync'.";
+    case "failed": return "The client runtime restart did not complete; the previous runtime keeps serving. If a background service or the desktop app owns it, restart it there; otherwise retry with 'ocx restart' or 'ocx sync'.";
   }
 }

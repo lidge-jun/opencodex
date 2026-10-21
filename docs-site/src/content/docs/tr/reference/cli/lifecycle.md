@@ -238,6 +238,8 @@ Doctor asla kimlik bilgilerini değiştirmez veya onarımlar uygulamaz.
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+> **Remote Link Child:** `ocx sync` Home'un Codex ayarlarını da uygular ve istemci çalışma zamanı bu uygulamadan önce başlamışsa, yeniden başlatma bayrağı olmadan da onu yeniden başlatır. Yeniden başlatma başarısız olursa önceki çalışma zamanı hizmet vermeye devam eder ve komut sıfırdan farklı bir kodla çıkar. `ocx status --json` ve `ocx link status --json` içindeki ilgili alanlar için [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity) (İngilizce) bölümüne bakın.
+
 Açıkça istenen yeniden başlatma, katalog ve önbellek baytları değişmese bile `config.toml` değişikliği başarıyla kaydedildikten sonra da çalışır. Yalnızca yapılandırmayı işleyen bir işlem değişiklik yapmadığında, reddedildiğinde, ön kontrolde kaldığında veya yazma geri alındığında yeniden başlatma tetiklenmez. Yeniden başlatma bayrağı olmadan sync, Codex’i otomatik olarak yeniden başlatmaz.
 
 Yapılandırılmış her sağlayıcıdan canlı model listesini alın ve birleştirilmiş

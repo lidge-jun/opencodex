@@ -24,7 +24,7 @@ import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tu
 import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } from "./link-state";
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState } from "./state";
-import { clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
+import { clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 
 let activeServer: Server<unknown> | null = null;
@@ -379,7 +379,16 @@ export async function startClientRuntime(
         { deadlineAt },
       );
     },
-    resume: () => serve({ port: servedPort, portWaitMs: CLIENT_RESTART_REBIND_WAIT_MS }),
+    resume: async () => {
+      // The connection may have changed while the replacement was starting (`ocx disconnect`, a
+      // new connect). Serving the old one again would be a stale runtime nothing recycles; hand
+      // off to the recycle, which starts whatever the durable state now calls for.
+      if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") {
+        await recycleStandalone(state.value.tokenFingerprint);
+        return;
+      }
+      await serve({ port: servedPort, portWaitMs: CLIENT_RESTART_REBIND_WAIT_MS });
+    },
     exitProcess: code => { process.exit(code); },
   });
 

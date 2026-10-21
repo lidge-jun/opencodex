@@ -838,18 +838,19 @@ export interface ConnectedSyncResult {
   homeSettings?: HomeCodexSettingsSource;
   /** The apply record this sync committed or kept (link Child with Home settings only). */
   appliedRecord?: HomeCodexSettingsRecord;
+  /** The Home's settings were injected but their record could not be written (OCX-6). */
+  applyRecordFailed?: true;
 }
 
 /**
- * Refresh the catalog and Codex config from the hub or Home. On a link Child the whole sync holds
- * the apply lock (OCX-6), so its record names the settings its own injection wrote.
+ * Refresh the catalog and Codex config from the hub or Home. Every sync holds the apply lock
+ * (OCX-6), so a sync that finds a link connection inside, whatever an earlier unlocked read said,
+ * never interleaves with another apply, and its record names what its own injection wrote.
  */
 export async function syncConnectedClient(
   options: { restartCodex?: boolean } = {},
   deps: ClientConnectDeps = {},
 ): Promise<ConnectedSyncResult> {
-  const state = readClientConnectionState();
-  if (state.kind !== "connected" || !isLinkConnection(state.value)) return syncConnectedClientUnlocked(options, deps);
   return withLinkApply(() => syncConnectedClientUnlocked(options, deps), deps.linkApplyLockPath);
 }
 
@@ -903,6 +904,7 @@ async function syncConnectedClientUnlocked(
   let injected = false;
   let homeSettings: HomeCodexSettingsSource | undefined;
   let appliedRecord: HomeCodexSettingsRecord | undefined;
+  let applyRecordFailed = false;
   if (next.selectedClients.includes("codex")) {
     let config = loadConfig();
     // #6957: a link Child applies the Home's OpenCodex-owned Codex settings with the catalog.
@@ -929,9 +931,11 @@ async function syncConnectedClientUnlocked(
           return recordHomeCodexSettings(linkId, settings, deps.now) ?? readHomeCodexSettingsRecord(linkId) ?? undefined;
         }, deps.lifecycleLockDeps);
       } catch (error) {
-        if (error instanceof Error && error.message === "client_token_changed") throw error;
-        try { clearHomeCodexSettingsRecord(); } catch { /* the error below already reports the missing record */ }
-        throw new Error("the Home's Codex settings were applied, but the apply record could not be written; run 'ocx sync' again", { cause: error });
+        // An ownership change is not a disk problem: report it as itself.
+        if (error instanceof Error && (error.message === "client_token_changed" || error.message === "client_connection_changed")) throw error;
+        // The injection committed, so the cache refresh below still runs; the caller reports this.
+        try { clearHomeCodexSettingsRecord(); } catch { /* status already reads no recorded apply or reports the write */ }
+        applyRecordFailed = true;
       }
     }
   }
@@ -944,6 +948,7 @@ async function syncConnectedClientUnlocked(
     catalogWritten: downloaded !== undefined, cacheSynced, injected, stale,
     ...(homeSettings ? { homeSettings } : {}),
     ...(appliedRecord ? { appliedRecord } : {}),
+    ...(applyRecordFailed ? { applyRecordFailed } : {}),
   };
 }
 

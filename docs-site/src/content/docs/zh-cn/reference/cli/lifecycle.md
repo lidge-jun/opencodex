@@ -152,6 +152,8 @@ ocx status --json
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+> **Remote Link Child：** `ocx sync` 还会应用 Home 的 Codex 设置；如果客户端运行时在该次应用之前启动，即使没有重启参数也会重启运行时。重启失败时，原有运行时继续提供服务，命令以非零状态退出。`ocx status --json` 和 `ocx link status --json` 中的相关字段见 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
+
 显式指定重启标志后，即使目录和缓存的字节未变，成功提交 `config.toml` 更改也会触发重启。仅处理配置的操作若没有更改、被拒绝、仅作预检或写入已回滚，则不会触发重启。未指定重启标志时，sync 不会自动重启 Codex。
 
 从每个已配置的提供方获取实时模型列表，并将合并后的目录重新注入 Codex。在添加提供方后运行，或用于刷新可用模型。

@@ -21,6 +21,10 @@ import {
   CLIENT_RESTART_READY_BY_MS,
   isDesktopSupervised,
 } from "../lib/system-restart-contract";
+import type { OcxClientConnectionConfig } from "../types";
+import { sameClientConnectionOwner, type readClientConnectionState } from "./state";
+
+type ClientConnectionState = ReturnType<typeof readClientConnectionState>;
 
 export type ClientRestartSupervisor = "service" | "desktop";
 
@@ -105,4 +109,19 @@ export async function clientRestartSupervisor(): Promise<ClientRestartSupervisor
   // Same viability test as the standalone restart: stale service assets would not relaunch.
   const { isServiceViable } = await import("../service/orchestration");
   return isServiceViable() ? "service" : null;
+}
+
+/**
+ * After a failed replacement: serve the same connection again only while it is still the durable
+ * one (same owner and link). Anything else, a disconnect or a different connection, goes to the
+ * recycle, which starts what the current state calls for instead of a stale client runtime.
+ */
+export function clientRestartRollbackAction(
+  served: OcxClientConnectionConfig,
+  current: ClientConnectionState,
+): "resume" | "recycle" {
+  return current.kind === "connected" && sameClientConnectionOwner(current.value, served)
+    && current.value.link?.linkId === served.link?.linkId
+    ? "resume"
+    : "recycle";
 }

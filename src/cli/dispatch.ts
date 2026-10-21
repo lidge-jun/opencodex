@@ -437,6 +437,10 @@ const commandRunners: Record<string, CommandRunner> = {
           }
         }
         await handleConnectedSyncCatalogWrite(result, restartScope);
+        if (result.applyRecordFailed) {
+          console.error("The Home's Codex settings were applied, but the apply record could not be written; the client runtime was not restarted. Run 'ocx sync' again.");
+          process.exitCode = 1;
+        }
         // OCX-6: a link Child's runtime must have started after the apply it serves under.
         if (link && result.appliedRecord) {
           const { applyRestartMessage, restartRuntimeAfterApply } = await import("./link-apply-restart");

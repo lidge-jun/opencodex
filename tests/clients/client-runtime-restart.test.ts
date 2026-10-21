@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
 import { startMachineListener } from "../../src/client/machine-listener";
-import { createClientRestartController, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
+import { clientRestartRollbackAction, createClientRestartController, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
 import {
   createLocalAttestationChallenge,
   createLocalAttestationSecret,
@@ -213,5 +213,15 @@ describe("client restart controller", () => {
     finish();
     await controller.settled();
     expect(spawns).toBe(1);
+  });
+});
+
+describe("rollback after a failed replacement", () => {
+  const link = { ...connection, transport: "link" as const, link: { linkId: `lnk_${"b".repeat(16)}`, tunnelPort: 23457 } };
+  test("serves the same connection again only while it is still the durable one", () => {
+    expect(clientRestartRollbackAction(link, { kind: "connected", value: { ...link, catalogSyncedAt: "2026-10-21T00:00:00.000Z" } })).toBe("resume");
+    expect(clientRestartRollbackAction(link, { kind: "disconnected" } as never)).toBe("recycle");
+    expect(clientRestartRollbackAction(link, { kind: "connected", value: { ...link, connectedAt: "2026-10-21T00:00:00.000Z" } })).toBe("recycle");
+    expect(clientRestartRollbackAction(link, { kind: "connected", value: { ...link, link: { ...link.link, linkId: `lnk_${"c".repeat(16)}` } } })).toBe("recycle");
   });
 });
