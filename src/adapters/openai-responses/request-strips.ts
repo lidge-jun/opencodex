@@ -188,6 +188,38 @@ export function stripCanonicalOnlyTopLevelFields(body: unknown): unknown {
 }
 
 /**
+ * OpenAI-private input item TYPES, the item-level sibling of the two tables above.
+ *
+ * Each one is a positional control the OpenAI Responses backend interprets where it sits in
+ * history, never a turn of the conversation, so dropping it leaves every message, call and output
+ * in place. Codex gates sending one on its own `is_openai` provider check, which loopback
+ * injection always satisfies, so a gateway this proxy does not operate can still receive one and
+ * reject the whole body as an unknown item type.
+ *
+ * Same rule as the top-level table: only types a client is OBSERVED to send.
+ */
+const CANONICAL_ONLY_INPUT_ITEM_TYPES: ReadonlySet<string> = new Set([
+  // Codex 0.164 `ResponseItem::ConfigurationUpdate` ({type, reasoning: {effort}}): a durable
+  // reasoning-effort change recorded at its position in history. codex-rs sends it only for a
+  // catalog row with `supports_reasoning_effort_updates`, and keeps it in saved history after a
+  // model switch. Mapping the effort onto another provider is out of scope (#6895).
+  "configuration_update",
+]);
+
+/**
+ * Remove OpenAI-private input items. The caller decides the boundary, exactly as for
+ * {@link stripCanonicalOnlyTopLevelFields}; the canonical and OpenAI-operated destinations keep
+ * the items verbatim and in order. Returns the input unchanged when none is present.
+ */
+export function stripCanonicalOnlyInputItems(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const isPrivate = (item: unknown): boolean => isPlainObject(item)
+    && typeof item.type === "string" && CANONICAL_ONLY_INPUT_ITEM_TYPES.has(item.type);
+  if (!body.input.some(isPrivate)) return body;
+  return { ...body, input: body.input.filter(item => !isPrivate(item)) };
+}
+
+/**
  * Sampling fields a model on the provider's `noStopModels` / `noPenaltyModels` list rejects on
  * every wire. Claude inbound translates `stop_sequences` into a Responses `stop`
  * (`src/claude/inbound.ts`), and a direct Responses caller can send penalties. Some listed models

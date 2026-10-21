@@ -135,7 +135,7 @@ import type { DataPlaneAdmission } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
 import { buildResponsesTransport, copyResponsesClientMetadata } from "../../adapters/openai-responses/transport";
-import { scrubOcxCompactionItems, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough } from "../../adapters/openai-responses/request-strips";
+import { scrubOcxCompactionItems, stripCanonicalOnlyInputItems, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough } from "../../adapters/openai-responses/request-strips";
 import { dropResponsesReasoningInputItems } from "../../adapters/openai-responses/reasoning";
 import { requiresPlaintextReasoningReplay } from "../../adapters/openai-responses/passthrough";
 import { destinationDecodesNativeCompactionBlob, isOpenAiOperatedResponsesDestination } from "../../providers/openai-tiers-destination";
@@ -1155,7 +1155,7 @@ export async function handleResponsesCompact(
           replayBody = stripInternalChatMessageMetadataPassthrough(replayBody) as typeof replayBody;
         }
         return isOpenAiOperatedResponsesDestination(sendProvider)
-          ? replayBody : stripCanonicalOnlyTopLevelFields(replayBody);
+          ? replayBody : stripCanonicalOnlyInputItems(stripCanonicalOnlyTopLevelFields(replayBody));
       };
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,

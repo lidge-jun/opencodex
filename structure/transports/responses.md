@@ -197,7 +197,7 @@ This table is not an unknown-parameter sanitizer, and the distinction is the poi
 client is observed to send, so an unrecognized top-level key reaches the wire untouched rather than
 being deleted on the theory that the destination would have rejected it. `codex_output_schema` is
 deliberately absent for that reason: in codex-rs it is the `name` of the JSON-schema `text.format`
-object, not a top-level key, so listing it would remove a field this client never sends.
+object, not a top-level key, so listing it would remove a field this client never sends. Private input item TYPES are a third table, `CANONICAL_ONLY_INPUT_ITEM_TYPES` (`stripCanonicalOnlyInputItems`, same destination boundary in the passthrough and native compact gateway replay). It holds Codex 0.164 `configuration_update` (`{type, reasoning: {effort}}`), a positional effort control: OpenAI-operated destinations receive it verbatim and in order, other gateways get the conversation without it, the translated parser drops it without clearing pending reasoning, and the agent-task tail walkers skip it like `compaction_trigger`. Codex sends it only for rows with `supports_reasoning_effort_updates`, which `normalizeRoutedCatalogEntry` removes from routed rows; its effort is never mapped onto a routed request (#6895). Coverage: `tests/responses/codex-0164-request-compat.test.ts`.
 
 After that namespace boundary has produced public function tools, the Grok CLI Responses transport
 applies the same root-schema policy as its Chat transport. A root `oneOf`/`anyOf` is flattened only
