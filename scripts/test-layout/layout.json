@@ -1961,6 +1961,7 @@
     "ws-steering-smoke.test.ts": "responses",
     "ws-steering-stability.test.ts": "responses",
     "ws-upstream-reuse.test.ts": "responses", "codex-ws-pool-contention.test.ts": "responses",
+    "codex-ws-handshake.test.ts": "responses", "codex-ws-handshake-validation.test.ts": "responses",
     "ws-upstream-socks5.test.ts": "responses",
     "ws-upstream.test.ts": "responses",
     "xai-client.test.ts": "images",

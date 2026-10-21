@@ -142,6 +142,17 @@ to restore the default upstream WebSocket selection. This setting does not chang
 client-facing `websockets` switch or the ChatGPT account used for the request. Native
 mid-turn steering and injection need upstream WebSocket and are unavailable while it is off.
 
+**Reasoning usage metadata (pending next release).** For HTTP/SSE clients on the canonical
+ChatGPT route, the upstream WebSocket relay preserves an actual `x-reasoning-included`
+connection-response header when the Bun runtime exposes it, including on a reused connection.
+This tells Codex that the server's reported usage already includes earlier reasoning. Metadata
+sent before the first Responses event takes precedence; later metadata remains in the stream
+but cannot change headers already committed. The relay does not invent this signal or alter
+usage numbers. A missing upstream signal and Codex's own accounting lifecycle remain separate
+issues, so this change alone does not establish that early compaction is fixed. Client-facing
+WebSocket connections have already completed their upgrade before the upstream response and
+cannot receive the signal retroactively as an upgrade header.
+
 Local provider pacing can also hold a request before it is dispatched at all. So a slow first
 output has several possible contributors, and upstream queueing is only one of them. `ocx doctor`
 classifies configuration and measures none of these: compare actual transport, pacing, network,

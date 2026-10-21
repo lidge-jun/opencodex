@@ -464,12 +464,12 @@ Lite identity still retires the previous socket, and subsequent eligible request
 identity can reuse the new socket. Malformed native metadata retains HTTP fallback eligibility
 without rewriting its body.
 
-Canonical WS quota and response metadata preceding the first Responses event
-are projected into bounded, allowlisted HTTP headers before the response is
-committed. Later quota observations update only the captured serving account;
-they cannot retroactively change HTTP headers already sent to the client.
-Control frames remain bounded, and provider credential/cookie headers are not
-forwarded. Once a WS create may have been sent, a missing prelude, overflow or
+Canonical WS quota and response metadata preceding the first Responses event are projected into bounded, allowlisted HTTP headers before commitment.
+`src/server/responses/codex-ws-session.ts` also retains the actual `x-reasoning-included` upgrade header when Bun exposes its handshake event, promoting the bounded candidate only after `open` validates the connection. No other upgrade header is retained: request ids, model, turn state, quota and credits are response-scoped.
+`src/server/responses/codex-ws-metadata.ts` rejects malformed or oversized raw headers and connection-nominated inclusion headers without changing transport failure or replay policy. Each canonical exchange starts from that connection signal; its own prelude metadata wins, including an explicit `false` value, and no prior exchange's metadata carries over. No signal is inferred from a model, configuration or encrypted input, and usage numbers are unchanged.
+Later metadata remains in the SSE body, while quota observations update only the captured serving account; neither changes committed HTTP headers. The pre-output hold freezes the same snapshot at its first Responses event. A client-facing WebSocket upgrade is already complete before upstream dispatch and cannot acquire this HTTP/SSE response header retroactively.
+`tests/responses/codex-ws-handshake.test.ts` and `tests/responses/codex-ws-handshake-validation.test.ts` cover the native loopback, reuse, bounds and failed-upgrade boundaries. Control frames remain bounded, and provider credential/cookie headers are not forwarded.
+Once a WS create may have been sent, a missing prelude, overflow or
 disconnect settles as a non-replayable gateway status before the first Responses
 event, or as an errored SSE body after it, rather than as a retryable fetch
 failure, so HTTP fallback cannot duplicate that inference. The one exception is a

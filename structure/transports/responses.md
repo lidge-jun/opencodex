@@ -19,7 +19,7 @@ Responses-compatible streaming output. Every Responses serializer projects unref
 The `openai-responses` adapter preserves caller `User-Agent` unless provider headers own it, in either auth mode.
 `forwardClientHeaders` additionally opts into `originator`, `x-client-request-id`, `x-codex-app-version`, or `user-agent`.
 Provider headers win case-insensitively; arbitrary names are rejected on load/write and ignored at runtime.
-Canonical forward auth retains its separate fixed credential/metadata allowlist; absent caller identity is not invented.
+Canonical forward auth retains its separate fixed credential/metadata allowlist; absent caller identity is not invented. Upstream WebSocket reasoning-inclusion headers follow the [native prelude and connection-signal contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 Retired Codex Spark has no model-specific tool or Responses Lite override; general Lite handling and
 namespace scrubbing remain shared compatibility behavior. Codex quota/reset evidence follows the
