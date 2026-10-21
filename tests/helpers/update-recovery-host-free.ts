@@ -1,4 +1,6 @@
 import { expect } from "bun:test";
+import { tmpdir } from "node:os";
+import { win32 } from "node:path";
 
 /**
  * Service-recovery scenarios answer every host probe themselves (#7417). On macOS the default
@@ -22,14 +24,30 @@ export const HOST_FREE_RECOVERY_IO = {
  * best-effort scheduler-wrapper cleanup (`killWindowsSchedulerWrappers`) launches PowerShell,
  * scoped to this test home's own wrapper paths, and swallows any failure. It is refused like
  * everything else, so it does no host work, but it is not counted against the scenario.
+ *
+ * The Windows ACL belt is the other exception. Every private config write on Windows tightens
+ * its ACL with `%SystemRoot%\\System32\\icacls.exe` (src/config/atomic-write.ts,
+ * src/config/paths.ts), and these scenarios write config inside the test home. Before this
+ * helper existed, those calls ran for real on Windows CI. Exactly that executable, with every
+ * path argument inside the test's OPENCODEX_HOME or the temp directory, is passed through to the
+ * real spawn. It is recorded in a separate `allowed` list (readable through `observed`) rather
+ * than the refused list, so a caller can assert on it. Everything else is still refused.
  */
-export async function withoutHostProcesses<T>(run: () => Promise<T>): Promise<T> {
+export async function withoutHostProcesses<T>(
+  run: () => Promise<T>,
+  observed?: { allowed: string[] },
+): Promise<T> {
   const bun = Bun as unknown as { spawnSync: (...args: unknown[]) => unknown };
   const original = bun.spawnSync;
   const spawned: string[] = [];
+  const allowed: string[] = observed?.allowed ?? [];
   bun.spawnSync = (...args: unknown[]) => {
     const first = args[0] as string[] | { cmd?: string[] } | undefined;
     const command = String(Array.isArray(first) ? first[0] : first?.cmd?.[0]);
+    if (isTestScopedWindowsAcl(command, Array.isArray(first) ? first : first?.cmd ?? [])) {
+      allowed.push(command);
+      return (original as (...a: unknown[]) => unknown).apply(bun, args);
+    }
     spawned.push(command);
     throw new Error(`unexpected host process launch: ${command}`);
   };
@@ -42,10 +60,46 @@ export async function withoutHostProcesses<T>(run: () => Promise<T>): Promise<T>
     bun.spawnSync = original;
   }
   expect(spawned.filter(command => !isWindowsWrapperCleanup(command))).toEqual([]);
+  expect(allowed.every(command => process.platform === "win32" && isWindowsIcaclsBinary(command))).toBe(true);
   if (!outcome.ok) throw outcome.error;
   return outcome.value;
 }
 
 function isWindowsWrapperCleanup(command: string): boolean {
   return process.platform === "win32" && /[\\/]powershell\.exe$/i.test(command);
+}
+
+/** Exported for the helper's own test; see the Windows ACL note on {@link withoutHostProcesses}. */
+export function isTestScopedWindowsAcl(
+  command: string,
+  argv: readonly unknown[],
+  platform: string = process.platform,
+  roots: readonly string[] = testScopedRoots(),
+  systemRoot: string = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows",
+): boolean {
+  if (platform !== "win32" || !isWindowsIcaclsBinary(command, systemRoot)) return false;
+  // Only Windows absolute paths count: drive-letter or UNC. Switches such as /grant:r start with "/".
+  const paths = argv.slice(1).map(String).filter(arg => /^[a-zA-Z]:[\\/]|^\\\\/.test(arg));
+  if (paths.length === 0) return false;
+  const scoped = roots.filter(Boolean).map(normalizeWindowsPath);
+  return paths.every(path => {
+    const target = normalizeWindowsPath(path);
+    return scoped.some(root => target === root || target.startsWith(`${root}/`));
+  });
+}
+
+/** True only for the exact `%SystemRoot%\\System32\\icacls.exe`, compared case-insensitively. */
+export function isWindowsIcaclsBinary(
+  command: string,
+  systemRoot: string = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows",
+): boolean {
+  return normalizeWindowsPath(command) === normalizeWindowsPath(win32.join(systemRoot, "System32", "icacls.exe"));
+}
+
+function normalizeWindowsPath(value: string): string {
+  return value.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
+}
+
+function testScopedRoots(): string[] {
+  return [process.env.OPENCODEX_HOME ?? "", tmpdir()];
 }
