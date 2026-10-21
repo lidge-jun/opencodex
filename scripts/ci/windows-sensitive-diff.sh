@@ -79,6 +79,7 @@ get-ciminstance
 process.platform
 localappdata
 userprofile
+spawnsync
 MARKERS
 
 status=0

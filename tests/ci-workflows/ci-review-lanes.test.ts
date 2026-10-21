@@ -231,8 +231,11 @@ describe("CI review lanes", () => {
       expect(enabled("npm-global-smoke", event, lane, "true", "false")).toBe(false);
     }
     for (const windows of ["true", "false", ""]) {
-      // Even a Windows-sensitive pull request runs only the fast Ubuntu subset.
-      expect(enabled("platform-windows", "pull_request", "", "true", "true", "true", windows)).toBe(false);
+      // Only a Windows-sensitive pull request (changes.outputs.windows == 'true') runs the
+      // nine shards; every other pull request stays on the fast Ubuntu subset (#7052).
+      expect(enabled("platform-windows", "pull_request", "", "true", "true", "true", windows)).toBe(windows === "true");
+      // A push never selects Windows, whatever the selector reported.
+      expect(enabled("platform-windows", "push", "", "true", "true", "true", windows)).toBe(false);
     }
     expect(enabled("platform-windows", "schedule", "", "false", "false", "false")).toBe(true);
     expect(enabled("macos-control", "schedule", "", "false", "false", "false")).toBe(true);
@@ -362,7 +365,7 @@ describe("Windows and nightly CI contracts", () => {
     expect(checkouts).toBe(17);
   });
 
-  test.skipIf(process.platform === "win32" || !Bun.which("jq"))("aggregate never requests Windows on a pull request and requests both diagnostic jobs nightly", async () => {
+  test.skipIf(process.platform === "win32" || !Bun.which("jq"))("aggregate requests Windows on a pull request only when it is Windows-sensitive, and both diagnostic jobs nightly", async () => {
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       jobs: Record<string, { needs?: string[]; steps?: Array<{ name?: string; shell?: string; env?: Record<string, string>; run?: string }> }>;
     };
@@ -381,8 +384,8 @@ describe("Windows and nightly CI contracts", () => {
     const slice = script.slice(start, last + "RESULTS_EOF".length);
     for (const [event, lane, windows, expectWindows, expectControl] of [
       ["schedule", "", undefined, "requested", "requested"],
-      // Pull requests run only the fast Ubuntu subset, even when the change is Windows-sensitive.
-      ["pull_request", "", "true", "not-requested", "not-requested"],
+      // A Windows-sensitive pull request runs the nine shards; any other stays on Ubuntu.
+      ["pull_request", "", "true", "requested", "not-requested"],
       ["pull_request", "", "false", "not-requested", "not-requested"],
       ["pull_request", "", undefined, "not-requested", "not-requested"],
       ["push", "", "true", "not-requested", "not-requested"],
@@ -408,6 +411,8 @@ describe("Windows and nightly CI contracts", () => {
   test.skipIf(process.platform === "win32" || !Bun.which("git"))("Windows diff scan considers only added src/tests markers and fails closed without a parent", () => {
     const scenarios = [
       { path: "src/example.ts", before: "plain\n", after: "WIN32\n", expected: "true" },
+      // An added spawnSync line is Windows-sensitive by content, outside the path filter too (#7468).
+      { path: "tests/update/example-host-guard.test.ts", before: "plain\n", after: "const original = Bun.spawnSync;\n", expected: "true" },
       { path: "tests/example.ts", before: "plain\n", after: "ordinary\n", expected: "false" },
       { path: "src/example.ts", before: "powershell\nplain\n", after: "plain\n", expected: "false" },
       { path: "docs/example.md", before: "plain\n", after: "pwsh\n", expected: "false" },
