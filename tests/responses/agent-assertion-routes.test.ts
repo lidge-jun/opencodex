@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
 import { saveConfig } from "../../src/config";
 import { AGENT_ASSERTION_HEADER, AGENT_ASSERTION_UNSUPPORTED_CODE } from "../../src/lib/authorization-scheme";
 import { startServer } from "../../src/server";
@@ -160,6 +161,25 @@ describe("Codex runtime agent assertion routes", () => {
     expect(response.status).toBe(200);
     await response.text();
     expect(seen).toEqual([{ path: "/chatgpt/responses", authorization: "Bearer pool-account-token", assertion: null }]);
+    expectNoAssertionPersisted();
+  });
+
+  test("dual_header with an admission Bearer substitutes stored main and drops the assertion", async () => {
+    const stored = fakeChatGptJwt({ exp: 4_000_000_000, "https://api.openai.com/auth": { chatgpt_account_id: "stored-main-account" } });
+    writeFileSync(join(isolatedCodexHome!.path, "auth.json"),
+      JSON.stringify({ tokens: { access_token: stored, account_id: "stored-main-account" } }));
+    const base = start({
+      hostname: "0.0.0.0",
+      defaultProvider: "openai",
+      providers: direct,
+      apiKeys: [{ id: "agent-key", name: "agent", key: ADMISSION_KEY, createdAt: "2026-10-21T00:00:00.000Z" }],
+    } as unknown as Partial<OcxConfig>);
+    await waitForNativeMainStartupGate();
+    const response = await post(base, { authorization: `Bearer ${ADMISSION_KEY}`, [AGENT_ASSERTION_HEADER]: ASSERTION });
+    expect(response.status).toBe(200);
+    await response.text();
+    // The assertion was sent beside the admission key, so it never rides with the stored credential.
+    expect(seen).toEqual([{ path: "/chatgpt/responses", authorization: `Bearer ${stored}`, assertion: null }]);
     expectNoAssertionPersisted();
   });
 
