@@ -213,6 +213,26 @@ const READ_ONLY_CALL = new RegExp(
   "i",
 );
 
+/**
+ * The one non-allowlisted spawn the Windows read may make, accepted by exact argv only. The
+ * scheduler verdict for a task whose trigger is scoped to a user needs the effective token SID,
+ * and `resolveCurrentWindowsPrincipal` (the same process-cached lookup the secret-ACL code
+ * uses) reads it with `WindowsIdentity::GetCurrent()`: it observes this process's own token
+ * and changes nothing. Skipping it would turn every scoped task into a false "stale" verdict.
+ */
+const WINDOWS_IDENTITY_PROBE = "powershell.exe -NoLogo -NoProfile -NonInteractive -Command "
+  + "$identity=[System.Security.Principal.WindowsIdentity]::GetCurrent();$identity.User.Value;$identity.Name";
+
+/** Calls outside the allowlist; the identity probe is counted separately and capped at one. */
+function unexpectedCalls(calls: readonly Spawned[], platform: NodeJS.Platform): Spawned[] {
+  const identityProbes = calls.filter(call => call === WINDOWS_IDENTITY_PROBE);
+  expect(identityProbes.length).toBeLessThanOrEqual(platform === "win32" ? 1 : 0);
+  return calls.filter(call => call !== WINDOWS_IDENTITY_PROBE && !READ_ONLY_CALL.test(call));
+}
+
+/** Test switches for the Windows doubles; reset before every passive case. */
+const windowsDoubles = { schedulerRegistered: true, scmAbsent: false };
+
 function describeCall(file: unknown, args: unknown): Spawned {
   if (Array.isArray(file)) return file.map(String).map((part, index) => index === 0 ? basename(part) : part).join(" ");
   if (file && typeof file === "object" && Array.isArray((file as { cmd?: unknown }).cmd)) {
@@ -229,7 +249,15 @@ function recordSubprocesses(): { calls: Spawned[]; restore: () => void } {
   const spies = [
     spyOn(childProcess, "spawnSync").mockImplementation(((file: unknown, args: unknown) => { calls.push(describeCall(file, args)); return result; }) as never),
     spyOn(childProcess, "execSync").mockImplementation(((command: unknown) => { calls.push(describeCall(command, undefined)); return ""; }) as never),
-    spyOn(childProcess, "execFileSync").mockImplementation(((file: unknown, args: unknown) => { calls.push(describeCall(file, args)); return ""; }) as never),
+    spyOn(childProcess, "execFileSync").mockImplementation(((file: unknown, args: unknown) => {
+      const call = describeCall(file, args);
+      calls.push(call);
+      // sc.exe proves absence only with ERROR_SERVICE_DOES_NOT_EXIST (1060).
+      if (windowsDoubles.scmAbsent && /^sc(?:\.exe)? query\b/i.test(call)) {
+        throw Object.assign(new Error("[SC] OpenService FAILED 1060"), { status: 1060 });
+      }
+      return "";
+    }) as never),
     spyOn(childProcess, "spawn").mockImplementation(((file: unknown, args: unknown) => { calls.push(describeCall(file, args)); throw new Error("async spawn is not expected"); }) as never),
     spyOn(childProcess, "execFile").mockImplementation(((file: unknown, args: unknown) => { calls.push(describeCall(file, args)); throw new Error("async execFile is not expected"); }) as never),
     spyOn(childProcess, "exec").mockImplementation(((command: unknown) => { calls.push(describeCall(command, undefined)); throw new Error("async exec is not expected"); }) as never),
@@ -253,6 +281,8 @@ describe("service status --json is passive", () => {
 
   beforeEach(() => {
     process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-service-status-json-"));
+    windowsDoubles.schedulerRegistered = true;
+    windowsDoubles.scmAbsent = false;
     const recorder = recordSubprocesses();
     calls = recorder.calls;
     restore = recorder.restore;
@@ -260,7 +290,8 @@ describe("service status --json is passive", () => {
     // so a non-query call would throw before reaching it.
     setQuerySchtasksForTests(args => {
       calls.push(`schtasks ${args.join(" ")}`);
-      return args.includes("/xml") ? buildWindowsTaskXml(undefined, undefined, undefined, TEST_SID) : "";
+      return args.includes("/xml") && windowsDoubles.schedulerRegistered
+        ? buildWindowsTaskXml(undefined, undefined, undefined, TEST_SID) : "";
     });
   });
 
@@ -297,7 +328,7 @@ describe("service status --json is passive", () => {
       // Non-vacuous: the manager really was asked, through the double (Docker is masked).
       expect(calls.length).toBeGreaterThan(0);
       expect(json.installed).toBe(true);
-      expect(calls.filter(call => !READ_ONLY_CALL.test(call))).toEqual([]);
+      expect(unexpectedCalls(calls, platform)).toEqual([]);
     });
   }
 
@@ -305,6 +336,10 @@ describe("service status --json is passive", () => {
     const lines: string[] = [];
     const log = spyOn(console, "log").mockImplementation((line: unknown) => { lines.push(String(line)); });
     const exit = spyOn(process, "exit").mockImplementation(((code?: number) => { throw new Error(`process.exit(${code})`); }) as never);
+    // Nothing registered on any host, including a Windows runner where the real diagnosis
+    // asks Task Scheduler and the SCM through the doubles.
+    windowsDoubles.schedulerRegistered = false;
+    windowsDoubles.scmAbsent = true;
     try {
       await withRegistration(process.platform, false, () => serviceCommand("status", "--json"));
     } finally {
@@ -315,7 +350,7 @@ describe("service status --json is passive", () => {
     const json = JSON.parse(lines[0]!);
     expect(json).toMatchObject({ schemaVersion: 1, installed: false, running: false, backend: "none" });
     expect(json.serving).toEqual({ probed: false, ok: false, port: null });
-    expect(calls.filter(call => !READ_ONLY_CALL.test(call))).toEqual([]);
+    expect(unexpectedCalls(calls, process.platform)).toEqual([]);
   });
 
   test("an installed registration's real serving probe leaves the config home untouched", async () => {
@@ -345,7 +380,7 @@ describe("service status --json is passive", () => {
     expect(json.serving.probed).toBe(true);
     expect(probed.length).toBeGreaterThan(0);
     expect({ entries: readdirSync(home).sort(), file: statSync(configPath).mode, dir: statSync(home).mode }).toEqual(before);
-    expect(calls.filter(call => !READ_ONLY_CALL.test(call))).toEqual([]);
+    expect(unexpectedCalls(calls, process.platform)).toEqual([]);
   }, 15_000);
 
   test("--json on a mutating verb is refused before Desktop checks or the Windows mutation lock", async () => {
