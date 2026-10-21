@@ -140,6 +140,18 @@ describe("conversationIdFromResponsesRequest", () => {
   });
 });
 
+test("Hermes identity is a log-only fallback for Responses", async () => {
+  const helpers = await import("../../src/server/request-log-conversation") as unknown as Record<string, unknown>;
+  const candidate = helpers.logConversationIdFromResponsesRequest;
+  expect(typeof candidate).toBe("function");
+  const resolveLogId = candidate as (nativeConversationId: string | undefined, headers: Headers) => string | undefined;
+  const rawId = "hermes-responses-fixture";
+  const headers = new Headers({ "x-hermes-conversation-id": rawId });
+  expect(resolveLogId(undefined, headers)).toBe(digest32(rawId));
+  const nativeId = digest32("codex-native-thread");
+  expect(resolveLogId(nativeId, headers)).toBe(nativeId);
+});
+
 describe("reasoningReplayConversationIdFromResponsesRequest", () => {
   test("keeps the raw identity instead of the hashed log id", () => {
     expect(reasoningReplayConversationIdFromResponsesRequest({

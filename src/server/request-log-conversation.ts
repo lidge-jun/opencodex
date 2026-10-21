@@ -173,6 +173,38 @@ export function conversationIdFromResponsesRequest(input: {
 }
 
 /**
+ * Hermes Agent session affinity header for log correlation (#330).
+ * Kept separate from runtime/session identities so it cannot affect lanes or routing.
+ */
+/**
+ * Hermes Agent session affinity header for log correlation (#330).
+ * Kept separate from runtime/session identities so it cannot affect lanes or routing.
+ */
+export function conversationIdFromHermesHeader(headers: Headers): string | undefined {
+  return normalizeLogConversationId(headers.get("x-hermes-conversation-id"));
+}
+
+/** Select Chat completions log identity: native thread/session headers strictly take precedence over Hermes fallback. */
+/**
+ * Select Chat completions log identity: native thread/session headers strictly take precedence over Hermes fallback.
+ * Validates and normalizes each candidate individually so empty or whitespace headers cannot suppress subsequent valid identities.
+ * Preserves the canonical Responses identity order: parent-thread -> session -> thread-id.
+ */
+export function conversationIdFromChatHeaders(headers: Headers): string | undefined {
+  const native = normalizeLogConversationId(headers.get("x-codex-parent-thread-id"))
+    ?? normalizeLogConversationId(sessionIdHeaderFromRequest(headers))
+    ?? normalizeLogConversationId(headers.get("thread-id"));
+  return native ?? conversationIdFromHermesHeader(headers);
+}
+
+export function logConversationIdFromResponsesRequest(
+  nativeConversationId: string | undefined,
+  headers: Headers,
+): string | undefined {
+  return nativeConversationId ?? conversationIdFromHermesHeader(headers);
+}
+
+/**
  * Claude Code metadata.user_id only — never the system-hash Desktop fallback.
  * Hashes the raw user_id once (same opacity goal as inbound prompt_cache_key).
  */
