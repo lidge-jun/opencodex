@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Agent, createServer, request } from "node:https";
-import { connect, constants, type ClientHttp2Session, type ClientHttp2Stream } from "node:http2";
-import type { ClientRequest, IncomingMessage, ServerResponse } from "node:http";
+import { connect, constants, Http2ServerRequest, type ClientHttp2Session, type ClientHttp2Stream } from "node:http2";
+import { IncomingMessage, type ClientRequest, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { createLocalInterceptCa, issueLocalInterceptLeaf } from "../../src/claude/intercept/local-ca";
 import { startPickerListener, type PickerListenerOptions } from "../../src/claude/intercept/picker-listener";
@@ -452,4 +452,120 @@ for (const protocol of ["h1", "h2"] as const) {
       } finally { await wait(f.close()); }
     });
   }
+
+  bounded(`${protocol} upstream backpressure suspends the idle guard until reads resume`, async wait => {
+    const idleMs = 120;
+    const proofHeader = "x-picker-backpressure-proof";
+    const proofToken = crypto.randomUUID();
+    const stallPath = `/stall-${protocol}-${proofToken}`;
+    const chunk = Buffer.alloc(256 * 1024, 0x62);
+    const pumpCap = 8 * 1024 * 1024;
+    const arrived = Promise.withResolvers<void>();
+    let upstreamReq: IncomingMessage | undefined;
+    let upstreamBytes = 0;
+    let payloadIntact = true;
+    let sent = 0;
+    let stopped = false;
+    const pollUntil = async (cond: () => boolean) => { while (!stopped && !cond()) await Bun.sleep(20); return cond(); };
+    const f = await fixture((req, res) => {
+      req.on("error", () => res.destroy());
+      if (req.url === stallPath) {
+        upstreamReq = req;
+        // Consume nothing until told to, so the relay's pipe must pause the client request.
+        req.once("readable", () => arrived.resolve());
+      } else { req.resume(); res.end("ordinary"); }
+    }, { uploadIdleMs: idleMs, maxActiveUpstreams: 1 });
+    // Observe the real req.pipe(upReq) handoff for this request only; restore in finally.
+    const requestClass = protocol === "h2" ? Http2ServerRequest : IncomingMessage;
+    const proto = requestClass.prototype;
+    const originalPipe = proto.pipe;
+    const hadOwnPipe = Object.prototype.hasOwnProperty.call(proto, "pipe");
+    const pair = Promise.withResolvers<{ src: IncomingMessage | Http2ServerRequest; dest: ClientRequest }>();
+    let pairCount = 0;
+    let pauseCount = 0;
+    let resumeCount = 0;
+    let drainCount = 0;
+    proto.pipe = function (this: IncomingMessage | Http2ServerRequest, ...args: Parameters<typeof originalPipe>) {
+      const dest = args[0] as ClientRequest;
+      const matches = this instanceof requestClass && this.method === "POST" && dest.method === "POST"
+        && this.url === stallPath && dest.path === stallPath
+        && this.headers[proofHeader] === proofToken;
+      if (matches) {
+        pairCount++;
+        this.on("pause", () => { pauseCount++; });
+        this.on("resume", () => { resumeCount++; });
+        dest.on("drain", () => { drainCount++; });
+      }
+      const out = Reflect.apply(originalPipe, this, args);
+      if (matches) pair.resolve({ src: this, dest });
+      return out;
+    } as typeof originalPipe;
+    let upload: ClientRequest | ClientHttp2Stream | undefined;
+    try {
+      const session = f.h2();
+      upload = protocol === "h2"
+        ? session.request({ ":method": "POST", ":path": stallPath, ":authority": "claude.ai", [proofHeader]: proofToken })
+        : f.h1(stallPath, "POST", { "Content-Length": String(pumpCap + chunk.length), [proofHeader]: proofToken });
+      // Send the head before awaiting the pipe observation; h1 holds headers until flushed.
+      if (protocol === "h1") (upload as ClientRequest).flushHeaders();
+      const closed = protocol === "h2" ? observeClose(upload) : observeSocketClose(upload as ClientRequest);
+      const { src, dest } = await wait(pair.promise);
+      expect(pairCount).toBe(1);
+      const drainNeeded = () => dest.writableNeedDrain === true;
+      // Bounded pump: keep writing until upstream backpressure pauses the relay's readable.
+      let stalled = false;
+      while (sent < pumpCap) {
+        sent += chunk.length;
+        upload.write(chunk);
+        await wait(Bun.sleep(20));
+        if (src.isPaused() && drainNeeded()) { stalled = true; break; }
+      }
+      expect(stalled).toBe(true);
+      await wait(arrived.promise);
+      // Bun's ClientRequest.getHeader() omits headers supplied as a raw array; check the wire peer.
+      expect(upstreamReq!.method).toBe("POST");
+      expect(upstreamReq!.url).toBe(stallPath);
+      expect(upstreamReq!.headers[proofHeader]).toBe(proofToken);
+      // A paused-by-backpressure upload outlives the idle interval.
+      const resumesBeforeWindow = resumeCount;
+      const drainsBeforeWindow = drainCount;
+      for (let interval = 0; interval < 3; interval++) {
+        await wait(Bun.sleep(idleMs));
+        expect(resumeCount).toBe(resumesBeforeWindow);
+        expect(drainCount).toBe(drainsBeforeWindow);
+        expect(src.isPaused()).toBe(true);
+        expect(drainNeeded()).toBe(true);
+      }
+      expect(pauseCount).toBeGreaterThanOrEqual(1);
+      expect(f.logs).not.toContain("picker upload idle timeout");
+      expect(upload.destroyed).toBe(false);
+      expect((await wait(normalH2(session))).status).toBe(503);
+      // Upstream reads again: the destination drains, the source resumes, the rest arrives.
+      upstreamReq!.on("data", data => {
+        upstreamBytes += data.length;
+        payloadIntact &&= Buffer.from(data).every(byte => byte === 0x62);
+      });
+      upstreamReq!.resume();
+      expect(await wait(pollUntil(() => !drainNeeded()))).toBe(true);
+      expect(await wait(pollUntil(() => !src.isPaused()))).toBe(true);
+      expect(drainCount).toBeGreaterThan(drainsBeforeWindow);
+      expect(resumeCount).toBeGreaterThan(resumesBeforeWindow);
+      expect(await wait(pollUntil(() => upstreamBytes >= sent || upstreamReq!.destroyed))).toBe(true);
+      expect(upstreamBytes).toBe(sent);
+      expect(payloadIntact).toBe(true);
+      expect(pairCount).toBe(1);
+      // Payload stopped without an end: the guard is live again and expires the upload.
+      await wait(closed);
+      expect(f.logs.filter(line => line === "picker upload idle timeout")).toHaveLength(1);
+      expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
+    } finally {
+      if (hadOwnPipe) proto.pipe = originalPipe; else delete (proto as { pipe?: unknown }).pipe;
+      stopped = true;
+      if (upload && !upload.destroyed) upload.destroy();
+      let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+      const cleanupDeadline = new Promise<never>((_, reject) => { cleanupTimer = setTimeout(() => reject(new Error("picker upload cleanup deadline")), 5_000); });
+      try { await Promise.race([f.close(), cleanupDeadline]); } finally { clearTimeout(cleanupTimer); }
+      expect(proto.pipe).toBe(originalPipe);
+    }
+  });
 }

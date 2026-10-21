@@ -219,6 +219,8 @@ seçildikten sonra Claude Desktop'ı tamamen kapatıp yeniden açın.
 Picker modu first-party'nin parçasıdır; bu nedenle [first-party hesap riski](#first-party-isteğe-bağlı)
 aynı şekilde geçerlidir.
 
+Üst sunucunun ilk yanıtından önce, 60 saniye boyunca ilerlemeyen picker yüklemesi kapatılır. Üst sunucunun geri basıncı nedeniyle aktarım duraklatıldığında bu boşta kalma sayacı da duraklatılır; yükleme tamamlandığında veya ilk yanıt geldiğinde kaldırılır. Toplam yükleme süresine sabit bir sınır konmaz: ilerleyen büyük ekler ve uzun süre açık kalan yanıt akışları desteklenmeye devam eder.
+
 ## Claude Desktop profili
 
 Bu profil yalnızca ağ geçidi modunda Desktop'a yazılır.
@@ -278,8 +280,6 @@ Yeni rotalar varsayılan olarak Opus ailesine gider, ancak bir rotayı taşımak
 çağırdığı sağlayıcıyı veya modeli değiştirmez. Eski uygulama bayrakları
 `--static`, `--hybrid` ve `--discovery-only` mevcut betikler için kullanılabilir
 durumda kalır.
-
-Üst sunucunun ilk yanıtından önce, 60 saniye boyunca ilerlemeyen picker yüklemesi kapatılır. Üst sunucunun geri basıncı nedeniyle aktarım duraklatıldığında bu boşta kalma sayacı da duraklatılır; yükleme tamamlandığında veya ilk yanıt geldiğinde kaldırılır. Toplam yükleme süresine sabit bir sınır konmaz: ilerleyen büyük ekler ve uzun süre açık kalan yanıt akışları desteklenmeye devam eder.
 
 ### Desktop Code sekmesinden opencodex modellerini kullanma (first-party bağlantıları)
 
