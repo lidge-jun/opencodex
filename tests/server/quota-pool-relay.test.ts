@@ -17,7 +17,7 @@ import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
 import { isPassiveRead } from "../../src/lib/passive-read";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
-import { applyAccountQuotaFromUpstreamHeaders } from "../../src/codex/quota";
+import { applyAccountQuotaFromUpstreamHeaders, clearAccountQuota } from "../../src/codex/quota";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore } from "../../src/link/store";
 import { linkManagementReadAllowed } from "../../src/link/management-routes";
@@ -29,7 +29,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const LINKED_KEY = "quota-pool-linked-admission";
 const ADMIN_KEY = "quota-pool-admin-admission";
-const POOL_EMAIL = "pool-expired@example.test";
+const POOL_EMAIL = "qp-pool-expired@example.test";
 const previous = {
   home: process.env.OPENCODEX_HOME,
   apiToken: process.env.OPENCODEX_API_AUTH_TOKEN,
@@ -104,7 +104,7 @@ function config(): OcxConfig {
       openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
     },
     // Expired token: reading its quota actively would refresh it first.
-    codexAccounts: [{ id: "pool-expired", email: POOL_EMAIL, plan: "plus", isMain: false }],
+    codexAccounts: [{ id: "qp-pool-expired", email: POOL_EMAIL, plan: "plus", isMain: false }],
     apiKeys: [{ id: "linked-key", name: "linked-key", key: LINKED_KEY, createdAt: "2026-10-21T00:00:00.000Z" }],
     clientIntegrations: { codex: false },
     webSearchSidecar: { enabled: false },
@@ -125,9 +125,9 @@ beforeEach(async () => {
   watchEffects();
   codexHome = installIsolatedCodexHome("ocx-quota-pool-codex-");
   writeFileSync(join(codexHome.path, "opencodex-catalog.json"), JSON.stringify({ models: [{ slug: "mock/m" }] }));
-  saveCodexAccountCredential("pool-expired", {
-    accessToken: "access-pool-expired", refreshToken: "refresh-pool-expired",
-    expiresAt: Date.now() - 60_000, chatgptAccountId: "acct-pool-expired",
+  saveCodexAccountCredential("qp-pool-expired", {
+    accessToken: "access-qp-pool-expired", refreshToken: "refresh-qp-pool-expired",
+    expiresAt: Date.now() - 60_000, chatgptAccountId: "acct-qp-pool-expired",
   });
   writeLinkStore(linkStorePath(), {
     version: 1,
@@ -142,7 +142,7 @@ beforeEach(async () => {
   const { startServer } = await import("../../src/server");
   server = startServer(0);
   const reset = Math.floor(Date.now() / 1000) + 3600;
-  applyAccountQuotaFromUpstreamHeaders("pool-expired", new Headers({
+  applyAccountQuotaFromUpstreamHeaders("qp-pool-expired", new Headers({
     "x-codex-primary-used-percent": "64", "x-codex-primary-window-minutes": "300", "x-codex-primary-reset-at": String(reset),
     "x-codex-secondary-used-percent": "18", "x-codex-secondary-reset-at": String(reset + 4 * 86400),
   }));
@@ -160,6 +160,10 @@ async function expectRefused(response: Response) {
 afterEach(async () => {
   if (server) await server.stop(true);
   server = null;
+  // The seeded reading lives in process memory; leaving it would make a later file's pool account
+  // look freshly measured.
+  clearAccountQuota();
+  await Bun.sleep(300); // let the clear's debounced persist land before the home is removed
   for (const undo of restore.splice(0).reverse()) undo();
   codexHome?.restore();
   codexHome = null;
@@ -176,7 +180,7 @@ async function expectPool(response: Response, role = "hub") {
   expect(response.status).toBe(200);
   expect(response.headers.get("cache-control")).toBe("no-store");
   const text = await response.text();
-  for (const secret of [POOL_EMAIL, "pool-expired", "acct-pool-expired", "access-pool-expired", LINKED_KEY, ADMIN_KEY]) {
+  for (const secret of [POOL_EMAIL, "qp-pool-expired", "acct-qp-pool-expired", "access-qp-pool-expired", LINKED_KEY, ADMIN_KEY]) {
     expect(text).not.toContain(secret);
   }
   const body = JSON.parse(text);
@@ -184,6 +188,8 @@ async function expectPool(response: Response, role = "hub") {
   const pool = QuotaPoolSchema.parse(body);
   expect(pool.producer).toMatchObject({ role, homeId: readQuotaPoolIdentity()!.homeId });
   const openai = pool.providers.find(provider => provider.provider === "openai");
+  // The passive read checks no credential, so no Codex row may be reported as needing reauth.
+  expect(openai?.accounts.map(row => row.state).filter(state => state === "reauth")).toEqual([]);
   const account = openai?.accounts.find(row => row.windows.length > 0);
   expect(account?.windows.map(window => [window.kind, window.usedPercent])).toEqual([["burst_5h", 64], ["weekly", 18]]);
   return pool;

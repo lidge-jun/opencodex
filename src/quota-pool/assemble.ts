@@ -223,7 +223,9 @@ function codexAccounts(identity: QuotaPoolIdentity, accounts: Awaited<ReturnType
     const account: QuotaPoolAccount = {
       provider,
       accountRef: quotaPoolAccountRef(identity, provider, dto.id),
-      state: accountState({ reauth: dto.needsReauth === true || dto.hasCredential === false, paused: dto.paused, windows }),
+      // needsReauth only: a passive read leaves hasCredential false when it did not check, and an
+      // account without a credential already carries needsReauth.
+      state: accountState({ reauth: dto.needsReauth === true, paused: dto.paused, windows }),
       windows,
     };
     if (typeof dto.logLabel === "string" && ACCOUNT_LOG_LABEL_RE.test(dto.logLabel)) account.label = dto.logLabel;

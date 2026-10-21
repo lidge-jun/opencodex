@@ -14,7 +14,9 @@ export async function handleQuotaPoolRoutes(ctx: ManagementContext): Promise<Res
   if (url.pathname === "/api/quota-pool" && req.method === "GET") {
     const { readQuotaPool } = await import("../../quota-pool/assemble");
     const result = await readQuotaPool(config);
-    const response = result.ok ? jsonResponse(result.pool) : jsonResponse({ error: result.error }, 503);
+    const response = result.ok
+      ? jsonResponse(result.pool, 200, req, config)
+      : jsonResponse({ error: result.error }, 503, req, config);
     response.headers.set("cache-control", "no-store");
     return response;
   }

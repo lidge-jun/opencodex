@@ -4,12 +4,12 @@
  * Codex header parser, and the opaque, stable `accountRef`.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
 import { codexQuotaWindows, providerQuotaWindows, readQuotaPool } from "../../src/quota-pool/assemble";
-import { ensureQuotaPoolIdentity, quotaPoolIdentityPath, resetQuotaPoolIdentityMemoForTests } from "../../src/quota-pool/identity";
+import { ensureQuotaPoolIdentity, quotaPoolIdentityPath, readQuotaPoolIdentity, resetQuotaPoolIdentityMemoForTests } from "../../src/quota-pool/identity";
 import { parseUpstreamQuotaHeaders } from "../../src/codex/quota";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
@@ -151,13 +151,46 @@ describe("ocx.quota-pool/1 producer", () => {
     for (const secret of [ACCOUNT_EMAIL, "xai-raw-account-a", "synthetic-access-a", "c".repeat(64), ...xaiIds]) {
       expect(body).not.toContain(secret);
     }
-    // A different install secret yields unrelated references.
-    writeFileSync(quotaPoolIdentityPath(), "{}");
+    // Removing the file rotates the install secret, and with it every reference.
+    unlinkSync(quotaPoolIdentityPath());
     resetQuotaPoolIdentityMemoForTests();
     ensureQuotaPoolIdentity();
     const rotated = await read();
     if (!rotated.ok) throw new Error(rotated.error);
     expect(refs(rotated.pool).some(ref => all.includes(ref))).toBe(false);
+  });
+});
+
+describe("quota-pool identity creation", () => {
+  test("a symlink or malformed file at the path is refused and left untouched", () => {
+    const decoy = join(home, "decoy.txt");
+    writeFileSync(decoy, "unrelated");
+    symlinkSync(decoy, quotaPoolIdentityPath());
+    expect(() => ensureQuotaPoolIdentity()).toThrow();
+    expect(readFileSync(decoy, "utf8")).toBe("unrelated");
+    expect(lstatSync(quotaPoolIdentityPath()).isSymbolicLink()).toBe(true);
+    unlinkSync(quotaPoolIdentityPath());
+    writeFileSync(quotaPoolIdentityPath(), "{}");
+    expect(() => ensureQuotaPoolIdentity()).toThrow();
+    expect(readFileSync(quotaPoolIdentityPath(), "utf8")).toBe("{}");
+    expect(readQuotaPoolIdentity()).toBeNull();
+  });
+
+  test("servers racing on a fresh home agree on one identity", async () => {
+    const script = `const { ensureQuotaPoolIdentity } = await import(${JSON.stringify(join(import.meta.dir, "../../src/quota-pool/identity.ts"))});
+await Bun.sleep(Math.max(0, Number(process.env.QP_START_AT) - Date.now()));
+console.log(ensureQuotaPoolIdentity().homeId);`;
+    for (let round = 0; round < 3; round++) {
+      const dir = mkdtempSync(join(home, "race-"));
+      const startAt = String(Date.now() + 400);
+      const runs = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, "-e", script], {
+        env: { ...process.env, OPENCODEX_HOME: dir, QP_START_AT: startAt }, stdout: "pipe", stderr: "pipe",
+      }));
+      const ids = await Promise.all(runs.map(async run => (await new Response(run.stdout).text()).trim()));
+      resetQuotaPoolIdentityMemoForTests();
+      const persisted = readQuotaPoolIdentity(dir)!.homeId;
+      expect(ids).toEqual([persisted, persisted, persisted, persisted]);
+    }
   });
 });
 
