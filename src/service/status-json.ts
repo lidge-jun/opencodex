@@ -4,6 +4,7 @@ import { confirmServiceServing } from "./health";
 import { ownershipMutationLeaseStatusLine } from "./ownership-mutation-lease.mjs";
 import { LABEL, TASK, serviceLogPath, serviceStatePaths } from "./state";
 import { WINSW_SERVICE_ID } from "../lib/winsw";
+import { runPassiveRead } from "../lib/passive-read";
 
 /** The service manager holding the registration; `none` when nothing is registered. */
 export type ServiceStatusBackend = "launchd" | "systemd" | "schtasks" | "winsw" | "none";
@@ -68,8 +69,15 @@ const BACKEND_LABEL: Record<ServiceStatusBackend, string | null> = {
  * (manager diagnosis, the loopback serving probe only when a registration exists, the
  * ownership-lease and Desktop login lines) and nothing else. The caller answers before
  * `platformOps()` is resolved, so no install, start, stop or repair path is reachable.
+ * The whole collection runs in a passive-read scope: the serving probe resolves the port
+ * through loadConfig(), which outside that scope hardens config modes and backs up a
+ * malformed config — writes an inventory read must not make.
  */
-export async function collectServiceStatusJson(deps: ServiceStatusJsonDeps = {}): Promise<ServiceStatusJson> {
+export function collectServiceStatusJson(deps: ServiceStatusJsonDeps = {}): Promise<ServiceStatusJson> {
+  return runPassiveRead(() => collectPassively(deps));
+}
+
+async function collectPassively(deps: ServiceStatusJsonDeps): Promise<ServiceStatusJson> {
   const diag = (deps.diagnose ?? diagnoseService)();
   const backend = serviceStatusBackend(diag);
   let serving: ServiceStatusJson["serving"] = { probed: false, ok: false, port: null };

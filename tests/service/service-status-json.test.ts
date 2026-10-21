@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { buildWindowsTaskXml, setQuerySchtasksForTests } from "../../src/service";
@@ -16,6 +16,7 @@ import {
 import { collectServiceStatusJson, type ServiceStatusJsonDeps } from "../../src/service/status-json";
 import { plistPath } from "../../src/service/state";
 import { unitPath } from "../../src/service/systemd";
+import * as liveness from "../../src/server/proxy-liveness";
 
 /**
  * `ocx service status --json` is what GOAT's inventory reads from an adopted install over
@@ -266,7 +267,8 @@ describe("service status --json is passive", () => {
     return onPlatform(platform, () => {
       const definition = platform === "darwin" ? plistPath() : platform === "linux" ? unitPath() : null;
       const exists = spyOn(fs, "existsSync").mockImplementation(((path: fs.PathLike) =>
-        definition !== null && String(path) === definition ? installed : realExists(path)) as never);
+        String(path) === "/.dockerenv" ? false
+          : definition !== null && String(path) === definition ? installed : realExists(path)) as never);
       return run().finally(() => exists.mockRestore());
     });
   }
@@ -277,11 +279,9 @@ describe("service status --json is passive", () => {
         collectServiceStatusJson({ diagnose: diagnoseService, serving: async () => ({ ok: false, port: 1 }) }));
       expect(json.schemaVersion).toBe(1);
       expect(json.platform).toBe(platform);
-      if (platform !== "linux" || !realExists("/.dockerenv")) {
-        // Non-vacuous: the manager really was asked, through the double.
-        expect(calls.length).toBeGreaterThan(0);
-        expect(json.installed).toBe(true);
-      }
+      // Non-vacuous: the manager really was asked, through the double (Docker is masked).
+      expect(calls.length).toBeGreaterThan(0);
+      expect(json.installed).toBe(true);
       expect(calls.filter(call => !READ_ONLY_CALL.test(call))).toEqual([]);
     });
   }
@@ -301,6 +301,55 @@ describe("service status --json is passive", () => {
     expect(json).toMatchObject({ schemaVersion: 1, installed: false, running: false, backend: "none" });
     expect(json.serving).toEqual({ probed: false, ok: false, port: null });
     expect(calls.filter(call => !READ_ONLY_CALL.test(call))).toEqual([]);
+  });
+
+  test("an installed registration's real serving probe leaves the config home untouched", async () => {
+    // A malformed, group-readable config is what a non-passive loadConfig() would repair:
+    // it backs the file up as .invalid-* and hardens modes. The status read must do neither.
+    const home = process.env.OPENCODEX_HOME!;
+    const configPath = join(home, "config.json");
+    writeFileSync(configPath, "{ not json", { mode: 0o644 });
+    fs.chmodSync(configPath, 0o644);
+    fs.chmodSync(home, 0o755);
+    const before = { entries: readdirSync(home).sort(), file: statSync(configPath).mode, dir: statSync(home).mode };
+    const probed: string[] = [];
+    const identity = spyOn(liveness, "proxyIdentityAt").mockImplementation((async (port: number, opts?: { hostname?: string }) => {
+      probed.push(`${opts?.hostname ?? "127.0.0.1"}:${port}`);
+      return null;
+    }) as never);
+    const lines: string[] = [];
+    const log = spyOn(console, "log").mockImplementation((line: unknown) => { lines.push(String(line)); });
+    try {
+      await withRegistration(process.platform, true, () => serviceCommand("status", "--json"));
+    } finally {
+      log.mockRestore();
+      identity.mockRestore();
+    }
+    const json = JSON.parse(lines.at(-1)!);
+    expect(json.installed).toBe(true);
+    expect(json.serving.probed).toBe(true);
+    expect(probed.length).toBeGreaterThan(0);
+    expect({ entries: readdirSync(home).sort(), file: statSync(configPath).mode, dir: statSync(home).mode }).toEqual(before);
+    expect(calls.filter(call => !READ_ONLY_CALL.test(call))).toEqual([]);
+  }, 15_000);
+
+  test("--json on a mutating verb is refused before Desktop checks or the Windows mutation lock", async () => {
+    const errors: string[] = [];
+    const error = spyOn(console, "error").mockImplementation((line: unknown) => { errors.push(String(line)); });
+    const savedExitCode = process.exitCode;
+    try {
+      for (const args of [["--json"], ["install", "--json"], ["start", "--json"]]) {
+        errors.length = 0;
+        await onPlatform("win32", () => serviceCommand(...args));
+        expect(errors).toEqual(["--json applies to `ocx service status` only."]);
+        expect(process.exitCode).toBe(1);
+        process.exitCode = 0;
+      }
+    } finally {
+      error.mockRestore();
+      process.exitCode = savedExitCode;
+    }
+    expect(calls).toEqual([]);
   });
 
   test("the allowlist itself refuses every service-manager mutation verb", () => {

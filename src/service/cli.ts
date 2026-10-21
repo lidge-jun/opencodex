@@ -48,6 +48,8 @@ export function normalizeServiceSubcommand(sub?: string): string {
   return sub ?? "install";
 }
 
+const SERVICE_JSON_STATUS_ONLY = "--json applies to `ocx service status` only.";
+
 export interface ParsedServiceArgs {
   sub: string;
   backend: ServiceBackend | null;
@@ -144,7 +146,7 @@ export function planServiceCommand(
     return { ok: false, message: `Unknown service option: ${parsed.invalid.join(" ")}` };
   }
   if (parsed.json && parsed.sub !== "status") {
-    return { ok: false, message: "--json applies to `ocx service status` only." };
+    return { ok: false, message: SERVICE_JSON_STATUS_ONLY };
   }
   if (parsed.backend && parsed.sub !== "install") {
     return { ok: false, message: "--native/--scheduler apply to `ocx service install` only; other subcommands use the installed backend." };
@@ -502,6 +504,13 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
   };
 
   const preliminary = parseServiceArgs(filteredArgs);
+  // `claim` parses its own --json. Any other verb is refused here, before the Desktop check
+  // and the Windows mutation lock, so a misplaced --json never reaches either.
+  if (preliminary.json && preliminary.sub !== "status" && preliminary.sub !== "claim") {
+    console.error(SERVICE_JSON_STATUS_ONLY);
+    process.exitCode = 1;
+    return;
+  }
   if (preliminary.invalid.length === 0) {
     const refusal = desktopServiceCommandRefusal(preliminary.sub, undefined, supervisionLatch);
     if (refusal) {
