@@ -147,9 +147,30 @@ const WRITE_PATHS = [
   "codexAuthJsonMirror", "saveConfig", "kimiDeviceId", "nousRefreshIntent",
 ];
 
+/**
+ * A helper whose entry is NOT a test file, spawned from inside the unpreloaded test. It cannot
+ * arm itself by name, so it is protected only if it inherits the flag the test process published.
+ */
+const CHILD_HELPER = String.raw`
+  const store = await import(${JSON.stringify(REPO_ROOT_URL)} + "src/oauth/store.ts");
+  try {
+    await store.saveCredential("anthropic", { access: "child", refresh: "child", expires: Date.now() + 3_600_000, email: "child@example.test" });
+    console.log("CHILD WROTE");
+  } catch (error) {
+    console.log(/refusing to write the real OpenCodex home/.test(String((error as Error)?.message)) ? "CHILD REFUSED" : "CHILD OTHER");
+  }
+`;
+
 function writeFixture(dir: string, name: string, home: string, asTest: boolean): string {
   // JSON-encoded so a Windows path keeps its backslashes inside the child's string literal.
-  const body = ATTEMPTS.replace('"__CODEX_AUTH__"', JSON.stringify(join(home, ".codex", "auth.json")));
+  let body = ATTEMPTS.replace('"__CODEX_AUTH__"', JSON.stringify(join(home, ".codex", "auth.json")));
+  if (asTest) {
+    const helper = join(dir, "spawned-helper.ts");
+    writeFileSync(helper, CHILD_HELPER);
+    body = body.replace('  console.log("REPORT "', "  const spawned = Bun.spawnSync([process.execPath, \"run\", " + JSON.stringify(helper) + "], { env: process.env });\n"
+      + "  out.child = /CHILD (\\w+)/.exec(spawned.stdout.toString())?.[1] ?? \"none\";\n"
+      + '  console.log("REPORT "');
+  }
   const source = asTest
     ? 'import { test } from "bun:test";\ntest("unpreloaded writes", async () => {\n' + body + "\n}, 30_000);\n"
     : body;
@@ -177,6 +198,8 @@ describe("bun test without the preload (#7407)", () => {
     expect(seen.flag).toBe("1");
     for (const path of WRITE_PATHS) expect({ path, outcome: seen[path] }).toEqual({ path, outcome: "REFUSED" });
     expect(seen.hint).toBe("true");
+    // A spawned helper with a non-test entry inherits the arming instead of writing the real home.
+    expect(seen.child).toBe("REFUSED");
     // Nothing landed, nothing was created, and no mode changed.
     expect(snapshot(home)).toEqual(before);
     expect(readFileSync(join(home, ".opencodex", "auth.json"), "utf8")).toBe(SENTINEL_AUTH);
@@ -192,6 +215,8 @@ describe("bun test without the preload (#7407)", () => {
 
     expect(seen.armed).toBe("false");
     expect(seen.flag).toBe("undefined");
+    // fetch is disabled, so a network path may fail otherwise, but none may hit the guard.
+    for (const path of WRITE_PATHS) expect({ path, refused: seen[path] === "REFUSED" }).toEqual({ path, refused: false });
     expect(seen.saveCredential).toBe("WROTE");
     expect(seen.saveConfig).toBe("WROTE");
     expect(seen.codexAuthJsonMirror).toBe("WROTE");

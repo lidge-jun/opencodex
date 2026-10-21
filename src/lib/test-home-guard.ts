@@ -130,6 +130,11 @@ const BUN_TEST_FILE = /[._](?:test|spec)\.[cm]?[jt]sx?$/i;
  *
  * A file passed by explicit path under a non-test name (`bun test ./scratch.ts`) is not
  * recognised; every repository suite is a `*.test.ts`, the only name `tests/test-layout.test.ts` admits.
+ *
+ * The converse also holds: `bun run ./something.test.ts` arms, because nothing distinguishes it
+ * from the runner. That is accepted. Requiring NODE_ENV=test as well would exempt every developer
+ * whose shell exports another NODE_ENV (`bun test` keeps an existing value), reopening #7407;
+ * the cost of the false positive is a refused real-home write from a script named like a test.
  */
 export function isBunTestFileProcess(): boolean {
   const main = (globalThis as { Bun?: { main?: unknown } }).Bun?.main;
