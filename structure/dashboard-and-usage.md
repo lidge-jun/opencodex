@@ -395,15 +395,15 @@ once it exceeds 200) with the upstream content-type, body kind (`sse / json / ot
 body sample, and the extracted usage. Off by default; the hot path is guarded so production stays
 untouched.
 
-For diagnosing cache-read instability without capturing content, set `OPENCODEX_CACHE_DEBUG=1`
-before start. `src/usage/cache-diagnostic.ts` then writes one record per finalized request to
-`~/.opencodex/cache-debug.jsonl` (same `0o600` file, same 200-to-100 rolling bound) holding only
-presence booleans, counts, closed enums, the raw upstream cache counter before defaulting, and
-process-local HMAC equality tags for the prompt-cache key, allowlisted session headers, the account
-log label, and ordered instruction/tool/message blocks (capped at 128 per section, first divergent
-section/index only). The signing key is created at process start and never persisted, so tags
-compare values within one proxy process and never become a durable correlation key; no prompt
-text, tool name, raw identifier, or header value is recorded. Off by default.
+For content-free cache-read diagnostics, `OPENCODEX_CACHE_DEBUG=1` enables `src/usage/cache-diagnostic.ts`; otherwise hooks return before body/header inspection, hashing or file access. Its live `enabled()` hook remains registered.
+It writes one finalized request to `~/.opencodex/cache-debug.jsonl` (mode `0o600`, 200-to-100 rolling lines), preserving raw cache-counter evidence.
+Process-local HMAC tags cover prompt keys, explicit account labels and ordered instructions/tools/messages; no prompt, tool name or raw identifier is retained, and keys never persist.
+Session-header tags cover `session_id`, `session-id`, `thread-id` and `x-session-id`, sharing a value domain but not merging header identities; an unobserved side is omitted. `accountAffinity` uses read-only `codexConversationIdentity` and states `derived-key-not-binding`; neither a key nor a route label proves a binding.
+`prefix.comparison` compares observed sides; `continuation` compares their previous finalization under the complete nonempty inbound session-header set, private caller scope, protocol, model and config directory; caller scope is never serialized.
+Provider changes preserve correlation; prompt-key and explicit account-label changes are separate. Synthesized outbound headers and prompt keys never replace missing inbound identity.
+Comparisons distinguish first/equal/message-tail append/different/truncated/uncomparable; instructions and tools grow before messages, while system/developer input rows retain wire order.
+Missing or unsupported observations are uncomparable. Sections retain 128 tags and never claim equality across hidden tails; history evicts beyond 512 entries.
+These are parsed hook projections in completion order, not exact network bytes or proof of cache reuse; `tests/usage/cache-diagnostic.test.ts` and `tests/usage/cache-diagnostic-hook-compat.test.ts` pin the contract.
 
 ## Z.ai quota destination ownership
 

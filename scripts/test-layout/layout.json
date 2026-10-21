@@ -294,7 +294,7 @@
     "bun-runtime.test.ts": "ci-workflows",
     "bun-transpiler-cache-scope.test.ts": "cli",
     "bun-stream-caps.test.ts": "lib",
-    "cache-diagnostic.test.ts": "usage",
+    "cache-diagnostic.test.ts": "usage", "cache-diagnostic-hook-compat.test.ts": "usage",
     "cancel-body-on-abort.test.ts": "server",
     "catalog-auto-refresh-client-fanout.test.ts": "codex-integration", "catalog-auto-refresh-scheduler.test.ts": "codex-integration",
     "catalog-cursor-search.test.ts": "codex-integration",
