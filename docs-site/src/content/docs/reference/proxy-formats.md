@@ -546,6 +546,16 @@ effort default to `reasoning.summary: "auto"` so thinking streams back as
 `reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
 `detailed`, or `none` wins over `include_reasoning`.
 
+When the model is Claude, the response also carries `reasoning_details` in the same shape
+OpenRouter uses: `{"type": "reasoning.text", "text", "signature", "format": "anthropic-claude-v1"}`
+for each signed thinking block and `{"type": "reasoning.encrypted", "data", ...}` for each redacted
+one, on `message` or as `delta.reasoning_details` (each entry arrives complete in one chunk). Send
+the array back unchanged on the assistant message, next to its `tool_calls`, and Claude keeps its
+reasoning across tool steps. The signature is opaque and is the same value `/v1/messages`
+clients receive. OpenCodex replays it only when the model routes to Anthropic's own API
+(`api.anthropic.com`) as a single route; on any other destination, or if an entry is altered,
+the turn falls back to the plain `reasoning_content` text.
+
 Structured output is part of that translation: `response_format` with `json_object` or
 `json_schema` is forwarded to routed `openai-chat` models. On `POST /v1/responses` the
 equivalent request field is `text.format`: native Responses routes preserve it in the raw

@@ -6,12 +6,12 @@
  * (`src/chat/inbound.ts`), including its validation and the fields it drops, which
  * `src/protocols/features.ts` declares.
  */
-import { chatCompletionsToResponsesBody, chatSettingsToResponsesBody } from "../../chat/inbound";
+import { chatCompletionsToResponsesBody, chatSettingsToResponsesBody, type ChatResponsesProjectionOptions } from "../../chat/inbound";
 import { featuresFromChatBody } from "../features";
 
 /** Project a Chat Completions body onto the internal Responses bridge body. */
-export function chatToResponsesBody(body: unknown): Record<string, unknown> {
-  return chatCompletionsToResponsesBody(body);
+export function chatToResponsesBody(body: unknown, options?: ChatResponsesProjectionOptions): Record<string, unknown> {
+  return chatCompletionsToResponsesBody(body, options);
 }
 
 /**

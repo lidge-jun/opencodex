@@ -482,7 +482,36 @@ projection as a `reasoning` input item emitted immediately before its assistant
 message, matching the parser's buffer-and-prepend adjacency. Only representable
 plaintext crosses: no signature, encrypted payload or provider item id is
 reconstructed, because those attest to content this proxy never received. Opaque
-reasoning replay across a Chat boundary remains unimplemented by design.
+reasoning replay across a Chat boundary has exactly one exception, below.
+
+## Anthropic thinking signatures on the Chat wire (#7429)
+
+A Chat client routed to Claude echoed `reasoning_content` only, so every tool step reached
+Anthropic without the signed thinking block it requires and the adapter dropped the reasoning.
+`src/chat/reasoning-details.ts` owns the carrier, OpenRouter's `reasoning_details` shape that
+Hermes and pi already round-trip: `{type:"reasoning.text", text, signature, format:
+"anthropic-claude-v1", index}` for a signed block and `{type:"reasoning.encrypted", data, …}`
+for a `redacted_thinking` block, redacted entries first as the adapter replays them.
+
+Outbound, the bridge converter (`src/chat/outbound.ts`, stream and JSON) builds the entries from
+each reasoning item's `ocxr1` envelope and the direct writer (`src/protocols/encoders/chat.ts`)
+from `reasoningDone` and the optional `progressThinking` hook; the parity suite holds them
+frame-equal. Only a value with Anthropic's signature spelling is emitted. A signature over text
+the client never saw (hidden thinking: `txt` without `upd`, or the driver's `hidden` flag) is
+withheld and only redacted entries go out. An Opus progress update (`txt` with `upd`) is
+shown as `content` and also returned as a signed entry over that same text.
+
+Inbound, `chatCompletionsToResponsesBody` reads the entries only when the ingress sets
+`acceptAnthropicReasoningSignatures`: the settled route is one `anthropic` adapter destination
+that is first-party (`credentialDomainFor(...).firstPartyAnthropic`) and cannot change
+credential domain (no combo, policy or credential rewrite). Every entry must be well formed or
+the whole array is ignored and the plaintext projection above applies unchanged; a client that
+sends no `reasoning_details` gets a byte-identical body. Accepted entries become reasoning
+items carrying the same `ocxr1` envelope the Responses wire uses, so the serving-identity
+strip, the rejection memo and thinking recovery all apply. When the echoed string `content`
+starts with exactly the signed texts, that prefix is the progress copy and is not replayed
+twice. No signature is computed, cached server side, or synthesized; the chat-ir placeholder
+still never passes the adapter's signature check.
 `presence_penalty` and `frequency_penalty` are carried too; per-model
 `noPenaltyModels` opt-outs still apply at the adapter.
 
