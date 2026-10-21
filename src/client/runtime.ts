@@ -383,8 +383,9 @@ export async function startClientRuntime(
     exitProcess: code => { process.exit(code); },
   });
 
-  await serve();
   installCrashGuards();
+  // serve() publishes the pid and runtime record; the ownership lease is released only after it.
+  await serve();
   options.afterPublish?.();
 
   let shuttingDown = false;
