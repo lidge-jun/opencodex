@@ -30,6 +30,7 @@ import { recallComboForLane } from "./combo-session-recall";
 import {
   sessionLaneIdFromRequest,
   conversationIdFromResponsesRequest,
+  logConversationIdFromResponsesRequest,
   sessionIdHeaderFromRequest,
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
@@ -576,6 +577,7 @@ export async function prepareResponsesRequest(
     threadIdHeader: req.headers.get("thread-id"),
     cursorConversationId: parsed._cursorConversationId,
   });
+  const logConversationId = logConversationIdFromResponsesRequest(resolvedConversationId, req.headers);
   bindTurnTerminationScope(parsed, resolvedConversationId);
   const rememberKiroDeliveredFinalAnswer = (adapterName: string, response: unknown): void => {
     if (adapterName === "kiro") rememberDeliveredFinalAnswer(parsed, response);
@@ -609,7 +611,7 @@ export async function prepareResponsesRequest(
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
   // absent or synthetically injected (session_id from prompt_cache_key).
   if (!logCtx.conversationId) {
-    logCtx.conversationId = resolvedConversationId;
+    logCtx.conversationId = logConversationId;
   }
   // A rewritten turn logs the selector the client asked for, so the usage log never
   // claims the operator typed the fallback model themselves.

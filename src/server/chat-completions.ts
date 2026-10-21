@@ -40,6 +40,7 @@ import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import { resolveOpenCodeGoTransport } from "../providers/opencode-go-transport";
 import {
+  conversationIdFromChatHeaders,
   getOrAllocateRequestSessionLane,
   linkRequestSessionLane,
 } from "./request-log-conversation";
@@ -114,6 +115,9 @@ export async function handleChatCompletions(
   logCtx: RequestLogContext,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
 ): Promise<Response> {
+  if (!logCtx.conversationId) {
+    logCtx.conversationId = conversationIdFromChatHeaders(req.headers);
+  }
   const translatorBudget = createTranslatorBudget();
   try {
     let response = await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds);
