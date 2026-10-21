@@ -1440,7 +1440,7 @@ describe("GET /readyz", () => {
       expectReadyProtocolMetadata(readyzBody, new URL(base).origin);
       // Sanitization: the body must never carry sync diagnostics, paths, or warnings.
       expect(Object.keys(readyzBody).sort()).toEqual([
-        "managementUrl", "minimumClientProtocol", "pid", "port", "protocol", "service", "status", "uptime", "version",
+        "features", "managementUrl", "minimumClientProtocol", "pid", "port", "protocol", "service", "status", "uptime", "version",
       ]);
       expect(JSON.stringify(readyzBody)).not.toContain("warning");
       expect(JSON.stringify(readyzBody)).not.toContain("path");

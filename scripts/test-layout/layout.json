@@ -1453,7 +1453,7 @@
     "proxy-env-macos.test.ts": "server",
     "proxy-env.test.ts": "server",
     "proxy-liveness-package-tree-fence.test.ts": "server",
-    "proxy-liveness.test.ts": "server",
+    "proxy-liveness.test.ts": "server", "readyz-features.test.ts": "server",
     "qoder-adapter.test.ts": "providers", "qoder-live-models.test.ts": "providers", "qoder-mcp-server.test.ts": "providers",
     "qoder-scaffold-guard.test.ts": "providers",
     "quota-401-recovery-runtime.test.ts": "usage",
