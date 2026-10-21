@@ -34,11 +34,6 @@ export function homeInstanceId(): string | undefined {
   return typeof homeId === "string" && INSTANCE_ID.test(homeId) ? homeId : undefined;
 }
 
-/** Whether a request is one whose response names the serving Home. */
-export function servedByApplies(method: string, pathname: string): boolean {
-  return method === "GET" && pathname === "/v1/models";
-}
-
 /** Stamp {@link SERVED_BY_HEADER} with this Home's instance id; leaves the response alone without one. */
 export function withServedBy(response: Response, instanceId = homeInstanceId()): Response {
   if (!instanceId) return response;
@@ -50,4 +45,13 @@ export function withServedBy(response: Response, instanceId = homeInstanceId()):
     headers.set(SERVED_BY_HEADER, instanceId);
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
   }
+}
+
+/**
+ * The server's last step for every answered request: `GET /v1/models` names the serving Home,
+ * whichever branch produced the response. `pathname` is the dispatch path the router matched.
+ */
+export function stampServedBy(method: string, pathname: string, response: Response): Response {
+  if (!response || method !== "GET" || pathname !== "/v1/models") return response;
+  return withServedBy(response);
 }

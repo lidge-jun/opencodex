@@ -204,7 +204,7 @@ import type { ReadinessGate } from "../readiness";
 import type { WorkflowRefusalLog } from "../workflow-refusal";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
-import { homeInstanceId, servedByApplies, withServedBy } from "../../remote/served-by";
+import { homeInstanceId, stampServedBy } from "../../remote/served-by";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
@@ -629,8 +629,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       if (url.pathname === "/healthz" && req.method === "GET") {
         // service/pid/port let CLI liveness reject foreign 200s and verify pid identity.
         const healthPort = ctx.server.port ?? listenPort;
-        // The Home's opaque instance id (src/remote/served-by.ts); omitted, never empty, until
-        // the install identity exists.
+        // Opaque Home instance id (src/remote/served-by.ts); omitted until the identity exists.
         const instanceId = homeInstanceId();
         const response = jsonResponse({
           status: "ok",
@@ -1987,15 +1986,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
     },
     websocket: createWebsocketHandler(ctx, requestMetrics),
   } as const;
-  // GET /v1/models names the serving Home in x-opencodex-served-by on every response this server
-  // answers, whichever branch produced it (src/remote/served-by.ts).
   const routeFetch = serveOptions.fetch;
-  return {
-    ...serveOptions,
-    async fetch(req: Request, requestServer: Server<WsData>): Promise<Response> {
-      const response = await routeFetch(req, requestServer);
-      if (!response || !servedByApplies(req.method, codexCompatibleUrl(req.url).pathname)) return response;
-      return withServedBy(response);
-    },
-  } as const;
+  // x-opencodex-served-by on GET /v1/models, whichever branch answered (src/remote/served-by.ts).
+  return { ...serveOptions, fetch: async (req: Request, requestServer: Server<WsData>): Promise<Response> =>
+    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer)) } as const;
 }
