@@ -14,11 +14,9 @@ import {
   resolveFallbackPolicy,
 } from "../../src/routing/fallback-policy";
 import { fallbackPolicyError, fallbackPolicySchema } from "../../src/config/schema/fallback-policy";
-import { writeLinkStore } from "../../src/link/store";
-import { linkStorePath } from "../../src/link/paths";
+import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
 import type { OcxConfig } from "../../src/types";
 import type { OcxFallbackConfig } from "../../src/types/fallback";
-import { createTempHome, type TempHome } from "../helpers/temp-home";
 
 const cfg = (fallback?: OcxFallbackConfig): OcxConfig => ({ fallback } as unknown as OcxConfig);
 const LINK = "lnk_0123456789abcdef";
@@ -89,29 +87,26 @@ describe("config degrade", () => {
 });
 
 describe("device identity", () => {
-  let home: TempHome;
-  beforeEach(() => {
-    home = createTempHome("ocx-fallback-device-");
-    resetFallbackLinkCacheForTests();
-  });
-  afterEach(() => {
-    resetFallbackLinkCacheForTests();
-    home.remove();
-  });
+  beforeEach(() => resetFallbackLinkCacheForTests());
+  afterEach(() => resetFallbackLinkCacheForTests());
 
-  test("a link data key resolves to its link id, a Hub key to itself, others to nothing", () => {
-    writeLinkStore(linkStorePath(), {
+  test("the link listener's slot maps a link data key to its link id; a Hub key is itself", async () => {
+    const store = {
       version: 1,
       listenerPort: 41000,
-      links: [{ id: LINK, alias: "mac-studio", direction: "client-initiated", hostKeyFingerprint: null, tunnelPort: 41001, apiKeyId: "key_link", createdAt: "2026-10-22T00:00:00.000Z" }],
-    });
+      links: [{ id: LINK, alias: "mac-studio", direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: 41001, apiKeyId: "key_link", createdAt: "2026-10-22T00:00:00.000Z" }],
+    } as const;
     const config = cfg({ devices: { [LINK]: { model: false } } });
+    const lifecycle = createLinkListenerLifecycle({ storePath: "/nonexistent/links.json", readStore: () => structuredClone(store) as never });
     expect(fallbackDeviceIds(config, { kind: "configured", keyId: "key_link" })).toEqual([LINK, "key_link"]);
     expect(fallbackDeviceIds(config, { kind: "configured", keyId: "key_hub" })).toEqual(["key_hub"]);
     expect(fallbackDeviceIds(config, { kind: "loopback" })).toEqual([]);
     expect(fallbackDeviceIds(config, undefined)).toEqual([]);
-    // No device overrides: the store is never read and no identity is attached.
+    // No device overrides: the resolver is never asked and no identity is attached.
     expect(fallbackDeviceIds(cfg({ model: false }), { kind: "configured", keyId: "key_link" })).toEqual([]);
+    await lifecycle.stop();
+    resetFallbackLinkCacheForTests();
+    expect(fallbackDeviceIds(config, { kind: "configured", keyId: "key_link" })).toEqual(["key_link"]);
   });
 });
 

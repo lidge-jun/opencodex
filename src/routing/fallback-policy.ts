@@ -16,8 +16,6 @@
 import type { OcxConfig } from "../types";
 import type { OcxFallbackConfig, OcxFallbackKind, OcxFallbackSwitches } from "../types/fallback";
 import { FALLBACK_DEVICE_ID, FALLBACK_SELECTOR } from "../config/schema/fallback-policy";
-import { readLinkStore } from "../link/store";
-import { linkStorePath } from "../link/paths";
 
 export type FallbackScope = "device" | "route" | "provider" | "global" | "default";
 export type FallbackSite = "combo" | "subagent" | "hard-lock" | "routing-profile";
@@ -102,7 +100,25 @@ export function resolveFallbackPolicy(
   return { allowed: true, scope: "default" };
 }
 
-let linkCache: { at: number; byKey: Map<string, string> } | undefined;
+/**
+ * Core-owned slot (AGENTS.md "optional subsystems stay off the core path"): the link listener
+ * lifecycle registers how a data key id maps to its Remote Link id, so this request-path module
+ * never imports link state. With nothing registered a key id is its own device id (a Hub client).
+ */
+export type FallbackLinkResolver = (keyId: string) => string | undefined;
+let linkResolver: FallbackLinkResolver | undefined;
+
+/** Register the key-to-link resolver; returns a disposer that clears it if still current. */
+export function registerFallbackLinkResolver(resolver: FallbackLinkResolver): () => void {
+  linkResolver = resolver;
+  linkCache = undefined;
+  return () => {
+    if (linkResolver === resolver) linkResolver = undefined;
+    linkCache = undefined;
+  };
+}
+
+let linkCache: { at: number; byKey: Map<string, string | undefined> } | undefined;
 const LINK_CACHE_MS = 5_000;
 
 /** Test seam: forget the cached link-key map. */
@@ -111,19 +127,19 @@ export function resetFallbackLinkCacheForTests(): void {
 }
 
 function linkIdForKey(keyId: string, now: number): string | undefined {
-  if (!linkCache || now - linkCache.at > LINK_CACHE_MS) {
-    const byKey = new Map<string, string>();
-    try {
-      for (const link of readLinkStore(linkStorePath()).links) byKey.set(link.apiKeyId, link.id);
-    } catch { /* no store, or unreadable: the key id alone still identifies a Hub client */ }
-    linkCache = { at: now, byKey };
+  if (!linkResolver) return undefined;
+  if (!linkCache || now - linkCache.at > LINK_CACHE_MS) linkCache = { at: now, byKey: new Map() };
+  if (!linkCache.byKey.has(keyId)) {
+    let linkId: string | undefined;
+    try { linkId = linkResolver(keyId); } catch { /* unreadable store: the key id alone still identifies the device */ }
+    linkCache.byKey.set(keyId, linkId);
   }
   return linkCache.byKey.get(keyId);
 }
 
 /**
  * Device ids for a request: the Remote Link id its data key belongs to, then the key id itself
- * (a Hub client). The link store is read only when a device override exists.
+ * (a Hub client). The registered link resolver runs only when a device override exists.
  */
 export function fallbackDeviceIds(config: Pick<OcxConfig, "fallback">, admission: FallbackAdmission, now = Date.now()): string[] {
   const devices = policyOf(config)?.devices;
