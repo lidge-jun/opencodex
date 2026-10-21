@@ -644,19 +644,20 @@ export function requireApiAuth(req: Request, config: RequestPolicyView, _kind: "
  * domains can never be confused.
  */
 export function resolveResponsesApiAuth(req: Request, config: RequestPolicyView): DataPlaneAdmission | null {
-  if (!isApiAuthRequired(config)) return { kind: "loopback", source: "loopback" };
+  // Optional local credentials still identify a proxy bearer that Direct must substitute.
+  const fallback: DataPlaneAdmission | null = isApiAuthRequired(config) ? null : { kind: "loopback", source: "loopback" };
   // The dedicated header still WINS, because it is unambiguous.
   const dedicated = req.headers.get("x-opencodex-api-key")?.trim();
-  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated", { linkIngress: config.linkIngress?.allowedKeyIds });
+  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated", { linkIngress: config.linkIngress?.allowedKeyIds }) ?? fallback;
   // #1686: a bearer may also be one of OUR admission secrets. Rejecting it outright meant a
   // Codex client configured with `env_key` could not reach Direct at all. Admitting it is only
   // safe because the upstream credential is then SUBSTITUTED rather than forwarded -- see
-  // materializeCodexUpstreamAuth. A bearer that is NOT our secret stays unadmitted here and
-  // remains Codex Direct passthrough, so the two bearer domains still never mix.
+  // materializeCodexUpstreamAuth. A bearer that is NOT our secret gets only the local fallback
+  // (or no admission remotely), preserving caller-owned Direct passthrough on loopback.
   const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-  if (bearer) return resolveDataPlaneAdmissionSecret(bearer, config, "bearer", { linkIngress: config.linkIngress?.allowedKeyIds });
+  if (bearer) return resolveDataPlaneAdmissionSecret(bearer, config, "bearer", { linkIngress: config.linkIngress?.allowedKeyIds }) ?? fallback;
   // `x-api-key` is deliberately NOT accepted on this transport.
-  return null;
+  return fallback;
 }
 
 

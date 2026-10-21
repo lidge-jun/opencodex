@@ -222,6 +222,8 @@ credential (the stored main login in Direct); missing credentials fail before fo
 Proxy admission credentials never go upstream. Encrypted arguments, response bodies, and
 upstream error statuses are preserved.
 
+Local Responses clients can also send an OpenCodex API key as `Authorization: Bearer <key>` to use the stored main login in Direct mode. Loopback admission remains optional, but an unauthenticated request does not automatically select that login: without an OpenCodex bearer, Direct expects the caller's own ChatGPT credential. `x-opencodex-api-key` authenticates the proxy separately and does not replace the caller's upstream bearer.
+
 A successful ChatGPT model response records the root session's actual serving account in a
 bounded, process-local ownership registry. History and notes use that recorded owner, including
 an explicitly selected account, even when the current active account changes. Stored-account token
@@ -235,7 +237,7 @@ names an organization rather than a person, so the registry also binds the stabl
 the credential upstream accepted: an ordinary token refresh for that same user continues the
 session, while a different user in the same workspace does not. When the accepted credential
 proves no stable user, only that exact credential continues. That principal is the opencodex API key the request presents. A remote bind already requires one,
-so ownership works there. On the default loopback bind opencodex admits requests without reading a
+so ownership works there. On the default loopback bind opencodex admits requests without requiring a
 key, and the built-in loopback injection cannot carry the `x-opencodex-api-key` header, so Codex
 presents no opencodex key and context history returns HTTP 403. **The relay is therefore available
 on a remote bind with a configured key, or to a client that sends `x-opencodex-api-key` itself, and

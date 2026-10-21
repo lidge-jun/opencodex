@@ -142,16 +142,17 @@ function install401ThenRefreshHarness(): { sends: string[]; refreshes: string[] 
 }
 
 describe("native main 401 refresh and replay", () => {
-  test.each(["/v1/responses", "/v1/responses/compact"] as const)(
-    "%s strips caller account identity when a bearer key selects stored Direct",
-    async path => {
+  test.each(["0.0.0.0", "127.0.0.1"].flatMap(hostname =>
+    (["/v1/responses", "/v1/responses/compact"] as const).map(path => [hostname, path] as const)))(
+    "%s %s strips caller account identity when a bearer key selects stored Direct",
+    async (hostname, path) => {
       const payload = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 86_400 })).toString("base64url");
       const storedCredential = `header.${payload}.signature`;
       writeFileSync(join(home, "auth.json"), JSON.stringify({
         tokens: { access_token: storedCredential },
       }));
       const cfg = config();
-      cfg.hostname = "0.0.0.0";
+      cfg.hostname = hostname;
       cfg.providers.openai!.codexAccountMode = "direct";
       cfg.apiKeys = [{
         id: "direct-test", name: "direct-test", key: "ocx_data_direct_ingress",

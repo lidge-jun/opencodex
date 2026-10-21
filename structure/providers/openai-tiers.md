@@ -48,6 +48,8 @@ engine. Direct short-circuits that engine before pool state is read or mutated a
 current caller/main-login bearer. Neither mode may fall through to `openai-apikey`, and the API
 provider may not fall through to Codex-login credentials.
 
+Responses admission in `src/server/auth-cors.ts` recognizes a supplied valid proxy key on loopback as well as public listeners. A proxy Bearer selects stored-main credential substitution in Direct; a dedicated admission header retains precedence and does not itself select substitution. Loopback requests without a matching key retain anonymous admission and caller-owned credential behavior. Public listeners still require a valid admission key.
+
 Caller credentials stay scoped to the selected physical route. Typed proxy admission survives
 Combo/policy recursion, but raw Authorization and ChatGPT account headers are removed from
 rebuilt requests at those selections or actual shadow/thread-spawn rewrites. An original caller's

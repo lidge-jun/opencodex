@@ -208,6 +208,21 @@ describe("the two wrappers still differ", () => {
 });
 
 describe("loopback binds", () => {
+  test.each(["127.0.0.1", "::1", "localhost"])("Responses preserves optional key identity on %s", hostname => {
+    const config = { ...loopbackConfig(), hostname };
+    const resolve = (headers: Record<string, string>) => resolveResponsesApiAuth(request(headers), config);
+    expect(resolve({ authorization: "Bearer ocx_data_firstsecret" }))
+      .toMatchObject({ kind: "configured", keyId: "first-key", source: "bearer" });
+    expect(resolve({ "x-opencodex-api-key": "ocx_data_secondsecret", authorization: "Bearer ocx_data_firstsecret" }))
+      .toMatchObject({ kind: "configured", keyId: "second-key", source: "dedicated" });
+    for (const headers of [{}, { authorization: "Bearer caller-owned-token" }, { "x-api-key": "ocx_data_firstsecret" },
+      { "x-opencodex-api-key": "unknown", authorization: "Bearer ocx_data_firstsecret" }]) {
+      expect(resolve(headers)).toEqual({ kind: "loopback", source: "loopback" });
+    }
+    process.env.OPENCODEX_API_AUTH_TOKEN = "local-env-secret";
+    expect(resolve({ authorization: "Bearer local-env-secret" })).toMatchObject({ kind: "environment", source: "bearer" });
+  });
+
   test("admit without reading a token, and say so", () => {
     const config = loopbackConfig();
     expect(resolveApiAuth(request(), config)).toEqual({ kind: "loopback", source: "loopback" });

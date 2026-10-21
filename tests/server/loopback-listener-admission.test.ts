@@ -51,12 +51,10 @@ describe("loopback listener policy view", () => {
   });
 
   test("a valid configured key is still attributed to that key, not collapsed to loopback", () => {
-    // The loopback view takes the same branch a plain loopback bind always has, which returns
-    // before reading any header. Assert the public listener keeps per-key attribution so a
-    // future refactor cannot quietly make every admission anonymous.
+    // The companion listener must preserve optional key identity just like the public one.
     expect(resolveResponsesApiAuth(
       request("/v1/responses", { "x-opencodex-api-key": "ocx_data_realsecret" }),
-      wildcardConfig,
+      requestPolicyView(wildcardConfig, "127.0.0.1"),
     )).toEqual({ kind: "configured", keyId: "k1", source: "dedicated", contextPrincipalId: expect.stringMatching(/^[a-f0-9]{64}$/) });
   });
 
