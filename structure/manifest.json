@@ -744,7 +744,8 @@
         "src/config/",
         "src/client/",
         "src/server/",
-        "src/cli/"
+        "src/cli/",
+        "src/codex/"
       ]
     },
     {

@@ -8,8 +8,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { handleComboResponses, handleResponses } from "../../src/server/responses/core";
-import { executeComboResponses } from "../../src/server/responses/core-combo";
+import { comboExecutionBudgetPolicy, executeComboResponses } from "../../src/server/responses/core-combo";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
 import type { OcxConfig } from "../../src/types";
 import type { OcxFallbackConfig } from "../../src/types/fallback";
@@ -71,7 +72,11 @@ function upstream(): string[] {
   return hosts;
 }
 
-async function run(cfg: OcxConfig, admission?: { kind: "configured"; keyId: string; source: "header" }): Promise<Response> {
+async function run(
+  cfg: OcxConfig,
+  admission?: { kind: "configured"; keyId: string; source: "header" },
+  sendBudget?: ReturnType<typeof createRequestExecutionBudget>,
+): Promise<Response> {
   const req = new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -80,7 +85,13 @@ async function run(cfg: OcxConfig, admission?: { kind: "configured"; keyId: stri
   return executeComboResponses(req, await req.clone().json(), "fan", cfg, { model: "", provider: "" }, {
     translatorBudget: createTranslatorBudget(),
     ...(admission ? { admission: admission as never } : {}),
+    ...(sendBudget ? { sendBudget } : {}),
   }, { handleComboResponses, handleResponses });
+}
+
+/** A config whose combo targets are redirected by blockedModelRedirects. */
+function redirected(fallback: OcxFallbackConfig, targets: Array<{ provider: string; model: string }>, redirects: Record<string, string>): OcxConfig {
+  return { ...config(fallback), combos: { fan: { strategy: "failover", targets } }, blockedModelRedirects: redirects } as unknown as OcxConfig;
 }
 
 describe("combo fallback off", () => {
@@ -142,5 +153,85 @@ describe("combo fallback off", () => {
     // Allowed, the same state starts on the backup as before.
     expect((await run(config(undefined))).status).toBe(200);
     expect(hosts).toEqual(["backup.example"]);
+  });
+
+  test("proactive: a disabled first target is guarded too, and answers 503 unavailable", async () => {
+    const hosts = upstream();
+    const cfg = config({ provider: false });
+    (cfg.providers.primary as { disabled?: boolean }).disabled = true;
+    const response = await run(cfg);
+    expect(response.status).toBe(503);
+    const body = await response.json() as { error: { fallback: Record<string, string> } };
+    expect(body.error.fallback).toMatchObject({ trigger: "unavailable", kind: "provider", from: "primary/model-primary", to: "backup/model-backup" });
+    expect(hosts).toEqual([]);
+    // Allowed, the same state starts on the backup and the proactive hop is recorded.
+    const allowed = config(undefined);
+    (allowed.providers.primary as { disabled?: boolean }).disabled = true;
+    expect((await run(allowed)).status).toBe(200);
+    expect(hosts).toEqual(["backup.example"]);
+    expect(recentFallbackEvents().at(-1)).toMatchObject({ outcome: "taken", trigger: "unavailable", kind: "provider" });
+  });
+});
+
+describe("combo hops are classified by resolved destination", () => {
+  test("a same-provider selector redirected to another provider is a provider hop, and is refused", async () => {
+    const hosts = upstream();
+    const response = await run(redirected({ provider: false },
+      [{ provider: "primary", model: "model-primary" }, { provider: "primary", model: "model-primary-mini" }],
+      { "primary/model-primary-mini": "backup/model-backup" }));
+    expect(response.status).toBe(429);
+    const body = await response.json() as { error: { fallback: Record<string, string> } };
+    expect(body.error.fallback).toMatchObject({ kind: "provider", from: "primary/model-primary", to: "backup/model-backup" });
+    expect(hosts).toEqual(["primary.example"]);
+  });
+
+  test("a cross-provider selector redirected onto the same provider is a model hop, and provider off allows it", async () => {
+    const hosts = upstream();
+    const response = await run(redirected({ provider: false },
+      [{ provider: "primary", model: "model-primary" }, { provider: "backup", model: "model-backup" }],
+      { "backup/model-backup": "primary/model-primary-mini" }));
+    expect(response.status).toBe(200);
+    expect(hosts).toEqual(["primary.example", "primary.example"]);
+    expect(recentFallbackEvents()).toMatchObject([{ outcome: "taken", kind: "model", from: "primary/model-primary", to: "primary/model-primary-mini" }]);
+  });
+
+  test("the hop leaves the failed child's resolved destination, not its configured selector", async () => {
+    const hosts = upstream();
+    // backup/model-backup really dispatches to primary/model-primary (which answers 429), so the
+    // hop to primary/model-primary-mini stays on one provider.
+    const response = await run(redirected({ provider: false },
+      [{ provider: "backup", model: "model-backup" }, { provider: "primary", model: "model-primary-mini" }],
+      { "backup/model-backup": "primary/model-primary" }));
+    expect(response.status).toBe(200);
+    expect(hosts).toEqual(["primary.example", "primary.example"]);
+    expect(recentFallbackEvents()).toMatchObject([{ outcome: "taken", kind: "model", from: "primary/model-primary" }]);
+  });
+});
+
+describe("a hop is recorded as taken only after its dispatch is admitted", () => {
+  test("a later target refused by the send budget leaves no taken event", async () => {
+    const budget = createRequestExecutionBudget();
+    const hosts: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      hosts.push(new URL(input instanceof Request ? input.url : String(input)).host);
+      budget.used = comboExecutionBudgetPolicy(2).maxTotalModelSends;
+      return Response.json({ error: { message: "rate limited", type: "rate_limit_error" } }, { status: 429 });
+    }) as typeof fetch;
+    const response = await run(config(undefined), undefined, budget);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-opencodex-fallback")).toBeNull();
+    expect(hosts).toEqual(["primary.example"]);
+    expect(recentFallbackEvents()).toEqual([]);
+  });
+
+  test("a proactive hop whose first reservation is refused leaves no taken event", async () => {
+    const hosts = upstream();
+    const budget = createRequestExecutionBudget();
+    budget.used = comboExecutionBudgetPolicy(2).maxTotalModelSends;
+    coolComboTarget("fan", { provider: "primary", model: "model-primary" }, { retryAfter: "120", status: 429 });
+    const response = await run(config(undefined), undefined, budget);
+    expect(response.status).toBe(429);
+    expect(hosts).toEqual([]);
+    expect(recentFallbackEvents()).toEqual([]);
   });
 });

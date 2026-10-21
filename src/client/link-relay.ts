@@ -121,6 +121,21 @@ function homeUnreachable(error: string): Response {
   });
 }
 
+/**
+ * The peer answered but the connection-bound relay authentication failed. That is not a Home
+ * outage (an unrecognized protocol needs an upgrade or a re-link), so it must never read as
+ * `home_unreachable`, which GOAT's device-local fallback keys on. The status and Retry-After it
+ * carried before OCX-11 are kept: a lost bound socket can succeed on a fresh connection.
+ */
+export const LINK_RELAY_AUTH_FAILED_CODE = "link_relay_auth_failed";
+
+function relayAuthenticationFailed(error: string): Response {
+  return Response.json({ error, code: LINK_RELAY_AUTH_FAILED_CODE }, {
+    status: 503,
+    headers: { "Retry-After": String(LINK_RELAY_RETRY_AFTER_SECONDS) },
+  });
+}
+
 export function linkRelayDestination(url: URL, target: Pick<LinkRelayTarget, "tunnelPort">): string {
   if (!isLinkPort(target.tunnelPort)) {
     throw new RangeError("invalid link tunnel port");
@@ -402,7 +417,7 @@ export async function relayLinkDataRequest(
       if (error instanceof LinkRelayAuthenticationError) {
         cleanup();
         try { await body?.cancel(); } catch { /* an upload might already be drained */ }
-        return homeUnreachable(error.message);
+        return relayAuthenticationFailed(error.message);
       }
       if (bodyOverflow) {
         cleanup();

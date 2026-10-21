@@ -188,13 +188,27 @@ export interface FallbackHop {
 }
 
 export type FallbackGuardResult =
-  | { ok: true; kind: OcxFallbackKind | null }
+  | {
+    ok: true;
+    kind: OcxFallbackKind | null;
+    /**
+     * Record the hop as taken. A site calls it once the fallback dispatch is admitted (send
+     * budget reserved, candidate not locally skipped), so the ring never claims a target that was
+     * never contacted. Idempotent; a no-op for a same-target retry.
+     */
+    commit: () => void;
+  }
   | { ok: false; kind: OcxFallbackKind; decision: FallbackDecision; response: Response };
 
-/** Check and record one hop. A same-target retry is not a hop and always passes unrecorded. */
+const NO_COMMIT = (): void => {};
+
+/**
+ * Check one hop. A refusal is recorded at once; an allowed hop is recorded only through the
+ * returned `commit`. A same-target retry is not a hop and always passes unrecorded.
+ */
 export function guardFallbackHop(config: OcxConfig, hop: FallbackHop): FallbackGuardResult {
   const kind = fallbackHopKind(hop.from, hop.to);
-  if (kind === null) return { ok: true, kind: null };
+  if (kind === null) return { ok: true, kind: null, commit: NO_COMMIT };
   const now = hop.now ?? Date.now();
   const deviceIds = fallbackDeviceIds(config, hop.admission, now);
   const routes = [hop.route, ...(hop.aliases ?? [])].filter((value, index, all) => value && all.indexOf(value) === index);
@@ -212,8 +226,11 @@ export function guardFallbackHop(config: OcxConfig, hop: FallbackHop): FallbackG
     ...(decision.scopeKey !== undefined ? { scopeKey: decision.scopeKey } : {}),
     ...(deviceIds[0] !== undefined ? { deviceId: deviceIds[0] } : {}),
   };
+  if (decision.allowed) {
+    let committed = false;
+    return { ok: true, kind, commit: () => { if (!committed) { committed = true; record(event); } } };
+  }
   record(event);
-  if (decision.allowed) return { ok: true, kind };
   return { ok: false, kind, decision, response: fallbackRefusedResponse(event, hop) };
 }
 

@@ -731,6 +731,9 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   const anthropicError = anthropicOAuthInstanceConfigError(value) ?? anthropicAccountPoolConfigError(value) ?? anthropicSidecarConfigError(value);
   if (anthropicError) return { ok: false, error: anthropicError };
   const boundaryError = blockedModelRedirectsError(value)
+    // OCX-11: the read schema degrades a malformed fallback leaf to absent, which would silently
+    // drop a refusal on the next whole-config save; the write boundary rejects it instead.
+    ?? fallbackPolicyError(value)
     ?? nativeReasoningRetentionConfigError(value)
     ?? mainAccountHardLockFallbackError(value)
     ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)

@@ -25,7 +25,11 @@ export interface OcxFallbackDeviceConfig extends OcxFallbackSwitches {
 }
 
 export interface OcxFallbackConfig extends OcxFallbackSwitches {
-  /** Keyed by the provider of the target the request started on. */
+  /**
+   * Keyed by the provider a hop leaves: the resolved provider of the target that just failed or
+   * is known unavailable. In combo [a, b, c] with providers.b.provider false, a to b is allowed and
+   * b to c is refused.
+   */
   providers?: Record<string, OcxFallbackSwitches>;
   /** Keyed by an exact public selector: combo/<id>, policy/<id>, provider/model or an alias. */
   routes?: Record<string, OcxFallbackSwitches>;

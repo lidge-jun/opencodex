@@ -116,6 +116,12 @@ describe("PUT /api/fallback", () => {
     expect((await call(live, { scope: "device", key: "key_hub", setting: "model", value: false })).status).toBe(200);
     expect(live.fallback?.devices?.key_hub).toEqual({ model: false });
     expect((await call(live, { scope: "device", key: "nobody", setting: "model", value: false })).status).toBe(404);
+    // Clearing a device that is gone (a revoked link keeps its entry) is allowed and removes it.
+    live.fallback = { devices: { lnk_fedcba9876543210: { model: false }, key_hub: { model: false } } };
+    saveConfig(live);
+    expect((await call(live, { scope: "device", key: "lnk_fedcba9876543210", setting: "model", value: null })).status).toBe(200);
+    expect(live.fallback).toEqual({ devices: { key_hub: { model: false } } });
+    expect(readConfigDiagnostics().config.fallback).toEqual({ devices: { key_hub: { model: false } } });
     for (const body of [
       { scope: "global", setting: "localFallback", value: true },
       { scope: "provider", setting: "model", value: false },

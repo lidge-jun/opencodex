@@ -4092,7 +4092,7 @@ export const ru: Record<TKey, string> = {
   "fallback.state.off": "выкл.",
   "fallback.state.inherit": "наследуется",
   "fallback.clear": "Сбросить",
-  "fallback.last": "Последний переход на резерв",
+  "fallback.last": "Последняя попытка резервного переключения",
   "fallback.last.none": "С момента запуска прокси переходов на резерв не было.",
   "fallback.last.taken": "выполнен",
   "fallback.last.refused": "отклонён",

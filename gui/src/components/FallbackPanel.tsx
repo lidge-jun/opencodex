@@ -18,17 +18,21 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
   const [saveFailed, setSaveFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  // Every load and every write takes a sequence number; a load applies its answer only while it is
+  // still the newest, so a slow poll that started before a write cannot restore the old state.
+  const seqRef = useRef(0);
 
   const load = useCallback(async () => {
     if (savingRef.current) return;
+    const seq = ++seqRef.current;
     const bounded = createBoundedFetch(15_000);
     try {
       const response = await fetch(apiBase + "/api/fallback", { signal: bounded.signal });
       const parsed = response.ok ? parseFallbackState(await response.json()) : null;
       if (!parsed) throw new Error("shape");
-      if (!savingRef.current) { setState(parsed); setLoadFailed(false); }
+      if (!savingRef.current && seq === seqRef.current) { setState(parsed); setLoadFailed(false); }
     } catch {
-      if (!savingRef.current) setLoadFailed(true);
+      if (!savingRef.current && seq === seqRef.current) setLoadFailed(true);
     } finally {
       bounded.clear();
     }
@@ -43,6 +47,7 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
   const write = useCallback(async (writes: FallbackWrite[]) => {
     if (savingRef.current || readOnly) return;
     savingRef.current = true;
+    seqRef.current += 1;
     setSaving(true);
     setSaveFailed(false);
     const bounded = createBoundedFetch(15_000);
@@ -53,6 +58,7 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
       });
       const latest = response.ok ? parseFallbackState(await response.json()) : null;
       if (!latest) throw new Error("save");
+      seqRef.current += 1;
       setState(latest);
     } catch {
       setSaveFailed(true);
@@ -131,7 +137,7 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
   return (
     <section className="panel fallback-panel">
       <h3>{t("fallback.title")}</h3>
-      <p className="card-sub">{t("fallback.desc")}</p>
+      <p className="card-sub">{t(readOnly ? "fallback.devices.childNote" : "fallback.desc")}</p>
       {(["model", "provider"] as const).map(kind => (
         <div className="fallback-switch-row" key={kind}>
           <div>
@@ -151,7 +157,7 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
               <li key={row.scope + ":" + row.key}>
                 <span>{t(row.scope === "provider" ? "fallback.scope.provider" : "fallback.scope.route", { name: row.key })}</span>
                 <span className="card-sub">{t("fallback.model")}: {stateWord(row.value.model)} · {t("fallback.provider")}: {stateWord(row.value.provider)}</span>
-                <button type="button" className="btn btn-ghost btn-sm" disabled={saving} onClick={() => {
+                <button type="button" className="btn btn-ghost btn-sm" disabled={locked} onClick={() => {
                   void write((["model", "provider"] as const).filter(kind => row.value[kind] !== undefined)
                     .map(kind => ({ scope: row.scope, key: row.key, setting: kind, value: null })));
                 }}>{t("fallback.clear")}</button>

@@ -9,7 +9,8 @@
 import { describe, expect, test } from "bun:test";
 import { firstLoadTimePathTo } from "../helpers/import-graph";
 import { relayHubManagementRequest } from "../../src/client/hub-relay";
-import { relayLinkDataRequest } from "../../src/client/link-relay";
+import { LINK_RELAY_AUTH_FAILED_CODE, relayLinkDataRequest } from "../../src/client/link-relay";
+import { LinkRelayAuthenticationError } from "../../src/client/link-relay-transport";
 import { HOME_UNREACHABLE_CODE, HOME_UNREACHABLE_MESSAGE } from "../../src/client/home-unreachable";
 
 // The modules that turn a request into an upstream send: Responses dispatch, the router and
@@ -58,5 +59,24 @@ describe("home_unreachable answers", () => {
   test("the message says nothing was served locally and where local fallback is decided", () => {
     expect(HOME_UNREACHABLE_MESSAGE).toContain("did not serve this request from this device's local providers");
     expect(HOME_UNREACHABLE_MESSAGE).toContain("ocx fallback local on --device");
+  });
+
+  test("a failed relay authentication is not home_unreachable, so it never reads as Home down", async () => {
+    for (const unrecognized of [false, true]) {
+      const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "m", input: "hello" }),
+      }), { tunnelPort: 41001, admissionKey: "fixture-link-key", linkId: "lnk_0123456789abcdef", apiKeyId: "key_link" }, {
+        tunnel: { connected: () => true, pending: () => false, waitForConnected: async () => true },
+        fetchImpl: (async () => { throw new LinkRelayAuthenticationError(unrecognized); }) as unknown as typeof fetch,
+      });
+      expect(response.status).toBe(503);
+      const body = await response.json() as { error: string; code: string; message?: string };
+      expect(body.code).toBe(LINK_RELAY_AUTH_FAILED_CODE);
+      expect(body.code).not.toBe(HOME_UNREACHABLE_CODE);
+      expect(body.message).toBeUndefined();
+      expect(body.error).toBe(new LinkRelayAuthenticationError(unrecognized).message);
+    }
   });
 });

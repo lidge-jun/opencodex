@@ -26,6 +26,23 @@ function candidateKey(candidate: Pick<RouteCandidateTrace, "provider" | "model">
   return `${candidate.provider}\u0000${candidate.model}`;
 }
 
+/**
+ * OCX-11: the destination a candidate physically dispatches to, after provider aliases and
+ * blockedModelRedirects, so the fallback guard compares where requests really go. A candidate
+ * that does not resolve keeps its own selector.
+ */
+function resolvedPolicyTarget(
+  config: OcxConfig,
+  candidate: Pick<RouteCandidateTrace, "provider" | "model">,
+): { provider: string; model: string } {
+  try {
+    const routed = routeConcreteModel(config, `${candidate.provider}/${candidate.model}`);
+    return { provider: routed.providerName, model: routed.modelId };
+  } catch {
+    return { provider: candidate.provider, model: candidate.model };
+  }
+}
+
 function staysWithinPolicyAfterRedirect(
   config: OcxConfig,
   policyEligibility: ReadonlySet<string>,
@@ -220,7 +237,7 @@ export async function handleResponsesWithPolicyFallback(
   policyScope.triedDestinations.add(policyScope.preparedDestination ?? policyWireDestination({
     providerName: initialTrace.selected.provider, modelId: initialTrace.selected.model,
   }));
-  let current = { provider: initialTrace.selected.provider, model: initialTrace.selected.model };
+  let current = resolvedPolicyTarget(config, initialTrace.selected);
   const policyRoute = `policy/${initialTrace.profile!.id}`;
 
   while (!storedPool401ReplayDispatched && await shouldHopPolicyCandidate(response, req.signal)) {
@@ -228,13 +245,15 @@ export async function handleResponsesWithPolicyFallback(
     const next = rankPolicyFallbackCandidates(initialTrace, tried)
       .find(candidate => staysWithinPolicyAfterRedirect(config, policyEligibility, candidate, policyScope.triedDestinations));
     if (!next) return response;
-    // OCX-11: the next candidate is a hop; the fallback policy decides before it is sent.
+    // OCX-11: the next candidate is a hop; the fallback policy decides before it is sent, on the
+    // redirected destination the guard above already validated.
+    const nextTarget = resolvedPolicyTarget(config, next);
     const hop = guardFallbackHop(config, {
       site: "routing-profile",
       route: policyRoute,
       aliases: [initialRequestedModel ?? initialTrace.requestedModel],
       from: current,
-      to: { provider: next.provider, model: next.model },
+      to: nextTarget,
       trigger: fallbackTriggerForStatus(response.status),
       admission: options.admission,
       failureStatus: response.status,
@@ -263,8 +282,10 @@ export async function handleResponsesWithPolicyFallback(
           }
           Object.assign(logCtx, failureLog);
         } else {
+          // Dispatched: only a candidate that was not locally skipped counts as a taken hop.
+          hop.commit();
           response = nextResponse;
-          current = { provider: next.provider, model: next.model };
+          current = nextTarget;
         }
         if (policyScope.preparedDestination) policyScope.triedDestinations.add(policyScope.preparedDestination);
       } catch (error) {

@@ -132,4 +132,44 @@ describe("FallbackPanel", () => {
     const host = await mount((async () => json({ error: "nope" }, 500)) as unknown as typeof fetch, "routing");
     expect(host.textContent).toContain("Could not load fallback settings.");
   });
+
+  test("a poll that started before a save cannot restore the state the save replaced", async () => {
+    // Capture the 30 s poll so the test decides when the second GET starts.
+    let poll: (() => void) | undefined;
+    const realSetInterval = testWindow.setInterval.bind(testWindow);
+    testWindow.setInterval = ((fn: () => void, ms?: number) => {
+      if (ms === 30_000) { poll = fn; return 0; }
+      return realSetInterval(fn, ms);
+    }) as typeof testWindow.setInterval;
+    let gets = 0;
+    let releaseStale: (() => void) | undefined;
+    const host = await mount((async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") return json({ ...baseState, global: { model: true, provider: false } });
+      gets += 1;
+      if (gets === 1) return json(baseState);
+      await new Promise<void>(resolve => { releaseStale = resolve; });
+      return json(baseState);
+    }) as unknown as typeof fetch, "routing");
+    expect(poll).toBeDefined();
+    await act(async () => { poll!(); await flush(); });
+    expect(gets).toBe(2);
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Provider fallback"]')!.click(); await flush(); });
+    expect(host.querySelector('button[aria-label="Provider fallback"]')!.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => { releaseStale!(); await flush(); });
+    expect(host.querySelector('button[aria-label="Provider fallback"]')!.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  test("on a Child the routing switches and the Clear button are read-only", async () => {
+    let puts = 0;
+    const host = await mount((async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") puts += 1;
+      return json(baseState);
+    }) as unknown as typeof fetch, "routing", true);
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons.some(button => button.textContent === "Clear")).toBe(true);
+    expect(buttons.every(button => button.disabled)).toBe(true);
+    expect(host.textContent).toContain("kept on this device's Home");
+    for (const button of buttons) await act(async () => { button.click(); await flush(); });
+    expect(puts).toBe(0);
+  });
 });

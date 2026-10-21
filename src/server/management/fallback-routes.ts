@@ -52,6 +52,9 @@ async function writeFallback(ctx: ManagementContext): Promise<Response> {
     // A link alias names its link; otherwise the key must be a known link id or data key id.
     const byAlias = known.find(link => link.alias === write.key);
     if (byAlias) write.key = byAlias.id;
+    // Clearing stays possible for a device that is gone (a revoked link, a deleted data key):
+    // its entry still lists in the state, and clearing a missing entry is a no-op.
+    if (write.value === null) continue;
     const exists = known.some(link => link.id === write.key)
       || (config.apiKeys ?? []).some(entry => entry.id === write.key);
     if (!exists) {

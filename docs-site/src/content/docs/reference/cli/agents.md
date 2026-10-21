@@ -334,7 +334,7 @@ There is no monetary cost or comparative savings field in this report.
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 
-+## Fallback off
+## Fallback off
 
 ### `ocx fallback <status|off|on|clear|local> ...`
 

@@ -134,6 +134,8 @@ export async function applyMainHardLockFallbackOverride(
     ...(now !== undefined ? { now } : {}),
   });
   if (!hop.ok) throw new FallbackRefusedError(hop.response);
+  // The rewrite is this site's admission: the body now names the fallback model.
+  hop.commit();
 
   parsed.raw.model = fallback.model;
   if (fallback.reasoningEffort !== undefined) {

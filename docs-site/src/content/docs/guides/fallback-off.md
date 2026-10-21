@@ -30,7 +30,7 @@ the same target, and transport fallbacks that keep the same target, are not fall
 ocx fallback off                               # model and provider fallback, everywhere
 ocx fallback off --kind provider               # only cross-provider hops
 ocx fallback off --route combo/coding          # one combo, routing profile or model selector
-ocx fallback off --provider anthropic          # requests that start on one provider
+ocx fallback off --provider anthropic          # hops that leave one provider
 ocx fallback on --route combo/coding           # an exception under a global off
 ocx fallback clear --route combo/coding        # remove an override
 ocx fallback status                            # current settings and the last fallback
@@ -79,9 +79,15 @@ still a 429 with its `Retry-After`, and with this body:
 ```
 
 The response also carries `x-opencodex-fallback: refused`. When the first target is already known to be
-unavailable (a combo target cooling down, an exhausted subagent model, a blocked main account), the
-refusal happens before anything is sent and answers 429 for quota and cooldown, 503 otherwise. The
-fallback target is never contacted.
+unavailable, the refusal happens before anything is sent, and the fallback target is never contacted.
+The status depends on why the first target was skipped:
+
+- A combo's first target cooling down, or with its quota spent: 429.
+- A combo's first target disabled or not usable for the request: 503.
+- A blocked main account: 429.
+- An unavailable subagent model: 503.
+
+After a real upstream failure, the refusal keeps that failure's status.
 
 ## Remote Link Children and Hub clients
 

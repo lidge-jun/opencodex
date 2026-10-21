@@ -8,16 +8,19 @@ import type { OcxConfig } from "../../src/types";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
 import { handleResponsesWithPolicyFallback } from "../../src/server/responses/policy-fallback";
+import { PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "../../src/server/responses/policy-request-scope";
 import { clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
 import type { OcxFallbackConfig } from "../../src/types/fallback";
 
-function config(fallback?: OcxFallbackConfig): OcxConfig {
+function config(fallback?: OcxFallbackConfig, redirects?: Record<string, string>): OcxConfig {
   return {
     port: 0, defaultProvider: "provider-a",
     providers: Object.fromEntries(["a", "b"].map(id => ["provider-" + id, {
-      adapter: "openai-chat", baseUrl: "https://" + id + ".example/v1", authMode: "key", apiKey: "fixture-key", models: ["model-" + id],
+      adapter: "openai-chat", baseUrl: "https://" + id + ".example/v1", authMode: "key", apiKey: "fixture-key",
+      models: ["model-" + id, "model-" + id + "2", "model-x"],
     }])),
     ...(fallback ? { fallback } : {}),
+    ...(redirects ? { blockedModelRedirects: redirects } : {}),
   } as OcxConfig;
 }
 
@@ -76,5 +79,78 @@ describe("routing-profile fallback off", () => {
     const { response, calls } = await run({ provider: false, providers: { "provider-a": { provider: true } } });
     expect(response.status).toBe(200);
     expect(calls).toBe(2);
+  });
+});
+
+type Candidate = { provider: string; model: string; score: number };
+
+function traceOf(candidates: Candidate[]): RouteDecisionTraceV1 {
+  return {
+    ...trace(),
+    candidates: candidates.map(c => ({ provider: c.provider, model: c.model, eligible: true, exclusions: [], score: { total: c.score, components: {} } })),
+    selected: { candidateIndex: 0, provider: candidates[0]!.provider, model: candidates[0]!.model, reason: "highest-score" },
+  };
+}
+
+/** Run with scripted core answers: each call takes the next one, and the last repeats. */
+async function runScripted(cfg: OcxConfig, candidates: Candidate[], answers: Array<() => Response>): Promise<{ response: Response; models: string[] }> {
+  const models: string[] = [];
+  const response = await handleResponsesWithPolicyFallback(new Request("http://localhost/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "policy/daily", input: "hello", stream: false }),
+  }), cfg, {} as RequestLogContext, {}, {
+    runCore: async (req, _config, context, options) => {
+      const body = await req.json() as { model: string };
+      models.push(body.model);
+      options.onRequestBodyParsed?.(body);
+      context.routeDecision = traceOf(candidates);
+      return answers[Math.min(models.length - 1, answers.length - 1)]!();
+    },
+  });
+  return { response, models };
+}
+
+const overloaded = () => Response.json({ error: { message: "overloaded", type: "server_error" } }, { status: 503 });
+const completed = () => Response.json({ status: "completed" });
+
+describe("routing-profile hops are classified by resolved destination", () => {
+  beforeEach(() => clearFallbackEventsForTests());
+
+  test("a same-provider candidate redirected to another provider is a provider hop, and is refused", async () => {
+    const { response, models } = await runScripted(
+      config({ provider: false }, { "provider-a/model-x": "provider-b/model-b" }),
+      [{ provider: "provider-a", model: "model-a", score: 0.9 }, { provider: "provider-a", model: "model-x", score: 0.85 }, { provider: "provider-b", model: "model-b", score: 0.1 }],
+      [overloaded, completed],
+    );
+    expect(response.status).toBe(503);
+    const body = await response.json() as { error: { fallback: Record<string, string> } };
+    expect(body.error.fallback).toMatchObject({ kind: "provider", from: "provider-a/model-a", to: "provider-b/model-b" });
+    expect(models).toEqual(["policy/daily"]);
+  });
+
+  test("after a redirected hop, current is the redirected destination", async () => {
+    // a/model-a -> a/model-x (really b/model-b) is a provider hop and allowed; the next hop leaves
+    // provider-b for b/model-b2, a model hop that provider-b's own model switch refuses.
+    const { response, models } = await runScripted(
+      config({ providers: { "provider-b": { model: false } } }, { "provider-a/model-x": "provider-b/model-b" }),
+      [{ provider: "provider-a", model: "model-a", score: 0.9 }, { provider: "provider-a", model: "model-x", score: 0.85 },
+        { provider: "provider-b", model: "model-b2", score: 0.8 }, { provider: "provider-b", model: "model-b", score: 0.1 }],
+      [overloaded, overloaded, completed],
+    );
+    expect(models).toEqual(["policy/daily", "provider-a/model-x"]);
+    expect(response.status).toBe(503);
+    const body = await response.json() as { error: { fallback: Record<string, string> } };
+    expect(body.error.fallback).toMatchObject({ kind: "model", scope: "provider", scopeKey: "provider-b", from: "provider-b/model-b", to: "provider-b/model-b2" });
+  });
+
+  test("a candidate the core skips locally is not recorded as a taken hop", async () => {
+    const { response, models } = await runScripted(config(),
+      [{ provider: "provider-a", model: "model-a", score: 0.9 }, { provider: "provider-b", model: "model-b", score: 0.8 }],
+      [overloaded, () => policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!],
+    );
+    expect(models).toEqual(["policy/daily", "provider-b/model-b"]);
+    expect(response.status).toBe(503);
+    expect(recentFallbackEvents()).toEqual([]);
   });
 });

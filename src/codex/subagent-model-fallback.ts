@@ -667,6 +667,8 @@ export function applySubagentModelFallback(
     now,
   });
   if (!hop.ok) return { from, to: from, skipped: selection.skipped, refusal: hop.response };
+  // The rewrite is this site's admission: the spawn now carries the fallback model.
+  hop.commit();
   rewriteParsedModel(parsed, selection.model);
   return { from, to: selection.model, skipped: selection.skipped };
 }

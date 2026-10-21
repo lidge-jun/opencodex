@@ -42,12 +42,18 @@ and is cached for five seconds. Loopback and unkeyed requests have no device sco
 
 | Site | Hop point | Reactive status | Proactive |
 |---|---|---|---|
-| Combos, `src/server/responses/core-combo.ts` | top of the dispatch loop, when a later dispatch follows a failure on a different target; and before the first send of a `failover` combo whose first target is cooling down | the failure's status and `Retry-After` | `cooldown`, 429 |
+| Combos, `src/server/responses/core-combo.ts` | top of the dispatch loop, when a later dispatch follows a failure on a different target; and before the first send of a `failover` combo that starts on a later target than its first, for any reason | the failure's status and `Retry-After` | `cooldown` or `quota_exhausted`, 429; otherwise `unavailable`, 503 |
 | Routing profiles, `src/server/responses/policy-fallback.ts` | before the next ranked candidate runs | the failure's status and `Retry-After` | — |
 | Subagent model fallback, `src/codex/subagent-model-fallback.ts` | `applySubagentModelFallback`, before the spawn's model is rewritten; the caller in `src/server/responses/request-prepare.ts` returns the refusal | — | `unavailable`, 503 |
 | Main-account hard-lock fallback, `src/server/responses/main-hard-lock-routing.ts` | before the body is rewritten; `FallbackRefusedError` carries the refusal to `request-prepare.ts` | — | `hard_lock`, 429 |
 
 A refused hop never contacts the fallback target and leaves the request body untouched.
+
+The combo and routing-profile sites classify a hop by resolved destinations: both ends pass through
+`routeConcreteModel`, so provider aliases and `blockedModelRedirects` are applied, and the end a hop
+leaves is the failed child's resolved provider and model. Two selectors under one provider that redirect
+to different providers make a provider hop; a routing profile's `current` advances to the redirected
+candidate.
 
 ## Refusal contract
 
@@ -63,13 +69,20 @@ has no provider dispatch; `tests/clients/client-home-unreachable.test.ts` proves
 path from it to Responses dispatch, the router or adapter resolution. When the Home cannot be reached,
 the Child's data relay (`src/client/link-relay.ts`) answers a retryable 503 and the Hub client's
 management relay (`src/client/hub-relay.ts`) a 502; both bodies keep their legacy `error` string and add
-`code: "home_unreachable"` and the message from `src/client/home-unreachable.ts`.
+`code: "home_unreachable"` and the message from `src/client/home-unreachable.ts`. That code means the
+connection is unavailable and nothing else: a failed connection-bound relay authentication answers
+`code: "link_relay_auth_failed"`, so an upgrade or re-link problem never reads as Home down to GOAT.
+A tunnel that drops after forwarding started also answers `home_unreachable`, and the Home may have
+received that request.
 `devices.<id>.localFallback` is a permission GOAT reads (goat-si/goat ADR-0021 §1.6, "local fallback
 opt-in per device"); OpenCodex never acts on it and keeps answering `home_unreachable`.
 
 ## State and surfaces
 
-Every guarded hop, taken or refused, is recorded in a 20-entry in-memory ring (`recentFallbackEvents`):
+Every guarded hop, taken or refused, is recorded in a 20-entry in-memory ring (`recentFallbackEvents`).
+A refusal is recorded when it is decided; an allowed hop only when its site calls `commit()` after the
+dispatch is admitted (the combo send-budget reservation passed, a profile candidate was not locally
+skipped), so the ring never names a target that was not contacted. Each event carries
 time, site, route, kind, from, to, trigger, outcome, deciding scope and the device id. No body, key,
 account id, label or email. `src/routing/fallback-state.ts` builds the `ocx.fallback/1` view and applies
 the one scoped write.

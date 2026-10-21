@@ -84,6 +84,17 @@ describe("config degrade", () => {
     expect(fallbackPolicyError({ fallback: { model: false, devices: { [LINK]: { localFallback: true } } } })).toBeUndefined();
     expect(fallbackPolicyError({})).toBeUndefined();
   });
+
+  test("a whole-config write rejects a malformed fallback section instead of dropping its refusals", async () => {
+    const { validateConfigCandidate } = await import("../../src/config/diagnostics");
+    const base = { port: 0, defaultProvider: "alpha", providers: { alpha: { adapter: "openai-chat", baseUrl: "https://alpha.test/v1" } } };
+    for (const fallback of [{ provider: "off" }, { routes: { "combo/x": { provider: 0 } } }, { devices: { [LINK]: { localFallback: "yes" } } }, { account: false }]) {
+      const result = validateConfigCandidate({ ...base, fallback });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("schema_invalid: fallback");
+    }
+    expect(validateConfigCandidate({ ...base, fallback: { provider: false, routes: { "combo/x": { model: true } } } }).ok).toBe(true);
+  });
 });
 
 describe("device identity", () => {
@@ -149,19 +160,31 @@ describe("guard and refusal contract", () => {
     expect(unavailable.ok || unavailable.response.status).toBe(503);
   });
 
-  test("allowed hops are recorded as taken; a same-target retry is not a hop", () => {
+  test("an allowed hop is recorded as taken only once committed; a same-target retry is not a hop", () => {
     const config = cfg();
-    expect(guardFallbackHop(config, { site: "combo", route: "combo/x", from: { provider: "a", model: "m" }, to: { provider: "a", model: "m" }, trigger: "upstream_5xx" }))
-      .toEqual({ ok: true, kind: null });
-    expect(guardFallbackHop(config, { site: "combo", route: "combo/x", from: { provider: "a", model: "m" }, to: { provider: "b", model: "m" }, trigger: "upstream_5xx" }).ok).toBe(true);
+    const same = guardFallbackHop(config, { site: "combo", route: "combo/x", from: { provider: "a", model: "m" }, to: { provider: "a", model: "m" }, trigger: "upstream_5xx" });
+    expect(same).toMatchObject({ ok: true, kind: null });
+    if (same.ok) same.commit();
+    expect(recentFallbackEvents()).toHaveLength(0);
+    const allowed = guardFallbackHop(config, { site: "combo", route: "combo/x", from: { provider: "a", model: "m" }, to: { provider: "b", model: "m" }, trigger: "upstream_5xx" });
+    expect(allowed.ok).toBe(true);
+    // Decided but not yet admitted (a send budget or a local skip can still stop it): no event.
+    expect(recentFallbackEvents()).toHaveLength(0);
+    if (allowed.ok) { allowed.commit(); allowed.commit(); }
     const events = recentFallbackEvents();
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ outcome: "taken", kind: "provider", from: "a/m", to: "b/m", scope: "default" });
   });
 
+  test("a refusal is recorded when it is decided", () => {
+    guardFallbackHop(cfg({ provider: false }), { site: "combo", route: "combo/x", from: { provider: "a", model: "m" }, to: { provider: "b", model: "m" }, trigger: "upstream_5xx" });
+    expect(recentFallbackEvents()).toEqual([expect.objectContaining({ outcome: "refused", kind: "provider" })]);
+  });
+
   test("the ring keeps the last 20 events", () => {
     for (let i = 0; i < 25; i += 1) {
-      guardFallbackHop(cfg(), { site: "combo", route: "combo/x", from: { provider: "a", model: "m" + i }, to: { provider: "a", model: "n" }, trigger: "upstream_5xx" });
+      const hop = guardFallbackHop(cfg(), { site: "combo", route: "combo/x", from: { provider: "a", model: "m" + i }, to: { provider: "a", model: "n" }, trigger: "upstream_5xx" });
+      if (hop.ok) hop.commit();
     }
     const events = recentFallbackEvents();
     expect(events).toHaveLength(20);
