@@ -924,11 +924,13 @@
       "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery.",
       "documents": [
         "src/link/",
+        "src/client/link-home.ts",
         "src/client/link-parity-reporter.ts",
         "src/client/runtime-restart.ts",
         "src/cli/link-apply-restart.ts",
         "src/cli/status-codex-settings.ts",
         "src/server/index/link-management.ts",
+        "src/server/management/link-routes.ts",
         "src/lib/gui-pair-intent.ts",
         "src/lib/windows-owner-acl.ts",
         "src/server/gui-pair-delivery.ts"
