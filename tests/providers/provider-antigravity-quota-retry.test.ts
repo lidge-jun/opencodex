@@ -85,9 +85,9 @@ describe("Antigravity quota summary 403 compatibility retry (#5940)", () => {
     });
   }
 
-  for (const [status, failure] of [[401, "access_denied"], [403, "access_denied"], [429, "rate_limited"], [503, "upstream_error"]] as const) {
+  for (const [status, failure] of [[302, "redirect_blocked"], [401, "access_denied"], [403, "access_denied"], [429, "rate_limited"], [503, "upstream_error"]] as const) {
     test(`models fallback status ${status} maps to ${failure}`, async () => {
-      const calls = transport([new Response(null, { status: 500 }), new Response(null, { status })]);
+      const calls = transport([new Response(null, { status: 500 }), new Response(null, { status, headers: { location: "https://redirect.example/" } })]);
       expect(await probeAntigravityUsageQuota("test-access", "test-project")).toMatchObject({ kind: "unavailable", failure });
       expect(calls).toEqual([expectedCall(summaryUrl), expectedCall(modelsUrl)]);
     });
