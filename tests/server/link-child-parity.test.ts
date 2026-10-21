@@ -37,7 +37,7 @@ const store: LinkStore = {
     { id: OTHER_LINK, alias: "child-b", direction: "hub-initiated", hostKeyFingerprint: "SHA256:qrstuvwxyzabcdef", tunnelPort: 19201, apiKeyId: "link-key-2", createdAt: "2026-10-20T00:00:00.000Z" },
   ],
 };
-const report = { linkId: LINK_ID, lastApplyAt: 1_761_008_400_000, runtimeStartedAt: 1_761_008_405_000, appliedCodexSettingsDigest: DIGEST };
+const report = { linkId: LINK_ID, lastApplyAt: 1_761_008_400_000, runtimeStartedAt: 1_761_008_405_000, appliedCodexSettingsDigest: DIGEST, sequence: 3 };
 
 let root = "";
 let previousHome: string | undefined;
@@ -81,6 +81,9 @@ describe("the Child's apply report on the Home", () => {
     expect((await post(JSON.stringify({ ...report, lastApplyAt: "2026-10-21T00:00:00.000Z" }))).status).toBe(400);
     expect((await post(JSON.stringify({ ...report, appliedCodexSettingsDigest: `sha256:${DIGEST}` }))).status).toBe(400);
     expect((await post(JSON.stringify({ ...report, appliedCodexSettingsDigest: null }))).status).toBe(400);
+    expect((await post(JSON.stringify({ ...report, sequence: -1 }))).status).toBe(400);
+    const { sequence: _sequence, ...unsequenced } = report;
+    expect((await post(JSON.stringify(unsequenced))).status).toBe(400);
     expect((await post("not json")).status).toBe(400);
     expect((await post(" ".repeat(LINK_CHILD_PARITY_MAX_BYTES + 1))).status).toBe(413);
     expect((await post("", KEY_ID, LINK_CHILD_PARITY_PATH, "GET")).status).toBe(404);
@@ -110,6 +113,21 @@ describe("the Child's apply report on the Home", () => {
     parity.record({ ...report, linkId: OTHER_LINK }, new Set([OTHER_LINK]));
     expect(parity.get(LINK_ID).reportedAt).toBeNull();
     expect(parity.get(OTHER_LINK).reportedAt).toBe(now);
+  });
+
+  test("a late report never moves the Home's view backward", () => {
+    const parity = createLinkChildParityStore(() => 1_761_008_410_000);
+    const links = new Set([LINK_ID]);
+    const newerRuntime = { ...report, runtimeStartedAt: report.runtimeStartedAt + 60_000, sequence: 1 };
+    expect(parity.record(newerRuntime, links)).toBe(true);
+    // The old runtime's in-flight POST lands afterwards: ignored, whatever its sequence.
+    expect(parity.record({ ...report, sequence: 99 }, links)).toBe(false);
+    expect(parity.get(LINK_ID).runtimeStartedAt).toBe(newerRuntime.runtimeStartedAt);
+    // Within one runtime only a later send wins, even when it withdraws the digest.
+    const withdrawn = { ...newerRuntime, lastApplyAt: null, appliedCodexSettingsDigest: null, sequence: 2 };
+    expect(parity.record(withdrawn, links)).toBe(true);
+    expect(parity.record({ ...newerRuntime, sequence: 1 }, links)).toBe(false);
+    expect(parity.get(LINK_ID)).toMatchObject({ lastApplyAt: null, appliedCodexSettingsDigest: null });
   });
 });
 

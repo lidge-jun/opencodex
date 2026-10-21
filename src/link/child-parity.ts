@@ -33,6 +33,11 @@ export interface LinkChildParityReport {
   runtimeStartedAt: number;
   /** `appliedCodexSettingsDigest` of the applied settings; null before any apply. */
   appliedCodexSettingsDigest: string | null;
+  /**
+   * Increases with every report this runtime process sends. With `runtimeStartedAt` it orders
+   * reports, so a late POST from an older runtime or an earlier send never replaces a newer one.
+   */
+  sequence: number;
 }
 
 /** The per-link fields `GET /api/link/status` carries; every one is null until a report arrives. */
@@ -60,39 +65,51 @@ function exactKeys(value: unknown, keys: readonly string[]): value is Record<str
 
 /** Strict: an unknown field, a non-integer time or a malformed digest rejects the report. */
 export function parseLinkChildParityReport(value: unknown): LinkChildParityReport | null {
-  if (!exactKeys(value, ["linkId", "lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest"])) return null;
-  const { linkId, lastApplyAt, runtimeStartedAt, appliedCodexSettingsDigest: digest } = value;
+  if (!exactKeys(value, ["linkId", "lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "sequence"])) return null;
+  const { linkId, lastApplyAt, runtimeStartedAt, appliedCodexSettingsDigest: digest, sequence } = value;
   if (typeof linkId !== "string" || !LINK_ID.test(linkId)) return null;
   if (lastApplyAt !== null && !isEpochMs(lastApplyAt)) return null;
   if (!isEpochMs(runtimeStartedAt)) return null;
   if (digest !== null && (typeof digest !== "string" || !CODEX_SETTINGS_DIGEST_PATTERN.test(digest))) return null;
   // An apply has both a time and a digest; before the first apply it has neither.
   if ((lastApplyAt === null) !== (digest === null)) return null;
-  return { linkId, lastApplyAt, runtimeStartedAt, appliedCodexSettingsDigest: digest };
+  if (typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 0) return null;
+  return { linkId, lastApplyAt, runtimeStartedAt, appliedCodexSettingsDigest: digest, sequence };
 }
 
 export interface LinkChildParityStore {
-  /** Keep the report for its link, dropping every entry whose link is not in `currentLinkIds`. */
-  record(report: LinkChildParityReport, currentLinkIds: ReadonlySet<string>): void;
+  /**
+   * Keep the report for its link unless a newer one is already kept (by `runtimeStartedAt`, then
+   * `sequence`), dropping every entry whose link is not in `currentLinkIds`. True when kept.
+   */
+  record(report: LinkChildParityReport, currentLinkIds: ReadonlySet<string>): boolean;
   get(linkId: string): LinkChildParity;
   clear(): void;
 }
 
 export function createLinkChildParityStore(now: () => number = Date.now): LinkChildParityStore {
-  const reports = new Map<string, LinkChildParity>();
+  const reports = new Map<string, LinkChildParity & { sequence: number }>();
   return {
     record(report, currentLinkIds) {
       for (const id of reports.keys()) if (!currentLinkIds.has(id)) reports.delete(id);
-      if (!currentLinkIds.has(report.linkId)) return;
+      if (!currentLinkIds.has(report.linkId)) return false;
+      const kept = reports.get(report.linkId);
+      if (kept && (kept.runtimeStartedAt! > report.runtimeStartedAt
+        || (kept.runtimeStartedAt === report.runtimeStartedAt && kept.sequence >= report.sequence))) return false;
       reports.set(report.linkId, {
         lastApplyAt: report.lastApplyAt,
         runtimeStartedAt: report.runtimeStartedAt,
         appliedCodexSettingsDigest: report.appliedCodexSettingsDigest,
         reportedAt: now(),
+        sequence: report.sequence,
       });
+      return true;
     },
     get(linkId) {
-      return { ...(reports.get(linkId) ?? EMPTY_LINK_CHILD_PARITY) };
+      const kept = reports.get(linkId);
+      if (!kept) return { ...EMPTY_LINK_CHILD_PARITY };
+      const { sequence: _sequence, ...parity } = kept;
+      return parity;
     },
     clear() { reports.clear(); },
   };

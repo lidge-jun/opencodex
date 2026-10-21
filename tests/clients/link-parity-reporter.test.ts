@@ -46,15 +46,19 @@ function harness(outcomes: Array<"accepted" | "unsupported" | "failed">) {
 
 describe("link parity reporter", () => {
   test("the report carries the apply time, digest and start as epoch ms", () => {
-    expect(linkChildParityReport(connection, STARTED, record)).toEqual({
+    expect(linkChildParityReport(connection, STARTED, record, 7)).toEqual({
       linkId: LINK_ID,
       lastApplyAt: Date.parse("2026-10-21T01:00:00.000Z"),
       runtimeStartedAt: Date.parse(STARTED),
       appliedCodexSettingsDigest: "57c751eff89844f93db71a6ee4acdac03afbc29fec52734ade80a40193e826cd",
+      sequence: 7,
     });
-    expect(linkChildParityReport(connection, STARTED, null)).toEqual({
-      linkId: LINK_ID, lastApplyAt: null, runtimeStartedAt: Date.parse(STARTED), appliedCodexSettingsDigest: null,
+    expect(linkChildParityReport(connection, STARTED, null, 8)).toEqual({
+      linkId: LINK_ID, lastApplyAt: null, runtimeStartedAt: Date.parse(STARTED), appliedCodexSettingsDigest: null, sequence: 8,
     });
+    // Without an explicit sequence each report counts up, process-wide.
+    const first = linkChildParityReport(connection, STARTED, null)!.sequence;
+    expect(linkChildParityReport(connection, STARTED, null)!.sequence).toBeGreaterThan(first);
   });
 
   test("backs off while the Home is unreachable, then reports once a minute", async () => {

@@ -15,6 +15,13 @@ import { readHomeCodexSettingsRecord, sendLinkChildParityReport, type HomeCodexS
 export const LINK_PARITY_RETRY_MS = [2_000, 5_000, 15_000, 30_000, 60_000] as const;
 export const LINK_PARITY_PERIOD_MS = 60_000;
 
+/** Process-wide, so a reporter rebuilt by a restart rollback keeps counting up (see `sequence`). */
+let reportSequence = 0;
+function nextReportSequence(): number {
+  reportSequence += 1;
+  return reportSequence;
+}
+
 export interface LinkParityReporter {
   start(): void;
   stop(): void;
@@ -36,14 +43,15 @@ export function linkChildParityReport(
   connection: OcxClientConnectionConfig,
   runtimeStartedAt: string,
   record: HomeCodexSettingsRecord | null,
+  sequence: number = nextReportSequence(),
 ): LinkChildParityReport | null {
   const linkId = connection.link?.linkId;
   const started = Date.parse(runtimeStartedAt);
   if (!linkId || !Number.isFinite(started)) return null;
   const applied = record ? Date.parse(record.appliedAt) : Number.NaN;
   return Number.isFinite(applied)
-    ? { linkId, lastApplyAt: applied, runtimeStartedAt: started, appliedCodexSettingsDigest: codexSettingsDigest(record!.document.settings) }
-    : { linkId, lastApplyAt: null, runtimeStartedAt: started, appliedCodexSettingsDigest: null };
+    ? { linkId, lastApplyAt: applied, runtimeStartedAt: started, appliedCodexSettingsDigest: codexSettingsDigest(record!.document.settings), sequence }
+    : { linkId, lastApplyAt: null, runtimeStartedAt: started, appliedCodexSettingsDigest: null, sequence };
 }
 
 export function createLinkParityReporter(deps: LinkParityReporterDeps): LinkParityReporter {
