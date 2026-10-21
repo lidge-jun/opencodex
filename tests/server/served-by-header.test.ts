@@ -73,11 +73,15 @@ async function instanceIdFromHealth(): Promise<string> {
 }
 
 function expectOpaque(id: string): void {
-  const host = hostname().toLowerCase();
   expect(id).toMatch(INSTANCE_ID);
-  expect(id.toLowerCase()).not.toContain(host);
-  expect(id.toLowerCase()).not.toContain(host.split(".")[0]!);
-  expect(id).not.toContain(Buffer.from(host).toString("hex"));
+  // Only the random body can carry anything, and a short or hex-only label can occur in random hex
+  // by chance; check labels long enough for a match to mean derivation.
+  const body = id.slice("home_".length);
+  const label = hostname().toLowerCase().split(".")[0] ?? "";
+  if (label.length >= 8) {
+    expect(body).not.toContain(label);
+    expect(body).not.toContain(Buffer.from(label).toString("hex").slice(0, 16));
+  }
 }
 
 async function stopServer(): Promise<void> {

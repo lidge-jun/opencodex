@@ -79,6 +79,7 @@ never published.
 `ocx.quota-pool/1` NUL provider NUL accountId). It is stable across restarts, distinct per provider,
 and never contains an email, a raw account id or a token; without the secret a recipient cannot
 confirm a guessed identity against it. Deleting the file rotates `homeId` and every reference
-together. `label` is the account's existing log label (`main`, `p<hex6>`, `o<hex6>`), never an
+together when the proxy next starts; a running proxy keeps the identity it already read (and keeps
+publishing that `homeId` as its instance id). `label` is the account's existing log label (`main`, `p<hex6>`, `o<hex6>`), never an
 email or alias. `producer.role` is `runtimeRole` (`standalone` when unset) and `producer.version`
 is the package version. `driver` and `pooled.headroom` are not produced yet.

@@ -672,7 +672,8 @@ device the header names the Home that served the model list. `GET /readyz` lists
 Right after a fresh install starts, before its identity file exists, or when that file is
 unreadable, both the `instanceId` field and the header are left out; an empty value is never sent.
 Deleting `quota-pool-identity.json` from the OpenCodex home rotates the id together with every
-quota-pool account reference.
+quota-pool account reference when the proxy next starts; a running proxy keeps reporting the id it
+already read.
 
 ### Providers
 
