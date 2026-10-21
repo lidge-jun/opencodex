@@ -15,6 +15,7 @@ import { chatCompletionsToResponsesBody } from "../../src/chat/inbound";
 import { collectChatCompletion } from "../../src/chat/outbound";
 import { resetWorkflowBudgetsForTest } from "../../src/lib/workflow-budget";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
+import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import { resetThoughtSignatureReplayForTests } from "../../src/responses/thought-signature-replay";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import type { OcxConfig } from "../../src/types";
@@ -60,10 +61,15 @@ afterEach(() => {
   }
 });
 
-function config(baseUrl: string, direct: boolean): OcxConfig {
+/** The OAuth store knows Anthropic accounts by the canonical provider name. */
+const OAUTH_PROVIDER = "anthropic";
+
+function config(baseUrl: string, direct: boolean, oauth = false): OcxConfig {
+  const name = oauth ? OAUTH_PROVIDER : "anth";
   return {
-    defaultProvider: "anth", emptyCompletionRetry: false,
-    providers: { anth: { adapter: "anthropic", baseUrl, authMode: "key", apiKey: "synthetic-test-key", proxy: "direct", models: [MODEL, PROGRESS_MODEL] } },
+    defaultProvider: name, emptyCompletionRetry: false,
+    providers: { [name]: { adapter: "anthropic", baseUrl, proxy: "direct", models: [MODEL, PROGRESS_MODEL],
+      ...(oauth ? { authMode: "oauth" } : { authMode: "key", apiKey: "synthetic-test-key" }) } },
     ...(direct ? { protocols: { rollout: { directEncoders: true } } } : {}),
   } as OcxConfig;
 }
@@ -139,10 +145,10 @@ function transport(baseUrl: string, enforce: boolean, answer: (step: number, str
   return bodies;
 }
 
-async function chat(cfg: OcxConfig, messages: unknown[], stream: boolean, model = MODEL): Promise<Item> {
+async function chat(cfg: OcxConfig, messages: unknown[], stream: boolean, model = MODEL, provider = "anth"): Promise<Item> {
   const request = new Request("http://localhost/v1/chat/completions", {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: `anth/${model}`, messages, tools: TOOLS, reasoning_effort: "high", stream }),
+    body: JSON.stringify({ model: `${provider}/${model}`, messages, tools: TOOLS, reasoning_effort: "high", stream }),
   });
   const response = await handleChatCompletions(request, cfg, { model: "", provider: "" });
   expect(response.status).toBe(200);
@@ -231,6 +237,24 @@ describe("#7429 Chat reasoning_details carry Anthropic thinking across tool step
     });
   }
 
+  // A Claude subscription reaches the same first-party host with a pooled OAuth account.
+  test("pooled OAuth route: signatures survive a multi-step tool loop", async () => {
+    await saveCredential(OAUTH_PROVIDER, { access: "synthetic-oauth-access", refresh: "synthetic-oauth-refresh",
+      expires: Date.now() + 3_600_000, accountId: "synthetic-oauth-account", source: "oauth" });
+    await setActiveAccount(OAUTH_PROVIDER, getAccountSet(OAUTH_PROVIDER)!.accounts[0]!.id);
+    const cfg = config(FIRST_PARTY, false, true);
+    const bodies = transport(FIRST_PARTY, true, (step, stream) => upstreamTurn(step, stream, { tool: step < 2 }));
+    const first = await chat(cfg, [USER], true, MODEL, OAUTH_PROVIDER);
+    expect((first.reasoning_details as Item[])[0]!.signature).toBe(SIGNATURES[0]);
+    const second = await chat(cfg, [USER, first, toolResult(first)], true, MODEL, OAUTH_PROVIDER);
+    const final = await chat(cfg, [USER, first, toolResult(first), second, toolResult(second)], true, MODEL, OAUTH_PROVIDER);
+    expect(final.content).toBe("Done.");
+    expect(bodies).toHaveLength(3);
+    assistantTurns(bodies[2]!).forEach((content, step) => {
+      expect(content[0]).toEqual({ type: "thinking", thinking: THINKING[step], signature: SIGNATURES[step] });
+    });
+  });
+
   test("a non-first-party Anthropic destination never receives the echoed signature", async () => {
     const cfg = config(COMPATIBLE, false);
     const bodies = transport(COMPATIBLE, false, (step, stream) => upstreamTurn(step, stream, { redacted: step === 0 }));
@@ -284,4 +308,5 @@ describe("#7429 Chat reasoning_details carry Anthropic thinking across tool step
     expect(input.at(-1)).toEqual({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Same answer" }] });
   });
 });
+
 
