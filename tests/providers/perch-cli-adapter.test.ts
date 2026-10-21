@@ -1,26 +1,22 @@
 // perch-cli adapter: outcome mapping on recorded `perch run --json` documents (perchai-cli 2.4.109,
-// reduced to the fields the adapter reads), staging, argv, runTurn against a fake CLI, and the
-// preload under a real Node against a local HTTP server. Nothing here starts Perch or reaches its API.
+// reduced to the fields the adapter reads), staging, argv, and runTurn against a fake CLI. Nothing
+// here starts Perch or reaches its API.
 import { afterAll, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
-import { pathToFileURL } from "node:url";
 import * as A from "../../src/adapters/perch-cli/adapter";
 import { PERCH_CLI_PROFILE } from "../../src/adapters/perch-cli/profiles";
 import { buildCodeBuddyToolBridge } from "../../src/adapters/codebuddy/tool-bridge";
 import { effectiveAdapterContract, getAdapterDefinition } from "../../src/adapters/registry";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
-import { fixturePath, repoPath } from "../helpers/repo-root";
+import { fixturePath } from "../helpers/repo-root";
 
 const fx = (name: string) => readFileSync(fixturePath("perch-cli", name), "utf8");
-const NODE = Bun.which("node");
 
 // A signed-in Perch (the adapter only checks that the sign-in file exists) and an installed CLI.
 const FAKE_ROOT = mkdtempSync(join(tmpdir(), "ocx-perch-test-"));
@@ -94,16 +90,6 @@ describe("perchOutcome on recorded runs", () => {
   test("the model's preamble before a tool call is kept as text", () => {
     const out = A.perchOutcome(fx("approval-preamble.json"), "", fakeBridge("ocxprobe"));
     expect(out.events.find((e: any) => e.type === "text_delta")?.text).toBe("I'll read the README.md file for you.");
-  });
-  test("already-streamed text and reasoning are not repeated; a mirror that stopped early is completed", () => {
-    const full = A.perchOutcome(fx("approval-preamble.json"), "", fakeBridge("ocxprobe")).events as any[];
-    const text = full.find(e => e.type === "text_delta").text;
-    const thinking = full.find(e => e.type === "thinking_delta")?.thinking ?? "";
-    const out = A.perchOutcome(fx("approval-preamble.json"), "", fakeBridge("ocxprobe"), { text, thinking });
-    expect(out.events.some((e: any) => e.type === "text_delta" || e.type === "thinking_delta")).toBe(false);
-    expect(out.events.some((e: any) => e.type === "tool_call_start")).toBe(true);
-    const rest = A.perchOutcome(fx("approval-preamble.json"), "", fakeBridge("ocxprobe"), { text: text.slice(0, 5), thinking }).events as any[];
-    expect(rest.filter(e => e.type === "text_delta").map(e => e.text)).toEqual([text.slice(5)]);
   });
   test("Perch built-in tool use is a violation", () => {
     expect(A.perchOutcome(fx("native-tools.json"), "", fakeBridge("ocx"))).toMatchObject({ kind: "violation", tools: ["readLocalFile", "listLocalSources"] });
@@ -206,29 +192,24 @@ describe("staging and argv", () => {
     expect(chunks.join("")).toBe(text);
     for (const c of chunks) expect(Buffer.byteLength(c)).toBeLessThanOrEqual(60_000);
   });
-  test("invocation runs node directly with the heap flag, and with the preload only when enabled", () => {
+  test("invocation runs node directly with only the heap flag; nothing is loaded into the CLI", () => {
     // npm's Windows shim: the bin script sits in node_modules beside it, and node.exe may sit next to it.
     const npmDir = join(FAKE_ROOT, "npm");
     mkdirSync(join(npmDir, "node_modules", "perchai-cli", "bin"), { recursive: true });
     writeFileSync(join(npmDir, "perch.cmd"), "");
     writeFileSync(join(npmDir, "node_modules", "perchai-cli", "bin", "perch"), "");
-    const inv = A.perchInvocation(join(npmDir, "perch.cmd"), "win32", true)!;
+    const inv = A.perchInvocation(join(npmDir, "perch.cmd"), "win32")!;
     expect(inv.file).toBe("node");
+    expect(inv.args).toHaveLength(2);
     expect(inv.args[0]).toBe("--max-old-space-size=4096");
-    expect(inv.args[1]).toMatch(/^--import=file:\/\/\/.*perch-cli\/preload\.mjs$/);
-    expect(inv.args[2]).toMatch(/perchai-cli[\\/]bin[\\/]perch$/);
+    expect(inv.args[1]).toMatch(/perchai-cli[\\/]bin[\\/]perch$/);
     expect(A.perchInvocation(join(FAKE_ROOT, "perch-missing"), "linux")).toBeUndefined();
     const linked = join(npmDir, "node_modules", "perchai-cli", "bin", "perch");
-    expect(A.perchInvocation(linked, "linux", true)?.args[2]).toBe(linked);
-    // Off by default: the CLI runs unmodified.
-    expect(A.perchInvocation(linked, "linux", false)?.args).toEqual(["--max-old-space-size=4096", linked]);
-    expect(A.perchPreloadEnabled({})).toBe(false);
-    expect(A.perchPreloadEnabled({ OCX_PERCH_PRELOAD: "true" })).toBe(false);
-    expect(A.perchPreloadEnabled({ OCX_PERCH_PRELOAD: "1" })).toBe(true);
-    // A version-manager shim is run as is, with the flags in NODE_OPTIONS.
-    const shim = A.perchInvocation(FAKE_BIN, "linux", true)!;
+    expect(A.perchInvocation(linked, "linux")?.args).toEqual(["--max-old-space-size=4096", linked]);
+    // A version-manager shim is run as is, with the heap flag in NODE_OPTIONS.
+    const shim = A.perchInvocation(FAKE_BIN, "linux")!;
     expect([shim.file, shim.args]).toEqual([FAKE_BIN, []]);
-    expect(shim.nodeOptions).toMatch(/^--max-old-space-size=4096 --import=file:/);
+    expect(shim.nodeOptions).toBe("--max-old-space-size=4096");
     const shimEnv = A.buildChildEnv("h", shim);
     expect(shimEnv.NODE_OPTIONS).toBe(shim.nodeOptions);
     expect(shimEnv.VOLTA_HOME).toBe(shim.voltaHome); // the staging HOME would hide volta's toolchain
@@ -247,7 +228,7 @@ describe("staging and argv", () => {
     writeFileSync(join(dir, "abs.cmd"), `@"node" "${script}" %*\r\n`);
     for (const shim of ["perch.cmd", "perch", "npm.cmd", "abs.cmd"]) expect(A.shimScript(join(dir, shim))).toBe(script);
     expect(A.perchInvocation(join(dir, "perch.cmd"), "win32")?.args.at(-1)).toBe(script);
-    expect(A.perchInvocation(join(dir, "perch"), "linux", true)).toMatchObject({ file: "node", args: ["--max-old-space-size=4096", expect.stringMatching(/^--import=/), script] });
+    expect(A.perchInvocation(join(dir, "perch"), "linux")).toMatchObject({ file: "node", args: ["--max-old-space-size=4096", script] });
     writeFileSync(join(dir, "other.cmd"), `node "%~dp0\\node_modules\\my-perchai-cli\\bin\\perch" %*\r\n`);
     expect(A.shimScript(join(dir, "other.cmd"))).toBeUndefined(); // another package's script is not Perch's
     expect(A.shimScript(FAKE_BIN)).toBeUndefined(); // no script named: treated as a native launcher
@@ -272,12 +253,13 @@ describe("staging and argv", () => {
     expect(prompt.endsWith("Fix it.")).toBe(true);
     expect(A.perchTurnPrompt(undefined, false)).not.toContain("mcp__");
   });
-  test("child env isolates HOME, keeps the auth dir, skips the heap re-exec and opens the mirror fd", () => {
+  test("child env isolates HOME, keeps the auth dir and skips the heap re-exec; it carries no injection hooks", () => {
     const env = A.buildChildEnv("C:\\stage\\h");
     expect([env.HOME, env.USERPROFILE]).toEqual(["C:\\stage\\h", "C:\\stage\\h"]);
     expect(env.PERCH_CLI_AUTH_DIR).toBe(AUTH_DIR);
-    expect(env.OCX_PERCH_CACHE_DIR).toBe(A.perchCacheDir());
-    expect([env.PERCH_CLI_HEAP_REEXEC, env.PERCH_LANG, env.OCX_PERCH_STREAM_FD]).toEqual(["1", "en", "3"]);
+    expect([env.PERCH_CLI_HEAP_REEXEC, env.PERCH_LANG]).toEqual(["1", "en"]);
+    expect(env.NODE_OPTIONS).toBeUndefined();
+    expect(Object.keys(env).filter(key => key.startsWith("OCX_"))).toEqual([]);
   });
   test("a tool catalog over Perch's MCP deferral threshold keeps one-line descriptions; the full ones move to PERCH.md", async () => {
     // Codex's exec description is ~50 KB; on the 200K tier Perch would defer every MCP schema.
@@ -347,7 +329,8 @@ describe("staging and argv", () => {
     const big = parsedWith({ messages: [{ role: "user", content: "y".repeat(150_000), timestamp: 1 }], tools: [] });
     const stage = await A.stagePerchTurn(big, provider, undefined);
     try {
-      expect(readdirSync(join(stage.workspace, ".perch", "rules"))).toEqual(["20-conversation-01.md", "20-conversation-02.md", "20-conversation-03.md"]);
+      // readdir order is unsorted on ext4; the files' own part numbers carry the order.
+      expect(readdirSync(join(stage.workspace, ".perch", "rules")).sort()).toEqual(["20-conversation-01.md", "20-conversation-02.md", "20-conversation-03.md"]);
       expect(Object.keys(JSON.parse(readFileSync(join(stage.workspace, ".perch", "mcp.json"), "utf8")).servers)).toEqual(["courtlistener"]);
       expect(JSON.parse(readFileSync(join(stage.workspace, ".perch", "skills.json"), "utf8")).disabled).toContain("research");
     } finally {
@@ -364,25 +347,26 @@ describe("staging and argv", () => {
   });
 });
 
-/** A fake `perch` child: the script writes the mirror lines and stdout, then closes. */
-function fakeSpawn(script: (io: { stdout: PassThrough; mirror: PassThrough; close: () => void }, call: number) => void) {
+/** A fake `perch` child: the script writes stdout, then closes. */
+function fakeSpawn(script: (io: { stdout: PassThrough; close: () => void }, call: number) => void) {
   const calls: string[][] = [];
+  const options: any[] = [];
   const kills: number[] = [];
-  const spawnFn = (_file: string, args: string[]) => {
+  const spawnFn = (_file: string, args: string[], opts: any) => {
     calls.push(args);
+    options.push(opts);
     const child: any = new EventEmitter();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
-    const mirror = new PassThrough();
-    child.stdio = [null, child.stdout, child.stderr, mirror];
+    child.stdio = [null, child.stdout, child.stderr];
     let closed = false;
-    const close = () => { if (closed) return; closed = true; child.stdout.end(); mirror.end(); child.stderr.end(); setTimeout(() => child.emit("close", 0), 5); };
+    const close = () => { if (closed) return; closed = true; child.stdout.end(); child.stderr.end(); setTimeout(() => child.emit("close", 0), 5); };
     child.kill = () => { kills.push(calls.length); close(); return true; };
     const n = calls.length;
-    setTimeout(() => script({ stdout: child.stdout, mirror, close }, n), 5);
+    setTimeout(() => script({ stdout: child.stdout, close }, n), 5);
     return child;
   };
-  return { spawnFn, calls, kills };
+  return { spawnFn, calls, options, kills };
 }
 async function drive(spawnFn: any, opts: { parsed?: any; incoming?: any } = {}) {
   const adapter = A.createPerchCliAdapter(provider, { spawn: spawnFn, which: () => FAKE_BIN, heartbeatMs: 60_000 });
@@ -394,17 +378,17 @@ const nativeRun = run({ status: "approval_required", events: [{ type: "tool_call
 const bridgeRun = (usage: any) => run({ status: "approval_required", events: [{ type: "model_call_started" }, { type: "tool_call_requested", toolName: "mcp__opencodex__shell", toolCallId: "c1", input: { command: ["ls"] } }], contextSnapshot: { rows: [], turnApiUsage: usage } });
 
 describe("runTurn with a fake CLI", () => {
-  test("mirror deltas stream before exit and are not repeated from the final JSON", async () => {
-    const { spawnFn } = fakeSpawn(({ stdout, mirror, close }) => {
-      mirror.write('{"type":"reasoning_delta","text":"think"}\n{"type":"answer_delta","text":"Hel"}\n{"type":"answer_delta","text":"lo"}\n{"type":"model_call_done","model":"x/y"}\n');
-      stdout.write(run({ status: "completed", assistantText: "Hello", events: [{ type: "model_call_started" }, { type: "content_delta", text: "Hello" }] }));
+  test("reasoning and text come from the final JSON at exit; the CLI is spawned with no extra stdio or hooks", async () => {
+    const { spawnFn, options } = fakeSpawn(({ stdout, close }) => {
+      stdout.write(run({ status: "completed", assistantText: "Hello", events: [{ type: "model_call_started" }, { type: "reasoning_delta", text: "think" }, { type: "content_delta", text: "Hello" }] }));
       close();
     });
     const events = await drive(spawnFn, { parsed: parsedWith({ tools: [] }) });
-    expect(events.map(e => e.type)).toEqual(["thinking_delta", "text_delta", "text_delta", "done"]);
-    expect(events.filter(e => e.type === "text_delta").map(e => e.text).join("")).toBe("Hello");
+    expect(events.map(e => e.type === "text_delta" ? e.text : e.type === "thinking_delta" ? e.thinking : e.type)).toEqual(["think", "Hello", "done"]);
+    expect(options[0].stdio).toEqual(["ignore", "pipe", "pipe"]);
+    expect(options[0].env.NODE_OPTIONS ?? "").not.toMatch(/--(?:import|require|loader|experimental-loader)\b/);
   });
-  test("without the mirror the final JSON still carries the text", async () => {
+  test("a completed run without events still carries its text", async () => {
     const { spawnFn } = fakeSpawn(({ stdout, close }) => { stdout.write(run({ status: "completed", assistantText: "Hello" })); close(); });
     expect((await drive(spawnFn, { parsed: parsedWith({ tools: [] }) })).map(e => e.type === "text_delta" ? e.text : e.type)).toEqual(["Hello", "done"]);
   });
@@ -424,17 +408,6 @@ describe("runTurn with a fake CLI", () => {
     const events = await drive(spawnFn);
     expect(calls.length).toBe(2);
     expect(events.at(-1)).toMatchObject({ type: "error", code: "undeclared_tool_call" });
-  });
-  test("a built-in call after streamed output fails instead of appending a second answer", async () => {
-    const { spawnFn, calls } = fakeSpawn(({ stdout, mirror, close }) => {
-      mirror.write('{"type":"answer_delta","text":"Let me look."}\n');
-      stdout.write(nativeRun);
-      close();
-    });
-    const events = await drive(spawnFn);
-    expect(calls.length).toBe(1);
-    expect(events.map(e => e.type)).toEqual(["text_delta", "error"]);
-    expect(events.at(-1)).toMatchObject({ code: "undeclared_tool_call" });
   });
   test("an abort between attempts ends the turn with the first attempt's usage", async () => {
     const controller = new AbortController();
@@ -456,7 +429,7 @@ describe("runTurn with a fake CLI", () => {
       const child: any = new EventEmitter();
       child.stdout = new PassThrough();
       child.stderr = new PassThrough();
-      child.stdio = [null, child.stdout, child.stderr, new PassThrough()];
+      child.stdio = [null, child.stdout, child.stderr];
       child.kill = () => true;
       setTimeout(() => child.emit("error", Object.assign(new Error("spawn node ENOENT"), { code: "ENOENT" })), 5);
       return child;
@@ -469,15 +442,6 @@ describe("runTurn with a fake CLI", () => {
       close();
     });
     expect((await drive(spawnFn)).at(-1)).toMatchObject({ type: "error", code: "undeclared_tool_call", usage: { inputTokens: 200, outputTokens: 2 } });
-  });
-  test("mirrored text is tracked per model call, and the final JSON completes a mirror that stopped early", async () => {
-    const { spawnFn } = fakeSpawn(({ stdout, mirror, close }) => {
-      mirror.write('{"type":"model_call_start"}\n{"type":"answer_delta","text":"Hel"}\n');
-      stdout.write(run({ status: "completed", assistantText: "Hello", events: [{ type: "model_call_started" }] }));
-      close();
-    });
-    const events = await drive(spawnFn, { parsed: parsedWith({ tools: [] }) });
-    expect(events.filter(e => e.type === "text_delta").map(e => e.text)).toEqual(["Hel", "lo"]);
   });
   test("no budget for the corrective rerun reports the violation and withholds recovery", async () => {
     const { spawnFn, calls } = fakeSpawn(({ stdout, close }) => { stdout.write(nativeRun); close(); });
@@ -506,15 +470,14 @@ describe("runTurn with a fake CLI", () => {
     expect((await drive(twice.spawnFn, { parsed: parsedWith({ tools: [] }) })).at(-1)).toMatchObject({ type: "error", code: "perch_cli_unavailable" });
     expect(twice.calls.length).toBe(2);
   });
-  test("output already streamed is never followed by a retry", async () => {
-    const { spawnFn, calls } = fakeSpawn(({ stdout, mirror, close }) => {
-      mirror.write('{"type":"answer_delta","text":"partial"}\n');
+  test("a transport failure is retried once, and a second one is reported as retryable", async () => {
+    const { spawnFn, calls } = fakeSpawn(({ stdout, close }) => {
       stdout.write(run({ status: "failed", runId: "tkt-cli-1", events: [{ type: "turn_failed", errorCode: "provider_transport", error: "socket hang up" }] }));
       close();
     });
     const events = await drive(spawnFn, { parsed: parsedWith({ tools: [] }) });
-    expect(calls.length).toBe(1);
-    expect(events.at(-1)).toMatchObject({ type: "error", code: "perch_cli_unavailable", retryable: true });
+    expect(calls.length).toBe(2);
+    expect(events).toMatchObject([{ type: "error", code: "perch_cli_unavailable", retryable: true }]);
   });
   test("an abort before start spawns nothing; an abort mid-run kills the CLI and reports turn_aborted", async () => {
     const first = fakeSpawn(() => {});
@@ -534,100 +497,5 @@ describe("runTurn with a fake CLI", () => {
     await adapter.runTurn(parsedWith({ tools: [] }), { headers: new Headers(), translatorBudget: {} as any }, (e: any) => events.push(e));
     expect(kills.length).toBe(1);
     expect(events.at(-1)).toMatchObject({ type: "error", code: "timeout", retryable: true });
-  });
-});
-
-describe.skipIf(!NODE)("preload under Node", () => {
-  test("drops turn uploads locally and mirrors model-call deltas to fd 3 without changing the CLI's stream", async () => {
-    const server = createServer((req, res) => {
-      if (req.url?.startsWith("/api/perch-terminal/model-call")) {
-        res.writeHead(200, { "content-type": "text/event-stream" });
-        res.end(': keepalive\n\ndata: {"type":"reasoning_delta","text":"r"}\n\ndata: {"type":"answer_delta","text":"A"}\n\ndata: {"type":"done","model":"vendor/m-1"}\n\n');
-      } else {
-        res.writeHead(500).end("upload reached the network");
-      }
-    });
-    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-    const base = `http://127.0.0.1:${(server.address() as any).port}`;
-    const dir = mkdtempSync(join(tmpdir(), "ocxp-test-"));
-    const script = join(dir, "client.mjs");
-    writeFileSync(script, [
-      `const up = await fetch("${base}/api/perch-terminal/cli-turn", { method: "POST", body: "{}" });`,
-      `const learn = await fetch("${base}/api/perch-terminal/cli-learning", { method: "POST" });`,
-      `const mc = await fetch("${base}/api/perch-terminal/model-call", { method: "POST" });`,
-      `const body = await mc.text();`,
-      `await new Promise(r => setTimeout(r, 100));`,
-      `console.log(JSON.stringify({ up: up.status, upBody: await up.text(), learn: learn.status, sawDone: body.includes('"done"') }));`,
-    ].join("\n"));
-    const preload = pathToFileURL(repoPath("src", "adapters", "perch-cli", "preload.mjs")).href;
-    const child = spawn(NODE!, [`--import=${preload}`, script], { env: { ...process.env, OCX_PERCH_STREAM_FD: "3" }, stdio: ["ignore", "pipe", "pipe", "pipe"] });
-    let out = "", mirror = "", err = "";
-    child.stdout!.on("data", d => { out += d; });
-    child.stderr!.on("data", d => { err += d; });
-    (child.stdio[3] as any).on("data", (d: Buffer) => { mirror += d; });
-    await new Promise(resolve => child.on("close", resolve));
-    server.close();
-    await rm(dir, { recursive: true, force: true });
-    expect(err).toBe("");
-    expect(JSON.parse(out)).toEqual({ up: 200, upBody: '{"ok":true}', learn: 200, sawDone: true });
-    expect(mirror.trim().split("\n").map(l => JSON.parse(l))).toEqual([
-      { type: "model_call_start" },
-      { type: "reasoning_delta", text: "r" },
-      { type: "answer_delta", text: "A" },
-      { type: "model_call_done", model: "vendor/m-1" },
-    ]);
-  });
-  test("startup lookups are served from token-keyed caches; memories never reach the turn", async () => {
-    const hits: Record<string, number> = {};
-    const server = createServer((req, res) => {
-      const path = req.url!.split("?")[0]!;
-      hits[path] = (hits[path] ?? 0) + 1;
-      const body = path.endsWith("public-model-default") ? { ok: true, selection: { chatModelId: "m" } }
-        : path.endsWith("cli-context") ? { ok: true, session: { userId: "u1" }, permanentMemories: [{ id: "m" }], attachments: [{ id: "a" }] }
-        : { ok: true, session: { planCode: "starter" }, usageMeter: null };
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(body));
-    });
-    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-    const base = `http://127.0.0.1:${(server.address() as any).port}`;
-    const dir = mkdtempSync(join(tmpdir(), "ocxp-test-"));
-    const script = join(dir, "client.mjs");
-    writeFileSync(script, [
-      "const auth = { Authorization: process.argv[2] };",
-      `const dm = await (await fetch("${base}/api/perch-terminal/public-model-default")).json();`,
-      `const ctx = await (await fetch("${base}/api/perch-terminal/cli-context", { method: "POST", headers: auth, body: "{}" })).json();`,
-      `const acct = await (await fetch("${base}/api/perchai/account", { headers: auth })).json();`,
-      "console.log(JSON.stringify({ dm, ctx, acct }));",
-    ].join("\n"));
-    const preload = pathToFileURL(repoPath("src", "adapters", "perch-cli", "preload.mjs")).href;
-    const runOnce = async (token: string) => {
-      const child = spawn(NODE!, [`--import=${preload}`, script, token], {
-        env: { ...process.env, OCX_PERCH_CACHE_DIR: dir, OCX_PERCH_DEFAULT_MODEL_URL: `${base}/api/perch-terminal/public-model-default` },
-      });
-      let out = "";
-      child.stdout!.on("data", d => { out += d; });
-      await new Promise(resolve => child.on("close", resolve));
-      return JSON.parse(out);
-    };
-    const count = (suffix: string) => Object.entries(hits).filter(([p]) => p.endsWith(suffix)).reduce((n, [, c]) => n + c, 0);
-    const first = await runOnce("Bearer a");
-    expect(first.ctx).toEqual({ ok: true, session: { userId: "u1" }, permanentMemories: [], attachments: [] });
-    expect(first.acct.session.planCode).toBe("starter");
-    expect(first.dm.selection.chatModelId).toBe("m");
-    expect([count("public-model-default"), count("cli-context"), count("account")]).toEqual([1, 1, 1]);
-    const again = await runOnce("Bearer a");
-    expect(again).toEqual(first);
-    expect([count("public-model-default"), count("cli-context"), count("account")]).toEqual([1, 1, 1]); // all local
-    for (const name of readdirSync(dir).filter(f => f.endsWith(".json"))) expect(readFileSync(join(dir, name), "utf8")).not.toContain("Bearer");
-    await runOnce("Bearer b"); // another sign-in reads none of the first one's entries
-    expect([count("cli-context"), count("account")]).toEqual([2, 2]);
-    // An account entry past 10 min and a default-model entry past 6 h are fetched again.
-    for (const [name, ageMs] of [["account.json", 11 * 60_000], ["public-model-default.json", 7 * 3_600_000]] as const) {
-      const entry = JSON.parse(readFileSync(join(dir, name), "utf8"));
-      writeFileSync(join(dir, name), JSON.stringify({ ...entry, at: Date.now() - ageMs }));
-    }
-    await runOnce("Bearer b");
-    expect([count("public-model-default"), count("account"), count("cli-context")]).toEqual([2, 3, 2]);
-    server.close();
-    await rm(dir, { recursive: true, force: true });
   });
 });

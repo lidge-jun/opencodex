@@ -1335,8 +1335,8 @@ The `perch-cli` preset runs the [Perch](https://app.perchai.app) CLI headlessly,
   the CLI keeps its sign-in in the Keychain by default, which this row cannot pass to the CLI; sign in
   with `PERCH_CLI_AUTH_DIR=~/.perch perch login` instead (macOS has not been verified end to end).
 - **Models:** `roost-standard` (Perch's 200K Roost tier), `roost-standard-max` (the 1M Roost tier)
-  and `deepseek-flash-starter`. Roost tiers are routed by Perch to a backend it picks; the service
-  log names the model that actually answered each turn. The 1M-context models are published at
+  and `deepseek-flash-starter`. Roost tiers are routed by Perch to a backend it picks, so the model
+  that answers a turn can differ from turn to turn. The 1M-context models are published at
   512K, because the replayed conversation reaches Perch through its project rule files (at most 40
   files of 64 KB), and Codex must compact before the history outgrows them.
 - **Tool ownership:** client tools are exposed as an isolated MCP catalog. Perch reports the
@@ -1345,8 +1345,9 @@ The `perch-cli` preset runs the [Perch](https://app.perchai.app) CLI headlessly,
   `undeclared_tool_call`.
 - **Isolation:** each turn runs in a fresh staging folder and thread with an empty home directory, so
   Perch loads none of the machine's Perch config, MCP servers or skills.
-- **Data sent to Perch:** the CLI runs unmodified. Perch receives each turn's prompt, the replayed
-  conversation and the tool calls, as it would from any CLI session. The CLI also uploads the whole
+- **Data sent to Perch:** the CLI runs unmodified; OpenCodex loads nothing into its process. Perch
+  receives each turn's prompt, the replayed conversation and the tool calls, as it would from any
+  CLI session. The CLI also uploads the whole
   turn to Perch (`cli-turn`) and asks Perch to derive account memories from it (`cli-learning`), and
   the account's saved memories are added to every turn.
 - **Starter Data Program:** on the Starter plan this program is on by default (Terms §8). Perch can
@@ -1357,39 +1358,21 @@ The `perch-cli` preset runs the [Perch](https://app.perchai.app) CLI headlessly,
   so it does not inherit proxy variables, OpenCodex's configured outbound proxy, or
   `NODE_EXTRA_CA_CERTS`. Behind a mandatory proxy or a TLS-inspecting firewall it needs a
   system-level route.
-- **Streaming:** none by default. `perch run` prints one result when it exits, so a turn's text
-  arrives all at once.
+- **Streaming:** none. `perch run` prints one result when it exits, so a turn's text arrives all at
+  once.
 - **Input media:** the models are text-only; with the vision sidecar on the request path, images are
   described in text before they reach the row.
 - **Known limits:** Perch's persona prompt cannot be replaced (the client's instructions are added
   after it), and each request carries roughly 22K tokens of Perch's own prompt and tool
-  definitions. A turn starts in about 6–10 seconds with the preload below and 3–5 seconds later
-  without it. The CLI's startup lookups can time out, and Perch then answers "model is busy"; the
-  adapter retries that turn once. Perch's read-only built-in tools (web search, web fetch) can run
-  inside a turn before OpenCodex sees the call, so the client's network sandbox does not cover them.
+  definitions. A turn takes about 9–15 seconds before its text arrives. The CLI's startup lookups
+  can time out, and Perch then answers "model is busy"; the adapter retries that turn once. Perch's
+  read-only built-in tools (web search, web fetch) can run inside a turn before OpenCodex sees the
+  call, so the client's network sandbox does not cover them.
 
 > **Terms:** this preset spends your Perch plan through Perch's own CLI. Perch's Terms of Service
 > (§6–7) limit access to Perch-hosted models to its Web, Desktop and CLI surfaces and prohibit
 > automating, proxying or exposing its hosted-model endpoints as an API without a plan that
 > includes API access. Read them before enabling this row; a proxied CLI may be treated as such use.
-
-#### Optional preload (at your own risk)
-
-Setting `OCX_PERCH_PRELOAD=1` in the environment OpenCodex starts with loads a small script into the
-CLI's Node process (`node --import`). Standalone OpenCodex builds ignore it. The script:
-
-- streams text and reasoning as Perch's model calls produce them, instead of at exit;
-- answers the `cli-turn` and `cli-learning` uploads locally, so Perch never receives them;
-- leaves the account's saved memories out of each turn;
-- caches Perch's startup lookups, which cuts 3–5 seconds from the start of a turn and makes the
-  "model is busy" answer less likely.
-
-It works by replacing `fetch` inside Perch's CLI. That CLI is proprietary: its license forbids
-modifying it, and the Terms (§6–7) restrict automating Perch's service. The script changes no file,
-but it does change what the CLI sends, and Perch has not approved it. Perch may treat this as a
-breach of its license or Terms and throttle or close the account. OpenCodex does not support or
-endorse this option. It does not opt you out of the Starter Data Program: the model calls still
-carry each prompt and answer to Perch.
 
 ### A6API credit quota
 

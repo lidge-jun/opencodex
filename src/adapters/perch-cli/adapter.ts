@@ -4,16 +4,12 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { createInterface } from "node:readline";
-import type { Readable } from "node:stream";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../base";
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import type { SendClass } from "../../lib/request-execution-budget";
 import { mapReasoningEffort, modelRecordValue } from "../../reasoning-effort";
-import { getConfigDir } from "../../config/paths";
-import { isStandaloneBinary } from "../../lib/standalone";
 import { buildSystemPrompt, projectedHistoryCharLimit } from "../coding-agent/protocol";
 import { baseScopedEnv, codeBuddyMcpInvocation, killWindowsProcessTree, redactSecrets, type SpawnFn } from "../coding-agent/turn";
 import { resolveCodingAgentBinary, resolveProfileByBaseUrl, type WhichFn } from "../coding-agent/profile";
@@ -24,7 +20,7 @@ import {
   type CodeBuddyToolBridge,
 } from "../codebuddy/tool-bridge";
 import { buildStableClaudeConversationInput, CLAUDE_REPLAY_SYSTEM_PROMPT, stableClaudeToolBridge } from "../claude-cli/stable-replay";
-import { PERCH_CLI_PROFILE, PERCH_CLI_PROFILES } from "./profiles";
+import { PERCH_CLI_PROFILES } from "./profiles";
 
 /*
  * Perch CLI adapter: one headless, single-turn `perch run --json` per request, with the same
@@ -56,13 +52,12 @@ import { PERCH_CLI_PROFILE, PERCH_CLI_PROFILES } from "./profiles";
  *   annotations, so Perch classifies every bridge tool as a write, reports the whole parallel batch
  *   as `tool_call_requested`, and ends the run itself with status `approval_required` before calling
  *   the server. No process has to be killed mid-turn.
- * - Streaming (claude: --include-partial-messages). `perch run` prints one JSON document at exit,
- *   so by default the text is emitted then. The opt-in `./preload.mjs` (`perchPreloadEnabled`) runs
- *   inside the CLI, mirrors model-call deltas to fd 3 and drops the CLI's turn uploads.
+ * - Streaming (claude: --include-partial-messages). `perch run` prints one JSON document at exit
+ *   and has no partial-output flag, so the turn's text is emitted then. The CLI runs unmodified:
+ *   nothing is injected into its process.
  */
 
 const CAPTURE_MCP_SERVER_PATH = fileURLToPath(new URL("../codebuddy/mcp-server.ts", import.meta.url));
-const PRELOAD_URL = pathToFileURL(fileURLToPath(new URL("./preload.mjs", import.meta.url))).href;
 const PERCH_MD_MAX_BYTES = 60_000; // Perch truncates PERCH.md and each rule past 64,000 bytes.
 const PERCH_MAX_RULE_FILES = 40;
 const PART_HEADER_BYTES = 64; // "[conversation part NN of NN]\n", with room to spare
@@ -73,7 +68,6 @@ const PERCH_HEAP_MB = 4096; // What bin/perch re-executes itself with; passing i
 const DEFAULT_TIMEOUT_MS = 300_000; // Same ceiling as the shared coding-agent runner.
 const KILL_REAP_MS = 5_000;
 const HEARTBEAT_MS = 15_000;
-const STREAM_FD = 3;
 const PERCH_BUILTIN_SKILLS = [
   "workspace", "data-quality", "pdf", "research", "about-perch", "diagrams", "documents", "github",
   "presentations", "release", "skill-creator", "spreadsheets", "wait-operator", "browser-operator",
@@ -153,27 +147,17 @@ export function shimScript(shim: string): string | undefined {
     return undefined;
   }
   const target = /"([^"]*[\\/]perchai-cli[\\/]bin[\\/]perch)"/i.exec(text)?.[1];
-  return target ? resolve(dirname(shim), target.replace(/^(?:%~?dp0%?|\$basedir)[\\/]/i, "")) : undefined;
+  // `\` separates paths only on Windows; `/` works everywhere, so a .cmd shim resolves the same on any host.
+  return target ? resolve(dirname(shim), target.replace(/^(?:%~?dp0%?|\$basedir)[\\/]/i, "").replace(/\\/g, "/")) : undefined;
 }
 
 /**
- * The preload is opt-in (`OCX_PERCH_PRELOAD=1`): it hooks `fetch` inside Perch's proprietary CLI,
- * which its license and terms may not allow. Without it the CLI runs unmodified: no streaming, no
- * caches, and Perch receives its transcript uploads. See the provider guide.
- * A standalone build's own files live in its virtual filesystem, which the CLI's node cannot read,
- * so those builds never load it.
+ * Run the CLI's node entry directly, with the heap flag bin/perch would otherwise re-execute itself
+ * for. On Windows `perch` is a `.cmd` shim, and going through cmd.exe would also cut argv at the
+ * first newline.
  */
-export function perchPreloadEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.OCX_PERCH_PRELOAD?.trim() === "1" && !isStandaloneBinary();
-}
-
-/**
- * Run the CLI's node entry directly: with the heap flag bin/perch would otherwise re-execute itself
- * for, and with the preload when it is enabled. On Windows `perch` is a `.cmd` shim, and going
- * through cmd.exe would also cut argv at the first newline.
- */
-export function perchInvocation(binary: string, platform: NodeJS.Platform = process.platform, preload = perchPreloadEnabled()): PerchInvocation | undefined {
-  const flags = [`--max-old-space-size=${PERCH_HEAP_MB}`, ...(preload ? [`--import=${PRELOAD_URL}`] : [])];
+export function perchInvocation(binary: string, platform: NodeJS.Platform = process.platform): PerchInvocation | undefined {
+  const flags = [`--max-old-space-size=${PERCH_HEAP_MB}`];
   let node = "node";
   let script: string;
   if (platform === "win32" && /\.(cmd|bat)$/i.test(binary)) {
@@ -198,11 +182,6 @@ export function perchAuthDir(): string {
   return process.env.PERCH_CLI_AUTH_DIR?.trim() || join(homedir(), ".perch");
 }
 
-/** Where ./preload.mjs keeps its short caches of Perch's startup lookups. */
-export function perchCacheDir(): string {
-  return join(getConfigDir(), "perch-cli");
-}
-
 /** Scoped env: an empty staging home hides `~/.perch` config; the auth dir stays the operator's. */
 export function buildChildEnv(stagingHome: string, invocation: Pick<PerchInvocation, "nodeOptions" | "voltaHome"> = {}): Record<string, string> {
   const { nodeOptions, voltaHome } = invocation;
@@ -220,9 +199,6 @@ export function buildChildEnv(stagingHome: string, invocation: Pick<PerchInvocat
     PERCH_CLI_PLAIN: "1",
     NO_COLOR: "1",
     NO_UPDATE_NOTIFIER: "1",
-    OCX_PERCH_STREAM_FD: String(STREAM_FD),
-    OCX_PERCH_DEFAULT_MODEL_URL: `${PERCH_CLI_PROFILE.canonicalBaseUrl}/api/perch-terminal/public-model-default`,
-    OCX_PERCH_CACHE_DIR: perchCacheDir(),
   };
 }
 
@@ -436,16 +412,6 @@ type PerchRunResult = {
   contextSnapshot?: { turnApiUsage?: PerchApiUsage; rows?: PerchContextRow[] };
 };
 
-/**
- * What the model-call mirror delivered for the latest model call, so the final mapping sends only
- * the rest; `firstOutputAt` is set once anything at all reached the client.
- */
-export type PerchStreamed = { text: string; thinking: string; firstOutputAt?: number };
-const NOTHING_STREAMED: PerchStreamed = { text: "", thinking: "" };
-
-/** The part of `full` the mirror has not sent. A mirror that diverged has sent its own version, which stands. */
-const unsent = (full: string, sent: string) => (full.startsWith(sent) ? full.slice(sent.length) : "");
-
 // `incomplete` reasons (Perch's `error` field) that mean the turn was cut short; anything else,
 // such as `clarification_required`, ends the turn normally.
 const PERCH_TRUNCATED_REASONS = new Set(["max_iterations", "turn_incomplete", "empty_final_answer", "unexecuted_tool_call", "announced_work_not_done"]);
@@ -537,7 +503,7 @@ function perchFailure(result: PerchRunResult | undefined, stderr: string): Adapt
 }
 
 /** Map Perch's final JSON document to adapter events, or report built-in tool use for a corrective rerun. */
-export function perchOutcome(stdout: string, stderr: string, bridge?: CodeBuddyToolBridge, streamed: PerchStreamed = NOTHING_STREAMED): PerchOutcome {
+export function perchOutcome(stdout: string, stderr: string, bridge?: CodeBuddyToolBridge): PerchOutcome {
   let result: PerchRunResult;
   try {
     result = JSON.parse(stdout) as PerchRunResult;
@@ -569,12 +535,9 @@ export function perchOutcome(stdout: string, stderr: string, bridge?: CodeBuddyT
   const last = events.findLastIndex(event => event.type === "model_call_started");
   const final = events.slice(last + 1);
   const joined = (type: string) => final.filter(event => event.type === type).map(event => event.text ?? "").join("");
-  const thinking = unsent(joined("reasoning_delta"), streamed.thinking);
+  const thinking = joined("reasoning_delta");
   const preface: AdapterEvent[] = thinking ? [{ type: "thinking_delta", thinking }] : [];
-  const textEvent = (full: string): AdapterEvent[] => {
-    const text = unsent(full, streamed.text);
-    return text ? [{ type: "text_delta", text }] : [];
-  };
+  const textEvent = (text: string): AdapterEvent[] => (text ? [{ type: "text_delta", text }] : []);
 
   if (result.status === "approval_required" && requested.length > 0) {
     if (requested.length > CODEBUDDY_TOOL_LIMITS.maxTurnToolCalls) {
@@ -621,38 +584,12 @@ function killTree(child: ChildProcess): void {
   setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already gone */ } }, 2_000).unref();
 }
 
-/** Forward the preload's model-call mirror; returns what it delivered for the latest model call. */
-function followMirror(stream: Readable | null | undefined, emit: (event: AdapterEvent) => void, served: string[]): PerchStreamed {
-  const streamed: PerchStreamed = { text: "", thinking: "" };
-  if (!stream) return streamed;
-  createInterface({ input: stream }).on("line", line => {
-    let message: { type?: string; text?: string; model?: string | null };
-    try { message = JSON.parse(line); } catch { return; }
-    if ((message.type === "answer_delta" || message.type === "reasoning_delta") && message.text) streamed.firstOutputAt ??= Date.now();
-    if (message.type === "model_call_start") {
-      // The final document carries the last model call's text, so what was sent is tracked per call.
-      streamed.text = "";
-      streamed.thinking = "";
-    } else if (message.type === "answer_delta" && message.text) {
-      streamed.text += message.text;
-      emit({ type: "text_delta", text: message.text });
-    } else if (message.type === "reasoning_delta" && message.text) {
-      streamed.thinking += message.text;
-      emit({ type: "thinking_delta", thinking: message.text });
-    } else if (message.type === "model_call_done" && message.model) {
-      served.push(message.model);
-    }
-  });
-  return streamed;
-}
-
 function runPerchProcess(
   invocation: PerchInvocation,
   args: string[],
   stage: PerchStage,
   incoming: IncomingMeta,
   deps: PerchCliAdapterDeps,
-  onMirror: (stream: Readable | null | undefined) => void,
 ): Promise<PerchProcessResult> {
   return new Promise(resolve => {
     let child: ChildProcess;
@@ -660,15 +597,13 @@ function runPerchProcess(
       child = (deps.spawn ?? nodeSpawn)(invocation.file, [...invocation.args, ...args], {
         cwd: stage.workspace,
         env: buildChildEnv(stage.home, invocation),
-        stdio: ["ignore", "pipe", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });
     } catch (err) {
       resolve({ stdout: "", stderr: "", timedOut: false, spawnError: err instanceof Error ? err.message : String(err) });
       return;
     }
-    const mirror = child.stdio?.[STREAM_FD] as Readable | null | undefined;
-    onMirror(mirror);
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -682,7 +617,6 @@ function runPerchProcess(
       clearTimeout(timer);
       clearTimeout(reapTimer);
       incoming.abortSignal?.removeEventListener("abort", stop);
-      mirror?.destroy();
       resolve({ stdout, stderr, timedOut, overflow, spawnError });
     };
     // bin/perch can leave a grandchild holding the pipes; stop waiting for `close` after a grace period.
@@ -754,7 +688,6 @@ export function createPerchCliAdapter(provider: OcxProviderConfig, deps: PerchCl
       }
 
       const cwd = clientWorkingDirectory(parsed);
-      await mkdir(perchCacheDir(), { recursive: true, mode: 0o700 }).catch(() => {});
       const beat = setInterval(() => emit({ type: "heartbeat" }), deps.heartbeatMs ?? HEARTBEAT_MS);
       let misused: string[] | undefined;
       let carriedUsage: OcxUsage | undefined;
@@ -796,24 +729,17 @@ export function createPerchCliAdapter(provider: OcxProviderConfig, deps: PerchCl
 
             const prompt = perchTurnPrompt(cwd, bridge !== undefined, misused && `A previous attempt called ${misused.join(", ")}, which were discarded; use the mcp__${CODEBUDDY_MCP_SERVER_NAME}__ tools listed under Correction.`);
             const args = buildArgs(parsed, provider, stage.workspace, `ocx-${randomUUID()}`, bridge !== undefined, prompt);
-            const served: string[] = [];
-            let streamed = NOTHING_STREAMED;
-            const startedAt = Date.now();
-            const run = await runPerchProcess(invocation, args, stage, incoming, deps, stream => { streamed = followMirror(stream, emit, served); });
+            const run = await runPerchProcess(invocation, args, stage, incoming, deps);
             if (incoming.abortSignal?.aborted) return emit(withUsage(ABORTED));
             if (run.spawnError) return emit(withUsage(errorEvent(500, "cli_spawn_failed", redact(run.spawnError), false)));
             if (run.timedOut) return emit(withUsage(errorEvent(504, "timeout", "Perch CLI turn timed out.", true)));
             if (run.overflow) return emit(withUsage(errorEvent(502, "perch_cli_output_too_large", "Perch CLI printed more output than a turn can hold; the run was stopped.", false)));
-            // Perch can serve an exact pin with another model (a Starter gpt-6.1-sol pin was served by
-            // poolside/laguna-s-2.1); its persona prompt still names the requested model.
-            const seconds = (at: number) => `${((at - startedAt) / 1000).toFixed(1)} s`;
-            if (served.length > 0) console.info(`[perch-cli] ${parsed.modelId} served by ${[...new Set(served)].join(", ")}; ${served.length} model call(s), first output ${streamed.firstOutputAt ? seconds(streamed.firstOutputAt) : "none"}, total ${seconds(Date.now())}`);
-            const outcome = perchOutcome(run.stdout, run.stderr, bridge, streamed);
+            const outcome = perchOutcome(run.stdout, run.stderr, bridge);
             if (outcome.kind === "events") {
               const [first] = outcome.events;
               // Perch could not reach its hosted models (most often a startup request timing out, which
-              // leaves the run unticketed) and nothing reached the client: one same-target retry.
-              if (attempt === 1 && first?.type === "error" && first.code === "perch_cli_unavailable" && streamed.firstOutputAt === undefined) {
+              // leaves the run unticketed). Nothing is emitted before the CLI exits: one same-target retry.
+              if (attempt === 1 && first?.type === "error" && first.code === "perch_cli_unavailable") {
                 console.warn(`[perch-cli] attempt 1 could not reach Perch's hosted models; retrying once`);
                 carriedUsage = addUsage(carriedUsage, outcome.usage);
                 retry = { sendClass: "transient", withheld: withUsage(first) };
@@ -824,7 +750,7 @@ export function createPerchCliAdapter(provider: OcxProviderConfig, deps: PerchCl
             }
             console.warn(`[perch-cli] attempt ${attempt} called Perch built-in tools: ${outcome.tools.join(", ")}`);
             const violation = withUsage(errorEvent(502, "undeclared_tool_call", `Perch CLI called tools outside the isolated catalog: ${outcome.tools.join(", ")}.`, false), outcome.usage);
-            if (attempt === 2 || streamed.firstOutputAt !== undefined) return emit(violation);
+            if (attempt === 2) return emit(violation);
             misused = outcome.tools;
             retry = { sendClass: "repair", withheld: violation };
             carriedUsage = addUsage(carriedUsage, outcome.usage);
