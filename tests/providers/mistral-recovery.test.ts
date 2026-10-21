@@ -379,6 +379,26 @@ describe("Mistral observed budget pacing", () => {
     cancelled.abort();
     await expect(next).rejects.toThrow();
   });
+
+  test("an aggregate waiter bound refuses only new parked waiters, never a request that can send", async () => {
+    const pacing = new MistralBudgetPacer();
+    const abort = new AbortController();
+    // Distinct identities (client-chosen model strings) cannot grow the waiters without bound.
+    const waiting = ["a", "b", "c", "d"].flatMap(identity => {
+      pacing.observe(identity, budget("0", "1", "10", "30"));
+      return Array.from({ length: 128 }, () => pacing.acquire(identity, abort.signal));
+    });
+    const settled = Promise.allSettled(waiting);
+    pacing.observe("e", budget("0", "1", "10", "30"));
+    await expect(pacing.acquire("e", abort.signal)).rejects.toMatchObject({ reason: "queue_full" });
+    (await pacing.acquire("healthy"))(true);
+    abort.abort();
+    expect((await settled).every(result => result.status === "rejected")).toBe(true);
+    const after = new AbortController();
+    const parked = pacing.acquire("e", after.signal);
+    after.abort();
+    await expect(parked).rejects.toMatchObject({ name: "AbortError" });
+  });
 });
 
 describe("Mistral error-triggered minute recovery", () => {

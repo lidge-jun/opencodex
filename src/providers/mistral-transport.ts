@@ -10,6 +10,12 @@ import type { OcxProviderTransport } from "./xai-transport";
 const MAX_IDENTITIES = 128;
 /** Queued waiters per credential+model identity; one hot identity never refuses another. */
 const MAX_WAITERS_PER_IDENTITY = 128;
+/**
+ * Process-wide waiter bound. Model strings come from clients, so identities are not bounded by
+ * configuration; this keeps memory and pending requests finite. It is a multiple of the
+ * per-identity cap, so no single identity can fill it alone.
+ */
+const MAX_WAITERS_TOTAL = 4 * MAX_WAITERS_PER_IDENTITY;
 const DEFAULT_MAX_WAIT_MS = 60_000; // Existing retry wait budget, not an inferred rate window.
 const MINUTE_MS = 60 * 1000; // Unit named by the observed headers, never an account quota.
 type RecoveryState = { generation: number; probe?: { done: Promise<void>; finish(): void } };
@@ -64,12 +70,13 @@ export class MistralBudgetPacer {
   /** Latest live deadline evicted at capacity; unknown identities wait it out instead of sending early. */
   private evictedUntil = 0;
   /**
-   * Waiters keyed by identity. The cap is per identity so a held credential or model fills only its
-   * own queue: a different identity is never answered queue_full (HTTP 429) because of it. Identities
-   * are hashes of configured send credentials and models, so the map stays bounded by configuration
-   * and empties as waiters settle.
+   * Parked waiters keyed by identity. A request counts only once it is about to wait, so a held
+   * credential or model fills only its own queue and a request that can send now is never answered
+   * queue_full (HTTP 429). The map holds identities with live waiters only; the total is capped by
+   * MAX_WAITERS_TOTAL.
    */
   private readonly waiting = new Map<string, number>();
+  private waitingTotal = 0;
 
   constructor(
     private readonly now: () => number = Date.now,
@@ -111,10 +118,18 @@ export class MistralBudgetPacer {
   /** Wait within the admission budget and return a release callback for one recovery probe. */
   async acquire(identity: string, signal?: AbortSignal, maxWaitMs = DEFAULT_MAX_WAIT_MS): Promise<(success?: boolean) => void> {
     signal?.throwIfAborted();
-    const queued = this.waiting.get(identity) ?? 0;
-    if (queued >= MAX_WAITERS_PER_IDENTITY) throw new RequestPacingQueueOverloadError("mistral", "queue_full", 60);
-    this.waiting.set(identity, queued + 1);
     const deadline = this.now() + maxWaitMs;
+    let parked = false;
+    const park = (): void => {
+      if (parked) return;
+      const queued = this.waiting.get(identity) ?? 0;
+      if (queued >= MAX_WAITERS_PER_IDENTITY || this.waitingTotal >= MAX_WAITERS_TOTAL) {
+        throw new RequestPacingQueueOverloadError("mistral", "queue_full", 60);
+      }
+      this.waiting.set(identity, queued + 1);
+      this.waitingTotal++;
+      parked = true;
+    };
     try {
       for (;;) {
         signal?.throwIfAborted();
@@ -127,6 +142,7 @@ export class MistralBudgetPacer {
           throw new RequestPacingQueueOverloadError("mistral", "queue_expired", Math.ceil(delay / 1000));
         }
         if (readyAt !== undefined && readyAt > this.now()) {
+          park();
           await this.sleep(readyAt - this.now(), signal);
           continue;
         }
@@ -135,6 +151,7 @@ export class MistralBudgetPacer {
         if (state.probe) {
           const remaining = deadline - this.now();
           if (remaining <= 0) throw new RequestPacingQueueOverloadError("mistral", "queue_expired", 1);
+          park();
           const local = new AbortController();
           try {
             await Promise.race([state.probe.done, this.sleep(remaining, AbortSignal.any([local.signal, ...(signal ? [signal] : [])]))]);
@@ -160,9 +177,12 @@ export class MistralBudgetPacer {
         };
       }
     } finally {
-      const left = (this.waiting.get(identity) ?? 1) - 1;
-      if (left > 0) this.waiting.set(identity, left);
-      else this.waiting.delete(identity);
+      if (parked) {
+        this.waitingTotal--;
+        const left = (this.waiting.get(identity) ?? 1) - 1;
+        if (left > 0) this.waiting.set(identity, left);
+        else this.waiting.delete(identity);
+      }
     }
   }
 }
