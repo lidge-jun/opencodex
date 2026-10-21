@@ -405,6 +405,15 @@
       ]
     },
     {
+      "path": "data-planes/chat-reasoning-details.md",
+      "tier": 3,
+      "title": "Anthropic Thinking Signatures on the Chat Wire",
+      "scope": "The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429).",
+      "documents": [
+        "src/chat/reasoning-details.ts"
+      ]
+    },
+    {
       "path": "data-planes/protocol-paths.md",
       "tier": 3,
       "title": "Protocol Paths",

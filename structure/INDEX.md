@@ -61,6 +61,7 @@ The wire surfaces a client actually talks to.
 | [`data-planes/images.md`](data-planes/images.md) | Standalone image generation/edit relay and local hosted Responses image display. |
 | [`data-planes/search.md`](data-planes/search.md) | Hosted search relay and exact account selectors. |
 | [`data-planes/inbound-compat.md`](data-planes/inbound-compat.md) | Chat Completions inbound, Anthropic-shaped clients, and JSON-upstream streaming clients. |
+| [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) | The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429). |
 | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) | Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings. |
 | [`remote-workspace.md`](remote-workspace.md) | Opt-in workspace identity, executor grants, runtime adapters, management and dashboard integration. |
 | [`remote-link.md`](remote-link.md) | SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery. |
@@ -180,6 +181,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
 | `src/bridge/` | [`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
 | `src/chat/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
+| `src/chat/reasoning-details.ts` | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) |
 | `src/chatgpt/` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
 | `src/claude/` | [`runtime.md`](runtime.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) |
 | `src/cli.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
