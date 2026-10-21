@@ -2,6 +2,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest } from "../../src/types";
 import { parseRequest } from "../../src/responses/parser";
+import { rewriteReplayedWebSearchCells } from "../../src/responses/web-search-replay";
 import { clearBridgeSearchReplayCacheForTests } from "../../src/responses/bridge-search-replay-cache";
 import { runWithWebSearch } from "../../src/web-search/loop";
 import { rememberSidecarSearch, restoreSidecarSearchResults, stripReplayedSearchPairs } from "../../src/web-search/sidecar-search-replay";
@@ -207,6 +208,58 @@ test("synthetic call ids never collide with client call ids or with each other",
     ? message.content.flatMap(part => part.type === "toolCall" ? [part.id] : []) : []);
   expect(new Set(ids).size).toBe(ids.length);
   expect(searchPair(parsed.context.messages, "shared").result?.content).toBe("shared");
+});
+
+test("replayed-cell id allocation stays linear when many cells share the fallback base", () => {
+  // Every candidate still clears the request-wide taken set; the regression being pinned is that
+  // probing does not rescan suffixes an earlier allocation already settled.
+  const COUNT = 60;
+  const input = Array.from({ length: COUNT }, () => ({ type: "web_search_call", status: "completed", action: { type: "search", query: "q" } }));
+  const originalHas = Set.prototype.has;
+  const probes = new Map<Set<unknown>, number>();
+  Set.prototype.has = function (value: unknown) {
+    probes.set(this as Set<unknown>, (probes.get(this as Set<unknown>) ?? 0) + 1);
+    return originalHas.call(this, value);
+  } as typeof Set.prototype.has;
+  let rewritten: ReturnType<typeof rewriteReplayedWebSearchCells>;
+  try {
+    rewritten = rewriteReplayedWebSearchCells(input);
+  } finally {
+    Set.prototype.has = originalHas;
+  }
+  const callIds = rewritten!.cells.map(entry => entry.callId);
+  expect(callIds[0]).toBe("ws_replay");
+  expect(callIds.at(-1)).toBe(`ws_replay_${COUNT - 1}`);
+  expect(new Set(callIds).size).toBe(COUNT);
+  const takenSets = [...probes.keys()].filter(set => callIds.every(id => originalHas.call(set, id)));
+  expect(takenSets).toHaveLength(1);
+  expect(probes.get(takenSets[0]!)).toBeLessThanOrEqual(2 * COUNT);
+});
+
+test("allocation keeps the smallest free suffix past seeded ids, alternate bases, and duplicate cells", () => {
+  const input = [
+    call("ws_replay"), call("ws_replay_2"),
+    cell("ws_replay_1"),
+    { type: "web_search_call", status: "completed", action: { type: "search", query: "a" } },
+    { type: "web_search_call", id: "bad id!", status: "completed", action: { type: "search", query: "b" } },
+    cell("ws_dup"), cell("ws_dup"),
+    { type: "web_search_call", status: "completed", action: { type: "search", query: "c" } },
+  ];
+  const rewritten = rewriteReplayedWebSearchCells(input)!;
+  expect(rewritten.cells).toEqual([
+    { cellId: "ws_replay_1", callId: "ws_replay_1", failed: false },
+    { callId: "ws_replay_3", failed: false },
+    { callId: "ws_replay_4", failed: false },
+    { cellId: "ws_dup", callId: "ws_dup", failed: false },
+    { callId: "ws_replay_5", failed: false },
+  ]);
+  const ids = rewritten.items.map(item => (item as { call_id?: string }).call_id).filter((id): id is string => typeof id === "string");
+  expect(ids).toEqual([
+    "ws_replay", "ws_replay_2", "ws_replay_1", "ws_replay_3", "ws_replay_4", "ws_dup", "ws_replay_5",
+    "ws_replay_1", "ws_replay_3", "ws_replay_4", "ws_dup", "ws_replay_5",
+  ]);
+  // Rewritten positions still map back to the caller's input indexes, with the dropped duplicate absent.
+  expect(rewritten.sourceIndexes).toEqual([0, 1, 2, 3, 4, 5, 7, 2, 3, 4, 5, 7]);
 });
 
 test("without a sidecar plan the pairs are removed, restoring the pre-#7269 history", () => {

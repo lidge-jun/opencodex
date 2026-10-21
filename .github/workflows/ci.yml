@@ -997,12 +997,15 @@ jobs:
   # now means Linux + macOS + the gates; Windows re-enters the gate when the
   # tracked failures are fixed, not before.
   #
-  # Dispatch-only proved too late. #6639, #6556, #6605 and #6606 each landed with
-  # green pull-request CI while breaking Windows, and the breakage surfaced days
-  # later on a manual dispatch. So a pull request whose changes job reports
-  # windows=true (a Windows path, or an added src/tests line naming a Windows
-  # marker; see scripts/ci/windows-sensitive-diff.sh) now runs the nine shards,
-  # and the daily schedule catches whatever that filter misses.
+  # Pull requests never run these shards (AGENTS.md "CI policy", a maintainer
+  # decision): Windows runs on the nightly schedule and on a lane=all dispatch.
+  # The changes job still computes windows=true for a Windows-sensitive pull
+  # request (a Windows path, or an added src/tests line naming a Windows marker;
+  # see scripts/ci/windows-sensitive-diff.sh). That verdict does not schedule
+  # these jobs; it posts a non-blocking notice, and a maintainer dispatches
+  # lane=all on the branch before merging. #6639, #6556, #6605, #6606 and #7468
+  # each landed with green pull-request CI while breaking Windows, which is why
+  # that dispatch is part of merging a Windows-sensitive pull request.
   platform-windows:
     name: windows ${{ matrix.shard }}/9
     needs: [changes, select-windows-runner]

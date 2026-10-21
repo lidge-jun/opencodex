@@ -6,9 +6,46 @@ export const CODEX_WS_METADATA_MAX_HEADERS = 128;
 export const CODEX_WS_METADATA_MAX_VALUE_BYTES = 4096;
 
 export type CodexWsQuotaObserver = (headers: Headers) => void;
+const REASONING_INCLUDED_HEADER = "x-reasoning-included";
+const HTTP_HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9a-z-]+$/i;
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Bun emits this payload before validating the upgrade; the session must wait for open. */
+export function readCodexWsUpgradeHeaders(payload: unknown): Headers {
+  try {
+    if (!record(payload) || payload.statusCode !== 101 || !Array.isArray(payload.rawHeaders)
+      || payload.rawHeaders.length % 2 !== 0 || payload.rawHeaders.length > CODEX_WS_METADATA_MAX_HEADERS * 2) return new Headers();
+    const headers = new Headers();
+    let bytes = 0;
+    let connectionNominated = false;
+    for (let i = 0; i < payload.rawHeaders.length; i += 2) {
+      const name = payload.rawHeaders[i];
+      const value = payload.rawHeaders[i + 1];
+      if (typeof name !== "string" || typeof value !== "string"
+        || name.length + value.length > CODEX_WS_METADATA_MAX_BYTES - bytes || !HTTP_HEADER_TOKEN.test(name)
+        || /[\r\n\0]/.test(value)) return new Headers();
+      bytes += Buffer.byteLength(name) + Buffer.byteLength(value);
+      if (bytes > CODEX_WS_METADATA_MAX_BYTES) return new Headers();
+      const lower = name.toLowerCase();
+      if (lower === "connection" && value.split(",").some(token => token.trim().toLowerCase() === REASONING_INCLUDED_HEADER)) {
+        connectionNominated = true;
+      }
+      // Other allowlisted response headers (quota, request id, turn state, model)
+      // describe a response, not a reusable connection. Never retain them here.
+      if (lower === REASONING_INCLUDED_HEADER) {
+        if (Buffer.byteLength(value) > CODEX_WS_METADATA_MAX_VALUE_BYTES) return new Headers();
+        headers.append(lower, value);
+        if (Buffer.byteLength(headers.get(lower)!) > CODEX_WS_METADATA_MAX_VALUE_BYTES) return new Headers();
+      }
+    }
+    return connectionNominated ? new Headers() : headers;
+  } catch {
+    // Missing/unsupported or malformed optional metadata cannot authorize a retry.
+    return new Headers();
+  }
 }
 
 function finiteNonnegative(value: unknown): value is number {
@@ -90,6 +127,13 @@ export class CodexWsMetadata {
   constructor(private observer?: CodexWsQuotaObserver) {}
 
   snapshot(): Headers { return new Headers(this.headers); }
+
+  /** Seed only the connection-level inclusion signal; per-response frames still win. */
+  seed(headers: Headers): void {
+    if (this.ended || this.committed || this.headers.has(REASONING_INCLUDED_HEADER)) return;
+    const value = headers.get(REASONING_INCLUDED_HEADER);
+    if (value !== null) setMetadataHeader(this.headers, REASONING_INCLUDED_HEADER, value);
+  }
 
   private publishQuota(headers: Headers): void {
     // Observation is auxiliary bookkeeping; a consumer exception cannot turn

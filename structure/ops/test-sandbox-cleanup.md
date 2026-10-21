@@ -52,6 +52,16 @@ protected roots resolve at check time and compare case-insensitively on macOS an
 directory is also a protected removal tree.
 `tests/claude-integration/claude-config-home-isolation.test.ts` pins each layer.
 
+The write guard arms without the preload too. Bun reads `bunfig.toml` from the current working
+directory, so `bun test` started outside the repository loads no preload and keeps the real HOME.
+`isTestHomeGuardArmed()` therefore also arms when the entry module (`Bun.main`) has a Bun
+test-file name, and publishes `OCX_TEST_HOME_GUARD=1` so the processes it spawns inherit the arming. No
+production entrypoint has such a name, and `NODE_ENV` is never consulted. An explicit
+`OCX_TEST_HOME_GUARD=0` disarms, which is how a case exercises a production branch. Such a run
+refuses OAuth, Codex account-pool, refresh-intent, `auth.json` and config writes instead of
+sandboxing them; `tests/ci-workflows/test-home-guard-unpreloaded.test.ts` drives each one from a
+cwd without `bunfig.toml` against a fake real home, and checks that a plain `bun` process still persists (#7407).
+
 `tests/helpers/test-sandbox-cleanup.ts` exposes case-scoped lifecycle ownership: cancellation
 starts listener stops while owned asynchronous work settles, and repeated close/stop calls share
 one promise. After teardown starts only the lifecycle's own abort reason is absorbed; any other

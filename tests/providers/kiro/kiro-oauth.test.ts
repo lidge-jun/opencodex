@@ -457,6 +457,36 @@ describe("kiro oauth — import-first", () => {
     expect(nested.accountId).toBe(arn);
   });
 
+  test("the Profile block kiro-cli 2.32 prints after the whoami JSON does not hide the user", async () => {
+    const arn = "arn:aws:codewhisperer:us-east-1:123456789012:profile/ORGPROFILE";
+    seedKiroCliDb({ access_token: "aoa-org", refresh_token: "rt-org" }, { stateArn: arn });
+    const identity = JSON.stringify({
+      accountType: "IamIdentityCenter", email: "Org.User@Example.com", region: "us-east-1", startUrl: "https://org.awsapps.com/start",
+    });
+    const runner = async (args: string[]) => {
+      if (args[0] === "whoami") return { exitCode: 0, stdout: `${identity}\n\nProfile:\nKiroProfile-us-east-1\n${arn}\n\n` };
+      throw new Error(`unexpected Kiro CLI command: ${args[0]}`);
+    };
+
+    const cred = await loginKiro({}, { cliRunner: runner });
+
+    expect(cred).toMatchObject({ accountId: arn, email: "org.user@example.com" });
+  });
+
+  test("a second whoami value on the same line leaves the identity unread", async () => {
+    seedKiroCliDb({ access_token: "aoa-two", refresh_token: "rt-two" });
+    const runner = async (args: string[]) => {
+      if (args[0] === "whoami") {
+        return { exitCode: 0, stdout: `${JSON.stringify({ email: "first@example.com" })}${JSON.stringify({ email: "second@example.com" })}\n` };
+      }
+      throw new Error(`unexpected Kiro CLI command: ${args[0]}`);
+    };
+
+    const cred = await loginKiro({}, { cliRunner: runner });
+
+    expect(cred.email).toBeUndefined();
+  });
+
   test("a malformed whoami ARN is ignored without breaking the login (#993)", async () => {
     seedKiroCliDb({ access_token: "aoa-bad", refresh_token: "rt-bad" });
     const badRunner = async (args: string[]) => {

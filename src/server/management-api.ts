@@ -161,6 +161,13 @@ async function handleLowQuotaRoutesOnDemand(ctx: ManagementContext): Promise<Res
   return handleLowQuotaRoutes(ctx);
 }
 
+/** Lazy for the same reason: the quota-pool assembler pulls every quota cache reader. */
+async function handleQuotaPoolRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/quota-pool", false)) return null;
+  const { handleQuotaPoolRoutes } = await import("./management/quota-pool-routes");
+  return handleQuotaPoolRoutes(ctx);
+}
+
 /**
  * Lazy like the Lab and routing-profile handlers, and for the same recorded reason: this file is
  * mounted for every dashboard request, so a static import would put the workflow-budget ledger
@@ -351,6 +358,7 @@ export async function handleManagementAPI(
     ??     (await handleRequestHistoryRoutes(ctx))
     ??     (await handleQuotaResetRoutesOnDemand(ctx))
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
+    ??     (await handleQuotaPoolRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))
     ??     (await handleProtocolRoutesOnDemand(ctx))

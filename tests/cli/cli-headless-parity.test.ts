@@ -477,14 +477,18 @@ describe("ocx agent sidecar --list (#2188)", () => {
   });
 });
 
-afterEach(() => {
-  for (const server of servers.splice(0)) server.stop(true);
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(server => server.stop(true)));
   process.exitCode = 0;
 });
 
 function fakeRuntime(responder?: (req: Request, body: unknown) => unknown) {
   const requests: Recorded[] = [];
   const server = Bun.serve({
+    // Bind the exact address the CLI dials (#7416). A wildcard bind lets another process on a
+    // loaded host bind 127.0.0.1 on the same port; it then receives this fake's requests, and a
+    // real proxy there answers the management call with 404.
+    hostname: "127.0.0.1",
     port: 0,
     async fetch(req) {
       const url = new URL(req.url);
@@ -1805,6 +1809,19 @@ describe("ownership recovery advice does not assume injection is enabled", () =>
       } finally { log.mockRestore(); }
     });
   }
+});
+
+test("the fake runtime owns the loopback address the CLI dials", async () => {
+  const { deps } = fakeRuntime();
+  const port = Number(new URL(deps.baseUrl).port);
+  let intruder: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    intruder = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response(null, { status: 404 }) });
+  } catch (error) {
+    expect((error as { code?: string }).code).toBe("EADDRINUSE");
+  }
+  await intruder?.stop(true);
+  expect(intruder).toBeUndefined();
 });
 
 test("Claude intercept start uses the management POST and preserves refusal exit status", async () => {

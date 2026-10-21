@@ -394,12 +394,18 @@ not traffic missed between polls; injection seq cannot exclude restart/eviction 
 Check post-sync readiness through the unauthenticated `GET /readyz` endpoint. It returns `200` when
 ready, or `503` with `Retry-After: 1` for `pending` and terminal `failed`. Its sanitized HTTP identity
 is `{service, version, uptime, pid, port, status}` plus the remote-hub protocol fields
-`{protocol, minimumClientProtocol, managementUrl}`. `protocol` is the hub protocol this proxy
+`{protocol, minimumClientProtocol, managementUrl, features}`. `protocol` is the hub protocol this proxy
 speaks and `minimumClientProtocol` the oldest client it still accepts, so a client can refuse an
 incompatible pairing before sending anything else. `managementUrl` is the origin a client should
 use for the management plane: the configured `hub.managementPublicOrigin` when `runtimeRole` is
 `hub`, and otherwise the origin the request itself arrived on. A readiness request with no
-HTTP(S) origin is rejected rather than answered with a guess. Old proxies without `/readyz` fail
+HTTP(S) origin is rejected rather than answered with a guess.
+`features` lists the peer features this build serves, so a peer can check a capability without
+comparing versions: `relay-auth/<n>` names the Remote Link relay authentication version,
+`link-management-relay` the read-only Remote Link management relay, `quota-pool/1` the
+`GET /api/quota-pool` management read, and `served-by-header` the `x-opencodex-served-by` response
+header. A feature this build does not serve is absent. The list holds fixed names only, never
+account or configuration data. Old proxies without `/readyz` fail
 closed as `unreachable`; `/healthz` is separate liveness, not readiness. The command performs one probe by
 default; `--wait` polls until ready or timeout, but exits immediately when it observes the terminal `failed` state. The
 default timeout is 45 seconds; `--timeout <seconds>` requires `--wait` and accepts positive integer seconds from 1–300.

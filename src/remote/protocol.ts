@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../types/config";
+import { buildPeerFeatures } from "./features";
 
 export const REMOTE_HUB_PROTOCOL = 1;
 export const MINIMUM_REMOTE_CLIENT_PROTOCOL = 1;
@@ -53,6 +54,7 @@ export function readyProtocolMetadata(config: OcxConfig, req: Request): RemoteRe
     protocol: REMOTE_HUB_PROTOCOL,
     minimumClientProtocol: MINIMUM_REMOTE_CLIENT_PROTOCOL,
     managementUrl,
+    features: buildPeerFeatures(),
   };
 }
 

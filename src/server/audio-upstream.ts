@@ -24,6 +24,7 @@ import {
 } from "./auth-cors";
 import { codexAccountSelectionForTurn } from "./lifecycle";
 import type { RequestLogContext } from "./request-log";
+import { authorizationCredential } from "../lib/authorization-scheme";
 
 export const TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
 export const LIVE_AUDIO_MODEL = "gpt-live-1-codex";
@@ -77,7 +78,7 @@ export async function resolveAudioUpstream(
     if (candidates.keyed?.providerName !== options.providerName) delete candidates.keyed;
   }
   const headers = new Headers(incoming);
-  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(headers);
   if (bearer && isProxyAdmissionSecret(bearer, config)) {
     headers.delete("authorization");
     headers.delete("chatgpt-account-id");

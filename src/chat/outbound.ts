@@ -23,6 +23,7 @@ import {
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { createSseBlockBuffer, sseDataPayload } from "../server/sse-payload-rewrite";
+import { reasoningDetailEntriesForItem } from "./reasoning-details";
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
@@ -149,7 +150,7 @@ export function chunkBase(id: string, model: string, created: number): Rec {
   };
 }
 
-function appendedUtf8Bytes(previous: string, previousBytes: number, fragment: string): number {
+export function appendedUtf8Bytes(previous: string, previousBytes: number, fragment: string): number {
   let nextBytes = previousBytes + Buffer.byteLength(fragment);
   const previousLast = previous.charCodeAt(previous.length - 1);
   const fragmentFirst = fragment.charCodeAt(0);
@@ -511,6 +512,17 @@ export function responsesSseToChatCompletionsSse(
         frame.choices = [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }];
         emit(frame);
       };
+      // #7429: provider-issued thinking state, one complete frame per finished reasoning item.
+      let nextReasoningDetailIndex = 0;
+      const emitReasoningDetails = (item: Rec) => {
+        const entries = reasoningDetailEntriesForItem(item, nextReasoningDetailIndex, translatorBudget);
+        if (entries.length === 0) return;
+        nextReasoningDetailIndex += entries.length;
+        ensureRole();
+        const frame = chunkBase(id, model, created);
+        frame.choices = [{ index: 0, delta: { reasoning_details: entries }, finish_reason: null }];
+        emit(frame);
+      };
       const resolveFinalArguments = (candidate: unknown, streamed: string) => {
         if (typeof candidate !== "string") return streamed;
         // Some compatible providers send an empty final snapshot. Do not let that erase
@@ -717,6 +729,7 @@ export function responsesSseToChatCompletionsSse(
               && refusalItems.has(data.output_index)) {
               refusalItem(data.output_index, data, "item_id");
             }
+            if (item.type === "reasoning") emitReasoningDetails(item);
             if (item.type === "function_call") {
               sawToolUse = true;
               const callId = typeof item.call_id === "string" ? item.call_id : "";
@@ -872,6 +885,7 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
   let contentBytes = 0;
   let reasoningBytes = 0;
   const toolCalls: Rec[] = [];
+  const reasoningDetails: Rec[] = [];
   const append = (previous: string, previousBytes: number, fragment: string): { text: string; bytes: number } => {
     if (!fragment) return { text: previous, bytes: previousBytes };
     const scope = { kind: "retained_collectors" as const };
@@ -902,6 +916,11 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
         }
       }
     } else if (raw.type === "reasoning") {
+      const entries = reasoningDetailEntriesForItem(raw, reasoningDetails.length, translatorBudget);
+      if (entries.length > 0) {
+        translatorBudget?.chargeRetained(Buffer.byteLength(JSON.stringify(entries)), { kind: "retained_collectors" });
+        reasoningDetails.push(...entries);
+      }
       if (Array.isArray(raw.summary)) {
         for (const part of raw.summary) {
           if (isRec(part) && part.type === "summary_text" && typeof part.text === "string") {
@@ -948,6 +967,7 @@ export function responsesJsonToChatCompletion(json: unknown, model: string, tran
     refusal,
   };
   if (reasoning) message.reasoning_content = reasoning;
+  if (reasoningDetails.length > 0) message.reasoning_details = reasoningDetails;
   if (toolCalls.length > 0) message.tool_calls = toolCalls;
 
   return {
@@ -981,7 +1001,8 @@ export async function collectChatCompletion(
   let content = "";
   let refusal: string | null = null;
   let reasoning = "";
-  const retainedBytes = { content: 0, refusal: 0, reasoning: 0 };
+  const reasoningDetails: Rec[] = [];
+  const retainedBytes = { content: 0, refusal: 0, reasoning: 0, reasoningDetails: 0 };
   const toolCalls = new Map<number, { id: string; name: string; arguments: string; argumentBytes: number }>();
   // Per-call budget scopes (2 MiB/call enforced by the budget): the map key is the
   // wire index, which is stable across deltas and present before the call id.
@@ -1005,8 +1026,8 @@ export async function collectChatCompletion(
     }
   };
   const releaseCollectors = () => {
-    translatorBudget.releaseRetained(retainedBytes.content + retainedBytes.refusal + retainedBytes.reasoning,
-      { kind: "retained_collectors" });
+    translatorBudget.releaseRetained(retainedBytes.content + retainedBytes.refusal + retainedBytes.reasoning
+      + retainedBytes.reasoningDetails, { kind: "retained_collectors" });
   };
   try {
     // Share native relay framing, while retaining the collector's existing admission
@@ -1055,6 +1076,16 @@ export async function collectChatCompletion(
           refusal = appendRetained("refusal", refusal ?? "", delta.refusal);
         }
         if (typeof delta.reasoning_content === "string") reasoning = appendRetained("reasoning", reasoning, delta.reasoning_content);
+        // Each entry arrives complete in one frame (#7429), so the fold is a concatenation.
+        if (Array.isArray(delta.reasoning_details)) {
+          for (const entry of delta.reasoning_details) {
+            if (!isRec(entry)) continue;
+            const entryBytes = Buffer.byteLength(JSON.stringify(entry));
+            translatorBudget.chargeRetained(entryBytes, { kind: "retained_collectors" });
+            retainedBytes.reasoningDetails += entryBytes;
+            reasoningDetails.push(entry);
+          }
+        }
         if (Array.isArray(delta.tool_calls)) {
           for (const tc of delta.tool_calls) {
             if (!isRec(tc)) continue;
@@ -1121,6 +1152,7 @@ export async function collectChatCompletion(
     refusal,
   };
   if (reasoning) message.reasoning_content = reasoning;
+  if (reasoningDetails.length > 0) message.reasoning_details = reasoningDetails;
   if (toolCalls.size > 0) {
     // Final owner transfer is itself a charging operation: if it overflows,
     // release every copy already charged in this loop and close every scope

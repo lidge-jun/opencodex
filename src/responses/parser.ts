@@ -329,6 +329,13 @@ export function parseRequest(
         continue;
       }
 
+      if (effectiveType === "configuration_update") {
+        // Codex 0.164 positional reasoning-effort control. It is not a turn, so a translated route
+        // drops it without touching pending reasoning; the native passthrough keeps it verbatim in
+        // _rawBody. Mapping its effort onto the routed request is deliberately not done (#6895).
+        continue;
+      }
+
       if (isCompactionItemType(effectiveType)) {
         // A stored summary from a previous compaction. Decode our ocx1/ocx2 envelopes into plain text so
         // the routed model keeps the compacted context; real OpenAI-encrypted blobs degrade to a note.

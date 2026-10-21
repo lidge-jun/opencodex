@@ -91,9 +91,18 @@ export function rewriteReplayedWebSearchCells(input: readonly unknown[]): Rewrit
   if (!input.some(item => isObj(item) && item.type === "web_search_call")) return undefined;
   // A synthetic call id must not collide with any client call id, nor with another cell's.
   const taken = new Set(input.flatMap(item => isObj(item) && typeof item.call_id === "string" ? [item.call_id] : []));
+  // First suffix each base has not settled yet; taken stays the collision check on every candidate,
+  // so seeded ids and ids handed out under another base still block the smallest free suffix.
+  const nextSuffix = new Map<string, number>();
   const allocate = (base: string): string => {
-    let id = base;
-    for (let n = 1; taken.has(id); n++) id = `${base}_${n}`;
+    if (!taken.has(base)) {
+      taken.add(base);
+      return base;
+    }
+    let n = nextSuffix.get(base) ?? 1;
+    let id = `${base}_${n}`;
+    while (taken.has(id)) id = `${base}_${++n}`;
+    nextSuffix.set(base, n + 1);
     taken.add(id);
     return id;
   };

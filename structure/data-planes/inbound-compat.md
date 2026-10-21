@@ -482,7 +482,9 @@ projection as a `reasoning` input item emitted immediately before its assistant
 message, matching the parser's buffer-and-prepend adjacency. Only representable
 plaintext crosses: no signature, encrypted payload or provider item id is
 reconstructed, because those attest to content this proxy never received. Opaque
-reasoning replay across a Chat boundary remains unimplemented by design.
+reasoning replay across a Chat boundary has exactly one exception: Anthropic thinking
+signatures carried in `reasoning_details` (#7429), documented in
+[chat-reasoning-details.md](chat-reasoning-details.md).
 `presence_penalty` and `frequency_penalty` are carried too; per-model
 `noPenaltyModels` opt-outs still apply at the adapter.
 
@@ -561,3 +563,16 @@ Missing identity, a restarted/expired/evicted cache, and another route receive o
 placeholder; they never recover another conversation's raw text. SSE capture retains at most
 256 KiB and 64 calls within the translator budget and releases on terminal/error/cancellation.
 Unfinished tool streams cannot seed replay. This leaves the native wire and response fields intact.
+
+## Codex runtime agent assertions
+
+Authorization scheme parsing lives in `src/lib/authorization-scheme.ts`, and every former
+`replace(/^Bearer\s+/i, "")` read uses it. Codex 0.164 runtime agent assertions add a value that is
+neither an admission secret nor a caller credential. `Authorization: AgentAssertion` (assertion_only)
+is never a bearer, never admitted, and never forwarded: the request fetch handler refuses it with
+`agent_assertion_unsupported` before admission or routing, and Responses auth plus
+`materializeCodexUpstreamAuth` refuse it again so no pool or substituted credential can stand in for
+it. The dual_header `x-openai-agent-assertion` is outside `FORWARD_HEADERS` and blocked from
+`forwardClientHeaders`. It is carried only for canonical-forward Direct when the outbound Bearer is
+the caller's original one, and is dropped under a pool override. Coverage:
+`tests/server/agent-assertion-auth.test.ts` and `tests/responses/agent-assertion-routes.test.ts`.
