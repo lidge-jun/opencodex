@@ -10,6 +10,7 @@ import {
 } from "../../src/server/inbound-body-budget";
 
 const freshSignal = () => new AbortController().signal;
+/** Assert that every reservation, active owner, and queued waiter was released. */
 function assertEmpty(budget: InboundBodyBudget) {
   assert.deepEqual(budget.snapshot(), { reservedBytes: 0, activeLeases: 0, queuedRequests: 0 });
 }
