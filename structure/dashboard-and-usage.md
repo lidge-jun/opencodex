@@ -307,15 +307,15 @@ that discarded a warmed prompt-cache prefix. `/api/usage` totals these as `sends
 accounting source, and `attemptCount` is the smaller number because retry layers re-send inside
 one attempt.
 
-Cache detail is qualified by provenance rather than read as a measurement. `cacheProvenance` is
-`observed`, `synthesized` or `unknown`: strict-client normalization emits zero-default
-token-detail objects on every bridged wire, so a `cached_tokens: 0` recovered from a parsed wire
-is a wire-compatibility artifact, and a row with no cache fields measured nothing at all. Only
-observed input tokens reach the `cacheHitRate` denominator, reported alongside it as
-`cacheObservedInputTokens`, and the summary counts the three provenances separately. A row
-written before the field existed is reconstructed from its own shape, so historical rows keep
-their previous reading. `/api/logs` marks a non-observed detail with `cache_detail_missing` on
-the cost estimate rather than pricing the turn as a measured uncached send.
+Cache detail is qualified by explicit `cacheTelemetry` evidence from `src/usage/cache-telemetry.ts`; `cacheProvenance` is `observed`, `synthesized` or `unknown`; upstream zero is observed, missing
+fields remain unknown, and bridged client defaults cannot manufacture an observation. Canonical
+`cachedInputTokens` is cache read, not read plus creation; reads and writes are summed separately. Unlabelled historic combined-cache records retain their legacy read/write recovery.
+Multi-round guards retain per-field completeness, including sent rounds without usage. Unsent,
+usage-free candidates and local answers do not dilute measured attempt evidence. Only complete
+observed reads and their matching input tokens enter `cacheHitRate`/`cacheObservedInputTokens`;
+partial totals remain visible but do not inflate the rate. Ledger reloads preserve the allowlisted
+metadata; legacy zero-only rows stay unknown and attempts never borrow parent provenance.
+`/api/logs` marks non-observed detail `cache_detail_missing` rather than pricing it as uncached.
 
 A pool selection that produced no account reaches no auth context, so its cause is recorded on
 the request that failed for it: reasons are held per (thread, model lane) and consumed by that
@@ -398,7 +398,7 @@ untouched.
 For diagnosing cache-read instability without capturing content, set `OPENCODEX_CACHE_DEBUG=1`
 before start. `src/usage/cache-diagnostic.ts` then writes one record per finalized request to
 `~/.opencodex/cache-debug.jsonl` (same `0o600` file, same 200-to-100 rolling bound) holding only
-presence booleans, counts, closed enums, the raw upstream cache counter before defaulting, and
+presence booleans, counts, closed enums, separate raw observation/usage/read/write presence, and
 process-local HMAC equality tags for the prompt-cache key, allowlisted session headers, the account
 log label, and ordered instruction/tool/message blocks (capped at 128 per section, first divergent
 section/index only). The signing key is created at process start and never persisted, so tags

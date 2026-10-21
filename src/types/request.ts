@@ -533,6 +533,19 @@ export interface OcxUrlCitation {
   title?: string;
 }
 
+/** Content-free cache evidence, captured before client defaults. Missing counters are not zero. */
+export interface CacheTelemetry {
+  source: "upstream" | "adapter" | "client" | "aggregate";
+  usagePresent: boolean;
+  read?: number;
+  creation?: number;
+  /** Aggregate evidence is complete only when every contributing usage is observed. */
+  complete?: boolean;
+  /** Aggregate sums may be partial even when every round reports some cache detail. */
+  readComplete?: boolean;
+  creationComplete?: boolean;
+}
+
 /**
  * Canonical usage convention (devlog/260711_claude_inbound/070):
  * - `inputTokens` is the TOTAL prompt size, INCLUDING cache reads and cache writes
@@ -545,6 +558,8 @@ export interface OcxUrlCitation {
  * - `totalTokens` = inputTokens + outputTokens. Never re-add cache detail on top.
  */
 export interface OcxUsage {
+  /** Internal/persisted evidence; never serialize this metadata onto the client wire. */
+  cacheTelemetry?: CacheTelemetry;
   /** Provider-reported credit spend, independent of token estimates and USD pricing. */
   providerCredits?: number;
   inputTokens: number;

@@ -1,3 +1,4 @@
+import { aggregateCacheTelemetry, withAdapterCacheTelemetry } from "../../usage/cache-telemetry";
 import type { AdapterEvent, OcxConfig, OcxUsage } from "../../types";
 import { sanitizeLogMetadataString } from "../../lib/redact";
 
@@ -160,6 +161,8 @@ export function mergeUsage(
   first: OcxUsage | undefined,
   second: OcxUsage | undefined,
 ): OcxUsage | undefined {
+  first = withAdapterCacheTelemetry(first);
+  second = withAdapterCacheTelemetry(second);
   if (!first) return second;
   if (!second) return first;
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
@@ -170,7 +173,11 @@ export function mergeUsage(
       : undefined;
   };
   const cachedInputTokens = sumOptional("cachedInputTokens");
-  const cacheReadInputTokens = sumOptional("cacheReadInputTokens");
+  const cacheReadInputTokens = sumOptional("cacheReadInputTokens") === undefined ? undefined
+    : [first, second].reduce((sum, usage) => {
+      const read = usage.cacheReadInputTokens ?? usage.cachedInputTokens;
+      return sum + (typeof read === "number" ? read : 0);
+    }, 0);
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
@@ -185,6 +192,7 @@ export function mergeUsage(
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
+    cacheTelemetry: aggregateCacheTelemetry([first, second]),
     ...(contextTotalTokens !== undefined ? { contextTotalTokens } : {}),
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
     ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
@@ -232,9 +240,16 @@ export async function* guardEmptyCompletionEventStream(
   let passthrough = false;
   let retries = 0;
   let usage: OcxUsage | undefined;
+  // A missing physical terminal is not the initial, empty numeric accumulator.
+  let missingUsage = false;
+  const addUsage = (round: OcxUsage | undefined): OcxUsage | undefined => {
+    missingUsage ||= !round;
+    const merged = mergeUsage(usage, round);
+    return merged && missingUsage ? { ...merged, cacheTelemetry: aggregateCacheTelemetry([merged, undefined]) } : merged;
+  };
 
   const withUsage = (event: AdapterEvent & { usage?: OcxUsage }): AdapterEvent => {
-    const merged = mergeUsage(usage, event.usage);
+    const merged = addUsage(event.usage);
     return merged ? { ...event, ...(merged ? { usage: merged } : {}) } : event;
   };
   const releaseHeld = (): AdapterEvent[] => {
@@ -273,7 +288,7 @@ export async function* guardEmptyCompletionEventStream(
         continue;
       }
       if (event.type === "done") {
-        usage = mergeUsage(usage, event.usage);
+        usage = addUsage(event.usage);
         if (event.stopReason !== undefined && VISIBLE_INCOMPLETE_STOP_REASONS.has(event.stopReason)) {
           // Rendered as response.incomplete: a stated failure, not the silent
           // empty success this guard exists to catch.
@@ -305,7 +320,7 @@ export async function* guardEmptyCompletionEventStream(
           // The upstream failed the turn before any text or tool call (#6876: Vertex dropped a
           // malformed function call). Nothing actionable reached the client, so this is the same
           // replay-safe shape as an empty completion: retry the identical turn once.
-          usage = mergeUsage(usage, event.usage);
+          usage = addUsage(event.usage);
           markRetryBoundary();
           retries += 1;
           try {
@@ -323,7 +338,7 @@ export async function* guardEmptyCompletionEventStream(
           // the stream's own error framing — same move as the router's
           // empty_completion_retry_failed. Client cancels (499) pass through, and a
           // replay-safe failure that repeats keeps its own, more specific message.
-          yield emptyCompletionRetryFailedEvent(mergeUsage(usage, event.usage), true);
+          yield emptyCompletionRetryFailedEvent(addUsage(event.usage), true);
           return;
         }
         yield* releaseHeld();
@@ -354,6 +369,7 @@ export async function* guardEmptyCompletionEventStream(
       if (isReasoningEvent(event)) yield { type: "heartbeat" };
     }
     if (!terminalSeen) {
+      usage = addUsage(undefined);
       // A terminal-less EOF before text or a tool call is replay-safe: nothing
       // actionable reached the client. Retry once, then surface a stated error
       // instead of letting the bridge reduce the turn to adapter_eof.

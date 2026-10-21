@@ -317,7 +317,8 @@ export async function runWithCompactionRecovery(
     void completed.response.body?.cancel().catch(() => undefined);
     void response.body?.cancel().catch(() => undefined);
     if (snapshot.stream === true) {
-      const usage = usageFromResponsesPayload(json.usage);
+      // dispatch already returned client JSON, possibly with bridge-defaulted cache zeros.
+      const usage = usageFromResponsesPayload(json.usage, "client");
       async function* events(): AsyncGenerator<AdapterEvent> {
         yield { type: "text_delta", text: preserved };
         yield { type: "done", compactionEncryptedContent: encryptedContent, ...(usage ? { usage } : {}) };

@@ -1,6 +1,7 @@
 import { truncationReasonFor } from "../../responses/truncated-stop-reason";
 import { normalizeRoutedAgentMessages } from "../routed-agent-messages";
 import { frameCompactionHistory } from "../../responses/compaction-history-framing";
+import { rawCacheTelemetry } from "../../usage/cache-telemetry";
 import { nameRoutedIdentity, repairIdentityInResponsesBody, stripRoutedIdentity } from "../identity";
 import { stripBracketedModelSuffix } from "../openai-chat";
 import { normalizeOpenCodeGoAdditionalTools } from "../opencode-go-additional-tools";
@@ -140,12 +141,15 @@ function usageFromResponsesPayload(payload: unknown): OcxUsage | undefined {
         && key !== "cache_write_1h_tokens"))
     || (isPlainObject(usage.output_tokens_details)
       && Object.keys(usage.output_tokens_details).some(key => key !== "reasoning_tokens"));
-  if (inputTokens === 0 && outputTokens === 0 && !hasExtras) return undefined;
+  if (inputTokens === 0 && outputTokens === 0 && !hasExtras
+    && typeof (usage.input_tokens_details as Record<string, unknown> | undefined)?.cached_tokens !== "number"
+    && typeof (usage.input_tokens_details as Record<string, unknown> | undefined)?.cache_write_tokens !== "number") return undefined;
   const inputDetails = isPlainObject(usage.input_tokens_details) ? usage.input_tokens_details : undefined;
   const outputDetails = isPlainObject(usage.output_tokens_details) ? usage.output_tokens_details : undefined;
   return {
     inputTokens,
     outputTokens,
+    cacheTelemetry: rawCacheTelemetry(usage),
     ...(typeof usage.total_tokens === "number" ? { totalTokens: usage.total_tokens } : {}),
     ...(typeof inputDetails?.cached_tokens === "number" ? { cachedInputTokens: inputDetails.cached_tokens } : {}),
     ...(typeof inputDetails?.cache_write_tokens === "number" ? { cacheCreationInputTokens: inputDetails.cache_write_tokens } : {}),

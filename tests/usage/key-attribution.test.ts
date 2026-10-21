@@ -277,9 +277,9 @@ describe("key attempt accounting", () => {
     noteProviderAttemptSend(ctx, "test", key, undefined);
     recordKeyAttemptUsage(ctx, { inputTokens: 10, outputTokens: 0, estimated: true });
     noteProviderAttemptSend(ctx, "test", key, undefined);
-    applyResponseLogMetadata(ctx, { usage: { prompt_tokens: 3, completion_tokens: 2 } });
-    applyResponseLogMetadata(ctx, { usage: { prompt_tokens: 3, completion_tokens: 2 } });
-    applyResponseLogMetadata(ctx, { usage: { prompt_tokens: 4, completion_tokens: 2 } });
+    applyResponseLogMetadata(ctx, { usage: { prompt_tokens: 3, completion_tokens: 2 } }, "upstream");
+    applyResponseLogMetadata(ctx, { usage: { prompt_tokens: 3, completion_tokens: 2 } }, "upstream");
+    applyResponseLogMetadata(ctx, { usage: { prompt_tokens: 4, completion_tokens: 2 } }, "upstream");
     finishRequestAttempt(active, 200, 1);
     expect(active).toMatchObject({
       usageStatus: "estimated",

@@ -411,7 +411,7 @@ working without inventing IDs or silently dropping the steering instruction.
 
 Native chains bypass single-response SSE repair/terminal truncation. Wire IDs, lane IDs and
 control events are preserved. A single bounded reader owns delivery; client cancellation,
-account invalidation and shutdown abort its upstream. Numeric usage is summed once per
+account invalidation and shutdown abort its upstream. Cache evidence follows each native terminal, with missing usage reducing aggregate completeness rather than fabricating a cache read; control events are excluded (`tests/responses/cache-telemetry-native-seams.test.ts`). Numeric usage is summed once per
 response; steering control frames (which can contain returned user input) are not log samples.
 
 Bounds: 32 outstanding submissions, 128 response IDs per chain, 32 MiB replay journal

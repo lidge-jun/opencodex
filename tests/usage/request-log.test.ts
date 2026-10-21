@@ -222,7 +222,7 @@ describe("request log metadata", () => {
       defaultProvider: "gateway",
       providers: {
         gateway: {
-          adapter: "openai-responses",
+          adapter: "openai-responses", fetch: globalThis.fetch, // Keep this synthetic fixture off ambient proxy transports.
           authMode: "key",
           apiKey: "test-key",
           baseUrl: "https://gateway.example/v1",
@@ -678,7 +678,7 @@ describe("request log metadata", () => {
         ordinal: 1,
         status: 200,
         usageStatus: "reported",
-        usage: { inputTokens: 9, outputTokens: 3, totalTokens: 12 },
+        usage: { inputTokens: 9, outputTokens: 3, totalTokens: 12, cacheTelemetry: { source: "client", usagePresent: true } },
       }),
     ]);
   });

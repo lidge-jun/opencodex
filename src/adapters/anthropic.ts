@@ -7,6 +7,7 @@ import { createAdapterTierMetadata, type AdapterTierMetadata } from "../provider
 import { ANTHROPIC_FAST_MODE_BETA, mergeAnthropicBetaHeader } from "../providers/anthropic-fast";
 import { createToolCallIdAllocator, type ToolCallIdAllocator } from "./tool-call-id";
 import { debugDroppedFrame } from "../lib/debug";
+import { rawCacheTelemetry } from "../usage/cache-telemetry";
 import type {
   AdapterEvent,
   OcxAssistantMessage,
@@ -652,6 +653,7 @@ function usageFromAnthropic(usage: unknown): OcxUsage | undefined {
   return {
     inputTokens,
     outputTokens: output,
+    cacheTelemetry: rawCacheTelemetry(usage),
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(hasCache ? {
       cachedInputTokens: read,

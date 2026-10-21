@@ -6,6 +6,7 @@ import {
   type PersistedUsageEntry,
 } from "../../src/usage/log";
 import { cacheObservationFromUsage, summarizeUsage } from "../../src/usage/summary";
+import { rawCacheTelemetry } from "../../src/usage/cache-telemetry";
 
 const NOW = Date.UTC(2026, 8, 14, 12, 0, 0);
 
@@ -22,10 +23,12 @@ function entry(overrides: Partial<PersistedUsageEntry> & { requestId: string }):
 }
 
 describe("cache telemetry provenance", () => {
-  test("a zero is observed when reported raw and synthesized when read off a wire", () => {
+  test("zero classification follows original presence, not the wireParsed heuristic", () => {
     const zeroDetail = { inputTokens: 1000, outputTokens: 10, cachedInputTokens: 0, cacheReadInputTokens: 0 };
-    expect(classifyCacheTelemetryProvenance(zeroDetail)).toBe("observed");
-    expect(classifyCacheTelemetryProvenance(zeroDetail, { wireParsed: true })).toBe("synthesized");
+    expect(classifyCacheTelemetryProvenance(zeroDetail)).toBe("unknown");
+    expect(classifyCacheTelemetryProvenance(zeroDetail, { wireParsed: true })).toBe("unknown");
+    expect(classifyCacheTelemetryProvenance({ ...zeroDetail, cacheTelemetry: rawCacheTelemetry({ input_tokens_details: { cached_tokens: 0 } }) }, { wireParsed: true })).toBe("observed");
+    expect(classifyCacheTelemetryProvenance({ ...zeroDetail, cacheTelemetry: rawCacheTelemetry({}) })).toBe("synthesized");
     // A positive reading is a measurement whatever carried it.
     expect(classifyCacheTelemetryProvenance({ ...zeroDetail, cacheReadInputTokens: 5 }, { wireParsed: true }))
       .toBe("observed");
@@ -34,14 +37,30 @@ describe("cache telemetry provenance", () => {
     expect(classifyCacheTelemetryProvenance(undefined)).toBe("unknown");
   });
 
-  test("a row written before the field existed keeps its previous reading", () => {
-    expect(cacheObservationFromUsage({ inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 0 }, undefined).provenance)
-      .toBe("observed");
+  test("historical zeros without original evidence stay unknown regardless of the old label", () => {
+    for (const label of [undefined, "observed", "synthesized"] as const) {
+      expect(cacheObservationFromUsage({ inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 0 }, label).provenance).toBe("unknown");
+    }
+    expect(cacheObservationFromUsage({ inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 5 }, undefined).provenance).toBe("observed");
     expect(cacheObservationFromUsage({ inputTokens: 10, outputTokens: 1 }, undefined).provenance).toBe("unknown");
     expect(cacheObservationFromUsage(undefined, undefined).provenance).toBe("unknown");
     // A stored label cannot invent a denominator the row has no fields for.
     expect(cacheObservationFromUsage({ inputTokens: 10, outputTokens: 1 }, "observed").provenance).toBe("unknown");
   });
+});
+
+test("ledger reload retains exact zero evidence, strips unknown metadata, and never backfills old zero labels", () => {
+  const evidence = { ...rawCacheTelemetry({ input_tokens_details: { cached_tokens: 0 } }), untrusted: "credential-sentinel" };
+  const normalized = normalizeUsageEntryForTest(entry({ requestId: "evidence-zero", cacheProvenance: "observed",
+    usage: { inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 0, cacheTelemetry: evidence } }));
+  expect(normalized.cacheProvenance).toBe("observed");
+  expect(normalized.usage?.cacheTelemetry).toEqual({ source: "upstream", usagePresent: true, read: 0 });
+  expect(JSON.stringify(normalized)).not.toContain("credential-sentinel");
+  for (const cacheProvenance of ["observed", "synthesized"] as const) {
+    const old = normalizeUsageEntryForTest(entry({ requestId: "historic-zero", cacheProvenance,
+      usage: { inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 0 } }));
+    expect(old.cacheProvenance).toBe("unknown");
+  }
 });
 
 describe("persisted spend record", () => {
@@ -60,7 +79,7 @@ describe("persisted spend record", () => {
     const normalized = normalizeUsageEntryForTest(entry({
       requestId: "ocx-1",
       logicalRequestId: "lr-abc-1",
-      usage: { inputTokens: 100, outputTokens: 5 },
+      usage: { inputTokens: 100, outputTokens: 5, cachedInputTokens: 0, cacheTelemetry: rawCacheTelemetry({}) },
       spend: { sends: 4, settled: 4, unresolved: 0, reserved: 4, policyVersion: "guarded-v1" },
       cacheProvenance: "synthesized",
     }));
@@ -123,7 +142,7 @@ describe("usage summary spend and cache provenance", () => {
       }),
       entry({
         requestId: "ocx-synth",
-        usage: { inputTokens: 1000, outputTokens: 10, cachedInputTokens: 0, cacheReadInputTokens: 0 },
+        usage: { inputTokens: 1000, outputTokens: 10, cachedInputTokens: 0, cacheReadInputTokens: 0, cacheTelemetry: rawCacheTelemetry({}) },
         cacheProvenance: "synthesized",
       }),
     ], "30d", NOW);
@@ -150,7 +169,7 @@ describe("usage summary spend and cache provenance", () => {
     const summary = summarizeUsage([
       entry({
         requestId: "ocx-only-synth",
-        usage: { inputTokens: 500, outputTokens: 10, cachedInputTokens: 0, cacheReadInputTokens: 0 },
+        usage: { inputTokens: 500, outputTokens: 10, cachedInputTokens: 0, cacheReadInputTokens: 0, cacheTelemetry: rawCacheTelemetry({}) },
         cacheProvenance: "synthesized",
       }),
     ], "30d", NOW);
@@ -176,7 +195,7 @@ describe("usage summary spend and cache provenance", () => {
           {
             ordinal: 2, provider: "anthropic", model: "claude-opus-5", adapter: "anthropic",
             status: 200, durationMs: 5, sendCount: 1, recoveryKinds: [], usageStatus: "reported",
-            usage: { inputTokens: 1000, outputTokens: 10, cachedInputTokens: 0, cacheReadInputTokens: 0 },
+            usage: { inputTokens: 1000, outputTokens: 10, cachedInputTokens: 0, cacheReadInputTokens: 0, cacheTelemetry: rawCacheTelemetry({}) },
             cacheProvenance: "synthesized",
           },
         ],
@@ -189,4 +208,18 @@ describe("usage summary spend and cache provenance", () => {
     expect(opus?.cacheHitRate).toBeNull();
     expect(opus?.cacheObservedInputTokens).toBe(0);
   });
+});
+
+// Invalid evidence must not become a legacy positive reading after JSONL normalization.
+test("invalid cache evidence stays unknown after repeated ledger normalization", () => {
+  const source = entry({ requestId: "invalid-evidence", cacheProvenance: "observed", usage: {
+    inputTokens: 100, outputTokens: 5, cachedInputTokens: 40,
+    cacheTelemetry: { source: "invented", usagePresent: true, read: 40, secret: "metadata-sentinel" } as never,
+  } });
+  const once = normalizeUsageEntryForTest(source);
+  const twice = normalizeUsageEntryForTest(JSON.parse(JSON.stringify(once)));
+  expect(once.cacheProvenance).toBe("unknown");
+  expect(twice.cacheProvenance).toBe("unknown");
+  expect(cacheObservationFromUsage(twice.usage, twice.cacheProvenance).provenance).toBe("unknown");
+  expect(JSON.stringify(twice)).not.toContain("metadata-sentinel");
 });

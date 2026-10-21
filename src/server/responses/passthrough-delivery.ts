@@ -1052,6 +1052,7 @@ export async function deliverPassthroughResponse(
         const effectInspector = createSseInspector({
           onTerminal: reportNativeTerminal,
           logCtx,
+          upstreamUsage: true,
           onParsedPayload: noteInspectedPayload,
           onFirstOutput: options.onFirstOutput,
           pinCompletedResponseIdToFirstSeen: githubCopilotRepairEnabled,
@@ -1132,6 +1133,7 @@ export async function deliverPassthroughResponse(
         const inspector = createSseInspector({
           onTerminal: reportNativeTerminal,
           logCtx,
+          upstreamUsage: true,
           onCompletedResponse: rememberPassthroughResponse && !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
           onParsedPayload: noteInspectedPayload,
           onFirstOutput: options.onFirstOutput,
@@ -1196,6 +1198,7 @@ export async function deliverPassthroughResponse(
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
+        upstreamUsage: true,
         // Request abort can reject the fetch body before the response cancel hook runs.
         clientGoneSignal,
         drainBounds: { ms: 15_000, bytes: 32 * 1024 * 1024 },
@@ -1286,7 +1289,7 @@ export async function deliverPassthroughResponse(
         return formatErrorResponse(502, "upstream_error", "upstream JSON response stalled before completing");
       }
       const text = bounded.text;
-      inspectResponseLogJson(logCtx, text);
+      inspectResponseLogJson(logCtx, text, "upstream");
       let plaintextV2RestoreFailed = false;
       let clientJson = (() => {
         const restoredNamespace = restoreRoutedNamespaceCallsInJson(

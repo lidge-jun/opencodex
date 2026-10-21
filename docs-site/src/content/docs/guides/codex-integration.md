@@ -931,6 +931,17 @@ See [The parser and bridge](/reference/architecture/#the-parser) for the explici
 There is no provider-level setting that can add a missing `tool_search` declaration; ordinary
 code-mode discovery remains a separate path.
 
+### Cache accounting evidence
+
+Cache summaries distinguish upstream-reported values from client-compatible defaults. An explicit
+upstream zero is measured; an omitted cache counter is unknown. Cache-read and cache-creation
+counts remain separate, and a missing round or sent attempt cannot become observed merely because
+other rounds reported usage. Unsent candidates without usage do not dilute the aggregate.
+Only complete observed cache reads contribute to the hit-rate numerator and its matching input
+denominator. Partial totals can remain visible without implying a measured hit rate; historical
+zero-only records without source evidence remain unknown. These are accounting corrections, not
+a measured performance improvement.
+
 ### Cache-read diagnostics
 
 Set `OPENCODEX_CACHE_DEBUG=1` before starting the proxy to write one diagnostic record per

@@ -271,7 +271,7 @@ test.each(["done", "error", "incomplete"] as const)("normal numeric usage is mer
   } finally { budget.dispose(); }
 });
 
-test("absent later usage preserves the admitted usage reference until iterator close", async () => {
+test("absent later usage keeps admitted counters and incomplete cache evidence until iterator close", async () => {
   const budget = createTranslatorBudget();
   const usage = usageFromOpenAIChat({ prompt_tokens_details: { cached_tokens: "x".repeat(400) } });
   const guard = createAdvisorGuard({ consult: async () => ({ ok: true, isError: false, content: "advice" }), formatUnavailable: () => "limit" });
@@ -282,7 +282,7 @@ test("absent later usage preserves the admitted usage reference until iterator c
     expect((await iterator.next()).value).toEqual({ type: "assistant_boundary" });
     const terminal = (await iterator.next()).value;
     expect(terminal).toMatchObject({ type: "done", usage });
-    expect(terminal && "usage" in terminal ? terminal.usage : undefined).toBe(usage);
+    expect(terminal && "usage" in terminal ? terminal.usage : undefined).toEqual({ ...usage, cacheTelemetry: { source: "aggregate", usagePresent: true, complete: false, readComplete: false, creationComplete: false } });
     expect(budget.snapshot().currentBytes).toBeGreaterThan(400);
     await iterator.return();
     expect(budget.snapshot().currentBytes).toBe(0);
@@ -291,7 +291,7 @@ test("absent later usage preserves the admitted usage reference until iterator c
 
 test("a usage merge refusal keeps the previous owner for one content-free budget error", async () => {
   const budget = createTranslatorBudget({ maxTurnBytes: 6_000 });
-  const first = usageFromOpenAIChat({ prompt_tokens_details: { cached_tokens: "x".repeat(1_200) } });
+  const first = usageFromOpenAIChat({ prompt_tokens_details: { cached_tokens: "x".repeat(1_200) } }); first.cacheTelemetry = { source: "adapter", usagePresent: true };
   const second = usageFromOpenAIChat({ completion_tokens_details: { reasoning_tokens: "y".repeat(2_000) } });
   try {
     const result = await run(stream([...call("c"), { type: "done", usage: first }]), budget,
@@ -320,7 +320,7 @@ test("a successful usage replacement releases the previous large owner before th
       return stream([done]);
     });
     expect(legs).toBe(2);
-    expect(result.events.at(-1)).toEqual({ type: "done", usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 } });
+    expect(result.events.at(-1)).toEqual({ type: "done", usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7, cacheTelemetry: { source: "aggregate", usagePresent: true, complete: false, readComplete: false, creationComplete: false } } });
     expect(budget.snapshot().currentBytes).toBe(0);
   } finally { budget.dispose(); }
 });

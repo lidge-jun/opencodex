@@ -1644,7 +1644,7 @@ export async function handleResponsesCompact(
           }
         } catch { /* A malformed body cannot establish serving provenance. */ }
       }
-      inspectResponseLogJson(logCtx, compactText);
+      inspectResponseLogJson(logCtx, compactText, "upstream");
       if (!options.compactionRoutingOverride) forgetCompactHandoffRoute(req, admission);
       rememberServingConversationStateIssuer(outcomeCtx, codexPoolAffinityKey(req.headers));
     } else if (!options.compactionRoutingOverride && quotaFailure && (!storedPool401ReplayAttempted || wasAccountAutoPaused(upstream))) {

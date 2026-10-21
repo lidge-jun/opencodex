@@ -172,9 +172,9 @@ describe("cache diagnostic", () => {
     append("absent", observeInbound({}, new Headers()), { provenance: "unknown" });
 
     const [zero, absent] = diagnosticRecords();
-    expect(zero.cache.rawUpstream).toEqual({ present: true, value: 0 });
+    expect(zero.cache.rawUpstream).toEqual({ observed: true, present: true, value: 0 });
     expect(zero.cache.normalized).toEqual({ present: true, value: 0, provenance: "observed" });
-    expect(absent.cache.rawUpstream).toEqual({ present: false });
+    expect(absent.cache.rawUpstream).toEqual({ observed: false, present: false });
     expect(absent.cache.normalized).toEqual({ present: false, provenance: "unknown" });
   });
 

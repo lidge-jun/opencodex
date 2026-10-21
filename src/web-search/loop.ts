@@ -1,3 +1,4 @@
+import { aggregateCacheTelemetry, withAdapterCacheTelemetry } from "../usage/cache-telemetry";
 import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
 import { anthropicDeclaredTools } from "../adapters/anthropic-tool-catalog";
 import { enableAnthropicReplayCapture, takeAnthropicReplay, bindAnthropicReplay, type AnthropicReplaySnapshot } from "../adapters/anthropic-replay";
@@ -464,6 +465,20 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // keeps the last iteration's usage: Codex and Claude Code size the context window from it, and
   // a sum would read as a context several times larger and trigger early auto-compaction.
   let hiddenUsage: OcxUsage | undefined;
+  // Preserve an unreported physical round even when there is no numeric usage to retain.
+  let hiddenUsageMissing = false;
+  const withHiddenUsage = (round: OcxUsage | undefined): OcxUsage | undefined => {
+    const merged = mergeUsage(countersOnly(hiddenUsage), round);
+    return merged && (hiddenUsageMissing || !round)
+      ? { ...merged, cacheTelemetry: aggregateCacheTelemetry([merged, undefined]) } : merged;
+  };
+  const addHiddenUsage = (round: OcxUsage | undefined): void => {
+    hiddenUsageMissing ||= !round;
+    hiddenUsage = mergeUsage(hiddenUsage, round);
+    if (hiddenUsage && hiddenUsageMissing) hiddenUsage = {
+      ...hiddenUsage, cacheTelemetry: aggregateCacheTelemetry([hiddenUsage, undefined]),
+    };
+  };
   let accountRefusalOutputStarted = false;
   const connectTimeoutMs = deps.connectTimeoutMs ?? 200_000;
   const routedModelStallTimeoutMs = deps.routedModelStallTimeoutMs ?? 200_000;
@@ -712,7 +727,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response);
         if (!rotated) break;
-        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) hiddenUsage = undefined;
+        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) {
+          hiddenUsage = undefined;
+          hiddenUsageMissing = false;
+        }
         const retainRefusal = prepared.response.status === 403
           && deps.incomingMeta?.providerName === "google-antigravity" && rotated.recoveryKind === "oauth-account-403";
         // Keep the bounded refusal readable until the sibling actually returns headers.
@@ -788,22 +806,27 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     let streamedPassthroughCount = 0;
     let anthropicReplay: AnthropicReplaySnapshot | undefined;
     let releaseCapture = () => {};
+    let errorUsageReported = false;
     try {
       const parse: ProviderAdapter["parseStream"] = (response, budget) => {
         if (prepared.responseAdapter.name === "anthropic") releaseCapture = enableAnthropicReplayCapture(response);
         return prepared.responseAdapter.parseStream(response, budget);
       };
-      for await (const event of parseStreamWithProgress(prepared.response, parse, {
+      for await (const parsedEvent of parseStreamWithProgress(prepared.response, parse, {
         signal,
         inactivityTimeoutMs: routedModelStallTimeoutMs,
         translatorBudget,
         preserveAdapterError: deps.thinkingRecovery !== undefined,
         // A pass that fails was still billed; the error path reports it with the hidden passes.
-        onErrorUsage: usage => { hiddenUsage = mergeUsage(hiddenUsage, usage); },
+        onErrorUsage: usage => { errorUsageReported = true; addHiddenUsage(usage); },
       })) {
+        let event = parsedEvent;
         if (event.type === "done") {
           anthropicReplay = takeAnthropicReplay(event);
           if (anthropicReplay) replaySnapshots.add(anthropicReplay);
+        }
+        if ((event.type === "done" || event.type === "incomplete") && event.usage) {
+          event = { ...event, usage: withAdapterCacheTelemetry(event.usage) };
         }
         if (event.type === "heartbeat") yield event;
         // Kiro's explicit-completion protocol marks ordinary assistant text as commentary while
@@ -826,6 +849,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         }
       }
     } catch (error) {
+      if (!errorUsageReported) addHiddenUsage(undefined);
       if (isTranslatorBudgetExceededError(error) || error instanceof SendBudgetExhaustedError) throw error;
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
       if (error instanceof WebSearchAdapterEventError) {
@@ -1087,7 +1111,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                   stopReason: terminalEvent.stopReason,
                   eventTypes: [...new Set(split.passthrough.map(event => event.type))],
                 }));
-                hiddenUsage = mergeUsage(hiddenUsage, terminalEvent.usage);
+                addHiddenUsage(terminalEvent.usage);
                 if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries === 0) {
                   emptyAnswerRetries++;
                   console.warn("[web-search-loop] empty forced answer — retrying once with tool calls disabled");
@@ -1110,7 +1134,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             yield* replay(split.passthrough.slice(split.streamedPassthroughCount));
             return;
           }
-          hiddenUsage = mergeUsage(hiddenUsage, terminalUsage(split.passthrough));
+          addHiddenUsage(terminalUsage(split.passthrough));
           // The thinking that led to the search belongs to the FIRST call's assistant replay turn.
           for (const event of split.passthrough.slice(split.streamedPassthroughCount)) {
             if (event.type === "text_delta" && event.anthropicThinkingSignature) yield event;
@@ -1198,7 +1222,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       hideRawReasoning: parsed.options.hideRawReasoning,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
-      ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(countersOnly(hiddenUsage), usage)) } : {}),
+      ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(withHiddenUsage(usage)) } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },
   );

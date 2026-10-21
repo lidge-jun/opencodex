@@ -33,7 +33,7 @@ tool arguments pass through without a retained copy and end replay retention for
 Reconstruction reserves space before joining or parsing admitted sources; raw and replay owners
 overlap until the replacement is admitted. Appended history remains charged through the guard's
 final exit. Accumulated usage has a separate retained owner across legs; replacement admits the
-new usage while raw terminal data and prior usage remain charged. An optional request translator
+new usage while raw terminal data and prior usage remain charged, including bounded cache-evidence metadata slack. Missing worker-leg usage reduces aggregate completeness without synthetic tokens (`tests/advisor/advisor-cache-evidence-retention.test.ts`). An optional request translator
 budget receives separate local charges, never shared
 event/call leases or disposal. All exits, including iterator close, release only the guard's own
 charges. Refusals use content-free 502 `upstream_error` / `translation_buffer_limit` events.

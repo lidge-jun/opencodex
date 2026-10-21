@@ -1105,6 +1105,8 @@ export type SseInspector = {
 };
 
 export type SseInspectorHandlers = {
+  /** True only at the upstream observation seam, before client encoders/defaults. */
+  upstreamUsage?: boolean;
   onTerminal?: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void;
   logCtx?: RequestLogContext;
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void;
@@ -1326,7 +1328,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       }
     }
     if (!reported && handlers.logCtx) {
-      inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed);
+      inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed, handlers.upstreamUsage ? "upstream" : "client");
     }
     // Before any terminal handling: a consumer deciding on the whole turn must observe this
     // payload even when the terminal snapshot that follows no longer mentions it.
@@ -1536,6 +1538,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
 export type InspectionDrainBounds = { ms: number; bytes: number };
 
 export type InspectionConsumerOptions = {
+  upstreamUsage?: boolean;
   clientGoneSignal?: AbortSignal;
   drainBounds?: Partial<InspectionDrainBounds>;
   upstream?: AbortController;
@@ -1714,6 +1717,7 @@ export function consumeForInspection(
     onTerminal,
     logCtx,
     onCompletedResponse,
+    upstreamUsage: options?.upstreamUsage,
     onParsedPayload: payload => {
       const message = boundedBareUpstreamErrorMessage(payload);
       if (message !== undefined) bareUpstreamError = message;
@@ -1774,6 +1778,7 @@ export function consumeForResponseLogMetadata(
     logCtx,
     onCompletedResponse,
     onParsedPayload: options?.onParsedPayload,
+    upstreamUsage: options?.upstreamUsage,
     onFirstOutput,
     pinCompletedResponseIdToFirstSeen: options?.pinCompletedResponseIdToFirstSeen,
   });

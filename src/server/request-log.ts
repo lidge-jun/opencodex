@@ -1,4 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
+import { aggregateCacheTelemetry, finalAttemptUsage, rawCacheTelemetry, withAdapterCacheTelemetry, usageFromResponsesPayload, type UsageObservationSource } from "../usage/cache-telemetry";
+import type { CacheTelemetry } from "../types/request";
 import { randomBytes } from "node:crypto";
 import { stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
@@ -94,6 +96,11 @@ import type {
   PromptCacheKeySource,
 } from "../usage/cache-diagnostic";
 
+// Weak ownership keeps an earlier attempt's raw counter presence out of a later attempt.
+const rawCacheObservations = new WeakMap<object, CacheTelemetry>();
+const rawCacheSendBaselines = new WeakMap<object, OcxUsage | undefined>();
+const cacheIncompletePhysicalAttempts = new WeakSet<object>();
+const unreportedFinalizedUsage = new WeakMap<object, OcxUsage>();
 const CACHE_DIAGNOSTIC_HOOK = Symbol.for("opencodex.cache-diagnostic.v1");
 interface CacheDiagnosticHooks {
   /** Whether inbound bodies are actually recorded; the hook is registered at import either way. */
@@ -132,9 +139,8 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics {
    */
   executionBudget?: RequestExecutionBudget;
   /**
-   * True once usage counts were taken from a response wire rather than reported raw by the
-   * adapter. It decides cache provenance: the normalizer writes zero-default token-detail
-   * objects, so an all-zero cache detail from a parsed wire is not a measured cache miss.
+   * Compatibility marker: usage was parsed from a response wire. Cache provenance is carried
+   * by usage.cacheTelemetry, not inferred from this flag or from zero-valued counters.
    */
   usageWireParsed?: boolean;
   /**
@@ -279,7 +285,9 @@ export function observeCacheDiagnosticInbound(
   headers: Headers,
   source: PromptCacheKeySource,
 ): void {
-  const draft = cacheDiagnosticHooks()?.observeInbound(body, headers, source);
+  const hooks = cacheDiagnosticHooks();
+  if (!hooks?.enabled()) return;
+  const draft = hooks.observeInbound(body, headers, source);
   if (draft) logCtx.cacheDiagnosticDraft = draft;
 }
 
@@ -933,7 +941,7 @@ export function catalogModelSupportsServiceTier(modelId: string, serviceTier: st
   }
 }
 
-export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unknown): void {
+export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unknown, usageSource: UsageObservationSource = "client"): void {
   if (!payload || typeof payload !== "object") return;
   if (logCtx.observedTerminalStatus === undefined) {
     const eventType = (payload as { type?: unknown }).type;
@@ -964,75 +972,35 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   } else if (Object.prototype.hasOwnProperty.call(source, "service_tier")) {
     logCtx.activeTierMetadata?.observeResponseServiceTier(serviceTier);
   }
-  const usage = usageFromResponsesPayload((source as { usage?: unknown }).usage);
+  const rawUsage = (source as { usage?: unknown }).usage;
+  if (usageSource === "upstream" && (Object.hasOwn(source, "usage")
+    || ["completed", "failed", "incomplete"].includes(String((source as { status?: unknown }).status))
+    || ["response.completed", "response.failed", "response.incomplete"].includes(String((payload as { type?: unknown }).type)))) {
+    rawCacheObservations.set(logCtx.activeAttempt ?? logCtx, rawCacheTelemetry(rawUsage));
+  }
+  const usage = usageFromResponsesPayload(rawUsage, usageSource);
+  const current = logCtx.activeAttempt ? logCtx.activeAttempt.usage : logCtx.usage;
+  const original = current?.cacheTelemetry?.source;
+  // A second pass over client-defaulted values must not replace raw evidence.
+  if (usageSource === "client" && (original === "upstream" || original === "adapter" || original === "aggregate")) return;
   if (usage && !logCtx.usageFromBridge) {
     if (!recordKeyWireAttemptUsage(logCtx, usage)) {
       logCtx.usage = usage;
       if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
     }
-    // Counts taken off a wire, not reported raw. The zero-default token-detail objects strict
-    // clients require are indistinguishable here from a measured zero, so the cache detail these
-    // counts carry is recorded as synthesized rather than as an observed miss.
-    logCtx.usageWireParsed = true;
+    logCtx.usageWireParsed = true; // Compatibility marker only, never a provenance decision.
+  } else if (usageSource === "upstream" && current && !logCtx.usageFromBridge
+    && (["completed", "failed", "incomplete"].includes(String((source as { status?: unknown }).status))
+      || ["response.completed", "response.failed", "response.incomplete"].includes(String((payload as { type?: unknown }).type)))) {
+    // A final event without usage must not inherit a prior event's cache reading.
+    const { cachedInputTokens: _cached, cacheReadInputTokens: _read, cacheCreationInputTokens: _creation, cacheCreation1hInputTokens: _oneHour, ...retained } = current;
+    const cleared = { ...retained, cacheTelemetry: rawCacheTelemetry(rawUsage) };
+    logCtx.usage = cleared;
+    if (logCtx.activeAttempt) logCtx.activeAttempt.usage = cleared;
   }
 }
 
-export function usageFromResponsesPayload(usage: unknown): OcxUsage | undefined {
-  if (!usage || typeof usage !== "object") return undefined;
-  const raw = usage as {
-    input_tokens?: unknown;
-    output_tokens?: unknown;
-    input_tokens_details?: { cached_tokens?: unknown; cache_write_tokens?: unknown; cache_write_1h_tokens?: unknown };
-    output_tokens_details?: { reasoning_tokens?: unknown };
-    total_tokens?: unknown;
-    prompt_tokens?: unknown;
-    completion_tokens?: unknown;
-    prompt_tokens_details?: { cached_tokens?: unknown; cache_write_tokens?: unknown };
-    completion_tokens_details?: { reasoning_tokens?: unknown };
-  };
-  if (typeof raw.input_tokens === "number" && typeof raw.output_tokens === "number") {
-    return {
-      inputTokens: raw.input_tokens,
-      outputTokens: raw.output_tokens,
-      ...(typeof raw.total_tokens === "number" ? { totalTokens: raw.total_tokens } : {}),
-      ...(typeof raw.input_tokens_details?.cached_tokens === "number"
-        ? {
-            cachedInputTokens: raw.input_tokens_details.cached_tokens,
-            cacheReadInputTokens: raw.input_tokens_details.cached_tokens,
-          }
-        : {}),
-      ...(typeof raw.input_tokens_details?.cache_write_tokens === "number"
-        ? { cacheCreationInputTokens: raw.input_tokens_details.cache_write_tokens }
-        : {}),
-      ...(typeof raw.input_tokens_details?.cache_write_1h_tokens === "number"
-        ? { cacheCreation1hInputTokens: raw.input_tokens_details.cache_write_1h_tokens }
-        : {}),
-      ...(typeof raw.output_tokens_details?.reasoning_tokens === "number"
-        ? { reasoningOutputTokens: raw.output_tokens_details.reasoning_tokens }
-        : {}),
-    };
-  }
-  if (typeof raw.prompt_tokens === "number" && typeof raw.completion_tokens === "number") {
-    return {
-      inputTokens: raw.prompt_tokens,
-      outputTokens: raw.completion_tokens,
-      ...(typeof raw.total_tokens === "number" ? { totalTokens: raw.total_tokens } : {}),
-      ...(typeof raw.prompt_tokens_details?.cached_tokens === "number"
-        ? {
-            cachedInputTokens: raw.prompt_tokens_details.cached_tokens,
-            cacheReadInputTokens: raw.prompt_tokens_details.cached_tokens,
-          }
-        : {}),
-      ...(typeof raw.prompt_tokens_details?.cache_write_tokens === "number"
-        ? { cacheCreationInputTokens: raw.prompt_tokens_details.cache_write_tokens }
-        : {}),
-      ...(typeof raw.completion_tokens_details?.reasoning_tokens === "number"
-        ? { reasoningOutputTokens: raw.completion_tokens_details.reasoning_tokens }
-        : {}),
-    };
-  }
-  return undefined;
-}
+export { usageFromResponsesPayload };
 
 /**
  * Mark a refusal this proxy synthesized locally. Sets origin to `synthetic` and a
@@ -1049,9 +1017,9 @@ export function markLocalRequestLogRefusal(
   logCtx.terminalSource = "synthetic";
 }
 
-export function inspectResponseLogJson(logCtx: RequestLogContext, text: string): void {
+export function inspectResponseLogJson(logCtx: RequestLogContext, text: string, source: UsageObservationSource = "client"): void {
   try {
-    applyResponseLogMetadata(logCtx, JSON.parse(text));
+    applyResponseLogMetadata(logCtx, JSON.parse(text), source);
   } catch {
     logCtx.activeTierMetadata?.markResponseUnparseable();
     /* body may not be JSON; request log metadata is best-effort only */
@@ -1079,12 +1047,13 @@ export function inspectResponseLogSsePayloadParsed(
   logCtx: RequestLogContext,
   payload: string | null,
   parsed: unknown | undefined,
+  source: UsageObservationSource = "client",
 ): void {
   if (!payload || payload.trim() === "[DONE]") return;
   const debugEnabled = isUsageDebugEnabled();
   const sseAlreadyMarked = logCtx.usageDebugBodyKind === "sse";
   if (parsed !== undefined) recordGenerationEvent(logCtx, (parsed as { type?: unknown } | null)?.type);
-  if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed);
+  if (parsed !== undefined) applyResponseLogMetadata(logCtx, parsed, source);
   else logCtx.activeTierMetadata?.markResponseUnparseable();
   captureUpstreamErrorParsed(logCtx, payload, parsed);
   if (debugEnabled) {
@@ -1386,6 +1355,13 @@ export function addFinalRequestLog(
   const closeReason = effectiveStatus === 499
     ? "client_cancel"
     : meta?.closeReason;
+  let finalUsage = finalAttemptUsage(logCtx.usage, logCtx.activeAttempt, logCtx.attempts);
+  if (logCtx.activeAttempt) captureFreshAdapterCacheObservation(logCtx.activeAttempt, finalUsage);
+  const finalSendMissing = logCtx.activeAttempt && unchangedUsageSinceSend(logCtx.activeAttempt, finalUsage);
+  if (finalUsage && (finalSendMissing || (logCtx.activeAttempt && cacheIncompletePhysicalAttempts.has(logCtx.activeAttempt)))) {
+    finalUsage = { ...finalUsage, cacheTelemetry: aggregateCacheTelemetry([finalUsage, undefined]) };
+    logCtx.activeAttempt!.usage = finalUsage;
+  }
   if (logCtx.activeAttempt) {
     finishRequestAttempt(
       logCtx.activeAttempt,
@@ -1393,7 +1369,7 @@ export function addFinalRequestLog(
       Date.now() - (logCtx.activeAttemptStartedAt ?? start),
       keyUsageOwners.has(logCtx.activeAttempt)
         ? logCtx.activeAttempt.usage
-        : logCtx.usage,
+        : finalUsage,
     );
     // The final row and its active physical attempt describe the same terminal. Preserve the
     // semantic code on both so detailed attempt telemetry cannot regress to a generic status code.
@@ -1416,10 +1392,10 @@ export function addFinalRequestLog(
   // The one seam every request passes exactly once, whatever transport served it and however
   // it ended. The terminal usage belongs to the last send that left; the ledger resolves every
   // earlier send of this request as unresolved spend rather than handing its tokens back.
-  logCtx.spendTracker?.settle(logCtx.usage);
+  logCtx.spendTracker?.settle(finalSendMissing ? undefined : finalUsage);
   const existing = finalizedUsage(
     logCtx.providerAdapter ?? logCtx.provider,
-    logCtx.usage,
+    finalUsage,
     logCtx.usageLogInputTokens,
     contextWindowForModel(logCtx.providerAdapter ?? logCtx.provider, logCtx.model),
     logCtx.localTerminalReason !== undefined,
@@ -1458,12 +1434,15 @@ export function addFinalRequestLog(
     ...(spend ? { spendSends: spend.sends } : {}),
     ...(attribution.failureCause ? { failureCause: attribution.failureCause } : {}),
   });
-  const cacheProvenance = classifyCacheTelemetryProvenance(loggedUsage, {
-    wireParsed: logCtx.usageWireParsed === true,
-  });
+  const cacheProvenance = classifyCacheTelemetryProvenance(loggedUsage);
   const logicalRequestId = logCtx.logicalRequestId ?? logCtx.executionBudget?.logicalRequestId;
   const normalizedCacheValue = loggedUsage?.cacheReadInputTokens ?? loggedUsage?.cachedInputTokens;
-  cacheDiagnosticHooks()?.finalize({
+  const diagnosticHooks = cacheDiagnosticHooks();
+  const rawOwner = logCtx.activeAttempt ?? logCtx;
+  const rawObservation = rawCacheObservations.get(rawOwner)
+    ?? (finalUsage?.cacheTelemetry?.source === "upstream"
+      && finalUsage.cacheTelemetry !== rawCacheSendBaselines.get(rawOwner)?.cacheTelemetry ? finalUsage.cacheTelemetry : undefined);
+  if (diagnosticHooks?.enabled()) diagnosticHooks.finalize({
     requestId,
     ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),
     protocol: logCtx.inboundProtocol ?? "responses",
@@ -1472,10 +1451,8 @@ export function addFinalRequestLog(
     ...(isCodexUsageAccountLogLabel(logCtx.accountLogLabel) ? { accountLogLabel: logCtx.accountLogLabel } : {}),
     ...(logCtx.affinity ? { affinityMove: logCtx.affinity } : {}),
     ...(logCtx.affinityReason ? { affinityReason: logCtx.affinityReason } : {}),
-    // loggedUsage carries the upstream cache counter by reference all the way from the
-    // adapter extraction for the native Responses route, so an undefined read here is a
-    // genuinely absent counter rather than a defaulted one.
-    ...(normalizedCacheValue !== undefined ? { rawCacheCounterValue: normalizedCacheValue } : {}),
+    // An aggregate or a client normalization is not an original upstream payload.
+    ...(rawObservation ? { rawCacheTelemetry: rawObservation } : {}),
     ...(normalizedCacheValue !== undefined ? { normalizedCacheValue } : {}),
     cacheProvenance,
     ...(logCtx.cacheDiagnosticDraft ? { draft: logCtx.cacheDiagnosticDraft } : {}),
@@ -1542,7 +1519,7 @@ export function addFinalRequestLog(
     // "unknown" is recorded rather than omitted whenever usage exists: a row that reported tokens
     // with no cache detail at all is a different fact from a row with no usage, and the summary
     // has to refuse both as a hit-rate denominator.
-    ...(loggedUsage || cacheProvenance !== "unknown" ? { cacheProvenance } : {}),
+    cacheProvenance,
     ...(logCtx.affinity ? { affinity: logCtx.affinity } : {}),
     ...(logCtx.affinityReason ? { affinityReason: logCtx.affinityReason } : {}),
     ...(logCtx.conversationStateScrub === "account-change"
@@ -1686,7 +1663,7 @@ export async function recordKeyAttemptFailure(logCtx: RequestLogContext, respons
     const body = await readBoundedResponseBody(response.clone(), { signal, totalTimeoutMs: 1000, inactivityTimeoutMs: 1000 });
     if (body.truncated || body.oversized) return;
     const value = JSON.parse(body.text);
-    const usage = usageFromResponsesPayload(value?.usage ?? value?.response?.usage);
+    const usage = usageFromResponsesPayload(value?.usage ?? value?.response?.usage, "upstream");
     if (usage) recordKeyWireAttemptUsage(logCtx, usage);
   } catch { /* Absent/malformed usage remains unknown; recovery still owns the response. */ }
   finally { signal?.removeEventListener("abort", cancelOriginal); }
@@ -1694,8 +1671,10 @@ export async function recordKeyAttemptFailure(logCtx: RequestLogContext, respons
 
 /** Add raw per-response usage before a bridge combines multiple rounds for the client. */
 export function recordKeyAttemptUsage(logCtx: RequestLogContext, usage: OcxUsage | undefined): void {
+  usage = withAdapterCacheTelemetry(usage);
   const attempt = logCtx.activeAttempt;
   if (!attempt || !usage) return;
+  captureFreshAdapterCacheObservation(attempt, usage);
   attempt.usage = attempt.usage
     ? aggregateAttemptUsage([{ ...attempt, usageStatus: attempt.usage.estimated ? "estimated" : "reported" },
       { ...attempt, usage, usageStatus: usage.estimated ? "estimated" : "reported" }]).usage
@@ -1745,6 +1724,7 @@ export function noteProviderAttemptSend(
     }
     for (const key of Object.keys(attempt)) delete (attempt as unknown as Record<string, unknown>)[key];
     Object.assign(attempt, fresh);
+    cacheIncompletePhysicalAttempts.delete(attempt);
     delete logCtx.usage;
     logCtx.activeAttemptStartedAt = Date.now();
   }
@@ -1791,6 +1771,15 @@ export function noteAttemptSend(
   recovery?: AttemptRecoveryKind,
 ): void {
   if (!attempt) return;
+  // A later measured send cannot fill an earlier unreported physical-send gap.
+  if (attempt.sendCount > 0 && attempt.locallyAnswered !== true && rawCacheSendBaselines.has(attempt)
+    && (attempt.usage === rawCacheSendBaselines.get(attempt) || unchangedUsageSinceSend(attempt, attempt.usage))) {
+    cacheIncompletePhysicalAttempts.add(attempt);
+  }
+  // Stable attempt objects survive rotation/resends; only this physical send may supply raw facts.
+  rawCacheObservations.delete(attempt);
+  unreportedFinalizedUsage.delete(attempt);
+  rawCacheSendBaselines.set(attempt, attempt.usage);
   attempt.sendCount += 1;
   if (typeof inputTokenEstimate === "number"
     && Number.isFinite(inputTokenEstimate)
@@ -1823,15 +1812,35 @@ export function noteAttemptRecoveryWithheld(
   if (!attempt.recoveryWithheld.includes(reason)) attempt.recoveryWithheld.push(reason);
 }
 
+function captureFreshAdapterCacheObservation(attempt: PersistedUsageAttempt, usage?: OcxUsage): void {
+  const evidence = usage?.cacheTelemetry;
+  if (evidence?.source === "upstream" && evidence !== rawCacheSendBaselines.get(attempt)?.cacheTelemetry
+    && !rawCacheObservations.has(attempt)) rawCacheObservations.set(attempt, evidence);
+}
+
+function unchangedUsageSinceSend(attempt: PersistedUsageAttempt, usage?: OcxUsage): boolean {
+  const same = (previous?: OcxUsage) => !!usage && !!previous
+    && (usage === previous || (usage.cacheTelemetry !== undefined && usage.cacheTelemetry === previous.cacheTelemetry));
+  return attempt.locallyAnswered !== true
+    && (same(rawCacheSendBaselines.get(attempt)) || same(unreportedFinalizedUsage.get(attempt)));
+}
+
 export function finishRequestAttempt(
   attempt: PersistedUsageAttempt,
   status: number,
   durationMs: number,
   usage?: OcxUsage,
 ): PersistedUsageAttempt {
+  let current = usage ?? attempt.usage;
+  captureFreshAdapterCacheObservation(attempt, current);
+  const finalSendMissing = unchangedUsageSinceSend(attempt, current);
+  if (current && (cacheIncompletePhysicalAttempts.has(attempt) || finalSendMissing)) {
+    current = { ...current, cacheTelemetry: aggregateCacheTelemetry([current, undefined]) };
+    if (finalSendMissing) unreportedFinalizedUsage.set(attempt, current);
+  }
   const finalized = finalizedUsage(
     attempt.adapter,
-    usage ?? attempt.usage,
+    current,
     attempt.inputTokenEstimate,
     contextWindowForModel(attempt.adapter, attempt.model),
     attempt.locallyAnswered === true,
@@ -1839,6 +1848,7 @@ export function finishRequestAttempt(
   attempt.status = status;
   attempt.durationMs = Math.max(0, durationMs);
   attempt.usageStatus = finalized.status;
+  attempt.cacheProvenance = classifyCacheTelemetryProvenance(finalized.usage);
   if (finalized.usage) attempt.usage = finalized.usage;
   else delete attempt.usage;
   if (finalized.totalTokens !== undefined) attempt.totalTokens = finalized.totalTokens;
@@ -1895,6 +1905,7 @@ export function aggregateAttemptUsage(
     0,
   );
   const aggregate: OcxUsage = {
+    cacheTelemetry: aggregateCacheTelemetry(measured.map(attempt => attempt.usage)),
     inputTokens: usages.reduce((sum, usage) => sum + usage.inputTokens, 0),
     outputTokens: usages.reduce((sum, usage) => sum + usage.outputTokens, 0),
     totalTokens,

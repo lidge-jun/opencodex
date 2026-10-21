@@ -1,5 +1,6 @@
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
+import { withAdapterCacheTelemetry } from "../../usage/cache-telemetry";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
@@ -519,6 +520,7 @@ export async function prepareResponsesTransport(
     pendingKeySend = undefined;
   };
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
+    usage = withAdapterCacheTelemetry(usage);
     logCtx.usageFromBridge = true;
     if (usesApiKeyAccount(route.provider)) {
       logCtx.usage = logCtx.activeAttempt?.usage;

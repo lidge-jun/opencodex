@@ -21,7 +21,7 @@ describe("Anthropic usage numeric boundary", () => {
       })) as AdapterEvent[];
       const done = events.find(event => event.type === "done");
       expect(done && "usage" in done ? done.usage : undefined)
-        .toEqual(usage ? { inputTokens: 0, outputTokens: 0 } : undefined);
+        .toEqual(usage ? { inputTokens: 0, outputTokens: 0, cacheTelemetry: { source: "upstream", usagePresent: true } } : undefined);
     }
   });
 
@@ -36,6 +36,7 @@ describe("Anthropic usage numeric boundary", () => {
     const done = events.find(event => event.type === "done");
     expect(done && "usage" in done ? done.usage : undefined).toEqual({
       inputTokens: 15, outputTokens: 4, cachedInputTokens: 3, cacheReadInputTokens: 3, cacheCreationInputTokens: 2,
+      cacheTelemetry: { source: "upstream", usagePresent: true, read: 3, creation: 2 },
     });
   });
 

@@ -54,6 +54,7 @@ describe("Anthropic reported thinking usage (#6719)", () => {
     expect(terminalUsage(events)).toEqual({
       inputTokens: 15, outputTokens: 292, reasoningOutputTokens: 156,
       cachedInputTokens: 3, cacheReadInputTokens: 3, cacheCreationInputTokens: 2,
+      cacheTelemetry: { source: "upstream", usagePresent: true, read: 3, creation: 2 },
     });
     const json = buildResponseJSON(events, "anthropic/claude-test");
     expect(json.usage).toMatchObject({ output_tokens: 292, total_tokens: 307, output_tokens_details: { reasoning_tokens: 156 } });
@@ -94,7 +95,7 @@ describe("Anthropic reported thinking usage (#6719)", () => {
   test("zero is reported while absent details remain unreported internally", async () => {
     expect(terminalUsage(await buffered({ ...counts, output_tokens_details: { thinking_tokens: 0 } }))?.reasoningOutputTokens).toBe(0);
     expect(terminalUsage(await buffered(counts))).not.toHaveProperty("reasoningOutputTokens");
-    expect(terminalUsage(await buffered({}))).toEqual({ inputTokens: 0, outputTokens: 0 });
+    expect(terminalUsage(await buffered({}))).toEqual({ inputTokens: 0, outputTokens: 0, cacheTelemetry: { source: "upstream", usagePresent: true } });
   });
 
   test.each([null, [], "details", {}, { thinking_tokens: "156" }, { thinking_tokens: null }, { thinking_tokens: -1 }, { thinking_tokens: true }, { thinking_tokens: 293 }].map(outputDetails => ({ outputDetails })))(
@@ -102,6 +103,7 @@ describe("Anthropic reported thinking usage (#6719)", () => {
       for (const events of [await buffered({ ...counts, output_tokens_details: outputDetails }), await streaming({ output_tokens: 292, output_tokens_details: outputDetails })]) {
         expect(terminalUsage(events)).toEqual({
           inputTokens: 15, outputTokens: 292, cachedInputTokens: 3, cacheReadInputTokens: 3, cacheCreationInputTokens: 2,
+          cacheTelemetry: { source: "upstream", usagePresent: true, read: 3, creation: 2 },
         });
       }
     },

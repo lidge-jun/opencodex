@@ -6,6 +6,8 @@ import { CODEX_AFFINITY_DEBUG_SAFE_HEADERS } from "../codex/affinity-debug";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import type { CacheTelemetryProvenance } from "./log";
+import type { CacheTelemetry } from "../types/request";
+import { normalizeCacheTelemetry } from "./cache-telemetry";
 
 const CACHE_DEBUG_KEY = randomBytes(32);
 const MAX_BLOCKS = 128;
@@ -42,6 +44,8 @@ export interface CacheDiagnosticFinalFacts {
    * all, which keeps a measured zero distinct from an absent-then-defaulted zero.
    */
   rawCacheCounterValue?: number;
+  /** Original upstream presence/counters, never inferred from an aggregate or client wire. */
+  rawCacheTelemetry?: CacheTelemetry;
   normalizedCacheValue?: number;
   cacheProvenance: CacheTelemetryProvenance;
   draft?: CacheDiagnosticDraft;
@@ -238,6 +242,9 @@ export function appendFinalCacheDiagnostic(facts: CacheDiagnosticFinalFacts): vo
     const outboundKey = draft.promptCacheKey?.outbound;
     const inboundPrefix = draft.prefix?.inbound ?? prefixFingerprint(undefined);
     const outboundPrefix = draft.prefix?.outbound ?? prefixFingerprint(undefined);
+    const evidence = normalizeCacheTelemetry(facts.rawCacheTelemetry);
+    const raw = evidence?.source === "upstream" ? evidence : undefined;
+    const rawRead = raw?.read ?? facts.rawCacheCounterValue;
     const record = {
       version: 1 as const,
       ts: Date.now(),
@@ -272,9 +279,13 @@ export function appendFinalCacheDiagnostic(facts: CacheDiagnosticFinalFacts): vo
         ...(facts.affinityReason ? { affinityReason: facts.affinityReason } : {}),
       },
       cache: {
-        rawUpstream: facts.rawCacheCounterValue !== undefined
-          ? { present: true, value: facts.rawCacheCounterValue }
-          : { present: false },
+        rawUpstream: {
+          observed: raw !== undefined || facts.rawCacheCounterValue !== undefined,
+          ...(raw ? { usagePresent: raw.usagePresent } : {}),
+          present: rawRead !== undefined,
+          ...(rawRead !== undefined ? { value: rawRead } : {}),
+          ...(raw?.creation !== undefined ? { creation: raw.creation } : {}),
+        },
         normalized: {
           present: facts.normalizedCacheValue !== undefined,
           ...(facts.normalizedCacheValue !== undefined ? { value: facts.normalizedCacheValue } : {}),

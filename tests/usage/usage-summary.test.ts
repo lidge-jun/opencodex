@@ -432,7 +432,7 @@ describe("day-level estimated cost", () => {
       model: i === total - 1 ? "overflow-cache-tail" : `overflow-cache-${String(i).padStart(4, "0")}`,
       usageStatus: "reported",
       usage: i === total - 1
-        ? { inputTokens: 100, outputTokens: 1, cacheReadInputTokens: cacheRead }
+        ? { inputTokens: 100, outputTokens: 1, cacheReadInputTokens: cacheRead, cacheTelemetry: { source: "upstream", usagePresent: true, read: cacheRead } }
         : { inputTokens: 1, outputTokens: 1 },
     }));
 
@@ -1620,7 +1620,7 @@ describe("summarizeUsage", () => {
         usage: {
           inputTokens: 500,
           outputTokens: 100,
-          cacheReadInputTokens: 0,
+          cacheReadInputTokens: 0, cacheTelemetry: { source: "upstream", usagePresent: true, read: 0 },
         },
       }),
       entry({

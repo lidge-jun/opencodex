@@ -1,6 +1,6 @@
 # Responses Transport
 
-Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+Native JSON/SSE inspection and Responses passthrough capture raw cache evidence before client normalization; bridged guards preserve missing-round provenance. `tests/responses/cache-telemetry-http.test.ts` covers auto/legacy/eager relay, fragmentation, cancellation and slow consumers without upstream calls. Native result continuations and function-result injection follow [the mode-specific result and control contract](streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
 Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 

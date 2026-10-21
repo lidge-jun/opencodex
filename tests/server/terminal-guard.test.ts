@@ -486,7 +486,7 @@ describe("terminal guard bounded retention", () => {
           expect(actual).toHaveLength(events.length);
           for (let i = 0; i < events.length - 1; i += 1) expect(actual[i]).toBe(events[i]);
           // Terminal usage is preserved through the existing shallow-copy path.
-          expect(actual.at(-1)).toEqual(done);
+          expect(actual.at(-1)).toEqual({ ...done, usage: { ...done.usage, cacheTelemetry: { source: "adapter", usagePresent: true } } });
         });
       }
 
@@ -587,7 +587,7 @@ describe("terminal guard lifecycle and accounting", () => {
           expect(calls).toBe(1);
           expect(actual).toEqual([
             announcement, { type: "assistant_boundary" },
-            { type: "error", message: failure.message, usage },
+            { type: "error", message: failure.message, usage: { ...usage, cacheTelemetry: { source: "client", usagePresent: true, read: 3, creation: 1 } } },
           ]);
         });
       }
@@ -613,7 +613,7 @@ describe("terminal guard lifecycle and accounting", () => {
         expect(actual.filter(event => event.type === "done")).toHaveLength(0);
         expect(actual.at(-1)).toEqual({
           type: "error", message: "second continuation setup failed",
-          usage: { inputTokens: 20, outputTokens: 4, totalTokens: 24, cachedInputTokens: 6 },
+          usage: { inputTokens: 20, outputTokens: 4, totalTokens: 24, cachedInputTokens: 6, cacheTelemetry: { source: "aggregate", usagePresent: true, complete: true, read: 6, readComplete: true, creationComplete: false } },
         });
       });
 

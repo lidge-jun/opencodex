@@ -7,6 +7,7 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { cacheProvenance, cacheProvenanceForRecord, normalizeCacheTelemetry } from "./cache-telemetry";
 import {
   normalizePersistedJevDecision,
   type PersistedJevDecisionV1,
@@ -95,8 +96,8 @@ export type UsageCredentialSource = "grok-oauth" | "xai-api-key";
  * Where a row's cache-token detail came from.
  *
  * Strict-client normalization emits zero-default token-detail objects on every bridged wire
- * (`responsesUsage` in src/bridge.ts), so a `cached_tokens: 0` read back off that wire is a
- * wire-compatibility artifact and not a measured cache miss. The three values stay distinct all
+ * (`responsesUsage` in src/bridge.ts), so a `cached_tokens: 0` read back off that wire alone
+ * cannot distinguish a compatibility artifact from a measured cache miss. The three values stay distinct all
  * the way to the summary because folding `synthesized` or `unknown` into `observed` is what
  * lets a pool that discarded every warm prefix still report a plausible cache hit rate (#4546).
  */
@@ -113,22 +114,16 @@ export function isKnownCacheTelemetryProvenance(value: unknown): value is CacheT
 /**
  * Classify one usage record's cache detail.
  *
- * `wireParsed` means the counts were read back off a response wire rather than reported raw by
- * the adapter. An all-zero cache detail from that source cannot be told apart from the zero
- * defaults the normalizer writes, so it is `synthesized`; the same shape reported raw is a real
- * zero and stays `observed`. A record with no cache fields at all is `unknown`, which is not a
- * zero either.
+ * Presence evidence from the upstream/adapter boundary distinguishes real zero from defaulted
+ * zero. The legacy wireParsed argument is accepted for compatibility, never used as evidence.
+ * Zero-only historical rows without evidence remain unknown; positive legacy readings remain
+ * usable because a zero-default normalizer could not have produced them.
  */
 export function classifyCacheTelemetryProvenance(
   usage: OcxUsage | undefined,
-  options: { wireParsed?: boolean } = {},
+  _options: { wireParsed?: boolean } = {},
 ): CacheTelemetryProvenance {
-  if (!usage) return "unknown";
-  const present = [usage.cachedInputTokens, usage.cacheReadInputTokens, usage.cacheCreationInputTokens]
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  if (present.length === 0) return "unknown";
-  if (present.some(value => value > 0)) return "observed";
-  return options.wireParsed === true ? "synthesized" : "observed";
+  return cacheProvenance(usage);
 }
 
 export interface PersistedUsageAttempt {
@@ -567,7 +562,11 @@ export function usageStatusForFinalLog(usage: OcxUsage | undefined): UsageStatus
 
 function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined {
   if (!usage) return undefined;
+  const cacheTelemetry = normalizeCacheTelemetry(usage.cacheTelemetry)
+    ?? (usage.cacheTelemetry !== undefined
+      ? { source: "aggregate" as const, usagePresent: true, complete: false } : undefined);
   return {
+    ...(cacheTelemetry ? { cacheTelemetry } : {}),
     inputTokens: usage.inputTokens,
     outputTokens: usage.outputTokens,
     // Absolute active-context checkpoint (types.ts). Stateful providers such as Kiro report
@@ -775,7 +774,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       : {}),
     ...(typeof attempt.errorCode === "string" ? { errorCode: attempt.errorCode } : {}),
     ...(isKnownCacheTelemetryProvenance(attempt.cacheProvenance)
-      ? { cacheProvenance: attempt.cacheProvenance }
+      ? { cacheProvenance: cacheProvenanceForRecord(attempt.usage as OcxUsage | undefined, attempt.cacheProvenance) }
       : {}),
     ...(isLabRouteSubjectId(attempt.labRouteSubjectId)
       ? { labRouteSubjectId: attempt.labRouteSubjectId }
@@ -1068,7 +1067,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(Array.isArray(entry.attempts) ? { attempts } : {}),
     ...(spend ? { spend } : {}),
     ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
-      ? { cacheProvenance: entry.cacheProvenance }
+      ? { cacheProvenance: cacheProvenanceForRecord(entry.usage, entry.cacheProvenance) }
       : {}),
     ...(transportPhase ? { transportPhase } : {}),
     ...(terminalSource ? { terminalSource } : {}),

@@ -30,7 +30,7 @@ export function guardPassthroughCompletion(
     signal,
     retryEnabled: config.emptyCompletionRetry,
     stallTimeoutMs: resolveStallTimeoutMs(config.stallTimeoutSec),
-    recordUsage: usage => { recordKeyWireAttemptUsage(logCtx, usageFromResponsesPayload(usage)); },
+    recordUsage: usage => { recordKeyWireAttemptUsage(logCtx, usageFromResponsesPayload(usage, "upstream")); },
     retry: async () => {
       const result = await rebuildAndRefetch("empty-completion");
       if (!("failed" in result)) return result;

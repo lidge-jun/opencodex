@@ -88,7 +88,7 @@ describe("empty-completion guard retry", () => {
     expect(withoutHeartbeats(events)).toEqual([
       { type: "thinking_delta", thinking: "thinking..." },
       { type: "text_delta", text: "answer" },
-      { type: "done", usage: { inputTokens: 10, outputTokens: 2 } },
+      { type: "done", usage: { inputTokens: 10, outputTokens: 2, cacheTelemetry: { source: "adapter", usagePresent: true } } },
     ]);
   });
 
@@ -119,7 +119,7 @@ describe("empty-completion guard retry", () => {
       { type: "assistant_boundary" },
       { type: "thinking_delta", thinking: "second attempt" },
       { type: "text_delta", text: "finally an answer" },
-      { type: "done", usage: { inputTokens: 30, outputTokens: 5, totalTokens: 35 } },
+      { type: "done", usage: { inputTokens: 30, outputTokens: 5, totalTokens: 35, cacheTelemetry: { source: "aggregate", usagePresent: true, complete: false, readComplete: false, creationComplete: false } } },
     ]);
   });
 
@@ -160,7 +160,7 @@ describe("empty-completion guard retry", () => {
       inputTokens: 300,
       outputTokens: 30,
       totalTokens: 330,
-      cachedInputTokens: 40,
+      cachedInputTokens: 40, cacheTelemetry: { source: "aggregate", usagePresent: true, complete: false, read: 40, readComplete: false, creationComplete: false },
       reasoningOutputTokens: 12,
       providerCredits: 0.05,
     });
@@ -249,7 +249,7 @@ describe("empty-completion guard retry", () => {
     expect(continuations).toBe(0);
     expect(withoutHeartbeats(events)).toEqual([
       { type: "thinking_delta", thinking: "..." },
-      { type: "done", stopReason: "max_tokens", usage: { inputTokens: 5, outputTokens: 1 } },
+      { type: "done", stopReason: "max_tokens", usage: { inputTokens: 5, outputTokens: 1, cacheTelemetry: { source: "adapter", usagePresent: true } } },
     ]);
   });
 

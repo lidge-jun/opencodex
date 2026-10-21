@@ -1,3 +1,4 @@
+import { aggregateCacheTelemetry } from "../../usage/cache-telemetry";
 import { jsonUtf8Bytes } from "../../lib/json-byte-size";
 import {
   TRANSLATOR_MAX_TURN_BYTES,
@@ -16,6 +17,7 @@ export class AdvisorRetention {
   private historyBytes = 0;
   private copyBytes = 0;
   private usageBytes = 0;
+  private missingUsage = false;
   private events = 0;
   private calls = 0;
 
@@ -30,17 +32,19 @@ export class AdvisorRetention {
 
   /** Usage can alias a terminal payload. Keep its own owner after the raw leg ends. */
   usage(first: OcxUsage | undefined, second: OcxUsage | undefined): OcxUsage | undefined {
-    if (!second) return first;
-    // Two-input merge materializes a new object. Reserve before merging, including
-    // a conservative bound for concatenation if a provider supplied malformed scalars.
-    const bytes = first
-      ? (jsonUtf8Bytes(first) + jsonUtf8Bytes(second)) * 2 + 256
-      : jsonUtf8Bytes(second) + 1;
+    this.missingUsage ||= !second;
+    if (!first && !second) return undefined;
+    // Reserve before materializing either a first observation or an aggregate. The fixed
+    // allowance covers closed cache metadata; malformed scalar concatenations remain bounded.
+    const bytes = first && second
+      ? (jsonUtf8Bytes(first) + jsonUtf8Bytes(second)) * 2 + 512
+      : jsonUtf8Bytes(first ?? second) + 512;
     this.charge(bytes, "request_copies");
     this.copyBytes += bytes;
     let retained = 0;
     try {
-      const merged = mergeUsage(first, second);
+      let merged = mergeUsage(first, second)!;
+      if (this.missingUsage) merged = { ...merged, cacheTelemetry: aggregateCacheTelemetry([merged, undefined]) };
       const measured = jsonUtf8Bytes(merged, bytes) + 1;
       if (measured > bytes) throw new TranslatorBudgetExceededError("request_copies", TRANSLATOR_MAX_TURN_BYTES);
       retained = measured;
@@ -113,5 +117,6 @@ export class AdvisorRetention {
     this.historyBytes = 0;
     this.shared?.releaseRetained(this.usageBytes, { kind: "request_copies" });
     this.usageBytes = 0;
+    this.missingUsage = false;
   }
 }

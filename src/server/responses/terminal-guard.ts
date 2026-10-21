@@ -1,3 +1,4 @@
+import { aggregateCacheTelemetry, withAdapterCacheTelemetry } from "../../usage/cache-telemetry";
 import { assistantReplayContent } from "../../responses/assistant-replay";
 import type {
   AdapterEvent,
@@ -158,6 +159,8 @@ export function isTerminalGuardPassthroughOnly(event: AdapterEvent): boolean {
 
 /** Merge two reported usages (canonical Responses convention). Shared with the advisor guard. */
 export function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): OcxUsage | undefined {
+  first = withAdapterCacheTelemetry(first);
+  second = withAdapterCacheTelemetry(second);
   if (!first) return second;
   if (!second) return first;
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
@@ -168,7 +171,11 @@ export function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undef
       : undefined;
   };
   const cachedInputTokens = sumOptional("cachedInputTokens");
-  const cacheReadInputTokens = sumOptional("cacheReadInputTokens");
+  const cacheReadInputTokens = sumOptional("cacheReadInputTokens") === undefined ? undefined
+    : [first, second].reduce((sum, usage) => {
+      const read = usage.cacheReadInputTokens ?? usage.cachedInputTokens;
+      return sum + (typeof read === "number" ? read : 0);
+    }, 0);
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
@@ -179,6 +186,7 @@ export function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undef
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
+    cacheTelemetry: aggregateCacheTelemetry([first, second]),
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
     ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
     ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
@@ -205,6 +213,13 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
   let parsed = options.parsed;
   let continuations = 0;
   let accumulatedUsage: OcxUsage | undefined;
+  // A missing physical terminal is not the initial, empty numeric accumulator.
+  let missingUsage = false;
+  const addUsage = (round: OcxUsage | undefined): OcxUsage | undefined => {
+    missingUsage ||= !round;
+    const merged = mergeUsage(accumulatedUsage, round);
+    return merged && missingUsage ? { ...merged, cacheTelemetry: aggregateCacheTelemetry([merged, undefined]) } : merged;
+  };
   let source: AsyncIterable<AdapterEvent> = options.firstEvents;
 
   while (true) {
@@ -229,7 +244,7 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
           : { decision: "pass" as const };
         const normalStop = event.stopReason !== "max_tokens" && event.stopReason !== "content_filter";
         if (normalStop && analysis.decision === "continue" && continuations < maxContinuations) {
-          accumulatedUsage = mergeUsage(accumulatedUsage, event.usage);
+          accumulatedUsage = addUsage(event.usage);
           continuations += 1;
           parsed = buildContinuationRequest(parsed, seen);
           seen.length = 0;
@@ -247,13 +262,13 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
           }
           break;
         }
-        const usage = mergeUsage(accumulatedUsage, event.usage);
+        const usage = addUsage(event.usage);
         yield usage ? { ...event, usage } : event;
         return;
       }
       if (event.type === "incomplete" || event.type === "error") {
         terminalSeen = true;
-        const usage = mergeUsage(accumulatedUsage, event.usage);
+        const usage = addUsage(event.usage);
         yield usage ? { ...event, usage } : event;
         return;
       }

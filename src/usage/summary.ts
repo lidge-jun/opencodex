@@ -1,10 +1,10 @@
 import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
+import { aggregateCacheTelemetry, cacheProvenanceForRecord, normalizeCacheTelemetry } from "./cache-telemetry";
 import type { UsageTimeWindow } from "./time-range";
 import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
 import {
-  classifyCacheTelemetryProvenance,
   isCodexUsageAccountLogLabel,
   type CacheTelemetryProvenance,
   type PersistedUsageEntry,
@@ -247,8 +247,9 @@ export function cacheTokensFromUsage(usage?: PersistedUsageEntry["usage"]): {
   hasCacheTelemetry: boolean;
 } {
   if (!usage) return { read: undefined, creation: undefined, hasCacheTelemetry: false };
-  const creation = usage.cacheCreationInputTokens;
-  const read = typeof usage.cacheReadInputTokens === "number"
+  const evidence = normalizeCacheTelemetry(usage.cacheTelemetry);
+  const creation = evidence ? evidence.creation : usage.cacheCreationInputTokens;
+  const read = evidence ? evidence.read : typeof usage.cacheReadInputTokens === "number"
     ? usage.cacheReadInputTokens
     : typeof usage.cachedInputTokens === "number" && typeof creation === "number"
       ? Math.max(0, usage.cachedInputTokens - creation)
@@ -262,21 +263,22 @@ export function cacheTokensFromUsage(usage?: PersistedUsageEntry["usage"]): {
 /**
  * Cache tokens plus the provenance that says whether they may be averaged.
  *
- * A persisted `cacheProvenance` wins; a row written before the field existed is reconstructed
- * from its own shape, which reproduces the previous reading exactly (telemetry present is
- * observed, absent is unknown) so historical rows do not change meaning. Only `observed` reaches
+ * Validated original evidence wins. Historical zero-only rows cannot distinguish measured
+ * misses from client defaults, regardless of their old provenance label. Only `observed` reaches
  * a hit-rate denominator: a synthesized zero was emitted for wire compatibility and an unknown
  * was never measured, and averaging either as a zero is how a cold pool reports a warm cache.
  */
 export function cacheObservationFromUsage(
   usage: PersistedUsageEntry["usage"],
   provenance: CacheTelemetryProvenance | undefined,
-): { read: number | undefined; creation: number | undefined; provenance: CacheTelemetryProvenance } {
+): { read: number | undefined; creation: number | undefined; provenance: CacheTelemetryProvenance; readObserved: boolean } {
   const { read, creation, hasCacheTelemetry } = cacheTokensFromUsage(usage);
   // A row cannot have observed what it does not carry, so a stored label never opens the
   // denominator for a record with no cache fields in it.
-  if (!usage || !hasCacheTelemetry) return { read, creation, provenance: "unknown" };
-  return { read, creation, provenance: provenance ?? classifyCacheTelemetryProvenance(usage) };
+  if (!usage || !hasCacheTelemetry) return { read, creation, provenance: "unknown", readObserved: false };
+  const observed = cacheProvenanceForRecord(usage, provenance);
+  return { read, creation, provenance: observed, readObserved: observed === "observed"
+    && typeof read === "number" && normalizeCacheTelemetry(usage.cacheTelemetry)?.readComplete !== false };
 }
 
 export function calculateCacheHitRate(
@@ -493,10 +495,8 @@ export function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[
     }];
   }
   return entry.attempts.map(attempt => {
-    // An attempt's own provenance wins; the row's is the fallback for a child written before
-    // attempt-level provenance existed. A child carrying no cache fields still resolves to
-    // unknown in cacheObservationFromUsage, so it cannot inherit a sibling's observation.
-    const cacheProvenance = attempt.cacheProvenance ?? entry.cacheProvenance;
+    // A parent or sibling is not evidence about this physical attempt.
+    const cacheProvenance = attempt.cacheProvenance;
     return {
       requestId: entry.requestId,
       provider: attempt.provider,
@@ -562,6 +562,12 @@ function projectedComboUsage(
   if (!hasUsage && !hasTotalTokens) return {};
   const usage = hasUsage
     ? {
+      cacheTelemetry: aggregateCacheTelemetry(
+        attempts.filter(attempt => attempt.usage || (attempt.sendCount !== 0 && attempt.locallyAnswered !== true))
+          .map(({ usage }) => usage && !usage.cacheTelemetry
+            ? { ...usage, cachedInputTokens: cacheTokensFromUsage(usage).read, cacheReadInputTokens: cacheTokensFromUsage(usage).read }
+            : usage),
+      ),
       inputTokens,
       outputTokens,
       ...(hasCacheTelemetry ? { cachedInputTokens, cacheReadInputTokens, cacheCreationInputTokens } : {}),
@@ -626,10 +632,10 @@ function addCacheProvenanceTotals(
   totals: UsageSummaryTotals,
   entry: Pick<PersistedUsageEntry, "usage" | "cacheProvenance">,
 ): void {
-  const { provenance } = cacheObservationFromUsage(entry.usage, entry.cacheProvenance);
+  const { provenance, readObserved } = cacheObservationFromUsage(entry.usage, entry.cacheProvenance);
   if (provenance === "observed") {
     totals.cacheObservedRequests = (totals.cacheObservedRequests ?? 0) + 1;
-    totals.cacheObservedInputTokens = (totals.cacheObservedInputTokens ?? 0) + (entry.usage?.inputTokens ?? 0);
+    if (readObserved) totals.cacheObservedInputTokens = (totals.cacheObservedInputTokens ?? 0) + (entry.usage?.inputTokens ?? 0);
     return;
   }
   if (provenance === "synthesized") {
@@ -730,6 +736,8 @@ interface UsageModelAccumulator {
   cacheObserved: boolean;
   /** Input tokens from attributions with OBSERVED cache detail; the hit-rate denominator. */
   cacheObservedInputTokens: number;
+  /** Read numerator from exactly the same complete observations as the denominator. */
+  cacheObservedReadTokens: number;
   throughputOutputTokens: number;
   throughputDurationMs: number;
   throughputSamples: number;
@@ -931,6 +939,7 @@ function blankModelAccumulator(
     cacheCreationInputTokens: 0,
     cacheObserved: false,
     cacheObservedInputTokens: 0,
+    cacheObservedReadTokens: 0,
     throughputOutputTokens: 0,
     throughputDurationMs: 0,
     throughputSamples: 0,
@@ -962,6 +971,7 @@ function mergeModelAccumulator(target: UsageModelAccumulator, source: UsageModel
   target.cacheCreationInputTokens += source.cacheCreationInputTokens;
   target.cacheObserved ||= source.cacheObserved;
   target.cacheObservedInputTokens += source.cacheObservedInputTokens;
+  target.cacheObservedReadTokens += source.cacheObservedReadTokens;
   target.throughputOutputTokens += source.throughputOutputTokens;
   target.throughputDurationMs += source.throughputDurationMs;
   target.throughputSamples += source.throughputSamples;
@@ -1139,7 +1149,7 @@ function buildDayModels(
     outputTokens: model.outputTokens,
     cacheReadInputTokens: model.cacheReadInputTokens,
     cacheCreationInputTokens: model.cacheCreationInputTokens,
-    cacheHitRate: calculateCacheHitRate(model.cacheObserved, model.cacheObservedInputTokens, model.cacheReadInputTokens),
+    cacheHitRate: calculateCacheHitRate(model.cacheObserved, model.cacheObservedInputTokens, model.cacheObservedReadTokens),
     cacheObservedInputTokens: model.cacheObservedInputTokens,
     ...(model.estimatedCostUsd !== undefined ? { estimatedCostUsd: model.estimatedCostUsd } : {}),
   }));
@@ -1178,7 +1188,7 @@ function buildUsageModels(
       cachedInputTokens: model.cacheReadInputTokens,
       cacheReadInputTokens: model.cacheReadInputTokens,
       cacheCreationInputTokens: model.cacheCreationInputTokens,
-      cacheHitRate: calculateCacheHitRate(model.cacheObserved, model.cacheObservedInputTokens, model.cacheReadInputTokens),
+      cacheHitRate: calculateCacheHitRate(model.cacheObserved, model.cacheObservedInputTokens, model.cacheObservedReadTokens),
       cacheObservedInputTokens: model.cacheObservedInputTokens,
       priceCoverageRatio: requests > 0 ? counts.pricedRequests / requests : 0,
       pricedRequests: counts.pricedRequests,
@@ -1223,7 +1233,7 @@ function buildUsageProviders(
         cachedInputTokens: provider.cacheReadInputTokens,
         cacheReadInputTokens: provider.cacheReadInputTokens,
         cacheCreationInputTokens: provider.cacheCreationInputTokens,
-        cacheHitRate: calculateCacheHitRate(provider.cacheObserved, provider.cacheObservedInputTokens, provider.cacheReadInputTokens),
+        cacheHitRate: calculateCacheHitRate(provider.cacheObserved, provider.cacheObservedInputTokens, provider.cacheObservedReadTokens),
         cacheObservedInputTokens: provider.cacheObservedInputTokens,
         priceCoverageRatio: requests > 0 ? counts.pricedRequests / requests : 0,
         pricedRequests: counts.pricedRequests,
@@ -1403,14 +1413,15 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
         breakdown.throughputDurationMs += attribution.durationMs!;
         breakdown.throughputSamples += 1;
       }
-      const { read, creation, provenance } = cacheObservationFromUsage(
+      const { read, creation, readObserved } = cacheObservationFromUsage(
         attribution.usage,
         attribution.cacheProvenance,
       );
       // Only an observation opens the denominator. A synthesized zero and an unreported detail
       // both contribute their tokens to inputTokens and nothing to the cache average, which is
       // the difference between "no cache reads measured" and "no cache reads happened".
-      if (provenance === "observed") {
+      if (readObserved) {
+        breakdown.cacheObservedReadTokens += read!;
         breakdown.cacheObserved = true;
         breakdown.cacheObservedInputTokens += attribution.usage.inputTokens;
       }
