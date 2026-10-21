@@ -12,6 +12,7 @@ import { codexQuotaScopeForModel } from "../../codex/routing/health-store";
 import { getEligiblePoolAccounts } from "../../codex/routing/selection";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
+import { FallbackRefusedError, guardFallbackHop, type FallbackAdmission } from "../../routing/fallback-policy";
 /** Resolves to a synchronous ownership proof, or null when the caller does not own the locked main. */
 export type MainHardLockCallerCheck = (sourceModel: string) => Promise<(() => boolean) | null>;
 
@@ -81,6 +82,7 @@ export async function applyMainHardLockFallbackOverride(
   config: OcxConfig,
   now?: number,
   callerCheck?: MainHardLockCallerCheck,
+  admission?: FallbackAdmission,
 ): Promise<MainHardLockFallbackOverride | null> {
   const parsed = rawModelOf(body);
   if (!parsed) return null;
@@ -120,6 +122,19 @@ export async function applyMainHardLockFallbackOverride(
     }
   }
 
+  // OCX-11: the reroute is a proactive model hop; refused, the request is answered with the
+  // fallback refusal and the body is left untouched.
+  const hop = guardFallbackHop(config, {
+    site: "hard-lock",
+    route: parsed.model,
+    from: { provider: OPENAI_CODEX_PROVIDER_ID, model: parsed.model },
+    to: hardLockTargetOf(config, fallback.model),
+    trigger: "hard_lock",
+    admission,
+    ...(now !== undefined ? { now } : {}),
+  });
+  if (!hop.ok) throw new FallbackRefusedError(hop.response);
+
   parsed.raw.model = fallback.model;
   if (fallback.reasoningEffort !== undefined) {
     const reasoning = parsed.raw.reasoning;
@@ -131,4 +146,14 @@ export async function applyMainHardLockFallbackOverride(
     };
   }
   return { sourceModel: parsed.model, targetModel: fallback.model };
+}
+
+function hardLockTargetOf(config: OcxConfig, model: string): { provider: string; model: string } {
+  try {
+    const route = previewRouteModel(config, model);
+    return { provider: route.providerName, model: route.modelId };
+  } catch {
+    const slash = model.indexOf("/");
+    return slash > 0 ? { provider: model.slice(0, slash), model: model.slice(slash + 1) } : { provider: "", model };
+  }
 }

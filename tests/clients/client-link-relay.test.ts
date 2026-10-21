@@ -17,6 +17,7 @@ import {
   type LinkTunnelGate,
 } from "../../src/client/link-relay";
 import { HUB_RELAY_REQUEST_BODY_MAX_BYTES } from "../../src/client/hub-relay";
+import { HOME_UNREACHABLE_MESSAGE } from "../../src/client/home-unreachable";
 import { startMachineListener } from "../../src/client/machine-listener";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import type { OcxClientConnectionConfig } from "../../src/types";
@@ -587,7 +588,12 @@ describe("client link relay while the tunnel reconnects", () => {
     const response = await pending;
     expect(response.status).toBe(503);
     expect(response.headers.get("retry-after")).toBe("1");
-    expect(await response.json()).toEqual({ error: "link tunnel unavailable" });
+    // OCX-11: the legacy `error` string stays; `code` and `message` are the stable contract.
+    expect(await response.json()).toEqual({
+      error: "link tunnel unavailable",
+      code: "home_unreachable",
+      message: HOME_UNREACHABLE_MESSAGE,
+    });
     expect(calls).toBe(0);
   });
 

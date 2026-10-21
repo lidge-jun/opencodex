@@ -13,6 +13,7 @@ import { resolvePolicyProfileId } from "../../routing/profile";
 import { parseSyntheticRowId } from "../fast-row";
 import { routeConcreteModel } from "../../router";
 import { isPolicyCandidateRefusal, policyWireDestination, type PolicyRequestScope } from "./policy-request-scope";
+import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -219,12 +220,30 @@ export async function handleResponsesWithPolicyFallback(
   policyScope.triedDestinations.add(policyScope.preparedDestination ?? policyWireDestination({
     providerName: initialTrace.selected.provider, modelId: initialTrace.selected.model,
   }));
+  let current = { provider: initialTrace.selected.provider, model: initialTrace.selected.model };
+  const policyRoute = `policy/${initialTrace.profile!.id}`;
 
   while (!storedPool401ReplayDispatched && await shouldHopPolicyCandidate(response, req.signal)) {
     if (req.signal.aborted) return response;
     const next = rankPolicyFallbackCandidates(initialTrace, tried)
       .find(candidate => staysWithinPolicyAfterRedirect(config, policyEligibility, candidate, policyScope.triedDestinations));
     if (!next) return response;
+    // OCX-11: the next candidate is a hop; the fallback policy decides before it is sent.
+    const hop = guardFallbackHop(config, {
+      site: "routing-profile",
+      route: policyRoute,
+      aliases: [initialRequestedModel ?? initialTrace.requestedModel],
+      from: current,
+      to: { provider: next.provider, model: next.model },
+      trigger: fallbackTriggerForStatus(response.status),
+      admission: options.admission,
+      failureStatus: response.status,
+      retryAfter: response.headers.get("retry-after"),
+    });
+    if (!hop.ok) {
+      try { await response.body?.cancel(); } catch { /* the refusal replaces this body */ }
+      return hop.response;
+    }
     tried.add(candidateKey(next));
 
     // Retain the failed response's log owner until a candidate actually replaces it. This is
@@ -243,7 +262,10 @@ export async function handleResponsesWithPolicyFallback(
             if (!Object.hasOwn(failureLog, key)) Reflect.deleteProperty(logCtx, key);
           }
           Object.assign(logCtx, failureLog);
-        } else response = nextResponse;
+        } else {
+          response = nextResponse;
+          current = { provider: next.provider, model: next.model };
+        }
         if (policyScope.preparedDestination) policyScope.triedDestinations.add(policyScope.preparedDestination);
       } catch (error) {
         const overload = requestPacingOverloadResponse(error);

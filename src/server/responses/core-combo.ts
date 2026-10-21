@@ -1,6 +1,7 @@
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
-import type { CodexAccountModelRefusal } from "../../combos/failover";
+import { comboCooldownRetryAfterSeconds, type CodexAccountModelRefusal } from "../../combos/failover";
+import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import {
   isCodexReasoningEffort,
   isDeclaredReasoningEffort,
@@ -638,6 +639,24 @@ export async function executeComboResponses(
       ? clientCancelledResponse()
       : comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, targetEligible));
   }
+  // OCX-11: an ordered failover combo whose first target is cooling down would start on a later
+  // target. That is a proactive hop, so the fallback policy decides before anything is sent.
+  const primaryTarget = combo.targets[0];
+  if (!toolLoopPin && (combo.strategy ?? "failover") === "failover" && primaryTarget
+    && targetKey(primaryTarget) !== targetKey(pick.target) && isComboTargetInCooldown(comboId, primaryTarget, initialNow)) {
+    const proactive = guardFallbackHop(config, {
+      site: "combo",
+      route: `combo/${comboId}`,
+      aliases: [requestedModel],
+      from: primaryTarget,
+      to: pick.target,
+      trigger: "cooldown",
+      admission: options.admission,
+      retryAfter: comboCooldownRetryAfterSeconds(comboId, initialNow) ?? null,
+      now: initialNow,
+    });
+    if (!proactive.ok) return proactive.response;
+  }
   let jevDecision: JevDecision | undefined;
   if (combo.strategy === "jev" && !toolLoopPin) {
     const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now());
@@ -760,6 +779,9 @@ export async function executeComboResponses(
   // no-more-targets branch; a budget refusal ends the ladder one iteration later, where that
   // iteration's own `childLog` is already out of scope.
   let lastFailedChildLog: RequestLogContext | undefined;
+  // The target behind `lastFailure`, so the next dispatch can tell a hop from a same-target retry.
+  let lastFailedTarget: { provider: string; model: string } | undefined;
+  let lastFailedRetryAfter: string | undefined;
   // The exhausted-combo mapping below runs outside the loop, where `failure.upstreamCode`
   // is gone, so carry the loop's own classification decision instead of re-deriving a
   // weaker one from the status alone (#4149).
@@ -812,6 +834,25 @@ export async function executeComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const firstComboTarget = comboTargetsDispatched === 0;
+    // OCX-11: every later dispatch after a failure is a hop when the target changed. One check
+    // here covers the ordinary failover pick and the recovery picks alike.
+    if (!firstComboTarget && lastFailure && lastFailedTarget) {
+      const hop = guardFallbackHop(config, {
+        site: "combo",
+        route: `combo/${comboId}`,
+        aliases: [requestedModel],
+        from: lastFailedTarget,
+        to: pick.target,
+        trigger: fallbackTriggerForStatus(lastFailure.status),
+        admission: options.admission,
+        failureStatus: lastFailure.status,
+        retryAfter: lastFailedRetryAfter ?? null,
+      });
+      if (!hop.ok) {
+        if (lastFailedChildLog) adoptFailedChildLog(lastFailedChildLog);
+        return hop.response;
+      }
+    }
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
     // The inherited spend tracker observes this parent log, before the child has its own label.
     logCtx.spendPoolId = targetRoute.providerName;
@@ -1147,6 +1188,8 @@ export async function executeComboResponses(
       quotaFailedChildLog = childLog;
     }
     lastFailedChildLog = childLog;
+    lastFailedTarget = { provider: pick.target.provider, model: pick.target.model };
+    lastFailedRetryAfter = failure.retryAfter;
     // A replacement that answers 200 is unmarked, and its zero-output failure only exists once
     // preflight has rebuilt the stream as a fresh Response. A spent grant never hops: a status the
     // client would resend becomes the refusal, and anything else reaches the client as it is.

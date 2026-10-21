@@ -97,6 +97,7 @@ When a step fails, the dashboard shows the reason and, when SSH reported one, a 
 - **ocx was not found on the remote computer**: OpenCodex looks for `ocx` on the PATH of a non-interactive SSH session first, then in `~/.bun/bin`, `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`. If it is installed elsewhere, add that directory to PATH in a file the remote shell reads for non-interactive sessions, such as `~/.zshenv` for zsh.
 - **OpenCodex on the remote computer is too old**: run `ocx update` on that computer. Remote Link needs 2.66.0 or later.
 - **The remote computer did not report an OpenCodex version**: `ocx --version` on that computer printed something else, for example the usage text of an unsupported Windows install.
+- **Requests fail with `home_unreachable` while the Home is down**: a Child never serves requests from its own providers. It answers a retryable 503 and sends nothing until the tunnel is back. Whether GOAT may move that device's work to its own sign-ins is the per-device local fallback permission on the Home's **Remote Link** page, or `ocx fallback local on --device <alias>`; see [Fallback off](/guides/fallback-off/).
 
 ## Security
 

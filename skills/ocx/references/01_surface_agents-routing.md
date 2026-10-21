@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 62.
+Declared capabilities: 67.
 
 ### `ocx agent subagents force`
 
@@ -589,6 +589,109 @@ State-changing: yes. JSON mode: `payload`.
 
 - Without --list at least one setting is required. Stored settings and Codex application outcomes remain distinct.
 - Stream-routed-output belongs only to web. Timeout changes preserve siblings; native apply and saved state are distinct.
+
+### `ocx fallback`
+
+Usage: `ocx fallback [status] [--json]`
+
+Show which model and provider fallbacks are allowed, per-device local fallback, and the last fallback taken or refused.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/fallback` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the ocx.fallback/1 state. |
+
+- Reads the live proxy. On a Remote Link Child it reads the Home's state over the link (aliases omitted). The last event is in memory and resets on restart.
+
+### `ocx fallback off`
+
+Usage: `ocx fallback off [--kind model|provider|all] [--provider <name> | --route <selector> | --device <id|alias>] [--json]`
+
+Refuse model or provider fallback globally or for one provider, route or device.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/fallback` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--kind` | string | model, provider or all (default). |
+| `--provider` | string | Scope to the provider a request started on. |
+| `--route` | string | Scope to an exact selector such as combo/<id> or policy/<id>. |
+| `--device` | string | Scope to a Remote Link id or alias, or a Hub data key id; device off always refuses. |
+| `--json` | boolean | Emit the resulting state. |
+
+- A refused hop answers fallback_refused with the triggering failure's status. Rotation among accounts or keys of one provider pool is not a fallback and stays on.
+
+### `ocx fallback on`
+
+Usage: `ocx fallback on [--kind model|provider|all] [--provider <name> | --route <selector> | --device <id|alias>] [--json]`
+
+Allow model or provider fallback at one scope, overriding a broader off.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/fallback` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--kind` | string | model, provider or all (default). |
+| `--provider` | string | Scope to a provider. |
+| `--route` | string | Scope to an exact selector. |
+| `--device` | string | Scope to a device. |
+| `--json` | boolean | Emit the resulting state. |
+
+- Route beats provider beats global. A device setting can only refuse: on for a device records the value but never reopens a hop another scope refuses.
+
+### `ocx fallback clear`
+
+Usage: `ocx fallback clear [--kind model|provider|all] [--provider <name> | --route <selector> | --device <id|alias>] [--json]`
+
+Remove a fallback override so the scope inherits again.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/fallback` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--kind` | string | model, provider or all (default). |
+| `--provider` | string | Scope to a provider. |
+| `--route` | string | Scope to an exact selector. |
+| `--device` | string | Scope to a device. |
+| `--json` | boolean | Emit the resulting state. |
+
+- Clearing every override restores today's behavior: every fallback allowed.
+
+### `ocx fallback local`
+
+Usage: `ocx fallback local <on|off> --device <id|alias> [--json]`
+
+Record whether a device may use its own providers while the Home is unreachable.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/fallback` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--device` | string | Remote Link id or alias, or Hub data key id. |
+| `--json` | boolean | Emit the resulting state. |
+
+- Run on the Home. A permission GOAT reads; OpenCodex itself keeps answering home_unreachable on the device and never serves it from local providers.
 
 ### `ocx effort`
 

@@ -612,6 +612,7 @@ describe("headless GUI parity CLI", () => {
       // `ocx route policy`. Analytics is GUI-first for now; the same request
       // history remains available through observe/index tooling.
       ["/api/routing-profiles", "ocx route policy"],
+      ["/api/fallback", "ocx fallback"],
       ["/api/routing-analytics", "(none — GUI analytics surface; history via ocx observe/logs)"],
       // Remote Workspace is one product family in both surfaces. The current CLI owns
       // executor pairing, presence, and local status; Hub/device/session inspection is

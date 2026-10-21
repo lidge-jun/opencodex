@@ -590,6 +590,8 @@ rows show decision count, applied count, and average latency for `typesafe`, `sy
 ## What happens when a target fails
 
 Combo failures are divided into **hop** failures and **terminal** failures.
+To make a combo fail with a clear `fallback_refused` error instead of hopping to another model or
+provider, see [Fallback off](/guides/fallback-off/).
 
 | Result | Behavior |
 | --- | --- |

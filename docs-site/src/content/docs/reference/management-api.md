@@ -687,6 +687,8 @@ already read.
 | `GET /api/provider-quotas` | Read provider quota reports; `refresh=1` forces refresh | — |
 | `GET /api/quota-pool` | Read the passive `ocx.quota-pool/1` account quota pool (per-account and pooled windows, opaque account references) from cached evidence only; never probes or refreshes, and ignores `refresh`. Also readable from a Remote Link Child or Hub client at `/api/machine/hub-relay/api/quota-pool` | — |
 | `GET /api/quota-resets` | List recently detected quota-window resets and whether detection is enabled; `limit=<n>` caps the count | 400 invalid `limit` |
+| `GET /api/fallback` | Read the `ocx.fallback/1` fallback state: effective global switches, provider and route overrides, devices with local fallback permission, and the last 20 fallbacks taken or refused. Also readable from a Remote Link Child at `/api/machine/hub-relay/api/fallback` (link aliases omitted) | — |
+| `PUT /api/fallback` | Set or clear one switch: `{ scope: "global"\|"provider"\|"route"\|"device", key?, setting: "model"\|"provider"\|"localFallback", value: true\|false\|null }`; `localFallback` is per device; a device key may be a link alias. Returns the new state | 400 invalid body; 404 `unknown_device`; 409 `config_unavailable` |
 | `GET, PUT /api/provider-context-caps` | Read or update global, all-provider, or one-provider context caps | 400 invalid request; 404 unknown provider |
 | `GET /api/provider-presets` | Return GUI provider presets derived from the runtime registry | — |
 

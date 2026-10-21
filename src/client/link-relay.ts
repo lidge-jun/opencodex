@@ -1,4 +1,5 @@
 import { fetchBoundLinkRelay, LinkRelayAuthenticationError } from "./link-relay-transport";
+import { homeUnreachableBody } from "./home-unreachable";
 import {
   boundedRelayResponseStream,
   filterRelayHeaders,
@@ -110,6 +111,14 @@ const CALLER_CREDENTIAL_HEADERS = [
 function jsonError(status: number, error: string, retry = false): Response {
   const headers = retry ? { "Retry-After": String(LINK_RELAY_RETRY_AFTER_SECONDS) } : undefined;
   return Response.json({ error }, { status, headers });
+}
+
+/** A retryable 503 for a Home this Child cannot reach (OCX-11 `home_unreachable`). */
+function homeUnreachable(error: string): Response {
+  return Response.json(homeUnreachableBody(error), {
+    status: 503,
+    headers: { "Retry-After": String(LINK_RELAY_RETRY_AFTER_SECONDS) },
+  });
 }
 
 export function linkRelayDestination(url: URL, target: Pick<LinkRelayTarget, "tunnelPort">): string {
@@ -369,7 +378,7 @@ export async function relayLinkDataRequest(
   const tunnelUnavailable = async (): Promise<Response> => {
     cleanup();
     try { await body?.cancel(); } catch { /* best effort */ }
-    return jsonError(503, "link tunnel unavailable", true);
+    return homeUnreachable("link tunnel unavailable");
   };
   const readyForFetch = async (): Promise<boolean> => {
     if (!tunnel) return false;
@@ -393,7 +402,7 @@ export async function relayLinkDataRequest(
       if (error instanceof LinkRelayAuthenticationError) {
         cleanup();
         try { await body?.cancel(); } catch { /* an upload might already be drained */ }
-        return jsonError(503, error.message, true);
+        return homeUnreachable(error.message);
       }
       if (bodyOverflow) {
         cleanup();
@@ -408,7 +417,7 @@ export async function relayLinkDataRequest(
   if (relayAbort.signal.aborted) {
     cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
-    return jsonError(503, "link tunnel unavailable", true);
+    return homeUnreachable("link tunnel unavailable");
   }
 
   const sse = isSse(upstream.headers);
