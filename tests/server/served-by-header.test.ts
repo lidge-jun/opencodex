@@ -14,7 +14,9 @@ import { getConfigDir, saveConfig } from "../../src/config";
 import { HOME_INITIATED_LINK_TUNNEL, relayLinkDataRequest } from "../../src/client/link-relay";
 import { linkStorePath } from "../../src/link/paths";
 import { writeLinkStore } from "../../src/link/store";
-import { quotaPoolIdentityPath, readQuotaPoolIdentity, resetQuotaPoolIdentityMemoForTests } from "../../src/quota-pool/identity";
+import {
+  ensureQuotaPoolIdentity, quotaPoolIdentityPath, readQuotaPoolIdentity, resetQuotaPoolIdentityMemoForTests,
+} from "../../src/quota-pool/identity";
 import { SERVED_BY_HEADER } from "../../src/remote/served-by";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -148,6 +150,20 @@ describe("GET /healthz instanceId", () => {
     const models = await fetch(new URL("/v1/models", server!.url), { headers: auth });
     expect(models.status).toBe(200);
     expect(models.headers.has(SERVED_BY_HEADER)).toBe(false);
+  });
+
+  test("a package-tree fence keeps the id on /healthz and the header on /v1/models", async () => {
+    const homeId = ensureQuotaPoolIdentity().homeId;
+    saveConfig(config("standalone"));
+    server = startServer(0, {
+      packageTreeIntegrity: { status: () => ({ ok: false as const, reason: "package_tree_replaced" as const }), dispose: () => {} },
+    });
+    const health = await fetch(new URL("/healthz", server.url));
+    expect(health.status).toBe(503);
+    expect(await health.json()).toMatchObject({ status: "restart_required", instanceId: homeId });
+    const models = await fetch(new URL("/v1/models", server.url), { headers: auth });
+    expect(models.status).toBe(503);
+    expect(models.headers.get(SERVED_BY_HEADER)).toBe(homeId);
   });
 });
 

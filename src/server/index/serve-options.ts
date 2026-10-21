@@ -414,11 +414,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
         const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
         const fencedHealth = url.pathname === "/healthz";
+        const fencedInstanceId = fencedHealth ? homeInstanceId() : undefined;
         const response = fencedHealth || readyzPath !== undefined
           ? jsonResponse({
               status: "restart_required",
               service: "opencodex",
               version: VERSION,
+              ...(fencedInstanceId ? { instanceId: fencedInstanceId } : {}),
               uptime: process.uptime(),
               pid: process.pid,
               port: fencedPort,
