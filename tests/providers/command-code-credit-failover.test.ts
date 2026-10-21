@@ -1,0 +1,119 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { createCommandCodeAdapter } from "../../src/adapters/command-code";
+import { resetCommandCodeReasoningEffortsForTest } from "../../src/providers/command-code-efforts";
+import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+
+const CREDITS_EXHAUSTED = {
+  success: false,
+  error: {
+    code: "BAD_REQUEST",
+    message: "You have insufficient credits to make this request. Please purchase more credits to continue using the service.",
+  },
+};
+
+function parsed(modelId = "deepseek/deepseek-v4-flash", reasoning = "high"): OcxParsedRequest {
+  return {
+    modelId,
+    stream: true,
+    context: {
+      systemPrompt: [],
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      tools: [],
+    },
+    options: { reasoning, maxOutputTokens: 100 },
+  };
+}
+
+function adapterWith(fetch: typeof globalThis.fetch) {
+  return createCommandCodeAdapter({
+    adapter: "command-code",
+    baseUrl: "https://api.commandcode.ai",
+    authMode: "oauth",
+    apiKey: "synthetic-credential",
+    fetch,
+  } as OcxProviderConfig & { fetch: typeof globalThis.fetch });
+}
+
+afterEach(() => resetCommandCodeReasoningEffortsForTest());
+
+describe("Command Code insufficient-credit refusal", () => {
+  test("maps the exact credit refusal to the shared 429 rotation path", async () => {
+    let calls = 0;
+    const fetchMock = (async () => {
+      calls += 1;
+      return new Response(JSON.stringify(CREDITS_EXHAUSTED), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof globalThis.fetch;
+    const adapter = adapterWith(fetchMock);
+    const response = await adapter.fetchResponse(await adapter.buildRequest(parsed()));
+
+    expect(calls).toBe(1);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-opencodex-upstream-status")).toBe("400");
+    expect(response.headers.get("x-opencodex-refusal")).toBe("insufficient-credits");
+    expect(await response.json()).toEqual(CREDITS_EXHAUSTED);
+  });
+
+  test("leaves ordinary 400s and other statuses untouched", async () => {
+    const fixtures = [
+      { status: 400, body: { success: false, error: { code: "BAD_REQUEST", message: "invalid params" } } },
+      { status: 400, body: { success: false, error: { code: "RATE_LIMITED", message: CREDITS_EXHAUSTED.error.message } } },
+      { status: 402, body: CREDITS_EXHAUSTED },
+      { status: 400, body: { success: true, error: CREDITS_EXHAUSTED.error } },
+    ];
+
+    for (const fixture of fixtures) {
+      let calls = 0;
+      const fetchMock = (async () => {
+        calls += 1;
+        return new Response(JSON.stringify(fixture.body), { status: fixture.status });
+      }) as typeof globalThis.fetch;
+      const adapter = adapterWith(fetchMock);
+      const response = await adapter.fetchResponse(await adapter.buildRequest(parsed()));
+
+      expect(calls).toBe(1);
+      expect(response.status).toBe(fixture.status);
+      expect(response.headers.get("x-opencodex-refusal")).toBeNull();
+    }
+  });
+
+  test("fails open for malformed and oversized bodies", async () => {
+    const fixtures = [
+      new Response("{not json", { status: 400 }),
+      new Response(JSON.stringify({ ...CREDITS_EXHAUSTED, pad: "x".repeat(9_000) }), { status: 400 }),
+    ];
+
+    for (const fixture of fixtures) {
+      let calls = 0;
+      const fetchMock = (async () => {
+        calls += 1;
+        return fixture.clone();
+      }) as typeof globalThis.fetch;
+      const adapter = adapterWith(fetchMock);
+      const response = await adapter.fetchResponse(await adapter.buildRequest(parsed()));
+
+      expect(calls).toBe(1);
+      expect(response.status).toBe(400);
+      expect(response.headers.get("x-opencodex-refusal")).toBeNull();
+    }
+  });
+
+  test("normalizes the retry response after a reasoning-effort rejection", async () => {
+    let calls = 0;
+    const fetchMock = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: "unsupported reasoning_effort" }), { status: 400 });
+      }
+      return new Response(JSON.stringify(CREDITS_EXHAUSTED), { status: 400 });
+    }) as typeof globalThis.fetch;
+    const adapter = adapterWith(fetchMock);
+    const response = await adapter.fetchResponse(await adapter.buildRequest(parsed("moonshotai/Kimi-K3", "max")));
+
+    expect(calls).toBe(2);
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-opencodex-refusal")).toBe("insufficient-credits");
+  });
+});

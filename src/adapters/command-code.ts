@@ -493,6 +493,26 @@ function isReasoningEffortRejection(status: number, payload: string): boolean {
   return (status === 400 || status === 422) && /reasoning[_ -]?effort|unsupported effort|invalid effort/i.test(payload);
 }
 
+/** Command Code reports exhausted credits as BAD_REQUEST; normalize only that refusal
+ * so every caller can reuse the existing OAuth quota rotation and send budget. */
+async function normalizeCommandCodeCreditRefusal(response: Response, signal?: AbortSignal): Promise<Response> {
+  if (response.status !== 400) return response;
+  try {
+    const observed = await readBoundedResponseBody(response.clone(), { signal, maxBytes: 8 * 1024 });
+    if (!observed.displaySafe) return response;
+    const payload = JSON.parse(observed.text);
+    if (payload?.success !== false || payload.error?.code !== "BAD_REQUEST"
+      || typeof payload.error?.message !== "string"
+      || !/^You have insufficient credits to make this request(?:[.!]|$)/i.test(payload.error.message)) return response;
+    const headers = new Headers(response.headers);
+    headers.set("x-opencodex-upstream-status", "400");
+    headers.set("x-opencodex-refusal", "insufficient-credits");
+    return new Response(response.body, { status: 429, statusText: "Too Many Requests", headers });
+  } catch {
+    return response;
+  }
+}
+
 function requestWithoutReasoningEffort(request: AdapterRequest): AdapterRequest | undefined {
   try {
     const body = JSON.parse(request.body) as { params?: Record<string, unknown> };
@@ -651,7 +671,9 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
     },
     async fetchResponse(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> {
       const send = createAdapterPhysicalSend(ctx, executor);
-      const response = await send({ url: request.url, dispatch: physical => fetchCommandCode(request, ctx, physical) });
+      const response = await normalizeCommandCodeCreditRefusal(
+        await send({ url: request.url, dispatch: physical => fetchCommandCode(request, ctx, physical) }), ctx?.abortSignal,
+      );
       if (response.ok) return response;
       const currentEffort = (() => {
         try { return (JSON.parse(request.body) as { params?: { reasoning_effort?: unknown } }).params?.reasoning_effort; } catch { return undefined; }
@@ -678,9 +700,9 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       const retry = requestWithoutReasoningEffort(request);
       if (!retry) return response;
       try {
-        return await send({ url: retry.url, sendClass: "repair", recovery: "reasoning-effort-downgrade",
+        return await normalizeCommandCodeCreditRefusal(await send({ url: retry.url, sendClass: "repair", recovery: "reasoning-effort-downgrade",
           beforeDispatch: () => { try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ } },
-          dispatch: physical => fetchCommandCode(retry, ctx, physical) });
+          dispatch: physical => fetchCommandCode(retry, ctx, physical) }), ctx?.abortSignal);
       } catch (error) {
         if (error instanceof SendBudgetExhaustedError) return response;
         throw error;
