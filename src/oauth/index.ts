@@ -1672,7 +1672,7 @@ export async function runLogin(
         : existing.accountId && cred.accountId
           ? existing.accountId === cred.accountId
           : existing.email && cred.email
-            ? existing.email.toLowerCase() === cred.email.toLowerCase()
+            ? existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase()
             : false;
       if (!identityMatches) {
         throw new OAuthReauthIdentityMismatchError();

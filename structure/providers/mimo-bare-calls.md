@@ -27,7 +27,7 @@ in order at streaming bounds, but eligible candidate inputs survive in a separat
 Only detached candidate data is retained, never trailing prose: at most 128 calls, 4 MiB total
 and a conservative 2 MiB per-record cap. Exceeding a cap disables the entire synthetic batch;
 candidate traversal stops at the 129th header, including after earlier candidates were released.
-disposal releases all bytes. Already released markup cannot be retracted. Buffered recovery
+Disposal releases all bytes. Already released markup cannot be retracted. Buffered recovery
 shares eligibility and byte/count bounds without the streaming text-release limit.
 When a size bound releases an unresolved outer block, standalone recovery is disabled for that
 response so later inner headers cannot become calls. A nested header also makes later apparent

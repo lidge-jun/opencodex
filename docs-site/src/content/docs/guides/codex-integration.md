@@ -142,7 +142,7 @@ to restore the default upstream WebSocket selection. This setting does not chang
 client-facing `websockets` switch or the ChatGPT account used for the request. Native
 mid-turn steering and injection need upstream WebSocket and are unavailable while it is off.
 
-**Reasoning usage metadata (pending next release).** For HTTP/SSE clients on the canonical
+**Reasoning usage metadata (2.90.0 and later).** For HTTP/SSE clients on the canonical
 ChatGPT route, the upstream WebSocket relay preserves an actual `x-reasoning-included`
 connection-response header when the Bun runtime exposes it, including on a reused connection.
 This tells Codex that the server's reported usage already includes earlier reasoning. Metadata

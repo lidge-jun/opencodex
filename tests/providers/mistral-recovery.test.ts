@@ -366,7 +366,13 @@ describe("Mistral observed budget pacing", () => {
     const waiting = Array.from({ length: 128 }, () => pacing.acquire("pressure", abort.signal));
     const settled = Promise.allSettled(waiting);
     await expect(pacing.acquire("pressure")).rejects.toMatchObject({ reason: "queue_full" });
+    // A full queue belongs to its identity: a healthy identity sends at once, and another
+    // held identity still queues behind its own deadline instead of being refused.
+    (await pacing.acquire("unrelated"))(true);
+    pacing.observe("held", budget("0", "1", "10", "30"));
+    const held = pacing.acquire("held", abort.signal);
     abort.abort();
+    await expect(held).rejects.toMatchObject({ name: "AbortError" });
     expect((await settled).every(result => result.status === "rejected")).toBe(true);
     const cancelled = new AbortController();
     const next = pacing.acquire("pressure", cancelled.signal);

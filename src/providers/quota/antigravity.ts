@@ -8,6 +8,7 @@ import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TI
 import { report, type ProviderQuotaReport } from "./report-cache";
 import { quotaCredentialIdentity } from "./account-cache";
 import type { ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "../quota-types";
+import { httpQuotaFailure } from "./failure-codes";
 
 export function antigravityQuotaDiagnosticIdentity(accountId: string, credential = getAccountCredential("google-antigravity", accountId)): string | undefined {
   return credential ? quotaCredentialIdentity("google-antigravity", accountId, credential, {
@@ -275,13 +276,6 @@ function quotaTransportFailure(error: unknown): QuotaFailureCode {
   return "transport_error";
 }
 
-function quotaHttpFailure(status: number): QuotaFailureCode {
-  if (status >= 300 && status < 400) return "redirect_blocked";
-  if (status === 401 || status === 403) return "access_denied";
-  if (status === 429) return "rate_limited";
-  return "upstream_error";
-}
-
 function unavailableAntigravityQuota(failure: QuotaFailureCode): AntigravityQuotaProbeResult {
   return { kind: "unavailable", failure, legacy: { kind: "null" } };
 }
@@ -342,7 +336,7 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
       return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, "redirect_blocked"));
     }
     if (!response.ok) {
-      return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, quotaHttpFailure(response.status)));
+      return unavailableAntigravityQuota(antigravityUnavailableFailure(summaryFailure, httpQuotaFailure(response.status)));
     }
     const customWindows = antigravityWindowsFromModels(asRecord(await readQuotaJson(response)));
     if (!customWindows.length) {

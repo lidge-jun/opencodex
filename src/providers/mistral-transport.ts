@@ -8,6 +8,8 @@ import { RequestPacingQueueOverloadError } from "./request-pacing";
 import type { OcxProviderTransport } from "./xai-transport";
 
 const MAX_IDENTITIES = 128;
+/** Queued waiters per credential+model identity; one hot identity never refuses another. */
+const MAX_WAITERS_PER_IDENTITY = 128;
 const DEFAULT_MAX_WAIT_MS = 60_000; // Existing retry wait budget, not an inferred rate window.
 const MINUTE_MS = 60 * 1000; // Unit named by the observed headers, never an account quota.
 type RecoveryState = { generation: number; probe?: { done: Promise<void>; finish(): void } };
@@ -61,7 +63,13 @@ export class MistralBudgetPacer {
   private readonly recoveries = new Map<string, RecoveryState>();
   /** Latest live deadline evicted at capacity; unknown identities wait it out instead of sending early. */
   private evictedUntil = 0;
-  private waiting = 0;
+  /**
+   * Waiters keyed by identity. The cap is per identity so a held credential or model fills only its
+   * own queue: a different identity is never answered queue_full (HTTP 429) because of it. Identities
+   * are hashes of configured send credentials and models, so the map stays bounded by configuration
+   * and empties as waiters settle.
+   */
+  private readonly waiting = new Map<string, number>();
 
   constructor(
     private readonly now: () => number = Date.now,
@@ -103,8 +111,9 @@ export class MistralBudgetPacer {
   /** Wait within the admission budget and return a release callback for one recovery probe. */
   async acquire(identity: string, signal?: AbortSignal, maxWaitMs = DEFAULT_MAX_WAIT_MS): Promise<(success?: boolean) => void> {
     signal?.throwIfAborted();
-    if (this.waiting >= MAX_IDENTITIES) throw new RequestPacingQueueOverloadError("mistral", "queue_full", 60);
-    this.waiting++;
+    const queued = this.waiting.get(identity) ?? 0;
+    if (queued >= MAX_WAITERS_PER_IDENTITY) throw new RequestPacingQueueOverloadError("mistral", "queue_full", 60);
+    this.waiting.set(identity, queued + 1);
     const deadline = this.now() + maxWaitMs;
     try {
       for (;;) {
@@ -150,7 +159,11 @@ export class MistralBudgetPacer {
           probe.finish();
         };
       }
-    } finally { this.waiting--; }
+    } finally {
+      const left = (this.waiting.get(identity) ?? 1) - 1;
+      if (left > 0) this.waiting.set(identity, left);
+      else this.waiting.delete(identity);
+    }
   }
 }
 

@@ -285,7 +285,7 @@ describe("applyMainHardLockFallbackOverride", async () => {
       .toEqual({ sourceModel: "gpt-5.3", targetModel: "deepseek/deepseek-chat" });
   });
 
-+  test.each(["none", "identity", "bearer"] as const)("Direct ownership is rechecked after the async caller check (change: %s)", async change => {
+  test.each(["none", "identity", "bearer"] as const)("Direct ownership is rechecked after the async caller check (change: %s)", async change => {
     observeMainQuotaCredential("fixture-caller-a", "fallback-account-a");
     observe({ weeklyPercent: 100 });
     const cfg = config({

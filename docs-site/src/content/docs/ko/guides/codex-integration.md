@@ -219,7 +219,7 @@ Windows에서 Orca shell은 `CODEX_HOME`과 `ORCA_CODEX_HOME`을 Orca의 번들 
 
 전용 provider 모드의 `requires_openai_auth = true`는 Codex App/TUI의 계정 게이트 화면을 네이티브 Codex와 같은 조건으로 맞춥니다. opencodex는 `/v1/responses`도 WebSocket으로 제공합니다. 전용 provider는 `"websockets": true`일 때만 `supports_websockets = true`를 광고합니다. loopback에서는 Codex의 빌트인 provider가 먼저 WebSocket을 시도할 수 있으며, 비활성화된 proxy는 `426`을 반환해서 Codex가 HTTP/SSE로 fallback합니다.
 
-**추론 사용량 표시 보존(다음 릴리스 반영 예정).** 정식 ChatGPT 경로를 HTTP/SSE로 받는
+**추론 사용량 표시 보존(2.90.0 이상).** 정식 ChatGPT 경로를 HTTP/SSE로 받는
 클라이언트에는, Bun 런타임이 제공하는 상류 WebSocket 연결 응답의 실제
 `x-reasoning-included` 헤더를 전달합니다. 같은 연결을 재사용하는 요청에서도 유지합니다.
 이 표시는 서버가 보고한 사용량에 이전 추론량이 이미 포함됐음을 Codex에 알립니다.
