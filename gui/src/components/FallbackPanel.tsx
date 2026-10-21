@@ -47,15 +47,13 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
     setSaveFailed(false);
     const bounded = createBoundedFetch(15_000);
     try {
-      let latest: FallbackState | null = null;
-      for (const body of writes) {
-        const response = await fetch(apiBase + "/api/fallback", {
-          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: bounded.signal,
-        });
-        latest = response.ok ? parseFallbackState(await response.json()) : null;
-        if (!latest) throw new Error("save");
-      }
-      if (latest) setState(latest);
+      // One request, one config mutation: a device's chains switch writes both kinds atomically.
+      const response = await fetch(apiBase + "/api/fallback", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ writes }), signal: bounded.signal,
+      });
+      const latest = response.ok ? parseFallbackState(await response.json()) : null;
+      if (!latest) throw new Error("save");
+      setState(latest);
     } catch {
       setSaveFailed(true);
     } finally {
@@ -87,32 +85,36 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
         <p className="card-sub">{t(readOnly ? "fallback.devices.childNote" : "fallback.devices.desc")}</p>
         {state.devices.length === 0
           ? <p className="card-sub">{t("fallback.devices.empty")}</p>
-          : <div className="fallback-devices" role="table" aria-label={t("fallback.devices.title")}>
-            <div className="fallback-device-row fallback-device-head" role="row">
-              <span role="columnheader">{t("fallback.devices.device")}</span>
-              <span role="columnheader">{t("fallback.devices.local")}</span>
-              <span role="columnheader">{t("fallback.devices.chains")}</span>
-            </div>
+          : <table className="fallback-devices" aria-label={t("fallback.devices.title")}>
+            <thead>
+              <tr className="fallback-device-head">
+                <th scope="col">{t("fallback.devices.device")}</th>
+                <th scope="col">{t("fallback.devices.local")}</th>
+                <th scope="col">{t("fallback.devices.chains")}</th>
+              </tr>
+            </thead>
+            <tbody>
             {state.devices.map(device => {
               const chainsOn = device.model !== false && device.provider !== false;
               const name = device.alias ?? device.id;
               return (
-                <div className="fallback-device-row" role="row" key={device.id}>
-                  <span role="cell"><strong>{name}</strong>{device.alias && <code className="fallback-device-id">{device.id}</code>}</span>
-                  <span role="cell"><FallbackToggle label={t("fallback.devices.localFor", { name })} on={device.localFallback} disabled={locked}
-                    onToggle={() => { void write([{ scope: "device", key: device.id, setting: "localFallback", value: !device.localFallback }]); }} /></span>
-                  <span role="cell"><FallbackToggle label={t("fallback.devices.chainsFor", { name })} on={chainsOn} disabled={locked}
+                <tr key={device.id}>
+                  <td><strong>{name}</strong>{device.alias && <code className="fallback-device-id">{device.id}</code>}</td>
+                  <td><FallbackToggle label={t("fallback.devices.localFor", { name })} on={device.localFallback} disabled={locked}
+                    onToggle={() => { void write([{ scope: "device", key: device.id, setting: "localFallback", value: !device.localFallback }]); }} /></td>
+                  <td><FallbackToggle label={t("fallback.devices.chainsFor", { name })} on={chainsOn} disabled={locked}
                     onToggle={() => {
                     const value = chainsOn ? false : null;
                     void write([
                       { scope: "device", key: device.id, setting: "model", value },
                       { scope: "device", key: device.id, setting: "provider", value },
                     ]);
-                    }} /></span>
-                </div>
+                    }} /></td>
+                </tr>
               );
             })}
-          </div>}
+            </tbody>
+          </table>}
         {saveFailed && <Notice tone="err">{t("fallback.saveFailed")}</Notice>}
       </section>
     );

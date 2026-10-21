@@ -11,7 +11,7 @@ import { mutatePersistedConfig } from "../../config";
 import { isPassiveRead } from "../../lib/passive-read";
 import { readLinkStore, type LinkRecord } from "../../link/store";
 import { linkStorePath } from "../../link/paths";
-import { applyFallbackWrite, buildFallbackState, parseFallbackWrite } from "../../routing/fallback-state";
+import { applyFallbackWrite, buildFallbackState, parseFallbackWrites } from "../../routing/fallback-state";
 import { managementBodyTooLargeResponse, readManagementJsonBody } from "./body";
 
 function links(ctx: ManagementContext): LinkRecord[] {
@@ -44,12 +44,12 @@ async function writeFallback(ctx: ManagementContext): Promise<Response> {
     return managementBodyTooLargeResponse(error, req, config)
       ?? jsonResponse({ error: "invalid JSON body", code: "invalid_request" }, 400, req, config);
   }
-  const parsed = parseFallbackWrite(body);
+  const parsed = parseFallbackWrites(body);
   if (!parsed.ok) return jsonResponse({ error: parsed.error, code: "invalid_request" }, 400, req, config);
-  const write = parsed.write;
-  if (write.scope === "device") {
+  const known = links(ctx);
+  for (const write of parsed.writes) {
+    if (write.scope !== "device") continue;
     // A link alias names its link; otherwise the key must be a known link id or data key id.
-    const known = links(ctx);
     const byAlias = known.find(link => link.alias === write.key);
     if (byAlias) write.key = byAlias.id;
     const exists = known.some(link => link.id === write.key)
@@ -59,7 +59,8 @@ async function writeFallback(ctx: ManagementContext): Promise<Response> {
     }
   }
   const outcome = mutatePersistedConfig(persisted => {
-    const changed = applyFallbackWrite(persisted, write);
+    let changed = false;
+    for (const write of parsed.writes) changed = applyFallbackWrite(persisted, write) || changed;
     return { changed, value: persisted.fallback === undefined ? undefined : structuredClone(persisted.fallback) };
   });
   if (outcome.status === "unavailable") {

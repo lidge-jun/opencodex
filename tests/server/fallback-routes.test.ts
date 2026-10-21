@@ -122,6 +122,25 @@ describe("PUT /api/fallback", () => {
       { scope: "route", key: "has space", setting: "model", value: false },
       { scope: "global", setting: "account", value: false },
       { scope: "global", setting: "model", value: "off" },
+      { writes: [] },
+      { writes: [{ scope: "global", setting: "model", value: false }, { scope: "global", setting: "bogus", value: false }] },
     ]) expect((await call(live, body)).status).toBe(400);
+    // A refused batch writes nothing.
+    expect(live.fallback?.model).toBeUndefined();
+  });
+
+  test("a batch applies every write in one mutation, and an unknown device refuses the whole batch", async () => {
+    const live = config();
+    saveConfig(live);
+    expect((await call(live, { writes: [
+      { scope: "device", key: "mac-studio", setting: "model", value: false },
+      { scope: "device", key: "mac-studio", setting: "provider", value: false },
+    ] })).status).toBe(200);
+    expect(live.fallback).toEqual({ devices: { [LINK]: { model: false, provider: false } } });
+    expect((await call(live, { writes: [
+      { scope: "global", setting: "model", value: false },
+      { scope: "device", key: "nobody", setting: "model", value: false },
+    ] })).status).toBe(404);
+    expect(readConfigDiagnostics().config.fallback).toEqual({ devices: { [LINK]: { model: false, provider: false } } });
   });
 });

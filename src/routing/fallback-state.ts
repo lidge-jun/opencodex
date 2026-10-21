@@ -133,6 +133,25 @@ export function parseFallbackWrite(body: unknown): { ok: true; write: FallbackWr
   return { ok: true, write: { scope, key, setting, value } };
 }
 
+/** Up to 8 writes applied in one config mutation: `{ writes: [...] }`, or a single write. */
+export const MAX_FALLBACK_WRITES = 8;
+
+export function parseFallbackWrites(body: unknown): { ok: true; writes: FallbackWrite[] } | { ok: false; error: string } {
+  const list = body && typeof body === "object" && !Array.isArray(body) && Object.hasOwn(body, "writes")
+    ? (body as { writes: unknown }).writes
+    : [body];
+  if (!Array.isArray(list) || list.length === 0 || list.length > MAX_FALLBACK_WRITES) {
+    return { ok: false, error: "writes must hold 1 to " + MAX_FALLBACK_WRITES + " entries" };
+  }
+  const writes: FallbackWrite[] = [];
+  for (const entry of list) {
+    const parsed = parseFallbackWrite(entry);
+    if (!parsed.ok) return parsed;
+    writes.push(parsed.write);
+  }
+  return { ok: true, writes };
+}
+
 function setLeaf(target: Record<string, unknown>, setting: string, value: boolean | null): void {
   if (value === null) delete target[setting];
   else target[setting] = value;

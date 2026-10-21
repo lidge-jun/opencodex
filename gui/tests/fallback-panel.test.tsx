@@ -78,7 +78,7 @@ describe("FallbackPanel", () => {
     const writes: unknown[] = [];
     const host = await mount((async (_url: string, init?: RequestInit) => {
       if (init?.method === "PUT") {
-        writes.push(JSON.parse(String(init.body)));
+        writes.push(...(JSON.parse(String(init.body)) as { writes: unknown[] }).writes);
         return json({ ...baseState, global: { model: true, provider: false } });
       }
       return json(baseState);
@@ -94,11 +94,10 @@ describe("FallbackPanel", () => {
   });
 
   test("devices: local fallback writes the device permission; chains off refuses both kinds", async () => {
-    const writes: Array<Record<string, unknown>> = [];
+    const requests: unknown[] = [];
     const host = await mount((async (_url: string, init?: RequestInit) => {
       if (init?.method === "PUT") {
-        const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-        writes.push(body);
+        requests.push(JSON.parse(String(init.body)));
         return json(baseState);
       }
       return json(baseState);
@@ -106,10 +105,13 @@ describe("FallbackPanel", () => {
     expect(host.textContent).toContain("mac-studio");
     await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Local fallback for mac-studio"]')!.click(); await flush(); });
     await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Fallback chains for mac-studio"]')!.click(); await flush(); });
-    expect(writes).toEqual([
-      { scope: "device", key: LINK, setting: "localFallback", value: true },
-      { scope: "device", key: LINK, setting: "model", value: false },
-      { scope: "device", key: LINK, setting: "provider", value: false },
+    // One request per switch; the chains switch writes both kinds in one batch.
+    expect(requests).toEqual([
+      { writes: [{ scope: "device", key: LINK, setting: "localFallback", value: true }] },
+      { writes: [
+        { scope: "device", key: LINK, setting: "model", value: false },
+        { scope: "device", key: LINK, setting: "provider", value: false },
+      ] },
     ]);
   });
 

@@ -6,8 +6,9 @@
 .fallback-overrides ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .fallback-overrides li { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .fallback-overrides li > button { margin-left: auto; }
-.fallback-devices { display: flex; flex-direction: column; gap: var(--space-1); }
-.fallback-device-row { display: grid; grid-template-columns: minmax(0, 1fr) 7rem 7rem; align-items: center; gap: var(--space-3); }
-.fallback-device-head { color: var(--muted); font-size: var(--text-label); }
+.fallback-devices { width: 100%; border-collapse: collapse; }
+.fallback-devices th, .fallback-devices td { text-align: left; padding: var(--space-1) var(--space-3) var(--space-1) 0; vertical-align: middle; }
+.fallback-devices th:not(:first-child), .fallback-devices td:not(:first-child) { width: 7rem; }
+.fallback-device-head th { color: var(--muted); font-size: var(--text-label); font-weight: inherit; }
 .fallback-device-id { margin-left: var(--space-2); color: var(--muted); }
 .fallback-last p { margin: 0; }

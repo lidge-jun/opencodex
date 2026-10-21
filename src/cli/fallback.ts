@@ -98,8 +98,7 @@ async function setSwitch(argv: string[], value: boolean | null, deps: RuntimeApi
   const kinds = takeKinds(args);
   const scope = takeScope(args);
   rejectArgs(args, FALLBACK_USAGE);
-  let state: FallbackState = {};
-  for (const setting of kinds) state = await put({ ...scope, setting, value }, deps);
+  const state = await put({ writes: kinds.map(setting => ({ ...scope, setting, value })) }, deps);
   printData(state, wantsJson, fallbackStatusLines(state));
 }
 
