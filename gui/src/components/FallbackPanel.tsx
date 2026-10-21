@@ -69,6 +69,9 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
   const locked = saving || readOnly;
 
   if (!state) {
+    // The device rows are an addition to Remote Link: a Home or Child without the fallback state
+    // (an older OpenCodex, or a read that failed) shows nothing rather than a second error.
+    if (section === "devices") return null;
     return (
       <section className="panel fallback-panel" aria-busy={!loadFailed || undefined}>
         <h3>{t(section === "routing" ? "fallback.title" : "fallback.devices.title")}</h3>
