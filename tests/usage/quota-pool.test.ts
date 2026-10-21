@@ -9,7 +9,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
 import { codexQuotaWindows, providerQuotaWindows, readQuotaPool } from "../../src/quota-pool/assemble";
-import { ensureQuotaPoolIdentity, quotaPoolIdentityPath, readQuotaPoolIdentity, resetQuotaPoolIdentityMemoForTests } from "../../src/quota-pool/identity";
+import {
+  ensureQuotaPoolIdentity,
+  quotaPoolIdentityPath,
+  readQuotaPoolIdentity,
+  resetQuotaPoolIdentityMemoForTests,
+  setQuotaPoolIdentityHooksForTests,
+} from "../../src/quota-pool/identity";
 import { parseUpstreamQuotaHeaders } from "../../src/codex/quota";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
@@ -65,6 +71,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  setQuotaPoolIdentityHooksForTests();
   setProviderQuotaReportCache(null);
   clearAccountQuotaCache("xai");
   resetQuotaPoolIdentityMemoForTests();
@@ -176,6 +183,42 @@ describe("quota-pool identity creation", () => {
     expect(readQuotaPoolIdentity()).toBeNull();
   });
 
+  test("a winner published between the absence read and the existence check is adopted, not refused", () => {
+    const winner = { homeId: `home_${"a".repeat(32)}`, secret: "b".repeat(64) };
+    setQuotaPoolIdentityHooksForTests({
+      // Another server links its complete file in exactly inside this process's check window.
+      afterAbsentRead: path => writeFileSync(path, `${JSON.stringify({ version: 1, ...winner })}\n`, { mode: 0o600 }),
+    });
+    expect(ensureQuotaPoolIdentity()).toEqual(winner);
+    expect(readFileSync(quotaPoolIdentityPath(), "utf8")).toContain(winner.homeId);
+  });
+
+  test("an in-place create seen before its bytes land is never adopted or memoized", () => {
+    const seen: { read?: unknown; concurrent?: unknown; concurrentError?: string } = {};
+    let writerPaused = false;
+    setQuotaPoolIdentityHooksForTests({
+      // No hard links on this filesystem: publication falls back to exclusive create in place.
+      link: () => { throw Object.assign(new Error("hard links unsupported"), { code: "EPERM" }); },
+      publishedReadAttempts: 2,
+      afterCreate: path => {
+        if (path !== quotaPoolIdentityPath() || writerPaused) return;
+        writerPaused = true;
+        // The file exists and is still empty: a reader and a concurrent loser look now.
+        seen.read = readQuotaPoolIdentity();
+        try { seen.concurrent = ensureQuotaPoolIdentity(); } catch (error) { seen.concurrentError = (error as Error).message; }
+      },
+    });
+    const identity = ensureQuotaPoolIdentity();
+    expect(writerPaused).toBe(true);
+    expect(seen.read).toBeNull();
+    expect(seen.concurrent).toBeUndefined();
+    expect(seen.concurrentError).toContain("not a valid regular file");
+    expect(identity.homeId).toMatch(/^home_[0-9a-f]{32}$/);
+    // Nothing invalid was memoized: a fresh read returns the writer's complete identity.
+    resetQuotaPoolIdentityMemoForTests();
+    expect(readQuotaPoolIdentity()).toEqual(identity);
+  });
+
   test("servers racing on a fresh home agree on one identity", async () => {
     const script = `const { ensureQuotaPoolIdentity } = await import(${JSON.stringify(join(import.meta.dir, "../../src/quota-pool/identity.ts"))});
 await Bun.sleep(Math.max(0, Number(process.env.QP_START_AT) - Date.now()));
@@ -186,10 +229,14 @@ console.log(ensureQuotaPoolIdentity().homeId);`;
       const runs = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, "-e", script], {
         env: { ...process.env, OPENCODEX_HOME: dir, QP_START_AT: startAt }, stdout: "pipe", stderr: "pipe",
       }));
-      const ids = await Promise.all(runs.map(async run => (await new Response(run.stdout).text()).trim()));
+      // Read each child to completion (stdout, stderr and exit) so a loser that fails names its error.
+      const results = await Promise.all(runs.map(async run => {
+        const [out, err, code] = await Promise.all([new Response(run.stdout).text(), new Response(run.stderr).text(), run.exited]);
+        return { id: out.trim(), code, error: err.trim() };
+      }));
       resetQuotaPoolIdentityMemoForTests();
       const persisted = readQuotaPoolIdentity(dir)!.homeId;
-      expect(ids).toEqual([persisted, persisted, persisted, persisted]);
+      expect(results).toEqual(Array.from({ length: 4 }, () => ({ id: persisted, code: 0, error: "" })));
     }
   });
 });

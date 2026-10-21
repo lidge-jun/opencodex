@@ -65,10 +65,12 @@ the pooled windows.
 `homeId` (`home_` + 32 hex, the Home's stable instance id, not a hostname) and a 256-bit secret.
 The server creates it in `acquireServerBackgroundLifecycle` before it serves; the read only reads it
 and answers 503 `quota_pool_identity_unavailable` instead of creating it. Creation is exclusive and
-never follows a link: the secret is written to a private temp file and hard-linked into place (an
-in-place exclusive create where hard links are unavailable), so two servers starting on one fresh
-home adopt the same identity, and a symlink or malformed file at the path is refused and left
-untouched rather than overwritten.
+never follows a link: the secret is written and flushed to a private temp file and hard-linked into
+place (an in-place exclusive create where hard links are unavailable), so two servers starting on
+one fresh home adopt the same identity. A loser that finds a file at the path, including one that
+appears between its own absence check and existence check, re-reads it for up to 500 ms and adopts
+it once it is valid; an empty or partial file is never returned or memoized. A symlink, or a file
+that stays malformed past that bound, is refused and left untouched rather than overwritten.
 
 `accountRef` is `acct_` + base64url of the first 128 bits of HMAC-SHA256(secret,
 `ocx.quota-pool/1` NUL provider NUL accountId). It is stable across restarts, distinct per provider,
