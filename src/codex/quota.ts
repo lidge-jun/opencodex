@@ -1099,3 +1099,13 @@ export function getAccountQuotaHistory(accountId: string, limit: number = QUOTA_
   return { observations: result.samples.map(({ credentialGeneration: _generation, ...sample }) => sample),
     truncated: result.truncated, retention: { maxObservations: QUOTA_HISTORY_LIMITS.perAccount, maxAgeDays: 30 } };
 }
+
+/**
+ * Where the newest stored reading for a pool account came from (a WHAM usage body or upstream
+ * response headers), or undefined when no current history exists. Read-only: unlike
+ * `getAccountQuotaHistory` it never prunes or clears a mismatched bucket.
+ */
+export function latestCodexQuotaObservationSource(accountId: string): "wham" | "response-header" | undefined {
+  hydrateAccountQuotasFromDisk();
+  return quotaHistory.peekLatestSource(accountId, poolQuotaHistoryIdentity(accountId));
+}

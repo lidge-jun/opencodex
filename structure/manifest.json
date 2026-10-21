@@ -715,6 +715,16 @@
       ]
     },
     {
+      "path": "quota-pool.md",
+      "tier": 5,
+      "title": "Quota Pool Producer",
+      "scope": "The passive GET /api/quota-pool read GOAT consumes (ocx.quota-pool/1): sources, window mapping, absent-not-zero, and the install identity behind homeId and accountRef.",
+      "documents": [
+        "src/quota-pool/",
+        "src/server/management/quota-pool-routes.ts"
+      ]
+    },
+    {
       "path": "pricing.md",
       "tier": 5,
       "title": "Model Price Overrides",

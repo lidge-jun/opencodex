@@ -181,6 +181,20 @@ async function checkAdmission(model: string, deps: AdmissionDeps, now: number): 
 }
 
 let preflightOverride: ((model: string) => Promise<ClaudeAdmission>) | undefined;
+
+/** The last usage the admission recorded, as `/api/quota-pool` reports it. */
+export type ClaudeUsageObservation = Readonly<Snapshot>;
+
+/**
+ * The newest recorded usage snapshot, from memory or the admission file. Read-only: it resolves
+ * no sign-in (no Keychain read), runs no probe and writes nothing. `identity` is the admission's
+ * own SHA-256 account key, never the account uuid itself.
+ */
+export function peekClaudeUsageObservation(deps: Pick<AdmissionDeps, "statePath"> = {}): ClaudeUsageObservation | null {
+  const path = statePath(deps);
+  const rows = [load(path), memory.get(path)].filter((s): s is Snapshot => s !== undefined);
+  return rows.sort((a, b) => b.checkedAt - a.checkedAt)[0] ?? null;
+}
 /** Test seam for the pre-dispatch check in the Responses executor; call with no argument to restore. */
 export function setClaudeUsagePreflightForTests(fn?: (model: string) => Promise<ClaudeAdmission>): void { preflightOverride = fn; }
 /** The pre-dispatch check the Responses executor runs before a claude-cli turn. */

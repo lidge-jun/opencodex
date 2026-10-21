@@ -201,7 +201,7 @@
   "abort-race.test.ts": "adapters", "account-import.test.ts": "server",
   "account-import-project-fallback.test.ts": "server",
   "account-pool-management-api.test.ts": "server", "link-listener-admission.test.ts": "server",
-  "link-management-relay.test.ts": "server",
+  "link-management-relay.test.ts": "server", "quota-pool-relay.test.ts": "server", "quota-pool.test.ts": "usage",
   "link-listener-lifecycle.test.ts": "server",
     "link-listener-mutation.test.ts": "server", "link-join-route.test.ts": "server",
   "core-link-boundary.test.ts": "lab", "acl-error-classification.test.ts": "lib",
