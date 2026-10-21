@@ -4053,7 +4053,7 @@ export const fr: Record<TKey, string> = {
   "fallback.rotationNote": "Passer d'un compte ou d'une clé à l'autre chez un même fournisseur n'est pas un repli et reste actif.",
   "fallback.overrides": "Remplacements",
   "fallback.scope.provider": "Fournisseur {name}",
-  "fallback.scope.route": "Route {name}",
+  "fallback.scope.route": "Sélecteur de route {name}",
   "fallback.state.on": "activé",
   "fallback.state.off": "désactivé",
   "fallback.state.inherit": "hérité",
