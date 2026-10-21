@@ -12,7 +12,7 @@ export const FREE_PROVIDER_ACCESS_GROUPS = {
     "cloudflare-ai", "cohere", "coze", "duckduckgo-web", "felo-web", "friendliai", "gemini", "github-models",
     "groq", "hackclub", "huggingchat", "huggingface", "iflytek", "inference-net", "kiro", "liquid", "llm7",
     "mistral", "morph", "muse-spark-web", "nara", "navy", "nlpcloud", "ollama-cloud", "opencode", "openrouter",
-    "ovhcloud", "pollinations", "puter", "qwen-web", "reka", "runcrate", "sambanova", "sparkdesk", "t3-web", "uncloseai",
+    "ovhcloud", "perch", "pollinations", "puter", "qwen-web", "reka", "runcrate", "sambanova", "sparkdesk", "t3-web", "uncloseai",
   ],
   "recurring-uncapped": [
     "agnes", "ainative", "aion", "baidu", "glm", "glm-cn", "kilo-gateway", "opencode-zen", "requesty",
@@ -204,7 +204,7 @@ const LABELS: Record<string, string> = {
   gemini: "Google Gemini", "github-models": "GitHub Models", huggingchat: "HuggingChat", huggingface: "Hugging Face",
   iflytek: "iFlytek", "inference-net": "Inference.net", llm7: "LLM7", "muse-spark-web": "Muse Spark Web",
   nlpcloud: "NLP Cloud", "ollama-cloud": "Ollama Cloud", ovhcloud: "OVHcloud", "qwen-web": "Qwen Web",
-  "t3-web": "T3 Web", uncloseai: "UncloseAI", ainative: "AI Native", baidu: "Baidu Qianfan",
+  "t3-web": "T3 Web", uncloseai: "UncloseAI", perch: "Perch", ainative: "AI Native", baidu: "Baidu Qianfan",
   glm: "Z.AI GLM", "glm-cn": "BigModel GLM (CN)", "kilo-gateway": "Kilo Gateway", "opencode-zen": "OpenCode Zen",
   sealion: "SEA-LION", bytez: "Bytez", "nous-research": "Nous Research", agentrouter: "AgentRouter",
   ai21: "AI21", baichuan: "Baichuan", crusoe: "Crusoe", deepinfra: "DeepInfra", deepseek: "DeepSeek", doubao: "Doubao",
