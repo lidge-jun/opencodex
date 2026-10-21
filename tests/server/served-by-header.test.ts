@@ -181,7 +181,9 @@ describe("x-opencodex-served-by on GET /v1/models", () => {
       expect(response.headers.get(SERVED_BY_HEADER)).toBe(id);
     }
     // Refusals from the same route name the same Home; other routes carry no header.
-    expect((await fetch(new URL("/v1/models", server!.url), { headers: { origin: "https://elsewhere.example" } })).headers.get(SERVED_BY_HEADER)).toBe(id);
+    const refusal = await fetch(new URL("/v1/models", server!.url), { headers: { origin: "https://elsewhere.example" } });
+    expect(refusal.status).toBe(401);
+    expect(refusal.headers.get(SERVED_BY_HEADER)).toBe(id);
     expect((await fetch(new URL("/healthz", server!.url))).headers.has(SERVED_BY_HEADER)).toBe(false);
   });
 
