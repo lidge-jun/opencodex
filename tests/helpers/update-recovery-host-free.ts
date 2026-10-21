@@ -28,10 +28,12 @@ export const HOST_FREE_RECOVERY_IO = {
  * The Windows ACL belt is the other exception. Every private config write on Windows tightens
  * its ACL with `%SystemRoot%\\System32\\icacls.exe` (src/config/atomic-write.ts,
  * src/config/paths.ts), and these scenarios write config inside the test home. Before this
- * helper existed, those calls ran for real on Windows CI. Exactly that executable, with every
- * path argument inside the test's OPENCODEX_HOME or the temp directory, is passed through to the
- * real spawn. It is recorded in a separate `allowed` list (readable through `observed`) rather
- * than the refused list, so a caller can assert on it. Everything else is still refused.
+ * helper existed, those calls ran for real on Windows CI. Exactly that executable, called in one
+ * of the ACL belt's own argv shapes (one target, then nothing or /grant:r, /inheritance:r,
+ * /remove:g or /findsid with principal/SID/ACE tokens only), with the target canonicalized and
+ * inside the test's OPENCODEX_HOME or the temp directory, is passed through to the real spawn.
+ * It is recorded in a separate `allowed` list (readable through `observed`) rather than the
+ * refused list, so a caller can assert on it. Everything else is still refused.
  */
 export async function withoutHostProcesses<T>(
   run: () => Promise<T>,
@@ -78,15 +80,25 @@ export function isTestScopedWindowsAcl(
   systemRoot: string = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows",
 ): boolean {
   if (platform !== "win32" || !isWindowsIcaclsBinary(command, systemRoot)) return false;
-  // Only Windows absolute paths count: drive-letter or UNC. Switches such as /grant:r start with "/".
-  const paths = argv.slice(1).map(String).filter(arg => /^[a-zA-Z]:[\\/]|^\\\\/.test(arg));
-  if (paths.length === 0) return false;
-  const scoped = roots.filter(Boolean).map(normalizeWindowsPath);
-  return paths.every(path => {
-    const target = normalizeWindowsPath(path);
-    return scoped.some(root => target === root || target.startsWith(`${root}/`));
-  });
+  // Exactly the argv shapes src/lib/windows-secret-acl.ts builds: one target path, then nothing,
+  // or one of its four switches followed only by principal/SID/ACE tokens. Any other switch
+  // (/save, /restore, /setowner, ...) or any further path or file operand is refused.
+  const [, target, step, ...rest] = argv.map(String);
+  if (target === undefined || !/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(target)) return false;
+  if (step !== undefined && !ACL_BELT_STEPS.has(step)) return false;
+  if (step === undefined && rest.length > 0) return false;
+  if (!rest.every(token => ACE_TOKEN.test(token))) return false;
+  // win32.resolve collapses "." and ".." segments, so a traversal cannot pass the prefix check.
+  const canonical = normalizeWindowsPath(win32.resolve(target));
+  return roots.filter(Boolean)
+    .map(root => normalizeWindowsPath(win32.resolve(root)))
+    .some(root => canonical === root || canonical.startsWith(`${root}/`));
 }
+
+/** The four switches the production ACL belt passes to icacls (src/lib/windows-secret-acl.ts). */
+const ACL_BELT_STEPS = new Set(["/grant:r", "/inheritance:r", "/remove:g", "/findsid"]);
+/** A principal or SID, optionally with rights: "user:(OI)(CI)(F)", "*S-1-1-0", "*S-1-5-32-545:(R)". */
+const ACE_TOKEN = /^\*?[^\\/:\s][^\\/:]*(?::(?:\([A-Z]+\))+)?$/;
 
 /** True only for the exact `%SystemRoot%\\System32\\icacls.exe`, compared case-insensitively. */
 export function isWindowsIcaclsBinary(
