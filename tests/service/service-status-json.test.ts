@@ -162,6 +162,18 @@ describe("service status JSON shape per platform branch", () => {
     expect(json.serving).toEqual({ probed: false, ok: false, port: null });
   });
 
+  test("a serving probe that throws still yields the document", async () => {
+    const diag = deriveSystemdServiceDiagnostic({
+      installed: true, enabled: true, running: true, stale: false, diagnostics: `logs: ${LOG}`,
+    });
+    const json = await collectServiceStatusJson({
+      ...fixedDeps(diag, "linux"),
+      serving: async () => { throw new Error("port resolution failed"); },
+    });
+    expect(json).toMatchObject({ installed: true, running: true, backend: "systemd" });
+    expect(json.serving).toEqual({ probed: true, ok: false, port: null });
+  });
+
   test("an unsupported platform still answers with a document", async () => {
     const diag: ServiceDiagnostic = {
       supported: false, installed: false, enabled: false, running: false, viable: false,

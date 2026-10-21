@@ -82,8 +82,14 @@ async function collectPassively(deps: ServiceStatusJsonDeps): Promise<ServiceSta
   const backend = serviceStatusBackend(diag);
   let serving: ServiceStatusJson["serving"] = { probed: false, ok: false, port: null };
   if (diag.installed) {
-    const result = await (deps.serving ?? (() => confirmServiceServing({ timeoutMs: 1_500 })))();
-    serving = { probed: true, ok: result.ok, port: result.port };
+    // A probe that throws (config load, port resolution) must not cost the caller the whole
+    // document; it is reported as probed, not serving, with no port.
+    try {
+      const result = await (deps.serving ?? (() => confirmServiceServing({ timeoutMs: 1_500 })))();
+      serving = { probed: true, ok: result.ok, port: result.port };
+    } catch {
+      serving = { probed: true, ok: false, port: null };
+    }
   }
   const desktopLogin = deps.desktopLogin ?? (() => {
     const desktop = diagnoseDesktopStartup();
