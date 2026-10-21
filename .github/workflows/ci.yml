@@ -997,22 +997,20 @@ jobs:
   # now means Linux + macOS + the gates; Windows re-enters the gate when the
   # tracked failures are fixed, not before.
   #
-  # Dispatch-only proved too late. #6639, #6556, #6605 and #6606 each landed with
-  # green pull-request CI while breaking Windows, and the breakage surfaced days
-  # later on a manual dispatch. #6670 made a pull request whose changes job reports
-  # windows=true (a Windows path, or an added src/tests line naming a Windows
-  # marker; see scripts/ci/windows-sensitive-diff.sh) run the nine shards. #7052
-  # then dropped that clause to keep pull requests on the fast Ubuntu subset, and
-  # since dev is absent from the push trigger, Windows ran only nightly or on a
-  # lane=all dispatch. #7468 landed green that way and broke windows 9/9 on dev.
-  # The clause is back for Windows-sensitive pull requests only: every other pull
-  # request still runs the Ubuntu subset, and the nightly schedule still catches
-  # whatever the selector misses. The aggregate below mirrors this condition.
+  # Pull requests never run these shards (AGENTS.md "CI policy", a maintainer
+  # decision): Windows runs on the nightly schedule and on a lane=all dispatch.
+  # The changes job still computes windows=true for a Windows-sensitive pull
+  # request (a Windows path, or an added src/tests line naming a Windows marker;
+  # see scripts/ci/windows-sensitive-diff.sh). That verdict does not schedule
+  # these jobs; it posts a non-blocking notice, and a maintainer dispatches
+  # lane=all on the branch before merging. #6639, #6556, #6605, #6606 and #7468
+  # each landed with green pull-request CI while breaking Windows, which is why
+  # that dispatch is part of merging a Windows-sensitive pull request.
   platform-windows:
     name: windows ${{ matrix.shard }}/9
     needs: [changes, select-windows-runner]
     if: >-
-      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all') || github.event_name == 'pull_request' && needs.changes.outputs.windows == 'true'
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')
     runs-on: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
     # Sharded like the Linux legs. The single-leg run reached 30 minutes on a
     # green suite and was killed in cleanup; four shards put each leg inside the
@@ -1810,9 +1808,6 @@ jobs:
             if [ -z "$LANE" ] || [ "$LANE" = "all" ]; then
               windows=requested
             fi
-          elif [ "$EVENT_NAME" = "pull_request" ] && [ "${CHANGES_WINDOWS:-}" = "true" ]; then
-            # A Windows-sensitive pull request runs the nine shards (platform-windows if:).
-            windows=requested
           fi
 
           # One line per job, mirroring that job's own `if:`. Adding a job to this workflow

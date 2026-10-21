@@ -313,13 +313,12 @@ describe("GitHub Actions hardening", () => {
     expect(macosControlSteps.some(step => step.run?.includes("--shard"))).toBe(false);
     expect(macosControlSteps.some(step => step.run?.includes("coreutils") && step.run.includes("GITHUB_PATH"))).toBe(true);
 
-    // Dispatch and the daily schedule request Windows, and so does a Windows-sensitive
-    // pull request (changes.outputs.windows == 'true'); every other pull request runs
-    // only the fast Ubuntu subset, and pushes never do. Keep branch-ref shortcuts off
-    // this condition.
+    // Dispatch and the daily schedule request Windows; pull requests (which run
+    // only the fast Ubuntu subset) and pushes do not. Keep branch-ref shortcuts
+    // off this condition.
     const windowsIf = String((ci.jobs?.["platform-windows"] as { if?: string })?.if ?? "");
     expect(windowsIf).toBe(
-      "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all') || github.event_name == 'pull_request' && needs.changes.outputs.windows == 'true'",
+      "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all')",
     );
     expect(windowsIf).not.toContain("refs/heads/main");
     expect(windowsIf).not.toContain("refs/heads/preview");

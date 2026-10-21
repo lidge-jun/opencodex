@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
@@ -231,11 +231,8 @@ describe("CI review lanes", () => {
       expect(enabled("npm-global-smoke", event, lane, "true", "false")).toBe(false);
     }
     for (const windows of ["true", "false", ""]) {
-      // Only a Windows-sensitive pull request (changes.outputs.windows == 'true') runs the
-      // nine shards; every other pull request stays on the fast Ubuntu subset (#7052).
-      expect(enabled("platform-windows", "pull_request", "", "true", "true", "true", windows)).toBe(windows === "true");
-      // A push never selects Windows, whatever the selector reported.
-      expect(enabled("platform-windows", "push", "", "true", "true", "true", windows)).toBe(false);
+      // Even a Windows-sensitive pull request runs only the fast Ubuntu subset.
+      expect(enabled("platform-windows", "pull_request", "", "true", "true", "true", windows)).toBe(false);
     }
     expect(enabled("platform-windows", "schedule", "", "false", "false", "false")).toBe(true);
     expect(enabled("macos-control", "schedule", "", "false", "false", "false")).toBe(true);
@@ -365,7 +362,7 @@ describe("Windows and nightly CI contracts", () => {
     expect(checkouts).toBe(17);
   });
 
-  test.skipIf(process.platform === "win32" || !Bun.which("jq"))("aggregate requests Windows on a pull request only when it is Windows-sensitive, and both diagnostic jobs nightly", async () => {
+  test.skipIf(process.platform === "win32" || !Bun.which("jq"))("aggregate never requests Windows on a pull request and requests both diagnostic jobs nightly", async () => {
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       jobs: Record<string, { needs?: string[]; steps?: Array<{ name?: string; shell?: string; env?: Record<string, string>; run?: string }> }>;
     };
@@ -384,8 +381,8 @@ describe("Windows and nightly CI contracts", () => {
     const slice = script.slice(start, last + "RESULTS_EOF".length);
     for (const [event, lane, windows, expectWindows, expectControl] of [
       ["schedule", "", undefined, "requested", "requested"],
-      // A Windows-sensitive pull request runs the nine shards; any other stays on Ubuntu.
-      ["pull_request", "", "true", "requested", "not-requested"],
+      // Pull requests run only the fast Ubuntu subset, even when the change is Windows-sensitive.
+      ["pull_request", "", "true", "not-requested", "not-requested"],
       ["pull_request", "", "false", "not-requested", "not-requested"],
       ["pull_request", "", undefined, "not-requested", "not-requested"],
       ["push", "", "true", "not-requested", "not-requested"],
@@ -442,13 +439,19 @@ describe("Windows and nightly CI contracts", () => {
         commit();
         if (!scenario.orphan) { writeFileSync(path, scenario.after ?? scenario.before); commit(); }
         const output = join(directory, "output");
+        const summary = join(directory, "summary");
         const result = spawnSync("bash", [repoPath("scripts", "ci", "windows-sensitive-diff.sh")], {
           cwd: directory, encoding: "utf8", timeout: 5_000,
-          env: { ...process.env, EVENT_NAME: scenario.event ?? "pull_request", PATH_SELECTED: scenario.selected ?? "false", GITHUB_OUTPUT: output },
+          env: { ...process.env, EVENT_NAME: scenario.event ?? "pull_request", PATH_SELECTED: scenario.selected ?? "false", GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary },
         });
         expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(scenario.status ?? 0);
         if (scenario.expected) expect(readFileSync(output, "utf8")).toBe(`windows=${scenario.expected}\n`);
+        // A Windows-sensitive pull request gets a non-blocking notice and summary line, and nothing
+        // else does; the PR still never runs the Windows shards (AGENTS.md CI policy).
+        const notice = (scenario.event ?? "pull_request") === "pull_request" && scenario.expected === "true";
+        expect(result.stdout.includes("::notice title=Windows-sensitive::")).toBe(notice);
+        expect(existsSync(summary) && readFileSync(summary, "utf8").includes("lane=all")).toBe(notice);
       } finally { rmSync(directory, { recursive: true, force: true }); }
     }
   }, 30_000);
