@@ -31,7 +31,7 @@
     "oxlint": "1.78.0",
     "react-refresh": "^0.18.0",
     "typescript": "~6.0.2",
-    "vite": "^8.2.1"
+    "vite": "^8.2.4"
   },
   "overrides": {
     "brace-expansion": "5.0.9",
