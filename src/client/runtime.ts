@@ -9,6 +9,7 @@ import { createLocalAttestationSecret } from "../lib/local-management-attestatio
 import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import {
+  CLIENT_RESTART_REBIND_WAIT_MS,
   DESKTOP_RESTART_EXIT_CODE,
   DESKTOP_SUPERVISED_ENV,
   DESKTOP_SUPERVISED_PORT_WAIT_MS,
@@ -23,11 +24,20 @@ import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tu
 import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } from "./link-state";
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState } from "./state";
+import { clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
+import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 
 let activeServer: Server<unknown> | null = null;
 let activePort: number | null = null;
 let activeSupervisor: ClientLinkSupervisor | null = null;
+let activeReporter: LinkParityReporter | null = null;
 let recycleScheduled = false;
+
+/**
+ * When this runtime's process started (OCX-6, P5): what `/healthz` reports as `startedAt` and the
+ * Child reports to its Home. A Home settings apply recorded after it means this runtime predates it.
+ */
+export const CLIENT_RUNTIME_STARTED_AT = new Date(Date.now() - process.uptime() * 1000).toISOString();
 
 /**
  * How long link mode waits for its configured port: the budget a hard-pinned `ocx start --port`
@@ -53,6 +63,8 @@ export interface ClientRuntimeIo {
   /** Link-mode port budget; defaults to {@link LINK_PORT_WAIT_MS}. */
   portWaitMs?: number;
   startListener?: typeof startMachineListener;
+  /** Which supervisor owns this process for a bound restart; tests replace the production check. */
+  restartSupervisor?: () => Promise<"service" | "desktop" | null>;
 }
 
 export interface StandaloneRecycleIo {
@@ -214,7 +226,7 @@ export async function bindClientListener(
     preferred: number;
     explicitPort: boolean;
     configuredPort: number;
-  } & Pick<MachineListenerDeps, "linkStatus" | "linkKeySource" | "linkTunnel">,
+  } & Pick<MachineListenerDeps, "linkStatus" | "linkKeySource" | "linkTunnel" | "restart">,
   io: ClientRuntimeIo = {},
 ): Promise<{ server: Server<unknown>; port: number }> {
   const { linkMode } = request;
@@ -254,6 +266,7 @@ export async function bindClientListener(
         ...(request.linkStatus ? { linkStatus: request.linkStatus } : {}),
         ...(request.linkKeySource ? { linkKeySource: request.linkKeySource } : {}),
         ...(request.linkTunnel ? { linkTunnel: request.linkTunnel } : {}),
+        ...(request.restart ? { restart: request.restart } : {}),
       });
       return { server, port: server.port ?? port };
     } catch (error) {
@@ -286,33 +299,88 @@ export async function startClientRuntime(
   if (linkMode && state.value.link) {
     try { recordChildInitiatedLink(state.value.link.linkId); } catch { /* the sidecar check below still applies */ }
   }
-  const supervisor = linkMode && existsSync(clientLinkStatePath())
-    ? createClientLinkSupervisor({
-      onLinkEnded: () => scheduleStandaloneRecycle(state.value.tokenFingerprint),
-      linkKey,
-    })
-    : null;
+  const supervised = linkMode && existsSync(clientLinkStatePath());
   // A Child with no sidecar and no record of joining itself was connected by its Home over
   // `ssh -R`; that link keeps 2.67.0's unproven forward. A Child-initiated link that lost its
   // sidecar gets no gate at all, so the relay refuses it.
-  const homeInitiated = linkMode && !supervisor && !!state.value.link
+  const homeInitiated = linkMode && !supervised && !!state.value.link
     && !isChildInitiatedLink(state.value.link.linkId);
-  const { server, port: boundPort } = await bindClientListener({
-    state: state.value,
-    linkMode,
-    preferred,
-    explicitPort: options.port !== undefined,
-    configuredPort: config.port,
-    ...(linkMode ? { linkStatus: () => supervisor?.status() ?? { kind: "stopped" as const }, linkKeySource: linkKey } : {}),
-    ...(supervisor ? { linkTunnel: supervisor } : homeInitiated ? { linkTunnel: HOME_INITIATED_LINK_TUNNEL } : {}),
-  }, io);
-  activeServer = server;
-  activePort = boundPort;
-  activeSupervisor = supervisor;
-  supervisor?.start();
+  // One secret for the life of this process: a rollback republishes the same identity.
+  const attestationSecret = createLocalAttestationSecret();
+
+  // Bind, start a fresh tunnel supervisor and publish. Runs once at start and again when a failed
+  // restart rolls back (OCX-6); the stopped supervisor cannot be started twice, so each call builds one.
+  const serve = async (portWaitMs?: number): Promise<void> => {
+    const supervisor = supervised
+      ? createClientLinkSupervisor({
+        onLinkEnded: () => scheduleStandaloneRecycle(state.value.tokenFingerprint),
+        linkKey,
+      })
+      : null;
+    const { server, port: boundPort } = await bindClientListener({
+      state: state.value,
+      linkMode,
+      preferred,
+      explicitPort: options.port !== undefined,
+      configuredPort: config.port,
+      restart: { attestationSecret, startedAt: CLIENT_RUNTIME_STARTED_AT, request: () => restartController.request() },
+      ...(linkMode ? { linkStatus: () => activeSupervisor?.status() ?? { kind: "stopped" as const }, linkKeySource: linkKey } : {}),
+      ...(supervisor ? { linkTunnel: supervisor } : homeInitiated ? { linkTunnel: HOME_INITIATED_LINK_TUNNEL } : {}),
+    }, portWaitMs === undefined ? io : { ...io, portWaitMs });
+    activeServer = server;
+    activePort = boundPort;
+    activeSupervisor = supervisor;
+    supervisor?.start();
+    writePid(process.pid);
+    writeRuntimePort(clientRuntimeRecord(process.pid, boundPort, attestationSecret));
+    if (linkMode && state.value.link && linkKey) {
+      activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
+      activeReporter.start();
+    }
+  };
+
+  // Stop everything this process serves, giving in-flight requests up to `drainMs`.
+  const stopServing = async (drainMs: number): Promise<void> => {
+    activeReporter?.stop();
+    activeReporter = null;
+    try {
+      await activeSupervisor?.stop();
+    } catch (error) {
+      console.warn(`[client] link supervisor stop failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    activeSupervisor = null;
+    const server = activeServer;
+    activeServer = null;
+    if (!server) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.resolve(server.stop(false)),
+        new Promise<void>(resolve => { timer = setTimeout(resolve, drainMs); }),
+      ]);
+    } catch { /* closed below */ } finally {
+      if (timer) clearTimeout(timer);
+    }
+    try { await server.stop(true); } catch { /* already closed */ }
+  };
+
+  const restartController: ClientRestartController = createClientRestartController({
+    supervisor: io.restartSupervisor ?? clientRestartSupervisor,
+    stop: stopServing,
+    spawnReplacement: async deadlineAt => {
+      const { replacementStartEnvironment } = await import("../server/management/system-restart");
+      const { spawnReplacementStart } = await import("../server/restart-replacement");
+      await spawnReplacementStart(
+        { port: activePort ?? config.port, waitForHealth: true, env: replacementStartEnvironment(true), notReady: "terminate" },
+        { deadlineAt },
+      );
+    },
+    resume: () => serve(CLIENT_RESTART_REBIND_WAIT_MS),
+    exitProcess: code => { process.exit(code); },
+  });
+
+  await serve();
   installCrashGuards();
-  writePid(process.pid);
-  writeRuntimePort(clientRuntimeRecord(process.pid, boundPort));
   options.afterPublish?.();
 
   let shuttingDown = false;
@@ -320,14 +388,16 @@ export async function startClientRuntime(
     if (shuttingDown) return;
     shuttingDown = true;
     void (async () => {
+      activeReporter?.stop();
+      activeReporter = null;
       try {
-        await supervisor?.stop();
+        await activeSupervisor?.stop();
       } catch (error) {
         console.warn(`[client] link supervisor stop failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       activeSupervisor = null;
       try {
-        server.stop(true);
+        activeServer?.stop(true);
       } catch (error) {
         console.warn(`[client] listener stop failed: ${error instanceof Error ? error.message : String(error)}`);
       } finally {

@@ -1388,4 +1388,6 @@
   "server-desktop-compatibility-startup.test.ts": "server",
   "codex-set-prompt.test.ts": "gui", "codex-prompt-writes.test.ts": "codex-integration", "codex-prompt-scalar-scope.test.ts": "codex-integration",
   "advisor-settings.test.ts": "advisor", "advisor-context.test.ts": "advisor", "advisor-state.test.ts": "advisor", "advisor-guard.test.ts": "advisor", "advisor-consult.test.ts": "advisor", "advisor-plan.test.ts": "advisor", "advisor-responses-wiring.test.ts": "advisor", "advisor-routes.test.ts": "server", "advisor-internal-authority.test.ts": "advisor", "advisor-core-boundary.test.ts": "advisor", "advisor-continuation-limit.test.ts": "advisor", "advisor-authority-transport.test.ts": "advisor", "advisor-evidence.test.ts": "advisor", "advisor-budget.test.ts": "advisor", "advisor-adaptive.test.ts": "advisor"
+  ,"link-codex-settings-digest.test.ts": "clients", "link-apply-record.test.ts": "clients", "client-runtime-restart.test.ts": "clients", "link-parity-reporter.test.ts": "clients",
+  "link-apply-restart.test.ts": "cli", "link-child-parity.test.ts": "server", "restart-replacement-not-ready.test.ts": "server"
 }

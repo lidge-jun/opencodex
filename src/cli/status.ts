@@ -36,6 +36,7 @@ export type { ListenTarget } from "./status-probes";
 import { checkProxyHealth, probeUncleanExitState, type ListenTarget } from "./status-probes";
 import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
+import { collectAppliedCodexSettingsStatus, type CliAppliedCodexSettingsStatus } from "./status-codex-settings";
 
 /**
  * The state of the data-plane admission secret the SERVICE will use. State only -- never the value.
@@ -230,7 +231,7 @@ export type CliStatusJson = {
   versionSkew: VersionSkew;
   cliCommand: CliPathDiagnostics;
   startupSource: "live" | "local" | "local-supervision-override";
-};
+} & CliAppliedCodexSettingsStatus;
 
 export type CliStatusView = {
   json: CliStatusJson;
@@ -859,6 +860,9 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
   // No extra request: findLiveProxy's identity probe already parsed and validated the
   // healthz body, so the version came back with the liveness result.
   const versionSkew = computeVersionSkew(packageVersion(), live?.version);
+  // OCX-6: what this machine applied and, on a Child, when its runtime started. Additive and
+  // always present (null when unknown), so `schemaVersion` stays 1.
+  const appliedCodexSettings = await collectAppliedCodexSettingsStatus(config, live);
   const listen = live
     ? {
       port: live.port,
@@ -1068,6 +1072,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
       versionSkew,
       cliCommand,
       startupSource,
+      ...appliedCodexSettings,
     },
   };
 }

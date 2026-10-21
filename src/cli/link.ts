@@ -2,6 +2,8 @@ import { clientLinkStatusIdentity } from "../client/link-status";
 import { clientLinkTunnelStatus } from "../client/link-tunnel";
 import { loadConfig } from "../config";
 import { projectLinkStatus, type ClientLinkIdentity, type LinkStatusConfig, type LinkStatusDto } from "../link/status-projection";
+import { isEpochMs, type LinkChildParity } from "../link/child-parity";
+import { CODEX_SETTINGS_DIGEST_PATTERN } from "../link/codex-settings";
 import { runLinkEnrollment } from "./link-enrollment";
 import { assertSshAlias } from "../link/ssh-argv";
 import { linkStorePath } from "../link/paths";
@@ -40,7 +42,7 @@ type ListenerState = "off" | "listening" | "failed";
 export interface LinkStatusPayload {
   role: "standalone" | "home" | "child";
   listener: { state: ListenerState; port: number | null };
-  links: Array<{
+  links: Array<LinkChildParity & {
     id: string;
     alias: string;
     direction: LinkDirection;
@@ -121,7 +123,11 @@ function validateStatus(value: unknown): LinkStatusPayload {
   if (!Array.isArray(value.links)) throw new Error("invalid link API response: links");
   const links = value.links.map((candidate, index) => {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
-    assertExactKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort"], `link ${index}`);
+    // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
+    // present in this output, null when absent.
+    const parityKeys = PARITY_KEYS.filter(key => key in candidate);
+    assertExactKeys(candidate, ["id", "alias", "direction", "state", "since", "reason", "tunnelPort", ...parityKeys], `link ${index}`);
+    const parity = validateParity(candidate, index);
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
       || (candidate.state !== "connecting" && candidate.state !== "connected" && candidate.state !== "reconnecting" && candidate.state !== "failed" && candidate.state !== "idle")
@@ -136,6 +142,7 @@ function validateStatus(value: unknown): LinkStatusPayload {
       since: candidate.since,
       reason: candidate.reason,
       tunnelPort: candidate.tunnelPort,
+      ...parity,
     } as LinkStatusPayload["links"][number];
   });
   let child: LinkStatusPayload["child"] = null;
@@ -328,4 +335,25 @@ export async function runLinkCommand(rawArgs: string[], deps: LinkCliDeps = {}):
     else if (command === "reconnect") await runReconnect(args, deps);
     else throw new CliUsageError("link requires one of: probe, add, port, issue, status, revoke, reconnect", LINK_USAGE);
   });
+}
+
+const PARITY_KEYS = ["lastApplyAt", "runtimeStartedAt", "appliedCodexSettingsDigest", "reportedAt"] as const;
+
+function validateParity(candidate: Record<string, unknown>, index: number): LinkChildParity {
+  const time = (key: "lastApplyAt" | "runtimeStartedAt" | "reportedAt"): number | null => {
+    const value = candidate[key];
+    if (value === undefined || value === null) return null;
+    if (!isEpochMs(value)) throw new Error(`invalid link API response: link ${index} ${key}`);
+    return value;
+  };
+  const digest = candidate.appliedCodexSettingsDigest;
+  if (digest !== undefined && digest !== null && (typeof digest !== "string" || !CODEX_SETTINGS_DIGEST_PATTERN.test(digest))) {
+    throw new Error(`invalid link API response: link ${index} appliedCodexSettingsDigest`);
+  }
+  return {
+    lastApplyAt: time("lastApplyAt"),
+    runtimeStartedAt: time("runtimeStartedAt"),
+    appliedCodexSettingsDigest: typeof digest === "string" ? digest : null,
+    reportedAt: time("reportedAt"),
+  };
 }

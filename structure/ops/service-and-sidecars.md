@@ -574,7 +574,7 @@ waits for its replacement to answer, exits 1 when it never did, and falls back t
 when the listener recorded none. A supervised process (`OCX_SERVICE=1`) never spawns and exits 1
 for its supervisor. Coverage: `tests/server/restart-replacement.test.ts`,
 `tests/cli/cli-restart-handoff.test.ts`, `tests/server/system-restart.test.ts` and
-`tests/clients/client-runtime.test.ts`.
+`tests/clients/client-runtime.test.ts`. The client runtime's bound restart (OCX-6) keeps serving when its replacement fails, so it alone passes `notReady: "terminate"`: an unready replacement is stopped and `not_ready` returns only after its exit is observed (`tests/server/restart-replacement-not-ready.test.ts`; contract in [Remote Link](../remote-link.md)).
 
 A process the desktop app spawned spawns no replacement at all. The app sets
 `OCX_DESKTOP_SUPERVISED=1` on its sidecar; `handleStart` consumes it with the other start markers and

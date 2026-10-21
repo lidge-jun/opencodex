@@ -380,7 +380,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // the shared table in src/link/management-routes.ts; never reachable on another ingress.
         if (isLinkManagementPath(requestUrl.pathname)) {
           const { handleLinkManagementRequest } = await import("./link-management");
-          return withCors(await handleLinkManagementRequest(req, requestUrl, config, requestManagementApiDeps, managementSessionControl), req, policy);
+          return withCors(await handleLinkManagementRequest(
+            req, requestUrl, config, requestManagementApiDeps, managementSessionControl,
+            admission.kind === "configured" ? admission.keyId : undefined,
+          ), req, policy);
         }
       }
       const url = requestUrl;

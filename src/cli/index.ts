@@ -167,7 +167,7 @@ import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
-import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
+import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS, RESTART_REOBSERVE_RESERVE_MS } from "../lib/system-restart-contract";
 import { startServiceLogging } from "../service/logging";
 
 /**
@@ -941,7 +941,6 @@ async function handleTrayProxyStart(existingIsSuccess = true): Promise<boolean> 
 const PROXY_RESTART_OBSERVE_MS = MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIMEOUT_MS + 15_000;
 
 /** Reserve confirmation time within the shared restart deadline. */
-const RESTART_REOBSERVE_RESERVE_MS = 10_000;
 async function handleProxyRestart(
   startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>,
 ): Promise<boolean> {

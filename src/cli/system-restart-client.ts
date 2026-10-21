@@ -6,6 +6,8 @@ import {
   verifyLocalAttestationProof,
 } from "../lib/local-management-attestation";
 import {
+  CLIENT_RESTART_REQUEST_MIN_REMAINING_MS,
+  RESTART_SUPERVISED_ERROR,
   SYSTEM_RESTART_CAPABILITY_HEADER,
   SYSTEM_RESTART_CAPABILITY_VERSION,
   SYSTEM_RESTART_EXPECTED_PID_HEADER,
@@ -182,6 +184,13 @@ export async function requestBoundSystemRestart(
   );
   if (!capability) return rejected("restart_capability_unavailable");
 
+  // A connected client runtime keeps serving when its replacement fails, but its rollback takes
+  // up to CLIENT_RESTART_BUDGET_MS. Ask only while that still ends before this CLI stops observing,
+  // or the recovery start below could race the rollback for the port (OCX-6).
+  if (body.role === "client" && deadlineAt - now() < CLIENT_RESTART_REQUEST_MIN_REMAINING_MS) {
+    return rejected("restart_deadline_expired");
+  }
+
   const requestBudget = remaining(deadlineAt, now, SYSTEM_RESTART_REQUEST_TIMEOUT_MS);
   if (requestBudget <= 0) return rejected("restart_deadline_expired");
   try {
@@ -194,10 +203,31 @@ export async function requestBoundSystemRestart(
       },
       signal: AbortSignal.timeout(requestBudget),
     });
-    return response.ok ? { accepted: true } : rejected(`restart_request_http_${response.status}`);
+    if (response.ok) return { accepted: true };
+    if (response.status === 409) {
+      const supervisor = await supervisedRefusal(response);
+      if (supervisor) return rejected(`${RESTART_SUPERVISED_ERROR}_${supervisor}`);
+    }
+    return rejected(`restart_request_http_${response.status}`);
   } catch {
     // The server may have accepted the restart before the response connection failed.
     // The coordinator observes the original PID for replacement instead of replaying.
     return uncertain("restart_request_outcome_unknown");
+  }
+}
+
+/**
+ * A client runtime under the desktop app or a service answers 409 `restart_supervised` and keeps
+ * serving (OCX-6). Read that small body and return the validated supervisor, or null.
+ */
+async function supervisedRefusal(response: Response): Promise<"service" | "desktop" | null> {
+  try {
+    const text = await response.text();
+    if (text.length > 1024) return null;
+    const body = JSON.parse(text) as { error?: { code?: unknown; supervisor?: unknown } } | null;
+    if (body?.error?.code !== RESTART_SUPERVISED_ERROR) return null;
+    return body.error.supervisor === "service" || body.error.supervisor === "desktop" ? body.error.supervisor : null;
+  } catch {
+    return null;
   }
 }

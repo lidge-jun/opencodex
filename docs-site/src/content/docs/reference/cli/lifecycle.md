@@ -153,6 +153,14 @@ Eligibility refusals name the reason and next action: use the owning installatio
 owning service/desktop app on Windows. Unknown ancestry or a changed target calls for
 `ocx status` before any restart.
 
+On a connected client runtime (a Remote Link Child or a hub client), `ocx restart` asks the runtime
+to start its own replacement on the same port. If the replacement does not answer within the
+restart budget it is stopped, and the old runtime binds the port again and keeps serving; the
+command then reports the restart as not completed. A client runtime run by a background service or
+the desktop app refuses the request and keeps serving ("Restart not performed; the running client
+runtime was kept"); restart it with `ocx service restart` or from the app. See
+[Remote Link apply parity](#remote-link-apply-parity).
+
 If package files or the Bun runtime remain incomplete after the installer exited or failed,
 run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or
 desktop app), then reinstall with the same package manager and start it again. See
@@ -278,6 +286,9 @@ strings still produce a neutral warning when they cannot be strictly parsed as S
 only in build metadata; neither side is called older. Versions are not trimmed and a leading `v`
 is not normalized. JSON exposes the same advice in `versionSkew`, whose fields remain
 `cliVersion`, `proxyVersion`, `skewed`, and `warning`.
+
+On a Remote Link Child and its Home, `--json` also reports `appliedCodexSettingsDigest`,
+`lastApplyAt` and `runtimeStartedAt`; see [Remote Link apply parity](#remote-link-apply-parity).
 
 Print a read-only diagnostic summary: proxy PID, `/healthz` reachability, dashboard URL, config path,
 default provider, Codex autostart setting, service state, shim state, and the redacted effective Codex
@@ -494,6 +505,9 @@ upstream status but never consumes or resumes a grant.
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 An explicitly requested restart also runs after a successful committed `config.toml` change, even if the catalog and cache bytes are unchanged. A configuration-only no-op, refusal, preflight, or rolled-back write does not trigger it. Without a restart flag, sync never automatically restarts Codex.
+
+On a Remote Link Child, `ocx sync` also applies the Home's Codex settings and, when the client runtime
+started before that apply, restarts it; see [Remote Link apply parity](#remote-link-apply-parity).
 
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
 Run it after adding a provider or to refresh available models.
@@ -1096,6 +1110,46 @@ The new-field receipt is `{ok:true,policy,job:{status}}`, with observed trigger,
 target, mode, schedule and optional last/next-run facts. `job.status` describes an
 existing idle/running state, not a cleanup started by this command. Read back on
 an unknown outcome rather than replaying the write.
+
+## Remote Link apply parity
+
+A Remote Link Child applies its Home's OpenCodex-owned Codex settings when it is linked
+(`ocx link add` on the Home) and on every `ocx sync`. Three facts let a peer check that the
+Child really runs under the settings it applied, without reading either machine's configuration.
+
+`ocx status --json`, on any device, carries:
+
+| Field | Meaning |
+| --- | --- |
+| `appliedCodexSettingsDigest` | Lowercase hex SHA-256 of the applied settings (below). On a Child, the values its last apply wrote; on a Home or standalone install, its own values, which is also what it serves its Children. `null` on a hub client and on a Child with no recorded apply. |
+| `lastApplyAt` | Child only: epoch milliseconds of the last successful apply of a *different* settings document. Re-applying the same values keeps it. `null` elsewhere. |
+| `runtimeStartedAt` | Child only: epoch milliseconds the running client runtime started. `null` when no client runtime answers. |
+
+The digest is computed over this compact UTF-8 JSON, with the keys in exactly this order and no
+whitespace, from the values actually applied:
+
+```json
+{"version":1,"settings":{"fastMode":true,"multiAgentMode":"v1","webSearchSidecarEnabled":false,"subagentDefaults":null}}
+```
+
+`subagentDefaults` is `null` when unset, otherwise `{"model":…,"reasoningEffort":…}` in that order.
+The example above hashes to `57c751eff89844f93db71a6ee4acdac03afbc29fec52734ade80a40193e826cd`. The digest
+never contains a setting value, and the Home's name and version are not part of it, so a Home and
+a Child that applied the same values report the same digest.
+
+On the Home, every row of `ocx link status --json` carries what that Child last reported:
+`lastApplyAt`, `runtimeStartedAt`, `appliedCodexSettingsDigest` (same meanings as above) and
+`reportedAt` (epoch milliseconds, the Home's clock). A linked Child reports shortly after its runtime
+starts and then once a minute; the Home keeps reports in memory only, so after a Home restart the
+fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
+running an older runtime than its last apply.
+
+After `ocx sync` applies the Home's settings on a Child, it restarts the Child's client runtime when
+that runtime started before `lastApplyAt`, using the same restart as `ocx restart`. A runtime that
+already started after the apply is left alone, nothing is started when no client runtime is
+running, and a failed restart exits nonzero while the previous runtime keeps serving; run
+`ocx sync` or `ocx restart` again to retry. Two applies on one Child never interleave: a second
+`ocx sync` while one is applying fails fast and changes nothing.
 
 ## Forced link revoke and remote recovery
 

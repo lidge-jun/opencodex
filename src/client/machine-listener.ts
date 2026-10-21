@@ -22,9 +22,23 @@ import { readClientLinkState, type ClientLinkState } from "./link-state";
 import { projectClientLinkChild, type ClientLinkSidecarRead } from "./link-status";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
 import { packageVersion } from "../lib/package-version";
+import { createLocalAttestationProof, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../lib/local-management-attestation";
+import {
+  CLIENT_RESTART_BUDGET_MS,
+  parseExpectedSystemRestartPid,
+  RESTART_SUPERVISED_ERROR,
+  SYSTEM_RESTART_CAPABILITY_HEADER,
+  SYSTEM_RESTART_CAPABILITY_VERSION,
+  SYSTEM_RESTART_EXPECTED_PID_HEADER,
+  SYSTEM_RESTART_METHOD,
+  SYSTEM_RESTART_NONCE_HEADER,
+  SYSTEM_RESTART_PATH,
+  verifySystemRestartCapability,
+} from "../lib/system-restart-contract";
 import { linkRouteAllowed } from "../link/routes";
 import { linkHomeName, linkHomePhrase } from "./link-home";
 import { relayLinkManagementRead } from "./link-management-relay";
+import type { ClientRestartAdmission } from "./runtime-restart";
 
 const VERSION = packageVersion("0.0.0");
 const GUI_SPA_PATHS = new Set([
@@ -51,6 +65,17 @@ export interface MachineListenerDeps {
   linkTunnel?: LinkTunnelGate;
   /** Link mode: relay seams (deadline clock and byte cap). */
   linkRelay?: LinkIngress["relay"];
+  /**
+   * The bound restart (OCX-6). With it, `/healthz` proves this process's identity to a challenge,
+   * advertises `restartCapability` and `startedAt`, and `POST /api/system/restart` accepts a
+   * capability signed with `attestationSecret` for this pid and port, and nothing else.
+   */
+  restart?: {
+    attestationSecret: string;
+    /** ISO start time of this runtime's process. */
+    startedAt: string;
+    request: () => Promise<ClientRestartAdmission>;
+  };
   serve?: (options: Parameters<typeof Bun.serve>[0]) => Server<unknown>;
 }
 
@@ -68,6 +93,8 @@ export function machineRouteAllowed(url: URL, req: Request, relayEnabled: boolea
   if (linkMode && linkRouteAllowed(url, req)) return true;
   const path = url.pathname;
   if (req.method === "GET" && (path === "/healthz" || path === "/readyz" || path === "/" || path === "/opencodex-session")) return true;
+  // The bound restart. Only a capability signed for this exact process admits it (see the handler).
+  if (req.method === SYSTEM_RESTART_METHOD && path === SYSTEM_RESTART_PATH) return true;
   if ((req.method === "GET" || req.method === "HEAD") && (path === "/api/machine/status" || path === "/api/machine/clients" || path === "/api/machine/shim")) return true;
   // The one link route a connected Child serves: its own read-only link status.
   if (linkMode && (req.method === "GET" || req.method === "HEAD") && path === "/api/link/status") return true;
@@ -143,7 +170,20 @@ export function startMachineListener(
       }
       if (!machineRouteAllowed(url, req, relayEnabled, linkMode)) return json404(req);
       if (url.pathname === "/healthz" && req.method === "GET") {
-        return Response.json({ service: "opencodex", version: VERSION, role: "client", uptime: process.uptime(), pid: process.pid, port: server.port });
+        const restart = deps.restart;
+        const response = Response.json({
+          service: "opencodex", version: VERSION, role: "client", uptime: process.uptime(), pid: process.pid, port: server.port,
+          ...(restart ? { startedAt: restart.startedAt, restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION, restartBudgetMs: CLIENT_RESTART_BUDGET_MS } : {}),
+        });
+        const challenge = restart ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;
+        const proof = challenge && server.port
+          ? createLocalAttestationProof(restart!.attestationSecret, challenge, process.pid, server.port)
+          : null;
+        if (proof) response.headers.set(LOCAL_ATTESTATION_PROOF_HEADER, proof);
+        return response;
+      }
+      if (url.pathname === SYSTEM_RESTART_PATH && req.method === SYSTEM_RESTART_METHOD) {
+        return await handleBoundRestart(req, server, deps.restart);
       }
       if (url.pathname === "/readyz" && req.method === "GET") {
         return Response.json({ service: "opencodex", version: VERSION, role: "client", status: "ready", uptime: process.uptime(), pid: process.pid, port: server.port, protocolVersion: 1 });
@@ -231,4 +271,46 @@ export function startMachineListener(
       return json404(req);
     },
   } as Parameters<typeof Bun.serve>[0]);
+}
+
+/**
+ * `POST /api/system/restart` on the client listener (OCX-6). The only accepted principal is the
+ * process-bound restart capability `ocx restart` derives from this runtime's attestation secret:
+ * no dashboard session, admin token or link key reaches it, and a browser cannot mint it.
+ */
+async function handleBoundRestart(
+  req: Request,
+  server: Server<unknown>,
+  restart: MachineListenerDeps["restart"],
+): Promise<Response> {
+  const noStore = { "cache-control": "no-store" };
+  if (!restart || !server.port) return json404(req);
+  const expected = parseExpectedSystemRestartPid(req.headers.get(SYSTEM_RESTART_EXPECTED_PID_HEADER));
+  if (expected.kind !== "present" || expected.pid !== process.pid) {
+    return Response.json({ success: false, error: "Restart target identity changed." }, { status: 409, headers: noStore });
+  }
+  const authorized = verifySystemRestartCapability(
+    restart.attestationSecret,
+    req.headers.get(SYSTEM_RESTART_NONCE_HEADER),
+    SYSTEM_RESTART_METHOD,
+    SYSTEM_RESTART_PATH,
+    process.pid,
+    server.port,
+    req.headers.get(SYSTEM_RESTART_CAPABILITY_HEADER),
+  );
+  if (!authorized) return Response.json({ success: false, error: "restart capability required" }, { status: 401, headers: noStore });
+  const admission = await restart.request();
+  if (admission.kind === "supervised") {
+    return Response.json({
+      success: false,
+      error: { code: RESTART_SUPERVISED_ERROR, supervisor: admission.supervisor },
+    }, { status: 409, headers: noStore });
+  }
+  return Response.json({
+    success: true,
+    message: admission.alreadyRestarting ? "Restart already in progress." : "Restarting the client runtime.",
+    activeTurnCount: 0,
+    drainTimeoutMs: CLIENT_RESTART_BUDGET_MS,
+    alreadyDraining: admission.alreadyRestarting,
+  }, { status: 202, headers: noStore });
 }

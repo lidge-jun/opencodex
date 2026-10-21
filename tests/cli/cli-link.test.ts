@@ -6,6 +6,8 @@ import { CAPABILITIES } from "../../src/cli/capabilities";
 import { DISPATCH_COMMANDS } from "../../src/cli/dispatch";
 import { findCommand } from "../../src/cli/registry";
 
+const NO_PARITY = { lastApplyAt: null, runtimeStartedAt: null, appliedCodexSettingsDigest: null, reportedAt: null };
+
 type RequestCall = { url: string; init: RequestInit | undefined };
 
 function captureOutput(): { stdout: string[]; stderr: string[]; restore: () => void } {
@@ -137,7 +139,11 @@ describe("ocx link", () => {
         readAdminToken: () => "ocx_admin_test-token",
       });
       expect(code).toBe(0);
-      expect(JSON.parse(output.stdout[0]!)).toEqual(statusResponse);
+      // An older runtime omits the OCX-6 parity fields; the CLI prints them as null.
+      expect(JSON.parse(output.stdout[0]!)).toEqual({
+        ...statusResponse,
+        links: statusResponse.links.map(link => ({ ...link, ...NO_PARITY })),
+      });
       expect(calls[0]?.url).toBe("http://127.0.0.1:19101/api/link/status");
       expect(new Headers(calls[0]?.init?.headers).get("x-opencodex-api-key")).toBe("ocx_admin_test-token");
     } finally {
@@ -177,6 +183,7 @@ describe("ocx link", () => {
           since: "2026-09-25T00:00:00.000Z",
           reason: null,
           tunnelPort: 19200,
+          ...NO_PARITY,
         }],
         child: null,
       });

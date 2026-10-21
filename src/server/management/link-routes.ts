@@ -7,6 +7,7 @@ import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
 import { projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
+import { homeLinkChildParity } from "../../link/child-parity";
 import { isLinkPort } from "../../link/ports";
 import { joinHome, type ClientLinkJoinDeps } from "../../client/link-join";
 import { clientLinkStatusIdentity } from "../../client/link-status";
@@ -268,6 +269,7 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
       store, state.supervisor.status(), listenerStatus, ctx.config, readCompensation(),
       ctx.config.runtimeRole === "client" ? clientLinkTunnelStatus() : null,
       ctx.config.runtimeRole === "client" && ctx.config.client?.link ? clientLinkStatusIdentity(ctx.config.client.link.linkId) : null,
+      linkId => homeLinkChildParity.get(linkId),
     );
     for (const link of dto.links) {
       const failure = state.compensationFailures?.get(link.id);

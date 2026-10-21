@@ -130,5 +130,9 @@
   "link-status-projection.test.ts": "clients",
   "link-admission-wait.test.ts": "clients",
   "link-fingerprint.test.ts": "clients",
-  "link-compensation.test.ts": "clients"
+  "link-compensation.test.ts": "clients",
+  "link-codex-settings-digest.test.ts": "clients",
+  "link-apply-record.test.ts": "clients",
+  "client-runtime-restart.test.ts": "clients",
+  "link-parity-reporter.test.ts": "clients"
 }

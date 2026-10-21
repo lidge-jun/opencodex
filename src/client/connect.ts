@@ -78,9 +78,13 @@ import { overlayHomeCodexSettings } from "../link/codex-settings";
 import {
   clearHomeCodexSettingsRecord,
   fetchHomeCodexSettings,
+  homeCodexSettingsReceipt,
+  readHomeCodexSettingsRecord,
   resolveHomeCodexSettings,
   recordHomeCodexSettings,
+  withLinkApply,
   writeHomeCodexSettingsRecord,
+  type HomeCodexSettingsRecord,
   type HomeCodexSettingsSource,
   type LinkHomeDeps,
 } from "./link-home";
@@ -122,6 +126,8 @@ export interface ClientConnectDeps {
   catalogCompatibility?: CatalogCompatibilityDeps;
   /** Link mode: how the Home's Codex settings are read (#6957). */
   linkHome?: LinkHomeDeps;
+  /** Link mode: the apply lock's path (OCX-6); defaults to `<configDir>/link/apply-lock.sqlite`. */
+  linkApplyLockPath?: string;
 }
 
 export interface RotateClientOptions {
@@ -549,7 +555,20 @@ function assertConnectingState(expectedTokenFingerprint?: string): void {
 }
 
 /** Enroll a client key, keeping its pending ownership visible until commit or rollback. */
+/**
+ * Connect this machine to a hub or, with `transport: "link"`, to a Remote Link Home. A link
+ * connect holds the apply lock throughout (OCX-6), because it applies the Home's Codex settings
+ * and records that apply exactly as `ocx sync` does.
+ */
 export async function connectClient(
+  options: ConnectOptions,
+  deps: ClientConnectDeps = {},
+): Promise<OcxClientConnectionConfig> {
+  if ((options.transport ?? "hub") !== "link") return connectClientUnlocked(options, deps);
+  return withLinkApply(() => connectClientUnlocked(options, deps), deps.linkApplyLockPath);
+}
+
+async function connectClientUnlocked(
   options: ConnectOptions,
   deps: ClientConnectDeps = {},
 ): Promise<OcxClientConnectionConfig> {
@@ -755,11 +774,17 @@ export async function connectClient(
       commitClientConnection(connection);
       committed = true;
     }), deps.lifecycleLockDeps);
-    // Recorded only when the injection that applied it ran (not with --no-sync).
+    // Recorded only when the injection that applied it ran (not with --no-sync). The connection is
+    // already committed, so a failed record write must not reach the rollback below: it is a
+    // warning, and `ocx status` reports no recorded apply until `ocx sync` writes one.
     if (homeSettings?.kind === "fresh" && linkMetadata && injectionCommitted) {
       try {
-        writeHomeCodexSettingsRecord({ linkId: linkMetadata.linkId, fetchedAt: now, document: homeSettings.document });
-      } catch { /* the next sync records it; the applied config is already committed */ }
+        writeHomeCodexSettingsRecord(homeCodexSettingsReceipt(
+          linkMetadata.linkId, homeSettings.document, now, (deps.now ?? (() => new Date()))().toISOString(), null,
+        ));
+      } catch {
+        console.warn("Warning: the Home's Codex settings were applied, but the apply record was not written; run 'ocx sync' to record it.");
+      }
     }
     return connection;
   } catch (error) {
@@ -804,10 +829,33 @@ export async function connectClient(
   }
 }
 
+export interface ConnectedSyncResult {
+  catalogWritten: boolean;
+  cacheSynced: boolean;
+  injected: boolean;
+  stale: boolean;
+  homeSettings?: HomeCodexSettingsSource;
+  /** The apply record this sync committed or kept (link Child with Home settings only). */
+  appliedRecord?: HomeCodexSettingsRecord;
+}
+
+/**
+ * Refresh the catalog and Codex config from the hub or Home. On a link Child the whole sync holds
+ * the apply lock (OCX-6), so its record names the settings its own injection wrote.
+ */
 export async function syncConnectedClient(
+  options: { restartCodex?: boolean } = {},
+  deps: ClientConnectDeps = {},
+): Promise<ConnectedSyncResult> {
+  const state = readClientConnectionState();
+  if (state.kind !== "connected" || !isLinkConnection(state.value)) return syncConnectedClientUnlocked(options, deps);
+  return withLinkApply(() => syncConnectedClientUnlocked(options, deps), deps.linkApplyLockPath);
+}
+
+async function syncConnectedClientUnlocked(
   _options: { restartCodex?: boolean } = {},
   deps: ClientConnectDeps = {},
-): Promise<{ catalogWritten: boolean; cacheSynced: boolean; injected: boolean; stale: boolean; homeSettings?: HomeCodexSettingsSource }> {
+): Promise<ConnectedSyncResult> {
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const initial = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
     assertNoClientDisconnectPending();
@@ -853,6 +901,7 @@ export async function syncConnectedClient(
   };
   let injected = false;
   let homeSettings: HomeCodexSettingsSource | undefined;
+  let appliedRecord: HomeCodexSettingsRecord | undefined;
   if (next.selectedClients.includes("codex")) {
     let config = loadConfig();
     // #6957: a link Child applies the Home's OpenCodex-owned Codex settings with the catalog.
@@ -866,14 +915,30 @@ export async function syncConnectedClient(
     });
     if (!result.success || result.status === "skipped") throw new Error(result.message);
     injected = true;
-    if (homeSettings && next.link) recordHomeCodexSettings(next.link.linkId, homeSettings);
+    if (homeSettings && next.link) {
+      const linkId = next.link.linkId;
+      const settings = homeSettings;
+      try {
+        appliedRecord = withClientLifecycleSync(() => {
+          beforeClientWrite();
+          return recordHomeCodexSettings(linkId, settings, deps.now) ?? readHomeCodexSettingsRecord(linkId) ?? undefined;
+        }, deps.lifecycleLockDeps);
+      } catch (error) {
+        if (error instanceof Error && error.message === "client_token_changed") throw error;
+        throw new Error("the Home's Codex settings were applied, but the apply record could not be written; run 'ocx sync' again", { cause: error });
+      }
+    }
   }
   const cacheSynced = withClientLifecycleSync(() => {
     beforeClientWrite();
     // Cache invalidation acquires K itself (N -> K -> C); never call it while C is held.
     return invalidateCodexModelsCache({ allowWhenDesiredDisabled: true });
   }, deps.lifecycleLockDeps);
-  return { catalogWritten: downloaded !== undefined, cacheSynced, injected, stale, ...(homeSettings ? { homeSettings } : {}) };
+  return {
+    catalogWritten: downloaded !== undefined, cacheSynced, injected, stale,
+    ...(homeSettings ? { homeSettings } : {}),
+    ...(appliedRecord ? { appliedRecord } : {}),
+  };
 }
 
 /**
