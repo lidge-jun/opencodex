@@ -1304,14 +1304,14 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     keyOptional: true,
     featured: false,
-    deprecated: "Deprecated: Xiaomi ended the anonymous free lane. Bootstrap may still return a JWT, but /api/free-ai/openai/chat answers 400 \"Unsupported model\" for every model, including mimo-auto. Kept only so existing saved providers keep resolving; new setups should use the keyed xiaomi provider.",
+    deprecated: "Deprecated: requests through this entry fail. Bootstrap may still return a JWT, but /api/free-ai/openai/chat rejects the configured model \"mimo-auto\" with 400 \"Unsupported model\". Kept only so existing saved providers keep resolving; new setups should use the keyed xiaomi provider.",
     liveModels: true,
     dashboardUrl: "https://xiaomimimo.com",
     defaultModel: "mimo-auto",
     models: ["mimo-auto"],
     reasoningEfforts: ["low", "medium", "high"],
     reasoningEffortMap: { xhigh: "high", max: "high", ultra: "high" },
-    note: "Deprecated: Xiaomi ended the anonymous free lane in 2026. The bootstrap endpoint may still issue a JWT, but /api/free-ai/openai/chat rejects mimo-auto with 400 \"Unsupported model\", so requests cannot complete. This entry remains only so existing saved providers keep resolving; add the keyed Xiaomi provider at https://platform.xiaomimimo.com instead. Xiaomi may resume or change the service at any time.",
+    note: "Deprecated: the anonymous MiMo free lane stopped completing requests for this entry in 2026. Bootstrap may still issue a JWT, but /api/free-ai/openai/chat rejects the configured model \"mimo-auto\" with 400 \"Unsupported model\", so turns cannot finish. This entry remains only so existing saved providers keep resolving; add the keyed Xiaomi provider at https://platform.xiaomimimo.com instead. Xiaomi may resume or change the service at any time.",
   },
   // Xiaomi MiMo paid token plan. Separate host and wire from both `xiaomi` (Anthropic) and
   // `mimo-free` (free tier, bespoke adapter), so it needs its own entry rather than a variant.

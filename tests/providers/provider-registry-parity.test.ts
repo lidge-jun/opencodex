@@ -70,11 +70,13 @@ describe("provider registry parity", () => {
     const presets = deriveProviderPresets();
     const featured = deriveFeaturedProviderIds();
     const keyLogins = Object.keys(deriveKeyLoginMap());
+    const initProviders = buildInitProviders();
     for (const entry of deprecated) {
       expect(providerConfigSeed(entry).adapter).toBe(entry.adapter);
       expect(presets.find(preset => preset.id === entry.id)).toBeUndefined();
       expect(featured).not.toContain(entry.id);
       expect(keyLogins).not.toContain(entry.id);
+      expect(initProviders.find(provider => provider.id === entry.id)).toBeUndefined();
     }
   });
 
