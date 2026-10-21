@@ -204,9 +204,11 @@ describe("#7429 Chat reasoning_details carry Anthropic thinking across tool step
         const turns = assistantTurns(bodies[2]!);
         expect(turns).toHaveLength(2);
         turns.forEach((content, step) => {
-          // Exactly the original turn: the progress copy in content is not replayed a second time.
+          // The signed block first. A progress update's visible copy stays in the text the
+          // client sent: nothing on the wire tells it from answer text, so nothing is removed.
           expect(content).toEqual([
             { type: "thinking", thinking: THINKING[step], signature: SIGNATURES[step] },
+            ...(progress ? [{ type: "text", text: THINKING[step] }] : []),
             expect.objectContaining({ type: "tool_use", id: `toolu_${step + 1}` }),
           ]);
         });
@@ -272,6 +274,14 @@ describe("#7429 Chat reasoning_details carry Anthropic thinking across tool step
     const body = { model: "m", messages, tools: TOOLS };
     expect(JSON.stringify(chatCompletionsToResponsesBody(body, { acceptAnthropicReasoningSignatures: true })))
       .toBe(JSON.stringify(chatCompletionsToResponsesBody(body)));
+  });
+
+  test("answer text that begins with a signed thought is replayed intact", () => {
+    const messages = [USER, { role: "assistant", content: "Same answer", reasoning_details: [
+      { type: "reasoning.text", text: "Same", signature: SIGNATURES[0], format: FORMAT, index: 0 },
+    ] }];
+    const input = chatCompletionsToResponsesBody({ model: "m", messages }, { acceptAnthropicReasoningSignatures: true }).input as Item[];
+    expect(input.at(-1)).toEqual({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Same answer" }] });
   });
 });
 

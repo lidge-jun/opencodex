@@ -6,7 +6,7 @@
  * responsesRequestSchema so routing/OAuth/pool/sidecars are inherited unchanged.
  */
 import { chatImageUrlFromPart } from "./image-parts";
-import { contentWithoutProgressCopy, signedReasoningInputItems } from "./reasoning-details";
+import { signedReasoningInputItems } from "./reasoning-details";
 import { untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
 
 export class ChatCompletionsRequestError extends Error {}
@@ -541,7 +541,9 @@ export function chatCompletionsToResponsesBody(raw: unknown, options: ChatRespon
             content: [{ type: "reasoning_text", text: reasoningText }],
           });
         }
-        const blocks = assistantContentToBlocks(signedReasoning ? contentWithoutProgressCopy(msg.content, signedReasoning) : msg.content);
+        // An Opus progress update also sits in `content`. The wire has no marker that tells it
+        // from answer text, so the content is replayed as sent, as it was before #7429.
+        const blocks = assistantContentToBlocks(msg.content);
         if (blocks.length > 0) input.push({ type: "message", role: "assistant", content: blocks });
         if (msg.tool_calls !== undefined) {
           toolCallsToItems(msg.tool_calls, input, knownNameByCallId, awaitingToolResult);

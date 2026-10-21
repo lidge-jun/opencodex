@@ -135,15 +135,3 @@ export function signedReasoningInputItems(details: unknown): Rec[] | undefined {
   if (redacted.length > 0) items.push(reasoningInputItem("", { red: redacted }));
   return items;
 }
-
-/**
- * The assistant content with an Opus progress copy removed. A progress update reaches a Chat
- * client twice — as the signed entry and as the start of `content` — so when the echoed string
- * begins with exactly the signed texts in order, that prefix is the copy of blocks now replayed
- * as thinking. Any edit, or content that is not a plain string, is left as the client sent it.
- */
-export function contentWithoutProgressCopy(content: unknown, signedItems: readonly Rec[]): unknown {
-  if (typeof content !== "string") return content;
-  const prefix = signedItems.map(item => responsesReasoningItemText(item)).join("");
-  return prefix.length > 0 && content.startsWith(prefix) ? content.slice(prefix.length) : content;
-}

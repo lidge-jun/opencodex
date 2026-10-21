@@ -553,8 +553,10 @@ one, on `message` or as `delta.reasoning_details` (each entry arrives complete i
 the array back unchanged on the assistant message, next to its `tool_calls`, and Claude keeps its
 reasoning across tool steps. The signature is opaque and is the same value `/v1/messages`
 clients receive. OpenCodex replays it only when the model routes to Anthropic's own API
-(`api.anthropic.com`) as a single route; on any other destination, or if an entry is altered,
-the turn falls back to the plain `reasoning_content` text.
+(`api.anthropic.com`) as a single route; on any other destination, or when an entry is
+malformed (an unknown type or format, or a missing signature), the turn falls back to the plain
+`reasoning_content` text. An entry whose text or signature was edited is forwarded as is, and
+Anthropic rejects it, so return the array exactly as received.
 
 Structured output is part of that translation: `response_format` with `json_object` or
 `json_schema` is forwarded to routed `openai-chat` models. On `POST /v1/responses` the

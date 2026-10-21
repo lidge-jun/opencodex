@@ -508,10 +508,11 @@ credential domain (no combo, policy or credential rewrite). Every entry must be 
 the whole array is ignored and the plaintext projection above applies unchanged; a client that
 sends no `reasoning_details` gets a byte-identical body. Accepted entries become reasoning
 items carrying the same `ocxr1` envelope the Responses wire uses, so the serving-identity
-strip, the rejection memo and thinking recovery all apply. When the echoed string `content`
-starts with exactly the signed texts, that prefix is the progress copy and is not replayed
-twice. No signature is computed, cached server side, or synthesized; the chat-ir placeholder
-still never passes the adapter's signature check.
+strip, the rejection memo and thinking recovery all apply. A progress update's visible copy in
+`content` is replayed as sent: no marker distinguishes it from answer text, so nothing is cut.
+Validation is structural only: an edited `text` or a well-formed altered signature is forwarded
+and Anthropic refuses it. No signature is computed, cached server side, or synthesized; the
+chat-ir placeholder still never passes the adapter's signature check.
 `presence_penalty` and `frequency_penalty` are carried too; per-model
 `noPenaltyModels` opt-outs still apply at the adapter.
 
