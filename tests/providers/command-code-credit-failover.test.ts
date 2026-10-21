@@ -62,6 +62,9 @@ describe("Command Code insufficient-credit refusal", () => {
       { status: 400, body: { success: false, error: { code: "RATE_LIMITED", message: CREDITS_EXHAUSTED.error.message } } },
       { status: 402, body: CREDITS_EXHAUSTED },
       { status: 400, body: { success: true, error: CREDITS_EXHAUSTED.error } },
+      { status: 400, body: { success: false, error: { code: "BAD_REQUEST", message: "You have insufficient credits to make this request!" } } },
+      { status: 400, body: { success: false, error: { code: "BAD_REQUEST", message: "You have insufficient credits to make this request" } } },
+      { status: 400, body: { success: false, error: { code: "BAD_REQUEST", message: "you have insufficient credits to make this request." } } },
     ];
 
     for (const fixture of fixtures) {

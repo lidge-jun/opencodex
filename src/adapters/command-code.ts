@@ -503,7 +503,7 @@ async function normalizeCommandCodeCreditRefusal(response: Response, signal?: Ab
     const payload = JSON.parse(observed.text);
     if (payload?.success !== false || payload.error?.code !== "BAD_REQUEST"
       || typeof payload.error?.message !== "string"
-      || !/^You have insufficient credits to make this request(?:[.!]|$)/i.test(payload.error.message)) return response;
+      || !payload.error.message.startsWith("You have insufficient credits to make this request.")) return response;
     const headers = new Headers(response.headers);
     headers.set("x-opencodex-upstream-status", "400");
     headers.set("x-opencodex-refusal", "insufficient-credits");
