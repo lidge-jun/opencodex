@@ -83,6 +83,7 @@ import {
   resolveHomeCodexSettings,
   recordHomeCodexSettings,
   withLinkApply,
+  withdrawChangingHomeCodexSettingsRecord,
   writeHomeCodexSettingsRecord,
   type HomeCodexSettingsRecord,
   type HomeCodexSettingsSource,
@@ -908,6 +909,10 @@ async function syncConnectedClientUnlocked(
     if (isLinkConnection(next)) {
       homeSettings = await resolveHomeCodexSettings(next, initial.token.token, deps.linkHome);
       if (homeSettings.source !== "local") config = overlayHomeCodexSettings(config, homeSettings.document.settings);
+      // About to write different settings: until their record commits, report no applied digest
+      // rather than the previous one (OCX-6). A failed injection then reads "unknown", never a
+      // digest of values Codex no longer has or never got.
+      if (homeSettings.source === "home" && next.link) withdrawChangingHomeCodexSettingsRecord(next.link.linkId, homeSettings.document);
     }
     const result = await injectCodexConfig(config.port, { ...config, syncResumeHistory: false }, {
       routingTarget: routingTarget(next.serverUrl, isLinkConnection(next) ? config.port : undefined, config), catalogPath: DEFAULT_CATALOG_PATH,
@@ -925,6 +930,7 @@ async function syncConnectedClientUnlocked(
         }, deps.lifecycleLockDeps);
       } catch (error) {
         if (error instanceof Error && error.message === "client_token_changed") throw error;
+        try { clearHomeCodexSettingsRecord(); } catch { /* the error below already reports the missing record */ }
         throw new Error("the Home's Codex settings were applied, but the apply record could not be written; run 'ocx sync' again", { cause: error });
       }
     }

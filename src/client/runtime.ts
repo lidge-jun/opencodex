@@ -310,7 +310,9 @@ export async function startClientRuntime(
 
   // Bind, start a fresh tunnel supervisor and publish. Runs once at start and again when a failed
   // restart rolls back (OCX-6); the stopped supervisor cannot be started twice, so each call builds one.
-  const serve = async (portWaitMs?: number): Promise<void> => {
+  // The port this process actually serves on; a rollback binds exactly this one again.
+  let servedPort = preferred;
+  const serve = async (rollback?: { port: number; portWaitMs: number }): Promise<void> => {
     const supervisor = supervised
       ? createClientLinkSupervisor({
         onLinkEnded: () => scheduleStandaloneRecycle(state.value.tokenFingerprint),
@@ -320,15 +322,17 @@ export async function startClientRuntime(
     const { server, port: boundPort } = await bindClientListener({
       state: state.value,
       linkMode,
-      preferred,
-      explicitPort: options.port !== undefined,
+      // A rollback takes back exactly the port it gave up: never the preferred one, never another.
+      preferred: rollback?.port ?? preferred,
+      explicitPort: rollback !== undefined || options.port !== undefined,
       configuredPort: config.port,
       restart: { attestationSecret, startedAt: CLIENT_RUNTIME_STARTED_AT, request: () => restartController.request() },
       ...(linkMode ? { linkStatus: () => activeSupervisor?.status() ?? { kind: "stopped" as const }, linkKeySource: linkKey } : {}),
       ...(supervisor ? { linkTunnel: supervisor } : homeInitiated ? { linkTunnel: HOME_INITIATED_LINK_TUNNEL } : {}),
-    }, portWaitMs === undefined ? io : { ...io, portWaitMs });
+    }, rollback === undefined ? io : { ...io, portWaitMs: rollback.portWaitMs });
     activeServer = server;
     activePort = boundPort;
+    servedPort = boundPort;
     activeSupervisor = supervisor;
     supervisor?.start();
     writePid(process.pid);
@@ -375,7 +379,7 @@ export async function startClientRuntime(
         { deadlineAt },
       );
     },
-    resume: () => serve(CLIENT_RESTART_REBIND_WAIT_MS),
+    resume: () => serve({ port: servedPort, portWaitMs: CLIENT_RESTART_REBIND_WAIT_MS }),
     exitProcess: code => { process.exit(code); },
   });
 

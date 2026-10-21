@@ -126,6 +126,18 @@ export function linkApplyLockPath(): string {
 }
 
 /**
+ * Before an apply writes settings that differ from the recorded ones, withdraw the record, so a
+ * failed injection or record write reads as "no recorded apply" instead of the previous digest
+ * (OCX-6). Re-applying the same settings keeps it. Returns whether the record was withdrawn.
+ */
+export function withdrawChangingHomeCodexSettingsRecord(linkId: string, document: HomeCodexSettingsDocument): boolean {
+  const previous = readHomeCodexSettingsRecord(linkId);
+  if (!previous || codexSettingsDigest(previous.document.settings) === codexSettingsDigest(document.settings)) return false;
+  clearHomeCodexSettingsRecord();
+  return true;
+}
+
+/**
  * Serialize applies of the Home's settings on this Child, from the Home read through the Codex
  * injection to the record write, so a receipt always names the settings the injection wrote.
  * Outermost in the client lock order (before N, L and C); a second apply fails fast.

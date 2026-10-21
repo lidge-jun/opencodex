@@ -1,4 +1,5 @@
 import { readRuntimePort } from "../config/process-state";
+import { readBoundedResponseBytes } from "../lib/bounded-body";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
   LOCAL_ATTESTATION_PROOF_HEADER,
@@ -222,9 +223,9 @@ export async function requestBoundSystemRestart(
  */
 async function supervisedRefusal(response: Response): Promise<"service" | "desktop" | null> {
   try {
-    const text = await response.text();
-    if (text.length > 1024) return null;
-    const body = JSON.parse(text) as { error?: { code?: unknown; supervisor?: unknown } } | null;
+    const read = await readBoundedResponseBytes(response, { maxBytes: 1024, signal: AbortSignal.timeout(SYSTEM_RESTART_REQUEST_TIMEOUT_MS) });
+    if (read.oversized) return null;
+    const body = JSON.parse(new TextDecoder().decode(read.bytes)) as { error?: { code?: unknown; supervisor?: unknown } } | null;
     if (body?.error?.code !== RESTART_SUPERVISED_ERROR) return null;
     return body.error.supervisor === "service" || body.error.supervisor === "desktop" ? body.error.supervisor : null;
   } catch {

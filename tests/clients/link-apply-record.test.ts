@@ -14,6 +14,7 @@ import {
   readHomeCodexSettingsRecord,
   recordHomeCodexSettings,
   withLinkApply,
+  withdrawChangingHomeCodexSettingsRecord,
 } from "../../src/client/link-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -98,5 +99,16 @@ describe("apply lock", () => {
     release();
     expect(await first).toBe("first");
     expect(await withLinkApply(async () => "third", lockPath)).toBe("third");
+  });
+});
+
+describe("withdrawing a record that is about to change", () => {
+  test("different settings withdraw the record first; the same settings keep it", () => {
+    recordHomeCodexSettings(LINK_ID, { source: "home", document: document(true), fetchedAt: "2026-10-21T01:00:00.000Z" }, at("2026-10-21T01:00:01.000Z"));
+    expect(withdrawChangingHomeCodexSettingsRecord(LINK_ID, document(true, "renamed"))).toBe(false);
+    expect(readHomeCodexSettingsRecord(LINK_ID)?.appliedAt).toBe("2026-10-21T01:00:01.000Z");
+    expect(withdrawChangingHomeCodexSettingsRecord(LINK_ID, document(false))).toBe(true);
+    // A failed injection or record write now reports no applied digest, never the old one.
+    expect(readHomeCodexSettingsRecord(LINK_ID)).toBeNull();
   });
 });

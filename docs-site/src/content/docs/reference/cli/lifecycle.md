@@ -1121,8 +1121,8 @@ Child really runs under the settings it applied, without reading either machine'
 
 | Field | Meaning |
 | --- | --- |
-| `appliedCodexSettingsDigest` | Lowercase hex SHA-256 of the applied settings (below). On a Child, the values its last apply wrote; on a Home or standalone install, its own values, which is also what it serves its Children. `null` on a hub client and on a Child with no recorded apply. |
-| `lastApplyAt` | Child only: epoch milliseconds of the last successful apply of a *different* settings document. Re-applying the same values keeps it. `null` elsewhere. |
+| `appliedCodexSettingsDigest` | Lowercase hex SHA-256 of the applied settings (below). On a Child, the values its last recorded apply wrote. On a Home or standalone install, the settings document it serves its Children right now, computed from its current configuration. `null` on a hub client, on a Child with no recorded apply, and on a Child whose apply of changed settings is in progress or failed (the previous digest is withdrawn first, so it is never reported for values Codex no longer has). |
+| `lastApplyAt` | Child only: epoch milliseconds of the last successful apply that changed the applied settings. Re-applying the same values is not a new apply and keeps it, so an unchanged `ocx sync` never forces a restart. `null` elsewhere. |
 | `runtimeStartedAt` | Child only: epoch milliseconds the running client runtime started. `null` when no client runtime answers. |
 
 The digest is computed over this compact UTF-8 JSON, with the keys in exactly this order and no
