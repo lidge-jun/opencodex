@@ -176,32 +176,50 @@ export function conversationIdFromResponsesRequest(input: {
  * Hermes Agent session affinity header for log correlation (#330).
  * Kept separate from runtime/session identities so it cannot affect lanes or routing.
  */
-/**
- * Hermes Agent session affinity header for log correlation (#330).
- * Kept separate from runtime/session identities so it cannot affect lanes or routing.
- */
 export function conversationIdFromHermesHeader(headers: Headers): string | undefined {
   return normalizeLogConversationId(headers.get("x-hermes-conversation-id"));
 }
 
-/** Select Chat completions log identity: native thread/session headers strictly take precedence over Hermes fallback. */
+/**
+ * Validates and normalizes native header candidates in priority order for logging:
+ * parent-thread -> session_id -> session-id -> thread-id.
+ * Each candidate spelling is evaluated and normalized independently so an empty or
+ * whitespace-only candidate (e.g. empty session_id) cannot suppress a subsequent valid candidate.
+ */
+export function nativeLogConversationIdFromHeaders(headers: Headers): string | undefined {
+  return (
+    normalizeLogConversationId(headers.get("x-codex-parent-thread-id")) ??
+    normalizeLogConversationId(headers.get("session_id")) ??
+    normalizeLogConversationId(headers.get("session-id")) ??
+    normalizeLogConversationId(headers.get("thread-id"))
+  );
+}
+
 /**
  * Select Chat completions log identity: native thread/session headers strictly take precedence over Hermes fallback.
  * Validates and normalizes each candidate individually so empty or whitespace headers cannot suppress subsequent valid identities.
  * Preserves the canonical Responses identity order: parent-thread -> session -> thread-id.
  */
 export function conversationIdFromChatHeaders(headers: Headers): string | undefined {
-  const native = normalizeLogConversationId(headers.get("x-codex-parent-thread-id"))
-    ?? normalizeLogConversationId(sessionIdHeaderFromRequest(headers))
-    ?? normalizeLogConversationId(headers.get("thread-id"));
-  return native ?? conversationIdFromHermesHeader(headers);
+  return nativeLogConversationIdFromHeaders(headers) ?? conversationIdFromHermesHeader(headers);
 }
 
+/**
+ * Select the persisted Responses log identity:
+ * 1. An explicitly resolved native conversation identity (clientThreadId, cursor, or canonical header resolver).
+ * 2. Independent evaluation of native header candidates (parent-thread -> session_id -> session-id -> thread-id),
+ *    ensuring that an empty session header does not mask a valid thread-id.
+ * 3. Fallback to Hermes log-only correlation header.
+ */
 export function logConversationIdFromResponsesRequest(
   nativeConversationId: string | undefined,
   headers: Headers,
 ): string | undefined {
-  return nativeConversationId ?? conversationIdFromHermesHeader(headers);
+  return (
+    nativeConversationId ??
+    nativeLogConversationIdFromHeaders(headers) ??
+    conversationIdFromHermesHeader(headers)
+  );
 }
 
 /**

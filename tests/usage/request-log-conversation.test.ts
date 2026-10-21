@@ -152,6 +152,39 @@ test("Hermes identity is a log-only fallback for Responses", async () => {
   expect(resolveLogId(nativeId, headers)).toBe(nativeId);
 });
 
+test("Responses: empty session header does not suppress valid thread-id over Hermes fallback", async () => {
+  const { logConversationIdFromResponsesRequest, conversationIdFromResponsesRequest, sessionIdHeaderFromRequest } =
+    await import("../../src/server/request-log-conversation");
+  const rawHermesId = "hermes-responses-fallback";
+  const rawThreadId = "native-thread-valid";
+  const headers = new Headers({
+    "session_id": "",
+    "thread-id": rawThreadId,
+    "x-hermes-conversation-id": rawHermesId,
+  });
+
+  const resolvedConversationId = conversationIdFromResponsesRequest({
+    sessionIdHeader: sessionIdHeaderFromRequest(headers),
+    threadIdHeader: headers.get("thread-id"),
+  });
+  expect(resolvedConversationId).toBeUndefined();
+
+  const logId = logConversationIdFromResponsesRequest(resolvedConversationId, headers);
+  expect(logId).toBe(digest32(rawThreadId));
+});
+
+test("Chat: empty session_id does not mask valid session-id over Hermes fallback", async () => {
+  const { conversationIdFromChatHeaders } = await import("../../src/server/request-log-conversation");
+  const rawHermesId = "hermes-chat-fallback";
+  const rawSessionId = "native-session-valid";
+  const headers = new Headers({
+    "session_id": "",
+    "session-id": rawSessionId,
+    "x-hermes-conversation-id": rawHermesId,
+  });
+  expect(conversationIdFromChatHeaders(headers)).toBe(digest32(rawSessionId));
+});
+
 describe("reasoningReplayConversationIdFromResponsesRequest", () => {
   test("keeps the raw identity instead of the hashed log id", () => {
     expect(reasoningReplayConversationIdFromResponsesRequest({
