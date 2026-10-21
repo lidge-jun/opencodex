@@ -15,7 +15,7 @@
  */
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { closeSync, constants as fsConstants, fsyncSync, linkSync, lstatSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getConfigDir } from "../config/paths";
 
 export const QUOTA_POOL_IDENTITY_FILE = "quota-pool-identity.json";
@@ -96,6 +96,19 @@ function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | null)?.code;
 }
 
+/**
+ * Make the new directory entry durable too: fsyncing the file alone can lose the entry on power
+ * loss, and a lost entry would mint a new identity and rotate every accountRef on the next start.
+ * Best effort; Windows cannot open a directory for fsync.
+ */
+function syncParentDirectory(path: string): void {
+  if (process.platform === "win32") return;
+  try {
+    const fd = openSync(dirname(path), fsConstants.O_RDONLY);
+    try { fsyncSync(fd); } finally { closeSync(fd); }
+  } catch { /* the file itself is flushed; a directory fsync is an extra guarantee */ }
+}
+
 function pause(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -172,6 +185,7 @@ export function ensureQuotaPoolIdentity(configDir = getConfigDir()): QuotaPoolId
       return adoptPublishedIdentity(configDir, path);
     }
   }
+  syncParentDirectory(path);
   memo = { path, identity };
   return identity;
 }

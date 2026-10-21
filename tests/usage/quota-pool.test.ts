@@ -4,7 +4,7 @@
  * Codex header parser, and the opaque, stable `accountRef`.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { lstatSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OcxConfig } from "../../src/types";
@@ -191,6 +191,21 @@ describe("quota-pool identity creation", () => {
     });
     expect(ensureQuotaPoolIdentity()).toEqual(winner);
     expect(readFileSync(quotaPoolIdentityPath(), "utf8")).toContain(winner.homeId);
+  });
+
+  test("losing the hard-link race (EEXIST) adopts the winner's complete file", () => {
+    const winner = { homeId: `home_${"c".repeat(32)}`, secret: "d".repeat(64) };
+    setQuotaPoolIdentityHooksForTests({
+      // The winner links its complete file first; this process's own link then reports EEXIST.
+      link: (_temp, target) => {
+        writeFileSync(target, `${JSON.stringify({ version: 1, ...winner })}\n`, { mode: 0o600 });
+        throw Object.assign(new Error("file exists"), { code: "EEXIST" });
+      },
+    });
+    expect(ensureQuotaPoolIdentity()).toEqual(winner);
+    expect(readQuotaPoolIdentity()).toEqual(winner);
+    // The loser's private temp file is cleaned up.
+    expect(readdirSync(home).filter(name => name.startsWith("quota-pool-identity.json.") && name.endsWith(".tmp"))).toEqual([]);
   });
 
   test("an in-place create seen before its bytes land is never adopted or memoized", () => {
