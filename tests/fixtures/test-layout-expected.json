@@ -925,7 +925,7 @@
   "oauth-refresh-lock-multiprocess.test.ts": "oauth", "oauth-refresh.test.ts": "oauth",
   "oauth-status-privacy.test.ts": "oauth", "oauth-store-multi.test.ts": "oauth", "oauth-store-quota-isolation.test.ts": "oauth",
   "oauth-tos-warning.test.ts": "gui", "oauth-upsert-preserves-api-key.test.ts": "oauth",
-  "ocx-launcher-runtime.test.ts": "cli", "ocx-launcher-source.test.ts": "cli",
+  "ocx-launcher-runtime.test.ts": "cli", "ocx-launcher-fixture-trust.test.ts": "cli", "ocx-launcher-source.test.ts": "cli",
   "ocx-launcher-desktop-handoff.test.ts": "cli", "cli-path-diagnostics.test.ts": "cli",
   "ocx-run.test.ts": "cli", "ollama-native-parser.test.ts": "providers/ollama",
   "ollama-native-reasoning-wire.test.ts": "providers/ollama",

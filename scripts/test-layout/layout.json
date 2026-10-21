@@ -1325,6 +1325,7 @@
     "oauth-tos-warning.test.ts": "gui",
     "oauth-upsert-preserves-api-key.test.ts": "oauth",
     "ocx-launcher-runtime.test.ts": "cli",
+    "ocx-launcher-fixture-trust.test.ts": "cli",
     "ocx-launcher-desktop-handoff.test.ts": "cli", "cli-path-diagnostics.test.ts": "cli",
     "ocx-launcher-source.test.ts": "cli",
     "ocx-run.test.ts": "cli",
