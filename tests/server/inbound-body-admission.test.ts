@@ -27,6 +27,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { repoPath } from "../helpers/repo-root";
 
 let testBudget: ReturnType<typeof createInboundBodyBudget>;
+/** Use the per-test budget with immediate refusal instead of the shared FIFO queue. */
 function fixtureAdmission(...args: Parameters<typeof withRaisedInboundBodyAdmission>) {
   return withRaisedInboundBodyAdmission(args[0], args[1], args[2], args[3], args[4], {
     budget: testBudget, maxWaitMs: 0,
@@ -38,19 +39,23 @@ const RAISED_BODY_LIMIT = MAX_CONFIGURABLE_INBOUND_BODY_BYTES;
 // Read the gate's own set rather than a second copy: a route added to admission
 // without protocol coverage, or covered here but never admitted, must not pass.
 const raisedBodyPaths = [...CONFIGURABLE_JSON_BODY_ROUTES];
+/** Synchronize upload and producer milestones without timer-based ordering. */
 function bodyDeferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
+/** Build a POST fixture that supports streaming uploads and caller overrides. */
 function admissionRequest(path = "/v1/responses", body: BodyInit = "{}", init: RequestInit = {}): Request {
   return new Request(`http://localhost${path}`, {
     method: "POST", body, ...init, duplex: "half",
   } as RequestInit);
 }
+/** Admit a fixture handler using the request's own pathname and supplied limit. */
 function admittedBodyWork(work: () => Promise<Response>, req = admissionRequest(), limit = RAISED_BODY_LIMIT) {
   return fixtureAdmission(req, new URL(req.url).pathname, limit, work);
 }
+/** Probe admission and consume the response so the probe cannot retain a lease. */
 async function assertBodyCapacity(status: number) {
   const response = await admittedBodyWork(async () => new Response(null, { status: 204 }));
   assert.equal(response.status, status);
