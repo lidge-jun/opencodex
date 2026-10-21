@@ -19,12 +19,18 @@ import { repoPath } from "./repo-root";
  */
 export const TRUSTED_FIXTURE_DIR_ENV = "OPENCODEX_TEST_TRUSTED_FIXTURE_DIR";
 
-/** Ordered candidates: an explicit override, the per-user temp dir, then the checkout's sibling `.tmp`. */
+/**
+ * Ordered candidates, each a dedicated subdirectory: an explicit override, the temp dir
+ * (a private per-user dir on macOS, but 1777 `/tmp` on most Linux hosts, which the rule
+ * rejects), the per-user runtime dir when the host provides one, then the checkout's sibling `.tmp`.
+ */
 export function fixtureBaseCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
   const candidates: string[] = [];
   const override = env[TRUSTED_FIXTURE_DIR_ENV];
   if (override && isAbsolute(override)) candidates.push(override);
   candidates.push(join(tmpdir(), "opencodex-path-bun-fixtures"));
+  const runtimeDir = env.XDG_RUNTIME_DIR;
+  if (runtimeDir && isAbsolute(runtimeDir)) candidates.push(join(runtimeDir, "opencodex-path-bun-fixtures"));
   candidates.push(join(dirname(repoPath()), ".tmp", "path-bun-fixtures"));
   return candidates;
 }
@@ -53,19 +59,32 @@ export function untrustedFixtureAncestor(path: string, uid: number | undefined =
   return null;
 }
 
-/** A fresh private directory under the first trusted candidate. Throws, naming every rejection, when none qualifies. */
+/**
+ * A fresh private directory under the first usable trusted candidate. A candidate that passes
+ * the walk but cannot be created (a read-only parent, say) is recorded and skipped.
+ *
+ * When none qualifies this throws, naming every rejection. It deliberately does not skip:
+ * these fixtures are the only real-filesystem coverage of the product trust check, and a skip
+ * would let CI or prepush go green without it. The override is the remedy.
+ */
 export function trustedFixtureRoot(prefix: string, candidates: string[] = fixtureBaseCandidates()): string {
   if (process.platform === "win32") return mkdtempSync(join(tmpdir(), prefix));
   const rejected: string[] = [];
   for (const base of candidates) {
     const before = untrustedFixtureAncestor(base);
     if (before) { rejected.push(`${base}: ${before}`); continue; }
-    mkdirSync(base, { recursive: true, mode: 0o700 });
-    const after = untrustedFixtureAncestor(base);
-    if (after) { rejected.push(`${base}: ${after}`); continue; }
-    return realpathSync.native(mkdtempSync(join(base, prefix)));
+    try {
+      mkdirSync(base, { recursive: true, mode: 0o700 });
+      const after = untrustedFixtureAncestor(base);
+      if (after) { rejected.push(`${base}: ${after}`); continue; }
+      return realpathSync.native(mkdtempSync(join(base, prefix)));
+    } catch (error) {
+      rejected.push(`${base}: cannot create (${(error as NodeJS.ErrnoException).code ?? String(error)})`);
+    }
   }
   throw new Error(
-    `No fixture base passes the PATH-Bun trust rule; set ${TRUSTED_FIXTURE_DIR_ENV} to a private directory.\n${rejected.join("\n")}`,
+    `No fixture base passes the PATH-Bun trust rule. Set ${TRUSTED_FIXTURE_DIR_ENV} to an absolute directory `
+      + `whose every ancestor is owned by root or you and is not group/other-writable, with no node_modules/bun above it.\n`
+      + rejected.join("\n"),
   );
 }

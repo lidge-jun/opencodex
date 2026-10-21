@@ -3,7 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync
 import { join } from "node:path";
 import { findPathBun, type PathBunIo } from "../../src/lib/bun-path-runtime.mjs";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { TRUSTED_FIXTURE_DIR_ENV, trustedFixtureRoot, untrustedFixtureAncestor } from "../helpers/trusted-fixture-root";
+import { TRUSTED_FIXTURE_DIR_ENV, fixtureBaseCandidates, trustedFixtureRoot, untrustedFixtureAncestor } from "../helpers/trusted-fixture-root";
 
 // #7402: a checkout under group-writable directories (macOS external volumes) made every
 // real PATH-Bun fixture fail, because the fixtures sat beside the checkout. These cases
@@ -72,5 +72,27 @@ describe.skipIf(process.platform === "win32")("PATH-Bun fixture trust under a gr
     expect(untrustedFixtureAncestor(candidate)).toBe(`${outer} contains node_modules/bun`);
     expect(() => trustedFixtureRoot("ocx-7402-leak-", [candidate])).toThrow(TRUSTED_FIXTURE_DIR_ENV);
     expect(existsSync(candidate)).toBe(false);
+  });
+
+  // Root ignores directory permission bits, so the uncreatable candidate only exists for other users.
+  test.skipIf(process.geteuid?.() === 0)("a trusted but uncreatable candidate is recorded and the next one is tried", () => {
+    const outer = privateRoot("ocx-7402-readonly-");
+    const readonly = join(outer, "readonly");
+    mkdirSync(readonly, { mode: 0o700 });
+    chmodSync(readonly, 0o500);
+    try {
+      const blocked = join(readonly, "base");
+      const fallback = join(outer, "fallback");
+      expect(untrustedFixtureAncestor(blocked)).toBeNull();
+      expect(trustedFixtureRoot("ocx-7402-next-", [blocked, fallback]).startsWith(realpathSync.native(fallback) + "/")).toBe(true);
+      expect(() => trustedFixtureRoot("ocx-7402-none-", [blocked])).toThrow(`${blocked}: cannot create (EACCES)`);
+    } finally { chmodSync(readonly, 0o700); }
+  });
+
+  test("candidates keep the override first and include the per-user runtime dir", () => {
+    const candidates = fixtureBaseCandidates({ [TRUSTED_FIXTURE_DIR_ENV]: "/override", XDG_RUNTIME_DIR: "/run/user/1000" });
+    expect(candidates[0]).toBe("/override");
+    expect(candidates).toContain("/run/user/1000/opencodex-path-bun-fixtures");
+    expect(fixtureBaseCandidates({ [TRUSTED_FIXTURE_DIR_ENV]: "relative", XDG_RUNTIME_DIR: "" })).not.toContain("relative");
   });
 });
