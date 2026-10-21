@@ -222,6 +222,11 @@ describe("bun test without the preload (#7407)", () => {
     expect(seen.codexAuthJsonMirror).toBe("WROTE");
     const auth = JSON.parse(readFileSync(join(home, ".opencodex", "auth.json"), "utf8")) as Record<string, unknown>;
     expect(Object.keys(auth)).toContain("anthropic");
+    // The writers that now assert first still persist before their network call fails.
+    expect(readFileSync(join(home, ".opencodex", "kimi-device-id"), "utf8").trim()).not.toBe("");
+    const intents = readdirSync(join(home, ".opencodex", ".nous-refresh-intent")).filter(name => name.endsWith(".json"));
+    expect(intents.length).toBe(1);
+    expect(JSON.parse(readFileSync(join(home, ".opencodex", ".nous-refresh-intent", intents[0]!), "utf8")).status).toBeString();
   }, CHILD_MS + 5_000);
 
   // Only "0" opts out; any other value is normalised to "1" before a helper can inherit it.
