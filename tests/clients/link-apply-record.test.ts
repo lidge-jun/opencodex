@@ -100,6 +100,12 @@ describe("apply lock", () => {
     expect(await first).toBe("first");
     expect(await withLinkApply(async () => "third", lockPath)).toBe("third");
   });
+
+  test("a busy lock inside the apply is reported as itself, not as another apply", async () => {
+    const lockPath = join(root, "link", "apply-lock.sqlite");
+    const inner = Object.assign(new Error("client_lifecycle_busy"), { code: "client_lifecycle_busy" });
+    await expect(withLinkApply(async () => { throw inner; }, lockPath)).rejects.toBe(inner);
+  });
 });
 
 describe("withdrawing a record that is about to change", () => {

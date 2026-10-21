@@ -145,10 +145,13 @@ export function withdrawChangingHomeCodexSettingsRecord(linkId: string, document
 export async function withLinkApply<T>(work: () => Promise<T>, lockPath: string = linkApplyLockPath()): Promise<T> {
   const dir = linkDir();
   assertNotRealHomeUnderTest(join(dir, ".."));
+  // Only a refusal of the apply lock itself means "another apply"; an error from inside `work`
+  // (including a busy ordinary lifecycle lock) passes through as itself.
+  let entered = false;
   try {
-    return await withClientLifecycle(() => work(), { lockPath });
+    return await withClientLifecycle(() => { entered = true; return work(); }, { lockPath });
   } catch (error) {
-    if (error instanceof Error && error.message === "client_lifecycle_busy") {
+    if (!entered && error instanceof Error && error.message === "client_lifecycle_busy") {
       throw new Error("another Home settings apply is in progress on this machine; retry when it finishes");
     }
     throw error;
