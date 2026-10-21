@@ -203,6 +203,7 @@ export function peekOAuthRefreshIntent(provider: string, accountId: string): OAu
 }
 export function writeOAuthRefreshIntent(provider: string, accountId: string, generation: string, createdAt = Date.now(), flightId?: string): OAuthRefreshIntent {
   const dir = getConfigDir();
+  assertNotRealHomeUnderTest(dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   hardenConfigDir();
   const intent: OAuthRefreshIntent = {
