@@ -702,13 +702,15 @@ If the proxy is newer instead, check the CLI installation and `PATH` as describe
 | `restart` | The same refresh and a guaranteed restart on every platform. On macOS an unchanged, already-loaded job is kickstarted in place. Not an alias of `repair`. |
 | `start` | Start an installed service. |
 | `stop` | Stop the service and restore native Codex. |
-| `status` | Report service and proxy diagnostics plus log paths. |
+| `status` | Report service and proxy diagnostics plus log paths. `--json` prints the passive document described below. |
 | `uninstall` | Remove the service and restore native Codex. |
 | `remove` | Alias of `uninstall`. |
 
 On Windows, a bare `ocx service` runs the install path only after both Task Scheduler and WinSW are
 proven absent. If either status query is inconclusive, it refuses to register anything and asks you
 to run `ocx service status`; use explicit `ocx service install` only after confirming absence.
+
+`ocx service status --json` prints one passive document for scripts and peers such as GOAT's device inventory. It runs the same reads as the text report and never installs, starts, stops or repairs anything; `--json` on any other `service` verb is rejected. Fields: `schemaVersion` (1), `platform`, `supported`, `backend` (`launchd`, `systemd`, `schtasks`, `winsw`, or `none` when nothing is registered), `label` (the job, unit, task or WinSW service name), `installed`, `enabled`, `running` (the service manager's verdict), `viable`, `stale`, `conflict`, `serving` (`probed`, `ok`, `port`; probed only when a registration exists), `summary`, `logPath`, `ownershipLease` and `desktopLogin`. An unsupported platform or a Docker container still gets a document, with `supported: false`.
 
 ### Runtime ownership
 

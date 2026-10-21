@@ -49,6 +49,7 @@ Drives no management route.
 | `--json` | boolean | Emit the status envelope as JSON. |
 
 - Reads /healthz plus local config; drives no management API route.
+- --json includes install: {method: bun|npm|pnpm|mise|source|standalone|unknown, evidence: {basis, mise?, error?}} from the updater's install detector.
 
 ### `ocx resolve`
 
@@ -171,15 +172,20 @@ Drives no management route.
 
 ### `ocx service status`
 
-Usage: `ocx service status`
+Usage: `ocx service status [--json]`
 
 Inspect local service-manager status.
 
-State-changing: no. JSON mode: `none`.
+State-changing: no. JSON mode: `payload`.
 
 Drives no management route.
 
-- Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the passive service status document as JSON. |
+
+- Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API.
+- --json is passive: schemaVersion 1 with installed, running, enabled, viable, stale, conflict, backend (launchd|systemd|schtasks|winsw|none), label, serving {probed, ok, port}, summary, logPath, ownershipLease and desktopLogin. It starts, stops, installs and repairs nothing.
 - Backend options apply only to install; other verbs use the installed backend.
 
 ### `ocx service uninstall`

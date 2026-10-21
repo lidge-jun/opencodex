@@ -166,7 +166,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{ name: "--json", value: "boolean", summary: "Emit the status envelope as JSON." }],
     mutates: false,
     json: "envelope",
-    details: ["Reads /healthz plus local config; drives no management API route."],
+    details: ["Reads /healthz plus local config; drives no management API route.", "--json includes install: {method: bun|npm|pnpm|mise|source|standalone|unknown, evidence: {basis, mise?, error?}} from the updater's install detector."],
   },
   {
     command: ["resolve"],

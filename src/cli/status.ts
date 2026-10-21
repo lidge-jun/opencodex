@@ -37,6 +37,7 @@ import { checkProxyHealth, probeUncleanExitState, type ListenTarget } from "./st
 import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 import { collectAppliedCodexSettingsStatus, type CliAppliedCodexSettingsStatus } from "./status-codex-settings";
+import { installDetectionStatus, type InstallDetectionStatus } from "./status-install";
 
 /**
  * The state of the data-plane admission secret the SERVICE will use. State only -- never the value.
@@ -230,6 +231,8 @@ export type CliStatusJson = {
    */
   versionSkew: VersionSkew;
   cliCommand: CliPathDiagnostics;
+  /** Installer ownership from the updater's detector (OCX-10); additive, `schemaVersion` stays 1. */
+  install: InstallDetectionStatus;
   startupSource: "live" | "local" | "local-supervision-override";
 } & CliAppliedCodexSettingsStatus;
 
@@ -1071,6 +1074,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
       // print it under the wrong heading (#2701).
       versionSkew,
       cliCommand,
+      install: installDetectionStatus(),
       startupSource,
       ...appliedCodexSettings,
     },
