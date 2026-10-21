@@ -224,6 +224,22 @@ describe("bun test without the preload (#7407)", () => {
     expect(Object.keys(auth)).toContain("anthropic");
   }, CHILD_MS + 5_000);
 
+  // Only "0" opts out; any other value is normalised to "1" before a helper can inherit it.
+  test.each(["", "yes"])("a stray OCX_TEST_HOME_GUARD=%p is normalised so spawned helpers stay armed", async stray => {
+    const home = fakeRealHome();
+    const outside = owned("ocx-7407-stray-cwd-");
+    const fixture = writeFixture(outside, "stray-flag.test.ts", home, true);
+    const before = snapshot(home);
+
+    const result = await run(["test", fixture], outside, unsandboxedEnv(home, { OCX_TEST_HOME_GUARD: stray }));
+    const seen = report(result.stdout, result.stderr);
+
+    expect(seen.armed).toBe("true");
+    expect(seen.flag).toBe("1");
+    expect(seen.child).toBe("REFUSED");
+    expect(snapshot(home)).toEqual(before);
+  }, CHILD_MS + 5_000);
+
   test("an explicit OCX_TEST_HOME_GUARD=0 still disarms a test file", async () => {
     const home = fakeRealHome();
     const outside = owned("ocx-7407-optout-cwd-");

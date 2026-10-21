@@ -158,9 +158,13 @@ export function isTestHomeGuardArmed(): boolean {
  * A test process that armed through its entry file publishes the flag, so the CLI and helper
  * processes it spawns — whose own entry is not a test file — inherit the arming instead of
  * writing the real home they also inherited. Runs at import, which in such a run happens before
- * any test body. A production process never matches, so it never reaches the assignment.
+ * any test body. A production process never matches, so it never reaches the assignment. Any value
+ * but the explicit "0" opt-out is normalised, because an empty or stray value arms this process by
+ * name but would leave a non-test child, which cannot match by name, disarmed.
  */
-if (process.env[GUARD_ENV] === undefined && isBunTestFileProcess()) process.env[GUARD_ENV] = "1";
+if (process.env[GUARD_ENV] !== "0" && process.env[GUARD_ENV] !== "1" && isBunTestFileProcess()) {
+  process.env[GUARD_ENV] = "1";
+}
 
 /**
  * Appended to a refusal when no preload ran, because the fix there is different: the test did
