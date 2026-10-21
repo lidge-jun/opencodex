@@ -7,6 +7,7 @@ import { beforeEach, afterEach } from "bun:test";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { item } from "../fixtures/hosted-image-display";
 import { createHostedImageDisplayRewrite as factory, isLocalCodexImageClient, redactHostedImageDisplayPaths } from "../../src/server/responses-hosted-image-display";
+import { resolveResponsesApiAuth } from "../../src/server/auth-cors";
 let home: TempHome;
 beforeEach(() => { home = createTempHome("hosted-image-display-"); });
 afterEach(() => { home.remove(); });
@@ -134,13 +135,26 @@ test('non-streaming results have the same visible artifact contract', () => {
 
 test('filesystem paths are never enabled for remote or generic API clients', async () => {
   const codex = new Headers({ originator: 'Codex Desktop' });
-  expect(isLocalCodexImageClient(codex, 'loopback')).toBe(true);
-  expect(isLocalCodexImageClient(codex, 'configured')).toBe(false);
-  expect(isLocalCodexImageClient(new Headers(), 'loopback')).toBe(false);
-  expect(isLocalCodexImageClient(codex, 'loopback', 'anthropic')).toBe(false);
+  expect(isLocalCodexImageClient(codex, { source: 'loopback' })).toBe(true);
+  expect(isLocalCodexImageClient(codex, { source: 'bearer' })).toBe(false);
+  expect(isLocalCodexImageClient(new Headers(), { source: 'loopback' })).toBe(false);
+  expect(isLocalCodexImageClient(codex, { source: 'loopback' }, 'anthropic')).toBe(false);
   expect(isLocalCodexImageClient(codex)).toBe(false);
-  expect(isLocalCodexImageClient(new Headers({ 'user-agent': 'codex_cli_rs/1.0' }), 'loopback')).toBe(true);
-  expect(isLocalCodexImageClient(new Headers({ 'user-agent': 'not-codex' }), 'loopback')).toBe(false);
+  expect(isLocalCodexImageClient(new Headers({ 'user-agent': 'codex_cli_rs/1.0' }), { source: 'loopback' })).toBe(true);
+  expect(isLocalCodexImageClient(new Headers({ 'user-agent': 'not-codex' }), { source: 'loopback' })).toBe(false);
+});
+
+test.each(['authorization', 'x-opencodex-api-key'])('optional %s preserves local image display without authorizing remote clients', header => {
+  const headers = new Headers({ originator: 'Codex Desktop',
+    [header]: header === 'authorization' ? 'Bearer image-ingress-fixture' : 'image-ingress-fixture' });
+  const req = new Request('http://127.0.0.1/v1/responses', { headers });
+  const apiKeys = [{ id: 'image', name: 'image', key: 'image-ingress-fixture', createdAt: '2026-10-21' }];
+  const local = resolveResponsesApiAuth(req, { hostname: '127.0.0.1', apiKeys })!;
+  const remote = resolveResponsesApiAuth(req, { hostname: '0.0.0.0', apiKeys })!;
+  expect(isLocalCodexImageClient(headers, local)).toBe(true);
+  expect(isLocalCodexImageClient(headers, remote)).toBe(false);
+  expect(isLocalCodexImageClient(headers, local, 'anthropic')).toBe(false);
+  expect(isLocalCodexImageClient(new Headers(), local)).toBe(false);
 });
 
 test('multiple images keep distinct identities and create one artifact per image', () => {

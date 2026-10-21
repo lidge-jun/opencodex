@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { handleResponses } from "../../src/server/responses";
 import { handleContextHistory } from "../../src/server/context-history";
 import { getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
-import { requestPolicyView, resolveApiAuth, type DataPlaneAdmission } from "../../src/server/auth-cors";
+import { findAvailablePort } from "../../src/server/ports";
+import { contextPrincipalIdOf, requestPolicyView, resolveApiAuth, resolveResponsesApiAuth, type DataPlaneAdmission } from "../../src/server/auth-cors";
 import { saveConfig } from "../../src/config";
 import { linkStorePath } from "../../src/link/paths";
 import { readLinkStore, writeLinkStore } from "../../src/link/store";
@@ -21,6 +22,7 @@ const keyAdmission: DataPlaneAdmission = { kind: "configured", keyId: "k1", sour
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 const destination = "https://chatgpt.com/backend-api/codex";
 const originalFetch = globalThis.fetch;
@@ -101,7 +103,7 @@ beforeEach(() => {
           content: [{ type: "output_text", text: "ready", annotations: [] }] }],
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
     }
-    if (url === `${destination}/alpha/notes/v2/read_file`) return Response.json({ value: "same account" });
+    if (url.startsWith(`${destination}/alpha/`)) return Response.json({ value: "same account" });
     throw new Error(`Unexpected test request: ${url}`);
   }, { preconnect: originalFetch.preconnect });
 });
@@ -182,6 +184,61 @@ test("Direct proxy-bearer model and notes use stored main without leaking the pr
   expect((await notes(cfg, "root-proxy", headers, admission)).status).toBe(200);
   expect(sent.map(row => row.headers.get("authorization"))).toEqual([`Bearer ${token}`, `Bearer ${token}`]);
   expect(sent.every(row => row.headers.get("chatgpt-account-id") === "physical-main")).toBe(true);
+});
+
+test("loopback bearer context keeps its recorded principal and stored main credential", async () => {
+  const keyA = "ocx_data_loopback-context-a";
+  const keyB = "ocx_data_loopback-context-b";
+  const sessionId = "root-loopback-bearer";
+  const cfg = config();
+  cfg.providers.openai.codexAccountMode = "direct";
+  cfg.apiKeys = [
+    { id: "loopback-a", name: "Loopback A", key: keyA, createdAt: "2026-10-21T00:00:00.000Z" },
+    { id: "loopback-b", name: "Loopback B", key: keyB, createdAt: "2026-10-21T00:00:00.000Z" },
+  ];
+  const token = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
+  writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: { access_token: token, account_id: "physical-main" } }));
+  const modelHeaders = requestHeaders(sessionId, keyA, "untrusted-account");
+  const modelAdmission = resolveResponsesApiAuth(
+    new Request("http://127.0.0.1/v1/responses", { headers: modelHeaders }),
+    requestPolicyView(cfg, "127.0.0.1"),
+  );
+  expect(modelAdmission?.source).toBe("bearer");
+  expect(modelAdmission?.listener).toBe("loopback");
+  const modelPrincipal = contextPrincipalIdOf(modelAdmission ?? undefined);
+  expect(modelPrincipal).toBeDefined();
+  expect((await model(cfg, sessionId, "gpt-5.5", modelHeaders, modelAdmission!)).status).toBe(200);
+  expect(getContextSessionOwner(modelPrincipal!, sessionId, destination))
+    .toMatchObject({ kind: "stored", accountId: "__main__" });
+  sent = [];
+  const contextRequest = (endpoint: string, headers: HeadersInit) => new Request(`http://127.0.0.1/v1/${endpoint}`, {
+    method: "POST", headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify({ context: { session_id: sessionId } }),
+  });
+  const relay = async (endpoint: string, headers: HeadersInit) => {
+    const req = contextRequest(endpoint, headers);
+    const policy = requestPolicyView(cfg, "127.0.0.1");
+    const admission = resolveApiAuth(req, policy, { identifyLoopbackKey: true });
+    const lease = tryAdmitTurn(); expect(lease).not.toBeNull();
+    try {
+      return await handleContextHistory(req, cfg, { model: "context_history", provider: "" }, endpoint,
+        lease!, admission ?? undefined, () => resolveApiAuth(req, policy, { identifyLoopbackKey: true }));
+    } finally { lease?.release(); }
+  };
+  for (const endpoint of ["alpha/history/v2/list_items", "alpha/notes/v2/read_file"]) {
+    expect((await relay(endpoint, { authorization: `Bearer ${keyA}` })).status).toBe(200);
+  }
+  expect((await relay("alpha/notes/v2/read_file", { authorization: `Bearer ${keyB}` })).status).toBe(409);
+  expect((await relay("alpha/notes/v2/read_file", { "x-api-key": keyA })).status).toBe(200);
+  expect(sent.map(row => row.headers.get("authorization"))).toEqual([`Bearer ${token}`, `Bearer ${token}`, `Bearer ${token}`]);
+  expect(sent.every(row => row.headers.get("chatgpt-account-id") === "physical-main")).toBe(true);
+});
+
+test("context route identifies loopback keys at entry and revalidation", () => {
+  const source = readFileSync(repoPath("src", "server", "index", "serve-options.ts"), "utf8");
+  const branch = source.slice(source.indexOf("if (contextEndpoint(url.pathname)"), source.indexOf('if (url.pathname === "/v1/alpha/search"'));
+  expect(branch).toContain("const admission = resolveApiAuth(req, policy, { identifyLoopbackKey: true });");
+  expect(branch).toMatch(/turnAdmissionLease, admission, \(\) => resolveApiAuth\(\s*req, ingress === "hub-link" \? linkPolicy\(\)\s*: ingress === "unauthenticated-loopback" \? loopbackPolicy\(\) : policy,\s*\{ identifyLoopbackKey: true \},\s*\)\)/);
 });
 
 test("post-body admission revalidation consults the live link policy, not the request-entry snapshot", async () => {
@@ -290,6 +347,65 @@ test("a real link listener refuses a revoked key after reading a delayed context
       method: "DELETE",
       headers: { "content-type": "application/json", "x-opencodex-api-key": "test-listener-admin-token" },
       body: JSON.stringify({ id: linkId }),
+    });
+    expect(revoked.status).toBe(200);
+    bodyController!.enqueue(new TextEncoder().encode(`{"session_id":"${sessionId}"}}`));
+    bodyController!.close();
+    bodyController = undefined;
+    expect((await pending).status).toBe(401);
+    expect(sent).toHaveLength(upstreamBefore);
+  } finally {
+    try { bodyController?.close(); } catch { /* already closed after an early response */ }
+    await server.stop(true);
+  }
+});
+
+test("a real loopback companion refuses a revoked key after reading a delayed context body", async () => {
+  const keyId = "loopback-companion-key";
+  const key = "loopback-companion-revoke";
+  const sessionId = "root-delayed-companion";
+  const cfg = config();
+  const port = await findAvailablePort(0, "127.0.0.1");
+  cfg.port = port;
+  cfg.hostname = "127.0.0.2";
+  cfg.unauthenticatedLoopbackListener = { enabled: true };
+  cfg.apiKeys = [{ id: keyId, name: keyId, key, createdAt: "2026-10-21T00:00:00.000Z" }];
+  const policy = requestPolicyView(cfg, "127.0.0.1");
+  const admission = resolveResponsesApiAuth(new Request("http://127.0.0.1/v1/responses", {
+    headers: { authorization: `Bearer ${key}` },
+  }), policy);
+  expect(admission?.listener).toBe("loopback");
+  expect((await model(cfg, sessionId, "side/gpt-5.5", requestHeaders(sessionId, key), admission!)).status).toBe(200);
+  const upstreamBefore = sent.length;
+
+  process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "test-companion-admin-token";
+  saveConfig(cfg);
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+  const { startServer } = await import("../../src/server");
+  const server = startServer(port);
+  let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  try {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        bodyController = controller;
+        controller.enqueue(new TextEncoder().encode('{"context":'));
+      },
+    });
+    const pending = originalFetch(`http://127.0.0.1:${port}/v1/alpha/notes/v2/read_file`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const waitUntil = Date.now() + 5_000;
+    while (getActiveTurnCount() === 0 && Date.now() < waitUntil) await Bun.sleep(5);
+    expect(getActiveTurnCount()).toBe(1);
+
+    const revoked = await originalFetch(new URL("/api/keys", server.url), {
+      method: "DELETE",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": "test-companion-admin-token" },
+      body: JSON.stringify({ id: keyId }),
     });
     expect(revoked.status).toBe(200);
     bodyController!.enqueue(new TextEncoder().encode(`{"session_id":"${sessionId}"}}`));

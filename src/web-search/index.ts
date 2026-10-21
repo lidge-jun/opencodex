@@ -153,7 +153,7 @@ export function planWebSearch(
   modelId: string,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
   options: {
-    admission?: Pick<DataPlaneAdmission, "source">;
+    admission?: Pick<DataPlaneAdmission, "source" | "listener">;
     codexAuthPolicy?: CodexAuthPolicyConfig;
     providerName?: string;
   } = {},

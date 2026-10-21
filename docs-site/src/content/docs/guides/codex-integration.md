@@ -237,13 +237,9 @@ names an organization rather than a person, so the registry also binds the stabl
 the credential upstream accepted: an ordinary token refresh for that same user continues the
 session, while a different user in the same workspace does not. When the accepted credential
 proves no stable user, only that exact credential continues. That principal is the opencodex API key the request presents. A remote bind already requires one,
-so ownership works there. On the default loopback bind opencodex admits requests without requiring a
-key, and the built-in loopback injection cannot carry the `x-opencodex-api-key` header, so Codex
-presents no opencodex key and context history returns HTTP 403. **The relay is therefore available
-on a remote bind with a configured key, or to a client that sends `x-opencodex-api-key` itself, and
-not through the default built-in loopback integration.** Whether a loopback-bound proxy should be
-able to name a caller at all is an open maintainer decision, so the current behaviour refuses
-rather than guessing.
+so ownership works there. On the default loopback bind, a recognized data-plane key presented as
+`Authorization: Bearer <key>`, `x-opencodex-api-key`, or `x-api-key` identifies the caller without
+making loopback admission mandatory. A proxy bearer is replaced by the recorded stored account's Codex credential before forwarding. The default built-in loopback integration does not supply an OCX key; clients must explicitly supply one for context ownership. A request with no recognized key returns HTTP 403 rather than guessing an owner.
 
 Unknown, expired, evicted, conflicting, or restart-lost ownership returns HTTP 409 before account
 selection or upstream I/O. The relay does not guess from the current active account. Existing

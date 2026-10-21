@@ -211,7 +211,7 @@ export function planVisionSidecar(
   parsed: OcxParsedRequest,
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
   options: {
-    admission?: Pick<DataPlaneAdmission, "source">;
+    admission?: Pick<DataPlaneAdmission, "source" | "listener">;
     codexAuthPolicy?: CodexAuthPolicyConfig;
     providerName?: string;
   } = {},

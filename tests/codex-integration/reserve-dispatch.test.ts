@@ -24,7 +24,7 @@ import { handleResponsesCompact } from "../../src/server/responses/compact";
 import { UpstreamRetryEvidenceError } from "../../src/lib/upstream-retry";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
-import type { DataPlaneAdmission } from "../../src/server/auth-cors";
+import { resolveResponsesApiAuth, type DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -220,12 +220,13 @@ describe("Reserve dispatch-time permission", () => {
     expect(usageReads).toBe(0);
   });
 
-  test("dispatch freezes admission source while keeping policy config live", async () => {
+  test.each(["loopback", "bearer", "dedicated"] as const)("dispatch freezes %s listener provenance while keeping policy config live", async source => {
     const { ctx, cfg } = await authorize();
-    const admission: Pick<DataPlaneAdmission, "source"> = { source: "loopback" };
+    const admission: Pick<DataPlaneAdmission, "source" | "listener"> = { source, listener: "loopback" };
     const guard = createCodexReserveDispatchGuard(ctx, cfg, "gpt-reserve", admission);
     expect(guard).toBeDefined();
     admission.source = "dedicated";
+    delete admission.listener;
     revoke();
     expect(() => guard!(headers())).toThrow(CodexReserveUnavailableError);
     cfg.codexDesktopAuthless = false;
@@ -403,6 +404,23 @@ describe("Reserve opt-in admission refusal", () => {
     expect(inferenceSends).toBe(1);
     expect(usageReads).toBe(0);
   };
+
+  test.each(["authorization", "x-opencodex-api-key"])("keyed local %s retains Reserve eligibility and opt-in refusal", header => {
+    const cfg = config();
+    cfg.apiKeys = [{ id: "local", name: "local", key: "reserve-ingress-fixture", createdAt: "2026-10-21" }];
+    const req = new Request("http://127.0.0.1/v1/responses", {
+      headers: { [header]: header === "authorization" ? "Bearer reserve-ingress-fixture" : "reserve-ingress-fixture" },
+    });
+    const local = resolveResponsesApiAuth(req, cfg)!;
+    expect(local.kind).toBe("configured");
+    expect(isCodexReserveRequestEligible(cfg, local)).toBe(true);
+    expect(isCodexReserveOptInMissing({ ...cfg, codexDesktopAuthless: false }, "gpt-reserve", local)).toBe(true);
+    expect(isCodexReserveRequestEligible({ ...cfg, runtimeRole: "client" }, local)).toBe(false);
+    const remote = resolveResponsesApiAuth(req, { ...cfg, hostname: "0.0.0.0" })!;
+    expect(remote.kind).toBe("configured");
+    expect(isCodexReserveRequestEligible(cfg, remote)).toBe(false);
+    expect(isCodexReserveOptInMissing({ ...cfg, codexDesktopAuthless: false }, "gpt-reserve", remote)).toBe(false);
+  });
 
   test("the predicate is the flag-only complement of eligibility and never overlaps it", () => {
     const loopback = { source: "loopback" } as const;

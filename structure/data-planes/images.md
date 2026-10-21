@@ -36,6 +36,7 @@ For loopback-admitted Codex Responses clients,
 `src/server/responses-hosted-image-display.ts` projects hosted `image_generation_call`
 results into assistant messages with `phase: final_answer` and Markdown links to local
 artifacts. The final phase keeps the image outside collapsible progress output.
+Local eligibility follows receiving-listener provenance, independently of optional OCX key identity; supplying a valid key on loopback retains image display, while the same key on a public listener does not authorize filesystem links.
 `src/server/responses/passthrough-delivery.ts` applies this projection after continuation
 observers, on the client branch only, for SSE, JSON and JSON synthesized into SSE.
 The SSE projection emits consistent message lifecycle events and terminal snapshots,

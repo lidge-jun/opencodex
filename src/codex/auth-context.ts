@@ -92,7 +92,7 @@ import {
   type MainQuotaWriter,
   type MainQuotaDispatch,
 } from "./main-account-cache";
-import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported, isCodexReserveRequestEligible } from "./loopback-target";
+import { CODEX_RESERVE_HELPER_UNSUPPORTED_MESSAGE, isCodexReserveHelperUnsupported, isCodexReserveRequestEligible, isLoopbackAdmission } from "./loopback-target";
 import type { DataPlaneAdmission } from "../server/auth-cors";
 import { getMainReserveAuthorization, isMainReserveAuthorizationLive, nativeUserIdClaims, type MainReserveAuthorization } from "./reserve-availability";
 import { UpstreamRetryEvidenceError } from "../lib/upstream-retry";
@@ -190,7 +190,7 @@ export interface CodexPoolStateEligibility {
   /** An exact account selector from the route, i.e. `options.accountId` here. */
   readonly accountId?: string;
   readonly modelId?: string;
-  readonly admission?: Pick<DataPlaneAdmission, "source">;
+  readonly admission?: Pick<DataPlaneAdmission, "source" | "listener">;
   /** The caller presented its own forwardable ChatGPT credential for this route. */
   readonly requestScopedMainCredential?: boolean;
 }
@@ -643,7 +643,7 @@ interface CodexAuthMaterializationOptions {
   config?: CodexAuthPolicyConfig;
   modelId?: string;
   /** Trusted receiving-listener admission; never inferred from request headers or config. */
-  admission?: Pick<DataPlaneAdmission, "source">;
+  admission?: Pick<DataPlaneAdmission, "source" | "listener">;
   signal?: AbortSignal;
   nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
   beginCodexAccountSelection?: () => CodexAccountSelectionAdmission | undefined;
@@ -652,7 +652,7 @@ interface CodexAuthMaterializationOptions {
 function requiresReserveAuthorization(
   config: CodexAuthPolicyConfig | undefined,
   modelId: string | undefined,
-  admission: Pick<DataPlaneAdmission, "source"> | undefined,
+  admission: Pick<DataPlaneAdmission, "source" | "listener"> | undefined,
 ): boolean {
   return modelId === NATIVE_RESERVE_MODEL && !!config && isCodexReserveRequestEligible(config, admission);
 }
@@ -733,16 +733,15 @@ export function createCodexReserveDispatchGuard(
   ctx: CodexAuthContext,
   config: CodexAuthPolicyConfig,
   modelId: string,
-  admission?: Pick<DataPlaneAdmission, "source">,
+  admission?: Pick<DataPlaneAdmission, "source" | "listener">,
   terminalHelper = false,
 ): ((headers: Headers) => void) | undefined {
-  // Snapshot the resolved source value, not the caller's mutable admission object. Config stays
+  // Snapshot listener provenance, not the caller's mutable admission object. Config stays
   // live so policy changes remain visible after pacing and retry backoff.
-  const source = admission?.source;
-  if (modelId !== NATIVE_RESERVE_MODEL || source !== "loopback") return undefined;
+  if (!admission || modelId !== NATIVE_RESERVE_MODEL || !isLoopbackAdmission(admission)) return undefined;
+  const ingress = Object.freeze({ source: admission.source, listener: admission.listener });
   // Only immutable request facts decide whether to install the callback. Flag/role eligibility
   // is checked inside it, including an opt-in enabled while a send waits for pacing or WS open.
-  const ingress = Object.freeze({ source });
   return headers => {
     if (isCodexReserveHelperUnsupported(config, modelId, ingress, terminalHelper)) {
       throw new CodexReserveHelperUnsupportedError();
@@ -771,7 +770,7 @@ export function createCodexAuthDispatchGuard(
   ctx: CodexAuthContext,
   config: CodexAuthPolicyConfig,
   modelId: string,
-  admission?: Pick<DataPlaneAdmission, "source">,
+  admission?: Pick<DataPlaneAdmission, "source" | "listener">,
   terminalHelper = false,
 ): ((headers: Headers) => void) | undefined {
   const reserveGuard = createCodexReserveDispatchGuard(ctx, config, modelId, admission, terminalHelper);
@@ -1017,7 +1016,7 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
 }
 
 export interface ResolveCodexAuthContextOptions {
-  admission?: Pick<DataPlaneAdmission, "source">;
+  admission?: Pick<DataPlaneAdmission, "source" | "listener">;
   /** Live policy owner when the routing config is a caller-specific replay snapshot. */
   codexAuthPolicy?: CodexAuthPolicyConfig;
   excludeAccountId?: string;
@@ -1930,7 +1929,7 @@ export function headersForCodexAuthContext(
   ctx: CodexAuthContext,
   config?: CodexAuthPolicyConfig,
   modelId?: string,
-  admission?: Pick<DataPlaneAdmission, "source">,
+  admission?: Pick<DataPlaneAdmission, "source" | "listener">,
 ): Headers {
   return materializeCodexUpstreamAuth(headers, ctx, { config, modelId, admission });
 }

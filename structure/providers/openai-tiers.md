@@ -50,6 +50,8 @@ provider may not fall through to Codex-login credentials.
 
 Responses admission in `src/server/auth-cors.ts` recognizes a supplied valid proxy key on loopback as well as public listeners. A proxy Bearer selects stored-main credential substitution in Direct; a dedicated admission header retains precedence and does not itself select substitution. Loopback requests without a matching key retain anonymous admission and caller-owned credential behavior. Public listeners still require a valid admission key.
 
+Key identity and presentation remain separate from receiving-listener provenance (`admission.listener`). Local keyed requests retain Reserve eligibility and the opt-in refusal through `isLoopbackAdmission` in `src/codex/loopback-target.ts`; the dispatch guard snapshots this provenance while rechecking live policy. A public listener does not become local because its URL, request headers, or configured companion listener names loopback.
+
 Caller credentials stay scoped to the selected physical route. Typed proxy admission survives
 Combo/policy recursion, but raw Authorization and ChatGPT account headers are removed from
 rebuilt requests at those selections or actual shadow/thread-spawn rewrites. An original caller's

@@ -1424,7 +1424,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (isDraining()) {
           return drainingResponse(req, policy);
         }
-        const admission = resolveApiAuth(req, policy);
+        const admission = resolveApiAuth(req, policy, { identifyLoopbackKey: true });
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
         if (!isAllowedRequestOrigin(req, policy)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
@@ -1439,7 +1439,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         };
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = await handleContextHistory(req, config, logCtx, contextEndpoint(url.pathname)!,
-            turnAdmissionLease, admission, () => resolveApiAuth(req, ingress === "hub-link" ? linkPolicy() : policy));
+            turnAdmissionLease, admission, () => resolveApiAuth(
+              req, ingress === "hub-link" ? linkPolicy()
+                : ingress === "unauthenticated-loopback" ? loopbackPolicy() : policy,
+              { identifyLoopbackKey: true },
+            ));
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
           return withCors(response, req, policy);

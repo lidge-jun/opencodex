@@ -431,10 +431,11 @@ function mintContextPrincipal(kind: string, keyId: string, credential: string): 
     .digest("hex");
 }
 
-export type DataPlaneAdmission =
+export type DataPlaneAdmission = (
   | { kind: "configured"; keyId: string; source: DataPlaneAdmissionSource; contextPrincipalId?: string }
   | { kind: "environment"; source: DataPlaneAdmissionSource; contextPrincipalId?: string }
-  | { kind: "loopback"; source: "loopback" };
+  | { kind: "loopback"; source: "loopback" }
+) & { listener?: "loopback" };
 
 /**
  * Which admission secret `token` is, or null when it is none of them.
@@ -489,8 +490,8 @@ export function contextPrincipalIdOf(admission: DataPlaneAdmission | undefined):
 /**
  * The caller principal for a context-relay request, which is a stricter question than admission.
  *
- * The default bind is loopback, where admission deliberately never reads a token, so an admitted
- * request carries no caller identity. History ownership needs one, so the relay asks separately:
+ * Broad loopback admission can remain anonymous; Responses and context ingress also identify keys.
+ * History ownership needs a principal, so anonymous local admissions ask separately:
  * a caller that presents a real opencodex API key gets that key’s principal even on loopback,
  * and a caller that presents none gets nothing and is refused. This adds identity where the caller
  * volunteered it; it does not admit anyone who was not already admitted, and it does not change
@@ -616,17 +617,23 @@ export function hasForwardableCodexBearer(headers: Headers, config: OcxConfig): 
  * Resolving form of `hasValidApiAuth`: identical header precedence, identical
  * decision, but it names the admission instead of collapsing it to a boolean.
  */
-export function resolveApiAuth(req: Request, config: RequestPolicyView): DataPlaneAdmission | null {
-  // A loopback bind never reads a token at all, so there is no key to name.
-  if (!isApiAuthRequired(config)) return { kind: "loopback", source: "loopback" };
+export function resolveApiAuth(req: Request, config: RequestPolicyView, options: { identifyLoopbackKey?: boolean } = {}): DataPlaneAdmission | null {
+  // Broad routes stay anonymous locally unless they need key identity for credential selection.
+  if (!options.identifyLoopbackKey && !isApiAuthRequired(config)) return { kind: "loopback", source: "loopback" };
   const dedicated = req.headers.get("x-opencodex-api-key")?.trim();
-  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated", { linkIngress: config.linkIngress?.allowedKeyIds });
+  if (dedicated) return admitOnListener(resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated", { linkIngress: config.linkIngress?.allowedKeyIds }), config);
   const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-  if (bearer) return resolveDataPlaneAdmissionSecret(bearer, config, "bearer", { linkIngress: config.linkIngress?.allowedKeyIds });
+  if (bearer) return admitOnListener(resolveDataPlaneAdmissionSecret(bearer, config, "bearer", { linkIngress: config.linkIngress?.allowedKeyIds }), config);
   // Anthropic-SDK clients (Claude Code with ANTHROPIC_API_KEY) authenticate via x-api-key.
   const apiKey = req.headers.get("x-api-key")?.trim();
-  if (apiKey) return resolveDataPlaneAdmissionSecret(apiKey, config, "x-api-key", { linkIngress: config.linkIngress?.allowedKeyIds });
-  return null;
+  if (apiKey) return admitOnListener(resolveDataPlaneAdmissionSecret(apiKey, config, "x-api-key", { linkIngress: config.linkIngress?.allowedKeyIds }), config);
+  return admitOnListener(null, config);
+}
+
+/** Listener provenance is independent of the optional key's identity and presentation. */
+function admitOnListener(admission: DataPlaneAdmission | null, config: RequestPolicyView): DataPlaneAdmission | null {
+  if (isApiAuthRequired(config)) return admission;
+  return admission ? { ...admission, listener: "loopback" } : { kind: "loopback", source: "loopback" };
 }
 
 export function hasValidApiAuth(req: Request, config: RequestPolicyView): boolean {
@@ -640,24 +647,23 @@ export function requireApiAuth(req: Request, config: RequestPolicyView, _kind: "
 
 /**
  * Admission for OpenAI Responses transports whose Authorization header belongs to
- * Codex Direct. Remote binds must use the dedicated proxy header so the two bearer
- * domains can never be confused.
+ * Codex Direct. A proxy bearer selects substitution; a caller-owned bearer uses
+ * a separate dedicated proxy key when admission is required remotely.
  */
 export function resolveResponsesApiAuth(req: Request, config: RequestPolicyView): DataPlaneAdmission | null {
   // Optional local credentials still identify a proxy bearer that Direct must substitute.
-  const fallback: DataPlaneAdmission | null = isApiAuthRequired(config) ? null : { kind: "loopback", source: "loopback" };
   // The dedicated header still WINS, because it is unambiguous.
   const dedicated = req.headers.get("x-opencodex-api-key")?.trim();
-  if (dedicated) return resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated", { linkIngress: config.linkIngress?.allowedKeyIds }) ?? fallback;
+  if (dedicated) return admitOnListener(resolveDataPlaneAdmissionSecret(dedicated, config, "dedicated", { linkIngress: config.linkIngress?.allowedKeyIds }), config);
   // #1686: a bearer may also be one of OUR admission secrets. Rejecting it outright meant a
   // Codex client configured with `env_key` could not reach Direct at all. Admitting it is only
   // safe because the upstream credential is then SUBSTITUTED rather than forwarded -- see
   // materializeCodexUpstreamAuth. A bearer that is NOT our secret gets only the local fallback
   // (or no admission remotely), preserving caller-owned Direct passthrough on loopback.
   const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
-  if (bearer) return resolveDataPlaneAdmissionSecret(bearer, config, "bearer", { linkIngress: config.linkIngress?.allowedKeyIds }) ?? fallback;
+  if (bearer) return admitOnListener(resolveDataPlaneAdmissionSecret(bearer, config, "bearer", { linkIngress: config.linkIngress?.allowedKeyIds }), config);
   // `x-api-key` is deliberately NOT accepted on this transport.
-  return fallback;
+  return admitOnListener(null, config);
 }
 
 

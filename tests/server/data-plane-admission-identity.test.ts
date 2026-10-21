@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   hasValidApiAuth,
+  contextPrincipalIdOf,
   isDataPlaneAdmissionSecret,
   isProxyAdmissionSecret,
   requireResponsesApiAuth,
@@ -211,16 +212,20 @@ describe("loopback binds", () => {
   test.each(["127.0.0.1", "::1", "localhost"])("Responses preserves optional key identity on %s", hostname => {
     const config = { ...loopbackConfig(), hostname };
     const resolve = (headers: Record<string, string>) => resolveResponsesApiAuth(request(headers), config);
-    expect(resolve({ authorization: "Bearer ocx_data_firstsecret" }))
-      .toMatchObject({ kind: "configured", keyId: "first-key", source: "bearer" });
-    expect(resolve({ "x-opencodex-api-key": "ocx_data_secondsecret", authorization: "Bearer ocx_data_firstsecret" }))
-      .toMatchObject({ kind: "configured", keyId: "second-key", source: "dedicated" });
+    const first = resolve({ authorization: "Bearer ocx_data_firstsecret" })!;
+    const second = resolve({ "x-opencodex-api-key": "ocx_data_secondsecret", authorization: "Bearer ocx_data_firstsecret" })!;
+    expect(first).toMatchObject({ kind: "configured", keyId: "first-key", source: "bearer", listener: "loopback" });
+    expect(second).toMatchObject({ kind: "configured", keyId: "second-key", source: "dedicated", listener: "loopback" });
+    expect(contextPrincipalIdOf(first)).toMatch(/^[a-f0-9]{64}$/);
+    expect(contextPrincipalIdOf(second)).toMatch(/^[a-f0-9]{64}$/);
+    expect(contextPrincipalIdOf(first)).not.toBe(contextPrincipalIdOf(second));
+    expect(contextPrincipalIdOf(resolve({ authorization: "Bearer ocx_data_firstsecret" })!)).toBe(contextPrincipalIdOf(first));
     for (const headers of [{}, { authorization: "Bearer caller-owned-token" }, { "x-api-key": "ocx_data_firstsecret" },
       { "x-opencodex-api-key": "unknown", authorization: "Bearer ocx_data_firstsecret" }]) {
       expect(resolve(headers)).toEqual({ kind: "loopback", source: "loopback" });
     }
     process.env.OPENCODEX_API_AUTH_TOKEN = "local-env-secret";
-    expect(resolve({ authorization: "Bearer local-env-secret" })).toMatchObject({ kind: "environment", source: "bearer" });
+    expect(resolve({ authorization: "Bearer local-env-secret" })).toMatchObject({ kind: "environment", source: "bearer", listener: "loopback" });
   });
 
   test("admit without reading a token, and say so", () => {

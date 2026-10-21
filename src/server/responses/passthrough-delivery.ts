@@ -883,7 +883,7 @@ export async function deliverPassthroughResponse(
         createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers, maskCredential),
         rememberPlaintextBlock,
         // Display-only projection must follow every continuation-cache observer.
-        isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
+        isLocalCodexImageClient(req.headers, options.admission, options.inboundWire)
           ? createHostedImageDisplayRewrite()
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
@@ -1367,7 +1367,7 @@ export async function deliverPassthroughResponse(
           JSON.parse(grokUpstreamEchoEnabled ? clientJson : text) as { id?: unknown; output?: unknown; status?: unknown; model?: unknown },
         );
       } catch { /* non-JSON despite content-type; recording is best-effort */ }
-      if (isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)) {
+      if (isLocalCodexImageClient(req.headers, options.admission, options.inboundWire)) {
         const imageDisplay = createHostedImageDisplayRewrite();
         try {
           clientJson = imageDisplay.json(clientJson);

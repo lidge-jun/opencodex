@@ -2,6 +2,8 @@ import { mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { join, posix } from "node:path";
 import { getConfigDir } from "../config";
+import { isLoopbackAdmission } from "../codex/loopback-target";
+import type { DataPlaneAdmission } from "./auth-cors";
 import { jsonUtf8Bytes } from "../lib/json-byte-size";
 import { TRANSLATOR_MAX_TURN_BYTES } from "../lib/translator-budget";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
@@ -70,8 +72,8 @@ export function redactHostedImageDisplayPaths(body: unknown, platform: NodeJS.Pl
 }
 
 /** Local filesystem links are only appropriate for the loopback Codex client. */
-export function isLocalCodexImageClient(headers: Headers, admissionKind?: string, inboundWire?: string): boolean {
-  return admissionKind === "loopback"
+export function isLocalCodexImageClient(headers: Headers, admission?: Pick<DataPlaneAdmission, "source" | "listener">, inboundWire?: string): boolean {
+  return isLoopbackAdmission(admission)
     && (inboundWire === undefined || inboundWire === "responses")
     && (originators.has(headers.get("originator") ?? "")
       || /^codex(?:[_ /-]|$)/i.test(headers.get("user-agent") ?? ""));

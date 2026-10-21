@@ -119,7 +119,7 @@ export function captureExplicitOpenAiCallerAuth(incomingHeaders: Headers, config
 function directSidecarHeaders(
   incomingHeaders: Headers,
   config: CodexAuthPolicyConfig,
-  admission?: Pick<DataPlaneAdmission, "source">,
+  admission?: Pick<DataPlaneAdmission, "source" | "listener">,
 ): Headers | undefined {
   if (!explicitSidecarAuth(incomingHeaders)) return undefined;
   const selected = headersForCodexAuthContext(incomingHeaders, { kind: "main", accountId: null }, config, undefined, admission);
@@ -141,7 +141,7 @@ export function resolveCallerOwnedOpenAiSidecar(
   candidates: readonly OpenAiForwardSidecarCandidate[],
   incomingHeaders: Headers,
   config: OcxConfig,
-  options: { admission?: Pick<DataPlaneAdmission, "source">; codexAuthPolicy?: CodexAuthPolicyConfig } = {},
+  options: { admission?: Pick<DataPlaneAdmission, "source" | "listener">; codexAuthPolicy?: CodexAuthPolicyConfig } = {},
 ): ResolvedOpenAiForwardSidecar | undefined {
   const candidate = candidates[0];
   if (!candidate) return undefined;
@@ -163,7 +163,7 @@ export async function resolveFirstUsableOpenAiSidecar(
   config: OcxConfig,
   options: {
     exactAccount?: ExactOpenAiSidecarAccount;
-    admission?: Pick<DataPlaneAdmission, "source">;
+    admission?: Pick<DataPlaneAdmission, "source" | "listener">;
     codexAuthPolicy?: CodexAuthPolicyConfig;
     beginCodexAccountSelection?: () => CodexAccountSelectionAdmission | undefined;
     signal?: AbortSignal;

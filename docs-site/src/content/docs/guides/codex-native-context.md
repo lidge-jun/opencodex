@@ -21,11 +21,10 @@ The inspected eligibility predicate accepts ChatGPT Plus, Pro, and ProLite; this
 that every account on those plans has working backend history endpoints.
 
 OpenCodex additionally requires an active **data-plane API key** on both the successful model
-request and the subsequent context requests. Default built-in loopback injection does not send
-that key, so it can serve models while context calls fail with `context_principal_required`
-(403). The authenticated remote provider-table form alone is not a native-context solution
-either: its `env_key` and provider name do not satisfy the Codex activation contract above.
-Never remove the principal or account-ownership checks to hide either problem.
+request and the subsequent context requests. Default built-in loopback injection does not supply that key, so context calls can fail with `context_principal_required` (403) even when model turns work. A local client explicitly supplying an OCX bearer can use its recorded Direct session's stored main credential for history and notes; context requests also accept `x-opencodex-api-key` or `x-api-key`. The authenticated remote provider-table form alone
+is not a native-context solution either: its `env_key` and provider name do not satisfy the Codex
+activation contract above. Never remove the principal or account-ownership checks to hide either
+problem.
 
 ## Explicit opt-in syntax
 
