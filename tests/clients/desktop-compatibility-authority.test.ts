@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureDesktopCompatibilityAuthority, inspectDesktopCompatibilityAuthority, loadDesktopCompatibilityAuthority, renewDesktopCompatibilityAuthority } from "../../src/codex/desktop-compatibility/certificate-store";
 import {
-  powerShellAuthorityKeyProtectionForTests, usesNativeDpapiForTests, windowsAuthorityKeyProtection, type AuthorityKeyProtection,
+  powerShellAuthorityKeyProtectionForTests, powerShellDpapiScriptForTests, usesNativeDpapiForTests,
+  windowsAuthorityKeyProtection, type AuthorityKeyProtection,
 } from "../../src/codex/desktop-compatibility/windows-key-protection";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 
@@ -163,6 +164,12 @@ describe("Codex Desktop compatibility authority lifecycle", () => {
     writeFileSync(path, "broken state");
     await expect(ensureDesktopCompatibilityAuthority({ directory: root, protection: protector() })).rejects.toMatchObject({ code: "unreadable" });
     expect(readFileSync(path, "utf8")).toBe("broken state");
+  });
+
+  test("the PowerShell DPAPI helper never invokes a cmdlet", () => {
+    // A cmdlet (Verb-Noun) triggers command discovery and module auto-loading, which a cold
+    // profile pays for before DPAPI runs at all. The helper must stay on .NET calls.
+    expect(powerShellDpapiScriptForTests().match(/\b[A-Z][A-Za-z]+-[A-Z][A-Za-z]+\b/g)).toBeNull();
   });
 
   test.skipIf(process.platform !== "win32")("real CurrentUser DPAPI survives separate helper invocations and rejects corruption", async () => {
