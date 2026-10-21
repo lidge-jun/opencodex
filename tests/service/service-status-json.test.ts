@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { buildWindowsTaskXml, setQuerySchtasksForTests } from "../../src/service";
 import { parseServiceArgs, planServiceCommand, serviceCommand } from "../../src/service/cli";
+import { maybeAutoRestoreCodexShim, skipsCodexShimAutoRestore } from "../../src/cli/codex-shim-autorestore";
+import { repoPath } from "../helpers/repo-root";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import {
   deriveLaunchdServiceDiagnostic,
   deriveSystemdServiceDiagnostic,
@@ -366,4 +369,51 @@ describe("service status --json is passive", () => {
     ];
     for (const command of mutations) expect(READ_ONLY_CALL.test(command)).toBe(false);
   });
+});
+
+describe("service status --json CLI preflight", () => {
+  test("Codex shim auto-restore is skipped for the JSON read and kept for the text report", () => {
+    expect(skipsCodexShimAutoRestore("service", ["service", "status", "--json"])).toBe(true);
+    expect(skipsCodexShimAutoRestore("service", ["service", "--json", "status"])).toBe(true);
+    // The text report and mutating verbs keep their existing preflight.
+    expect(skipsCodexShimAutoRestore("service", ["service", "status"])).toBe(false);
+    expect(skipsCodexShimAutoRestore("service", ["service", "install", "--json"])).toBe(false);
+    let restores = 0;
+    maybeAutoRestoreCodexShim("service", ["service", "status", "--json"], {
+      env: {}, warn: () => {}, readConfig: () => { throw new Error("must not read config"); },
+      restore: (() => { restores += 1; return { status: "restored", message: "x" }; }) as never,
+    });
+    expect(restores).toBe(0);
+  });
+
+  test("the real CLI leaves every isolated home byte-for-byte unchanged", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-service-status-cli-"));
+    try {
+      const home = join(root, "home");
+      const opencodexHome = join(root, "opencodex");
+      const codexHome = join(root, "codex");
+      for (const dir of [home, opencodexHome, codexHome]) fs.mkdirSync(dir, { recursive: true });
+      // Port 9 (discard) is never an opencodex proxy; a malformed sibling file must stay unrepaired.
+      writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({ port: 9, hostname: "127.0.0.1", codexAutoStart: false, codexShimAutoRestore: true }));
+      const snapshot = () => fs.readdirSync(root, { recursive: true, withFileTypes: true })
+        .map(entry => {
+          const path = join(entry.parentPath, entry.name);
+          const stat = statSync(path);
+          return `${path}|${stat.mode}|${stat.size}|${stat.mtimeMs}`;
+        })
+        .sort();
+      const before = snapshot();
+      const run = childProcess.spawnSync(process.execPath, [repoPath("src", "cli", "index.ts"), "service", "status", "--json"], {
+        cwd: repoPath(),
+        env: { ...process.env, HOME: home, USERPROFILE: home, OPENCODEX_HOME: opencodexHome, CODEX_HOME: codexHome, XDG_CONFIG_HOME: join(home, ".config") },
+        encoding: "utf8",
+      });
+      expect(run.status).toBe(0);
+      const json = JSON.parse(run.stdout);
+      expect(json).toMatchObject({ schemaVersion: 1, installed: false, backend: "none" });
+      expect(snapshot()).toEqual(before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, SPAWN_BUDGET_MS);
 });
