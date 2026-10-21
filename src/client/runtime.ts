@@ -24,6 +24,7 @@ import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tu
 import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } from "./link-state";
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState } from "./state";
+import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 
@@ -312,7 +313,9 @@ export async function startClientRuntime(
   // restart rolls back (OCX-6); the stopped supervisor cannot be started twice, so each call builds one.
   // The port this process actually serves on; a rollback binds exactly this one again.
   let servedPort = preferred;
-  const serve = async (rollback?: { port: number; portWaitMs: number }): Promise<void> => {
+  // Returns false only for a rollback whose connection changed while it was binding: the new
+  // listener is then closed unpublished and the caller recycles.
+  const serve = async (rollback?: { port: number; portWaitMs: number }): Promise<boolean> => {
     const supervisor = supervised
       ? createClientLinkSupervisor({
         onLinkEnded: () => scheduleStandaloneRecycle(state.value.tokenFingerprint),
@@ -330,17 +333,40 @@ export async function startClientRuntime(
       ...(linkMode ? { linkStatus: () => activeSupervisor?.status() ?? { kind: "stopped" as const }, linkKeySource: linkKey } : {}),
       ...(supervisor ? { linkTunnel: supervisor } : homeInitiated ? { linkTunnel: HOME_INITIATED_LINK_TUNNEL } : {}),
     }, rollback === undefined ? io : { ...io, portWaitMs: rollback.portWaitMs });
-    activeServer = server;
-    activePort = boundPort;
-    servedPort = boundPort;
-    activeSupervisor = supervisor;
-    supervisor?.start();
-    writePid(process.pid);
-    writeRuntimePort(clientRuntimeRecord(process.pid, boundPort, attestationSecret));
-    if (linkMode && state.value.link && linkKey) {
-      activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
-      activeReporter.start();
+    const publish = (): void => {
+      activeServer = server;
+      activePort = boundPort;
+      servedPort = boundPort;
+      activeSupervisor = supervisor;
+      supervisor?.start();
+      writePid(process.pid);
+      writeRuntimePort(clientRuntimeRecord(process.pid, boundPort, attestationSecret));
+      if (linkMode && state.value.link && linkKey) {
+        activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
+        activeReporter.start();
+      }
+    };
+    if (!rollback) {
+      publish();
+      return true;
     }
+    // A rollback publishes under the client lifecycle lock, after rechecking the connection there,
+    // so a disconnect or connect that committed during the bind can never be served over. A lock
+    // held by such an operation counts as a change.
+    let published = false;
+    try {
+      published = withClientLifecycleSync(() => {
+        if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") return false;
+        publish();
+        return true;
+      });
+    } catch {
+      published = false;
+    }
+    if (!published) {
+      try { await server.stop(true); } catch { /* never published */ }
+    }
+    return published;
   };
 
   // Stop everything this process serves, giving in-flight requests up to `drainMs`.
@@ -387,7 +413,9 @@ export async function startClientRuntime(
         await recycleStandalone(state.value.tokenFingerprint);
         return;
       }
-      await serve({ port: servedPort, portWaitMs: CLIENT_RESTART_REBIND_WAIT_MS });
+      if (!(await serve({ port: servedPort, portWaitMs: CLIENT_RESTART_REBIND_WAIT_MS }))) {
+        await recycleStandalone(state.value.tokenFingerprint);
+      }
     },
     exitProcess: code => { process.exit(code); },
   });
