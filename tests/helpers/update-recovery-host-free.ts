@@ -13,15 +13,20 @@ export const HOST_FREE_RECOVERY_IO = {
   restartServiceManagerFn: async () => "failed" as const,
 };
 
-/** Runs a scenario and fails it if it started any host process, so its work stays bounded. */
+/**
+ * Runs a scenario with host process launches refused, and fails it if it attempted any. The
+ * launch is refused rather than observed, so a regressed path neither waits on the command nor
+ * touches the host; the record still fails the case if production code swallows the refusal.
+ */
 export async function withoutHostProcesses<T>(run: () => Promise<T>): Promise<T> {
   const bun = Bun as unknown as { spawnSync: (...args: unknown[]) => unknown };
   const original = bun.spawnSync;
   const spawned: string[] = [];
   bun.spawnSync = (...args: unknown[]) => {
     const first = args[0] as string[] | { cmd?: string[] } | undefined;
-    spawned.push(String(Array.isArray(first) ? first[0] : first?.cmd?.[0]));
-    return original.apply(Bun, args);
+    const command = String(Array.isArray(first) ? first[0] : first?.cmd?.[0]);
+    spawned.push(command);
+    throw new Error(`unexpected host process launch: ${command}`);
   };
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   try {
