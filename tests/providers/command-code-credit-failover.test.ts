@@ -118,5 +118,7 @@ describe("Command Code insufficient-credit refusal", () => {
     expect(calls).toBe(2);
     expect(response.status).toBe(429);
     expect(response.headers.get("x-opencodex-refusal")).toBe("insufficient-credits");
+    expect(response.headers.get("x-opencodex-upstream-status")).toBe("400");
+    expect(await response.json()).toEqual(CREDITS_EXHAUSTED);
   });
 });
