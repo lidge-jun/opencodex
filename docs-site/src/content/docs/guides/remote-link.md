@@ -65,6 +65,8 @@ A failed link does not silently switch to a local provider.
 The Child returns a retryable `503` without forwarding the link key or request when its tunnel is failed, stopped, or not supervised.
 It also keeps the key local when another process owns the tunnel port; free that port so the Child's SSH tunnel can bind it.
 
+To confirm which Home is serving a Child, compare the `x-opencodex-served-by` header on the Child's `GET /v1/models` with the `instanceId` in the Home's `GET /healthz`. The Child passes the Home's header through unchanged, so the two match while the link works. The value is an opaque id, never a hostname; see [Home identity and the served-by header](/reference/management-api/#home-identity-and-the-served-by-header).
+
 ## What a Child shows and manages
 
 A Child runs on the Home's providers, accounts and settings, so the Home is where you change them.

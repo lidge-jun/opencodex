@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { LINK_MANAGEMENT_READ_PATHS } from "../../src/link/management-routes";
 import { LINK_RELAY_AUTH_VERSION } from "../../src/link/relay-auth";
+import { ensureQuotaPoolIdentity } from "../../src/quota-pool/identity";
 import {
   buildPeerFeatures,
   currentPeerFeatureSources,
@@ -107,16 +108,25 @@ describe("GET /readyz features on a live server", () => {
   });
 
   test("served-by-header is advertised exactly when responses carry the header", async () => {
+    saveConfig({
+      ...getDefaultConfig(),
+      defaultProvider: "mock",
+      providers: { mock: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:9/v1", allowPrivateNetwork: true, liveModels: false, models: ["m"] } },
+    });
+    ensureQuotaPoolIdentity();
     const server = startServer(0, { readinessGate: createReadinessGate() });
     try {
       const readyz = await fetch(new URL("/readyz", server.url));
       const advertised = ((await readyz.json()) as { features: string[] }).features.includes("served-by-header");
-      const responses = [
-        readyz,
-        await fetch(new URL("/healthz", server.url)),
-        await fetch(new URL("/v1/opencodex-readyz-features-probe", server.url)),
-      ];
-      for (const response of responses) expect(response.headers.has(SERVED_BY_HEADER)).toBe(advertised);
+      expect(advertised).toBe(SERVED_BY_HEADER_EMITTED);
+      expect(advertised).toBe(true);
+      const models = await fetch(new URL("/v1/models", server.url));
+      expect(models.status).toBe(200);
+      expect(models.headers.has(SERVED_BY_HEADER)).toBe(advertised);
+      // The header names the Home on model discovery only; other routes stay unstamped.
+      for (const response of [readyz, await fetch(new URL("/v1/opencodex-readyz-features-probe", server.url))]) {
+        expect(response.headers.has(SERVED_BY_HEADER)).toBe(false);
+      }
     } finally {
       await server.stop(true);
     }

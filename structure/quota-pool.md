@@ -70,6 +70,11 @@ in-place exclusive create where hard links are unavailable), so two servers star
 home adopt the same identity, and a symlink or malformed file at the path is refused and left
 untouched rather than overwritten.
 
+`homeId` is also the Home instance id other peers see: `GET /healthz` publishes it as `instanceId`
+and `GET /v1/models` names it in `x-opencodex-served-by` (`src/remote/served-by.ts`, see
+[Runtime](runtime.md)). It is random and carries nothing derivable from the machine; the secret is
+never published.
+
 `accountRef` is `acct_` + base64url of the first 128 bits of HMAC-SHA256(secret,
 `ocx.quota-pool/1` NUL provider NUL accountId). It is stable across restarts, distinct per provider,
 and never contains an email, a raw account id or a token; without the secret a recipient cannot
