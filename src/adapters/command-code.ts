@@ -498,7 +498,11 @@ function isReasoningEffortRejection(status: number, payload: string): boolean {
 async function normalizeCommandCodeCreditRefusal(response: Response, signal?: AbortSignal): Promise<Response> {
   if (response.status !== 400) return response;
   try {
-    const observed = await readBoundedResponseBody(response.clone(), { signal, maxBytes: 8 * 1024 });
+    const observed = await readBoundedResponseBody(response.clone(), {
+      signal,
+      maxBytes: 8 * 1024,
+      fatalUtf8: true,
+    });
     if (!observed.displaySafe) return response;
     const payload = JSON.parse(observed.text);
     if (payload?.success !== false || payload.error?.code !== "BAD_REQUEST"

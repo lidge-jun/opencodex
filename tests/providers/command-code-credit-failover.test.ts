@@ -83,9 +83,18 @@ describe("Command Code insufficient-credit refusal", () => {
   });
 
   test("fails open for malformed and oversized bodies", async () => {
+    const invalidUtf8Prefix = new TextEncoder().encode(
+      '{"success":false,"error":{"code":"BAD_REQUEST","message":"You have insufficient credits to make this request.',
+    );
+    const invalidUtf8Suffix = new TextEncoder().encode('"}}');
+    const invalidUtf8Body = new Uint8Array(invalidUtf8Prefix.length + 1 + invalidUtf8Suffix.length);
+    invalidUtf8Body.set(invalidUtf8Prefix);
+    invalidUtf8Body[invalidUtf8Prefix.length] = 0x80;
+    invalidUtf8Body.set(invalidUtf8Suffix, invalidUtf8Prefix.length + 1);
     const fixtures = [
       new Response("{not json", { status: 400 }),
       new Response(JSON.stringify({ ...CREDITS_EXHAUSTED, pad: "x".repeat(9_000) }), { status: 400 }),
+      new Response(invalidUtf8Body, { status: 400 }),
     ];
 
     for (const fixture of fixtures) {
