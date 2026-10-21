@@ -7,13 +7,14 @@ import { CAPABILITIES } from "../../src/cli/capabilities";
 import { LOCAL_TARGET, LocalFixtureRpcError, localMessagingFixture, NO_REPLY } from "../helpers/messaging-local";
 import { repoPath } from "../helpers/repo-root";
 
-test("command is local-only in registry and skips global repair even on malformed usage", () => {
+test("local commands stay registered and skip global repair even on malformed usage", () => {
   expect(skipsCodexShimAutoRestore("message", ["message", "unknown"])).toBe(true);
   const caps = CAPABILITIES.filter(cap => cap.command[0] === "message");
-  expect(caps.map(cap => cap.command[1])).toEqual(["sessions", "send"]);
+  expect(caps.map(cap => cap.command[1])).toContain("sessions");
+  expect(caps.map(cap => cap.command[1])).toContain("send");
   expect(caps.every(cap => cap.routes.length === 0)).toBe(true);
   expect(caps[1]!.mutates).toBe(true);
-  expect(caps[1]!.flags.map(flag => flag.name)).not.toContain("--host");
+  expect(caps[1]!.flags.map(flag => flag.name)).toContain("--host");
 });
 
 test("invalid usage allocates no timer, socket, helper or runtime-selection work", async () => {

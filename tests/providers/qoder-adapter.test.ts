@@ -458,8 +458,12 @@ describe("qoder adapter", () => {
 
   test("uses only the Global PAT and disables tools, MCP, settings hooks, and persistence", () => {
     const env = buildQoderChildEnv(QODER_GLOBAL_PROFILE, "qoder-pat");
+    expect(env.QODER_EXPOSE_TOKEN_USAGE).toBe("true");
     expect(env.QODER_PERSONAL_ACCESS_TOKEN).toBe("qoder-pat");
-    expect(Object.keys(env).filter(key => key.startsWith("QODER"))).toEqual(["QODER_PERSONAL_ACCESS_TOKEN"]);
+    expect(Object.keys(env).filter(key => key.startsWith("QODER"))).toEqual([
+      "QODER_EXPOSE_TOKEN_USAGE",
+      "QODER_PERSONAL_ACCESS_TOKEN",
+    ]);
     const args = buildQoderArgs(parsed({ options: { reasoning: "high" } }), provider());
     expect(args[args.indexOf("--tools") + 1]).toBe("");
     expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
@@ -496,6 +500,7 @@ describe("qoder adapter", () => {
     expect(args.join(" ")).not.toContain(secretDeveloper);
     expect(args).not.toContain("--append-system-prompt-file");
     expect(childEnv.QODER_APPEND_SYSTEM_PROMPT).toBe(`${secretSystem}\n\n${secretDeveloper}`);
+    expect(childEnv.QODER_EXPOSE_TOKEN_USAGE).toBe("true");
   });
 
   test("never inherits an ambient Qoder prompt for either region", () => {
@@ -525,8 +530,17 @@ describe("qoder adapter", () => {
 
     const globalEnv = buildQoderChildEnv(QODER_GLOBAL_PROFILE, "global-pat");
     const cnEnv = buildQoderChildEnv(QODER_CN_PROFILE, "cn-pat");
+    expect(globalEnv.QODER_EXPOSE_TOKEN_USAGE).toBe("true");
+    expect(globalEnv.QODERCN_EXPOSE_TOKEN_USAGE).toBeUndefined();
     expect(globalEnv.QODER_PERSONAL_ACCESS_TOKEN).toBe("global-pat");
     expect(globalEnv.QODERCN_PERSONAL_ACCESS_TOKEN).toBeUndefined();
+    // The CN build derives every variable from a QODERCN_ prefix and has no QODER_ fallback for this switch.
+    expect(cnEnv.QODERCN_EXPOSE_TOKEN_USAGE).toBe("true");
+    expect(cnEnv.QODER_EXPOSE_TOKEN_USAGE).toBeUndefined();
+    expect(Object.keys(cnEnv).filter(key => key.startsWith("QODER"))).toEqual([
+      "QODERCN_EXPOSE_TOKEN_USAGE",
+      "QODERCN_PERSONAL_ACCESS_TOKEN",
+    ]);
     expect(cnEnv.QODERCN_PERSONAL_ACCESS_TOKEN).toBe("cn-pat");
     expect(cnEnv.QODER_PERSONAL_ACCESS_TOKEN).toBeUndefined();
 
@@ -548,8 +562,11 @@ describe("qoder adapter", () => {
     expect(spawned).toHaveLength(2);
     const global = spawned.find(item => item.executable.endsWith("/qoder"))!;
     const cn = spawned.find(item => item.executable.endsWith("/qodercn"))!;
+    expect(global.env.QODER_EXPOSE_TOKEN_USAGE).toBe("true");
     expect(global.env.QODER_PERSONAL_ACCESS_TOKEN).toBe("global-pat");
     expect(global.env.QODERCN_PERSONAL_ACCESS_TOKEN).toBeUndefined();
+    expect(cn.env.QODERCN_EXPOSE_TOKEN_USAGE).toBe("true");
+    expect(cn.env.QODER_EXPOSE_TOKEN_USAGE).toBeUndefined();
     expect(cn.env.QODERCN_PERSONAL_ACCESS_TOKEN).toBe("cn-pat");
     expect(cn.env.QODER_PERSONAL_ACCESS_TOKEN).toBeUndefined();
   });

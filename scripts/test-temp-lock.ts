@@ -49,7 +49,10 @@ export type LockedTempDiagnostic = Readonly<{
 
 const defaultDiagnostic: LockedTempDiagnostic = {
   platform: process.platform,
-  realpath: realpathSync,
+  // The native resolver expands 8.3 aliases. Hosted Windows runners export TEMP as
+  // C:\Users\RUNNER~1\..., while test paths arrive long-form; the JS resolver keeps each
+  // spelling, so containment never matched and no final EPERM was ever moved aside.
+  realpath: path => realpathSync.native(path),
   readDir: path => readdirSync(path),
   isDirectory: path => {
     try { return statSync(path).isDirectory(); } catch { return false; }
@@ -104,11 +107,14 @@ function clip(text: string): string {
  * The temp directory the wrapped test child was given. Host temp does not qualify: moving a
  * sandbox root there would escape the owner marker.
  */
-export function containedRunTemp(env: Record<string, string | undefined> = process.env): string | null {
+export function containedRunTemp(
+  env: Record<string, string | undefined> = process.env,
+  realpath: (path: string) => string = path => realpathSync.native(path),
+): string | null {
   const raw = env.TEMP || env.TMP || env.TMPDIR;
   if (!raw) return null;
   let resolved: string;
-  try { resolved = realpathSync(raw); } catch { return null; }
+  try { resolved = realpath(raw); } catch { return null; }
   if (basename(resolved) !== "tmp") return null;
   if (!WRAPPED_TEST_ROOT_NAME.test(basename(resolve(resolved, "..")))) return null;
   return resolved;
@@ -158,7 +164,8 @@ export function quarantineFinalEperm(
   catch (describeError) { described = `[test-temp] lock diagnostic failed: ${String(describeError)}`; }
   diagnostic.warn(described);
 
-  const runTmp = containedRunTemp(env);
+  // Both sides of the containment check go through one resolver, or an alias decides it.
+  const runTmp = containedRunTemp(env, diagnostic.realpath);
   if (!runTmp) {
     diagnostic.warn("[test-temp] EPERM is outside the contained run temp; not moving it aside.");
     return false;

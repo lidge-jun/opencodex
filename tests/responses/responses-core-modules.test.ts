@@ -77,7 +77,7 @@ describe("Responses core module boundaries", () => {
   });
 
   test("lease transfer retains both finally owners until response construction settles", () => {
-    const ingress = readResponsesCoreModule("core.ts");
+    const ingress = readResponsesCoreModule("core-pipeline.ts");
     const native = readResponsesCoreModule("passthrough-execution.ts");
     expect(ingress).toContain("const passthroughResult = await executePassthroughResponse(");
     expect(ingress).toContain("if (passthroughResult instanceof Response) return passthroughResult;");
@@ -85,14 +85,15 @@ describe("Responses core module boundaries", () => {
     expect(ingress.indexOf("await executePassthroughResponse("))
       .toBeLessThan(ingress.indexOf("const sidecarPlans = await executeResponsesSidecars("));
     expect(native).toContain('if (nativeExchange instanceof Response || nativeExchange.kind === "adapter-handoff") return nativeExchange;');
-    // Delivery is awaited inside the try, and its direct body is wrapped before
-    // the return. What matters is that both awaits stay inside the lease owner,
-    // not that the delivery call is itself the return expression.
+    // Delivery is awaited inside the try, and its direct body is wrapped with
+    // tool ownership before return. Both awaits must stay inside the lease owner;
+    // the delivery call itself need not be the return expression.
     expect(native).toContain("const response = await deliverPassthroughResponse(");
-    expect(native).toContain("return guardDirectPassthroughBodyInactivity(");
+    const guardedReturn = "return attachResponseToolOwnership(guardDirectPassthroughBodyInactivity(";
+    expect(native).toContain(guardedReturn);
     expect(native.indexOf("await deliverPassthroughResponse("))
-      .toBeLessThan(native.indexOf("return guardDirectPassthroughBodyInactivity("));
-    expect(native.indexOf("return guardDirectPassthroughBodyInactivity("))
+      .toBeLessThan(native.indexOf(guardedReturn));
+    expect(native.indexOf(guardedReturn))
       .toBeLessThan(native.indexOf("} finally {"));
     expect(native.indexOf("admissionState.pendingHostAdmissionLease = null;"))
       .toBeLessThan(native.indexOf("await preparePassthroughExchange("));

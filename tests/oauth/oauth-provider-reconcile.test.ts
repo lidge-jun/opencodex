@@ -264,12 +264,9 @@ describe("OAuth provider reconciliation", () => {
     expect(provider.defaultModel).toBe("gemini-3.5-flash-low");
     expect(provider.models).toEqual([
       "gemini-3.8-flash",
-      "gemini-3.7-flash",
-      "gemini-3.1-pro",
-      "gemini-3.1-flash-image",
-      "claude-sonnet-4-6",
-      "claude-opus-4-6-thinking",
-      "gpt-oss-120b-medium",
+      "gemini-4-argon",
+      "claude-opus-5-5",
+      "claude-sonnet-5-5",
     ]);
     expect(provider.models).not.toContain("gemini-3.5-flash-low");
     expect(provider.models).not.toContain("gemini-3.6-flash");
@@ -327,7 +324,7 @@ describe("OAuth provider reconciliation", () => {
 
     upsertOAuthProvider(config, "google-antigravity");
     expect(config.providers["google-antigravity"].liveModels).toBe(true);
-    expect(config.providers["google-antigravity"].models).toHaveLength(7);
+    expect(config.providers["google-antigravity"].models).toHaveLength(4);
   });
 
   test("an explicit 3.7 default survives the 3.8 launch while its capabilities refresh", () => {
@@ -359,7 +356,8 @@ describe("OAuth provider reconciliation", () => {
     const provider = config.providers["google-antigravity"];
 
     expect(provider.defaultModel).toBe("gemini-3.7-flash");
-    expect(provider.models).toContain("gemini-3.7-flash");
+    // The static lineup no longer lists 3.7, but a live-discovery default stays operator-owned.
+    expect(provider.models).not.toContain("gemini-3.7-flash");
     expect(provider.models).toContain("gemini-3.8-flash");
     // Capability records still refresh from the registry — preservation is about the
     // user's CHOICE, not about freezing the row.
@@ -508,8 +506,7 @@ describe("OAuth provider reconciliation", () => {
     // The devin preset declares neither output field, so the delete branch was
     // the only branch either of them ever took: a hand-edited budget was gone
     // before the next startup finished, leaving the adapter's own fallback as
-    // the only reachable cap (#5190). Reconciliation still owns the input-side
-    // catalog, which is why modelContextWindows is asserted alongside.
+    // the only reachable cap (#5190). Input limits are operator-owned too (#7092).
     const preset = OAUTH_PROVIDERS.devin.providerConfig;
     expect(preset.defaultMaxOutputTokens).toBeUndefined();
     expect(preset.modelMaxOutputTokens).toBeUndefined();
@@ -531,10 +528,9 @@ describe("OAuth provider reconciliation", () => {
 
     expect(config.providers.devin.defaultMaxOutputTokens).toBe(64_000);
     expect(config.providers.devin.modelMaxOutputTokens).toEqual({ "swe-2": 32_000 });
-    expect(config.providers.devin.modelContextWindows).toEqual(preset.modelContextWindows!);
+    expect(config.providers.devin.modelContextWindows).toMatchObject({ "swe-2": 1 });
 
-    // A preset that does declare a budget still refreshes the saved row: this
-    // is a narrower delete branch, not an exemption from reconciliation.
+    // Later operator edits remain authoritative through another reconciliation.
     config.providers.devin.defaultMaxOutputTokens = 1;
     reconcileOAuthProviders(config, false);
     expect(config.providers.devin.defaultMaxOutputTokens).toBe(1);

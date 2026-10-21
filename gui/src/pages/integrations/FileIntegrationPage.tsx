@@ -72,6 +72,7 @@ const DISABLE_COPY: ConsequenceCopy = {
 const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   opencode: "integrations.semantics.opencode",
   pi: "integrations.semantics.pi",
+  "gentle-shell": "integrations.semantics.gentleShell",
   omp: "integrations.semantics.omp",
   hermes: "integrations.semantics.hermes",
   openclaw: "integrations.semantics.openclaw",
@@ -88,11 +89,13 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   cline: "integrations.semantics.cline",
   kilo: "integrations.semantics.kilo",
   droid: "integrations.semantics.droid",
+  qoder: "integrations.semantics.qoder",
 };
 
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   opencode: "integrations.tab.opencode",
   pi: "integrations.tab.pi",
+  "gentle-shell": "integrations.tab.gentleShell",
   omp: "integrations.tab.omp",
   hermes: "integrations.tab.hermes",
   openclaw: "integrations.tab.openclaw",
@@ -109,6 +112,7 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   cline: "integrations.tab.cline",
   kilo: "integrations.tab.kilo",
   droid: "integrations.tab.droid",
+  qoder: "integrations.tab.qoder",
 };
 
 type FileIntegrationPageProps = {

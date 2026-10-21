@@ -10,7 +10,9 @@ import {
   assertChatCompletionsRoutingBody,
   ChatCompletionsRequestError,
 } from "../chat/inbound";
-import { chatToResponsesBody } from "../protocols/codecs/chat";
+import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat";
+import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, type ChatIrConversation } from "../protocols/codecs/chat-ir";
+import { antigravityDirectDeclineReason } from "./antigravity-direct-eligibility";
 import { normalizeChatImageParts } from "../chat/image-parts";
 import {
   chatCompletionsErrorResponse,
@@ -19,6 +21,7 @@ import {
   responsesJsonToChatCompletion,
   responsesSseToChatCompletionsSse,
 } from "../chat/outbound";
+import { ADVISOR_INTERNAL_CAPABILITY_HEADER, isInternalCallCapability } from "../lib/local-internal-call-capability";
 import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
@@ -44,12 +47,14 @@ import type { OcxConfig } from "../types";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import {
   addFinalRequestLog,
+  cacheDiagnosticsObserving,
   httpStatusForRequestLogTerminal,
   recordFirstOutput,
   type RequestLogContext,
 } from "./request-log";
 import { createFinalRequestLog } from "./inference/final-log";
 import { clientWireLogOf, clientWireOf } from "./inference/client-wire";
+import { attachAdvisorReasoning } from "./inference/advisor-diagnostics";
 import { directEncodersApply } from "./inference/client-encoder-delivery";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
@@ -110,8 +115,10 @@ export async function handleChatCompletions(
 ): Promise<Response> {
   const translatorBudget = createTranslatorBudget();
   try {
+    let response = await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds);
+    if (isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER))) response = attachAdvisorReasoning(response, logCtx);
     return finalizeTranslatorBudgetResponse(
-      await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds),
+      response,
       translatorBudget,
       req.signal,
     );
@@ -272,6 +279,12 @@ async function handleChatCompletionsWithBudget(
   const protocolSettings = resolveProtocolSettings(config);
   const nativeChatCombos = protocolSettings.rollout.nativeChatCombos
     && settledRoute?.combo !== undefined && !effortRow;
+  // Antigravity direct lane (off by default): the conversation is decoded straight into the IR
+  // and the answer is encoded straight into Chat, with no internal Responses body either way.
+  const antigravityDecline = settledRoute && !chatNativeRoute
+    ? antigravityDirectDeclineReason(settledRoute, chatBody, config, { cacheDiagnostics: cacheDiagnosticsObserving() })
+    : undefined;
+  const directRoute = settledRoute && !chatNativeRoute && antigravityDecline === undefined ? settledRoute : null;
   const envelope = protocolSettings.unrepresentable === "reject" || nativeChatCombos
     ? createProtocolEnvelope({ inbound: "chat", body: chatBody, translatorBudget })
     : undefined;
@@ -281,7 +294,7 @@ async function handleChatCompletionsWithBudget(
       inbound: "chat",
       requestPath: chatNativeRoute
         ? requestPathForLane("chat", "native", "chat")
-        : requestPathForLane("chat", "bridge", upstreamWireForAdapter(settledRoute.provider.adapter)),
+        : requestPathForLane("chat", directRoute ? "direct" : "bridge", upstreamWireForAdapter(settledRoute.provider.adapter)),
       features: envelope.features(),
       policy: "reject",
     });
@@ -294,8 +307,15 @@ async function handleChatCompletionsWithBudget(
   }
   markProtocolEntry(logCtx, {
     inbound: "chat",
-    lane: chatNativeRoute ? "native" : "bridge",
-    reasonCodes: !chatNativeRoute && nativeDecline ? [nativeDecline] : [],
+    lane: chatNativeRoute ? "native" : directRoute ? "direct" : "bridge",
+    reasonCodes: [
+      ...(!chatNativeRoute && !directRoute && nativeDecline ? [nativeDecline] : []),
+      // Only a decline that says something about this route: with the switch off or a
+      // non-Antigravity target the path reason already explains the bridge.
+      ...(antigravityDecline && antigravityDecline !== "rollout-disabled" && antigravityDecline !== "not-migrated"
+        ? [antigravityDecline]
+        : []),
+    ],
     features: envelope ? () => envelope.features() : () => featuresFromChatBody(chatBody),
   });
   recordProtocolShadowPlan(logCtx, config, { inbound: "chat", model: requestedModel });
@@ -314,10 +334,18 @@ async function handleChatCompletionsWithBudget(
   }
 
   let internalBody: Rec;
+  let directConversation: ChatIrConversation | undefined;
   try {
     // Validate the full Chat boundary after routing. Native Chat keeps `chatBody` as
     // its wire source; this Responses projection is used only by the fallback path.
-    internalBody = chatToResponsesBody(chatBody);
+    // The direct lane validates the same boundary while decoding the conversation into the IR,
+    // and sends the core only the request settings.
+    if (directRoute) {
+      directConversation = chatConversationToIr(chatBody, chatBody.model as string);
+      internalBody = chatSettingsBody(chatBody);
+    } else {
+      internalBody = chatToResponsesBody(chatBody);
+    }
     if (effortRow) {
       internalBody.reasoning = {
         ...(isRec(internalBody.reasoning) ? internalBody.reasoning : {}),
@@ -370,6 +398,17 @@ async function handleChatCompletionsWithBudget(
   }
 
   const visionDescribeTerminal = req.headers.get("x-opencodex-vision-describe") === "1";
+  // Terminal advisor marker: the advisor sidecar's own loopback consultation re-enters through
+  // this surface. The bridge rebuilds headers from the FORWARD_HEADERS allowlist, which would
+  // drop the raw marker header — so the fact is detected here and carried as an option flag
+  // (same structure as the vision-describe fence above, depth cap 1).
+  //
+  // The header value is NOT evidence by itself: any external caller can send it, and the peer
+  // address proves nothing (Docker/WSL/tunnels/port-forwarding end on loopback). Internal
+  // authority comes from a process-owned capability minted at random per process and compared in
+  // constant time, so a forged header — or a token captured from an older process — is treated
+  // as an ordinary external request.
+  const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
   // Concrete helper targets must fail before optional stored-main credential enrichment.
   // Unresolved combos are checked after their concrete child route is selected in Responses.
   if (settledRoute && !settledRoute.combo && isCanonicalOpenAiForwardProvider(settledRoute.provider)
@@ -472,13 +511,35 @@ async function handleChatCompletionsWithBudget(
     // headers from the FORWARD_HEADERS allowlist, which would drop the raw
     // header — so the fact is detected here and carried as an option flag.
     ...(visionDescribeTerminal ? { visionDescribeTerminal: true } : {}),
+    ...(advisorInternal ? { advisorInternal: true } : {}),
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
-    ...(directEncodersApply(config, settledRoute)
-      ? { clientEncoder: { protocol: "chat" as const, stream, model: requestedModel } }
-      : {}),
+    // The direct lane answers through the direct encoder whatever `directEncoders` says: the
+    // point of the lane is that neither direction passes through the internal Responses body.
+    ...(directRoute && directConversation
+      ? {
+        clientEncoder: { protocol: "chat" as const, stream, model: requestedModel, requestLane: "direct" as const },
+        directRequest: {
+          protocol: "chat" as const,
+          providerName: directRoute.providerName,
+          modelId: directRoute.modelId,
+          evidence: chatIrRouteEvidence(directConversation),
+          decode: base => withDirectChatConversation(base, chatBody, directConversation!),
+          bridgeConversation: () => {
+            const bridge = chatToResponsesBody(chatBody);
+            return {
+              input: bridge.input,
+              ...(bridge.instructions !== undefined ? { instructions: bridge.instructions } : {}),
+              ...(bridge.tools !== undefined ? { tools: bridge.tools } : {}),
+            };
+          },
+        },
+      }
+      : directEncodersApply(config, settledRoute)
+        ? { clientEncoder: { protocol: "chat" as const, stream, model: requestedModel } }
+        : {}),
   });
   // Already in the Chat wire: no conversion. A direct-encoder body (PF-09) reports its own log
   // facts to the deferred request log. A native combo child (PF-07) carries none: its row is
@@ -543,6 +604,9 @@ async function handleChatCompletionsWithBudget(
       // below could never restore this one -- the translated client was told the provider
       // throttled the turn, and handed a two-second wait to send it again.
       classified.code = UPSTREAM_RESET_REPLAY_REFUSED_CODE;
+    } else if (upstreamCode === "claude_subscription_cooldown") {
+      classified.code = "claude_subscription_cooldown";
+      classified.type = "rate_limit_error";
     } else if (upstreamCode === "model_not_found") {
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";

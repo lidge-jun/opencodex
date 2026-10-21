@@ -1,13 +1,17 @@
 import {
   ACCOUNT_IMPORT_MAX_BYTES,
   ACCOUNT_IMPORT_MAX_EMAIL_LENGTH,
+  ACCOUNT_IMPORT_MAX_PROJECT_ID_LENGTH,
   ACCOUNT_IMPORT_MAX_RECORDS,
   ACCOUNT_IMPORT_MAX_REFRESH_TOKEN_BYTES,
   type ParsedCockpitRecord,
 } from "./types";
 
 const encoder = new TextEncoder();
-const ALLOWED_RECORD_KEYS = new Set(["email", "refresh_token", "tags", "notes"]);
+const ALLOWED_RECORD_KEYS = new Set(["email", "refresh_token", "project_id", "tags", "notes"]);
+// Google Cloud project id grammar: a lowercase letter, then lowercase letters, digits or hyphens,
+// not ending in a hyphen. Exact match only — no trimming, so whitespace or controls are rejected.
+const PROJECT_ID_SHAPE = /^[a-z][a-z0-9-]*[a-z0-9]$/;
 
 export type CockpitDocumentParseResult =
   | { ok: true; records: ParsedCockpitRecord[] }
@@ -50,10 +54,18 @@ function validMetadata(record: Record<string, unknown>): boolean {
   return record.notes === undefined || typeof record.notes === "string";
 }
 
+function validProjectId(value: unknown): value is string | undefined {
+  if (value === undefined) return true;
+  return typeof value === "string"
+    && value.length >= 6
+    && value.length <= ACCOUNT_IMPORT_MAX_PROJECT_ID_LENGTH
+    && PROJECT_ID_SHAPE.test(value);
+}
+
 function parseRecord(value: unknown, index: number): ParsedCockpitRecord {
   if (!isPlainRecord(value)) return { index, code: "invalid_record" };
   if (Object.keys(value).some(key => !ALLOWED_RECORD_KEYS.has(key))) return { index, code: "invalid_record" };
-  if (!validEmail(value.email) || !validRefreshToken(value.refresh_token) || !validMetadata(value)) {
+  if (!validEmail(value.email) || !validRefreshToken(value.refresh_token) || !validProjectId(value.project_id) || !validMetadata(value)) {
     return { index, code: "invalid_record" };
   }
   return {
@@ -61,6 +73,7 @@ function parseRecord(value: unknown, index: number): ParsedCockpitRecord {
     record: {
       email: value.email.toLowerCase(),
       refreshToken: value.refresh_token,
+      ...(typeof value.project_id === "string" ? { projectId: value.project_id } : {}),
     },
   };
 }

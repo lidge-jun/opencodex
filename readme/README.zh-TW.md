@@ -111,7 +111,7 @@ ocx start                         # 代理 + 儀表板位於 localhost:10100
 | 平台 | 檔案 | 說明 |
 |---|---|---|
 | macOS 13+（Apple Silicon 與 Intel） | `OpenCodex-<version>-macos.dmg` | 通用建置，以 Developer ID 簽章並經過公證 |
-| Windows（x64） | `OpenCodex-<version>-windows-x64.msi` | 尚未經程式碼簽章：SmartScreen 會詢問一次，選擇 **More info → Run anyway** |
+| Windows（x64） | `OpenCodex-<version>-windows-x64.msi` | 正透過 SignPath Foundation 推出程式碼簽章（[程式碼簽章政策](https://opencodex.me/zh-tw/reference/code-signing/)）；在版本簽章之前，SmartScreen 會詢問一次，選擇 **More info → Run anyway** |
 | Linux（x86_64） | `OpenCodex-<version>-linux-x86_64.AppImage` 或 `-linux-amd64.deb` | 系統匣需要支援 AppIndicator 的桌面環境 |
 
 每個檔案在發行頁面上都附有 `.sha256`。在 macOS 14+ 上，應用程式還附帶
@@ -147,10 +147,6 @@ opencodex 也能為 Codex 認證管理 **ChatGPT 帳號池**。新增多個 Chat
 <tr>
 <td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="../assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
 <td>感謝 <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a> 贊助本專案！OrcaRouter 是面向正式環境的 OpenAI 相容 AI 閘道：自適應路由會為每則提示評分，送到達到你門檻的模型；自動 failover；路由規則即程式碼；供應商原價零加價並含 prompt 快取；每次呼叫都有 guardrail、agent 防火牆與請求日誌，涵蓋 200+ 模型。在「新增供應商」選擇器選 <code>OrcaRouter</code>，或執行 <code>ocx provider add orcarouter</code>；<code>orcarouter/auto</code> 就是自適應路由器。</td>
-</tr>
-<tr>
-<td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
-<td>感謝 <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> 贊助本專案！PackyCode 是穩定、高效能的 API 轉送供應商，提供 Claude Code、Codex、Gemini 等轉送服務。具備自動 failover、智慧路由與無限並行，讓 AI 成為真正的生產力工具。<a href="https://www.packyapi.com/register?aff=k5KT">透過此連結註冊</a>即可開始！在「新增供應商」選擇器選 <code>PackyCode</code>，或執行 <code>ocx provider add packycode</code>。<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
 <tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
@@ -453,6 +449,16 @@ bun run test
 經維護者代為帶入或重寫而落地的貢獻者工作，
 若 commit 沒有寫出原作者，會記錄在
 **[CREDITS.md](../CREDITS.md)**。
+
+## 程式碼簽章政策 (Code signing policy)
+
+Windows 執行檔正在改用 Authenticode 簽章（[#7207](https://github.com/lidge-jun/opencodex/issues/7207)）。推出進度、簽章驗證方式與完整政策請見 [Windows 程式碼簽章指南](https://opencodex.me/zh-tw/reference/code-signing/)。
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## 免責聲明
 

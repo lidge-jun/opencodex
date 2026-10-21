@@ -1,3 +1,4 @@
+import { anthropicProgressItems } from "../responses/anthropic-progress";
 import type {
   AdapterEvent,
   OcxMessagePhase,
@@ -41,7 +42,7 @@ import {
   type TranslatorBudget,
   type TranslatorBufferKind,
 } from "../lib/translator-budget";
-import { adapterFailureFromEvent, emptyChunks, joinChunks, responsesUsage, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
+import { adapterFailureFromEvent, emptyChunks, joinChunks, responsesUsage, toolCallArgumentsUsable, uuid, webSearchAction, webSearchCellItemId } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
 import { bridgeToResponsesSSE } from "./sse";
 
@@ -67,6 +68,8 @@ export function buildResponseJSON(
     if (options?.translatorBudget && options.recordBufferedDelivery !== false) {
       attemptDeliveryRecorder(budget)?.noteBufferedDelivery(body);
     }
+    if (body.status === "completed" && options?.compaction
+      && !events.some(event => event.type === "done" && event.compactionEncryptedContent)) options.compactionRetention?.commit();
     return body;
   } finally {
     for (const event of events) {
@@ -98,6 +101,7 @@ function buildResponseJSONWithBudget(
     toolSearchToolNames?: Set<string>;
     /** Remote compaction v2 turn — append one synthetic compaction output item (see bridgeToResponsesSSE). */
     compaction?: boolean;
+    compactionRetention?: { encode(summary: string): string; commit(): void };
     onProviderState?: (state: OcxProviderContinuationState) => void;
     /** Raw adapter-reported usage before wire normalization (see bridgeToResponsesSSE onUsage). */
     onUsage?: (usage: OcxUsage | undefined) => void;
@@ -386,6 +390,16 @@ function buildResponseJSONWithBudget(
         flushToolCall();
         break;
       case "text_delta":
+        if (options?.compaction && e.anthropicThinkingSignature) break;
+        if (e.anthropicThinkingSignature) {
+          rawReasoningForNextToolCall = "";
+          flushText("commentary");
+          flushSummaryReasoning();
+          flushRawReasoning();
+          flushToolCall();
+          for (const item of anthropicProgressItems(e.text, e.anthropicThinkingSignature, budget)) pushOutput(item as OutputItem);
+          break;
+        }
         // Only flush on an explicit phase change. A later delta that omits `phase` must keep
         // appending under the previously established phase.
         if (currentText.bytes > 0 && e.phase !== undefined && currentTextPhase !== e.phase) flushText("commentary");
@@ -532,9 +546,10 @@ function buildResponseJSONWithBudget(
         flushToolCall();
         const safeSources = safeWebSearchSources(e.sources);
         pushOutput({
-          type: "web_search_call", id: `ws_${uuid()}`, status: e.status ?? "completed",
-          action: webSearchAction(e.queries),
+          type: "web_search_call", id: webSearchCellItemId(e.itemId), status: e.status ?? "completed",
+          action: webSearchAction(e.queries, e.anthropic),
           ...(safeSources.length > 0 ? { sources: safeSources } : {}),
+          ...(e.anthropic ? { anthropic_blocks: e.anthropic } : {}),
         });
         if (safeSources.length > 0) {
           for (const source of safeSources) {
@@ -616,7 +631,7 @@ function buildResponseJSONWithBudget(
   ) {
    const item = {
       type: "compaction", id: `cmp_${uuid()}`,
-      encrypted_content: compactionEncryptedContent ?? encodeCompactionSummary(joinChunks(batchCompaction)),
+      encrypted_content: compactionEncryptedContent ?? (options?.compactionRetention?.encode(joinChunks(batchCompaction)) ?? encodeCompactionSummary(joinChunks(batchCompaction))),
     };
     pushOutput(item, compactionEncryptedContent ? 0 : batchCompaction.bytes);
   }
@@ -646,7 +661,7 @@ function buildResponseJSONWithBudget(
       : errorEvent?.retryable !== undefined ? { retryable: errorEvent.retryable } : {}),
     ...(incompleteEvent ? {
       incomplete_details: {
-        reason: incompleteEvent.reason,
+        reason: truncationReasonFor(incompleteEvent.reason) ?? incompleteEvent.reason,
         ...(incompleteEvent.message ? { message: incompleteEvent.message } : {}),
         ...(incompleteEvent.retryable !== undefined ? { retryable: incompleteEvent.retryable } : {}),
       },

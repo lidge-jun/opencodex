@@ -143,6 +143,7 @@ export interface OverviewSources {
 const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   opencode: "integrations.tab.opencode",
   pi: "integrations.tab.pi",
+  "gentle-shell": "integrations.tab.gentleShell",
   omp: "integrations.tab.omp",
   hermes: "integrations.tab.hermes",
   openclaw: "integrations.tab.openclaw",
@@ -159,6 +160,7 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   cline: "integrations.tab.cline",
   kilo: "integrations.tab.kilo",
   droid: "integrations.tab.droid",
+  qoder: "integrations.tab.qoder",
 };
 
 /** A file client's block is in the file for both `current` and `stale`. */

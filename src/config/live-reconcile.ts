@@ -1,4 +1,5 @@
-import type { OcxConfig, OcxProviderConfig } from "../types";
+import { observeAccountAutoPauseRevisions, snapshotAutoPauseFingerprints } from "./account-auto-pause-revisions";
+import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import { adoptCustomModelCatalogMigration, projectCustomModelCatalogMigration } from "../codex/custom-model-catalog-migration";
 import { refreshPreservedProviderOwner } from "../usage/user-cost-overlays";
@@ -16,8 +17,9 @@ import {
 } from "./rebase-provenance";
 import { withConfigMutationLockSync, bumpGenerationForCooperatingConfigWrite } from "./mutation-lock";
 import { ConfigWritePublishedError, persistConfigUnlocked, readRawConfigJson } from "./persist-unlocked";
-import { configDiagnosticsFromRaw, readConfigDiagnostics } from "./diagnostics";
+import { configDiagnosticsFromRaw, readConfigDiagnostics, validateConfigCandidate } from "./diagnostics";
 import { normalizePersistedClaudeCode } from "./load-degrade";
+import { sanitizeRemovedOpenCodeFreeForLoad } from "./removed-opencode-free";
 import { reconcileApiKeys } from "./api-key-reconcile";
 import { captureLiveTopologyBaseline, LIVE_TOPOLOGY_KEYS, projectLiveTopology } from "./live-topology";
 
@@ -59,6 +61,35 @@ export function adoptPersistedCodexAccountSelection(
   }
   clearConfigTopLevelDeletionIntent(config, keys);
   if (baseline) clearConfigTopLevelDeletionIntent(baseline, keys);
+}
+
+type ModelCostReplacement = { provider: string; modelId: string; cost: ProviderCostOverlay | null };
+const modelCostReplacements = new WeakMap<OcxConfig, ModelCostReplacement>();
+
+/** Explicit pricing PUT owns one whole row, even when its base tuple equals the baseline. */
+export function withModelCostRowReplacement(
+  config: OcxConfig, provider: string, modelId: string, cost: ProviderCostOverlay | null, save: () => void,
+): void {
+  const previous = modelCostReplacements.get(config);
+  const replacementCost = structuredClone(cost);
+  if (replacementCost?.promptLengthPricing?.mode === "automatic") delete replacementCost.promptLengthPricing;
+  modelCostReplacements.set(config, { provider, modelId, cost: replacementCost });
+  try { save(); }
+  finally {
+    if (previous) modelCostReplacements.set(config, previous);
+    else modelCostReplacements.delete(config);
+  }
+}
+
+function applyModelCostRowReplacement(config: OcxConfig): void {
+  const replacement = modelCostReplacements.get(config);
+  if (!replacement) return;
+  if (!Object.hasOwn(config.providers, replacement.provider)) throw new Error("pricing provider was removed before persistence");
+  const provider = config.providers[replacement.provider]!;
+  const costs = Object.assign(Object.create(null) as Record<string, ProviderCostOverlay>, provider.modelCosts ?? {});
+  if (replacement.cost === null) delete costs[replacement.modelId];
+  else costs[replacement.modelId] = structuredClone(replacement.cost);
+  provider.modelCosts = costs;
 }
 
 /**
@@ -132,10 +163,25 @@ export function adoptPersistedProviderIntoLiveConfig(
   provider: OcxProviderConfig,
   persistedConfig?: OcxConfig,
 ): void {
+  const pauseBefore = snapshotAutoPauseFingerprints(config);
   config.providers[name] = structuredClone(provider);
+  observeAccountAutoPauseRevisions(config, persistedConfig ?? readRawConfigJson() ?? { accountAutoPausePolicyRevisions: null }, pauseBefore);
   const baseline = liveConfigBaseline.get(config);
   if (baseline) baseline.providers[name] = structuredClone(provider);
   if (persistedConfig) refreshPreservedProviderOwner(config, persistedConfig);
+}
+
+/** Adopt only the committed next-start preference; preserve unrelated pending live edits. */
+export function adoptPersistedDesktopCompatibility(config: OcxConfig, persisted: OcxConfig["desktopCompatibility"]): void {
+  const baseline = liveConfigBaseline.get(config);
+  const merged = reconcileConfigValue(baseline?.desktopCompatibility ?? MISSING_CONFIG_VALUE,
+    config.desktopCompatibility ?? MISSING_CONFIG_VALUE, persisted ?? MISSING_CONFIG_VALUE);
+  if (merged === MISSING_CONFIG_VALUE) delete config.desktopCompatibility;
+  else config.desktopCompatibility = merged as OcxConfig["desktopCompatibility"];
+  if (baseline) {
+    if (persisted === undefined) delete baseline.desktopCompatibility;
+    else baseline.desktopCompatibility = structuredClone(persisted);
+  }
 }
 
 /** Test seam only: is this instance armed? */
@@ -394,6 +440,7 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
   if (diagnostics.source === "fallback") {
     throw new Error(`OAuth config reconciliation failed: ${diagnostics.error ?? "invalid config file"}`);
   }
+  const pauseBefore = snapshotAutoPauseFingerprints(config);
   const persisted = diagnostics.config;
   const claudeGuardArmed = claudeCodeBaseline.has(config);
   const pendingLiveClaudeMutation = claudeGuardArmed
@@ -418,6 +465,7 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
     else config.claudeCode = structuredClone(persisted.claudeCode);
     claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
   }
+  observeAccountAutoPauseRevisions(config, persisted, pauseBefore);
   // The reconciliation may have adopted a providers.<name>.modelCosts edit made
   // by a cooperating process while the OAuth login was pending; keep the overlay
   // registry (and the usage-cache overlay version) in sync with the live config.
@@ -470,6 +518,10 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
   if (pinError) throw new Error(pinError);
   let published = false;
   const persist = (candidate: OcxConfig): void => {
+    if (modelCostReplacements.has(config)) {
+      const validation = validateConfigCandidate(candidate);
+      if (!validation.ok) throw new Error(validation.error);
+    }
     const changed = persistConfigUnlocked(candidate);
     published = true;
     if (changed) bumpGenerationForCooperatingConfigWrite();
@@ -480,6 +532,8 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     // One authoritative pre-write read feeds both the live-config reconciliation and
     // custom-model deletion migration. A second read could observe different bytes.
     const onDisk = readRawConfigJson();
+    sanitizeRemovedOpenCodeFreeForLoad(onDisk);
+    const pauseBefore = snapshotAutoPauseFingerprints(config);
     const baseline = liveConfigBaseline.get(config);
     let diskDeletedKeys = new Set<string>();
     let persistedSnapshot: OcxConfig | undefined;
@@ -530,7 +584,11 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
         }
       }
     }
+    observeAccountAutoPauseRevisions(config, onDisk ?? config, pauseBefore);
     applyConfigObjectChildDeletions(config, childDeletions);
+    // Recursive three-way merging preserves sibling rows; explicit PUT/reset
+    // replaces only its model after merging, including absent policy fields.
+    applyModelCostRowReplacement(config);
     if (claudeCodeBaseline.has(config)) {
       if (onDisk !== undefined) {
         const baseline = claudeCodeBaseline.get(config);

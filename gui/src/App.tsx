@@ -3,6 +3,7 @@ import { useKeyedClientResource } from "./client-resource";
 import Dashboard from "./pages/Dashboard";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
+import Advisor from "./pages/Advisor";
 import Subagents from "./pages/Subagents";
 import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
@@ -48,6 +49,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   providers: "nav.providers",
   models: "nav.models",
   subagents: "nav.subagents",
+  advisor: "nav.advisor",
   logs: "nav.logs",
   usage: "nav.usage",
   storage: "nav.storage",
@@ -613,12 +615,13 @@ export default function App() {
                 {page === "providers" && <Providers apiBase={sharedBase} />}
                 {page === "models" && <Models key={sharedBase} apiBase={sharedBase} restartEpoch={codexRestartEpoch} connected={targets.connected} catalogSyncedAt={targets.catalogSyncedAt} reportRestart={report} />}
                 {page === "subagents" && <Subagents key={sharedBase} apiBase={sharedBase} />}
+                {page === "advisor" && <Advisor key={sharedBase} apiBase={sharedBase} />}
                 {page === "logs" && <Logs apiBase={sharedBase} />}
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />}
                 {page === "storage" && <Storage apiBase={sharedBase} />}
                 {page === "remote" && !remotePairingFormOpen && <RemoteLink key={`${sharedBase}:${sharedSessionEpoch}`} apiBase={sharedBase} sessionReady={sharedSessionReady} pairingRecoveryAvailable={hubPairingAvailable} onRequestPairing={() => setHubPairingOpen(true)} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
                 {page === "remote-workspace" && <RemoteWorkspaceRoute available={remoteWorkspaceAvailable} apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} onOpenRemoteLink={() => navigateToPage("remote")} />}
-                {page === "codex-set" && <CodexSet apiBase={sharedBase} />}
+                {page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
                 {shellPage === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
               </>
             )}

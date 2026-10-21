@@ -2043,7 +2043,7 @@ describe("provider discovered model display names", () => {
       maxOutputTokens: 500_000,
       // Classified by the 2026-09-13 OAuth-lane probe: grok-4.6 is Fast-eligible on
       // either xAI transport, so the hint fills the capability and its description.
-      supportsServiceTier: true,
+      supportsServiceTier: true, supportsUltraFastTier: false,
       fastTierDescription: "Priority processing; tier pricing applies on key auth only",
     });
     expect(catalogModelSlug(output)).toBe("xai/grok-4.6");
@@ -3531,7 +3531,7 @@ describe("Codex catalog routed normalization", () => {
       "low", "medium", "high", "xhigh", "max", "ultra",
     ]);
     expect(gpt56?.context_window).toBe(272_000);
-    expect(gpt56?.max_context_window).toBe(272_000);
+    expect(gpt56?.max_context_window).toBe(922_000);
     expect(gpt56?.auto_compact_token_limit).toBe(244_800);
     expect((gpt55?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual([
       "low", "medium", "high", "xhigh", "max", "ultra",
@@ -4321,12 +4321,12 @@ describe("Codex catalog routed normalization", () => {
 
     expect(bare).toMatchObject({
       context_window: 272_000,
-      max_context_window: 272_000,
+      max_context_window: 922_000,
       auto_compact_token_limit: 120_000,
     });
     expect(account).toMatchObject({
       context_window: 272_000,
-      max_context_window: 272_000,
+      max_context_window: 922_000,
       auto_compact_token_limit: 120_000,
       opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
     });
@@ -4667,7 +4667,7 @@ describe("Codex catalog routed normalization", () => {
 
     expect(fetchCalls).toBe(0);
     expect(ids).toEqual([...(provider.models ?? [])].sort());
-    expect(ids).toHaveLength(7);
+    expect(ids).toHaveLength(4);
     expect(getProviderDiscoveryStatus(providerName)).toBeUndefined();
 
     markProviderDiscoveryFailed(providerName, { reason: "http", httpStatus: 404 });

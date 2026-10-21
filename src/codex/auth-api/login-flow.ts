@@ -5,7 +5,8 @@ import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import { ConfigMutationLockError, withConfigMutationLockSync } from "../../config";
 import { appendDefaultCodexAccountNamespace, codexAccountPickerEnabled } from "../account-namespaces";
 import { catalogRefreshIsPending, normalizeCatalogDisposition } from "../catalog-refresh-status";
-import { checkAccountIdCollision } from "../auth-collision";
+import { checkAccountIdCollisionWithNativeMain as checkAccountIdCollision, CodexCollisionReadBusyError } from "./login-collision";
+import { extractChatgptPlanType } from "../plan";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
 import { clearCodexPoolRefreshFailure } from "../pool-refresh-backoff";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -262,8 +263,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 break;
               }
 
-              let email = cred.email || accountId;
-              let plan: string | undefined;
+              let email = cred.email?.trim() || "";
+              let plan = extractChatgptPlanType(undefined, cred.access);
               let quota: Omit<StoredAccountQuota, "updatedAt"> | null = null;
               let policyQuota: Omit<StoredAccountQuota, "updatedAt"> | null = null;
               try {
@@ -274,8 +275,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 });
                 if (resp.ok) {
                   const data = (await resp.json()) as WhamUsageResponse;
-                  email = data.email ?? email;
-                  plan = nonEmptyPlan(data.plan_type) ?? undefined;
+                  email = data.email?.trim() || email;
+                  plan = nonEmptyPlan(data.plan_type) ?? plan;
                   quota = parseUsageQuota(data);
                   policyQuota = isValidWhamHistoryObservation(data) ? quota : null;
                 }
@@ -322,7 +323,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
               }
 
               // 1.2: Duplicate check is scoped by personal vs workspace plan bucket.
-              const collision = checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined);
+              const collision = await checkAccountIdCollision(oauthAccountId, email, plan, reauth ? accountId : undefined);
               if (collision.collision) {
                 setCodexLoginState(flowId, {
                   status: "error", error: collision.reason, doneAt: Date.now(),
@@ -330,6 +331,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
                 completed = true;
                 break;
               }
+
+              email ||= accountId;
 
               // A successful authenticated WHAM read can prove quota is exhausted without
               // spending an inference request. Store the account, but defer inference validation
@@ -470,7 +473,9 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
           });
         }
       } catch (error) {
-        const message = error instanceof ConfigMutationLockError
+        const message = error instanceof CodexCollisionReadBusyError
+          ? "Native Codex login is busy or unreadable; retry login shortly."
+          : error instanceof ConfigMutationLockError
           || error instanceof CodexCredentialRefreshLockTimeoutError
           ? "Configuration is busy; retry login shortly."
           : error instanceof CodexCredentialRefreshBusyError || error instanceof CodexCredentialRefreshStaleError

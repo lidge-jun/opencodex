@@ -38,6 +38,7 @@ function tempPath(label: string): string {
 
 function expectCommonTrustOptions(argv: string[], strict: "yes" | "accept-new", knownHostsFile: string): void {
   expect(argv).toContain("BatchMode=yes");
+  expect(argv).toContain("HashKnownHosts=no");
   expect(argv).toContain(`StrictHostKeyChecking=${strict}`);
   expect(argv).toContain(`UserKnownHostsFile=${knownHostsFile}`);
   expect(argv).toContain("GlobalKnownHostsFile=none");

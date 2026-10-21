@@ -9,6 +9,7 @@
  * Design of record: devlog/_fin/260802_client_toggle_api/021 §1.
  */
 import { homedir } from "node:os";
+import { gentleShellPaths } from "../clients/gentle-shell-path";
 import { assertDroidSettingsUnambiguous } from "./droid-settings";
 import { readPath } from "./merge";
 import type { OwnershipRecord } from "./ownership";
@@ -17,6 +18,8 @@ import { dirname, join } from "node:path";
 import {
   ClientPathError,
   buildDroidContribution,
+  qoderConfigPath,
+  qoderHomeDir,
   clineConfigPath,
   clineSettingsDir,
   droidConfigPath,
@@ -280,6 +283,11 @@ function xdgConfigHome(env: NodeJS.ProcessEnv, home: string): string {
 }
 
 export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientSpec> = {
+  qoder: {
+    id: "qoder",
+    configPath: qoderConfigPath,
+    detectDir: (env = process.env, home = homedir()) => qoderHomeDir(env, home),
+  },
   opencode: {
     id: "opencode",
     // These take `home` explicitly. The export registry's `destination` reads
@@ -497,6 +505,13 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
       assertDroidPathsUnambiguous(detectDir, exportContext);
       return { configPath: droidConfigPath(env, home), detectDir };
     },
+  },
+  "gentle-shell": {
+    id: "gentle-shell",
+    configPath: (env, home, io) => gentleShellPaths(env, home, io).configPath,
+    detectDir: (env, home, io) => gentleShellPaths(env, home, io).detectDir,
+    resolvePaths: (env, home, _context, io) => gentleShellPaths(env, home, io),
+    unresolvedPathHint: (_env, home = homedir()) => join(home, ".gentle-shell", "agent", "models.json"),
   },
 };
 

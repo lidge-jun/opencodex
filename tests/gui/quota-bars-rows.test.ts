@@ -20,6 +20,9 @@ function quota(overrides: Partial<AccountQuota>): AccountQuota {
   return { updatedAt: 0, ...overrides };
 }
 
+/** Row ids are React identity keys (model id, label, reset, ordinal); shape assertions ignore them. */
+const rowsWithoutIds = (rows: ReturnType<typeof buildQuotaRows>) => rows.map(({ id: _id, ...row }) => row);
+
 describe("buildQuotaRows (WP070)", () => {
   test("five-hour-only and weekly-only render single rows", () => {
     expect(buildQuotaRows(quota({ fiveHourPercent: 12 }), null, t).map(r => r.limitLabel))
@@ -74,7 +77,7 @@ describe("buildQuotaRows (WP070)", () => {
     const reported = quota({
       creditsUsd: { used: 89.96, limit: 90, remaining: 0.04, percent: 99.96, expiresAt: 1790430938000 },
     });
-    expect(buildQuotaRows(reported, null, t)).toEqual([{
+    expect(rowsWithoutIds(buildQuotaRows(reported, null, t))).toEqual([{
       customLabel: "Total subscription credits",
       label: "quota.totalSubscriptionCredits",
       limitLabel: "quota.totalSubscriptionCredits",
@@ -128,7 +131,7 @@ describe("buildQuotaRows (WP070)", () => {
         creditsUsd: { used: 99, limit: 100, remaining: 1, percent: 99, expiresAt: 1790517338000 },
       });
       for (const reported of [customOnly, withDirect]) {
-        expect(buildQuotaRows(reported, null, t)).toEqual([{
+        expect(rowsWithoutIds(buildQuotaRows(reported, null, t))).toEqual([{
           customLabel: "Total subscription credits",
           label: "quota.totalSubscriptionCredits",
           limitLabel: "quota.totalSubscriptionCredits",

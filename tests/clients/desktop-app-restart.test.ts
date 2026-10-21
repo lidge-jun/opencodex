@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
+import { listCodexDesktopShellPids, restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
+import { classifyDesktopPicker, readCodexCatalogBinding, readCodexDesktopPickerState } from "../../src/codex/desktop-app/picker-freshness";
+import type { DesktopAppAdapter, DesktopProcess } from "../../src/codex/desktop-app/types";
 import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
 import { handleDesktopAppRestart } from "../../src/cli/restart-scope";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
  * #2292: the desktop restart is the one path in the CLI that terminates a user's
@@ -171,6 +174,28 @@ describe("the test-runner guard follows the test preload, not NODE_ENV", () => {
 });
 
 describe("Codex desktop app restart (#2292)", () => {
+  test("an unreadable Windows root command line refuses before stop and leaves the restart lock reusable", () => {
+    const calls: Call[] = [];
+    const io = scriptedIo({ discovery: DISCOVERY, processes: `1000 900 2026-01-01T00:00:00Z ${INSTALL}\\app\\ChatGPT.exe\t`, calls });
+    withTrustedExes(() => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(restartCodexDesktopApp(io)).toEqual({ attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "relaunch_context_failed" });
+      }
+    });
+    expect(calls.some(call => call.file === TASKKILL || /CloseMainWindow|Start-Process|OpenCodexPackageActivation/.test(call.args.join(" ")))).toBe(false);
+  });
+
+  test("a relaunch-context failure refuses before any process is signalled and releases the lock", () => {
+    const calls: Call[] = [];
+    const io = scriptedIo({ discovery: DISCOVERY, processes: `1000 900 2026-01-01T00:00:00Z ${INSTALL}\\app\\ChatGPT.exe`, calls });
+    io.adapter = { ...windowsDesktopAppAdapter, captureRelaunchContext: () => { throw new Error("conflicting context"); } };
+    withTrustedExes(() => {
+      const first = restartCodexDesktopApp(io), second = restartCodexDesktopApp(io);
+      expect(first).toEqual({ attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "relaunch_context_failed" });
+      expect(second.reason).toBe("relaunch_context_failed");
+    });
+    expect(calls.some(call => call.file === TASKKILL || call.args.join(" ").includes("CloseMainWindow") || call.args.join(" ").includes("Start-Process"))).toBe(false);
+  });
   // macOS and Linux are no longer no-ops: they have real adapters. What survives from the
   // original assertion is that a platform with NO adapter still refuses without execing
   // anything, which is the fail-closed property the old windows_only case was really
@@ -505,3 +530,90 @@ describe("#2557 a failed probe is not an absent app", () => {
   });
 });
 
+describe("desktop picker freshness inputs (#4761)", () => {
+  const install = { id: "fixture", root: "/Applications/ChatGPT.app", relaunch: "fixture" };
+  const shellExe = "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT";
+  const helperExe = "/Applications/ChatGPT.app/Contents/Frameworks/Helper";
+  function fixtureAdapter(listed: DesktopProcess[] | null, discovered = true): DesktopAppAdapter {
+    const refuse = () => { throw new Error("a read-only probe must not act"); };
+    return {
+      discover: () => discovered ? install : null,
+      listProcesses: () => listed,
+      isShell: entry => entry.executable === shellExe,
+      ancestryPids: () => [],
+      requestQuit: refuse,
+      forceStop: refuse,
+      captureRelaunchContext: refuse,
+      relaunch: refuse,
+    };
+  }
+  const exec = () => { throw new Error("the fixture adapter never execs"); };
+  const listed: DesktopProcess[] = [
+    { pid: 10, parentPid: 1, createdAt: "a", executable: shellExe },
+    { pid: 11, parentPid: 10, createdAt: "b", executable: helperExe },
+    { pid: 12, parentPid: 10, createdAt: "c", executable: shellExe },
+  ];
+
+  test("lists only root shells, and null when discovery or the probe fails", () => {
+    expect(listCodexDesktopShellPids({ adapter: fixtureAdapter(listed), execFile: exec })).toEqual([10]);
+    expect(listCodexDesktopShellPids({ adapter: fixtureAdapter([]), execFile: exec })).toEqual([]);
+    expect(listCodexDesktopShellPids({ adapter: fixtureAdapter(null), execFile: exec })).toBeNull();
+    expect(listCodexDesktopShellPids({ adapter: fixtureAdapter(listed, false), execFile: exec })).toBeNull();
+  });
+
+  test("classifies a picker as current only when every shell started strictly after the catalog", () => {
+    expect(classifyDesktopPicker([2_000, 3_000], 1_000)).toBe("current");
+    expect(classifyDesktopPicker([2_000, 1_000], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([500], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([], 1_000)).toBe("not_running");
+    expect(classifyDesktopPicker([], null)).toBe("not_running");
+    expect(classifyDesktopPicker(null, 1_000)).toBe("unknown");
+    expect(classifyDesktopPicker([2_000, null], 1_000)).toBe("unknown");
+    expect(classifyDesktopPicker([2_000], null)).toBe("unknown");
+  });
+
+  test("reads shell start times and the bound catalog's mtime through its seams", () => {
+    const read = (binding: string | null, catalogMtimeMs: number | null, starts: Map<number, number | null>) => readCodexDesktopPickerState({
+      adapter: fixtureAdapter(listed), execFile: exec,
+      readStartMs: pids => { expect(pids).toEqual([10]); return starts; },
+      catalogBinding: () => binding,
+      catalogMtimeMs: path => { expect(path).toBe("/codex/opencodex-catalog.json"); return catalogMtimeMs; },
+    });
+    const bound = "/codex/opencodex-catalog.json";
+    expect(read(bound, 1_000, new Map([[10, 5_000]]))).toBe("current");
+    expect(read(bound, 9_000, new Map([[10, 5_000]]))).toBe("stale");
+    expect(read(bound, 1_000, new Map([[10, null]]))).toBe("unknown");
+    expect(read(bound, null, new Map([[10, 5_000]]))).toBe("unknown");
+    // No model_catalog_json: the shell shows Codex's own roster, which no local file dates.
+    expect(read(null, 1_000, new Map([[10, 5_000]]))).toBe("unknown");
+  });
+
+  test("the catalog binding is the configured model_catalog_json, never the default-path fallback", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-picker-binding-"));
+    const previous = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    try {
+      expect(readCodexCatalogBinding()).toBeNull();
+      writeFileSync(join(home, "config.toml"), 'model = "gpt-5.5"\n');
+      writeFileSync(join(home, "opencodex-catalog.json"), "{}\n");
+      expect(readCodexCatalogBinding()).toBeNull();
+      writeFileSync(join(home, "config.toml"), 'model_catalog_json = "opencodex-catalog.json"\n');
+      expect(readCodexCatalogBinding()).toBe(join(realpathSync.native(home), "opencodex-catalog.json"));
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previous;
+      removeTreeWithRetry(home);
+    }
+  });
+
+  test("an armed test process without an injected executor never probes the real app", () => {
+    const previous = process.env.OCX_TEST_HOME_GUARD;
+    process.env.OCX_TEST_HOME_GUARD = "1";
+    try {
+      expect(readCodexDesktopPickerState({ adapter: fixtureAdapter(listed) })).toBe("unknown");
+    } finally {
+      if (previous === undefined) delete process.env.OCX_TEST_HOME_GUARD;
+      else process.env.OCX_TEST_HOME_GUARD = previous;
+    }
+  });
+});

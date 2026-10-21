@@ -1,0 +1,15 @@
+.advisor-editor-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-2) 0;
+}
+.advisor-editor-label { min-width: 11rem; }
+.advisor-editor-row > input, .advisor-editor-row > select { min-width: 0; max-width: 100%; }
+.advisor-activity-table th, .advisor-activity-table td { white-space: nowrap; }
+
+@media (max-width: 760px) {
+  .advisor-editor-row { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+  .advisor-editor-label { min-width: 0; }
+  .advisor-editor-row > input, .advisor-editor-row > select { width: 100%; min-height: 44px; }
+}

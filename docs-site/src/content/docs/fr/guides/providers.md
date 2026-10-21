@@ -112,6 +112,7 @@ ocx login google-antigravity
 ocx login cursor       # standalone Cursor PKCE login
 ocx login command-code # Command Code browser OAuth (or import ~/.commandcode/auth.json)
 ocx login devin       # Cognition/Devin : import de l'identifiant du Devin CLI, sinon connexion navigateur Auth0
+ocx login dsh-account # DeepSeek Harness Desktop (import de l'autorisation ~/.dsh/.credentials.yaml)
 ocx login github-copilot  # GitHub device flow → Copilot token (Copilot Pro/Business)
 ocx login codex        # pool de comptes Codex (alias : chatgpt, openai ; nécessite un proxy en cours d'exécution)
 ocx logout <provider>
@@ -128,6 +129,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth avec le protocole Cloud Code Assist. La découverte en direct utilise le point de terminaison CCA authentifié `v1internal:fetchAvailableModels` et publie les modèles d'agent accessibles au compte connecté ; le catalogue maintenu reste la solution de repli. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Connexion PKCE expérimentale, transport HTTP/2 en direct et découverte de modèles filtrés par compte. |
 | `devin` | `devin` | `https://server.codeium.com` | Passerelle Cognition/Devin non officielle et expérimentale. La connexion importe d'abord l'identifiant que le Devin CLI installé détient déjà (`devin auth login` écrit un `devin-session-token` dans son propre `credentials.toml`) ; à défaut, elle ouvre l'authentification Auth0 dans le navigateur puis échange le jeton collé via `RegisterUser` contre une clé d'API durable. `ocx login devin-cli` reste accepté comme alias déprécié. Les modèles sont découverts par compte avec `GetCascadeModelConfigs` ; le streaming passe uniquement par `runTurn` sur Connect-RPC. Absente du préréglage du tableau de bord par défaut. |
+| `dsh-account` | `dsh-account` | `https://api.deepseek.com/anthropic` | Fournisseur de compte expérimental à importation prioritaire réutilisant un compte DeepSeek Harness (DSH) Desktop installé et connecté. Lit les identifiants en lecture seule stricte depuis `~/.dsh/.credentials.yaml` lors de l'importation explicite. Indépendant de la facturation par clé d'API DeepSeek. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Expérimental. Flux d'appareil GitHub et échange `copilot_internal` (client OAuth de VS Code). Nécessite un abonnement Copilot actif ; il ne s'agit pas d'une API tierce officielle. |
 
 Les vérifications de quota Google Antigravity utilisent des points de terminaison Google fixes, y compris le repli vers la liste des modèles. Elles prennent en charge le DNS Fake-IP transparent pour ces destinations en conservant la vérification TLS, le refus des redirections et les contrôles des adresses privées. Une URL de base personnalisée ne modifie que les requêtes de modèles ; `NO_PROXY` conserve la politique de connexion directe.
@@ -293,9 +295,20 @@ reconnue. Réparez ou supprimez la base illisible dans le chemin de données nor
 sélecteurs d'importation, puis réessayez. La connexion depuis une machine dépourvue de session `kiro-cli`
 existante n'est pas concernée.
 
+### DeepSeek Account (DSH)
+
+`dsh-account` est un fournisseur de compte expérimental à importation prioritaire, conçu pour réutiliser les identifiants de compte authentifiés d'une application DeepSeek Harness (DSH) Desktop installée.
+
+- **Indépendant de la clé d'API DeepSeek :** `dsh-account` utilise le quota de session DeepSeek authentifiée de l'utilisateur (portefeuilles standard et bonus, dépenses totales), tandis que le fournisseur `deepseek` facture sur le solde de la clé d'API de la plateforme. Les deux domaines d'identifiants et de routage sont strictement distincts et ne basculent jamais l'un vers l'autre.
+- **Importation explicite uniquement :** OpenCodeX détecte si DeepSeek Harness est installé et connecté (`~/.dsh/.credentials.yaml`), mais ne copiera, n'importera ni n'utilisera jamais automatiquement le jeton sans une action explicite de l'utilisateur (`ocx login dsh-account` ou clic sur Importer dans le tableau de bord web).
+- **Magasin d'identifiants DSH en lecture seule :** OpenCodeX traite `~/.dsh/.credentials.yaml` comme strictement en lecture seule. OpenCodeX n'écrit, ne modifie, ne supprime ni ne change jamais les permissions des fichiers appartenant à DeepSeek Harness.
+- **Copie d'identifiant et déconnexion isolées :** Lors de l'importation, OpenCodeX valide le jeton auprès du point de terminaison d'identité officiel de DeepSeek (`/auth-api/v0/users/current`) et enregistre sa propre copie dans le magasin d'authentification OpenCodeX. Se déconnecter ou supprimer le compte dans OpenCodeX supprime uniquement la copie locale d'OpenCodeX ; cela ne déclenche jamais de déconnexion de session distante et ne vous déconnecte pas de DeepSeek Harness Desktop.
+- **Pas de rotation automatique en arrière-plan et réimportation en cas de 401 :** Les autorisations de session DSH ne disposent pas d'un point de terminaison d'actualisation automatique en arrière-plan. Si le serveur distant renvoie HTTP 401 (`ACCOUNT_TOKEN_INVALID`), OpenCodeX marque le compte comme `needsReauth` et interrompt le routage. Pour rétablir l'accès, l'utilisateur doit réimporter explicitement via `ocx login dsh-account`.
+- **Avertissement relatif aux tiers :** OpenCodeX ne revendique aucune approbation ni autorisation officielle de DeepSeek pour la réutilisation des autorisations de session par des clients tiers.
+
 ## 3. Catalogue des clés API
 
-opencodex fournit 104 préréglages intégrés : 85 à clé, 15 OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 104 préréglages intégrés : 84 à clé, 16 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
@@ -372,31 +385,13 @@ sont affichés en premier. Créez une clé dans le [tableau de bord OpenGateway]
 puis lancez `ocx provider add opengateway` ou sélectionnez **OpenGateway** dans le tableau de bord.
 Les requêtes chat utilisent la clé Bearer configurée ; la liste publique ne valide pas cette clé.
 
-**OpenCode Zen** (`opencode-zen`) et le préréglage sans clé **OpenCode Free** utilisent tous deux
-`https://opencode.ai/zen/v1`. Sur cette passerelle, les modèles gratuits atteignent souvent une limite de
-rafale sur une courte fenêtre, d'environ 15 à 20 requêtes par minute (mesure de la communauté ; OpenCode ne publie
-pas de valeur RPM). Zen peut renvoyer des erreurs génériques 429 de limitation de débit sans en-têtes
-`Retry-After` / `X-RateLimit-*`. Cette limite est distincte du quota sans clé pour application de bureau
-annoncé par OpenCode (environ 200 requêtes Big Pickle ou vers des modèles gratuits toutes les 5 heures sur
-`opencode-free`). Lorsque Zen omet `Retry-After` sur une telle réponse 429, opencodex ajoute à l'erreur client
-des indications propres au fournisseur ainsi qu'un `Retry-After` synthétique ; un `Retry-After` reçu en amont
-reste prioritaire. L'attente et la nouvelle tentative avec la même clé restent facultatives et s'activent avec
-[`retryOn429`](/fr/reference/configuration/).
+**OpenCode Zen** (`opencode-zen`) utilise `https://opencode.ai/zen/v1` avec une clé API obtenue sur [opencode.ai/auth](https://opencode.ai/auth). Les modèles gratuits peuvent subir une limite courte d’environ 15–20 requêtes/minute (mesure communautaire ; OpenCode ne publie pas de RPM). Si une réponse 429 de limitation omet `Retry-After`, opencodex ajoute des indications et un `Retry-After` synthétique ; les en-têtes valides en amont restent prioritaires. Les tentatives avec la même clé restent facultatives via [`retryOn429`](/fr/reference/configuration/).
 
-**Le niveau sans clé `opencode-free` est actuellement fermé aux clients tiers.** Zen refuse toute requête
-qui arrive sans en-tête `x-opencode-session` et répond avec le type d'erreur `MissingSessionID` et le message
-« OpenCode's free tier can only be used in OpenCode ». Le contrôle porte uniquement sur la présence de
-l'en-tête : un proxy pourrait donc le franchir en inventant une valeur, ce que opencodex ne fait pas.
-Fabriquer un identifiant de session et un User-Agent versionné `opencode/<version>` revient à se déclarer
-client OpenCode, alors qu'OpenCode ne publie aucun contrat d'intégration tierce pour ce niveau sans clé ;
-une réponse HTTP 200 obtenue ainsi est un contrôle d'admission contourné, pas une autorisation. opencodex
-signale donc la restriction au lieu de la contourner : une requête vers `opencode-free` renvoie une erreur
-qui explique le blocage en amont.
+Sur les routes officielles `https://opencode.ai/zen/v1` et `https://opencode.ai/inference/v1` du fournisseur canonique `opencode-zen` avec authentification par clé API, Gemini utilise automatiquement l’API native Google en mode `googleMode: ai-studio` (par défaut). Les identifiants Zen sont conservés, y compris Flash sans suffixe `-tiered`. Claude utilise automatiquement Anthropic Messages, quel que soit `googleMode`. Au chargement des configurations enregistrées, seules les anciennes surcharges Chat/Responses admissibles de ces modèles natifs sont ignorées, ainsi que les préférences admissibles de l’outil hébergé `image_generation` propres à Responses. Les fournisseurs personnalisés, les routes sans authentification par clé et les autres préférences restent inchangés.
 
-La voie prise en charge vers les mêmes modèles est le fournisseur **`opencode-zen`** avec une clé d'API
-OpenCode Zen obtenue sur [opencode.ai/auth](https://opencode.ai/auth). Si OpenCode publie plus tard un accès
-tiers pour le niveau sans clé, opencodex pourra le suivre ; d'ici là, le préréglage sert à documenter la
-restriction. Conditions en amont : [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
+**La prise en charge de `opencode-free` a été supprimée** : tous les modèles renvoient désormais `403 permission_denied` à cause du contrôle du niveau gratuit en amont chez OpenCode ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Le chargement d’une configuration existante désactive en mémoire les entrées concernées et leurs références de modèles, avertit une fois par processus et ne modifie pas le fichier. Si ce fournisseur était le défaut, la route OpenAI OAuth standard devient le défaut. Utilisez `opencode-go`, `opencode-zen` avec clé ou un autre fournisseur. [Conditions OpenCode Zen](https://opencode.ai/docs/zen/).
+
+Les affectations et valeurs par défaut valides de Claude Desktop sont conservées. Les règles dont la liste de modèles sources autorisés devient vide sont désactivées, ainsi que la synchronisation native des sous-agents si son modèle d’injection est supprimé. Les sauvegardes suivantes ne rétablissent pas les références supprimées et préservent les modifications simultanées valides.
 
 La plupart utilisent l'adaptateur `openai-chat` avec une clé Bearer ; les préréglages compatibles
 Anthropic, comme **Xiaomi MiMo** (`xiaomi`), utilisent l'adaptateur `anthropic` (`x-api-key`). Xiaomi propose

@@ -9,12 +9,14 @@ import {
   requestBoundLocalProviderReload,
   type LocalProviderReloadResult,
 } from "../server/local-provider-reload-client";
-import { DEPRECATED_OAUTH_PROVIDER_ALIASES, isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
+import { DEPRECATED_OAUTH_PROVIDER_ALIASES, isPublicOAuthProvider, listOAuthProviders, publicOAuthAuthenticationErrorMessage, runLogin, supportsCodeLoginMode } from "./index";
+import { classifyLoginCodeError } from "./login-flow-state";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 import { assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
+import { reportOAuthLoginError } from "./login-cli-errors";
 
 /**
  * Seams a test drives in place of a browser, a terminal and a real provider. Production passes
@@ -113,37 +115,97 @@ export function warnIfLiveReloadSkipped(result: LocalProviderReloadResult | null
  * that used to be their only pointer to it.
  */
 export function loginUsageMessage(): string {
-  return `Usage: ocx login <provider>\n`
+  return `Usage: ocx login <provider> [--headless]\n`
+    + `  --headless:    no browser and no local port — approve in any browser, paste the code\n`
+    + `                 (${listCodeLoginProviders().join(", ")})\n`
     + `  Codex / ChatGPT: ocx login codex   (account pool, needs a running proxy; 'chatgpt' and\n`
     + `                   'openai' are the same route. An OpenAI platform key is 'openai-apikey'.)\n`
     + `  OAuth login:   ${listOAuthProviders().join(", ")}\n`
     + `  API-key login: ${Object.keys(KEY_LOGIN_PROVIDERS).join(", ")}`;
 }
 
-export async function handleLogin(provider?: string, deps: LoginCliDeps = {}): Promise<void> {
+export interface LoginCliOptions {
+  /** `--headless`: no callback server, no browser launch — print the URL and read back the code. */
+  codeMode?: boolean;
+}
+
+export async function handleLogin(provider?: string, deps: LoginCliDeps = {}, opts: LoginCliOptions = {}): Promise<void> {
   const name = (provider ?? "").trim().toLowerCase();
+  try {
+    // Check raw ownership before tolerant loading can print diagnostics or fall back to defaults.
+    if (name === "anthropic2") assertAnthropicInstanceLoginConfig({ providers: {} }, name);
+  } catch (error) {
+    reportOAuthLoginError(error);
+  }
   // A removed provider id reached through its alias still logs in — the merged
   // successor owns the flow. Warn rather than silently reroute so scripts and
   // docs that still say `devin-cli` surface the rename to whoever runs them.
   const alias = DEPRECATED_OAUTH_PROVIDER_ALIASES[name];
   if (alias) {
     console.error(`${name} is deprecated; logging in as ${alias}`);
-    return handleOAuthLogin(alias, deps);
+    return handleOAuthLogin(alias, deps, opts);
   }
-  if (isPublicOAuthProvider(name)) return handleOAuthLogin(name, deps);
+  if (isPublicOAuthProvider(name)) return handleOAuthLogin(name, deps, opts);
+  if (opts.codeMode) {
+    console.error(`--headless needs a provider with a code-display login: ${listCodeLoginProviders().join(", ")}`);
+    process.exit(1);
+  }
   if (isKeyLoginProvider(name)) return handleKeyLogin(name, deps);
   console.error(loginUsageMessage());
   process.exit(1);
 }
 
-export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}): Promise<void> {
+/** OAuth providers that accept `ocx login <provider> --headless`. */
+export function listCodeLoginProviders(): string[] {
+  return listOAuthProviders().filter(supportsCodeLoginMode);
+}
+
+/**
+ * `--headless`: the provider displays the authorization code instead of redirecting anywhere, so
+ * nothing is launched and nothing listens. Used where the browser is on another machine.
+ */
+async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> {
+  const login = deps.runLogin ?? runLogin;
+  if (!supportsCodeLoginMode(name)) {
+    console.error(`${name} has no code-display login. Providers that do: ${listCodeLoginProviders().join(", ")}`);
+    process.exit(1);
+  }
+  try {
+    await withPrompt(deps.ask, async (ask) => {
+      await login(name, {
+        onAuth: ({ url, instructions }) => {
+          console.log(`\n🔐 Open this URL in any browser to approve ${name}:\n${url}\n`);
+          if (instructions) console.log(instructions);
+        },
+        onProgress: (m) => console.log(`   ${m}`),
+        onManualCodeInput: async () => await ask("Paste the code shown after approval: "),
+      }, { codeMode: true });
+    });
+  } catch (error) {
+    // Never let the raw error reach stderr: a token endpoint's error body can quote the pasted
+    // code back. Only fixed, allowlisted text and the machine-readable reason are printed.
+    console.error(`\n❌ ${name} login failed (${classifyLoginCodeError(error)}): ${publicOAuthAuthenticationErrorMessage(error)}`);
+    process.exit(1);
+  }
+  const reload = await notifyRunningProxyAfterOAuthLogin(name);
+  console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
+  for (const line of modelSelectionGuidance(name)) console.log(line);
+  warnIfLiveReloadSkipped(reload);
+}
+
+export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}, opts: LoginCliOptions = {}): Promise<void> {
   if (name === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), name);
+  if (opts.codeMode) return handleCodeLogin(name, deps);
   const login = deps.runLogin ?? runLogin;
   const launch = deps.openUrl ?? openUrl;
   const browser = createBrowserLaunchReport(deps.warn);
   await withPrompt(deps.ask, async (ask) => {
     await login(name, {
       onAuth: ({ url, instructions }) => {
+        if (!url) {
+          if (instructions) console.log(instructions);
+          return;
+        }
         console.log(`\n🔐 Opening browser for ${name} login...\n${url}\n`);
         if (instructions) console.log(instructions);
         // The controller does not await onAuth, so the launcher's answer cannot be reported from
@@ -159,7 +221,7 @@ export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}): P
         return await ask("Paste redirect URL or code (or wait for browser): ");
       },
     });
-  });
+  }).catch(reportOAuthLoginError);
   // A device or polling provider never prompts, so nothing above waited on the launcher. It is
   // still owed an answer before this claims the login worked.
   await browser.settled();

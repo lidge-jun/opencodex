@@ -1,6 +1,7 @@
 import { namespacedToolName, type AdapterEvent, type OcxMessage, type OcxParsedRequest, type OcxUsage } from "../../types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { isValidCodingAgentToolNamePart } from "./tool-catalog";
+import { anthropicCacheWrite1hTokens } from "../anthropic/cache-retention";
 
 /**
  * Shared stream-json protocol for official coding-agent CLIs (CodeBuddy Code and Qoder CLI).
@@ -165,6 +166,7 @@ function usageFromAnthropicShape(usage: Record<string, unknown>): OcxUsage | und
   // that could carry those tokens instead, so the turn under-reported usage and cost.
   const cacheReadTotal = count(usage.cache_read_input_tokens);
   const cacheCreationTotal = count(usage.cache_creation_input_tokens);
+  const cacheCreation1h = anthropicCacheWrite1hTokens(usage, cacheCreationTotal);
   const inputTokens = freshInputTokens + cacheReadTotal + cacheCreationTotal;
   if (inputTokens === 0 && outputTokens === 0 && cacheReadTotal === 0 && cacheCreationTotal === 0) {
     return undefined;
@@ -175,6 +177,7 @@ function usageFromAnthropicShape(usage: Record<string, unknown>): OcxUsage | und
     totalTokens: inputTokens + outputTokens,
     ...(cacheReadTotal > 0 ? { cachedInputTokens: cacheReadTotal, cacheReadInputTokens: cacheReadTotal } : {}),
     ...(cacheCreationTotal > 0 ? { cacheCreationInputTokens: cacheCreationTotal } : {}),
+    ...(cacheCreationTotal > 0 && cacheCreation1h !== undefined ? { cacheCreation1hInputTokens: cacheCreation1h } : {}),
   };
 }
 
@@ -204,6 +207,8 @@ function mergePartialUsage(previous: OcxUsage | undefined, next: OcxUsage): OcxU
     next.cacheReadInputTokens ?? next.cachedInputTokens ?? 0,
   );
   const cacheCreation = Math.max(previous.cacheCreationInputTokens ?? 0, next.cacheCreationInputTokens ?? 0);
+  const cacheCreation1h = Math.min(cacheCreation,
+    Math.max(previous.cacheCreation1hInputTokens ?? 0, next.cacheCreation1hInputTokens ?? 0));
   // Inclusive inputs: fold each snapshot's fresh part, then add the folded cache counters once.
   const freshInput = (usage: OcxUsage) => Math.max(0, usage.inputTokens
     - (usage.cacheReadInputTokens ?? usage.cachedInputTokens ?? 0) - (usage.cacheCreationInputTokens ?? 0));
@@ -214,6 +219,7 @@ function mergePartialUsage(previous: OcxUsage | undefined, next: OcxUsage): OcxU
     totalTokens: inputTokens + outputTokens,
     ...(cacheRead > 0 ? { cachedInputTokens: cacheRead, cacheReadInputTokens: cacheRead } : {}),
     ...(cacheCreation > 0 ? { cacheCreationInputTokens: cacheCreation } : {}),
+    ...(cacheCreation1h > 0 ? { cacheCreation1hInputTokens: cacheCreation1h } : {}),
   };
 }
 
@@ -725,7 +731,7 @@ function imagePart(imageUrl: string): WireContentPart | undefined {
   return undefined;
 }
 
-function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: ReadonlyMap<string, string>): string {
+export function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: ReadonlyMap<string, string>): string {
   if (message.role === "user") {
     const text = typeof message.content === "string"
       ? message.content

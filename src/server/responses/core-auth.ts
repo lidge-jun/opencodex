@@ -2,6 +2,7 @@ import type { OcxProviderConfig, OcxConfig } from "../../types";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { CodexAuthContext } from "../../codex/auth-context";
 import type { RouteResult } from "../../router";
+import { routeConcreteModel } from "../../router";
 import type { HandleResponsesOptions } from "./core-options";
 import {
   hasForwardableCodexBearer,
@@ -24,6 +25,7 @@ import {
   CodexAuthContextError,
   applyCodexAuthContextToProvider,
   stripCodexRuntimeProviderFields,
+  mainAccountHardLockCallerProof,
 } from "../../codex/auth-context";
 import { codexAccountSelectionForTurn, tryClaimNativeMainProfileForTurn } from "../lifecycle";
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
@@ -43,6 +45,7 @@ import { codexAuthContextLogLabel } from "../../codex/account-label";
 import { forceRefreshMainAccountToken } from "../../codex/main-account";
 import { rebindPoolCreditPolicy } from "../../codex/pool-credit-policy";
 import { safeCallerSessionId } from "../caller-session-identity";
+import { copyResponsesClientMetadata } from "../../adapters/openai-responses/transport";
 
 /** Normalize caller aliases only on native egress; preserve ingress and fallback identity. */
 export function withClaudeNativeSession(headers: Headers, provider: OcxProviderConfig, sessionId?: string): Headers {
@@ -335,6 +338,11 @@ export async function resolveResponsesCodexAuth(
         headers.delete("chatgpt-account-id");
       }
     }
+    // Codex auth materialization keeps only its credential allowlist. A compact-v1 handoff
+    // must also retain the permitted client fingerprint for its routed summarizer send.
+    if (options.compactionRecoveryKind === "compaction-v1") {
+      copyResponsesClientMetadata(headers, authInputHeaders, route.provider);
+    }
     return {
       ok: true,
       authCtx,
@@ -583,4 +591,22 @@ export async function refreshNativeMainForwardAuth(args: {
       now: Date.now(), accountSelector: route.codexAccountNamespace,
     }) ?? nativeMainRefreshFailureResponse(error) };
   }
+}
+
+/** Inspect the original credential domain, before fallback changes the route or drops headers. */
+export function mainHardLockFallbackCallerCheck(
+  req: Request, config: OcxConfig, options: HandleResponsesOptions,
+): (sourceModel: string) => Promise<(() => boolean) | null> {
+  return async sourceModel => {
+    let sourceRoute: ReturnType<typeof routeConcreteModel>;
+    try { sourceRoute = routeConcreteModel(config, sourceModel); }
+    // This preview cannot replace the normal routing phase's existing error response.
+    catch { return null; }
+    const headers = codexRouteCredentialDomainHeaders(req, sourceRoute, options, false, config);
+    const { substituteMainCredential } = codexRouteCredentialOwnership(headers, config, sourceRoute, options);
+    return mainAccountHardLockCallerProof(headers, options.codexAuthPolicy ?? config, {
+      substituteMainCredentialForDirect: substituteMainCredential,
+      signal: options.abortSignal ?? req.signal,
+    });
+  };
 }

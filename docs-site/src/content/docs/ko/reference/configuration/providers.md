@@ -5,6 +5,12 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 
 공급자는 opencodex에 모델의 위치, 사용하는 와이어 어댑터, 요청 인증 방식을 알려줍니다.
 
+## 사용자 지정 공급자의 컨텍스트
+
+모델 창이 보고되거나 설정되지 않으면 Azure 메타데이터, 모델 ID로 찾은 번들 공급업체/집계 메타데이터, 활성 Context cap, 128k 순서로 보완합니다. 보고된 값과 설정 값 중 작은 값을 유지하고 Context cap은 계속 상한으로 적용됩니다. 기본 공급자는 바뀌지 않습니다. 정확한 ID를 우선하며 대소문자 및 점/하이픈 변형은 충돌이 없을 때만 허용합니다. 추정값은 Codex 압축 예산과 Claude 등 클라이언트 카탈로그에 반영되지만 라우팅의 검증된 용량으로 취급하지 않습니다. 같은 모델 이름이 중계 서비스의 실제 용량을 보장하지 않으므로 modelContextWindows 또는 Context cap으로 실제 상한을 설정하세요. cap을 자동으로 켜거나 모델 시험 요청을 보내지 않습니다. OpenAI API 값은 Codex 구독의 제한이 아닙니다.
+
+이 추정은 기본적으로 꺼져 있습니다. 공급자별로 `inferContextWindow: true`를 설정해야 켜집니다. 설정하지 않으면 창이 없는 모델은 활성 Context cap, 그다음 128k를 사용합니다.
+
 ## 처음 등록할 때의 모델 선택
 
 신규 비-OAuth 연결은 신뢰할 수 있는 모델 목록을 확보할 때까지 모델 노출을 보류합니다. Models 탭의 중복 없는 모델 행이 20개 이상이면 모델 스위치를 모두 OFF로 설정합니다. 프로바이더는 활성 상태를 유지합니다. 실제 인증 방식이 OAuth나 ChatGPT 로그인인 연결은 기존 기본값을 유지합니다.
@@ -47,7 +53,7 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 같은 계정과 스레드의 Codex WebSocket을 턴 사이에 재사용합니다. 기본값은 꺼짐입니다. 켜면 바쁜 소켓을 최대 750ms 기다리고, 모델이나 티어가 바뀌어도 소켓을 최대 2개 유지합니다. |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | 네이티브 OpenAI forward Responses와 compact 전송에서 입증된 연결 전 DNS/TCP 실패에 적용하는 선택적 회로 차단 임계값입니다. `0`은 비활성화하며, `1`~`20`은 이 횟수만큼 최종 논리 요청이 실패하면 provider-origin을 30초 동안 차단합니다. 차단 중에는 계정 선택이나 업스트림 전송 전에 `Retry-After`가 포함된 `503`을 반환하고, 시간이 지나면 반개방 요청 하나만 허용합니다. 타임아웃과 HTTP 응답은 집계하지 않으며, HTTP 응답이 하나라도 오면 회로를 닫습니다. Codex Pool 라우팅에서 계정이 고정되지 않은 경우에만 적용되며, `codexAccountMode: "direct"` 및 계정 한정 선택자에서는 동작하지 않습니다. |
 | `modelCacheTtlMs?` | `number` | `300000` | 공급자별 `/models` 캐시의 최신성 창입니다. |
-| `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 프롬프트 캐시 정책입니다. 비활성, 5분짜리 임시, 1시간짜리 확장 중 하나입니다. |
+| `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic 퍼스트파티: `"long"`, 그 외 Anthropic 호환 엔드포인트: `"short"` | Anthropic 프롬프트 캐시 정책입니다. 비활성, 5분짜리 임시, 1시간짜리 확장 중 하나입니다. 설정하지 않으면 `api.anthropic.com`(API 키 또는 OAuth 계정 풀) 요청은 1시간 TTL을 쓰고, 호환 게이트웨이와 벤더 엔드포인트는 5분 TTL을 유지합니다. 명시한 값이 항상 우선합니다. |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 꺼짐 | 선택적 선제 OAuth 갱신과 Codex 계정 워밍업 정책입니다. |
 
 각 전략의 계정별 유효 임계값은 `codexAccountAutoSwitchThresholds` 항목이 있으면 그 값이며, 없으면 전역 `autoSwitchThreshold`입니다. 0은 사용량 기반 사전 전환만 비활성화합니다. 시작 바인딩, 하드 잠금, 쿨다운, 모델 사용 권한 검사와 장애 복구는 계속 적용됩니다.
@@ -83,7 +89,9 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`, `openai-responses`, `anthropic`, `google`, `kiro`, `cursor`, `ollama-native`, `azure-openai` 중 하나이며, `azure`는 별칭입니다. |
 | `baseUrl` | `string` | 상위 API 기본 URL입니다. 대부분의 내장 고정 엔드포인트는 불일치를 무시합니다. 충돌 안전 키 프리셋은 같은 이름의 이전 사용자 지정 목적지를 보존합니다. |
-| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models? }` | 업스트림 사용량, 과금, rate-limit 지표와 별개인 선택적 클라이언트 측 아웃바운드 요청 시작 속도 조절입니다. `maxConcurrentRequests`는 진행 중 요청 수를 제한하는 양의 정수이며 provider 또는 model 규칙에서 단독으로 사용할 수 있습니다. Provider 제한은 모든 모델에 적용되고 `models` 항목은 정확한 업스트림 모델 ID와 일치하며 지연을 늘리거나 동시성을 줄일 수 있습니다. 큐 대기는 응답 헤더 타임아웃을 소모하지 않습니다. HTTP 및 명시적 어댑터 `fetchResponse`/`runTurn` 전송을 포함합니다. 동시성 제한이 있으면 표준 Responses WebSocket 턴은 응답 본문의 완료·오류·취소 때 점유 슬롯을 해제할 수 있도록 HTTP/SSE를 사용합니다. Cursor를 포함한 `runTurn` 어댑터에서는 물리적 전송 수가 아니라 진행 중인 턴 수를 제한합니다. 같은 턴의 RunSSE와 BidiAppend는 겹칠 수 있지만 다른 턴은 대기합니다. 후속 전송에도 시작 간격은 적용됩니다. |
+| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models?, keySelection?, keys? }` | 업스트림 사용량, 과금, rate-limit 지표와 별개인 선택적 클라이언트 측 아웃바운드 요청 시작 속도 조절입니다. `maxConcurrentRequests`는 진행 중 요청 수를 제한하는 양의 정수이며 provider 또는 model 규칙에서 단독으로 사용할 수 있습니다. Provider 제한은 모든 모델에 적용되고 `models` 항목은 정확한 업스트림 모델 ID와 일치하며 지연을 늘리거나 동시성을 줄일 수 있습니다. 큐 대기는 응답 헤더 타임아웃을 소모하지 않습니다. HTTP 및 명시적 어댑터 `fetchResponse`/`runTurn` 전송을 포함합니다. 동시성 제한이 있으면 표준 Responses WebSocket 턴은 응답 본문의 완료·오류·취소 때 점유 슬롯을 해제할 수 있도록 HTTP/SSE를 사용합니다. Cursor를 포함한 `runTurn` 어댑터에서는 물리적 전송 수가 아니라 진행 중인 턴 수를 제한합니다. 같은 턴의 RunSSE와 BidiAppend는 겹칠 수 있지만 다른 턴은 대기합니다. 후속 전송에도 시작 간격은 적용됩니다. |
+| `requestPacing.keySelection?` | `"active"`, `"round-robin"` | 정상 요청의 키 선택 방식입니다. 기본 `active`는 저장된 키와 기존 오류 전환을 유지하며, `round-robin`은 저장된 활성 키를 변경하지 않고 사용 가능한 풀 키를 요청별 순서대로 배정합니다. 토큰이나 비용이 아니라 배정 횟수를 분산합니다. |
+| `requestPacing.keys?` | `{ requestsPerMinute?, minIntervalMs?, maxConcurrentRequests? }` | 키 참조별 동일한 RPM·최소 시작 간격·동시 요청 제한입니다. 모든 모델에서 공유하며 프로바이더·정확한 모델 상한과 함께 적용합니다. 중복 참조는 한 슬롯을 공유하지만 같은 업스트림 프로젝트의 다른 참조가 독립 할당량을 뜻하지는 않습니다. TPM·일일 한도는 처리하지 않습니다. |
 | `responsesPath?` | `string` | 키 인증 `openai-responses` 요청의 상대 리소스 경로입니다. 반드시 `/`로 시작해야 하며 스킴, query, fragment를 포함하면 안 됩니다. |
 | `chatCompletionsPath?` | `string` | `openai-chat` 요청의 상대 리소스 경로로, `responsesPath`와 동일한 형식 규칙이 적용되는 대응 항목입니다. 하나의 업스트림이 Chat Completions와 Responses를 서로 다른 접두사로 제공할 때 필요합니다. 모델별 wire override는 어댑터만 바꾸고 `baseUrl`은 그대로 두므로, 이 설정이 없으면 옵트인된 Chat 요청이 Responses base로 전송됩니다. Z.AI가 제공되는 예시입니다. |
 | `upstreamWebsocket?` | `boolean` | `openai-responses` 요청에 대한 업스트림 Responses WebSocket 전송을 선택적으로 활성화합니다(기본값 `false`). 퍼스트파티 `https://api.openai.com/v1` 업스트림에서만 적용되며, 사용자 지정 공급자 엔드포인트는 항상 제한된 HTTP/SSE를 사용합니다. Bun은 전체 메시지를 할당하기 전에는 수신 WebSocket 메시지 크기 제한을 적용할 수 없기 때문입니다. 정식 ChatGPT `openai` 공급자에서는 생략하면 대상 턴에서 업스트림 WebSocket을 사용하고, `false`는 스트리밍 턴을 HTTP/SSE로 전송하며, `true`는 거부됩니다. `false`이면 네이티브 턴 중 스티어링과 주입을 사용할 수 없습니다. 이 필드는 클라이언트 측 `websockets` 설정과 독립적이며 엔드포인트와 자격 증명을 변경하지 않습니다. HTTP 기본 URL은 SSE를 유지하고, Responses가 아닌 경로와 `openai-chat` 요청은 HTTP를 사용합니다. |
@@ -100,12 +108,13 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `modelDisplayNames?` | `Record<string, string>` | 이 공급자의 정확한 네이티브 모델 id를 키로 쓰는 영구 표시 전용 이름입니다. 키는 대소문자를 구분합니다. 이름은 공급자 카탈로그 메타데이터보다 우선하며 인증, 어댑터, 라우팅, 청구 또는 업스트림 요청을 바꾸지 않습니다. 맵은 발견 한도와 같은 최대 2,000개 항목을 가질 수 있습니다. |
 | `contextWindow?` | `number` | 업스트림 메타데이터가 없을 때 쓰이는 공급자 전반의 컨텍스트 값입니다. 메타데이터가 있으면 상한으로 동작해 더 작은 라이브 값을 그대로 둡니다. Models 대시보드에서 `providerContextCaps`와 별도로 설정합니다. |
 | `modelContextWindows?` | `Record<string, number>` | 모델별 컨텍스트 값이자 상한입니다. `contextWindow`보다 우선하며, 창 크기를 알 수 없으면 설정값을 쓰고 더 작은 라이브 메타데이터가 있으면 그쪽을 따릅니다. |
+| `inferContextWindow?` | `boolean` | 사용자 지정 공급자 전용이며 기본값은 꺼짐입니다. `true`이면 빠진 창을 번들 모델 메타데이터로 채웁니다. 추정값이며 중계의 실제 용량을 검증하지 않습니다. |
 | `modelInputModalities?` | `Record<string, string[]>` | `["text"]` 또는 `["text", "image"]` 같은 모델별 입력 힌트입니다. |
 | `modelMaxInputTokens?` | `Record<string, number>` | 카탈로그 자동 압축 힌트에 쓰는 양수 모델별 최대 입력 한도입니다. |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | 모델별 양의 안전 정수형 소프트 자동 압축 예산입니다. 유효한 컨텍스트 또는 최대 입력의 90% 한도를 낮출 수만 있으며, 신뢰할 수 있는 컨텍스트 창을 알 수 없으면 내보내지 않습니다. canonical `openai`에서는 키가 공급자나 계정 선택자 접두사가 없는 정확한 지원 네이티브 모델 ID여야 합니다. 공급자 PATCH는 항목을 병합하며, 키를 `null`로 지정하면 해당 키를 삭제하고 필드 전체를 `null`로 지정하면 맵을 지웁니다. 이 `null` tombstone은 PATCH에서만 사용할 수 있습니다. |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | 모델별 양의 안전 정수형 소프트 자동 압축 예산입니다. 유효한 컨텍스트 또는 최대 입력의 90% 한도를 낮출 수만 있으며, 유효 컨텍스트 창을 결정할 수 없으면 내보내지 않습니다. canonical `openai`에서는 키가 공급자나 계정 선택자 접두사가 없는 정확한 지원 네이티브 모델 ID여야 합니다. 공급자 PATCH는 항목을 병합하며, 키를 `null`로 지정하면 해당 키를 삭제하고 필드 전체를 `null`로 지정하면 맵을 지웁니다. 이 `null` tombstone은 PATCH에서만 사용할 수 있습니다. |
 | `defaultMaxOutputTokens?` | `number` | 클라이언트가 `max_output_tokens`를 생략했을 때 쓰는 공급자 전반의 `openai-chat` 폴백입니다. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | 양수 모델별 `openai-chat` 폴백 예산입니다. 정확한 일치와 패턴 일치가 공급자 기본값보다 우선합니다. |
-| `modelCosts?` | `Record<string, Cost4>` | 모델별 표시 가격(100만 토큰당 USD). 해당 공급자의 정확한 업스트림 모델 ID를 키로 사용하며(공급자 식별자나 라우팅된 `provider/model` 레이블이 아님) 값은 `input`, `output`, `cacheRead`, `cacheWrite` 네 필드입니다(예: `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`). 커스텀 공급자는 `openai-chat` 어댑터로 임의의 OpenAI 호환 엔드포인트를 대상으로 할 수 있으며, 내장 카탈로그에 없는 로컬·내부 공급자 ID도 유효합니다. 사용자 구성 가격은 Logs `~$` 및 Usage 추정에서 내장 카탈로그보다 우선합니다. 기존 항목도 현재 오버레이로 다시 계산되므로 가격을 편집하면 과거 합계가 바뀔 수 있습니다(폴백 순서: 사용자 설정 → jawcode 카탈로그 → expected-price 오버레이 → 모델별 벤더 가격). 사용자가 모든 요율을 명시적으로 0으로 설정하면 비용을 0으로 추정합니다. 자동 가격으로 되돌리려면 해당 모델 항목을 삭제하세요. 카탈로그의 전부 0인 요율은 계속 다음 소스로 폴백합니다. 각 요율은 0 이상의 유한한 숫자이며 최대 1,000,000(100만 토큰당 USD)입니다. 범위를 벗어난 행은 관리 경계에서 거부되고 로드 시 삭제됩니다. 표시 전용 추정이며 라우팅·계정 선택·할당량·청구에는 영향을 주지 않습니다. |
+| `modelCosts?` | `Record<string, ProviderCostOverlay>` | 모델별 표시 가격(100만 토큰당 USD). 해당 공급자의 정확한 업스트림 모델 ID를 키로 사용하며(공급자 식별자나 라우팅된 `provider/model` 레이블이 아님) 값은 `input`, `output`, `cacheRead`, `cacheWrite` 네 필드입니다(예: `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`). 커스텀 공급자는 `openai-chat` 어댑터로 임의의 OpenAI 호환 엔드포인트를 대상으로 할 수 있으며, 내장 카탈로그에 없는 로컬·내부 공급자 ID도 유효합니다. 사용자 구성 가격은 Logs `~$` 및 Usage 추정에서 내장 카탈로그보다 우선합니다. 기존 항목도 현재 오버레이로 다시 계산되므로 가격을 편집하면 과거 합계가 바뀔 수 있습니다(폴백 순서: 사용자 설정 → jawcode 카탈로그 → expected-price 오버레이 → 모델별 벤더 가격). 사용자가 모든 요율을 명시적으로 0으로 설정하면 비용을 0으로 추정합니다. 자동 가격으로 되돌리려면 해당 모델 항목을 삭제하세요. 카탈로그의 전부 0인 요율은 계속 다음 소스로 폴백합니다. 각 요율은 0 이상의 유한한 숫자이며 최대 1,000,000(100만 토큰당 USD)입니다. 범위를 벗어난 행은 관리 경계에서 거부되고 로드 시 삭제됩니다. 표시 전용 추정이며 라우팅·계정 선택·할당량·청구에는 영향을 주지 않습니다. |
 | `headers?` | `Record<string, string>` | 추가 상위 헤더입니다. Authorization, cookies, API-key 헤더, 내장 개행, 잘못된 이름은 허용하지 않습니다. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | 기본 OpenRouter `order`, `only`, `allowFallbacks` 선호도입니다. 정식 OpenRouter와 `openai-chat`에서만 유효합니다. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | 공급자 전반의 OpenRouter 선호도를 덮어쓰는 정확한 모델 id별 재정의입니다. |
@@ -131,7 +140,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `noStopModels?` | `string[]` | 호출자가 지정한 `stop`을 거부하는 모델입니다. `openai-chat` 어댑터, Chat 패스스루, Responses 패스스루가 이 모델에는 해당 필드를 보내지 않습니다. 기본 `xai` 프리셋은 xAI 문서가 이 값을 거부한다고 밝힌 추론 모델(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)을 여기에 넣습니다. `grok-4.20-0309-non-reasoning`, `grok-composer-2.5-fast`은 호출자가 보낸 `stop`을 그대로 받습니다. |
 | `noPenaltyModels?` | `string[]` | presence/frequency penalty를 허용하지 않는 모델입니다. 기본 `xai` 프리셋은 xAI 문서가 이 값을 거부한다고 밝힌 추론 모델(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)을 여기에 넣습니다. 추론이 없는 모델은 호출자가 보낸 penalty를 그대로 받습니다. |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` 엔드포인트가 `response_format`을 거부하는 정확한 모델 ID입니다. 요청 모델이 항목과 정확히 일치할 때만 필드를 생략하며, 그 외 `openai-chat` 모델에서는 structured-output 변환을 유지합니다. |
-| `noJsonSchemaModels?` | `string[]` | `openai-chat` 엔드포인트가 `json_schema` 형식은 거부하지만 `json_object`는 받는 정확한 모델 ID입니다. 이런 요청은 필드를 지우는 대신 `json_object`로 낮춰 보내므로, JSON을 요청한 클라이언트가 산문 대신 JSON을 받습니다. 한 모델이 두 목록에 모두 있으면 `noStructuredOutputModels`가 우선합니다. `opencode go`, `opencode zen`, `opencode free` 프리셋이 DeepSeek 경로에 기본으로 싣습니다. |
+| `noJsonSchemaModels?` | `string[]` | `openai-chat` 엔드포인트가 `json_schema` 형식은 거부하지만 `json_object`는 받는 정확한 모델 ID입니다. 이런 요청은 필드를 지우는 대신 `json_object`로 낮춰 보내므로, JSON을 요청한 클라이언트가 산문 대신 JSON을 받습니다. 한 모델이 두 목록에 모두 있으면 `noStructuredOutputModels`가 우선합니다. `opencode go`, `opencode zen` 프리셋이 DeepSeek 경로에 기본으로 싣습니다. |
 | `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` 목적지가 `developer` 역할을 받는지 기록합니다. `foldDeveloperRoleToSystem`이 없으면 `system`, `true`이면 `system`, `false`이면 `developer`로 보냅니다. 값이 없다는 것은 이 목적지에 대해 기록된 것이 없다는 뜻이고, `true`는 상위 서비스가 역할을 거부한다는 기록, `false`는 받아들인다는 기록입니다. 어느 경우에도 메시지는 대화 안의 원래 위치를 유지하며 역할만 바뀝니다. 역할을 거부하는 목적지는 `400 role 'developer' is not allowed`로 응답해 턴이 시작조차 못 하므로, 기록이 없는 상태의 기본값을 접는 쪽으로 둡니다. |
 | `parallelToolCalls?` | `boolean` | 병렬 도구 호출을 켜거나 끕니다. OpenAI Chat은 기본으로 켜져 있고, 비-chat 어댑터는 명시적으로 `true`일 때만 이를 노출합니다. |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 기본값이 꺼진 downstream SSE 복구입니다. 정확한 자리표시자 id, 누락된 종료 id, 그리고(`repairInvalidIds`) 정규 `msg_`/`rs_` 접두사가 없는 message/reasoning id를 복구합니다. function-call id는 다시 쓰지 않습니다. 내장 DeepSeek은 마지막 두 가지를 기본으로 켭니다. |
@@ -150,8 +159,8 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `anthropicEofTolerance?` | `boolean` | `message_stop` 전에 스트림이 끝나도 표시 텍스트 또는 완전한 JSON 객체 툴 입력을 받은 경우에만 완료를 허용합니다（Anthropic 호환 게이트웨이용）. 기본값은 꺼짐. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google 전송/인증 모드입니다. 기본값은 `ai-studio`입니다. |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google 전용입니다. 생략하거나 `compatible`이면 호환 스키마와 기존 비직접 400 복구를 유지합니다. `reject-lossy`는 초기 손실 또는 판정 불가능한 상한 비교를 전송 전에 거부하고 제약을 개방하는 Vertex 또는 Cloud Code Assist 복구를 보류합니다. 직접 AI Studio는 이 복구를 수행하지 않습니다. |
-| `project?` | `string` | Vertex 또는 Antigravity Cloud Code Assist 프로젝트 id입니다. |
-| `location?` | `string` | Vertex 위치입니다. 환경 변수 폴백은 `GOOGLE_CLOUD_LOCATION`입니다. |
+| `project?` | `string` | Vertex 또는 Antigravity Cloud Code Assist 프로젝트 id입니다. Vertex API 키는 이 값이 있으면 프로젝트 엔드포인트를 쓰고, 없으면 `GOOGLE_CLOUD_PROJECT`가 설정돼 있어도 express 모드를 씁니다. ADC는 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`로 폴백합니다. |
+| `location?` | `string` | Vertex 위치입니다. API 키 프로젝트 엔드포인트는 기본값이 `global`이고 `GOOGLE_CLOUD_LOCATION`을 무시합니다. ADC는 이 값이나 `GOOGLE_CLOUD_LOCATION` 폴백이 필요합니다. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor 전용입니다. stdio 또는 Streamable HTTP MCP 서버입니다. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor 전용입니다. 외부 computer-use 및 record-screen 명령입니다. |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 레거시 불리언입니다. 더 새로운 필드가 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. |
@@ -571,3 +580,8 @@ source 재정의가 0이면 꺼지고, 전역 0이어도 source에 양수 재정
 ### `anthropicAccountPool.routes`
 
 `anthropicAccountPool.routes`는 모델을 저장된 Anthropic OAuth 계정 ID에 연결합니다. 풀이 활성화되면 대소문자를 구분하는 `match` 글롭의 첫 일치가 최초 선택과 429 재시도를 제한합니다. `fallback: true`는 해당 경로에 적격 계정이 없을 때만 일반 풀로 확장합니다.
+
+
+### `promptLengthPricing`
+
+선택 항목 `promptLengthPricing`은 네 기본 요율을 확장합니다. `mode: "automatic"` 또는 생략은 카탈로그의 컨텍스트 규칙을 유지하고, `mode: "flat"`은 이를 비활성화합니다. `mode: "custom"`은 양의 안전한 정수 `thresholdTokens`, `"gt"` (>) 또는 `"gte"` (≥)인 `comparison`, 네 절대 대체 요율을 담은 `rates`를 사용합니다. 임계값에는 캐시 읽기와 쓰기를 포함한 모든 프롬프트 토큰이 포함되며 출력은 제외됩니다. 선택한 요율은 출력을 포함한 전체 요청에 적용되고 임계값 양쪽에서 카탈로그 규칙을 대체합니다. Fast/Priority 조정은 요율을 선택한 뒤 한 번만 적용되며, 해당 모델에 대해 카탈로그가 공개한 Priority 관계를 따릅니다. 추정치는 카탈로그가 그 관계를 `lower-bound`로 선언한 경우(현재 xAI Grok)에만 하한으로 표시됩니다. 카탈로그 규칙이 없는 모델은 Priority 배수를 한 번만 적용합니다. **Models → Price**에서 설정합니다. **Reset to automatic**은 기본 요율과 규칙을 포함한 전체 재정의를 삭제합니다. 기존 설정은 호환되며 이 설정은 표시되는 추정 비용에만 해당합니다.

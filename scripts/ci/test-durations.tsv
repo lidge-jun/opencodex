@@ -1446,7 +1446,6 @@
 168	tests/providers/ollama/ollama-show-enrichment.test.ts
 389	tests/providers/ollama/ollama-show-ignore-abort.test.ts
 260	tests/providers/opencode-cli.test.ts
-106	tests/providers/opencode-free-provider.test.ts
 202	tests/providers/opencode-go-deepseek.test.ts
 150	tests/providers/opencode-go-grok46-responses.test.ts
 565	tests/providers/opencode-go-luna-wire.test.ts

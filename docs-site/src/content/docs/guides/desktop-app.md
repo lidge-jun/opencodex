@@ -23,9 +23,10 @@ still blocks it, use **System Settings → Privacy & Security → Open Anyway**.
 
 ### Windows
 
-Download `OpenCodex-<version>-windows-x64.msi` and run the installer. Windows SmartScreen may
-warn because the installer is not yet code-signed; choose **More info → Run anyway** after
-confirming that you downloaded it from the release page.
+Download `OpenCodex-<version>-windows-x64.msi` and run the installer. Code signing through
+SignPath Foundation is rolling out ([Windows Code Signing](/reference/code-signing/)). Until a
+release carries the signature, Windows SmartScreen may warn about an unsigned installer; choose
+**More info → Run anyway** after confirming that you downloaded it from the release page.
 
 ### Linux
 
@@ -116,8 +117,12 @@ means the registration could not be read. While the app runs the proxy, the Star
 background service installer disabled; to use it instead, quit OpenCodex and run
 `ocx service install` in a terminal. The Codex launcher shim can still be installed there.
 When a Codex launch finds no proxy, the shim waits for OpenCodex to restart it, opens
-OpenCodex on macOS if it quit, and otherwise reports an error instead of starting a second
-proxy. If the shim reads "activation not confirmed", add
+OpenCodex on macOS if it quit and its recorded ownership matches a valid **Start at Login**
+registration, and otherwise reports an error instead of starting a second proxy. Automatic
+reopening selects that registration's app bundle path and checks that its declared main
+executable matches the registered Desktop executable. If registration is missing, stale or
+inconsistent, open OpenCodex manually; another copy with the same bundle identifier is not
+selected as a fallback. If the shim reads "activation not confirmed", add
 `. ~/.opencodex/codex-shell-env.sh` to your shell startup file after other PATH setup.
 
 The bundled CLI is `/Applications/OpenCodex.app/Contents/MacOS/ocx` on macOS and
@@ -130,7 +135,7 @@ While the CLI detects Desktop supervising the proxy, `ocx service install`, `rep
 or verified login registration. Quit OpenCodex, then run `ocx service install` to move
 startup management to the CLI. A duplicate `ocx start` names the Desktop supervisor.
 
-Use **Check for Updates…** in the tray to update the app's bundle. `ocx update` refuses
+Use **Check for Updates…** in the tray to update the app's bundle. The bundled compiled CLI reports `installer: "standalone"` and `reason: "standalone_install"` from `ocx system update check`, with `canUpdate: false` and guidance to use Desktop updates. `ocx update` refuses
 package replacement while Desktop supervises the proxy, even for a separate npm/Bun install;
 quit OpenCodex first to update that install. An accepted `ocx restart` reports that Desktop
 starts the replacement and waits for it to become healthy. A newer PATH CLI cannot use

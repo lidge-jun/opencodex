@@ -2,6 +2,7 @@ import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
+import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import {
@@ -403,6 +404,9 @@ const REQUEST_SHAPE_FAILURE_CODES = new Set([
   "tool_catalog_too_large",
   "cursor_root_envelope_limit",
   "target_incompatible",
+  // A route that cannot read the request's media (image input to a text-only CLI route) is
+  // healthy for every other request, so cooling it would only block unrelated turns.
+  "unsupported_input_modality",
 ]);
 
 /** Credential/billing failures that every target sharing the provider inherits. */
@@ -663,8 +667,9 @@ function isDefiniteContextOverflowMessage(text: string): boolean {
  * arbitrary field that happens to sit in the first 500 bytes authorize a hop, so it fails closed.
  *
  * Only the exact proxy wrapper is unwrapped, within a fixed envelope budget and 16,384 characters.
+ * Exported for the sidecar loops, which classify their own provider failures with the same rule.
  */
-function isDefiniteContextOverflow(status: number, message: string): boolean {
+export function isDefiniteContextOverflow(status: number, message: string): boolean {
   if (!CONTEXT_VERDICT_STATUSES.has(status) && status < 500) return false;
   if (message.length > 16_384) return false;
   let text = message.trim();
@@ -768,7 +773,7 @@ export function codexAccountModelRefusal(
 export function comboFailureDecision(
   status: number,
   message: string,
-  options?: { code?: string | null; codexModelRefusal?: CodexAccountModelRefusal },
+  options?: { code?: string | null; codexModelRefusal?: CodexAccountModelRefusal; failedAdapter?: string },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
   if (message.toLowerCase().includes("origin_rejected")) return "stop";
@@ -836,7 +841,9 @@ export function comboFailureDecision(
   // says nothing about the next combo target. Structured code only, plus the explicit prose
   // form upstreams emit when they carry no code, so an unrelated 400 stays terminal.
   const failureCode = normalizedFailureCode(options?.code || error.code);
-  if (["model_not_found", "model_unavailable", "unsupported_model"].includes(failureCode)) {
+  // The input-modality refusal is the same kind of verdict: this route cannot read the turn's
+  // media, and a later target may. Its 400 would otherwise end the chain as invalid_request_error.
+  if (["model_not_found", "model_unavailable", "unsupported_model", "unsupported_input_modality"].includes(failureCode)) {
     return "hop";
   }
   if (modelRefusal === "refusal") return "hop";
@@ -850,6 +857,12 @@ export function comboFailureDecision(
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, options?.code)) return "hop";
   if (isAnthropicBillingFailure(status, message, options?.code)) return "hop";
+  // Kiro's body validator rejects the request for the identity it was routed under. The account
+  // layer rotates logins first; this is the no-alternate case, so the next combo target is the
+  // only remaining chance to serve the turn. Only a caller that knows the failed target is a Kiro
+  // adapter grants it (the words alone prove nothing for another provider); it must precede the
+  // generic invalid_request_error stop.
+  if (options?.failedAdapter === "kiro" && isKiroAccountProfileRefusal(status, message)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

@@ -111,17 +111,18 @@ export interface ClientEncodedDelivery {
 }
 
 /**
- * Record the attempt's observed path: the request still goes through the internal Responses
- * bridge until the codecs decode to IR directly, so the request path and mode stay the bridge's;
- * the response now reaches the client from the IR without the internal Responses hop.
+ * Record the attempt's observed path. The response reaches the client from the IR without the
+ * internal Responses hop. The request side is the bridge's unless the ingress also decoded the
+ * conversation straight into the IR (the Antigravity direct lane, `requestLane: "direct"`).
  */
 function markDirectEncoderPath(logCtx: RequestLogContext, encoder: ClientEncoderOption, adapter: string): void {
   const attempt = logCtx.activeAttempt;
   if (!attempt) return;
   const upstream = upstreamWireForAdapter(attempt.adapter || adapter);
+  const lane = encoder.requestLane ?? "bridge";
   markAttemptProtocolPath(attempt, {
-    mode: deliveryModeForLane(encoder.protocol, "bridge", upstream),
-    requestPath: requestPathForLane(encoder.protocol, "bridge", upstream),
+    mode: deliveryModeForLane(encoder.protocol, lane, upstream),
+    requestPath: requestPathForLane(encoder.protocol, lane, upstream),
     responsePath: [upstream, "ir", encoder.protocol],
   });
 }

@@ -71,7 +71,7 @@ host and port over a LAN IP or an alias.
 
 ## Dashboard layout
 
-The sidebar has eight rows, in order: **Dashboard**, **Connect**, **Codex**, **Providers**, **Models**, **Subagents**, **Usage & Logs**, and **Remote Link**. **Connect** opens the page headed **Connect**, with its tab strip ordered **Codex**, **Claude**, **Claude Desktop**, **Grok Build**, then the remaining integrations. Claude has no sub-tabs; it shows the Claude Code settings directly. Claude Desktop is a separate Connect tab at `#claude/desktop`. Connect has no section switcher. **Usage & Logs** opens Usage and groups Usage, Logs & Debug, and Storage with a pill-shaped section switcher. The last row, **Remote Link**, groups Remote Link (`#remote`) and Remote Workspace (`#remote-workspace`, when available) with the same switcher. **Codex** is the renamed **Codex Set** row; the preserved URLs include `#codex-set`, `#claude`, `#claude/code`, and `#claude/desktop`; the former `#claude/settings` bookmark opens Code. The former `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Startup (`#startup`) stays outside the sidebar.
+The sidebar has eight rows, in order: **Dashboard**, **Connect**, **Codex**, **Providers**, **Models**, **Subagents**, **Usage & Logs**, and **Remote Link**. **Connect** opens the page headed **Connect**, with its tab strip ordered **Codex**, **Claude**, **Claude Desktop**, **Grok Build**, then the remaining integrations. Claude has no sub-tabs; it shows the Claude Code settings directly. Claude Desktop is a separate Connect tab at `#claude/desktop`. Connect has no section switcher. **Subagents** opens Subagents and groups Subagents and Advisor (`#advisor`) with a pill-shaped section switcher. **Usage & Logs** opens Usage and groups Usage, Logs & Debug, and Storage with a pill-shaped section switcher. The last row, **Remote Link**, groups Remote Link (`#remote`) and Remote Workspace (`#remote-workspace`, when available) with the same switcher. **Codex** is the renamed **Codex Set** row; the preserved URLs include `#codex-set`, `#claude`, `#claude/code`, and `#claude/desktop`; the former `#claude/settings` bookmark opens Code. The former `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Startup (`#startup`) stays outside the sidebar.
 
 Responses first-output timing includes streamed function arguments and custom-tool input, as well
 as text and reasoning. A tool-only turn can therefore have a first-output time even without prose.
@@ -111,6 +111,7 @@ is visible) and never forces an upstream refresh.
 | Area | What it does |
 | --- | --- |
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
+| **Native reasoning retention** | Independently opt into reasoning ciphertext forwarding on native model or account changes. Both default off; account retention is experimental. See [the configuration scope](/reference/configuration/server/#native-reasoning-retention). |
 | **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
 | **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. In the desktop shell, its update entry opens the native app update page instead of running the package updater. |
@@ -147,6 +148,9 @@ A proxy replay refusal keeps HTTP 429 and error code `upstream_reset_replay_refu
 its request and attempt failure cause is `transport-ambiguous`, with resend permission
 `refused-ambiguous`: the upstream may already have processed the turn. A genuine provider
 429 remains `rate-limit` with resend permission `permitted`.
+
+A Codex move to another account after HTTP 402 appears as **Account quota exhausted (402)**
+in the attempt's recovery details and counts as a quota recovery in exported metrics.
 
 Logs filters combine surface, intercepted requests, provider, exact model, status, time,
 speed, and conversation ID over the currently loaded request ring. Provider and model
@@ -203,7 +207,13 @@ The **Usage** summary and Models/Providers tables show end-to-end output through
 
 The **Usage** Models and Providers tables show the estimated priced portion for each row. Requests
 without a matching price or usable usage are counted as excluded beside that amount when the proxy
-reports pricing coverage fields. A row with only excluded requests shows an em dash with that count
+reports pricing coverage fields. Usage that was only partly measured (`unreported` or `unsupported`)
+is not priced, and one excluded part excludes the whole request from that row's priced count. A
+leg that reached no upstream, or that upstream refused with an HTTP error before any output, spent
+nothing and does not; a client cancellation (499), or a leg whose response began or ended without
+a status but reported no usage, may have been billed, so it does. A refusal followed by a measured
+successful send contributes that send's cost to the summary even when the aggregate usage status
+is `unreported`. A row with only excluded requests shows an em dash with that count
 instead of a zero-dollar estimate, and a displayed zero-dollar value is a confirmed priced estimate.
 An older proxy that reports no coverage fields keeps a bare em dash with no count, so missing
 coverage stays distinct from an all-excluded row and from a confirmed zero estimate.
@@ -470,3 +480,30 @@ them. Both switches apply immediately; **Save** never changes them. When interce
 Claude/Anthropic accounts are managed only on **Providers > Anthropic > Accounts**: login and the browser option, the account roster with switch, pause, remove, and reauthentication, the paste-code field, account pool settings, and quota. Claude no longer has an Account sub-tab. Provider-level controls such as the default provider, removal, and the enabled switch stay on Providers.
 
 The bookmarks `#claude` and `#claude/code` open this page, and the former `#claude/settings` redirects to `#claude/code`; `#claude/desktop` selects the separate Claude Desktop tab. The old `#claude/account` bookmark redirects to `#providers?provider=anthropic&tab=accounts`. Legacy `#integrations/claude` and `#integrations/claude/desktop` bookmarks still redirect to `#claude/code` and `#claude/desktop`, respectively. Arrow keys move between tabs; Home and End select the first and last tab.
+
+
+## Test one provider model
+
+In **Providers**, **Test connection** checks discovery connectivity. Use the
+separate **Test completion** control to check whether a selected model answers.
+Choose a model and accept the confirmation that the request may incur provider
+charges. Cancelling the confirmation sends nothing. Changing the provider or
+model, or leaving the page, cancels the test and discards a stale result.
+
+The completion test sends `Reply exactly OK.` once with a 32-token output cap,
+a 20-second deadline and a 64 KiB stream limit. It reports TTFT at the first
+non-empty text delta, total latency, the upstream-reported model and a match,
+mismatch or unknown comparison against the wire model id. Missing or conflicting
+metadata is unknown; upstream metadata does not verify model identity. The panel
+shows the applicability reason when authentication, adapter or transport settings
+cannot be tested. No generated text is displayed, and the diagnostic does not
+update routing health, request history or the provider catalog.
+
+The authenticated management endpoint is
+`POST /api/providers/test-completion?name=<provider>` with exactly
+`{"model":"<model>","confirm":true}`. Dashboard sessions require their usual CSRF
+token. Invalid input returns 400, unknown providers return 404 and a concurrent
+test for the same provider returns 409. Completed diagnostics and applicability
+results return 200, including a structured error when inference fails. Destination
+policy and provider egress settings apply; redirects, retries and failover are disabled.
+For the CLI workflow, see [Providers and accounts](/reference/cli/providers-accounts/).

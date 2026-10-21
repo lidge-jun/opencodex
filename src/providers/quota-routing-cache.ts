@@ -1,3 +1,4 @@
+import { invalidateDecisionKeyQuotas } from "../lib/decision-quota-sink";
 import { createHash } from "node:crypto";
 import type { OcxProviderConfig } from "../types";
 import type { ProviderQuota, ProviderQuotaReport } from "./quota";
@@ -28,7 +29,7 @@ export function providerQuotaRoutingBinding(
   // A key probe must not constrain that later account selection.
   const entry = getProviderRegistryEntry(name);
   if (entry && (entry.authKind === "oauth" || entry.authKind === "forward")
-    && !providerUsesKeyAuthOverride(entry, provider, credential)) return null;
+    && !providerUsesKeyAuthOverride(entry, provider)) return null;
   // Static auth headers can replace or combine with the probed API-key header.
   // Its semantics belong to the adapter, so it is not provider-wide quota evidence.
   if (Object.keys(provider.headers ?? {}).some(header =>
@@ -38,7 +39,9 @@ export function providerQuotaRoutingBinding(
   ])).digest("hex");
 }
 
+/** Clear the routing quota cache together with key-based decision evidence, so one cannot outlive the other. */
 export function clearCachedProviderQuotas(): void {
+  invalidateDecisionKeyQuotas();
   quotaCache.clear();
 }
 

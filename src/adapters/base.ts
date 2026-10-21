@@ -14,6 +14,8 @@ export interface IncomingMeta {
   abortSignal?: AbortSignal;
   /** Lease acquired before the response is committed; the physical send transfers it to its body. */
   pacingSlot?: ProviderRequestSlot;
+  /** Internal queued rebuild already owns the outer provider fetch admission. */
+  dispatchPacingHeld?: boolean;
   /** Combo children must surface a pre-output refusal so the selector can try the next target. */
   comboAttempt?: boolean;
   /**
@@ -22,6 +24,8 @@ export interface IncomingMeta {
    * the same pacing queue and custom provider fetch seam.
    */
   providerFetch?: typeof globalThis.fetch;
+  /** Synchronous selection fence for adapter-owned sends; call after async setup, before dispatch. */
+  beforePhysicalSend?: () => void;
   /**
    * Image-normalization ladder bias for upstream-413 tightened retries: every image
    * starts one tier lower (devlog/260714_image_normalization_pipeline/030). Consumed by
@@ -125,6 +129,8 @@ export interface AdapterRequest {
     method: string;
     headers: Record<string, string>;
     body: string;
+    /** Exact final wire model, captured before serialization for model-scoped transport gates. */
+    outboundModelId?: string;
     /** Final upstream wire names of custom tools lowered to functions while building this request. */
     convertedRoutedCustomToolNames?: ReadonlySet<string>;
     /** Native custom-tool wire names authorized for representation-only response repair. */

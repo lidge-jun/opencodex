@@ -13,13 +13,23 @@ Routing turns the model id sent by a client into one concrete provider and upstr
 | `combos?` | `Record<string, OcxComboConfig>` | `{}` | Virtual `combo/<id>` models built from ordered provider/model targets. |
 | `routingProfiles?` | `Record<string, OcxRoutingProfileConfig>` | `{}` | Virtual `policy/<id>` models that select among an explicit candidate allowlist using hard capability requirements and deterministic scoring. |
 
+### Model alias discovery
+
+Set `preferModelAliasIds: true` to publish configured or enabled built-in model aliases
+as the `id` in `GET /v1/models`. The default is `false`. Promoted rows retain their
+previous qualified ID in `native_id` and keep `alias_of`; both IDs remain routable.
+Models without aliases keep their existing IDs. If a short alias is ambiguous across
+providers or is shadowed by another route, the row keeps its qualified ID so selecting
+it still reaches the intended model. The qualified ID also stays when a built-in short
+alias would produce an unparseable synthetic Fast selector. Codex's own model catalog is unchanged.
+
 ### Codex Pool low-quota protection
 
 `codexPool.lowQuotaProtection` applies only to stored Codex Pool accounts. The Desktop/main
 account keeps its separate 98% hard lock. The optional shape is:
 
 ```json
-{"codexPool":{"lowQuotaProtection":{"enabled":true,"threshold":80,"actions":{"pause":true,"notify":true},"windows":{"short":true,"weekly":true}}}}
+{"codexPool":{"lowQuotaProtection":{"enabled":true,"threshold":80,"actions":{"pause":true,"notify":true,"desktop":true},"windows":{"short":true,"weekly":true}}}}
 ```
 
 Absence or `enabled: false` disables it. `threshold` is a finite inclusive percentage from 1
@@ -42,9 +52,20 @@ With `notify`, the server writes a local log line with window and percentage but
 and records a bounded event. Authenticated `GET /api/codex-auth/low-quota-events` exposes only
 that server’s events, including account id, window, usage percentage, known reset time, timestamp,
 and status. The default status is `logged`: the alert reached the log and event history only.
-There is no desktop or OS notification. Each account/window logs once per server-local episode.
-If an injected notification sink fails, its failure is recorded and a later eligible observation
-can retry it; only a successful sink is marked `delivered`.
+Each account/window logs once per server-local episode.
+
+Optional `actions.desktop: true` (it requires `notify: true`) also hands each notice to the
+operating-system notifier of the machine running the proxy: `/usr/bin/osascript` on macOS, or
+`notify-send` from `/usr/bin`, `/usr/local/bin` or `/bin` on Linux. The notification names the account
+only by its pseudonymous log label (for example `p1a2b3c`), never its email, alias or id, and
+includes the window, usage, threshold and known reset time. Windows and hosts without a supported
+notifier keep the alert `logged`. `delivered` means the OS notifier accepted the notice; it cannot
+see whether the system's notification settings then hide it. A failed or timed-out notifier is
+recorded as `failed`; an eligible observation at least five minutes later can retry it, without
+repeating the log line. Turning `desktop` on or off
+applies to the next observation without a restart. A notice still in flight is cancelled at shutdown, and
+when the next quota observation detects that its episode ended (reset boundary, recovery,
+account removal or policy change); until then the notifier is bounded by a five-second timeout.
 
 ## Model resolution order
 
@@ -138,7 +159,8 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `targets` | `{ provider: string; model: string; weight?: number; lastResort?: boolean }[]` | required | Ordered concrete routes. `weight` is 1–10000 and defaults to `1`. `lastResort` marks an emergency-only target; see `cooldownWaitPolicy`. |
+| `targets` | `{ provider: string; model: string; weight?: number; lastResort?: boolean; metered?: boolean }[]` | required | Ordered concrete routes. `weight` is 1–10000 and defaults to `1`. `lastResort` marks an emergency-only target; see `cooldownWaitPolicy`. `metered: true` requires key consent or loopback-only combo consent; see [consent](/guides/combos/#metered-fallback-consent). |
+| `allowMeteredTargets?` | `boolean` | `false` | Operator consent for local callers on a loopback-only proxy. A non-loopback listener disables this flag; configured-key and linked callers still need key consent. |
 | `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window" \| "jev"` | `"failover"` | Selection strategy. Target order is failover priority; weights shape round-robin and random draws; least-used follows recorded successes; reset-window follows the soonest quota reset; JEV makes one bounded decision for the initial eligible target and effort, then uses ordinary ordered fallback. |
 | `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100. Applies only to round-robin. |
 | `cooldownMs?` | `number` | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Range 1–600000. When set, applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. Upstream signals take precedence. An explicit upstream `Retry-After` is capped at 24 hours; reset-derived, configured, and fallback cooldowns are capped at 10 minutes. |
@@ -154,6 +176,13 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `decisionProvider?` | `string` | `"jev"` | `strategy: "jev"` only. `"jev"` (the same as omitting it, and stored as omission) is the TypeSafe decision service, valid without a provider row; any other value must name a configured provider with `adapter: "jev-decision"` and a full HTTPS decision `baseUrl` (any path) or a local HTTP `/systemone` endpoint. Userinfo, query strings, and fragments are refused. |
 | `decisionModel?` | `string` | unset | `strategy: "jev"` only, mutually exclusive with `decisionProvider`. An ordinary opencodex route (for example `ollama/qwen3:4b`) asked to pick one offered option as JSON. It runs with the selected provider's stored credentials, never the caller's, and cannot resolve to this combo, any JEV combo, or a `jev-decision` row. |
 | `decisionTimeoutMs?` | `number` | `4000` | `strategy: "jev"` only. Decision deadline before failing open, 1000–120000 ms. |
+| `decisionQuotaSignals?` | `boolean` | `false` | JEV only. Explicit `true` sends loaded advisory quota evidence to the selected backend; never changes hard eligibility or account selection. |
+| `decisionQuotaTiers?` | `{ moderate?: number; limited?: number; nearlyExhausted?: number }` | `{ limited: 70, nearlyExhausted: 90 }` | JEV only. Partial overrides merge with defaults; finite 0–100 values must be strictly ascending. `moderate` is absent unless explicit. Does not enable signals by itself. |
+
+Quota settings, privacy and unknown-pool semantics are described in
+[Advisory quota signals for JEV](/guides/combos/#advisory-quota-signals-for-jev).
+Omitted settings survive JEV API updates/rename; `null` clears, `false` disables signals without
+clearing tiers, and switching to another strategy removes both settings.
 
 ```json
 {
@@ -367,7 +396,8 @@ Returned history and route-decision payloads expose only masked request metadata
 (for example opaque `apiKeyId` labels). They do not include credentials, raw
 prompt bodies, or provider secrets.
 
-CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`,
+CLI: `ocx logs history`, `ocx logs get <request-id>`,
+`ocx logs explain <request-id>`, `ocx logs rebuild-index`,
 `ocx logs index-status`, `ocx route policy list | show | dry-run | evaluate`.
 
 ## Migration
@@ -376,5 +406,9 @@ CLI: `ocx logs explain <request-id>`, `ocx logs rebuild-index`,
 unchanged. Old `usage.jsonl` rows without `routeDecision` parse unchanged.
 The history index is disposable - deleting `routing-history.sqlite` triggers
 an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
-rebuild-index` forces one. Nothing in this system auto-tunes weights,
-budgets, or candidate sets.
+rebuild-index` forces one. Once `usage.jsonl` reaches 1 MiB, a rebuild runs on
+a worker thread, so the proxy keeps serving requests while it runs. Until it
+finishes, history queries wait for it and routing profiles treat historical
+health as unknown evidence (the profile's `unknownEvidence.health` policy
+applies). Nothing in this system auto-tunes weights, budgets, or candidate
+sets.

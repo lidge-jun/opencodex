@@ -1,5 +1,6 @@
 import type { OcxConfig, StorageCleanupPolicy } from "../types";
 import { registerCodexLowQuotaProtection, type LowQuotaRegistration } from "../codex/low-quota-protection";
+import { resolveLowQuotaDesktopSink } from "../codex/low-quota-desktop-notifier";
 import type { LowQuotaEvent } from "../codex/low-quota-events";
 import { startStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
@@ -209,7 +210,7 @@ export function acquireServerBackgroundLifecycle(
     fanoutRevoked: false,
     applyPolicy,
     resources: acquireServerResourceOwner(),
-    lowQuota: registerCodexLowQuotaProtection(config),
+    lowQuota: registerCodexLowQuotaProtection(config, { desktopSink: () => resolveLowQuotaDesktopSink() }),
   };
   try {
     if (!processLoops) {

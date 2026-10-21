@@ -45,8 +45,31 @@ function quotaInfoEntries(modelInfo: Record<string, unknown>): Record<string, un
   return entries;
 }
 
+/**
+ * Gemini 4 Argon has its own quota pool. Its names also contain "gemini", so every family
+ * decision below checks Argon first; otherwise Argon readings fill or replace the Gem family.
+ */
+const ARGON_TOKEN = /(?:^|[^a-z0-9])argon(?:[^a-z0-9]|$)/i;
+const GEMINI_TOKEN = /(?:^|[^a-z0-9])gemini(?:[^a-z0-9]|$)/i;
+const CLAUDE_FAMILY_TOKEN = /(?:^|[^a-z0-9])(?:claude|3p|gpt|opus|sonnet)(?:[^a-z0-9]|$)/i;
+/** Canonical model of the Argon summary pool; tagging keeps the window out of routing. */
+const ARGON_POOL_MODEL_ID = "gemini-4-argon";
+
+type AntigravitySummaryFamily = "argon" | "gem" | "cla";
+
+/** A bucket's own id and name decide its family when they name one; the group decides otherwise. */
+function antigravitySummaryBucketFamily(bucket: Record<string, unknown>): AntigravitySummaryFamily | undefined {
+  const identity = `${typeof bucket.bucketId === "string" ? bucket.bucketId : ""} ${typeof bucket.displayName === "string" ? bucket.displayName : ""}`;
+  if (ARGON_TOKEN.test(identity)) return "argon";
+  if (GEMINI_TOKEN.test(identity)) return "gem";
+  if (CLAUDE_FAMILY_TOKEN.test(identity)) return "cla";
+  return undefined;
+}
+
 function classifyAntigravityFamily(modelId: string, modelInfo: Record<string, unknown>, quotaInfo: Record<string, unknown>): "Gem" | "Cla" | null {
   const displayName = typeof modelInfo.displayName === "string" ? modelInfo.displayName : "";
+  // Argon models keep their exact model rows but never seed the shared Gem family bar.
+  if (ARGON_TOKEN.test(`${modelId} ${displayName}`)) return null;
   const tier = typeof quotaInfo.tier === "string" ? quotaInfo.tier : "";
   const haystack = `${modelId} ${displayName} ${tier}`.toLowerCase();
   if (haystack.includes("gemini")) return "Gem";
@@ -71,19 +94,40 @@ function antigravityWindowsFromModels(body: Record<string, unknown> | null): Pro
   if (!models) return [];
 
   const windows = new Map<string, ProviderQuotaWindow>();
+  const modelWindows: ProviderQuotaWindow[] = [];
+  const labels = new Set(["Gem", "Cla"]);
   for (const [modelId, rawModelInfo] of Object.entries(models)) {
     const modelInfo = asRecord(rawModelInfo);
     if (!modelInfo) continue;
     for (const quotaInfo of quotaInfoEntries(modelInfo)) {
       const label = classifyAntigravityFamily(modelId, modelInfo, quotaInfo);
-      if (!label || windows.has(label)) continue;
       const percent = antigravityUsedPercent(quotaInfo);
       if (percent === undefined) continue;
-      windows.set(label, {
-        label,
-        percent,
-        ...(normalizeResetAt(quotaInfo.resetTime) !== undefined ? { resetAt: normalizeResetAt(quotaInfo.resetTime) } : {}),
-      });
+      const resetAt = normalizeResetAt(quotaInfo.resetTime);
+      if (label && !windows.has(label)) {
+        windows.set(label, { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
+      }
+      // Keep model measurements as display/diagnostic evidence. They are deliberately
+      // separate from the family summaries above; routing must not infer eligibility
+      // from one model's counter or from a missing row.
+      if (modelId.trim() && modelId.length <= 128 && modelWindows.length < 256) {
+        const tier = typeof quotaInfo.tier === "string" && quotaInfo.tier.length <= 64
+          ? quotaInfo.tier.trim().slice(0, Math.max(0, 125 - modelId.length))
+          : "";
+        const baseLabel = `${modelId}${tier ? ` · ${tier}` : ""}`;
+        let modelLabel = baseLabel;
+        for (let ordinal = 2; labels.has(modelLabel); ordinal += 1) {
+          const suffix = ` #${ordinal}`;
+          modelLabel = `${baseLabel.slice(0, 128 - suffix.length)}${suffix}`;
+        }
+        labels.add(modelLabel);
+        modelWindows.push({
+          label: modelLabel,
+          modelId,
+          percent,
+          ...(resetAt !== undefined ? { resetAt } : {}),
+        });
+      }
     }
   }
 
@@ -91,7 +135,7 @@ function antigravityWindowsFromModels(body: Record<string, unknown> | null): Pro
     const window = windows.get(label);
     return window ? [window] : [];
   });
-  return customWindows;
+  return [...customWindows, ...modelWindows];
 }
 
 /**
@@ -107,9 +151,13 @@ function parseAntigravityQuotaSummary(body: Record<string, unknown> | null): Pro
   for (const rawGroup of groups) {
     const group = asRecord(rawGroup);
     if (!group) continue;
-    const groupName = `${typeof group.displayName === "string" ? group.displayName : ""} ${typeof group.description === "string" ? group.description : ""}`.toLowerCase();
-    const isGemini = groupName.includes("gemini");
-    const isClaude = groupName.includes("claude") || groupName.includes("3p") || groupName.includes("gpt");
+    const groupDisplayName = typeof group.displayName === "string" ? group.displayName : "";
+    const groupName = `${groupDisplayName} ${typeof group.description === "string" ? group.description : ""}`.toLowerCase();
+    // A description that merely mentions Argon must not move a whole Gemini group.
+    const groupFamily: AntigravitySummaryFamily | undefined = ARGON_TOKEN.test(groupDisplayName) ? "argon"
+      : groupName.includes("gemini") ? "gem"
+        : groupName.includes("claude") || groupName.includes("3p") || groupName.includes("gpt") ? "cla"
+          : undefined;
 
     const buckets = Array.isArray(group.buckets) ? (group.buckets as unknown[]) : [];
     for (const rawBucket of buckets) {
@@ -122,13 +170,19 @@ function parseAntigravityQuotaSummary(body: Record<string, unknown> | null): Pro
 
       const isWeekly = windowStr.includes("week");
       const is5h = windowStr.includes("5h") || windowStr.includes("five");
+      const family = antigravitySummaryBucketFamily(bucket) ?? groupFamily;
 
-      if (isGemini) {
+      if (family === "argon") {
+        const label = is5h ? "Argon" : isWeekly ? "Argon (Weekly)" : "";
+        if (label && !customWindowsMap.has(label)) {
+          customWindowsMap.set(label, { label, modelId: ARGON_POOL_MODEL_ID, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
+        }
+      } else if (family === "gem") {
         const label = is5h ? "Gem" : isWeekly ? "Gem (Weekly)" : "";
         if (label && !customWindowsMap.has(label)) {
           customWindowsMap.set(label, { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
         }
-      } else if (isClaude) {
+      } else if (family === "cla") {
         const label = is5h ? "Cla" : isWeekly ? "Cla (Weekly)" : "";
         if (label && !customWindowsMap.has(label)) {
           customWindowsMap.set(label, { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
@@ -143,7 +197,7 @@ function parseAntigravityQuotaSummary(body: Record<string, unknown> | null): Pro
     }
   }
 
-  const PREFERRED_ORDER = ["Gem", "Gem (Weekly)", "Cla", "Cla (Weekly)"];
+  const PREFERRED_ORDER = ["Gem", "Gem (Weekly)", "Cla", "Cla (Weekly)", "Argon", "Argon (Weekly)"];
   const customWindows = Array.from(customWindowsMap.values()).sort((a, b) => {
     const ia = PREFERRED_ORDER.indexOf(a.label);
     const ib = PREFERRED_ORDER.indexOf(b.label);
@@ -252,13 +306,16 @@ function antigravityUnavailableFailure(
   return fallbackFailure;
 }
 
-export async function probeAntigravityUsageQuota(accessToken: string, projectId: string): Promise<AntigravityQuotaProbeResult> {
+export async function probeAntigravityUsageQuota(accessToken: string, projectId: string, signal?: AbortSignal): Promise<AntigravityQuotaProbeResult> {
+  // An optional caller signal (account import) cancels every request of this probe, including the
+  // 403 retry and the models fallback, alongside the per-request deadline.
+  const requestSignal = () => signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   const fetchQuota = (url: string, userAgent = antigravityUserAgent()) => providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, url, {
     headers: {
       Accept: "application/json", "Content-Type": "application/json",
       "User-Agent": userAgent, Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ project: projectId }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    body: JSON.stringify({ project: projectId }), signal: requestSignal(),
   }, antigravityOutboundDependencies);
   let summaryFailure: QuotaFailureCode | undefined;
   try {
@@ -278,6 +335,7 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
     // Existing behavior: summary transport/parse failure may recover through the models probe.
     summaryFailure = quotaTransportFailure(error);
   }
+  if (signal?.aborted) return unavailableAntigravityQuota(summaryFailure ?? "transport_error");
   try {
     const response = await fetchQuota(ANTIGRAVITY_QUOTA_MODELS_URL);
     if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_MODELS_URL)) {

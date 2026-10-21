@@ -16,6 +16,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import { isTransientUpstreamStatus } from "../../lib/upstream-retry";
+import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../lib/errors";
 import { encodeReasoningEnvelope } from "../../responses/reasoning-envelope";
 import { responsesUsage, webSearchAction } from "../../bridge/internal";
 import {
@@ -344,13 +345,14 @@ function createAnthropicMessageWriter(
         type: "web_search_call",
         id: search.itemId,
         status: search.status,
-        action: webSearchAction(search.queries),
+        action: webSearchAction(search.queries, search.anthropic),
         ...(search.sources.length > 0 ? { sources: search.sources } : {}),
+        ...(search.anthropic ? { anthropic_blocks: search.anthropic } : {}),
       });
       const toolIndex = blockIndex++;
       emit("content_block_start", {
         type: "content_block_start", index: toolIndex,
-        content_block: { type: "server_tool_use", id: pair.id, name: "web_search" },
+        content_block: { type: "server_tool_use", id: pair.id, name: pair.name },
       }, { sideEffect: true });
       emit("content_block_delta", {
         type: "content_block_delta", index: toolIndex,
@@ -360,10 +362,10 @@ function createAnthropicMessageWriter(
       const resultIndex = blockIndex++;
       emit("content_block_start", {
         type: "content_block_start", index: resultIndex,
-        content_block: { type: "web_search_tool_result", tool_use_id: pair.id, content: pair.resultContent },
+        content_block: { type: pair.resultType, tool_use_id: pair.id, content: pair.resultContent },
       });
       emit("content_block_stop", { type: "content_block_stop", index: resultIndex });
-      if (pair.completed) webSearchRequests++;
+      if (pair.completed && pair.name === "web_search") webSearchRequests++;
     },
     terminal(terminal) {
       if (terminal.status === "completed") {
@@ -386,8 +388,9 @@ function createAnthropicMessageWriter(
         return;
       }
       const message = typeof error.message === "string" ? error.message : "upstream request failed";
-      fail(anthropicFailedStatus(error, message), message, true,
-        error.code === "context_length_exceeded" ? error.code : undefined);
+      const deterministic = error.code === UNDECLARED_TOOL_CALL_ERROR_CODE;
+      fail(anthropicFailedStatus(error, message), message, !deterministic,
+        deterministic || error.code === "context_length_exceeded" ? error.code as string : undefined);
     },
     overflow() {
       fail(413, "upstream translation buffer exceeded the safe limit", false, "translation_buffer_limit");

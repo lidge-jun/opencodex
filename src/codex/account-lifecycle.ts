@@ -1,3 +1,5 @@
+import { observeSignedInCodexIdentity } from "./signed-in-identity";
+import { observeMainCodexCollisionIdentity } from "./collision-identity";
 import { existsSync, readFileSync } from "node:fs";
 import {
   deleteConfigTopLevelKey,
@@ -8,17 +10,21 @@ import {
 import { captureConfigTopLevelRollback } from "../config/rebase-provenance";
 import { removeCodexAccountCredential } from "./account-store";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
-import { getMainChatgptAccountId, readCodexTokensResult } from "./auth-collision";
+import { readMainAuth } from "./auth-collision";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
 import { clearAccountQuota } from "./quota";
-import { clearCodexUpstreamHealthForAccount, clearThreadAccountMapForAccount } from "./routing";
+import { forgetManualPreference } from "./routing/active-account";
+import { deleteAllHealthForAccount } from "./routing/health-store";
+import { forgetCodexFailureWindow } from "./routing/failure-window";
+import { clearThreadAccountMapForAccount } from "./routing/thread-affinity";
 
 import { clearCodexPoolRefreshFailure } from "./pool-refresh-backoff";
 import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
 import { clearMainAccountCredentialPresence, clearMainAccountInfoCache, observeMainQuotaCredential, observeMainQuotaIdentity } from "./main-account-cache";
-import { extractAccountIdClaims } from "../oauth/chatgpt";
+import { extractAccountId, extractAccountIdClaims } from "../oauth/chatgpt";
 import { forgetCodexAccountPause } from "./account-pause";
 import { forgetCodexAccountCreditUse } from "./account-credit-use";
+import { setCodexAccountUseRemainingQuota } from "./account-use-remaining";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
 import { forgetCodexQuotaAutoRefreshAccount } from "./quota-auto-refresh-state";
 import { forgetCodexAccountAutoSwitchThreshold } from "./account-auto-switch";
@@ -45,7 +51,15 @@ export function purgeCodexAccountRuntimeState(accountId: string): void {
   clearAccountNeedsReauth(accountId);
   clearAccountQuota(accountId);
   clearThreadAccountMapForAccount(accountId);
-  clearCodexUpstreamHealthForAccount(accountId);
+  // Deliberately not via `./routing`: the account-delete path only needs the health rows
+  // and their sibling routing state gone, and importing the router barrel here closed a
+  // cycle through routing/health-store and routing/active-account. The leaf imports below
+  // carry every per-account forget that barrel helper used to perform — including the
+  // failure window, whose degrade and pin-warning state must not leak into a replacement
+  // account or a new physical login behind __main__.
+  deleteAllHealthForAccount(accountId);
+  forgetManualPreference(accountId);
+  forgetCodexFailureWindow(accountId);
   clearCodexPoolRefreshFailure(accountId);
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
     clearMainAccountInfoCache();
@@ -66,7 +80,12 @@ function purgeMainCodexAccountRuntimeState(): void {
  * cooldown, quota, reauth, and thread affinity do not leak across accounts.
  */
 export function reconcileMainCodexAccountRuntimeState(): boolean {
-  const currentAccountId = getMainChatgptAccountId();
+  const read = readMainAuth();
+  if (read.status === "missing" || read.status === "api-key-only") observeMainCodexCollisionIdentity();
+  const currentAccountId = read.status === "ok"
+    ? extractAccountId(read.tokens.id_token, read.tokens.access_token) ?? (read.tokens.account_id || null)
+    : null;
+  if (read.status === "ok") observeSignedInCodexIdentity(read.tokens);
   // A missing/malformed auth.json is an unknown identity, not a confirmed account switch. Keep the
   // prior observation and its safety state until a real account id can be read again.
   if (currentAccountId === null) return false;
@@ -74,11 +93,13 @@ export function reconcileMainCodexAccountRuntimeState(): boolean {
   observedMainChatgptAccountId = currentAccountId;
   if (previousAccountId === undefined || previousAccountId === currentAccountId) {
     observeMainQuotaIdentity(currentAccountId);
+    if (read.status === "ok") observeMainCodexCollisionIdentity(read.tokens);
     return false;
   }
 
   purgeMainCodexAccountRuntimeState();
   observeMainQuotaIdentity(currentAccountId);
+  if (read.status === "ok") observeMainCodexCollisionIdentity(read.tokens);
   return true;
 }
 
@@ -91,7 +112,8 @@ export function reconcileMainCodexAccountRuntimeState(): boolean {
 export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   // Startup observes the pinned owned path inside the exclusive claim: bound the read so a
   // replaced non-regular or oversized file cannot stall startup inside that claim.
-  const result = readCodexTokensResult(authPath, { bounded: true });
+  const result = readMainAuth(authPath);
+  if (result.status === "missing" || result.status === "api-key-only") observeMainCodexCollisionIdentity();
   if (result.status !== "ok") return false;
   const { tokens } = result;
   if (typeof tokens.access_token !== "string" || !tokens.access_token
@@ -110,7 +132,9 @@ export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   const previousAccountId = observedMainChatgptAccountId;
   observedMainChatgptAccountId = accountId;
   if (previousAccountId !== undefined && previousAccountId !== accountId) purgeMainCodexAccountRuntimeState();
+  observeSignedInCodexIdentity(tokens);
   observeMainQuotaIdentity(accountId);
+  observeMainCodexCollisionIdentity(tokens);
   return observeMainQuotaCredential(tokens.access_token, accountId) !== undefined;
 }
 
@@ -122,6 +146,8 @@ export function applyConfirmedMainCodexAccountTransition(
   fromAccountId: string,
   toAccountId: string,
 ): boolean {
+  observeSignedInCodexIdentity();
+  observeMainCodexCollisionIdentity();
   if (!fromAccountId || !toAccountId || fromAccountId === toAccountId) {
     if (toAccountId) {
       observedMainChatgptAccountId = toAccountId;
@@ -136,7 +162,9 @@ export function applyConfirmedMainCodexAccountTransition(
 }
 
 export function resetMainCodexAccountIdentityTrackingForTests(): void {
+  observeMainCodexCollisionIdentity();
   observedMainChatgptAccountId = undefined;
+  observeSignedInCodexIdentity();
   clearMainAccountCredentialPresence();
 }
 
@@ -183,6 +211,7 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
     forgetCodexAccountCreditUse(runtimeConfig, accountId);
     forgetCodexAccountPriority(runtimeConfig, accountId);
     forgetCodexAccountAutoSwitchThreshold(runtimeConfig, accountId);
+    setCodexAccountUseRemainingQuota(runtimeConfig, accountId, false);
     if (runtimeConfig.codexQuotaAutoRefresh?.[accountId]) {
       const retained = { ...runtimeConfig.codexQuotaAutoRefresh };
       delete retained[accountId];

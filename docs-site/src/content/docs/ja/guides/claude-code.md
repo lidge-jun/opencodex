@@ -14,6 +14,26 @@ Messages API 経由の Devin ルート（SWE-2 を含む）では、テキスト
 この出力順序の修正は、生成された一部のシステムテキストを Cognition が拒否する別の問題を解決するものではありません。
 システム指示と安全上の制約は保持されます。
 
+## CLIと外部ランチャーのティア既定値
+
+Claude CodeタブでOpus、Sonnet、Haiku、Fableの既定モデルを選択し、**保存**してください。
+`claudeCode.tierModels`は新しい`ocx claude`起動に渡されます。現在の主モデル、推論強度、
+Desktopのモデル系列割り当ては変更しません。
+
+`claude`を直接起動するアプリには`ocx`の環境変数が渡されません。保存後、**Claude設定をプレビュー**で
+`ANTHROPIC_DEFAULT_*_MODEL`の変更を確認し、**Claude設定に適用**を選びます。対象はブラウザーのPCではなく
+OpenCodexホストのClaudeユーザー設定です。反映には新しいClaudeプロセスが必要です。既存セッションは再起動せず、
+ルーティングや認証も設定しないため、直接起動するアプリのOpenCodex接続は事前に設定してください。
+
+明示的に選んだティアのみ適用します。**未指定**は既存のClaude設定を維持し、ネイティブモデルには戻しません。
+ファイルがない場合は作成できますが、既存の空ファイルや壊れたJSONは拒否します。プレビュー後の変更には再プレビューが必要です。
+
+適用は実際のファイルをClaude設定ディレクトリ内の非公開`model-default-backups/apply-*/settings.json`へ一時移動し、
+内容を検証してから、対象が空いている場合のみ新設定を公開します。競合や復元時も他の書き込みを上書きしません。
+ファイルが一時的に存在しないため、適用中は設定の編集やClaude起動を避けてください。同一ボリュームの移動と
+ハードリンクが必要で、失敗時に上書きへ切り替えません。中断や自動復元失敗後はバックアップと新しい編集を照合してください。
+WindowsとLinuxは別々に検証が必要です。実際の提供モデルはリクエストログで確認します。Sonnetを使う外部分類器にも有用です。
+
 ## クイックスタート
 
 ```bash
@@ -146,21 +166,21 @@ unknown は設定がまだ opencodex のプロキシを指すか判断できな�
 
 ### Picker モード: 1P の Code タブで opencodex モデルを表示する
 
-Picker モードは 1P モードの一部です。macOS で 1P を選ぶとデフォルトで有効になりますが、
+Picker モードは 1P モードの一部です。macOS と Windows で 1P を選ぶとデフォルトで有効になりますが、
 `claudeCode.intercept.picker: false` を設定した場合は無効です。1P の Desktop の Code タブにある
 モデルピッカーを書き換え、利用できる opencodex モデルを名前付きで表示します。初回の有効化時は、
-macOS がログインキーチェーン内のローカル証明書認証局を信頼するよう求めることがあります。この認証局の
+macOS がログインキーチェーン内、Windows が現在のユーザーのルートストアでローカル証明書認証局を信頼するよう求めることがあります。この認証局の
 制約は `claude.ai` とそのサブドメインに限られます。エクスポート可能な署名用 ID は OS の資格情報ストアで
 保護され、通常の再起動でも同じ証明書と鍵を再利用します。OpenCodex の設定ディレクトリには Picker の
-署名鍵を平文で保存しません。制約付き CA の完全な検証と OS の信頼確認は引き続き必要です。
-承認済みの同じ ID と利用可能な資格情報ストアがあれば、再起動で証明書の信頼設定を追加・削除しません。
-起動時の復元は信頼をインストールしません。信頼が未設定、取り消し済み、不明の場合は保留となり、
-`ocx claude desktop picker on` または `ocx claude desktop picker trust` を明示的に実行して信頼を付与します。
+署名鍵を平文で保存しません。制約付き CA の完全な検証と OS の信頼確認は引き続き必要です(Windows では正確なフィンガープリントと検証済みリーフで確認します)。
+承認済みの同じ ID と利用可能な資格情報ストアがあれば、再起動で macOS の証明書の信頼設定を追加・削除しません。
+起動時の復元や状態確認は信頼をインストールしません。信頼が未設定、取り消し済み、不明の場合は保留となり、
+`ocx claude desktop picker on` または `ocx claude desktop picker trust` を明示的に実行して信頼を付与します(Windows では確認が表示されることがあります)。
 
 旧 ID からの一度限りの移行では、以前の信頼を削除するために同意が必要になる場合があります。
 削除が完了するまでは Picker は利用できず、適用済みプロファイルは復号しない中継を使います。
 キーチェーンのロック解除やアプリの資格情報へのアクセス許可は macOS 独自の動作で、再起動や更新時にも
-表示される場合があります。Windows と Linux は Picker 非対応で、Picker の CA、資格情報ストア、
+表示される場合があります。Windows では `on` や `trust` の明示的な実行時にルート追加の確認が表示されることがあります。Linux は Picker 非対応で、Picker の CA、資格情報ストア、
 プロキシの処理を開始しません。通常の Claude インターセプトは利用でき、ローカル CA ファイルには
 所有者、シンボリックリンク、ファイル権限、Windows ACL の検査が適用されます。
 
@@ -274,7 +294,7 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 引き続き動作します。古い設定の `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` も
 引き続き解決されますが、保存済みの旧 ID はルーティングされても Claude Code 側では 200k として計算されます。
 保存済みの `claude-ocx-` は `ocx-claude-` に、エスケープ付きの `claude-ocx2-` は `ocx-claude2-` に一度選び直すと、
-実際のコンテキストウィンドウと compact が両方とも適用されます。
+カタログの有効なコンテキストウィンドウと compact が両方とも適用されます。
 
 Claude Desktop のフッターピッカーで実行中の 3P 会話のモデルが切り替わらない場合は、
 `/model <id>` を試せますが、影響を受ける Desktop ビルドではこの回避策も失敗することがあります。
@@ -314,7 +334,9 @@ v2 エイリアスはエスケープを展開します。読みやすい形式�
 
 ### コンテキスト変種 `[1m]` 標識
 
-公式コンテキストウィンドウが 1M、またはデフォルトの圧縮しきい値（829,800）以上のモデルには `…[1m]` ピッカー行がもう一つできます。
+これらの判定にはカタログの有効なウィンドウを使い、[カスタムプロバイダー向けの推定値](/ja/reference/configuration/providers/#カスタムプロバイダーのコンテキスト)が含まれる場合があります。推定値は中継サービスの実際の容量を保証しません。
+
+カタログの有効なコンテキストウィンドウが 1M、またはデフォルトの圧縮しきい値（829,800）以上のモデルには `…[1m]` ピッカー行がもう一つできます。
 この基準は固定で、圧縮値を変えても下がりません。Anthropic 経路の Claude モデルは実際に 1M である必要があります。自動コンテキストをオフにすると
 1M のモデルだけが対象です。実際のウィンドウを超えると `prompt is too long` エラーが返り、Claude Code が自動で圧縮します。この行を選ぶと Claude Code が
 全体 1M コンテキストを計算します。プロキシはエイリアス解決とルーティング前に大文字小文字を区別せず `[1m]`
@@ -325,7 +347,7 @@ v2 エイリアスはエスケープを展開します。読みやすい形式�
 Claude Code は未知モデルのコンテキストを 200k トークンとして計算します。デフォルトでオンの**自動
 コンテキスト**がこの問題を解決します。
 
-1. 起動時の環境スロットには、実際のコンテキストウィンドウが 200k より大きく、設定した自動圧縮しきい値以上のとき
+1. 起動時の環境スロットには、カタログの有効なコンテキストウィンドウが 200k より大きく、設定した自動圧縮しきい値以上のとき
    `[1m]` 標識が付きます。ディスカバリーと Desktop のピッカー行はこのしきい値に従わず、固定の 829,800 トークン下限
    （Anthropic 経路の Claude モデルは実際の 1M）を使います。
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`(デフォルト `829800`、範囲 `100000`–`1000000`)を注入し、該当
@@ -353,7 +375,7 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 長いコンテキストのモデルが起動環境スロット、Desktop ピッカー、Desktop 3P（`prefer1m`）、生成されたサブエージェントで 1M として扱われます。
 `200k` にすると `[1m]` 標識を自動では付けず、`CLAUDE_CODE_AUTO_COMPACT_WINDOW` も注入せず、Desktop 3P は `supports1m` を残して
 `prefer1m` だけを外します。自分で `[1m]` を付けた選択は引き続き使えます（生成されたサブエージェントと強制サブエージェントは、モデルのウィンドウが支えられない標識を引き続き外します）。
-ディスカバリーには実際に 1M のモデルの `· 1M` 行が引き続き表示されます。`200k` は自動コンテキストより優先され、自分で export した圧縮値があっても自動標識は
+ディスカバリーにはカタログのウィンドウが 1M 以上のモデルの `· 1M` 行が引き続き表示されます。`200k` は自動コンテキストより優先され、自分で export した圧縮値があっても自動標識は
 再び有効になりません。その export 値自体は opencodex が変更しません。
 
 ```bash
@@ -515,7 +537,7 @@ Messages → Responses に変換されるリクエストでは、Claude Code の
 | Assistant `tool_use` | `function_call`(`input` → JSON 文字列に変換した `arguments`) |
 | ユーザー `tool_result` | `function_call_output`(`is_error` → `[tool error]` 接頭辞) |
 | `thinking` / `redacted_thinking` 再生 | シグネチャと秘匿ペイロードを境界付き `ocxr1` エンベロープに保持した `reasoning` 項目 |
-| Function ツール | `{type: "function"}`(`web_search*` → `{type: "web_search"}`) |
+| Function ツール | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com` への翻訳ルートでは、型付き `web_search_*` と `web_fetch_*` 宣言も Anthropic に送信され、サーバー側で実行されます。ただし Web 検索サイドカーが `web_search` を提供する場合はそちらが優先されます。検索と取得の結果は `server_tool_use` と対応する `web_search_tool_result` / `web_fetch_tool_result` としてクライアントに返されます |
 | `tool_choice` | `auto`→`auto`、`none`→`none`、`any`→`required`、名前指定関数→`{type:"function",name}`、ホスト型 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -624,7 +646,7 @@ Anthropic バックエンドを明示すると意図的に失敗後停止しま�
 `ANTHROPIC_BASE_URL` が古い値の可能性があります。新規ターミナルを開くか `ocx claude` を再実行してください。
 
 **大型モデルなのにコンテキストが 200k に制限される** — ピッカーで `[1m]` 変種を選ぶか、デフォルトでオンの
-自動コンテキストを使ってください。ピッカーに `[1m]` 行がない場合はモデルの公式コンテキストウィンドウが
+自動コンテキストを使ってください。ピッカーに `[1m]` 行がない場合はカタログ上のモデルの有効なコンテキストウィンドウが
 固定の 829,800 トークン下限より小さい可能性があります。
 
 **スキル呼び出し時のトークン数が多い** — バンドル `claude-api` スキル(約 136k トークン)は Claude モデルに
@@ -645,7 +667,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

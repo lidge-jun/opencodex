@@ -210,6 +210,35 @@ export function removeTestTempTree(path: string, options: RemoveTreeOptions = {}
   }
 }
 
+/**
+ * The same policy, but the waits yield to the event loop.
+ *
+ * The synchronous loop is only correct when the handle holder is another process. When the
+ * holder is async work in THIS process -- an un-awaited quota prime holding a claim database
+ * across an icacls child or a fetch -- `Bun.sleepSync` stops the loop that work needs to reach
+ * its `finally`, so every retry fails until the budget is gone. Awaiting lets the owner finish.
+ */
+export async function removeTestTempTreeAsync(
+  path: string,
+  options: Omit<RemoveTreeOptions, "sleep"> & { sleep?: (milliseconds: number) => Promise<void> } = {},
+): Promise<void> {
+  const delays = options.delays ?? removeRetrySchedule(options.budgetMs);
+  const remove = options.remove ?? (target => rmSync(target, { recursive: true, force: true }));
+  const sleep = options.sleep ?? (milliseconds => Bun.sleep(milliseconds));
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      remove(path);
+      return;
+    } catch (error) {
+      const transient = TRANSIENT_REMOVE_CODES.has(errorCode(error));
+      const finalAttempt = !transient || attempt === delays.length;
+      if (finalAttempt && quarantineFinalEperm(path, error, options.lockDiagnostic, options.lockEnv)) return;
+      if (finalAttempt) throw error;
+      await sleep(delays[attempt]!);
+    }
+  }
+}
+
 /** Stamp a newly created root so future runs can prove its OpenCodex test ownership. */
 export function writeTestTempOwner(root: string, runId?: string): void {
   const owner: TestTempOwner = {
@@ -346,6 +375,6 @@ export function recoverStaleTestTempArtifactsOnce(
 /** Create the contained temp subtree used by every os.tmpdir() call in the child test process. */
 export function createContainedTestTemp(root: string): string {
   const contained = join(root, "tmp");
-  mkdirSync(contained, { recursive: true });
+  mkdirSync(contained, { recursive: true, mode: 0o700 });
   return contained;
 }

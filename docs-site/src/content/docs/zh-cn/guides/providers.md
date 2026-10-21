@@ -92,6 +92,7 @@ ocx login cursor       # 独立的 Cursor PKCE 登录
 ocx login command-code # Command Code 浏览器 OAuth（或导入 ~/.commandcode/auth.json）
 ocx login orcarouter-oauth # OrcaRouter 浏览器授权 + PKCE
 ocx login devin       # Cognition/Devin：优先导入 Devin CLI 凭据，否则走 Auth0 浏览器登录
+ocx login dsh-account # DeepSeek Harness Desktop（导入 ~/.dsh/.credentials.yaml 授权）
 ocx login github-copilot  # GitHub 设备流 → Copilot 令牌（Copilot 账户）
 ocx login codex        # Codex 账号池（别名：chatgpt、openai；需要代理正在运行）
 ocx logout <provider>
@@ -109,6 +110,7 @@ ocx logout <provider>
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 实验性 PKCE 登录、带可选 HTTP/1.1 兼容路径的 HTTP/2 传输，以及按账号筛选的模型发现。 |
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | 浏览器授权与密钥交换走 `https://www.orcarouter.ai` + S256 PKCE。交换结果是用户自己的普通 `sk-orca-…` API key，保存在现有凭据库中并持续复用，直到被撤销。 |
 | `devin` | `devin` | `https://server.codeium.com` | 实验性的非官方 Cognition/Devin 桥接。登录会先导入已安装 Devin CLI 已持有的凭据（`devin auth login` 会把 `devin-session-token` 写入它自己的 `credentials.toml`）；没有则打开 Auth0 浏览器页面，再用 `RegisterUser` 把粘贴的令牌换成长期 API 密钥。`ocx login devin-cli` 仍作为已弃用别名可用。模型列表按账号通过 `GetCascadeModelConfigs` 实时获取，流式仅走 Connect-RPC 上的 `runTurn` 路径。默认不在仪表盘预设中，需要手动启用。 |
+| `dsh-account` | `dsh-account` | `https://api.deepseek.com/anthropic` | 实验性优先导入账户提供商，复用已安装并登录的 DeepSeek Harness (DSH) Desktop 账户。在用户显式导入时严格以只读方式读取 `~/.dsh/.credentials.yaml` 中的凭据。独立于 DeepSeek API Key 计费。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 实验性。GitHub 设备流 + `copilot_internal` 交换（VS Code OAuth 客户端）。需要有效的 Copilot 订阅；不是官方第三方 API。 |
 
 Google Antigravity 账户和提供方的配额查询（包括模型列表回退）使用固定的 Google 计量端点。这些目标支持透明 Fake-IP DNS，同时保留 TLS 验证、重定向拒绝和私有地址检查。自定义 base URL 仅改变模型请求，不改变配额目标；`NO_PROXY` 仍使用直连策略。
@@ -184,9 +186,20 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 由于回滚依赖快照，当会话存储已存在但无法捕获时（文件不可读、架构不匹配、令牌选择有歧义），当 `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` 将导入路径指向与活动 CLI 存储不同的位置时，或当主 CLI 数据库没有可识别的令牌行时，**添加账户**会拒绝将 `kiro-cli` 登出。请修复或删除常规 `kiro-cli` 数据路径下的损坏数据库，并取消仅用于导入的选择器后重试。对于完全没有现有 `kiro-cli` 会话的机器，不受影响。
 
+### DeepSeek Account (DSH)
+
+`dsh-account` 是一个实验性的、优先导入已有凭据的账户提供商，用于复用已安装并登录的 DeepSeek Harness (DSH) Desktop 应用程序的认证凭据。
+
+- **独立于 DeepSeek API Key**：`dsh-account` 使用用户的 DeepSeek 认证会话配额（普通/赠送钱包余额与总消费），而 `deepseek` 提供商按平台的 API Key 余额扣费。这两个凭据体系和路由严格隔离，互不回退。
+- **仅显式导入**：OpenCodeX 会检测是否已安装 DeepSeek Harness 且已登录（`~/.dsh/.credentials.yaml`），但绝不会在没有用户明确操作（`ocx login dsh-account` 或在 Web 仪表盘点击导入）的情况下自动复制、导入或使用该令牌。
+- **对 DSH 凭据库只读**：OpenCodeX 将 `~/.dsh/.credentials.yaml` 视为严格只读。OpenCodeX 绝不写入、修改、删除或更改任何属于 DeepSeek Harness 的文件权限。
+- **隔离的凭据副本与登出**：导入后，OpenCodeX 会通过 DeepSeek 权威身份端点（`/auth-api/v0/users/current`）校验令牌，并在 OpenCodeX 认证库中保存独立副本。在 OpenCodeX 中登出或删除该账户仅会删除 OpenCodeX 本地副本，绝不会触发上游远程会话登出，也不会退出 DeepSeek Harness Desktop。
+- **无后台令牌自动刷新与 401 重新导入**：DSH 会话授权不支持自动后台刷新端点。若上游返回 HTTP 401（`ACCOUNT_TOKEN_INVALID`），OpenCodeX 将该账户标记为 `needsReauth` 并停止路由。要恢复访问，用户必须通过 `ocx login dsh-account` 显式重新导入。
+- **第三方免责声明**：OpenCodeX 不主张 DeepSeek 官方对于第三方客户端复用会话授权提供背书或支持。
+
 ## 3. API 密钥目录
 
-opencodex 内置 104 个预设：85 个密钥预设、15 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 104 个预设：84 个密钥预设、16 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -265,12 +278,13 @@ Bearer 密钥；公开模型列表不能验证密钥有效性。
 MiniMax 和 MiniMax (CN) 的提供商卡片也会在配置的密钥有有效 Coding Plan 时显示用量。
 仪表盘读取 5 小时窗口，以及套餐提供时的每周窗口；这些仅用于展示，不会改变模型路由。
 
-**OpenCode Zen**（`opencode-zen`）与免密钥的 **OpenCode Free** 预设共用
-`https://opencode.ai/zen/v1`。该网关上的免费模型常会触发约每分钟 15–20 次请求的短窗口限流（社区观测；OpenCode 未公布 RPM）。Zen 可能返回不带 `Retry-After` / `X-RateLimit-*` 的通用 429。这与免密钥桌面配额（`opencode-free` 上约每 5 小时 200 次 Big Pickle/免费模型请求）是分开的。当这类 429 省略 `Retry-After` 时，opencodex 会在客户端错误中补充说明并附带合成的 `Retry-After`；若上游已提供 `Retry-After`，则仍以它为准。同密钥等待重试仍可通过 [`retryOn429`](/zh-cn/reference/configuration/) 选择开启。
+**OpenCode Zen**（`opencode-zen`）使用 [opencode.ai/auth](https://opencode.ai/auth) 签发的 API 密钥访问 `https://opencode.ai/zen/v1`。免费模型可能触发每分钟约 15–20 次请求的短窗口限流（社区观测；OpenCode 未公布 RPM）。限流 429 缺少 `Retry-After` 时，opencodex 会添加说明和合成的 `Retry-After`；有效的上游头优先。同密钥重试仍须通过 [`retryOn429`](/zh-cn/reference/configuration/) 启用。
 
-**免密钥的 `opencode-free` 层级目前对第三方客户端关闭。** Zen 会拒绝任何不带 `x-opencode-session` 头的请求，返回错误类型 `MissingSessionID` 和消息 "OpenCode's free tier can only be used in OpenCode"。这道关卡只检查该头是否存在，因此代理完全可以编一个值蒙混过去，但 opencodex 不这么做。伪造会话标识并附上带版本号的 `opencode/<version>` User-Agent，等于声称自己就是 OpenCode 客户端，而 OpenCode 并未公布这一免密钥层级的第三方集成约定；用这种方式换来的 HTTP 200 是绕过了准入检查，而不是获得了许可。因此 opencodex 选择如实报告限制：发往 `opencode-free` 的请求会返回一条解释上游关卡的错误。
+在规范 `opencode-zen` 提供商中，使用 API 密钥认证和官方路由 `https://opencode.ai/zen/v1` 或 `https://opencode.ai/inference/v1` 时，Gemini 会在默认 `googleMode: ai-studio` 下自动使用 Google 原生 API。Zen 模型 ID 保持不变，包括没有 `-tiered` 后缀的 Flash ID。Claude 使用 Anthropic Messages，不受 `googleMode` 影响。加载已保存的配置时，仅忽略这些原生模型符合条件的旧 Chat/Responses 覆盖设置，以及符合条件的 Responses 专用 `image_generation` 托管工具偏好。自定义提供商、非密钥认证路由及其他偏好保持不变。
 
-通往同一批模型的受支持路径，是使用 [opencode.ai/auth](https://opencode.ai/auth) 获取的 OpenCode Zen API 密钥、走带密钥的 **`opencode-zen`** 预设。若 OpenCode 之后公布了免密钥层级的第三方接入方式，opencodex 可以跟进；在此之前，这个预设的作用是记录该限制。上游条款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
+**已移除 `opencode-free` 支持。** OpenCode 的上游免费层级门槛导致所有模型均返回 `403 permission_denied`（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。加载现有配置时，会在内存中禁用相关条目和依赖的模型引用，每个进程仅警告一次，不修改文件。如果它原来是默认提供商，将改用标准 OpenAI OAuth 路径作为默认值。请使用 `opencode-go`、需要密钥的 `opencode-zen` 或其他提供商。[OpenCode Zen 条款](https://opencode.ai/docs/zen/)。
+
+保留正常的 Claude Desktop 分配和默认值。源模型允许列表变空的规则会被禁用；注入模型被移除时，原生子代理同步也会被禁用。后续保存配置时不会恢复已移除的引用，并会保留正常的并发编辑。
 
 大多数使用带 bearer 密钥的 `openai-chat` adapter；**Xiaomi MiMo**（`xiaomi`）等 Anthropic 兼容预设
 使用 `anthropic` adapter（`x-api-key`）。小米还提供 OpenAI Chat 预设 `xiaomi-mimo` 和 token plan 预设

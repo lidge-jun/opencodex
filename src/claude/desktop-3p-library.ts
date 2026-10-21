@@ -1,4 +1,4 @@
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, type BigIntStats } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, type BigIntStats } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { claudeDesktopConfigLibraryDir, resolveConfigLibraryDir } from "./desktop-3p-paths";
@@ -44,6 +44,20 @@ export interface Desktop3pMetadata {
 
 export const DESKTOP_PICKER_ENTRY_NAME = "opencodex-picker";
 
+export const MAX_DESKTOP_PROFILE_FILE_BYTES = 4 * 1024 * 1024;
+
+export function assertDesktopLibraryTextSize(text: string): void {
+  if (Buffer.byteLength(text, "utf8") > MAX_DESKTOP_PROFILE_FILE_BYTES) {
+    throw new Error("desktop_config_too_large");
+  }
+}
+
+export function serializeDesktopLibraryJson(value: unknown): string {
+  const text = JSON.stringify(value, null, 2) + "\n";
+  assertDesktopLibraryTextSize(text);
+  return text;
+}
+
 /** A path that no longer names the observed file was swapped; a same-path failure keeps its own errno. */
 function pathStillNamesExpectedFile(path: string, expected: BigIntStats): boolean {
   try {
@@ -54,7 +68,13 @@ function pathStillNamesExpectedFile(path: string, expected: BigIntStats): boolea
 }
 
 /** Read regular config files only; a path swap must not turn an observation into a FIFO wait. */
-export function readDesktopLibraryBytes(path: string): Buffer {
+export function readDesktopLibraryBytes(
+  path: string,
+  maxBytes: number = MAX_DESKTOP_PROFILE_FILE_BYTES,
+): Buffer {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_DESKTOP_PROFILE_FILE_BYTES) {
+    throw new RangeError("invalid Desktop library read limit");
+  }
   const expected = lstatSync(path, { bigint: true });
   if (!expected.isFile()) throw new Error("desktop_config_not_regular");
   // POSIX open of a FIFO can itself block, before fstat is possible. Windows has no POSIX
@@ -73,7 +93,27 @@ export function readDesktopLibraryBytes(path: string): Buffer {
     const opened = fstatSync(fd, { bigint: true });
     if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino
       || opened.ctimeNs !== expected.ctimeNs) throw new Error("desktop_config_not_regular");
-    return readFileSync(fd);
+    if (opened.size > BigInt(maxBytes)) throw new Error("desktop_config_too_large");
+    // Allocate for the observed size plus one sentinel byte, not the full cap: callers scan many
+    // small profiles, and the cap would zero-fill megabytes per read. A file that fills the
+    // buffer grew after validation — keep reading within the bound so it classifies as
+    // desktop_config_too_large rather than silently truncating.
+    let bytes = Buffer.alloc(Number(opened.size) + 1);
+    let length = 0;
+    for (;;) {
+      const count = readSync(fd, bytes, length, Math.min(64 * 1024, bytes.length - length), null);
+      if (count === 0) break;
+      length += count;
+      if (length > maxBytes) throw new Error("desktop_config_too_large");
+      if (length === bytes.length && bytes.length <= maxBytes) {
+        const grown = Buffer.alloc(Math.min(maxBytes + 1, bytes.length * 2));
+        bytes.copy(grown, 0, 0, length);
+        bytes = grown;
+      }
+    }
+    if (length > maxBytes) throw new Error("desktop_config_too_large");
+    if (!pathStillNamesExpectedFile(path, opened)) throw new Error("desktop_config_not_regular");
+    return bytes.subarray(0, length);
   } finally {
     closeSync(fd);
   }
@@ -84,9 +124,20 @@ export function readDesktopLibraryText(path: string): string {
   return readDesktopLibraryBytes(path).toString("utf8");
 }
 
+/** Only an absent directory entry is optional; dangling links and failed reads still refuse. */
+export function readOptionalDesktopLibraryBytes(path: string): Buffer | undefined {
+  try { return readDesktopLibraryBytes(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+/** Read optional verified metadata; a present file must contain an entries array. */
 export function parseMetadata(path: string): Desktop3pMetadata {
-  if (!existsSync(path)) return { entries: [] };
-  const parsed = JSON.parse(readDesktopLibraryText(path)) as Partial<Desktop3pMetadata>;
+  const bytes = readOptionalDesktopLibraryBytes(path);
+  if (bytes === undefined) return { entries: [] };
+  const parsed = JSON.parse(bytes.toString("utf8")) as Partial<Desktop3pMetadata>;
   if (!Array.isArray(parsed.entries)) throw new Error("Claude Desktop 3P _meta.json has no entries array");
   return { ...parsed, entries: parsed.entries };
 }
@@ -120,11 +171,25 @@ export const OPENCODEX_DESKTOP_PROFILE_KEYS = new Set([
   "inferenceModels",
 ]);
 
-export function readDesktopProfileForeignKeys(path: string): Record<string, unknown> {
-  if (!existsSync(path)) return {};
-  const parsed = JSON.parse(readDesktopLibraryText(path)) as unknown;
+export interface DesktopProfileSnapshot {
+  /** Verified bytes of the existing profile; undefined only when the entry is absent. */
+  bytes?: Buffer;
+  foreign: Record<string, unknown>;
+}
+
+/** Capture verified bytes for key preservation, backup and rollback; publication revalidates them. */
+export function readDesktopProfileSnapshot(path: string): DesktopProfileSnapshot {
+  const bytes = readOptionalDesktopLibraryBytes(path);
+  if (bytes === undefined) return { foreign: {} };
+  const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
   if (!isRecord(parsed)) throw new Error("Claude Desktop 3P profile is not a JSON object");
-  return Object.fromEntries(
+  const foreign = Object.fromEntries(
     Object.entries(parsed).filter(([key]) => !OPENCODEX_DESKTOP_PROFILE_KEYS.has(key)),
   );
+  return { bytes, foreign };
+}
+
+/** Preserve settings outside the gateway-owned keys from a verified profile. */
+export function readDesktopProfileForeignKeys(path: string): Record<string, unknown> {
+  return readDesktopProfileSnapshot(path).foreign;
 }

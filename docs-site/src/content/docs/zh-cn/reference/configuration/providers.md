@@ -5,6 +5,12 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 
 提供者用于告诉 opencodex 模型位于哪里、使用哪种线协议适配器，以及请求如何进行身份验证。
 
+## 自定义渠道的上下文窗口
+
+自定义渠道未报告或配置模型窗口时，OpenCodex 依次使用 Azure 元数据、按模型 ID 查询的内置厂商/聚合元数据、已启用的 Context cap，最后回退到 128k。已有发现值与配置值取较小者，Context cap 仍会向下限制窗口，内置渠道行为不变。精确 ID 优先，大小写或点号/短横线变体仅在无冲突时匹配；未知或浮动别名不猜测。推断会影响 Codex 压缩预算和其他客户端目录（含 Claude 长上下文选择），但不作为中转实测能力供路由使用。同名模型不保证中转支持官方窗口；请用 modelContextWindows 或 Context cap 设置中转实际上限。不会自动开启 cap，也不会调用模型探测。OpenAI API 窗口不代表 Codex 订阅窗口。
+
+该推断默认关闭，需要按渠道设置 `inferContextWindow: true` 开启。未开启时，缺少窗口的模型使用已启用的 Context cap，否则回退到 128k。
+
 ## 首次注册时的模型选择
 
 新的非 OAuth 连接会等待可靠的模型列表，再公开模型。如果 Models 标签页中去重后的模型行达到20个，所有模型开关初始为 OFF，但提供者本身保持 ACTIVE。实际认证方式为 OAuth 或 ChatGPT 登录的连接保留默认设置。
@@ -47,7 +53,7 @@ ocx models provider openrouter on
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 可选：同一账号和线程的 Codex WebSocket 跨回合复用。开启后忙套接字最多等待 750ms，模型或服务层级变化时最多保留 2 个套接字，回合状态头只出现在每条消息上。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | 原生 OpenAI forward Responses 与 compact 发送的可选断路器阈值，仅统计已证明的连接前 DNS/TCP 故障。`0` 表示禁用；`1`–`20` 表示在这么多个终止逻辑请求失败后，对 provider-origin 冷却 30 秒。断路期间会在账户选择和上游发送之前返回带 `Retry-After` 的 `503`；冷却结束后只允许一个半开请求。超时和 HTTP 响应不计数，任意 HTTP 响应都会关闭断路器。 仅适用于未固定账户的 Codex Pool 路由；在 `codexAccountMode: "direct"` 或使用账户限定选择器时不会启用。 |
 | `modelCacheTtlMs?` | `number` | `300000` | 每个提供者 `/models` 缓存的新鲜度窗口。 |
-| `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。 |
+| `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic 官方端点：`"long"`；其他 Anthropic 兼容端点：`"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。未设置时，发往 `api.anthropic.com`（API 密钥或 OAuth 账号池）的请求使用 1 小时 TTL，兼容网关和厂商端点保持 5 分钟 TTL。显式设置的值始终优先。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 关闭 | 可选的主动 OAuth 刷新与 Codex 账户预热策略。 |
 
 这些策略均使用各账户的有效阈值：存在 `codexAccountAutoSwitchThresholds` 条目时使用该值，否则继承全局 `autoSwitchThreshold`。覆盖值为 0 仅关闭基于用量的主动切换；启动绑定、硬锁、冷却、模型使用资格检查和故障恢复仍然生效。
@@ -83,9 +89,12 @@ selector，而不是分配一个新名称。
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`ollama-native`、`azure-openai`（或别名 `azure`）之一。 |
 | `baseUrl` | `string` | 上游 API 基础 URL。大多数内置固定端点会忽略不匹配的值；具备冲突安全键的预设会保留一个更早、同名的自定义目标。 |
-| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models? }` | 可选的客户端出站请求启动节流，与上游用量、计费和限流指标相互独立。`maxConcurrentRequests` 是限制进行中请求数的正整数，提供商或模型规则都可以只配置此项。提供商限制适用于所有模型，`models` 按上游模型精确 ID 匹配，并可增加延迟或收紧并发限制。排队等待不计入响应头超时。覆盖 HTTP 以及显式适配器 `fetchResponse`/`runTurn` 调用。配置并发上限时，标准 Responses WebSocket 请求改用 HTTP/SSE，以便在响应体完成、出错或取消时释放并发名额。 对包括 Cursor 在内的 `runTurn` 适配器，并发上限计算进行中的回合数，而非物理发送数：同一回合内的 RunSSE 和 BidiAppend 可以重叠，其他回合仍须等待。后续发送仍遵守启动间隔。 |
+| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models?, keySelection?, keys? }` | 可选的客户端出站请求启动节流，与上游用量、计费和限流指标相互独立。`maxConcurrentRequests` 是限制进行中请求数的正整数，提供商或模型规则都可以只配置此项。提供商限制适用于所有模型，`models` 按上游模型精确 ID 匹配，并可增加延迟或收紧并发限制。排队等待不计入响应头超时。覆盖 HTTP 以及显式适配器 `fetchResponse`/`runTurn` 调用。配置并发上限时，标准 Responses WebSocket 请求改用 HTTP/SSE，以便在响应体完成、出错或取消时释放并发名额。 对包括 Cursor 在内的 `runTurn` 适配器，并发上限计算进行中的回合数，而非物理发送数：同一回合内的 RunSSE 和 BidiAppend 可以重叠，其他回合仍须等待。后续发送仍遵守启动间隔。 |
+| `requestPacing.keySelection?` | `"active"`, `"round-robin"` | 正常请求的密钥选择：默认 `active` 保留已保存密钥和现有错误切换；`round-robin` 按顺序分配可用池密钥，不修改已保存的选择。均衡的是分配次数，不是令牌或费用。 |
+| `requestPacing.keys?` | `{ requestsPerMinute?, minIntervalMs?, maxConcurrentRequests? }` | 按密钥引用设置统一 RPM、最小启动间隔和并发上限，跨模型共享，并同时受提供商和模型上限约束。相同引用共享容量；同一上游项目的不同引用不代表独立配额。不管理 TPM 或每日配额。 |
 | `responsesPath?` | `string` | 用于 key-auth `openai-responses` 请求的相对资源路径。必须以 `/` 开头，且不能包含 scheme、query 或 fragment。 |
 | `chatCompletionsPath?` | `string` | 用于 `openai-chat` 请求的相对资源路径，是 `responsesPath` 的对应项，适用相同的路径规则。当同一上游以不同前缀提供 Chat Completions 和 Responses 时需要此配置：按模型的 wire override 只更换适配器而不改动 `baseUrl`，否则已启用的 Chat 请求会被发送到 Responses base。随附示例为 Z.AI。 |
+| `projectResponsesLiteHostedSearchHistory?` | `boolean` | 默认关闭。仅实际布尔值 `true` 可为此 provider 显式启用有损 hosted-search 历史投影，且只作用于最终目的地精确为标准 ChatGPT Codex `/responses`、明确选择 Responses Lite 的普通请求及原生 v2 `compaction_trigger` 压缩请求。省略或设为 `false` 时保留结构化历史；字符串和数字无效。不会启用 Lite、改变传输，也不影响原生 v1 `/responses/compact`、公开 OpenAI API／其他目的地或既有 portable/routed compaction 投影。详见[Lite 搜索历史](/zh-cn/reference/proxy-formats/#codex-原生普通-lite-请求的搜索历史)。 |
 | `upstreamWebsocket?` | `boolean` | 为 `openai-responses` 请求选择性启用上游 Responses WebSocket 传输（默认 `false`）。仅对第一方 `https://api.openai.com/v1` 上游生效；自定义提供者端点始终使用有界 HTTP/SSE，因为 Bun 无法在分配完整消息之前对入站 WebSocket 消息实施大小限制。对于规范 ChatGPT `openai` 提供商，省略该字段会在符合条件的轮次使用上游 WebSocket，`false` 通过 HTTP/SSE 发送流式轮次，`true` 会被拒绝；设为 `false` 时，原生轮次中操控与注入不可用。该字段独立于客户端侧的 `websockets` 设置，且不改变端点或凭据。普通 HTTP 仍使用 SSE；非 Responses 路径和 `openai-chat` 请求仍使用 HTTP。 |
 | `supportsServiceTier?` | `boolean` | `service_tier` 能力的三态。`true`：fast 模式可以注入，调用方提供的值也会被保留。`false`：剥离该字段且绝不注入（已明确不支持的上游不会收到它）。未设置：未分类——调用方提供的值原样保留，fast 模式绝不注入。注册表已对官方 OpenAI（`true`）、DeepSeek 和 Volcengine Ark（`false`）分类；仅对真正支持分层的自定义网关显式设置。 |
 | `responseTierAuthoritative?` | `boolean` | 响应等级是否足以确认或否定 Fast。对响应元数据不具权威性的链路显式设为 `false`；未设置时保持原有行为。不会启用 Fast 或修改出站参数。详见[响应服务等级的可信度](#响应服务等级的可信度)。 |
@@ -101,12 +110,13 @@ selector，而不是分配一个新名称。
 | `modelDisplayNames?` | `Record<string, string>` | 持久的仅显示名称，以此提供者的精确原生模型 id 为键。键区分大小写。名称优先于提供者目录元数据，并且不会改变身份验证、适配器、路由、计费或上游请求。该映射最多可包含 2,000 个条目，与发现上限相同。 |
 | `contextWindow?` | `number` | 上游缺少元数据时使用的提供者级上下文数值；有元数据时作为上限，保留更小的实时数值。Models 面板中与 `providerContextCaps` 分开设置。 |
 | `modelContextWindows?` | `Record<string, number>` | 按模型设置的上下文数值与上限。优先于 `contextWindow`：窗口未知时采用所配置的数值，而更小的实时元数据仍然优先。 |
+| `inferContextWindow?` | `boolean` | 仅限自定义渠道，默认关闭。设为 `true` 时用内置模型元数据补全缺失窗口；这是估计值，不代表中转的实测容量。 |
 | `modelInputModalities?` | `Record<string, string[]>` | 按模型设置的输入提示，例如 `["text"]` 或 `["text", "image"]`。 |
 | `modelMaxInputTokens?` | `Record<string, number>` | 正数型、按模型设置的最大输入限制，用于目录自动压缩提示。 |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | 按模型设置的正安全整数软自动压缩预算。该值只能降低“上下文或最大输入的 90%”这一有效上限；没有已知的权威上下文窗口时不会输出。对于规范 `openai`，键必须是受支持的精确原生模型 ID，且不得包含提供者或账户选择器前缀。提供者 PATCH 会合并条目；将某个键设为 `null` 会删除该键，将整个字段设为 `null` 会清空映射。这些 `null` 删除标记仅适用于 PATCH。 |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | 按模型设置的正安全整数软自动压缩预算。该值只能降低“上下文或最大输入的 90%”这一有效上限；无法解析出有效上下文窗口时不会输出。对于规范 `openai`，键必须是受支持的精确原生模型 ID，且不得包含提供者或账户选择器前缀。提供者 PATCH 会合并条目；将某个键设为 `null` 会删除该键，将整个字段设为 `null` 会清空映射。这些 `null` 删除标记仅适用于 PATCH。 |
 | `defaultMaxOutputTokens?` | `number` | 当客户端省略 `max_output_tokens` 时，`openai-chat` 的提供者级回退值。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` | 正数型、按模型设置的 `openai-chat` 回退预算；精确/模式匹配优先于提供者默认值。 |
-| `modelCosts?` | `Record<string, Cost4>` | 按模型设置的显示价格（每 100 万 token 的美元数），以该提供者的精确上游模型 ID 为键（不是提供者标识符或路由后的 `provider/model` 标签），值为四个字段：`input`、`output`、`cacheRead`、`cacheWrite`（示例：`{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`）。任何模型 ID 都是有效键——自定义提供者可以通过 `openai-chat` 适配器指向任意 OpenAI 兼容端点，即使不存在于内置目录中，本地 OpenAI 兼容和内部提供者的 ID 同样有效。用户配置的价格在 Logs 的 `~$` 和 Usage 估算中优先于内置目录；历史条目也会按当前覆盖项重新计价，因此修改价格可能改变过去的总额（回退顺序：用户配置 → jawcode 目录 → expected-price 覆盖 → 模型级厂商价格）；用户明确将所有费率设为零时，会得到已知的零费用估算；删除该模型的覆盖项即可恢复自动定价。目录中的全零价格仍会回退到下一个来源。每个费率必须是大于等于 0 的有限数字，且不超过 1,000,000（每 100 万 token 的美元数）；超出范围的条目会在管理边界被拒绝，并在加载时被丢弃。仅用于显示的估算：覆盖项不影响路由、账户选择、配额或计费。 |
+| `modelCosts?` | `Record<string, ProviderCostOverlay>` | 按模型设置的显示价格（每 100 万 token 的美元数），以该提供者的精确上游模型 ID 为键（不是提供者标识符或路由后的 `provider/model` 标签），值为四个字段：`input`、`output`、`cacheRead`、`cacheWrite`（示例：`{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`）。任何模型 ID 都是有效键——自定义提供者可以通过 `openai-chat` 适配器指向任意 OpenAI 兼容端点，即使不存在于内置目录中，本地 OpenAI 兼容和内部提供者的 ID 同样有效。用户配置的价格在 Logs 的 `~$` 和 Usage 估算中优先于内置目录；历史条目也会按当前覆盖项重新计价，因此修改价格可能改变过去的总额（回退顺序：用户配置 → jawcode 目录 → expected-price 覆盖 → 模型级厂商价格）；用户明确将所有费率设为零时，会得到已知的零费用估算；删除该模型的覆盖项即可恢复自动定价。目录中的全零价格仍会回退到下一个来源。每个费率必须是大于等于 0 的有限数字，且不超过 1,000,000（每 100 万 token 的美元数）；超出范围的条目会在管理边界被拒绝，并在加载时被丢弃。仅用于显示的估算：覆盖项不影响路由、账户选择、配额或计费。 |
 | `headers?` | `Record<string, string>` | 额外的上游请求头。会拒绝 Authorization、cookie、API key 头、嵌入换行符以及无效名称。 |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | 默认的 OpenRouter `order`、`only` 和 `allowFallbacks` 偏好；仅对使用 `openai-chat` 的规范 OpenRouter 有效。 |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | 精确模型 id 级别的覆盖项，会替换提供者级 OpenRouter 偏好。 |
@@ -132,7 +142,7 @@ selector，而不是分配一个新名称。
 | `noStopModels?` | `string[]` | 会拒绝调用方指定 `stop` 的模型。`openai-chat` 适配器、Chat 直通和 Responses 直通会为这些模型省略该字段。内置 `xai` 预设在此列出 xAI 文档说明会拒绝该参数的推理模型(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)；`grok-4.20-0309-non-reasoning`, `grok-composer-2.5-fast` 保留调用方的 `stop`。 |
 | `noPenaltyModels?` | `string[]` | 会拒绝 presence/frequency penalty 的模型。 内置 `xai` 预设在此列出 xAI 文档说明会拒绝这些参数的推理模型(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)；非推理模型保留调用方的 penalty。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` 端点拒绝 `response_format` 的精确模型 ID。仅当请求模型与条目完全匹配时才省略该字段；其他 `openai-chat` 模型仍启用 structured-output 转换。 |
-| `noJsonSchemaModels?` | `string[]` | `openai-chat` 端点拒绝 `json_schema` 形式但仍接受 `json_object` 的精确模型 ID。这类请求会降级为 `json_object` 而不是被丢弃，因此请求 JSON 的调用方仍能拿到 JSON。同一模型同时出现在两个列表时，以 `noStructuredOutputModels` 为准。`opencode go`、`opencode zen`、`opencode free` 预设已为其 DeepSeek 路由内置该项。 |
+| `noJsonSchemaModels?` | `string[]` | `openai-chat` 端点拒绝 `json_schema` 形式但仍接受 `json_object` 的精确模型 ID。这类请求会降级为 `json_object` 而不是被丢弃，因此请求 JSON 的调用方仍能拿到 JSON。同一模型同时出现在两个列表时，以 `noStructuredOutputModels` 为准。`opencode go`、`opencode zen` 预设已为其 DeepSeek 路由内置该项。 |
 | `foldDeveloperRoleToSystem?` | `boolean` | 记录某个 `openai-chat` 目的地是否接受 `developer` 角色。`foldDeveloperRoleToSystem` 未设置时按 `system` 发送，`true` 时按 `system` 发送，`false` 时按 `developer` 发送。未设置表示尚未记录该目的地的情况；`true` 记录上游拒绝该角色；`false` 记录其接受该角色。无论哪种情况，消息都保留在对话中的原有位置，只有角色改变。拒绝该角色的目的地会返回 `400 role 'developer' is not allowed`，这一轮根本无法开始，这就是未记录状态默认折叠的原因。 |
 | `parallelToolCalls?` | `boolean` | 切换并行工具调用。OpenAI Chat 默认开启；非 chat 适配器只有显式 `true` 时才会声明支持。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | 默认关闭的下游 SSE 修复，用于精确占位 id、缺失的终止 id，以及（`repairInvalidIds`）缺少规范 `msg_`/`rs_` 前缀的 message/reasoning id。function-call id 永远不会被重写。内置 DeepSeek 默认启用后两项。 |
@@ -151,8 +161,8 @@ selector，而不是分配一个新名称。
 | `anthropicEofTolerance?` | `boolean` | 允许 Anthropic 兼容网关在 `message_stop` 前结束流，仅当已收到可见文本或完整的 JSON 对象工具输入时。默认关闭。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google 传输/身份验证模式。默认 `ai-studio`。 |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | 仅限 Google。省略或设为 `compatible` 时保留兼容架构和现有的非直连 400 修复。`reject-lossy` 会在发送前拒绝初始损失或结果不确定的有界比较，并阻止会放宽约束的 Vertex 或 Cloud Code Assist 修复。直连 AI Studio 从不执行该修复。 |
-| `project?` | `string` | Vertex 或 Antigravity Cloud Code Assist 项目 id。 |
-| `location?` | `string` | Vertex 位置；环境变量回退为 `GOOGLE_CLOUD_LOCATION`。 |
+| `project?` | `string` | Vertex 或 Antigravity Cloud Code Assist 项目 id。设置后，Vertex API 密钥使用项目端点；未设置时，即使存在 `GOOGLE_CLOUD_PROJECT` 也使用 express 模式。ADC 回退到 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`。 |
+| `location?` | `string` | Vertex 位置。API 密钥的项目端点默认使用 `global`，并忽略 `GOOGLE_CLOUD_LOCATION`；ADC 需要此字段或 `GOOGLE_CLOUD_LOCATION` 回退。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | 仅 Cursor：stdio 或 Streamable HTTP MCP 服务器。 |
 | `desktopExecutor?` | `DesktopExecutorConfig` | 仅 Cursor：外部 computer-use 和录屏命令。 |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 旧布尔值；仅当更新字段未设置时，等同于 `nativeLocalExec: "on"`。 |
@@ -580,3 +590,8 @@ Vercel AI Gateway 可以在多个底层推理提供者之间路由一个模型�
 ### `anthropicAccountPool.routes`
 
 `anthropicAccountPool.routes` 将模型绑定到已保存的 Anthropic OAuth 账户 ID。启用账户池后，区分大小写的 `match` 通配模式按顺序取第一个匹配规则，限制首次选择和 429 重试。仅当该规则没有可用账户时，`fallback: true` 才回退到普通账户池。
+
+
+### `promptLengthPricing`
+
+可选字段 `promptLengthPricing` 扩展四项基础费率。`mode: "automatic"`（或省略该字段）保留目录的上下文计价规则；`mode: "flat"` 禁用这些规则。`mode: "custom"` 使用正安全整数 `thresholdTokens`、值为 `"gt"`（>）或 `"gte"`（≥）的 `comparison`，以及包含四项绝对替代费率的 `rates`。阈值统计所有提示词 token，包括缓存读取和写入，不包括输出。选中的费率适用于包括输出在内的整个请求，并在阈值两侧都取代目录上下文规则。Fast/Priority 调整在选定费率后只应用一次，并遵循目录为该模型公布的 Priority 关系；仅当目录将该关系声明为 `lower-bound`（目前为 xAI Grok）时，估算才会标记为下限；没有目录规则的模型只应用一次 Priority 倍率。可在 **Models → Price** 中配置。**Reset to automatic** 删除包括基础费率和规则在内的整个覆盖配置。旧配置保持兼容；这些设置只涉及显示的费用估算。

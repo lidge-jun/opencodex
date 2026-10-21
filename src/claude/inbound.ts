@@ -21,10 +21,16 @@ import { stabilizeClaudeInstructionsForPromptCache } from "./inbound-cache-stabi
 import { decodeReasoningEnvelope, encodeReasoningEnvelope, OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { inlineDocumentMarker } from "../responses/inline-document";
 import { createTranslatorBudget, type TranslatorBudget } from "../lib/translator-budget";
+import { collectAnthropicCacheTtls } from "../adapters/anthropic/cache-retention";
 
 
 
-function imageBlockToInputImage(block: Rec): Rec | null {
+/**
+ * The reference an Anthropic image block carries, as the Responses `image_url` string the bridge
+ * builds from it, or `null` for a source this route does not read. A file-backed source refuses.
+ * Shared with the direct Messages decoder (`src/protocols/codecs/messages-ir.ts`).
+ */
+export function anthropicImageBlockUrl(block: Rec): string | null {
   const source = block.source;
   if (!isRec(source)) return null;
   if (source.type === "file") {
@@ -34,20 +40,25 @@ function imageBlockToInputImage(block: Rec): Rec | null {
   }
   if (source.type === "base64" && typeof source.data === "string") {
     const media = typeof source.media_type === "string" ? source.media_type : "image/png";
-    return { type: "input_image", image_url: `data:${media};base64,${source.data}` };
+    return `data:${media};base64,${source.data}`;
   }
   if (source.type === "url" && typeof source.url === "string") {
-    return { type: "input_image", image_url: source.url };
+    return source.url;
   }
   return null;
 }
 
-function documentTitle(block: Rec): string | undefined {
+function imageBlockToInputImage(block: Rec): Rec | null {
+  const url = anthropicImageBlockUrl(block);
+  return url === null ? null : { type: "input_image", image_url: url };
+}
+
+export function documentTitle(block: Rec): string | undefined {
   return typeof block.title === "string" && block.title.length > 0 ? block.title : undefined;
 }
 
-/** An Anthropic base64 document as the Responses `input_file` block that carries its bytes. */
-function documentBlockToInputFile(block: Rec): Rec | null {
+/** A base64 document's bytes as a `data:` URL plus its title, or `null` for any other source. */
+export function anthropicDocumentData(block: Rec): { fileData: string; title?: string } | null {
   const source = block.source;
   if (!isRec(source) || source.type !== "base64") return null;
   const mediaType = typeof source.media_type === "string" && source.media_type.length > 0
@@ -55,10 +66,17 @@ function documentBlockToInputFile(block: Rec): Rec | null {
     : "application/octet-stream";
   if (typeof source.data !== "string" || source.data.length === 0) return null;
   const title = documentTitle(block);
+  return { fileData: `data:${mediaType};base64,${source.data}`, ...(title !== undefined ? { title } : {}) };
+}
+
+/** An Anthropic base64 document as the Responses `input_file` block that carries its bytes. */
+function documentBlockToInputFile(block: Rec): Rec | null {
+  const document = anthropicDocumentData(block);
+  if (!document) return null;
   return {
     type: "input_file",
-    file_data: `data:${mediaType};base64,${source.data}`,
-    ...(title !== undefined ? { filename: title } : {}),
+    file_data: document.fileData,
+    ...(document.title !== undefined ? { filename: document.title } : {}),
   };
 }
 
@@ -145,7 +163,7 @@ const NO_ELISION: SkillElisionContext = { callIds: new Set(), names: [] };
  * `Base directory for this skill: <dir>/<skill-name>`. Stub that block when the
  * directory basename matches a blocked skill.
  */
-function maybeElideSkillText(text: string, names: readonly string[]): string {
+export function maybeElideSkillText(text: string, names: readonly string[]): string {
   if (names.length === 0 || text.length < SKILL_ELISION_MIN_CHARS) return text;
   if (!text.startsWith(SKILL_TEXT_MARKER)) return text;
   const pathStart = SKILL_TEXT_MARKER.length;
@@ -162,14 +180,14 @@ function maybeElideSkillText(text: string, names: readonly string[]): string {
     + "(claudeCode.blockedSkills). The skill is loaded; answer from general knowledge instead of citing the bundle.";
 }
 
-function skillElisionStub(callId: string): string {
+export function skillElisionStub(callId: string): string {
   return "[opencodex] Skill document bundle elided for routed models (claudeCode.blockedSkills). "
     + `The skill loaded, but its reference documents were removed to save context (call ${callId}). `
     + "Answer from general knowledge instead of citing the bundle.";
 }
 
 /** Collect Skill-tool call ids whose input names a blocked skill. */
-function blockedSkillCallIds(messages: readonly unknown[], blocked: readonly string[]): Set<string> {
+export function blockedSkillCallIds(messages: readonly unknown[], blocked: readonly string[]): Set<string> {
   const ids = new Set<string>();
   if (blocked.length === 0) return ids;
   const needles = blocked.map(name => name.toLowerCase()).filter(name => name.length > 0);
@@ -222,7 +240,7 @@ export function anthropicBodyElidesBlockedSkill(body: unknown, cc?: Pick<OcxClau
  * prefix and rotating the Desktop `prompt_cache_key` fallback below on every turn
  * (#4148).
  */
-function systemMessageText(content: unknown): string {
+export function systemMessageText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   const parts: string[] = [];
@@ -370,6 +388,24 @@ function canonicalJson(value: unknown): string {
 /** Provenance of the generated prompt_cache_key (never serialized into the wire body). */
 export type ClaudeCacheKeySource = "metadata" | "system" | null;
 
+/**
+ * The translated lane places its own prompt-cache breakpoints, so the caller's are dropped;
+ * their TTL is the one thing worth keeping. When every caller breakpoint asks for `ttl: "1h"`
+ * (Claude Code on a subscription marks them so) this maps to `cacheRetention: "long"`. A caller
+ * that pins any breakpoint to an explicit non-1h TTL ("5m") maps to "short": "long" would also
+ * make the moving per-turn breakpoint 1h and bill writes the caller asked to keep at 5m at the
+ * 1h rate. Breakpoints without a TTL express no preference, so they fall through to the
+ * destination default (1h on first-party Anthropic). Read out of body: the Responses body has
+ * no field for it.
+ */
+export function callerCacheRetention(raw: unknown): "long" | "short" | undefined {
+  // Top-level automatic caching is a breakpoint too, and content blocks nest (tool_result,
+  // search_result, document sources), so every block container is walked.
+  const ttls = collectAnthropicCacheTtls(raw);
+  if (ttls.some(ttl => ttl !== undefined && ttl !== "1h")) return "short";
+  return ttls.length > 0 && ttls.every(ttl => ttl === "1h") ? "long" : undefined;
+}
+
 export interface ClaudeInboundTranslation {
   body: Rec;
   cacheKeySource: ClaudeCacheKeySource;
@@ -410,19 +446,10 @@ function translateAnthropicRequest(
   cc: OcxClaudeCodeConfig | undefined,
   budget: TranslatorBudget,
 ): ClaudeInboundTranslation {
-  if (!isRec(raw)) throw new AnthropicRequestError("request body must be a JSON object");
-  if (typeof raw.model !== "string" || raw.model.length === 0) {
-    throw new AnthropicRequestError("model is required");
-  }
-  if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
-    throw new AnthropicRequestError("messages must be a non-empty array");
-  }
+  assertAnthropicRequestShape(raw);
 
   const input: Rec[] = [];
   const nativeReasoningReplay = new Map<string, string>();
-  const systemParts: string[] = [];
-  const topLevelSystem = systemToInstructions(raw.system);
-  if (topLevelSystem !== undefined) systemParts.push(topLevelSystem);
   const blockedNames = effectiveBlockedSkillNames(cc);
   const elide: SkillElisionContext = {
     callIds: blockedSkillCallIds(raw.messages, blockedNames),
@@ -451,36 +478,99 @@ function translateAnthropicRequest(
     stream: raw.stream === true,
   };
 
-  const joinedSystem = systemParts.length > 0 ? systemParts.join("\n\n") : "";
-  const stabilizePromptCache = cc?.stabilizePromptCache === true;
-  // Desktop fallback hashes raw systemParts unless the caller opted into
-  // harness cleanup. Opt-in then hashes the same string as body.instructions.
-  let cacheSystem: string | string[] = systemParts;
-  if (joinedSystem) {
-    if (stabilizePromptCache) {
-      // Claude Code appends growing <total_tokens>N tokens left</total_tokens>
-      // footers (and occasional TaskCreate nudges) into system text. That churn
-      // breaks Muse/Go prefix cache on the Responses instructions prefix even
-      // when tools stay stable. Relocation is caller-opted, not inferred from
-      // a matching suffix or metadata.user_id.
-      const stabilized = stabilizeClaudeInstructionsForPromptCache(joinedSystem);
-      if (stabilized.instructions) body.instructions = stabilized.instructions;
-      // Token footers are dropped; append nothing if no other notice remains.
-      if (stabilized.dynamicNotice) {
-        input.push({
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: stabilized.dynamicNotice }],
-        });
-      }
-      cacheSystem = stabilized.instructions;
-    } else {
-      body.instructions = joinedSystem;
-    }
+  const system = anthropicSystemLayout(raw.system, cc);
+  if (system.instructions !== undefined) body.instructions = system.instructions;
+  if (system.dynamicNotice !== undefined) {
+    input.push({
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: system.dynamicNotice }],
+    });
   }
 
   const tools = toolsToResponses(raw.tools);
   if (tools) body.tools = tools;
+  const cacheKeySource = applyAnthropicSettings(raw, body, system.cacheSystem, tools);
+  return { body, cacheKeySource, nativeReasoningReplay };
+}
+
+function assertAnthropicRequestShape(raw: unknown): asserts raw is Rec & { model: string; messages: unknown[] } {
+  if (!isRec(raw)) throw new AnthropicRequestError("request body must be a JSON object");
+  if (typeof raw.model !== "string" || raw.model.length === 0) {
+    throw new AnthropicRequestError("model is required");
+  }
+  if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
+    throw new AnthropicRequestError("messages must be a non-empty array");
+  }
+}
+
+/** Where the top-level `system` lands on the bridge body, and what the cache-cohort key hashes. */
+export interface AnthropicSystemLayout {
+  /** The Responses `instructions`, when there are any. */
+  instructions?: string;
+  /** A dynamic notice `stabilizePromptCache` moved out of the system text into a trailing user turn. */
+  dynamicNotice?: string;
+  cacheSystem: string | string[];
+}
+
+/** The system text placement `claudeCode.stabilizePromptCache` decides; shared with the direct decoder. */
+export function anthropicSystemLayout(system: unknown, cc: OcxClaudeCodeConfig | undefined): AnthropicSystemLayout {
+  const systemParts: string[] = [];
+  const topLevelSystem = systemToInstructions(system);
+  if (topLevelSystem !== undefined) systemParts.push(topLevelSystem);
+  const joinedSystem = systemParts.length > 0 ? systemParts.join("\n\n") : "";
+  const stabilizePromptCache = cc?.stabilizePromptCache === true;
+  // Desktop fallback hashes raw systemParts unless the caller opted into
+  // harness cleanup. Opt-in then hashes the same string as body.instructions.
+  if (!joinedSystem) return { cacheSystem: systemParts };
+  if (!stabilizePromptCache) return { instructions: joinedSystem, cacheSystem: systemParts };
+  // Claude Code appends growing <total_tokens>N tokens left</total_tokens>
+  // footers (and occasional TaskCreate nudges) into system text. That churn
+  // breaks Muse/Go prefix cache on the Responses instructions prefix even
+  // when tools stay stable. Relocation is caller-opted, not inferred from
+  // a matching suffix or metadata.user_id.
+  const stabilized = stabilizeClaudeInstructionsForPromptCache(joinedSystem);
+  return {
+    ...(stabilized.instructions ? { instructions: stabilized.instructions } : {}),
+    // Token footers are dropped; append nothing if no other notice remains.
+    ...(stabilized.dynamicNotice ? { dynamicNotice: stabilized.dynamicNotice } : {}),
+    cacheSystem: stabilized.instructions,
+  };
+}
+
+/**
+ * The request settings of a Messages body as a Responses body with no conversation: `input` is
+ * empty and there are no `instructions` or `tools`, but the prompt-cache key is still derived
+ * from the system text and translated tool catalog exactly as the bridge derives it. The
+ * Antigravity direct lane hands this to the Responses core while the conversation is decoded
+ * straight into the IR (`src/protocols/codecs/messages-ir.ts`); both bodies are completed by
+ * `applyAnthropicSettings`. It validates the same request shape, but a conversation error the
+ * bridge would report first is not looked for here: a caller that gets a throw must translate
+ * the full body to learn the bridge's answer.
+ */
+export function anthropicSettingsTranslation(
+  raw: unknown,
+  cc?: OcxClaudeCodeConfig,
+): { body: Rec; cacheKeySource: ClaudeCacheKeySource } {
+  assertAnthropicRequestShape(raw);
+  const body: Rec = {
+    model: resolveInboundModel(raw.model, cc),
+    input: [],
+    store: false,
+    stream: raw.stream === true,
+  };
+  const system = anthropicSystemLayout(raw.system, cc);
+  const cacheKeySource = applyAnthropicSettings(raw, body, system.cacheSystem, toolsToResponses(raw.tools));
+  return { body, cacheKeySource };
+}
+
+/** Everything after the conversation and tool catalog: choice, limits, format, cache key, reasoning. */
+function applyAnthropicSettings(
+  raw: Rec,
+  body: Rec,
+  cacheSystem: string | string[],
+  tools: Rec[] | undefined,
+): ClaudeCacheKeySource {
   toolChoiceToResponses(raw.tool_choice, body);
 
   if (typeof raw.max_tokens === "number") body.max_output_tokens = raw.max_tokens;
@@ -505,7 +595,7 @@ function translateAnthropicRequest(
     // per-session key with a bounded length/charset.
     body.prompt_cache_key = userIdHash.slice(0, 32);
     cacheKeySource = "metadata";
-  } else if (systemParts.length > 0) {
+  } else if (typeof cacheSystem === "string" || cacheSystem.length > 0) {
     // Claude Desktop sends no metadata.user_id (H1, devlog 130): without any key the
     // ChatGPT/OpenAI backends reported cached_tokens:0 on every turn. Fall back to a
     // cache-cohort hash (devlog 260712 B4 + Pro review 012): fingerprint what the
@@ -526,7 +616,7 @@ function translateAnthropicRequest(
         version: 2,
         model: body.model,
         system: cacheSystem,
-        tools: Array.isArray(body.tools) ? body.tools : [],
+        tools: tools ?? [],
       }))
       .digest("hex").slice(0, 32);
     cacheKeySource = "system";
@@ -556,7 +646,7 @@ function translateAnthropicRequest(
     body.include = ["reasoning.encrypted_content"];
   }
 
-  return { body, cacheKeySource, nativeReasoningReplay };
+  return cacheKeySource;
 }
 
 /**

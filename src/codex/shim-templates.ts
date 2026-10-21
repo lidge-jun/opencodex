@@ -5,7 +5,14 @@ import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { windowsEnvIndirectBatchValue } from "../lib/win-paths";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
-const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 3";
+// Revision 4: OCX_SHIM_BYPASS skips loading the service API token. Bumping the marker
+// makes installed revision-3 wrappers obsolete so the existing refresh path rewrites them.
+const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 4";
+// Windows CMD and PowerShell wrappers carry their own revision. Revision 1 is the first one that
+// skips the service token under OCX_SHIM_BYPASS; a marked wrapper without it is obsolete and
+// install/auto-restore rewrite it in place. (The extensionless Git-Bash wrapper is the Unix
+// template and carries the Unix revision.)
+const WINDOWS_SHIM_REVISION_MARKER = "opencodex windows codex shim revision 1";
 
 const CODEX_SHIM_REENTRY_EXIT_CODE = 126;
 const CODEX_SHIM_REENTRY_DIAGNOSTIC = "opencodex: saved Codex launcher resolved back to the autostart shim; run ocx codex-shim uninstall and reinstall Codex before enabling codexAutoStart.";
@@ -122,7 +129,9 @@ esac
 # redispatch reaches depth 2 and is rejected before it can form an infinite chain.
 OCX_SHIM_ACTIVE_PID=$$
 export OCX_SHIM_ACTIVE_PID OCX_SHIM_ACTIVE_DEPTH
-if [ -z "$OPENCODEX_API_AUTH_TOKEN" ] && [ -f ${shQuote(tokenFile)} ]; then
+# A bypassed launch is native passthrough: it never talks to this proxy, so it must not
+# hand the proxy's data-plane token to the real Codex and everything Codex spawns.
+if [ -z "$OCX_SHIM_BYPASS" ] && [ -z "$OPENCODEX_API_AUTH_TOKEN" ] && [ -f ${shQuote(tokenFile)} ]; then
   OPENCODEX_API_AUTH_TOKEN="$(cat ${shQuote(tokenFile)})"
   export OPENCODEX_API_AUTH_TOKEN
 fi
@@ -190,13 +199,14 @@ export function buildWindowsCodexShim(realCodexPath: string, bunPath: string, cl
   const cliArgs = selfLaunchArgv([], { sourceEntrypoint: cliPath, isStandaloneExecutable: bunRuntimeSource === "standalone" });
   return `@echo off\r
 rem ${SHIM_MARKER}\r
+rem ${WINDOWS_SHIM_REVISION_MARKER}\r
 setlocal\r
 ${windowsBatchSet("OCX_REAL_CODEX", realCodexPath)}\r
 ${windowsBatchSet("OCX_BUN", bunPath)}\r
 ${cliArgs.length ? windowsBatchSet("OCX_CLI", cliArgs[0]!) : ""}\r
 ${windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath())}\r
-if "%OPENCODEX_API_AUTH_TOKEN%"=="" if exist "%OCX_API_TOKEN_FILE%" set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"\r
 if not "%OCX_SHIM_BYPASS%"=="" goto run_codex\r
+if "%OPENCODEX_API_AUTH_TOKEN%"=="" if exist "%OCX_API_TOKEN_FILE%" set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"\r
 goto scan_codex_args\r
 :scan_codex_args\r
 if "%~1"=="" goto ensure_ocx\r
@@ -240,10 +250,11 @@ export function buildWindowsPowerShellCodexShim(realCodexPath: string, bunPath: 
     .map(arg => `${psString(arg)} `).join("");
   return `#!/usr/bin/env pwsh
 # ${SHIM_MARKER}
+# ${WINDOWS_SHIM_REVISION_MARKER}
 $hadApiAuthToken = Test-Path Env:\\OPENCODEX_API_AUTH_TOKEN
 $priorApiAuthToken = $env:OPENCODEX_API_AUTH_TOKEN
 try {
-if (-not $env:OPENCODEX_API_AUTH_TOKEN -and (Test-Path -LiteralPath ${psString(tokenFile)})) {
+if (-not $env:OCX_SHIM_BYPASS -and -not $env:OPENCODEX_API_AUTH_TOKEN -and (Test-Path -LiteralPath ${psString(tokenFile)})) {
   $env:OPENCODEX_API_AUTH_TOKEN = (Get-Content -Raw -LiteralPath ${psString(tokenFile)}).Trim()
 }
 $internalCommands = @(${internalCommands})
@@ -294,4 +305,4 @@ function gitBashPath(path: string): string {
   return path.replace(/\\/g, "/");
 }
 
-export { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER, CODEX_SHIM_REENTRY_EXIT_CODE, CODEX_SHIM_REENTRY_DIAGNOSTIC, shQuote, windowsBatchSet, psString, gitBashPath };
+export { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER, WINDOWS_SHIM_REVISION_MARKER, CODEX_SHIM_REENTRY_EXIT_CODE, CODEX_SHIM_REENTRY_DIAGNOSTIC, shQuote, windowsBatchSet, psString, gitBashPath };

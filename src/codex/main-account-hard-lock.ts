@@ -1,4 +1,7 @@
 import type { OcxConfig } from "../types";
+import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
+import { codexAccountUsesRemainingQuota } from "./account-use-remaining";
+import { isDeclaredReasoningEffort } from "../reasoning-effort";
 import { getMainPolicyQuota } from "./quota";
 import { MAIN_ACCOUNT_HARD_LOCK_PERCENT, MAIN_ACCOUNT_HARD_LOCK_SHORT_PERCENT, MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "./quota-types";
 
@@ -13,9 +16,35 @@ export interface MainAccountHardLockStatus {
   window?: "short" | "long";
 }
 
-type PolicyConfig = Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds">;
+type PolicyConfig = Pick<OcxConfig, "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "codexMainAccountHardLockFallback" | "codexUseRemainingQuotaAccountIds">;
+
+/** The reroute destination for requests the lock blocks, when one is configured and readable. */
+export interface MainAccountHardLockFallback {
+  model: string;
+  reasoningEffort?: string;
+}
+
+/**
+ * The configured fallback, or `undefined` when nothing qualifies. The dashboard row keeps
+ * the configured model while its switch is off, so `enabled: false` pauses the reroute
+ * without forgetting the destination. A malformed hand edit — blank or padded model,
+ * undeclared effort — disables the reroute entirely rather than degrading into a
+ * half-applied one: the request path must never guess which part of a broken setting to
+ * keep. This is the same disable-don't-widen reading the compaction override takes, and
+ * the load/write boundaries report the malformation separately.
+ */
+export function resolveMainAccountHardLockFallback(config: PolicyConfig | undefined): MainAccountHardLockFallback | undefined {
+  const raw = config?.codexMainAccountHardLockFallback;
+  if (!raw || raw.enabled === false) return undefined;
+  const model = typeof raw.model === "string" ? raw.model : "";
+  if (model.length === 0 || model !== model.trim() || /\s/.test(model)) return undefined;
+  if (raw.reasoningEffort !== undefined
+    && (typeof raw.reasoningEffort !== "string" || !isDeclaredReasoningEffort(raw.reasoningEffort))) return undefined;
+  return raw.reasoningEffort !== undefined ? { model, reasoningEffort: raw.reasoningEffort } : { model };
+}
 
 export function resolveMainAccountHardLockThresholds(config: PolicyConfig | undefined): { short: number; long: number } {
+  if (codexAccountUsesRemainingQuota(config, MAIN_CODEX_ACCOUNT_ID)) return { short: 100, long: 100 };
   const valid = (value: unknown, fallback: number): number => typeof value === "number"
     && Number.isInteger(value) && value >= MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT && value <= 100 ? value : fallback;
   const long = valid(config?.codexMainAccountHardLockThresholds?.long, MAIN_ACCOUNT_HARD_LOCK_PERCENT);
@@ -91,4 +120,18 @@ export function getMainAccountHardLockStatus(
 
 export function isMainAccountHardLocked(config: PolicyConfig, now = Date.now()): boolean {
   return getMainAccountHardLockStatus(config, now).state === "blocked";
+}
+
+/**
+ * Scheduling evidence only: the latest blocking reset even after it has passed, so recovery can
+ * notice a revised reset that expired between sweeps. Never an admission or unlock signal.
+ */
+export function latestMainBlockingResetAt(config: PolicyConfig): number | undefined {
+  if (!isMainAccountHardLockEnabled(config)) return undefined;
+  const quota = getMainPolicyQuota();
+  if (!quota) return undefined;
+  const thresholds = resolveMainAccountHardLockThresholds(config);
+  const resets = governingWindows(quota)
+    .filter(w => validPercent(w.percent) && w.percent >= thresholds[w.kind]).map(w => resetTimestamp(w.resetAt));
+  return resets.length > 0 && resets.every(r => r !== undefined) ? Math.max(...(resets as number[])) : undefined;
 }

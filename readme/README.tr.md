@@ -114,7 +114,7 @@ başlatır; kontrol paneli proxy bağlantı noktasında kalır (başka bir tane 
 | Platform | Dosya | Notlar |
 |---|---|---|
 | macOS 13+ (Apple Silicon ve Intel) | `OpenCodex-<version>-macos.dmg` | Evrensel derleme, Developer ID ile imzalı ve noter onaylı |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Henüz kod imzalı değil: SmartScreen bir kez sorar, **Diğer bilgiler → Yine de çalıştır** seçin |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | SignPath Foundation ile kod imzalama kullanıma alınıyor ([kod imzalama politikası](https://opencodex.me/tr/reference/code-signing/)); bir sürüm imzalanana kadar SmartScreen bir kez sorar, **Diğer bilgiler → Yine de çalıştır** seçin |
 | Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` veya `-linux-amd64.deb` | Menü çubuğu simgesi AppIndicator destekli bir masaüstü gerektirir |
 
 Her dosyanın yanında sürüm sayfasında bir `.sha256` bulunur. macOS 14 ve üzerinde uygulama ayrıca
@@ -155,10 +155,6 @@ Her yukarı akış protokol değişiminde opencodex'in bakımını sürdürebilm
 <tr>
 <td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="../assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
 <td>Bu projeye sponsor olduğu için <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a>'a teşekkürler! OrcaRouter, üretimdeki yapay zekâ için tek bir OpenAI uyumlu yapay zekâ ağ geçidi: her istemi puanlayıp çıtanızı geçen modele gönderen uyarlanabilir yönlendirme, otomatik failover, kod olarak yazılan yönlendirme kuralları, istem önbelleğiyle birlikte sıfır marjlı sağlayıcı fiyatlandırması ve 200'den fazla modeldeki her çağrıda koruma kuralları, bir ajan güvenlik duvarı ve istek günlükleri. Add provider seçicisinden <code>OrcaRouter</code> seçin ya da <code>ocx provider add orcarouter</code> çalıştırın; uyarlanabilir yönlendirici <code>orcarouter/auto</code>.</td>
-</tr>
-<tr>
-<td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
-<td>Bu projeye sponsor olduğu için <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a>'a teşekkürler! PackyCode, Claude Code, Codex, Gemini ve daha fazlası için aktarma hizmeti sunan istikrarlı ve yüksek başarımlı bir API aktarma sağlayıcısıdır. Otomatik failover, akıllı yönlendirme ve sınırsız eşzamanlılıkla yapay zekâyı gerçek bir üretkenlik aracına dönüştürür. <a href="https://www.packyapi.com/register?aff=k5KT">Bu bağlantıdan kaydolun</a> ve hemen başlayın! Add provider seçicisinden <code>PackyCode</code> seçin ya da <code>ocx provider add packycode</code> çalıştırın.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
 <tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
@@ -483,6 +479,16 @@ bun run test
 
 Bir bakımcının devralması ya da yeniden uygulamasıyla gelen ve commit'inde özgün yazarı anılmayan katkılar
 **[CREDITS.md](../CREDITS.md)** içinde kayıt altına alınır.
+
+## Kod imzalama politikası (Code signing policy)
+
+Windows ikili dosyaları Authenticode imzalamaya geçiyor ([#7207](https://github.com/lidge-jun/opencodex/issues/7207)). Geçiş durumu, imzanın nasıl doğrulanacağı ve politikanın tamamı [Windows kod imzalama kılavuzunda](https://opencodex.me/tr/reference/code-signing/) anlatılıyor.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## Sorumluluk reddi
 

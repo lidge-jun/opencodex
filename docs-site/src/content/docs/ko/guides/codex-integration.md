@@ -13,6 +13,18 @@ Pool 모드에서는 선택된 저장 계정이 쿨다운 중이고 사용 가�
 권한과 main 계정 정책 검사는 유지됩니다. 이 fallback은 저장 계정의 쿨다운을 해제하거나 호출자
 인증을 Pool 선택으로 저장하지 않습니다. 특정 계정에 정확히 고정된 요청은 그 계정에 계속 묶입니다.
 
+수동 Pool pin은 우선순위 선호이므로 위 fallback을 허용합니다. 특정 계정만 사용해야 하면
+계정이 지정된 모델을 선택하세요. 관측된 native main을 일시 정지하면 일치하는 호출자 자격 증명의
+Pool fallback도 거부하지만, 별도 호출자 로그인을 main으로 간주하지는 않습니다.
+
+계정 ID·개인/워크스페이스 구독 구분·이메일이 native main과 중복되는 Pool 등록 및 재인증은
+거부됩니다. 이메일이 없으면 다른 구성원이라는 근거로 취급하지 않습니다. 서로 다른 워크스페이스,
+이메일로 구분되는 구성원, 개인/워크스페이스 구독은 계속 사용할 수 있습니다. 사용량 조회 실패 시에도
+로그인 토큰의 구독 정보는 유지합니다. 기존 중복 계정은 삭제하지 않고 Pool 선택에서 제외하며 계정
+목록의 `selectionExcludedReason: "duplicate_main"`과 `selectionExcludedAction`으로 이유를 알립니다. native main을 사용하거나
+native Codex를 다른 계정으로 로그인하면 됩니다. 재로그인 감지는 권한을 확보한 다음 native 로그인
+관측에서 반영하며, 수동 목록 조회나 호출자 소유 요청은 이를 위해 native 자격 증명을 읽지 않습니다.
+
 ## 설정 주입
 
 `ocx init`, `ocx start`, `ocx sync`는 모두 인젝터를 호출합니다. 기본 loopback 바인드에서는 Codex의 빌트인 `openai` 프로바이더 id를 그대로 유지한 채, 그 프로바이더가 opencodex를 바라보게 합니다.
@@ -292,6 +304,8 @@ CLI에서 표시 이름을 추가할 수 있습니다(proxy가 live 상태면 ca
 ```bash
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
+
+사용자 지정 공급자에서 컨텍스트 창을 명시하지 않으면 카탈로그는 모델 ID 추정을 포함한 [컨텍스트 창 보완 규칙](/ko/reference/configuration/providers/#사용자-지정-공급자의-컨텍스트)을 사용해요. 중계 서비스가 공급업체의 창보다 적은 용량을 지원하면 창이나 Context cap을 명시하세요.
 
 원격 Codex client는 관리자 토큰이 아니라 일반 데이터 플레인 키(`/v1/responses`에 이미 사용하는 것과 같은 자격 증명)로 같은 생성된 catalog를 가져올 수 있습니다:
 

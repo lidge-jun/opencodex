@@ -9,7 +9,7 @@ import { readSessionListCacheEntry, writeSessionListCacheEntry } from "../src/se
 import { parseComboList } from "../src/combo-workspace-data";
 
 const API_BASE = "http://localhost";
-const CACHE_KEY = `ocx.combos.workspace.v1:${API_BASE}`;
+const CACHE_KEY = `ocx.combos.workspace.v2:${API_BASE}`;
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
@@ -31,6 +31,9 @@ const hiddenImage: CatalogRow = {
 };
 const textModel: CatalogRow = {
   provider: "text", id: "plain", inputModalities: ["text"], reasoningEfforts: ["high", "xhigh"],
+};
+const audioModel: CatalogRow = {
+  provider: "audio", id: "listen", inputModalities: ["audio"], reasoningEfforts: ["high"],
 };
 const target = (row: CatalogRow): Target => ({ provider: row.provider, model: row.id });
 const combo = (targets: Target[], extra: Record<string, unknown> = {}) => ({
@@ -136,13 +139,27 @@ test("a disabled image-capable target enables the Image switch and stays visible
   expect(effortValues()).toEqual(["", "low", "high"]);
 });
 
+// Text-capable members are covered by the Vision Sidecar, so they keep images on.
 for (const [name, targets] of [
   ["text-only", [target(textModel)]],
-  ["unknown", [{ provider: "vision", model: "missing" }]],
   ["mixed image/text", [target(hiddenImage), target(textModel)]],
 ] as const) {
-  test(`${name} targets keep the Image switch off`, async () => {
+  test(`${name} targets keep the Image switch on through the Vision Sidecar`, async () => {
     mockCatalog([hiddenImage, textModel], [...targets]);
+    await mount();
+    await openDetail();
+    expectImages(true);
+  });
+}
+
+// Members the sidecar cannot cover still force the switch off.
+for (const [name, targets] of [
+  ["unknown", [{ provider: "vision", model: "missing" }]],
+  ["audio-only", [target(audioModel)]],
+  ["mixed text/audio-only", [target(textModel), target(audioModel)]],
+] as const) {
+  test(`${name} targets keep the Image switch off`, async () => {
+    mockCatalog([hiddenImage, textModel, audioModel], [...targets]);
     await mount();
     await openDetail();
     expectImages(false);
@@ -157,7 +174,9 @@ for (const provider of ["vision", "text"]) {
     ], [{ provider, model: "shared" }]);
     await mount();
     await openDetail();
-    expectImages(provider === "vision");
+    // The text row is sidecar-eligible, so both resolve to an enabled Image switch;
+    // the provider still decides which reasoning ladder applies.
+    expectImages(true);
     expect(effortValues()).toEqual(provider === "vision" ? ["", "low", "high"] : ["", "high", "xhigh"]);
   });
 }
@@ -190,7 +209,7 @@ test("JEV selected-target effort controls use the disabled row's advertised ladd
   expect(container.textContent).not.toContain("Reasoning efforts unknown");
 });
 
-test("a disabled provider default never returns in the new-member picker", async () => {
+test("hidden models including the provider default appear once in new and existing member pickers", async () => {
   mockCatalog([hiddenImage, { ...hiddenImage, id: "visible", disabled: false }], [target(hiddenImage)], {}, { vision: "hidden" });
   await mount();
   await openDetail();
@@ -199,8 +218,67 @@ test("a disabled provider default never returns in the new-member picker", async
   const dialog = container.querySelector("dialog")!;
   await chooseProvider("vision", dialog);
   const options = [...dialog.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.options].map(option => option.value);
-  expect(options).toEqual(["", "visible"]);
-  expect(options).not.toContain("hidden");
+  expect(options).toEqual(["", "hidden", "visible"]);
+  const model = dialog.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!;
+  await act(async () => {
+    model.value = "hidden";
+    model.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+  expect(model.value).toBe("hidden");
+  expectImages(true, dialog);
+});
+
+test("all-hidden catalogs remain selectable and old filtered caches are ignored", async () => {
+  writeSessionListCacheEntry(`ocx.combos.workspace.v1:${API_BASE}`, {
+    combos: parseComboList({ combos: [combo([target(hiddenImage)])] }),
+    providers: [{ name: "vision" }], models: [], cataloguedComboIds: ["hidden-test"],
+  });
+  const api = mockCatalog([hiddenImage, { ...hiddenImage, id: "other" }], [target(hiddenImage)]);
+  await mount();
+  expect(api.requests()).toBe(1);
+  await act(async () => { container.querySelector<HTMLButtonElement>('button[aria-label="Add combo"]')!.click(); });
+  const dialog = container.querySelector("dialog")!;
+  await chooseProvider("vision", dialog);
+  expect([...dialog.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!.options].map(option => option.value))
+    .toEqual(["", "hidden", "other"]);
+});
+
+test("editing can select and save a hidden model without changing its visibility", async () => {
+  const visible = { ...hiddenImage, id: "visible", disabled: false };
+  mockCatalog([hiddenImage, visible], [target(visible)]);
+  const fetchCatalog = globalThis.fetch;
+  const writes: { path: string; body: Record<string, unknown> }[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "PUT") {
+      writes.push({ path: new URL(String(input)).pathname, body: JSON.parse(String(init.body)) });
+      return Response.json({ success: true });
+    }
+    return fetchCatalog(input, init);
+  }) as typeof fetch;
+  await mount();
+  await openDetail();
+  const model = container.querySelector<HTMLSelectElement>('select[aria-label="Model"]')!;
+  expect([...model.options].map(option => option.value)).toEqual(["", "hidden", "visible"]);
+  await act(async () => {
+    model.value = "hidden";
+    model.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+  const save = container.querySelector<HTMLButtonElement>("#cwi-edit-save")!;
+  expect(save.disabled).toBe(false);
+  await act(async () => { save.click(); });
+  expect(writes).toHaveLength(1);
+  expect(writes[0]).toMatchObject({ path: "/api/combos", body: { combo: { targets: [target(hiddenImage)] } } });
+  expect(hiddenImage.disabled).toBe(true);
+});
+
+test("JEV decision model suggestions include hidden models but exclude the JEV combo itself", async () => {
+  mockCatalog([hiddenImage], [target(hiddenImage)], { strategy: "jev", decisionModel: "vision/hidden" });
+  await mount();
+  await openDetail();
+  const routes = [...container.querySelectorAll<HTMLOptionElement>('datalist[id$="-decision-model-options"] option')]
+    .map(option => option.value);
+  expect(routes).toContain("vision/hidden");
+  expect(routes).not.toContain("combo/hidden-test");
 });
 
 test("a default missing from the catalog still gets a picker placeholder", async () => {
@@ -221,8 +299,9 @@ test("cache remount and live revalidation preserve hidden-target capabilities", 
   const cached = readSessionListCacheEntry<{ capabilityModels: CatalogRow[]; models: CatalogRow[] }>(CACHE_KEY)!;
   expect(cached.data.capabilityModels).toEqual([{
     provider: "vision", id: "hidden", inputModalities: ["text", "image"], reasoningEfforts: ["low", "high"],
+    visionSidecarConsumer: false,
   }]);
-  expect(cached.data.models).toEqual([]);
+  expect(cached.data.models).toEqual(cached.data.capabilityModels);
   await act(async () => { root!.unmount(); });
   root = undefined;
   clearClientResourceStoresForTests();

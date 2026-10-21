@@ -52,9 +52,18 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
+import { mergeModelCapabilities, modelCapabilitiesConfigError } from "../../config/provider-validation";
+import { modelRecordValue } from "../../reasoning-effort";
+import { commitProviderPatch } from "./provider-patch-transaction";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
+import {
+  customRowInputModalities,
+  isVisionSidecarConsumer,
+  modelAcceptsImageInput,
+} from "../../vision/eligibility";
 import type { OcxClaudeCodeConfig, OcxComboConfig, OcxConfig, OcxCustomModel, OcxProviderConfig, OcxComboCooldownWaitPolicy } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
-import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
+import { notifyLiveConfigObservers, reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
@@ -116,6 +125,44 @@ function sparseComboConfig<T extends {
   };
 }
 
+interface VisionSidecarTarget {
+  provider: string;
+  model: string;
+}
+
+/**
+ * Request-only PUT field: combo members to declare text-only so the Vision Sidecar
+ * covers them when the combo accepts images. Every entry must be an exact target of
+ * the submitted combo, and the whole field is validated before any config mutation.
+ * Nothing from here is persisted under config.combos.
+ */
+function parseVisionSidecarTargets(
+  raw: unknown,
+  comboTargetKeys: ReadonlySet<string>,
+): { targets?: VisionSidecarTarget[]; error?: string } {
+  if (raw === undefined) return {};
+  if (!Array.isArray(raw)) return { error: "visionSidecarTargets must be an array" };
+  const seen = new Set<string>();
+  const targets: VisionSidecarTarget[] = [];
+  for (const entry of raw) {
+    if (!isPlainRecord(entry)) return { error: "visionSidecarTargets entries must be objects" };
+    const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
+    const model = typeof entry.model === "string" ? entry.model.trim() : "";
+    if (!provider || !model) {
+      return { error: "visionSidecarTargets entries must have nonblank provider and model" };
+    }
+    const key = `${provider}/${model}`;
+    if (!comboTargetKeys.has(key)) {
+      return { error: `visionSidecarTargets entry "${key}" is not a target of this combo` };
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    targets.push({ provider, model });
+  }
+  return { targets };
+}
+
+/** Handle the `/api/combos` management routes (list, save, delete and related combo endpoints), validating and preserving the opt-in quota signal fields; null when no route matches. */
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -176,6 +223,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const requestedCombo: Record<string, unknown> = body.combo;
     const effectiveCombo = {
       ...requestedCombo,
+      ...(!Object.hasOwn(requestedCombo, "decisionQuotaSignals") && requestedCombo.strategy === "jev" && previous?.decisionQuotaSignals !== undefined ? { decisionQuotaSignals: previous.decisionQuotaSignals } : {}),
+      ...(!Object.hasOwn(requestedCombo, "decisionQuotaTiers") && requestedCombo.strategy === "jev" && previous?.decisionQuotaTiers !== undefined ? { decisionQuotaTiers: previous.decisionQuotaTiers } : {}),
+      ...(!Object.hasOwn(requestedCombo, "allowMeteredTargets") && previous?.allowMeteredTargets === true
+        ? { allowMeteredTargets: true }
+        : {}),
       ...(!Object.hasOwn(requestedCombo, "cooldownMs") && previous?.cooldownMs !== undefined
         ? { cooldownMs: previous.cooldownMs }
         : {}),
@@ -195,6 +247,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...(!Object.hasOwn(requestedCombo, "imageInput") && previous?.imageInput !== undefined
         ? { imageInput: previous.imageInput }
         : {}),
+      // #7229: the dashboard does not edit the row description, so a round trip that omits it
+      // (including a rename) keeps it. An explicit empty string still clears it.
+      ...(!Object.hasOwn(requestedCombo, "description") && previous?.description !== undefined
+        ? { description: previous.description }
+        : {}),
       // `lastResort` rides on each target, so a GUI that re-sends the target list without the
       // flag would strip it. Carry it over per target, matched on provider+model.
       ...(Array.isArray(requestedCombo.targets) && Array.isArray(previous?.targets)
@@ -203,7 +260,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
               // A non-record entry stays as the client sent it so comboConfigError reports it.
               // Reading `lastResort` off it here would throw in place of that structured 400.
               if (!isPlainRecord(target)) return target;
-              if (Object.hasOwn(target, "lastResort")) return target;
+              if (["lastResort", "metered"].every(key => Object.hasOwn(target, key))) return target;
               const rawProvider = target.provider;
               const rawModel = target.model;
               if (typeof rawProvider !== "string" || typeof rawModel !== "string") return target;
@@ -214,7 +271,13 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
               const before = previous.targets.find(
                 candidate => candidate.provider === provider && candidate.model === model,
               );
-              return before?.lastResort ? { ...target, lastResort: true } : target;
+              // `metered` is carried the same way: dropping it on a GUI round-trip would open a
+              // pay-per-use target to every issued key.
+              return {
+                ...target,
+                ...(!Object.hasOwn(target, "lastResort") && before?.lastResort ? { lastResort: true } : {}),
+                ...(!Object.hasOwn(target, "metered") && before?.metered ? { metered: true } : {}),
+              };
             }),
           }
         : {}),
@@ -280,6 +343,54 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       if (routeError) return jsonResponse({ error: issue ? `combo "${otherId}": ${routeError}` : routeError }, 400);
     }
     const normalized = normalizeComboConfig(effectiveCombo as unknown as OcxComboConfig);
+    const sidecarParsed = parseVisionSidecarTargets(
+      body.visionSidecarTargets,
+      new Set(normalized.targets.map((target) => `${target.provider}/${target.model}`)),
+    );
+    if (sidecarParsed.error) return jsonResponse({ error: sidecarParsed.error }, 400);
+    const sidecarPatches = new Map<string, Record<string, { inputModalities: string[] }>>();
+    if (sidecarParsed.targets?.length) {
+      if (normalized.imageInput === "disabled") {
+        return jsonResponse({ error: "visionSidecarTargets requires imageInput not disabled" }, 400);
+      }
+      for (const { provider, model } of sidecarParsed.targets) {
+        const providerRow = config.providers?.[provider];
+        if (!providerRow) {
+          return jsonResponse({ error: `visionSidecarTargets entry "${provider}/${model}" has no configured provider` }, 400);
+        }
+        // A text-only declaration would HIDE a real capability; never overwrite one.
+        if (modelAcceptsImageInput(config, { provider, id: model }) === true) {
+          return jsonResponse({ error: `visionSidecarTargets entry "${provider}/${model}" already accepts image input` }, 400);
+        }
+        // Already a consumer through any runtime source (exact declaration, custom row,
+        // noVisionModels, legacy record, registry enrichment): the catalog already
+        // advertises image for it. Writing the declaration again would be a no-op write.
+        if (isVisionSidecarConsumer(config, provider, model)) continue;
+        // Read the declaration the way the runtime does: exact capability axis, then the
+        // operator's custom row, then the provider's per-model modality hint. A row without
+        // text (audio-only) cannot be widened by the sidecar, and writing ["text"] on the
+        // capability axis would silently override that declaration.
+        const capabilityRow = Object.hasOwn(providerRow.modelCapabilities ?? {}, model)
+          ? providerRow.modelCapabilities?.[model] : undefined;
+        const declared = capabilityRow?.inputModalities
+          ?? customRowInputModalities(config, provider, model)
+          ?? modelRecordValue(providerRow.modelInputModalities, model);
+        if (declared !== undefined && !declared.includes("text")) {
+          return jsonResponse({ error: `visionSidecarTargets entry "${provider}/${model}" is declared without text input; the Vision Sidecar cannot cover it` }, 400);
+        }
+        const patch = sidecarPatches.get(provider) ?? {};
+        patch[model] = { inputModalities: ["text"] };
+        sidecarPatches.set(provider, patch);
+      }
+      for (const [providerName, patch] of sidecarPatches) {
+        // Validate the map that will be persisted, not just the patch: a provider already at
+        // the modelCapabilities cap would otherwise save an oversized map that load-time
+        // sanitization truncates, silently dropping the new text-only declaration.
+        const merged = mergeModelCapabilities(config.providers?.[providerName]?.modelCapabilities, patch);
+        const error = modelCapabilitiesConfigError(patch) ?? (merged ? modelCapabilitiesConfigError(merged) : null);
+        if (error) return jsonResponse({ error: `visionSidecarTargets for provider "${providerName}": ${error}` }, 400);
+      }
+    }
     // Persist only non-default identity/capability fields so config stays sparse.
     // Capability defaults (`imageInput`, `reasoningEffortMode`) go through the same
     // helper the GET/PUT responses use, so the wire shape and the stored shape cannot drift.
@@ -295,9 +406,10 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       // would add a noise key to every target of every combo, including ones that never use
       // the policy (#5736). Only the opt-in value is stored, matching how the combo-level
       // policy is handled in sparseComboConfig.
-      targets: normalizedBase.targets.map(({ lastResort, modelProfile, ...target }) => ({
+      targets: normalizedBase.targets.map(({ lastResort, metered, modelProfile, ...target }) => ({
         ...target,
         ...(lastResort ? { lastResort: true } : {}),
+        ...(metered ? { metered: true } : {}),
         ...(modelProfile ? { modelProfile } : {}),
       })),
       ...(normalizedAlias ? { alias: normalizedAlias } : {}),
@@ -340,58 +452,82 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       const targetError = shadowCallTargetError({ ...config, combos: nextCombos }, migratedShadowTarget);
       if (targetError) return jsonResponse({ error: targetError }, 400);
     }
-    config.combos = nextCombos;
-    if (migratedModels.size > 0) {
-      const migrateReference = (model: string): string => migratedModels.get(model) ?? model;
-      const migrateAgentReference = (model: string): string => {
-        const migrated = migrateReference(model);
-        if (migrated !== model) shouldSyncClaudeAgentDefs = true;
-        return migrated;
-      };
-      if (config.subagentModels) {
-        config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
-      }
-      if (config.injectionModel && migratedModels.has(config.injectionModel)) {
-        config.injectionModel = migrateReference(config.injectionModel);
-      }
-      if (config.shadowCallIntercept?.model && migratedModels.has(config.shadowCallIntercept.model)) {
-        config.shadowCallIntercept = {
-          ...config.shadowCallIntercept,
-          model: migrateReference(config.shadowCallIntercept.model),
-        };
-      }
-      if (config.claudeCode) {
-        const claudeCode = { ...config.claudeCode };
-        for (const field of ["model", "smallFastModel"] as const) {
-          if (claudeCode[field]) claudeCode[field] = migrateAgentReference(claudeCode[field]);
-        }
-        if (claudeCode.tierModels) {
-          claudeCode.tierModels = Object.fromEntries(
-            Object.entries(claudeCode.tierModels).map(([tier, model]) => [tier, migrateAgentReference(model)]),
-          );
-        }
-        if (claudeCode.modelMap) {
-          claudeCode.modelMap = Object.fromEntries(
-            Object.entries(claudeCode.modelMap).map(([source, model]) => [source, migrateAgentReference(model)]),
-          );
-        }
-        if (claudeCode.intercept?.modelMap) {
-          claudeCode.intercept = {
-            ...claudeCode.intercept,
-            modelMap: Object.fromEntries(
-              Object.entries(claudeCode.intercept.modelMap).map(([pickerId, route]) => [pickerId, migrateAgentReference(route)]),
-            ),
+    // One atomic transaction: a failed save must restore the combo, the capability
+    // declarations, and every migrated reference together, never partially.
+    try {
+      commitProviderPatch(config, () => {
+        config.combos = nextCombos;
+        if (migratedModels.size > 0) {
+          const migrateReference = (model: string): string => migratedModels.get(model) ?? model;
+          const migrateAgentReference = (model: string): string => {
+            const migrated = migrateReference(model);
+            if (migrated !== model) shouldSyncClaudeAgentDefs = true;
+            return migrated;
           };
+          if (config.subagentModels) {
+            config.subagentModels = [...new Set(config.subagentModels.map(migrateAgentReference))];
+          }
+          if (config.injectionModel && migratedModels.has(config.injectionModel)) {
+            config.injectionModel = migrateReference(config.injectionModel);
+          }
+          if (config.shadowCallIntercept?.model && migratedModels.has(config.shadowCallIntercept.model)) {
+            config.shadowCallIntercept = {
+              ...config.shadowCallIntercept,
+              model: migrateReference(config.shadowCallIntercept.model),
+            };
+          }
+          if (config.claudeCode) {
+            const claudeCode = { ...config.claudeCode };
+            for (const field of ["model", "smallFastModel"] as const) {
+              if (claudeCode[field]) claudeCode[field] = migrateAgentReference(claudeCode[field]);
+            }
+            if (claudeCode.tierModels) {
+              claudeCode.tierModels = Object.fromEntries(
+                Object.entries(claudeCode.tierModels).map(([tier, model]) => [tier, migrateAgentReference(model)]),
+              );
+            }
+            if (claudeCode.modelMap) {
+              claudeCode.modelMap = Object.fromEntries(
+                Object.entries(claudeCode.modelMap).map(([source, model]) => [source, migrateAgentReference(model)]),
+              );
+            }
+            if (claudeCode.intercept?.modelMap) {
+              claudeCode.intercept = {
+                ...claudeCode.intercept,
+                modelMap: Object.fromEntries(
+                  Object.entries(claudeCode.intercept.modelMap).map(([pickerId, route]) => [pickerId, migrateAgentReference(route)]),
+                ),
+              };
+            }
+            config.claudeCode = claudeCode;
+          }
         }
-        config.claudeCode = claudeCode;
+        if (oldDisabledSelectors.size > 0 && config.disabledModels) {
+          config.disabledModels = [...new Set(config.disabledModels.map(model => (
+            oldDisabledSelectors.has(model) ? newDisabledModel : model
+          )))];
+        }
+        for (const [providerName, patch] of sidecarPatches) {
+          const provider = config.providers?.[providerName];
+          if (!provider) continue;
+          const capabilities = mergeModelCapabilities(provider.modelCapabilities, patch);
+          // Re-check under the config lock: a concurrent edit may have grown the map since
+          // the pre-check, and an oversized map must never be published.
+          if (capabilities && modelCapabilitiesConfigError(capabilities)) {
+            throw new Error("modelCapabilities would exceed its limit");
+          }
+          if (capabilities === undefined) delete provider.modelCapabilities;
+          else provider.modelCapabilities = capabilities;
+        }
+      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+    } catch (error) {
+      if (!(error instanceof ConfigWritePublishedError)) {
+        return jsonResponse({ error: "combo could not be saved" }, 500);
       }
+      // Published but bookkeeping failed: live observers (JEV quota activation) still follow the saved combo.
+      notifyLiveConfigObservers(config);
+      throw error;
     }
-    if (oldDisabledSelectors.size > 0 && config.disabledModels) {
-      config.disabledModels = [...new Set(config.disabledModels.map(model => (
-        oldDisabledSelectors.has(model) ? newDisabledModel : model
-      )))];
-    }
-    saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     clearComboSelectionState(id);
     clearComboTargetCooldowns(id);
@@ -422,7 +558,12 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const { clearComboSelectionState, clearComboTargetCooldowns } = await import("../../combos");
     delete config.combos![id];
     if (Object.keys(config.combos!).length === 0) deleteConfigTopLevelKey(config, "combos");
-    saveConfigPreservingClaudeCode(config);
+    try {
+      saveConfigPreservingClaudeCode(config);
+    } catch (error) {
+      if (error instanceof ConfigWritePublishedError) notifyLiveConfigObservers(config);
+      throw error;
+    }
     reconcileLiveStateStores();
     clearComboSelectionState(id);
     clearComboTargetCooldowns(id);

@@ -10,6 +10,7 @@ import { reconcileModelCacheGeneration } from "../codex/model-cache";
 import { reconcilePoolRotationState } from "../codex/pool-rotation";
 import { reconcileCodexQuotaAccounts } from "../codex/quota";
 import { reconcileQuotaRecovery, sweepExpiredQuotaRecovery } from "../codex/quota-401-recovery";
+import { bindUpstreamRequestCompressionConfig } from "../server/responses/request-compression";
 import {
   listLiveCodexAccountIds,
   reconcileCodexRoutingHealth,
@@ -57,12 +58,36 @@ import {
 
 let liveServerConfig: OcxConfig | null = null;
 
+const liveConfigObservers = new Map<string, (config: OcxConfig) => void>();
+
+/**
+ * Core-owned slot for optional subsystems that follow the adopted live config (for example JEV
+ * advisory quota activation). Keyed; the returned detach removes only this registration.
+ * Detached config reads never notify: only live adoption and live reconciliation do.
+ */
+export function registerLiveConfigObserver(key: string, observer: (config: OcxConfig) => void): () => void {
+  liveConfigObservers.set(key, observer);
+  return () => { if (liveConfigObservers.get(key) === observer) liveConfigObservers.delete(key); };
+}
+
+/** Notify live-config observers; never throws. Also used where a published write skips reconciliation. */
+export function notifyLiveConfigObservers(config: OcxConfig): void {
+  for (const observer of [...liveConfigObservers.values()]) {
+    try { observer(config); } catch { /* an optional observer never alters live adoption */ }
+  }
+}
+
 export function setLiveStateStoreConfig(config: OcxConfig): void {
   liveServerConfig = config;
+  // The one place the server's live config object is installed; detached configs (catalog sync)
+  // never come through here, so the outbound compression opt-in follows the running server only.
+  bindUpstreamRequestCompressionConfig(config);
+  notifyLiveConfigObservers(config);
 }
 
 export function reconcileLiveStateStores() {
   if (!liveServerConfig) return { storesVisited: 0, rowsRemoved: 0 };
+  notifyLiveConfigObservers(liveServerConfig);
   // Only adopted live providers own canonical pools; detached disk snapshots may
   // contain providers the routing instance deliberately has not activated yet.
   configureSharedSpendLedger(spendPolicyFromConfig(liveServerConfig.spend,

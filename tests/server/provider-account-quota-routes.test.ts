@@ -21,6 +21,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  quotaApi.setAntigravityAccountQuotaTransportForTests(null);
   clearAccountQuotaCache();
   clearProviderQuotaCache();
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -49,6 +50,41 @@ async function read(path: string, config: OcxConfig) {
   if (!response) throw new Error("unhandled fixture route");
   return response;
 }
+
+test.each([false, true])("paused Antigravity account API publishes only current model quota (replaced=%s)", async replaced => {
+  const { setAccountPaused } = await import("../../src/oauth/store");
+  const credential = { access: "paused-api-first", refresh: "paused-api-refresh", expires: Date.now() + 3600_000,
+    projectId: "paused-api-project-first", accountId: "paused-api-user", email: "paused-api@example.test" };
+  await saveCredential("google-antigravity", credential);
+  const config: OcxConfig = { port: 0, defaultProvider: "google-antigravity", providers: {
+    "google-antigravity": { adapter: "google", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com" },
+  } };
+  let posts = 0;
+  globalThis.fetch = (async () => { throw new Error("unexpected external quota transport"); }) as typeof fetch;
+  quotaApi.setAntigravityAccountQuotaTransportForTests({
+    resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com",
+      addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+    pinnedPost: async url => {
+      posts++;
+      return url.endsWith("retrieveUserQuotaSummary") ? new Response(null, { status: 404 })
+        : Response.json({ models: { "gemini-paused-api-model": { quotaInfo: { remainingFraction: 0.76 } } } });
+    },
+  });
+  const [seeded] = await quotaApi.fetchProviderAccountQuotas("google-antigravity", true);
+  const accountId = getAccountSet("google-antigravity")!.accounts[0]!.id;
+  expect(seeded?.quota?.customWindows).toContainEqual({ label: "gemini-paused-api-model", modelId: "gemini-paused-api-model", percent: 24 });
+  expect(posts).toBe(2);
+  if (replaced) await saveCredential("google-antigravity", { ...credential, access: "paused-api-second", projectId: "paused-api-project-second" });
+  await setAccountPaused("google-antigravity", accountId, true);
+  const body = await (await read("/api/oauth/accounts?provider=google-antigravity&quota=1&refresh=1", config)).json();
+  expect(body.accounts).toHaveLength(1);
+  expect(body.accounts[0].id).toBe(accountId);
+  expect(body.accounts[0].quota).toEqual(replaced ? null : seeded!.quota);
+  expect(body.accounts[0].quotaUnavailable).toBe(replaced);
+  expect(posts).toBe(2);
+  expect(JSON.stringify(body)).not.toContain("isCurrent");
+});
+
 
 test("cheap and refresh-only key lists advertise capability without probing or changing config", async () => {
   const config = keyConfig();

@@ -202,6 +202,7 @@ export interface ExportContext {
 export type DroidReasoningDefaults = Record<string, string>;
 
 export type ExportClientId =
+  | "qoder"
   | "opencode"
   | "pi"
   | "omp"
@@ -219,7 +220,8 @@ export type ExportClientId =
   | "cline"
   | "commandcode"
   | "kilo"
-  | "droid";
+  | "droid"
+  | "gentle-shell";
 
 export interface ExportClientSpec {
   id: ExportClientId;

@@ -115,7 +115,7 @@ correspondant à votre plateforme sur la page de la [dernière version publiée]
 | Plateforme | Fichier | Remarques |
 |---|---|---|
 | macOS 13+ (Apple Silicon et Intel) | `OpenCodex-<version>-macos.dmg` | Compilation universelle, signée avec un identifiant Developer ID et notariée |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Pas encore signée numériquement : SmartScreen demande une confirmation, choisissez **Informations complémentaires → Exécuter quand même** |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Signature du code via SignPath Foundation en cours de déploiement ([politique de signature du code](https://opencodex.me/fr/reference/code-signing/)) ; tant qu’une version n’est pas signée, SmartScreen demande une confirmation : choisissez **Informations complémentaires → Exécuter quand même** |
 | Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` ou `-linux-amd64.deb` | La barre d'état nécessite un environnement de bureau compatible AppIndicator |
 
 Chaque fichier est accompagné d'un `.sha256` sur la page de la version. Sous macOS 14+, l'application embarque
@@ -156,10 +156,6 @@ Voir [SPONSORS.md](../SPONSORS.md).
 <tr>
 <td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="../assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
 <td>Merci à <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a> pour son soutien à ce projet ! OrcaRouter est une passerelle d'IA compatible OpenAI pour la production : un routage adaptatif qui évalue chaque prompt et l'envoie au modèle qui atteint votre seuil, un basculement automatique, des règles de routage sous forme de code, une tarification fournisseur sans marge avec mise en cache des prompts, ainsi que des garde-fous, un pare-feu d'agents et des journaux de requêtes sur chaque appel, parmi plus de 200 modèles. Choisissez <code>OrcaRouter</code> dans le sélecteur Add provider ou exécutez <code>ocx provider add orcarouter</code> ; <code>orcarouter/auto</code> est le routeur adaptatif.</td>
-</tr>
-<tr>
-<td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
-<td>Merci à <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> pour son soutien à ce projet ! PackyCode est un fournisseur de relais API stable et performant, qui propose des services de relais pour Claude Code, Codex, Gemini et d'autres. Grâce au basculement automatique, au routage intelligent et à une concurrence illimitée, il fait de l'IA un véritable outil de productivité. <a href="https://www.packyapi.com/register?aff=k5KT">Inscrivez-vous via ce lien</a> et commencez ! Choisissez <code>PackyCode</code> dans le sélecteur Add provider ou exécutez <code>ocx provider add packycode</code>.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
 <tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
@@ -482,6 +478,16 @@ Consultez le guide **[Contribuer](../CONTRIBUTING.md)**.
 Les contributions de contributeurs intégrées par un report ou une réimplémentation d'un mainteneur,
 lorsque le commit ne nomme pas l'auteur d'origine, sont consignées dans
 **[CREDITS.md](../CREDITS.md)**.
+
+## Politique de signature du code (Code signing policy)
+
+Les binaires Windows passent à la signature Authenticode ([#7207](https://github.com/lidge-jun/opencodex/issues/7207)). Le [guide de signature du code Windows](https://opencodex.me/fr/reference/code-signing/) décrit le déploiement, la vérification d’une signature et la politique complète.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## Avis de non-responsabilité
 

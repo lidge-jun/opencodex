@@ -132,7 +132,7 @@ ocx combo set balanced \
 | 인증, 구독, 쿼터, 속도 제한, 과부하, 또는 상위 서버 오류로 분류됨 | 상태 코드만으로는 충분하지 않더라도 대상을 쿨다운으로 보내고 넘어갑니다. |
 | 클라이언트 취소(499), `origin_rejected`, cyber-policy refusal, context overflow, 또는 기타 invalid request | 멈추고 오류를 반환합니다. 다른 대상을 써도 요청이 유효해지지 않기 때문입니다. |
 | ChatGPT 계정으로 Codex를 사용할 때 해당 모델을 지원하지 않는다는 정확한 HTTP 400 거부 | 출력이 시작되기 전에 다음 설정 대상으로 넘어갑니다. 거부 문장 전체가 `detail`, `error.message` 또는 일반 텍스트에 있어야 하며, `detail`과 `error`가 충돌하면 중단합니다. 이 사유만으로 계정을 재인증 상태로 바꾸거나 공급자의 모든 모델에 쿨다운을 걸지는 않습니다. |
-| `user`를 명시적으로 거부하거나, `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값 또는 모델별 이미지 입력 거부(`param: input`)를 나타내는 구조화된 HTTP 400 | 출력 시작 전에 쿨다운 기록 없이 다음 적격 대상으로 넘어갑니다. 선택적 매개변수 호환성을 참조하세요. |
+| `user`를 명시적으로 거부하거나, `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`) 또는 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 HTTP 400 | 출력 시작 전에 쿨다운 기록 없이 다음 적격 대상으로 넘어갑니다. 선택적 매개변수 호환성을 참조하세요. |
 | 인프로세스 어댑터(`runTurn`)가 실행하는 Responses 턴에서 현재 요청이 선언하지 않은 첫 도구 호출(출력이나 재전송 불가 부작용 이전) | 대상을 쿨다운하고 같은 도구 카탈로그로 다음 대상으로 넘어갑니다. 출력이 보였거나 재전송 불가 부작용이 생긴 뒤에는 거부가 그대로 확정됩니다. Chat Completions와 Anthropic Messages 요청은 바뀌지 않습니다. |
 | 그 밖의 분류되지 않은 오류 | 멈추고 오류를 반환합니다. |
 
@@ -194,7 +194,7 @@ v1/base/v2 모드와 암호화된 작업의 전체 흐름은 [Sub-agent Surface]
 
 ### 대시보드
 
-로컬 대시보드를 열고 **Models → Combos**를 선택합니다. 워크스페이스는 콤보를 만들고, 편집하고, 이름을 바꾸고, 제거할 수 있으며, 대상 선택기에서는 비활성 모델과 중첩 콤보를 제외합니다.
+로컬 대시보드를 열고 **Models → Combos**를 선택합니다. 워크스페이스에서 콤보를 만들고, 편집하고, 이름을 바꾸고, 제거할 수 있습니다. 모델 선택기에는 숨겨진 모델도 포함됩니다. 표시 설정은 외부 모델 목록에만 적용되며 콤보 내부 선택에는 영향을 주지 않습니다. 숨겨진 모델을 선택해도 외부에 표시되지 않습니다. 대상 선택기에서는 비활성 공급자, 중첩 콤보, 결정 서비스 전용 JEV 공급자를 계속 제외합니다.
 
 각 대상에는 **사용 가능**, **할당량 소진**, **할당량 알 수 없음** 실시간 배지도 표시됩니다. 편집기는 사용 가능한 모든 대상에 대해 설정된 인증 정보의 추론 한도가 소진되었다는 서버 확인이 현재 유효할 때만 할당량을 이유로 저장과 만들기를 차단합니다. 표시 전용 계정·모델·검색·MCP 할당량이나 누락되거나 만료된 라우팅 근거 정보는 이 차단을 일으키지 않습니다. 차단은 해당 한도의 초기화 시점이나 데이터 유효기간이 끝나면 해제되며 페이지가 활성화되거나 표시될 때 다시 확인됩니다. 새로 고침은 콤보 데이터와 할당량을 모두 다시 불러옵니다. 대시보드 편집기에서는 아직 `cooldownMs`나 `waitForCooldownMs`를 설정할 수 없습니다. 후속 UI 작업이 완료될 때까지 구성 파일이나 관리 API를 사용하세요.
 
@@ -209,9 +209,9 @@ ocx combo set <id> --targets provider/model[:weight],...
 ocx combo remove <id> --yes
 ```
 
-`set`은 `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`, `--display-name`,
+`set`은 `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`, `--display-name`, `--description`,
 `--rename-from`도 받습니다. `--native-alias`에는 현재 지원되는 bare native alias와 비어 있지 않은 display name이 필요합니다. `--effort`, `--alias`,
-`--display-name`에 `-`를 지정하면 해당 값을 지울 수 있습니다. `create`와 `update`는 `set`의
+`--display-name`, `--description`에 `-`를 지정하면 해당 값을 지울 수 있습니다. `create`와 `update`는 `set`의
 별칭이고 `delete`는 `remove`의 별칭입니다. 모든 combo 하위 명령은 `ocx route combo ...`에서도 사용할 수 있습니다.
 
 ### Management API
@@ -256,6 +256,7 @@ ocx combo remove <id> --yes
 | `alias` | 아니요 | 없음 | 선택적으로 앞뒤 공백을 제거한 공개 모델 ID입니다. 위의 alias 규칙을 따릅니다. 빈 값은 alias 없음으로 저장됩니다. |
 | `nativeAlias` | 아니요 | `false` | 현재 지원되는 bare native alias가 routing/catalog 우선권을 갖도록 명시적으로 허용합니다. |
 | `displayName` | 아니요 | 없음 | catalog 표시 전용 label입니다. `nativeAlias`가 true이면 필수입니다. |
+| `description` | 아니요 | 없음 | catalog 행에 표시되는 설명입니다. `displayName`과 같은 제한이 적용됩니다. 설정하지 않으면 생성된 `Routed via opencodex → combo (combo).` 문구가 유지됩니다. |
 
 ## 문제 해결
 
@@ -285,6 +286,6 @@ opencodex 인스턴스에 기록했는지 확인하세요.
 
 ## 선택적 매개변수 호환성
 
-일반적인 400 오류는 종료되지만, `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값 또는 모델별 이미지 입력 거부(`param: input`)를 나타내는 구조화된 오류는 출력 시작 전에 다음 적격 대상으로 넘어갈 수 있습니다. 이 경우 쿨다운을 기록하지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다.
+일반적인 400 오류는 종료되지만, `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`) 또는 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 오류는 출력 시작 전에 다음 적격 대상으로 넘어갈 수 있습니다. 이 경우 쿨다운을 기록하지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).

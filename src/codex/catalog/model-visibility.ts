@@ -189,7 +189,6 @@ export function warnDroppedConfiguredIdsOnce(name: string, droppedConfiguredIds:
   );
 }
 export function shouldExposeProviderModel(providerName: string, modelId: string): boolean {
-  if (providerName === "opencode-free") return modelId === "big-pickle" || modelId.endsWith("-free");
   // xAI /models advertises both the dated deployment and this floating alias.
   // Keep only grok-4.20-multi-agent-0309; the alias is the same server-side id.
   if (providerName === "xai" && modelId === "grok-4.20-multi-agent-beta-latest") return false;
@@ -205,7 +204,6 @@ export function shouldRetainConfiguredProviderModel(
   prov?: OcxProviderConfig,
 ): boolean {
   if (CALLABLE_CONFIGURED_COMPATIBILITY_MODELS[providerName]?.has(modelId)) return true;
-  if (providerName === "opencode-free") return modelId === "big-pickle" || modelId.endsWith("-free");
   if (modelInList(prov?.retainModels, modelId)) return true;
   return false;
 }
@@ -231,6 +229,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
   retainComboTargets?: boolean;
   metadataModelIdCaseFold?: boolean;
   metadataConfigDir?: string;
+  includeVisionSidecar?: boolean;
 }): { models: CatalogModel[]; droppedConfiguredIds: string[] } {
   const {
     name,
@@ -242,6 +241,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     retainComboTargets = true,
     metadataModelIdCaseFold,
     metadataConfigDir,
+    includeVisionSidecar,
   } = opts;
   const out = [...opts.models];
   const present = new Set(out.map(model => model.id));
@@ -250,7 +250,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     if (present.has(candidate.id)) continue;
     const dated = out.find(live => isDatedVariantId(live.id, candidate.id));
     if (dated) {
-      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir));
+      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir, includeVisionSidecar));
       present.add(candidate.id);
       continue;
     }

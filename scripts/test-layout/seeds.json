@@ -9,7 +9,7 @@
   "domains": {
     "providers": {
       "match": [
-        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command(?!-code-client)|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode(?!-kilo)|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
+        "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command(?!-code-client)|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|dsh-account(?!-adapter)|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode(?!-kilo)|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
       ],
       "children": {
         "cursor": [
@@ -32,7 +32,7 @@
     "codex-integration": {
       "match": [
         "^context-compat\\.test\\.ts$",
-        "^(?:active|app|bearer|catalog|combos\\.test\\.ts|doctor\\.test\\.ts|effort|gather|history|injection|issue|multi|native|parallel|project|selected|slug|ultrafast|warmup\\.test\\.ts)-"
+        "^(?:active|app|bearer|catalog|combos\\.test\\.ts|doctor\\.test\\.ts|effort|gather|history|injection|issue|multi|native(?!-compaction-(?:gateway|provenance|oauth))|parallel|project|selected|slug|ultrafast|warmup\\.test\\.ts)-"
       ]
     },
     "server": {
@@ -46,7 +46,7 @@
     },
     "adapters": {
       "match": [
-        "^(?:bridge\\.test\\.ts|buffered|identity|run|tool|translator)-"
+        "^(?:bridge\\.test\\.ts|buffered|dsh-account-adapter|identity|run|tool|translator)-"
       ],
       "children": {
         "google": [
@@ -62,6 +62,7 @@
     },
     "responses": {
       "match": [
+        "^native-compaction-(?:gateway|provenance|oauth)\\.test\\.ts$",
         "^openai-responses-summary-none\\.test\\.ts$",
         "^(?:apply|chat|citation|continuation|eventstream|legacy|namespace|passthrough|responses|sse|thought|ws)-"
       ]
@@ -88,7 +89,7 @@
     },
     "oauth": {
       "match": [
-        "^(?:chatgpt|generic|state)-"
+        "^(?:chatgpt|dsh-login|generic|state)-"
       ]
     },
     "claude-integration": {
@@ -96,7 +97,7 @@
     },
     "ci-workflows": {
       "match": [
-        "^(?:assert|build|bump|ci|cleanup|closed|docs|dsh|fixture|install|keyring|package|release|repo|skill|test|zz)-"
+        "^(?:assert|build|bump|ci|cleanup|closed|docs|dsh-(?:path|rc6|writer)|fixture|install|keyring|package|release|repo|skill|test|zz)-"
       ]
     },
     "usage": {

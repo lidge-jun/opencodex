@@ -1,5 +1,5 @@
 import type { ProviderAdapter } from "../adapters/base";
-import type { AdapterEvent } from "../types";
+import type { AdapterEvent, OcxUsage } from "../types";
 import {
   isTranslatorBudgetExceededError,
   TRANSLATOR_MAX_TURN_BYTES,
@@ -26,12 +26,22 @@ export class WebSearchStreamProtocolError extends Error {
   }
 }
 
+/** Opt-in preserves an adapter refusal before it becomes an untyped parser exception. */
+export class WebSearchAdapterEventError extends Error {
+  constructor(readonly event: Extract<AdapterEvent, { type: "error" }>, readonly replaySafe: boolean) {
+    super(event.message);
+  }
+}
+
 export interface ParseStreamWithProgressOptions {
+  preserveAdapterError?: boolean;
   inactivityTimeoutMs: number;
   translatorBudget: TranslatorBudget;
   signal?: AbortSignal;
   /** Kept configurable for focused tests; production callers should use the 5 second default. */
   postTerminalDrainTimeoutMs?: number;
+  /** Receives the usage an adapter `error` event carries before the stream fails on it. */
+  onErrorUsage?: (usage: OcxUsage) => void;
 }
 
 type ParseStream = ProviderAdapter["parseStream"];
@@ -247,6 +257,7 @@ export async function* parseStreamWithProgress(
 
   resetInactivity();
 
+  let replaySafe = true;
   const parserPump = (async (): Promise<void> => {
     let heldTerminal: Extract<AdapterEvent, { type: "done" | "incomplete" }> | undefined;
     try {
@@ -296,11 +307,16 @@ export async function* parseStreamWithProgress(
           );
         }
         if (event.type === "error") {
+          if (event.usage) options.onErrorUsage?.(event.usage);
+          // An adapter's own overflow verdict keeps its typed event so the sidecar can end the
+          // turn as context_length_exceeded (#7316); other errors keep the plain-message shape.
+          const preserve = options.preserveAdapterError || event.code === "context_length_exceeded";
           fail(event.code === "translation_buffer_limit"
             ? new TranslatorBudgetExceededError("live_transient", TRANSLATOR_MAX_TURN_BYTES)
-            : new Error(event.message));
+            : preserve ? new WebSearchAdapterEventError(event, replaySafe) : new Error(event.message));
           return;
         }
+        replaySafe &&= event.type === "heartbeat" && event.replayUnsafe !== true;
         if (event.type === "done" || event.type === "incomplete") {
           heldTerminal = event;
           // Response-byte inactivity ends once the adapter has produced a terminal event.

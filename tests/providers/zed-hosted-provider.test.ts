@@ -268,8 +268,12 @@ describe("Zed Hosted AI provider", () => {
       role: "user",
       content: [{ type: "text", text: "hello zed" }],
     });
+    // Zed's gateway does not document the 1h TTL: the borrowed api.anthropic.com builder
+    // must not apply the first-party 1h default to it.
+    expect(request.body).toContain("cache_control");
+    expect(request.body).not.toContain("\"ttl\"");
   });
-  test("normalizes OpenAI string input to sequence blocks with input_text for Zed backend", async () => {
+  test("normalizes OpenAI input and removes Codex-only fields for Zed backend", async () => {
     const responses = [
       jsonResponse({ default_organization_id: "org-1" }),
       jsonResponse({ token: "llm-token-1" }),
@@ -287,18 +291,74 @@ describe("Zed Hosted AI provider", () => {
       authMode: "oauth",
       apiKey: "access-token",
     };
-    const parsed = parseRequest({ model: "gpt-6.1-sol", input: "hello zed openai", stream: true });
+    const parsed = parseRequest({
+      model: "gpt-6.1-sol",
+      input: [
+        { type: "message", role: "developer", content: [{ type: "input_text", text: "Follow the user request." }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hello zed openai" }] },
+      ],
+      stream: true,
+      access_programs: { cyber: ["standard"] },
+      tools: [
+        { type: "web_search", search_context_size: "medium" },
+        { type: "function", name: "synthetic_tool", parameters: { type: "object", properties: {} } },
+      ],
+    });
     parsed._zedAuthContext = { userId: "user-1" };
     const adapter = withTestTranslatorBudget(createZedAdapter(provider));
     const request = await adapter.buildRequest(parsed);
-    const body = JSON.parse(request.body) as { provider: string; provider_request: { input: Array<{ type: string; role: string; content: unknown }> } };
+    const body = JSON.parse(request.body) as {
+      provider: string;
+      provider_request: {
+        input: Array<{ type: string; role: string; content: unknown }>;
+        tools: Array<{ type: string }>;
+      };
+    };
 
     expect(body.provider).toBe("open_ai");
     expect(body.provider_request.input[0]).toEqual({
       type: "message",
+      role: "system",
+      content: [{ type: "input_text", text: "Follow the user request." }],
+    });
+    expect(body.provider_request.input[1]).toEqual({
+      type: "message",
       role: "user",
       content: [{ type: "input_text", text: "hello zed openai" }],
     });
+    expect(body.provider_request).not.toHaveProperty("access_programs");
+    expect(body.provider_request.tools).toEqual([{ type: "function", name: "synthetic_tool", parameters: { type: "object", properties: {} } }]);
+  });
+});
+
+describe("Zed OpenAI tool selection after filtering", () => {
+  const custom = { type: "custom", name: "apply_patch", format: { type: "text" } };
+  const web = { type: "web_search" };
+  for (const [name, tools, choice, expectedTools, expectedChoice] of [
+    ["custom is preserved", [custom, web], "required", [custom], "required"],
+    ["all removed with auto", [web], "auto", [], "auto"],
+    ["all removed with required", [web], "required", [], "none"],
+    ["removed named built-in", [web], { type: "web_search" }, [], "none"],
+    ["mixed allowed tools", [custom, web], { type: "allowed_tools", mode: "auto", tools: [web, { type: "custom", name: "apply_patch" }] },
+      [custom], { type: "allowed_tools", mode: "auto", tools: [{ type: "custom", name: "apply_patch" }] }],
+    ["all allowed tools removed", [web], { type: "allowed_tools", mode: "auto", tools: [web] }, [], "none"],
+  ] as const) test(name, async () => {
+    const catalog = [jsonResponse({ default_organization_id: "org-1" }),
+      jsonResponse({ token: "llm-token-1" }), jsonResponse({ models: [{ id: "gpt-6.1-sol", provider: "open_ai" }] })];
+    globalThis.fetch = (async () => {
+      const next = catalog.shift();
+      if (!next) throw new Error("unexpected Zed catalog fetch");
+      return next;
+    }) as typeof fetch;
+    const parsed = parseRequest({ model: "gpt-6.1-sol", input: "hello", tools, tool_choice: choice });
+    parsed._zedAuthContext = { userId: "user-1" };
+    const adapter = withTestTranslatorBudget(createZedAdapter({ adapter: "zed", baseUrl: "https://cloud.zed.dev",
+      authMode: "oauth", apiKey: "access-token" }));
+    const request = await adapter.buildRequest(parsed);
+    const body = JSON.parse(request.body).provider_request;
+    expect(body.input[0]).toMatchObject({ type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] });
+    expect(body.tools).toEqual(expectedTools);
+    expect(body.tool_choice).toEqual(expectedChoice);
   });
 });
 

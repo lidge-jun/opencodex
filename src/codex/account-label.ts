@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { CodexAccount, OcxConfig } from "../types";
 import type { CodexAuthContext } from "./auth-context";
 import type { ProviderApiKeySelection } from "../types/provider";
-import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
+import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
 export const CODEX_ACCOUNT_LOG_LABEL_RE = /^p[a-f0-9]{6}$/;
 

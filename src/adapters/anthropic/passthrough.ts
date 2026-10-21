@@ -31,11 +31,16 @@ import { applyAnthropicClientIdentity, hasObservedAnthropicClientIdentity, type 
 import { bindAnthropicAccountMetadata } from "./account-metadata";
 import { shouldPreserveNativeClientPreamble } from "./native-client-preamble";
 import { allowlistAnthropicBetas } from "./beta-allowlist";
+import { pairAnthropicBetaBody } from "./beta-body-pairs";
+import { applyAnthropicNativeCacheTtlDefault, resolveAnthropicCacheRetention } from "./cache-retention";
+export { contextManagementForWire } from "./beta-body-pairs";
 
 /**
  * Top-level Messages fields the native lane forwards. Everything else is dropped: an unknown or
  * beta-gated field would otherwise reach the provider unchecked. None of the dropped fields has
  * a name in the protocol feature vocabulary, so no feature effect is recorded for them.
+ * Beta-gated top-level and nested fields are reconciled with the final header through
+ * `beta-body-pairs.ts`, which also restores admitted top-level schemas.
  */
 export const ANTHROPIC_MESSAGES_PASSTHROUGH_FIELDS = [
   "model",
@@ -64,8 +69,12 @@ export interface AnthropicMessagesPassthroughRequest {
   body: string;
   /** The same body before serialization, for callers that count or inspect what is sent. */
   wireBody: Record<string, unknown>;
-  /** Caller `anthropic-beta` values were left out. Which ones is never recorded. */
+  /** Caller `anthropic-beta` values were left out. The trace never records which ones. */
   droppedBetas: boolean;
+  /** Log-safe names of the dropped values (known beta names only); see beta-allowlist.ts. */
+  droppedBetaNames: string[];
+  /** Dropped values that are not known beta names, counted only. */
+  droppedUnrecognizedBetas: number;
   /** Thinking signatures or `redacted_thinking` blocks were removed for this destination. */
   strippedOpaqueState: boolean;
   /**
@@ -260,14 +269,14 @@ export function anthropicMessagesNativeWireBody(
 /**
  * Build the upstream request. Throws the adapter's own errors for a missing credential or a
  * malformed or unresolved base URL, and refuses an OAuth credential for any destination other
- * than first-party Anthropic. `config` is accepted for parity with the other passthrough
- * builders; no config key changes the wire today.
+ * than first-party Anthropic. `config.cacheRetention` decides the TTL of caller breakpoints
+ * that carry none (see applyAnthropicNativeCacheTtlDefault).
  */
 export function buildAnthropicMessagesPassthroughRequest(
   provider: OcxProviderConfig,
   modelId: string,
   body: Readonly<Record<string, unknown>>,
-  _config?: OcxConfig,
+  config?: OcxConfig,
   options: AnthropicMessagesPassthroughOptions = {},
 ): AnthropicMessagesPassthroughRequest {
   const oauth = provider.authMode === "oauth";
@@ -286,7 +295,9 @@ export function buildAnthropicMessagesPassthroughRequest(
   const url = resolveAnthropicMessagesUrl(provider);
   const native = anthropicMessagesNativeWireBody(provider, modelId, body, options);
   const { strippedOpaqueState, oauthToolNames } = native;
-  const wireBody = oauth ? bindAnthropicAccountMetadata(native.wireBody, options.providerAccountUuid) : native.wireBody;
+  const ttlBody = applyAnthropicNativeCacheTtlDefault(
+    native.wireBody, resolveAnthropicCacheRetention(config?.cacheRetention, provider));
+  const wireBody = oauth ? bindAnthropicAccountMetadata(ttlBody, options.providerAccountUuid) : ttlBody;
   const headers = anthropicBaseRequestHeaders(wireBody.stream === true);
   if (oauth) applyAnthropicOAuthAuth(headers, provider.apiKey);
   else applyAnthropicKeyAuth(headers, provider);
@@ -306,12 +317,17 @@ export function buildAnthropicMessagesPassthroughRequest(
   const betas = allowlistAnthropicBetas(options.callerAnthropicBeta, domain?.firstPartyAnthropic ? "first-party" : "compatible",
     { inlineTools: hasInlineToolChanges(wireBody), observedNativeClient: hasObservedAnthropicClientIdentity(options.clientIdentity) });
   mergeAnthropicBetaHeader(headers, betas.betas);
+  // Header and body travel as a pair: the field goes out only when its beta does.
+  const sentBody = pairAnthropicBetaBody(wireBody, body, headers["anthropic-beta"],
+    domain?.firstPartyAnthropic === true, oauthToolNames);
   return {
     url,
     headers,
-    body: JSON.stringify(wireBody),
-    wireBody,
+    body: JSON.stringify(sentBody),
+    wireBody: sentBody,
     droppedBetas: betas.dropped,
+    droppedBetaNames: betas.droppedNames,
+    droppedUnrecognizedBetas: betas.droppedUnrecognized,
     strippedOpaqueState,
     ...(oauthToolNames ? { oauthToolNames } : {}),
   };

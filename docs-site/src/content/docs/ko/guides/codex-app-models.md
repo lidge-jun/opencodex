@@ -172,6 +172,52 @@ fast_mode = true
 `service_tier`가 제거됩니다(레지스트리가 정식 OpenAI를 `true`, DeepSeek과 Volcengine Ark를 `false`로 분류). 미분류 커스텀 게이트웨이는 호출자가 준 값을 그대로 보존하고 주입도 받지 않습니다. 따라서
 처리 불가능한 곳에 fast 옵션이 노출되지 않으며, 커스텀 게이트웨이는 `true`로 명시적으로 옵트인할 수 있습니다.
 
+### Codex 데스크톱에서 Ultra Fast 선택
+
+`service_tier: "ultrafast"`를 지원하는 프로바이더에는 전송 매핑을 한 번 설정하면 됩니다.
+opencodex가 라우팅 모델의 Codex 기본 속도 메뉴에 **Ultra Fast**를 추가하므로, 동기화할 때마다
+`opencodex-catalog.json`을 직접 수정할 필요가 없습니다. 예를 들어 GPT-6.1 Sol용 API
+프로바이더의 기존 설정에 다음 필드를 병합하세요.
+
+```json
+{
+  "models": ["gpt-6.1-sol"],
+  "modelSupportsServiceTier": { "gpt-6.1-sol": true },
+  "fastWire": {
+    "kind": "service-tier",
+    "canonicalToWire": { "priority": "priority", "ultrafast": "ultrafast" },
+    "foreignCallerTiers": "verbatim"
+  }
+}
+```
+
+이 매핑은 해당 프로바이더에서 Fast를 사용할 수 있는 모든 모델에 적용됩니다. 일부 모델만
+Ultra Fast를 지원한다면 별도 프로바이더 항목을 사용하세요. 앱에서 선택한 속도를 전달하려면
+opencodex의 Fast 모드를 **Auto**로 유지하세요(`fastMode` 생략). Fast 강제 모드는 `priority`를
+전송하고, Default 강제 모드는 tier를 제거합니다. 모델 카탈로그를 새로고침하고, 앱에 이전
+목록이 남아 있다면 Codex 데스크톱을 다시 시작한 뒤 라우팅 모델의 속도 메뉴에서 **Ultra Fast**를
+선택하세요. 기본 속도는 Standard로 유지됩니다.
+
+이 선택지를 라우팅 항목에 자동 생성하려면 사용 가능한 `service-tier` 전송 경로와 명시적인
+`ultrafast → ultrafast` 매핑이 있어야 합니다. 일반 Fast 지원이나 GPT와 비슷한 이름만으로는
+추가되지 않습니다. 이 라우팅 매핑은 네이티브·계정별 네이티브 항목이나 combo 별칭에는
+적용되지 않습니다. 매핑을 제거하거나 모델의 service-tier 지원을 끄면 다음 동기화 성공 시
+카탈로그와 캐시에서 자동 생성된 라우팅 선택지도 제거됩니다.
+Codex가 HTTP로 모델 목록을 불러올 때도 현재 적용 중인 설정의 동일한 선언이 Ultra Fast 선택지를 결정합니다.
+
+라우팅 항목에서는 `ultraFastTier`가 `provider/model` 식별자가 정확히 일치하는 저장된 항목에 사용자가
+별도로 넣은 Ultra Fast tier를 보존합니다. 자동 생성된 라우팅 tier는 사용자 제공 tier로
+취급하지 않습니다. bare native `gpt-6-astra` / `gpt-6.1-sol` 항목과 신뢰된 계정별 복제
+항목에서는 `ultraFastTier`를 켜면 네이티브 기본 tier를 바꾸지 않고 누락된 Ultrafast 선택지도
+생성합니다. 끄면 자동 생성한 것으로 추적되는 네이티브 tier 메타데이터만 제거하며,
+사용자가 별도로 넣거나 수정한 네이티브 tier 항목은 보존합니다.
+
+[OpenAI API 문서](https://developers.openai.com/api/docs/guides/ultrafast-mode)는 GPT-6 Astra와
+GPT-6.1 Sol의 Ultrafast 지원을 안내합니다. API 사용 권한과
+[Codex 요금제·워크스페이스 권한](https://learn.chatgpt.com/docs/agent-configuration/speed)은
+별개입니다. 메뉴 표시가 제공자의 사용 권한이나 실측 속도를 보장하지는 않습니다.
+Ultra Fast는 사용량·비용이 더 크며 Codex 자체 기능 제한도 계속 적용됩니다.
+
 ## 서브에이전트 선택
 
 Codex는 선택기에 보이는 카탈로그 항목을 `priority` 오름차순으로 정렬한 뒤 처음 다섯 개를

@@ -201,14 +201,10 @@ function Start-StartupHealthProbe {
     if ($null -ne $script:startupProbeProcess) {
       # Process.Start succeeded but the async pipe setup failed: Dispose alone
       # would leave the Bun child running, so terminate it before cleanup.
-      try {
-        $script:startupProbeProcess.Kill()
-        [void]$script:startupProbeProcess.WaitForExit(3000)
-      } catch {
-        Write-ActionLog "startup-health probe launch cleanup failed: $($_.Exception.GetType().Name)"
-      }
+      Stop-StartupHealthProbe
+    } else {
+      Complete-StartupHealthProbe
     }
-    Complete-StartupHealthProbe
   }
 }
 
@@ -217,11 +213,39 @@ function Complete-StartupHealthProbe {
   $script:startupProbeProcess = $null
   $script:startupProbeOutputTask = $null
   $script:startupProbeErrorTask = $null
+  $script:startupProbeTerminating = $false
   if ($null -ne $process) {
     try {
+      $process.StandardOutput.Dispose()
+      $process.StandardError.Dispose()
       $process.Dispose()
     } catch {
       Write-ActionLog "startup-health probe dispose failed: $($_.Exception.GetType().Name)"
+    }
+  }
+}
+
+function Stop-StartupHealthProbe([switch]$Shutdown) {
+  if ($null -eq $script:startupProbeProcess) { return }
+  $script:startupProbeTerminating = $true
+  try {
+    if (-not $script:startupProbeProcess.HasExited) { $script:startupProbeProcess.Kill() }
+  } catch { Write-ActionLog "startup-health probe kill failed: $($_.Exception.GetType().Name)" }
+  if ($Shutdown) {
+    # Shutdown alone may wait. Timeout ticks keep the child tracked until actual exit.
+    try { [void]$script:startupProbeProcess.WaitForExit(500) } catch { $null = $_ }
+    $exited = $false
+    try { $exited = $script:startupProbeProcess.HasExited } catch { $null = $_ }
+    if ($exited) {
+      # Exit does not mean both pipe readers finished; give them the same bounded wait.
+      $readers = @($script:startupProbeOutputTask, $script:startupProbeErrorTask) | Where-Object { $null -ne $_ }
+      if ($readers.Count -gt 0) {
+        try { [void][System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]$readers, 500) } catch { $null = $_ }
+      }
+      Complete-StartupHealthProbe
+    } else {
+      # Releasing the only reference would orphan a live child; keep it tracked.
+      Write-ActionLog "startup-health probe still running at shutdown; leaving it tracked"
     }
   }
 }
@@ -433,6 +457,7 @@ $script:startupRefreshMs = 20000L
 $script:startupProbeProcess = $null
 $script:startupProbeOutputTask = $null
 $script:startupProbeErrorTask = $null
+$script:startupProbeTerminating = $false
 $script:startupProbeStarted = 0L
 $script:startupProbeTimeoutMs = 30000L
 $script:updateAvailable = $false
@@ -520,10 +545,16 @@ function Update-TrayState {
     try {
       $probeExited = $script:startupProbeProcess.HasExited
     } catch {
-      $probeExited = $true
+      # Failed inspection is not proof of exit; keep ownership and request termination.
+      Stop-StartupHealthProbe
     }
     $probeTimedOut = ($now - $script:startupProbeStarted) -gt $script:startupProbeTimeoutMs
-    if ($probeExited -and $null -ne $script:startupProbeOutputTask -and $script:startupProbeOutputTask.IsCompleted) {
+    $probeDrained = ($null -eq $script:startupProbeOutputTask -or $script:startupProbeOutputTask.IsCompleted) -and
+      ($null -eq $script:startupProbeErrorTask -or $script:startupProbeErrorTask.IsCompleted)
+    if ($script:startupProbeTerminating) {
+      if ($probeExited -and $probeDrained) { Complete-StartupHealthProbe }
+      elseif (-not $probeExited) { Stop-StartupHealthProbe }
+    } elseif ($probeExited -and $probeDrained -and $null -ne $script:startupProbeOutputTask) {
       $probeStartup = $null
       try {
         $probeStartup = Parse-StartupHealthText $script:startupProbeOutputTask.Result
@@ -537,14 +568,8 @@ function Update-TrayState {
       # A hung diagnostic must not survive its refresh slot: terminate it so the
       # next refresh cannot stack another orphaned Bun process behind it.
       Write-ActionLog "startup-health probe timed out; terminating it"
-      try {
-        $script:startupProbeProcess.Kill()
-        [void]$script:startupProbeProcess.WaitForExit(3000)
-      } catch {
-        Write-ActionLog "startup-health probe kill failed: $($_.Exception.GetType().Name)"
-      }
+      Stop-StartupHealthProbe
       $script:startupHealth = $null
-      Complete-StartupHealthProbe
       $script:startupHealthCheckedAt = $now
     }
   }
@@ -710,14 +735,8 @@ try {
     # A probe still running when the tray shuts down would outlive it: Dispose()
     # releases the handle but does not terminate the child, so kill the active
     # probe, wait briefly for exit, then release the probe state.
-    try {
-      Write-ActionLog "terminating active startup-health probe on tray shutdown"
-      $script:startupProbeProcess.Kill()
-      [void]$script:startupProbeProcess.WaitForExit(3000)
-    } catch {
-      Write-ActionLog "startup-health probe shutdown kill failed: $($_.Exception.GetType().Name)"
-    }
-    Complete-StartupHealthProbe
+    Write-ActionLog "terminating active startup-health probe on tray shutdown"
+    Stop-StartupHealthProbe -Shutdown
   }
   Stop-UpdateBadgeProbe -Shutdown
   $notify.Dispose()

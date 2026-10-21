@@ -97,8 +97,12 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management-api
   { method: "POST", path: "/api/stop", module: "server/management-api", mutates: true },
   // codex/auth-api
+  { method: "GET", path: "/api/codex-auth/preserve-signed-in", module: "codex/auth-api/routes", mutates: false },
+  { method: "PUT", path: "/api/codex-auth/preserve-signed-in", module: "codex/auth-api/routes", mutates: true },
   { method: "DELETE", path: "/api/codex-auth/accounts", module: "codex/auth-api/routes", mutates: true },
   { method: "GET", path: "/api/codex-auth/accounts", module: "codex/auth-api/routes", mutates: false },
+  { method: "GET", path: "/api/codex-auth/accounts/use-remaining", module: "codex/auth-api/routes", mutates: false },
+  { method: "PUT", path: "/api/codex-auth/accounts/use-remaining", module: "codex/auth-api/routes", mutates: true },
   { method: "GET", path: "/api/codex-auth/active", module: "codex/auth-api/routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/login-status", module: "codex/auth-api/routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/quota", module: "codex/auth-api/routes", mutates: false },
@@ -139,6 +143,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/native-main-profiles/switch", module: "codex/native-profile-api", mutates: true },
   // server/management/agent-settings-routes
   { method: "GET", path: "/api/claude-code", module: "server/management/agent-settings-routes", mutates: false },
+  { method: "GET", path: "/api/claude-code/model-defaults", module: "server/management/agent-settings-routes", mutates: false, exempt: { reason: "interactive-preview", why: "Preview half of the GUI-only Claude Code tier-default apply; the fingerprint it returns is the only input POST accepts, and no terminal confirmation workflow exists yet." } },
+  { method: "POST", path: "/api/claude-code/model-defaults", module: "server/management/agent-settings-routes", mutates: true, exempt: { reason: "interactive-preview", why: "Apply half of the GUI-only Claude Code tier-default preview; it writes the shared Claude settings only for a fingerprint the dashboard preview produced." } },
   { method: "GET", path: "/api/claude-desktop", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/claude-desktop/status", module: "server/management/agent-settings-routes", mutates: false },
   { method: "GET", path: "/api/codex-auth/features/default-mode-request-user-input", module: "server/management/agent-settings-routes", mutates: false },
@@ -163,6 +169,12 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/claude-desktop-picker-routes
   { method: "GET", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: false },
   { method: "PUT", path: "/api/claude-desktop/picker", module: "server/management/claude-desktop-picker-routes", mutates: true },
+  { method: "GET", path: "/api/codex/desktop-compatibility/certificate", module: "server/management/desktop-compatibility-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "deferred-verb", owner: "codex-desktop-compatibility", ownerDoc: "structure/clients/codex-desktop.md", why: "Certificate status is available over authenticated HTTP while the desktop compatibility runtime/CLI status contract is integrated." } },
+  { method: "POST", path: "/api/codex/desktop-compatibility/certificate", module: "server/management/desktop-compatibility-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Certificate setup requires a confirmed local dashboard session; raw admin tokens cannot enroll or remove OS trust." } },
+  { method: "GET", path: "/api/codex/desktop-compatibility/runtime", module: "server/management/desktop-compatibility-runtime-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "deferred-verb", owner: "codex-desktop-compatibility", ownerDoc: "structure/clients/codex-desktop.md", why: "Experimental runtime status is authenticated HTTP while the native compatibility UI and CLI contract are integrated." } },
+  { method: "POST", path: "/api/codex/desktop-compatibility/runtime", module: "server/management/desktop-compatibility-runtime-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Native app launch and account-wide UI trial require explicit local dashboard confirmation." } },
+  { method: "GET", path: "/api/codex/desktop-compatibility/settings", module: "server/management/desktop-compatibility-settings-routes", mutates: false, mechanism: "path-constant", exempt: { reason: "deferred-verb", owner: "codex-desktop-compatibility", ownerDoc: "structure/clients/codex-desktop.md", why: "The persisted startup preference is currently owned by the local desktop compatibility panel." } },
+  { method: "POST", path: "/api/codex/desktop-compatibility/settings", module: "server/management/desktop-compatibility-settings-routes", mutates: true, mechanism: "path-constant", exempt: { reason: "session-only", why: "Saved native observation intent requires an explicit local GUI action and fresh field revision." } },
   { method: "PUT", path: "/api/codex-auth/features/default-mode-request-user-input", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/effort-caps", module: "server/management/agent-settings-routes", mutates: true },
   { method: "PUT", path: "/api/grok/selection", module: "server/management/agent-settings-routes", mutates: true },
@@ -209,8 +221,11 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/combos/decision-test", module: "server/management/decision-routes", mutates: true },
   // server/management/config-routes
   { method: "GET", path: "/api/config", module: "server/management/config-routes", mutates: false },
+  { method: "GET", path: "/api/auto-review-settings", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/diagnostics/project-config", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/settings", module: "server/management/config-routes", mutates: false },
+  { method: "GET", path: "/api/native-reasoning-retention", module: "server/management/native-reasoning-retention-routes", mutates: false, exempt: { reason: "local-transport", why: "The CLI reads the same nativeReasoningRetention policy through ocx config get; no separate HTTP-specific settings verb is required." } },
+  { method: "PUT", path: "/api/native-reasoning-retention", module: "server/management/native-reasoning-retention-routes", mutates: true, exempt: { reason: "deferred-verb", why: "A dedicated live CLI verb for this policy is deferred to native-reasoning-retention-live-cli; ocx config set/unset currently edits the same block on disk without live convergence.", owner: "native-reasoning-retention-live-cli", ownerDoc: "structure/transports/native-reasoning-retention.md" } },
   { method: "GET", path: "/api/shadow-call-settings", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/sidecar-settings", module: "server/management/config-routes", mutates: false },
   { method: "GET", path: "/api/startup-health", module: "server/management/config-routes", mutates: false },
@@ -223,6 +238,7 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/windows-tray", module: "server/management/config-routes", mutates: true },
   { method: "PUT", path: "/api/config", module: "server/management/config-routes", mutates: true, exempt: { reason: "disabled", why: "Returns 405 by design; provider changes go through POST /api/providers." } },
   { method: "PUT", path: "/api/settings", module: "server/management/config-routes", mutates: true },
+  { method: "PUT", path: "/api/auto-review-settings", module: "server/management/config-routes", mutates: true },
   { method: "PUT", path: "/api/shadow-call-settings", module: "server/management/config-routes", mutates: true },
   { method: "PUT", path: "/api/sidecar-settings", module: "server/management/config-routes", mutates: true },
   // server/management/integration-routes
@@ -267,6 +283,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/usage", module: "server/management/logs-usage-routes", mutates: false },
   // server/management/usage-timeline-routes
   { method: "GET", path: "/api/usage/timeline", module: "server/management/usage-timeline-routes", mutates: false },
+  // server/management/advisor-routes
+  { method: "GET", path: "/api/advisor/settings", module: "server/management/advisor-routes", mutates: false },
+  { method: "GET", path: "/api/advisor/activity", module: "server/management/advisor-routes", mutates: false },
+  { method: "PUT", path: "/api/advisor/settings", module: "server/management/advisor-routes", mutates: true },
   // server/management/companion-routes
   { method: "POST", path: "/api/companion/open-in-browser", module: "server/management/companion-routes", mutates: true, exempt: { reason: "browser-navigation", why: "Opens the companion's current view in the system browser under normal management admission; the CLI reads the underlying settings and usage directly." } },
   { method: "GET", path: "/api/companion/settings", module: "server/management/companion-routes", mutates: false },
@@ -344,15 +364,17 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/oauth/accounts/pool", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/providers/keys/active", module: "server/management/oauth-account-routes", mutates: true },
   { method: "PUT", path: "/api/providers/keys/alias", module: "server/management/oauth-account-routes", mutates: true },
+  { method: "PUT", path: "/api/providers/keys/pause", module: "server/management/oauth-account-routes", mutates: true },
   // server/management/provider-routes
   { method: "DELETE", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "GET", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/provider-presets", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/provider-quotas", module: "server/management/provider-routes", mutates: false },
-  { method: "GET", path: "/api/provider-request-pacing", module: "server/management/provider-routes", mutates: false },
+  { method: "GET", path: "/api/provider-request-pacing", module: "server/management/provider-key-pacing-routes", mutates: false },
   { method: "GET", path: "/api/providers", module: "server/management/provider-routes", mutates: false },
   { method: "PATCH", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "POST", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
+  { method: "POST", path: "/api/providers/test-completion", module: "server/management/provider-routes", mutates: true },
   { method: "POST", path: "/api/providers/test", module: "server/management/provider-routes", mutates: true },
   { method: "PUT", path: "/api/providers", module: "server/management/provider-routes", mutates: true },
   { method: "PUT", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: true },

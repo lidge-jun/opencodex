@@ -1,4 +1,5 @@
 import { projectAntigravitySelectedModels } from "../providers/antigravity-effort-families";
+import { configuredUltraFastSlugs } from "./catalog/configured-tiers";
 import { join } from "node:path";
 import { sameCatalogHealPath } from "./catalog/heal-observation";
 
@@ -52,7 +53,7 @@ import {
   orderForSubagents,
   } from "./catalog/sync";
   import { multiAgentV2EnabledFromConfigText } from "./features";
-  import { enforceCatalogSlugUniqueness, exactComboCatalogSlugs } from "./catalog/aggregation";
+  import { comboCatalogDescriptions, enforceCatalogSlugUniqueness, exactComboCatalogSlugs } from "./catalog/aggregation";
   import {
   isNativeAliasCatalogEntry,
   accountBoundNativeOpenAiSlugs,
@@ -371,6 +372,7 @@ function prepareCatalog(
   );
   const mergedModels = mergeCatalogEntriesFromObservedState({
     ultraFastTier: ultraFastTierEnabled(config),
+    configuredUltraFastSlugs: configuredUltraFastSlugs(ordered),
     modelPickerOrder,
     accountSelectors,
     catalogModels,
@@ -390,6 +392,7 @@ function prepareCatalog(
     multiAgentV2Enabled,
     keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
     exactComboSlugs,
+    comboDescriptions: comboCatalogDescriptions(config),
     hasPhysicalComboProvider,
     includeNativeOpenAi,
     accountBoundEntries,

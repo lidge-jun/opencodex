@@ -38,6 +38,7 @@ export interface ActiveTurnLease extends AdmissionLease {
   attach(lease: AdmissionLease): void;
   bindAbortSignal(signal: AbortSignal): () => void;
   bindAbortController(ac: AbortController): void;
+  unbindAbortController(ac: AbortController): void;
   beginCodexAccountSelection(): CodexAccountSelectionAdmission;
   isTransferred(): boolean;
 }
@@ -231,6 +232,17 @@ export function tryAdmitTurn(sessionLaneId?: string, clientSignal?: AbortSignal)
       activeTurns.set(ac, lease);
       lease.bindAbortSignal(ac.signal);
     },
+    unbindAbortController(ac) {
+      if (!controllers.delete(ac)) return;
+      if (activeTurns.get(ac) === lease) activeTurns.delete(ac);
+      const listener = abortListeners.get(ac.signal);
+      if (listener) {
+        ac.signal.removeEventListener("abort", listener);
+        abortListeners.delete(ac.signal);
+      }
+      // A completed child relay cannot retire its still-running parent turn.
+      if (controllers.size === 0) lease.release();
+    },
     beginCodexAccountSelection() {
       const mainProfileDraining = nativeMainDrainOwners.size > 0;
       let selectionActive = active && !mainProfileDraining;
@@ -327,7 +339,7 @@ export function unregisterTurn(ac: AbortController): void {
     turnReleaseMisses += 1;
     return;
   }
-  lease.release();
+  lease.unbindAbortController(ac);
 }
 export function isDraining(): boolean { return shutdownDraining || temporaryDrainOwners.size > 0; }
 export function getActiveTurnCount(): number { return turnGate.metrics().active; }
@@ -464,13 +476,25 @@ export function trackStreamLifetime(
   registerTurn(ac, lease);
   const reader = body.getReader();
   let closed = false;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  // A drain aborts the turn's controller; many callers pass a fresh one nothing else listens to,
+  // so the tracked stream itself has to stop.
+  const onAbort = () => {
+    if (closed) return;
+    // Stop the stream before the caller's onDone runs, so a throwing callback cannot leave it open.
+    reader.cancel(ac.signal.reason).catch(() => {});
+    try { streamController?.error(ac.signal.reason); } catch { /* already closed */ }
+    finish();
+  };
   const finish = () => {
     if (closed) return;
     closed = true;
+    ac.signal.removeEventListener("abort", onAbort);
     unregisterTurn(ac);
     onDone?.();
   };
-  return new ReadableStream<Uint8Array>({
+  const tracked = new ReadableStream<Uint8Array>({
+    start(controller) { streamController = controller; },
     async pull(controller) {
       try {
         const { done, value } = await reader.read();
@@ -487,6 +511,10 @@ export function trackStreamLifetime(
       reader.cancel(reason).catch(() => {});
     },
   });
+  // After registerTurn, so the lease's own abort listener (release the turn) runs first. A
+  // controller registerTurn already aborted (a settled lease) keeps its previous behaviour.
+  ac.signal.addEventListener("abort", onAbort, { once: true });
+  return tracked;
 }
 
 export async function drainAndShutdown(

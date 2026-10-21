@@ -16,6 +16,32 @@ Claude Code может использовать все маршрутизиру�
 Это исправление порядка вывода не решает отдельную проблему отказа Cognition принимать некоторые
 сгенерированные системные тексты. Системные инструкции и ограничения безопасности сохраняются.
 
+## Модели по уровням для CLI и внешних приложений
+
+На странице Claude Code выберите модели Opus, Sonnet, Haiku или Fable и нажмите **Сохранить**.
+Значения `claudeCode.tierModels` передаются новым запускам `ocx claude`, не изменяя текущую основную
+модель, уровень рассуждения или назначения семейств Desktop.
+
+Приложения, запускающие `claude` напрямую, не получают окружение `ocx`. После сохранения выберите
+**Предпросмотр настроек Claude**, проверьте изменения `ANTHROPIC_DEFAULT_*_MODEL`, затем
+**Применить к настройкам Claude**. Изменяется конфигурация пользователя Claude на хосте OpenCodex,
+а не на компьютере браузера. Для новых значений нужен новый процесс Claude; существующие сеансы
+не перезапускаются. Маршрутизация и аутентификация не настраиваются: прямое приложение должно быть
+уже подключено к OpenCodex.
+
+Применяются только явно выбранные уровни. **Не задано** сохраняет существующую настройку Claude,
+а не возвращает нативную модель. Отсутствующий файл поддерживается, существующий пустой или
+повреждённый файл отклоняется. Изменение после предпросмотра требует нового предпросмотра.
+
+При применении фактический файл временно перемещается в приватный каталог
+`model-default-backups/apply-*/settings.json` внутри каталога Claude, проверяется и заменяется
+публикацией только в свободный путь. Чужой новый файл не перезаписывается даже при откате.
+На короткое время файл отсутствует: не редактируйте настройки и не запускайте Claude в этот момент.
+Нужны перемещение в пределах одного тома и жёсткие ссылки; небезопасной перезаписью ошибки не обходятся.
+После прерывания или ошибки восстановления сопоставьте резервную копию с новыми правками.
+Windows и Linux требуют отдельных проверок. Реальную модель проверяйте по журналам запросов;
+функция полезна и для внешних классификаторов, запрашивающих Sonnet.
+
 ## Быстрый старт
 
 ```bash
@@ -154,22 +180,22 @@ unknown означает, что opencodex не может определить,
 
 ### Режим picker: модели opencodex в селекторе Code first-party
 
-Режим picker входит в режим first-party. В macOS он включён по умолчанию при выборе first-party,
+Режим picker входит в режим first-party. В macOS и Windows он включён по умолчанию при выборе first-party,
 если не задано `claudeCode.intercept.picker: false`. Он изменяет селектор моделей во вкладке Code
 first-party Desktop и показывает доступные модели opencodex по именам. При первом включении macOS может
-попросить доверить локальному центру сертификации в связке ключей для входа. Этот центр ограничен
+попросить доверить локальному центру сертификации в связке ключей для входа, а Windows — в хранилище корней текущего пользователя. Этот центр ограничен
 `claude.ai` и его поддоменами. Экспортируемая идентичность подписи защищена хранилищем учётных данных ОС
 и повторно используется при обычных перезапусках. Ключ подписи picker не хранится открытым текстом в
-каталоге конфигурации OpenCodex. Полная проверка ограниченного CA и доверия ОС сохраняется. Если одобренная
+каталоге конфигурации OpenCodex. Полная проверка ограниченного CA и доверия ОС сохраняется, в Windows — по точному отпечатку с проверенным листом. Если одобренная
 идентичность не изменилась и хранилище доступно, перезапуск не добавляет и не удаляет настройки доверия
-сертификатам. Восстановление при запуске никогда не устанавливает доверие: если оно отсутствует, отозвано
+сертификатам macOS. Восстановление при запуске и проверка состояния никогда не устанавливают доверие: если оно отсутствует, отозвано
 или неизвестно, picker остаётся в ожидании. Для предоставления доверия явно выполните
-`ocx claude desktop picker on` или `ocx claude desktop picker trust`.
+`ocx claude desktop picker on` или `ocx claude desktop picker trust`, включая подтверждение Windows при необходимости.
 
 При однократной миграции со старой идентичности может потребоваться согласие на удаление прежнего доверия.
 Пока очистка не завершена, picker недоступен, а применённый профиль использует туннель без расшифровки.
 macOS отдельно может попросить разблокировать связку ключей или разрешить приложению доступ к учётным
-данным, в том числе после перезапуска или обновления. Windows и Linux по-прежнему не поддерживают picker:
+данным, в том числе после перезапуска или обновления. В Windows явные `on` или `trust` могут запросить подтверждение добавления корня. Linux по-прежнему не поддерживает picker:
 работа с его CA, хранилищем и прокси не запускается. Основной перехват Claude остаётся доступен; для его
 локальных файлов CA проверяются владелец, символические ссылки, права доступа и ACL Windows.
 
@@ -333,7 +359,9 @@ Anthropic сохраняют канонические id в обоих инте�
 
 ### Маркер контекстного варианта `[1m]`
 
-Модели с подтверждённым контекстным окном 1M или не ниже порога сжатия по умолчанию (829 800)
+Эти проверки используют эффективное окно из каталога, которое может включать [оценку для пользовательского провайдера](/ru/reference/configuration/providers/#контекст-пользовательских-провайдеров). Оценка не подтверждает реальную ёмкость посредника.
+
+Модели с эффективным окном в каталоге размером 1M или не меньше порога сжатия по умолчанию (829 800)
 получают дополнительную строку `…[1m]` в селекторе. Этот порог фиксирован: изменение значения сжатия его
 не понижает, а модель Claude на маршруте Anthropic должна действительно иметь 1M. Без автоконтекста учитываются
 только окна 1M. При выходе за реальное окно приходит ошибка `prompt is too long`, и Claude Code сам сжимает контекст. Её выбор заставляет Claude Code
@@ -345,7 +373,7 @@ Anthropic сохраняют канонические id в обоих инте�
 Для любой незнакомой модели Claude Code считает контекст равным 200k токенов. **Автоконтекст**
 (включён по умолчанию) исправляет это:
 
-1. Слоты окружения при запуске получают маркер `[1m]`, когда реальное окно больше 200k **и** не меньше
+1. Слоты окружения при запуске получают маркер `[1m]`, когда эффективное окно из каталога больше 200k **и** не меньше
    настроенного порога автосжатия. Строки обнаружения и селектора Desktop этому порогу не следуют:
    для них действует фиксированный пол 829 800 токенов (настоящий 1M для моделей Claude на маршруте Anthropic).
 2. Внедряется `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (по умолчанию `829800`, диапазон
@@ -377,7 +405,7 @@ Anthropic сохраняют канонические id в обоих инте�
 субагентах. Значение `200k` это отключает: маркер `[1m]` автоматически не ставится, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` не
 передаётся, а Desktop 3P убирает `prefer1m`, оставляя `supports1m`. Селектор, который вы сами пометили `[1m]`, остаётся
 доступным (созданные и принудительные субагенты по-прежнему снимают маркер, который окно модели не выдерживает), а в списке
-обнаружения остаются строки `· 1M` для моделей с настоящим окном 1M. `200k` важнее автоконтекста: экспортированное вами
+обнаружения остаются строки `· 1M` для моделей с окном каталога не менее 1M. `200k` важнее автоконтекста: экспортированное вами
 значение сжатия не включает автоматическую разметку снова, но opencodex ваш экспорт не трогает.
 
 ```bash
@@ -545,7 +573,7 @@ Claude Code — это лишь учётные данные для доступ�
 | `tool_use` ассистента | `function_call` (`input` → `arguments` в виде JSON-строки) |
 | `tool_result` пользователя | `function_call_output` (`is_error` → префикс `[tool error]`) |
 | Повтор `thinking` / `redacted_thinking` | Элементы `reasoning` с ограниченными конвертами `ocxr1` для подписей и скрытых данных |
-| Function-инструменты | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
+| Function-инструменты | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). На переведённом маршруте к `api.anthropic.com` типизированные объявления `web_search_*` и `web_fetch_*` также передаются Anthropic для выполнения на сервере, если только сайдкар веб-поиска сам не предоставляет `web_search`. Поиск и загрузка возвращаются клиенту как `server_tool_use` и соответствующий `web_search_tool_result` / `web_fetch_tool_result` |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, именованная функция→`{type:"function",name}`, размещённый WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -660,8 +688,8 @@ Responses `web_search_call` в парные блоки Anthropic `server_tool_us
 `ocx claude`.
 
 **Потолок контекста 200k, хотя модель больше** — выберите в селекторе вариант `[1m]` или
-включите автоконтекст (включён по умолчанию). Если строки `[1m]` в селекторе нет, подтверждённое
-контекстное окно модели может быть меньше фиксированного пола в 829 800 токенов.
+включите автоконтекст (включён по умолчанию). Если строки `[1m]` в селекторе нет, эффективное
+контекстное окно модели из каталога может быть меньше фиксированного пола в 829 800 токенов.
 
 **Большой расход токенов при загрузке скиллов** — встроенный скилл `claude-api` (~136k токенов)
 автоматически загружается при упоминании моделей Claude. Для нативного проброса это нормально;
@@ -682,7 +710,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

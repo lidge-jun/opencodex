@@ -49,7 +49,16 @@ const SENTENCE_END_RE = /[.!?](?:\s|$)|\n/;
 function carryWindow(text, from) {
   const slice = text.slice(from, from + 80);
   const end = slice.search(SENTENCE_END_RE);
-  return end === -1 ? slice : slice.slice(0, end);
+  if (end !== -1) return slice.slice(0, end);
+
+  // Finish only the number already started in this window (including a bare
+  // hash at the cap). The bounded suffix check and forward digit walk keep
+  // untrusted text linear and leave owner/repo qualifiers intact for REF_RE.
+  let to = from + slice.length;
+  if (/#\d*$/.test(slice)) {
+    while (to < text.length && text[to] >= "0" && text[to] <= "9") to++;
+  }
+  return text.slice(from, to);
 }
 
 const TRAILER_RE = /^[ \t]*co-authored-by:[ \t]*(.+)$/gim;

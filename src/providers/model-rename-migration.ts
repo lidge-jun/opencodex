@@ -124,16 +124,18 @@ export const MODEL_RENAMES: readonly ModelRename[] = [
   // Assist almost immediately when the next ships, so a saved 3.6 (or older 3.5) id is a
   // dead selection rather than a merely outdated one. Routing already redirects these ids
   // at request time; this migration repairs the saved config so the picker, the allowlist
-  // and the capability maps stop naming a model the backend no longer serves.
+  // and the capability maps stop naming a model the backend no longer serves. The target is
+  // the live 3.8 base: 3.7 left the static lineup on 2026-10-14 (CCA 404s its wire id), and
+  // registrySeedsTarget refuses to write an id the registry no longer seeds.
   ...(["gemini-3.6-flash", "gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-high",
     "gemini-3.5-flash-extra-low", "gemini-3.5-flash-low", "gemini-3.5-flash-mid", "gemini-3.5-flash-high",
     "gemini-3-flash-agent"] as const).map(from => ({
     provider: "google-antigravity",
     from,
-    to: "gemini-3.7-flash",
+    to: "gemini-3.8-flash",
     reason: "Google retires the previous Antigravity Flash generation from Cloud Code Assist when its successor ships, so the saved id no longer resolves to a live model",
     // The retired Flash tiers were wire ids, so any saved per-model record keyed by one
-    // may also hold one as a value. 3.7 expresses tiers as thinkingLevel names instead.
+    // may also hold one as a value. 3.8 resolves tiers from its own suffix ladder instead.
     dropReasoningEffortMap: true,
   })),
 ];
@@ -290,8 +292,8 @@ function publishes(container: unknown, id: string): boolean {
  *
  * Under those two conditions the rewrite is worse than a no-op, because it never converges.
  * `startServer` runs this migration and then `reconcileOAuthProviders`, and
- * `applyOAuthPresetCatalog` copies the preset’s record over the saved one whenever the two
- * differ. The deletion is undone inside the same boot, the config is written twice, and the user
+ * `applyOAuthPresetCatalog` fills missing preset keys into the saved metadata maps.
+ * The deletion is undone inside the same boot, the config is written twice, and the user
  * is told about a rename that never sticks on every single start. Issue #5066 is exactly that:
  * `ANTIGRAVITY_MODEL_CONTEXT_WINDOWS` derives a window for every compatibility alias, so
  * `modelContextWindows` holds a key for all nine retired Flash ids beside the live ones — the

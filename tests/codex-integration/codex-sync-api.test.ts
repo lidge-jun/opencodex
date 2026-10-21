@@ -124,6 +124,20 @@ describe("GUI/CLI Codex sync backend", () => {
     serviceManagerPreloadPath = undefined;
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   });
+  test.each([true, false])("forwards only a committed configuration change: %s", async changed => {
+    const result = await syncModelsToCodex(12345, config, null, {
+      admitCodexWrite: admittedSync,
+      refreshCodexModelCatalog: async () => ({ added: 0, path: "/tmp/fixture-catalog.json", catalogExists: false,
+        catalogWritten: false, cacheSynced: false, comboOmissions: [] }),
+      injectCodexConfig: async () => ({ success: true, configChanged: changed, message: "fixture" }),
+      currentExternalCodexModelProvider: () => null,
+      collectCodexHomeDiagnostic: () => homeDiagnostic(),
+    });
+    expect(result.ok).toBe(true);
+    expect(result.configChanged === true).toBe(changed);
+    expect(result.catalogWritten).toBe(false);
+    expect(result.cacheSynced).toBe(false);
+  });
   test("returns the structured sync result used by POST /api/sync", async () => {
     let injectedPort = 0;
     let injectedCatalogPath: string | null | undefined;

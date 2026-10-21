@@ -23,12 +23,17 @@ import {
 import {
   clearLoginState,
   getLoginStatus,
+  isCodeLoginFlow,
   isPublicOAuthProvider,
   listOAuthProviders,
+  loginFlowAccountId,
   OAUTH_PROVIDERS,
   publicOAuthAuthenticationErrorMessage,
   startLoginFlow,
+  submitLoginCode,
   submitManualLoginCode,
+  supportsCodeLoginMode,
+  waitForLoginSettled,
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
 import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
@@ -253,9 +258,17 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    // Omitted mode is the localhost-callback flow this route has always run.
+    if (body.mode !== undefined && body.mode !== "callback" && body.mode !== "code") {
+      return jsonResponse({ error: "mode must be \"callback\" or \"code\"" }, 400);
+    }
+    const codeMode = body.mode === "code";
+    if (codeMode && !supportsCodeLoginMode(provider)) {
+      return jsonResponse({ error: "code_mode_unsupported" }, 400);
+    }
     // Muse may import a local Keychain credential or start a device grant; add-account
     // and reauth skip the import. All management login paths require the dashboard
     // principal before credential acquisition. A raw token proves administration,
@@ -292,10 +305,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       // request may already have mutated live config and yielded before its save.
       const persistedBaseline = readConfigDiagnostics().config;
       // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
-      const { url: authUrl, instructions, deviceCode } = await startLoginFlow(provider, {
+      // Only code mode gets a flow id: it is what a later paste is pinned to. The callback
+      // flow's lifecycle argument stays exactly as it was.
+      const flowId = codeMode ? randomUUID() : undefined;
+      const { url: authUrl, instructions, deviceCode, expiresAt } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
+        ...(codeMode ? { codeMode: true } : {}),
       }, {
+        ...(flowId ? { flowId } : {}),
         // startLoginFlow returns the authorization URL before background persistence completes.
         // Three-way reconcile settled disk changes so a failed login cannot leave a provider
         // live-only and an in-flight management mutation cannot be erased before it saves.
@@ -322,7 +340,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         const { openUrl } = await import("../../lib/open-url");
         browserLaunch = (await openUrl(authUrl)).status === "started" ? "started" : "failed";
       }
-      return jsonResponse({ url: authUrl, instructions, deviceCode, browserLaunch });
+      return jsonResponse({
+        url: authUrl,
+        instructions,
+        deviceCode,
+        browserLaunch,
+        ...(codeMode ? { mode: "code", flowId, expiresAt } : {}),
+      });
     } catch (err) {
       if (err instanceof OAuthMutationBusyError) throw err;
       const message = err instanceof Error ? err.message : String(err);
@@ -347,25 +371,70 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       return result ? jsonResponse(result) : jsonResponse({ error: "unknown login flow" }, 404);
     }
     const { cancelLoginFlow } = await import("../../oauth");
-    const cancelled = cancelLoginFlow(provider);
+    // Without a flow id this cancels the provider's newest in-flight login, which is what the
+    // single-user GUI has always meant by "Cancel". A host running concurrent code logins for
+    // several users passes the flowId it was given at /api/oauth/login.
+    const cancelled = cancelLoginFlow(provider, typeof body.flowId === "string" ? body.flowId : undefined,
+      { dismissSettledFailure: true });
     return jsonResponse({ ok: true, cancelled });
   }
 
   // Manual fallback for browser OAuth: paste the final redirect URL (or authorization code)
   // when the browser cannot reach the loopback callback (remote/SSH/blocked localhost).
+  //
+  // A code-display flow (started with mode:"code", or identified by its flowId) gets the
+  // richer contract instead: the paste is answered with the OUTCOME of the token exchange,
+  // not merely with "accepted". A hosted caller has one paste box and no second channel, so
+  // "accepted" is indistinguishable from "worked" to the person typing.
   if (url.pathname === "/api/oauth/login/code" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string; flowId?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const consentRequired = metaMuseConsentRequired(provider, principal);
     if (consentRequired) return consentRequired;
+    const flowId = typeof body.flowId === "string" ? body.flowId : undefined;
+    const maskEmails = emailMaskingEnabled(config);
+    // Only a code flow of THIS provider gets the outcome-waiting contract; that flow is single-use,
+    // so at most one request ever waits on it. A flow id naming anything else (a callback flow,
+    // another provider's flow, nothing) has no code login to complete.
+    const codeFlow = isCodeLoginFlow(provider, flowId);
+    if (flowId !== undefined && !codeFlow) return jsonResponse({ ok: false, error: "no_pending_login" }, 409);
     const input = typeof body.input === "string" ? body.input : typeof body.code === "string" ? body.code : "";
     // Authorization responses are measured in hundreds of bytes; never accept the
     // generic management-body allowance here.
-    if (input.length > 4096) return jsonResponse({ error: "input too long" }, 400);
-    const result = submitManualLoginCode(provider, input);
-    if (!result.ok) return jsonResponse({ error: result.error }, 409);
-    return jsonResponse({ ok: true });
+    if (input.length > 4096) {
+      return codeFlow
+        ? jsonResponse({ ok: false, error: "malformed_input" }, 400)
+        : jsonResponse({ error: "input too long" }, 400);
+    }
+    if (!codeFlow) {
+      const result = submitManualLoginCode(provider, input);
+      if (!result.ok) return jsonResponse({ error: result.error }, 409);
+      return jsonResponse({ ok: true });
+    }
+    const submitted = submitLoginCode(provider, input, flowId);
+    // Rejected before any token request: the flow stays alive so the user can paste again.
+    if (!submitted.ok) {
+      return jsonResponse({ ok: false, error: submitted.code }, submitted.code === "no_pending_login" ? 409 : 400);
+    }
+    // The exchange itself times out at 30s inside the provider client; this only has to
+    // outlast it so a hung socket surfaces as an answer rather than as a hung request.
+    // Pinned to the flow this paste actually landed in: with several code logins in flight for
+    // one provider, "the newest flow" by the time this resolves may be somebody else's.
+    const settled = await waitForLoginSettled(provider, 60_000, submitted.flowId);
+    const status = getLoginStatus(provider, maskEmails, submitted.flowId);
+    if (!settled) return jsonResponse({ ok: false, error: "provider_unreachable" }, 400);
+    if (status.error) {
+      const failure = status.errorCode ?? "invalid_or_expired_code";
+      return jsonResponse({ ok: false, error: failure }, failure === "no_pending_login" ? 409 : 400);
+    }
+    // A flow dropped while waiting (logout, clear) never completed, whatever the store now holds.
+    if (status.status !== "complete") return jsonResponse({ ok: false, error: "no_pending_login" }, 409);
+    // The account THIS flow wrote, which need not be the active one (reauth of an inactive account,
+    // or a concurrent login that finished later).
+    const savedId = loginFlowAccountId(provider, submitted.flowId);
+    const account = savedId === undefined ? undefined : status.accounts?.find(entry => entry.id === savedId);
+    return jsonResponse({ ok: true, ...(account ? { account: { id: account.id, email: account.email } } : {}) });
   }
 
   if (url.pathname === "/api/oauth/status" && req.method === "GET") {
@@ -442,7 +511,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
               reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
             });
           return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
-            ...(supportsPause ? { paused: full?.paused === true } : {}),
+            ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails } : {}) } : {}),
             ...(isAnthropicOAuthInstance(provider) && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
               effectiveAutoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config, full),
               autoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config) } : {}),
@@ -597,10 +666,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // sticky limit is refused identically whichever pool is addressed.
     let strategy: string | undefined;
     if (fields.strategy !== undefined) {
-      const parsed = kind === "codex" ? parseCodexAccountPoolStrategy(fields.strategy) : parseGenericPoolStrategy(fields.strategy, provider);
-      if (parsed === null) return jsonResponse({ error: kind === "codex"
-        ? "strategy must be one of: quota, round-robin, fill-first, reset-first"
-        : `strategy must be one of: quota, round-robin, fill-first${provider === "kiro" ? ", least-loaded" : ""}` }, 400);
+      // reset-first is a Codex and generic strategy. The Anthropic runtime implements only
+      // quota, round-robin and fill-first, so that kind keeps refusing it rather than storing
+      // a strategy it would silently ignore.
+      const parsed = kind === "codex" ? parseCodexAccountPoolStrategy(fields.strategy)
+        : kind === "generic" ? parseGenericPoolStrategy(fields.strategy, provider)
+        : parseAccountPoolStrategy(fields.strategy);
+      if (parsed === null) return jsonResponse({ error: kind === "anthropic"
+        ? "strategy must be one of: quota, round-robin, fill-first"
+        : `strategy must be one of: quota, round-robin, fill-first, reset-first${kind === "generic" && provider === "kiro" ? ", least-loaded" : ""}` }, 400);
       strategy = parsed;
     }
     let stickyLimit: number | undefined;
@@ -754,7 +828,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         if (body.strategy === null) delete next.strategy;
         else {
           const parsed = parseGenericPoolStrategy(body.strategy, provider);
-          if (parsed === null) return jsonResponse({ error: `strategy must be one of: quota, round-robin, fill-first${provider === "kiro" ? ", least-loaded" : ""}` }, 400);
+          if (parsed === null) return jsonResponse({ error: `strategy must be one of: quota, round-robin, fill-first, reset-first${provider === "kiro" ? ", least-loaded" : ""}` }, 400);
           next.strategy = parsed;
         }
       }
@@ -1042,6 +1116,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ...result, name, store: providerKeyStoreKind(config.providers[name]) });
+  }
+  if (url.pathname === "/api/providers/keys/pause" && req.method === "PUT") {
+    const body = await readManagementJsonBodyOr(req, {});
+    if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
+    if (typeof body.name !== "string" || typeof body.id !== "string" || typeof body.paused !== "boolean") return jsonResponse({ error: "name, id and paused required" }, 400);
+    if (!isValidProviderName(body.name) || !hasOwnProvider(config.providers, body.name)) return jsonResponse({ error: "unknown provider" }, 404);
+    const { setProviderApiKeyPaused } = await import("../../providers/api-key-pause");
+    return setProviderApiKeyPaused(config, body.name, body.id, body.paused)
+      ? jsonResponse({ ok: true }) : jsonResponse({ error: "key not found" }, 404);
   }
   if (url.pathname === "/api/providers/keys/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; id?: string };

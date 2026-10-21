@@ -8,6 +8,7 @@ export type Page =
   | "providers"
   | "models"
   | "subagents"
+  | "advisor"
   | "logs"
   | "usage"
   | "storage"
@@ -23,6 +24,7 @@ export const VALID_PAGES = new Set<Page>([
   "providers",
   "models",
   "subagents",
+  "advisor",
   "logs",
   "usage",
   "storage",
@@ -129,6 +131,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/cursor",
   "integrations/opencode",
   "integrations/pi",
+  "integrations/gentle-shell",
   "integrations/omp",
   "integrations/hermes",
   "integrations/openclaw",
@@ -145,6 +148,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/cline",
   "integrations/kilo",
   "integrations/droid",
+  "integrations/qoder",
 ] as const;
 
 /**
@@ -164,7 +168,7 @@ export function hashBelongsToPage(rawHash: string, page: Page): boolean {
     || (page === "claude" && ["claude/code", "claude/desktop"].includes(rawHash))
     || (page === "logs" && rawHash === "logs/debug")
     || (page === "usage" && rawHash === "usage/companion")
-    || (page === "codex-set" && rawHash === "codex-set/prompt")
+    || (page === "codex-set" && (rawHash === "codex-set/prompt" || rawHash === "codex-set/desktop"))
     || (page === "models" && (
       (MODELS_TAB_HASHES as readonly string[]).includes(rawHash)
       || rawHash === JEV_AUTO_CREATE_HASH

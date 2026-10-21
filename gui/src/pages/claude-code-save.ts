@@ -16,6 +16,7 @@ export const EDITABLE_KEYS = [
   "contextAccounting",
   "injectAgents",
   "smallFastModel",
+  "tierModels",
   "webSearchSidecar",
   "visionSidecar",
 ] as const satisfies readonly (keyof ClaudeCodeState)[];
@@ -48,6 +49,7 @@ export function claudeCodeSaveBody(state: ClaudeCodeState, rows: readonly MapRow
     contextAccounting: state.contextAccounting,
     injectAgents: state.injectAgents,
     smallFastModel: state.smallFastModel,
+    tierModels: state.tierModels ?? null,
     modelMap: normalizedModelMap(rows),
     webSearchSidecar: serializeSidecarOverride(state.webSearchSidecar),
     visionSidecar: serializeSidecarOverride(state.visionSidecar),

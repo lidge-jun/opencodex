@@ -28,7 +28,7 @@
  * completed-response effects belong to the caller, which folds the same events with
  * `buildResponseJSON` at the terminal through `beforeTerminal`.
  */
-import type { AdapterEvent, OcxMessagePhase, OcxProviderContinuationState, OcxUsage } from "../../types";
+import type { AdapterEvent, AnthropicServerBlocks, OcxMessagePhase, OcxProviderContinuationState, OcxUsage } from "../../types";
 import { normalizeDeclaredToolName } from "../../types";
 import { coerceIntegerToolArguments } from "../../lib/tool-argument-integers";
 import { classifyError, isCyberPolicyCode, type OcxErrorPayload } from "../../lib/errors";
@@ -61,6 +61,7 @@ export interface ClientWebSearch {
   status: "completed" | "failed";
   queries: string[];
   sources: { url: string; title?: string }[];
+  anthropic?: AnthropicServerBlocks;
 }
 
 /**
@@ -411,9 +412,9 @@ export function encodeAdapterEventStream(
     budget.closeCall(call.callId);
     currentToolCall = null;
   };
-  const closeCurrentWebSearch = (status: "completed" | "failed", queries: string[], sources?: { url: string; title?: string }[]) => {
+  const closeCurrentWebSearch = (status: "completed" | "failed", queries: string[], sources?: { url: string; title?: string }[], anthropic?: AnthropicServerBlocks) => {
     if (!currentWebSearch) return;
-    writer.webSearchDone({ itemId: currentWebSearch.itemId, status, queries, sources: sources ?? [] });
+    writer.webSearchDone({ itemId: currentWebSearch.itemId, status, queries, sources: sources ?? [], ...(anthropic ? { anthropic } : {}) });
     currentWebSearch = null;
   };
   const appendToolArgs = (call: OpenToolCall, fragment: string) => {
@@ -688,7 +689,7 @@ export function encodeAdapterEventStream(
               if (currentWebSearch) closeCurrentWebSearch("completed", []);
               currentWebSearch = { itemId: `ws_${uuid()}`, eventId: event.id };
             }
-            closeCurrentWebSearch(event.status ?? "completed", event.queries, safeWebSearchSources(event.sources));
+            closeCurrentWebSearch(event.status ?? "completed", event.queries, safeWebSearchSources(event.sources), event.anthropic);
             break;
           }
           case "done": {
@@ -729,7 +730,7 @@ export function encodeAdapterEventStream(
             terminal = {
               status: "incomplete",
               incomplete: {
-                reason: event.reason,
+                reason: truncationReasonFor(event.reason) ?? event.reason,
                 ...(event.message ? { message: event.message } : {}),
                 ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
               },

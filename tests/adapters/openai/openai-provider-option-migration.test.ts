@@ -5,6 +5,7 @@ import {
   projectOpenAiTierMigration,
 } from "../../../src/providers/openai-tiers";
 import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../../../src/types";
+import { repoRoot } from "../../helpers/repo-root";
 
 const forward: OcxProviderConfig = {
   adapter: "openai-responses",
@@ -30,6 +31,46 @@ function expectCanonical(result: ReturnType<typeof projectOpenAiTierMigration>, 
 }
 
 describe("OpenAI provider option migration matrix", () => {
+  test("CLI startup initializes the migration validators without an import cycle", () => {
+    const result = Bun.spawnSync([process.execPath, "run", "src/cli/index.ts", "--help"], {
+      cwd: repoRoot(), env: process.env, stdout: "pipe", stderr: "pipe", timeout: 10_000,
+    });
+    expect(result.stderr.toString()).not.toContain("ReferenceError");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toContain("Usage:");
+  });
+
+  test.each([
+    { mode: "automatic" },
+    { mode: "flat" },
+    { mode: "custom", thresholdTokens: 100_000, comparison: "gt", rates: { input: 2, output: 4, cacheRead: 0, cacheWrite: 0 } },
+    { mode: "custom", thresholdTokens: 100_000, comparison: "gte", rates: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+  ] as const)("legacy Multi preserves prompt-length policy %j when rewriting model keys", promptLengthPricing => {
+    const cost = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0, promptLengthPricing };
+    const input = cfg({ providers: { "openai-multi": { ...forward, modelCosts: { "openai-multi/gpt-5.6": cost } } } });
+    const before = structuredClone(input);
+    const result = projectOpenAiTierMigration(input);
+    expectCanonical(result, "pool");
+    expect(result.config.providers.openai.modelCosts).toEqual({ "gpt-5.6": cost });
+    expect(input).toEqual(before);
+    expect(projectOpenAiTierMigration(result.config).changed).toBe(false);
+  });
+
+  test.each([
+    null,
+    { mode: "flat", extra: true },
+    { mode: "automatic", rates: {} },
+    { mode: "custom", thresholdTokens: 0, comparison: "gt", rates: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 } },
+    { mode: "custom", thresholdTokens: 100, comparison: "gte", rates: { input: 1, output: 2, cacheRead: 0 } },
+    { mode: "custom", thresholdTokens: 100, comparison: "gte", rates: { input: 1_000_001, output: 2, cacheRead: 0, cacheWrite: 0 } },
+    { mode: "custom", thresholdTokens: 100, comparison: "gte", rates: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, extra: 1 } },
+  ])("legacy Multi rejects malformed prompt-length policy %j", promptLengthPricing => {
+    const input = cfg({ providers: { "openai-multi": { ...forward, modelCosts: {
+      "gpt-5.6": { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, promptLengthPricing },
+    } } } } as unknown as Partial<OcxConfig>);
+    expect(() => projectOpenAiTierMigration(input)).toThrow(OpenAiTierMigrationCollisionError);
+  });
+
   test("unmarked minimal openai becomes one pool-default row", () => {
     const input = cfg();
     const before = structuredClone(input);

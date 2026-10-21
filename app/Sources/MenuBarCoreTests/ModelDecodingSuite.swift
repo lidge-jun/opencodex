@@ -230,6 +230,23 @@ enum ModelDecodingSuite {
             t.equal(report.normalized().percent, 12)
         }
 
+        t.test("quotas: model diagnostics stay detailed and cannot become compact pressure") {
+            let json = """
+            {"provider":"google-antigravity","quota":{"customWindows":[
+             {"label":"aux","modelId":"aux","percent":100},
+             {"label":"Gem","percent":20}]}}
+            """
+            let report = try decode(QuotaReport.self, json)
+            t.equal(report.normalized().percent, 20)
+            t.equal(report.normalized().windowLabel, "Gem")
+            t.equal(report.normalizedWindows().count, 2)
+            t.equal(report.quota?.customWindows?.first?.modelId, "aux")
+            t.equal(report.normalizedWindows().first?.modelId, "aux")
+            let onlyModel = try decode(QuotaReport.self,
+                #"{"provider":"p","quota":{"customWindows":[{"label":"aux","modelId":"aux","percent":100}]}}"#)
+            t.isNil(onlyModel.normalized().percent, "model-only compact percent")
+        }
+
         t.test("quotas: an absent quota normalizes to a nil percent") {
             let normalized = try decode(QuotaReport.self, #"{"provider":"p","label":"P"}"#).normalized()
             t.isNil(normalized.percent, "percent")

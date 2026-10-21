@@ -5,6 +5,12 @@ description: プロバイダー エントリ、認証、エンドポイント、
 
 プロバイダーは、opencodex に、モデルが存在する場所、モデルが通信するワイヤー アダプター、およびリクエストの認証方法を伝えます。
 
+## カスタムプロバイダーのコンテキスト
+
+モデルのウィンドウが未報告・未設定の場合、Azure メタデータ、モデル ID による同梱ベンダー／集約メタデータ、有効な Context cap、128k の順で補完します。報告値と設定値は小さい方を使い、Context cap は引き続き上限となります。組み込みプロバイダーは変更しません。完全一致を優先し、大文字小文字やドット／ハイフンの別表記は曖昧でない場合だけ認めます。推定は Codex の圧縮予算や Claude を含むクライアントのカタログに反映されますが、ルーティングの実測能力とは区別します。同名モデルでも中継サービスの容量は保証されません。必要に応じて modelContextWindows または Context cap を設定してください。自動的な cap の有効化やモデルへの試験リクエストは行いません。OpenAI API の値は Codex サブスクリプションの上限ではありません。
+
+この推定は既定で無効です。プロバイダーごとに `inferContextWindow: true` で有効にします。未設定の場合、ウィンドウがないモデルは有効な Context cap、次に 128k を使います。
+
 ## 初回登録時のモデル選択
 
 新しい非 OAuth 接続では、信頼できるモデル一覧の取得が完了するまでモデルの公開を保留します。Models タブの重複しないモデル行が20個以上なら、モデルのスイッチをすべて OFF にします。プロバイダー自体は ACTIVE のままです。実際の認証方式が OAuth または ChatGPT ログインなら既定値を維持します。
@@ -47,7 +53,7 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 同一アカウントとスレッドで Codex WebSocket をターンをまたいで再利用します。既定はオフ。オンにすると忙しいソケットを最大750ms待ち、モデルやティアの変更では最大2本を残します。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | ネイティブOpenAI forwardのResponses送信とcompact送信で、実証済みの接続前DNS/TCP障害に適用するオプトインのサーキットしきい値です。`0`で無効、`1`〜`20`ではその回数の終端論理リクエストが失敗するとprovider-originを30秒間遮断します。遮断中はアカウント選択やupstream送信の前に`Retry-After`付き`503`を返し、時間経過後はhalf-openリクエストを1件だけ許可します。タイムアウトとHTTP応答は数えず、HTTP応答が1件でもあれば回路を閉じます。 Codex Pool ルーティングでアカウントが固定されていない場合にのみ適用され、`codexAccountMode: "direct"` とアカウント修飾セレクターでは動作しません。 |
 | `modelCacheTtlMs?` | `number` | `300000` |プロバイダーごとの `/models` キャッシュの鮮度ウィンドウ。 |
-| `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。 |
+| `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic ファーストパーティ: `"long"`、その他の Anthropic 互換エンドポイント: `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。未設定の場合、`api.anthropic.com`（API キーまたは OAuth アカウント プール）へのリクエストは 1 時間の TTL を使い、互換ゲートウェイやベンダーのエンドポイントは 5 分の TTL のままです。明示した値が常に優先されます。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
 
 各戦略で使う実効しきい値は、アカウントの `codexAccountAutoSwitchThresholds` があればその値、なければグローバルの `autoSwitchThreshold` です。0 は使用量による先行切り替えだけを無効にし、起動時のバインド、ハードロック、クールダウン、モデル利用資格の確認、障害復旧は引き続き適用されます。
@@ -83,7 +89,9 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`ollama-native`、`azure-openai` (または別名 `azure`) のいずれか。 |
 | `baseUrl` | `string` |アップストリーム API のベース URL。ほとんどの組み込み固定エンドポイントは不一致を無視します。衝突安全キー プリセットは、古い同じ名前のカスタム宛先を保持します。 |
-| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models? }` | 上流の使用量、請求、レート制限表示とは別の、クライアント側の送信開始間隔調整です。`maxConcurrentRequests` は実行中リクエスト数を制限する正の整数で、プロバイダー規則またはモデル規則だけに設定できます。プロバイダー制限は全モデルに適用され、`models` は上流の正確なモデル ID に一致し、遅延を増やすか同時実行数を減らします。キュー待機は応答ヘッダーのタイムアウトを消費しません。HTTP と明示的なアダプターの `fetchResponse`/`runTurn` 送信を対象にします。同時実行数の上限がある場合、標準の Responses WebSocket ターンは応答本文の完了・エラー・キャンセル時に枠を解放できるよう HTTP/SSE を使います。 Cursor を含む `runTurn` アダプターでは、上限は物理送信数ではなく進行中のターン数を数えます。同じターンの RunSSE と BidiAppend は重なり得ますが、別のターンは待機します。後続送信にも開始間隔は適用されます。 |
+| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models?, keySelection?, keys? }` | 上流の使用量、請求、レート制限表示とは別の、クライアント側の送信開始間隔調整です。`maxConcurrentRequests` は実行中リクエスト数を制限する正の整数で、プロバイダー規則またはモデル規則だけに設定できます。プロバイダー制限は全モデルに適用され、`models` は上流の正確なモデル ID に一致し、遅延を増やすか同時実行数を減らします。キュー待機は応答ヘッダーのタイムアウトを消費しません。HTTP と明示的なアダプターの `fetchResponse`/`runTurn` 送信を対象にします。同時実行数の上限がある場合、標準の Responses WebSocket ターンは応答本文の完了・エラー・キャンセル時に枠を解放できるよう HTTP/SSE を使います。 Cursor を含む `runTurn` アダプターでは、上限は物理送信数ではなく進行中のターン数を数えます。同じターンの RunSSE と BidiAppend は重なり得ますが、別のターンは待機します。後続送信にも開始間隔は適用されます。 |
+| `requestPacing.keySelection?` | `"active"`, `"round-robin"` | 通常リクエストのキー選択です。既定の `active` は保存済みキーと既存の障害時切替を維持します。`round-robin` は保存済み選択を変えず、利用可能なプールのキーを順に割り当てます。トークンや料金ではなく割当回数を分散します。 |
+| `requestPacing.keys?` | `{ requestsPerMinute?, minIntervalMs?, maxConcurrentRequests? }` | キー参照ごとの共通 RPM・開始間隔・同時実行上限です。全モデルで共有し、プロバイダーとモデルの上限も同時に適用します。同一参照は枠を共有しますが、同じ上流プロジェクトの別参照は独立クォータを意味しません。TPM と日次上限は管理しません。 |
 | `responsesPath?` | `string` |キー認証 `openai-responses` リクエストの相対リソース パス。 `/` で始まり、スキーム、クエリ、またはフラグメントが含まれていない必要があります。 |
 | `chatCompletionsPath?` | `string` | `openai-chat` リクエストの相対リソース パス。 `responsesPath` の対となる設定で、同じ形式ルールが適用されます。1つのアップストリームが Chat Completions と Responses を異なるプレフィックスで提供する場合に必要です。モデルごとの wire override はアダプターのみを変更し `baseUrl` は変更しないため、この設定がないと有効化された Chat リクエストが Responses ベースへ送信されます。同梱例は Z.AI です。 |
 | `upstreamWebsocket?` | `boolean` | `openai-responses` リクエストで使用するアップストリーム Responses WebSocket トランスポート（既定値は無効）。ファーストパーティの `https://api.openai.com/v1` アップストリームでのみ有効です。カスタムプロバイダーのエンドポイントは常に制限付き HTTP/SSE を使用します。Bun はメッセージ全体を確保する前に受信 WebSocket メッセージのサイズ上限を適用できないためです。正規の ChatGPT `openai` プロバイダーでは、省略すると対象となるターンでアップストリーム WebSocket を使用し、`false` はストリーミングのターンを HTTP/SSE で送信し、`true` は拒否されます。`false` の間はネイティブのターン途中のステアリングとインジェクションを利用できません。このフィールドはクライアント側の `websockets` 設定とは独立しており、エンドポイントと認証情報のどちらも変更しません。HTTP のベース URL は SSE のままとなり、Responses 以外のパスと `openai-chat` リクエストは HTTP を使用します。 |
@@ -100,12 +108,13 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `modelDisplayNames?` | `Record<string, string>` | このプロバイダーの正確なネイティブモデル ID をキーにした、永続的な表示専用ラベルです。大文字と小文字は区別されます。ラベルはプロバイダーカタログのメタデータより優先され、認証、アダプター、ルーティング、課金、上流リクエストには影響しません。マップは検出上限と同じ 2,000 件までです。 |
 | `contextWindow?` | `number` | アップストリームのメタデータが無い場合に使うプロバイダー全体のコンテキスト値。メタデータがある場合は上限として働き、より小さいライブ値をそのまま残します。Models ダッシュボードでは `providerContextCaps` とは別に設定します。 |
 | `modelContextWindows?` | `Record<string, number>` | モデルごとのコンテキスト値および上限。`contextWindow` より優先され、ウィンドウが不明なら設定値を使い、より小さいライブメタデータがあればそちらが優先されます。 |
+| `inferContextWindow?` | `boolean` | カスタムプロバイダーのみ、既定は無効。`true` で欠けたウィンドウを同梱モデルメタデータから補完します。推定値であり、中継の容量を検証したものではありません。 |
 | `modelInputModalities?` | `Record<string, string[]>` | `["text"]` や `["text", "image"]` などのモデルごとの入力ヒント。 |
 | `modelMaxInputTokens?` | `Record<string, number>` |カタログの自動圧縮ヒントに使用されるモデルごとの正の最大入力制限。 |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | モデルごとの正の安全な整数によるソフト自動圧縮予算。実効値であるコンテキストまたは最大入力の 90% の上限を下げることだけができ、信頼できるコンテキストウィンドウが不明な場合は出力されません。canonical `openai` では、キーは provider や account-selector の接頭辞を含まない、サポート対象の正確なネイティブモデル ID でなければなりません。provider PATCH はエントリをマージし、キーを `null` にするとそのキーを削除し、フィールド全体を `null` にするとマップを消去します。これらの `null` tombstone は PATCH 専用です。 |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | モデルごとの正の安全な整数によるソフト自動圧縮予算。実効値であるコンテキストまたは最大入力の 90% の上限を下げることだけができ、有効なコンテキストウィンドウを解決できない場合は出力されません。canonical `openai` では、キーは provider や account-selector の接頭辞を含まない、サポート対象の正確なネイティブモデル ID でなければなりません。provider PATCH はエントリをマージし、キーを `null` にするとそのキーを削除し、フィールド全体を `null` にするとマップを消去します。これらの `null` tombstone は PATCH 専用です。 |
 | `defaultMaxOutputTokens?` | `number` |クライアントが `max_output_tokens` を省略した場合の、プロバイダー全体の `openai-chat` フォールバック。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` |モデルごとの `openai-chat` フォールバック バジェットがプラスになります。正確な/パターン一致はプロバイダーのデフォルトを上回ります。 |
-| `modelCosts?` | `Record<string, Cost4>` | モデルごとの表示価格（100万トークンあたりの米ドル）。そのプロバイダーの正確なアップストリーム モデル ID をキーにします（プロバイダー識別子やルーティングされた `provider/model` ラベルではありません）。値は `input`, `output`, `cacheRead`, `cacheWrite` の 4 フィールドです（例: `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`）。組み込みカタログにないモデル ID も、任意の OpenAI 互換エンドポイントを対象とするカスタムプロバイダーや、ローカル・内部プロバイダーで有効です。ユーザー設定の価格は Logs の `~$` と Usage の見積もりで組み込みカタログより優先されます。過去のエントリも現在のオーバーレイで再計算されるため、価格を編集すると過去の合計が変わることがあります（フォールバック順: ユーザー設定 → jawcode カタログ → expected-price オーバーレイ → モデル別ベンダー価格）。ユーザーが明示的に全レートを 0 にした場合は、既知のゼロ料金として見積もります。自動料金に戻すにはそのモデルの設定を削除してください。カタログの全ゼロ料金は引き続きフォールバックします。各レートは 0 以上の有限数で、最大 1,000,000（100万トークンあたりの米ドル）です。範囲外の行は管理境界で拒否され、読み込み時に破棄されます。表示専用の見積もりであり、ルーティング・アカウント選択・クォータ・請求には影響しません。 |
+| `modelCosts?` | `Record<string, ProviderCostOverlay>` | モデルごとの表示価格（100万トークンあたりの米ドル）。そのプロバイダーの正確なアップストリーム モデル ID をキーにします（プロバイダー識別子やルーティングされた `provider/model` ラベルではありません）。値は `input`, `output`, `cacheRead`, `cacheWrite` の 4 フィールドです（例: `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`）。組み込みカタログにないモデル ID も、任意の OpenAI 互換エンドポイントを対象とするカスタムプロバイダーや、ローカル・内部プロバイダーで有効です。ユーザー設定の価格は Logs の `~$` と Usage の見積もりで組み込みカタログより優先されます。過去のエントリも現在のオーバーレイで再計算されるため、価格を編集すると過去の合計が変わることがあります（フォールバック順: ユーザー設定 → jawcode カタログ → expected-price オーバーレイ → モデル別ベンダー価格）。ユーザーが明示的に全レートを 0 にした場合は、既知のゼロ料金として見積もります。自動料金に戻すにはそのモデルの設定を削除してください。カタログの全ゼロ料金は引き続きフォールバックします。各レートは 0 以上の有限数で、最大 1,000,000（100万トークンあたりの米ドル）です。範囲外の行は管理境界で拒否され、読み込み時に破棄されます。表示専用の見積もりであり、ルーティング・アカウント選択・クォータ・請求には影響しません。 |
 | `headers?` | `Record<string, string>` |追加の上流ヘッダー。認証、Cookie、API キー ヘッダー、埋め込まれた改行、および無効な名前は拒否されます。 |
 | `openRouterRouting?` | `OpenRouterProviderRouting` |デフォルトの OpenRouter `order`、`only`、および `allowFallbacks` 設定。 `openai-chat` を持つ正規 OpenRouter に対してのみ有効です。 |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` |プロバイダー全体の OpenRouter 設定を置き換える正確なモデル ID のオーバーライド。 |
@@ -131,7 +140,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `noStopModels?` | `string[]` |発信者指定の`stop`を拒否するモデル。`openai-chat`アダプター、Chatパススルー、Responsesパススルーはこれらのモデルに対してこのフィールドを送りません。組み込みの`xai`プリセットは、xAIがこれを拒否すると文書化している推論モデル(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)をここに登録します。`grok-4.20-0309-non-reasoning`, `grok-composer-2.5-fast`は呼び出し元の`stop`をそのまま受け取ります。 |
 | `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 組み込みの`xai`プリセットは、xAIがこれらを拒否すると文書化している推論モデル(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)をここに登録します。非推論モデルは呼び出し元のペナルティをそのまま受け取ります。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` エンドポイントが `response_format` を拒否する正確なモデル ID。要求モデルが項目と完全一致する場合だけフィールドを省略し、その他の `openai-chat` モデルでは structured-output 変換を維持します。 |
-| `noJsonSchemaModels?` | `string[]` | `openai-chat` エンドポイントが `json_schema` 形式は拒否しつつ `json_object` は受け入れる正確なモデル ID。この要求はフィールドを削除せず `json_object` に降格して送るため、JSON を求めた呼び出し側は散文ではなく JSON を受け取れます。両方の一覧に載るモデルでは `noStructuredOutputModels` が優先します。`opencode go` / `opencode zen` / `opencode free` プリセットが DeepSeek 経路に既定で載せます。 |
+| `noJsonSchemaModels?` | `string[]` | `openai-chat` エンドポイントが `json_schema` 形式は拒否しつつ `json_object` は受け入れる正確なモデル ID。この要求はフィールドを削除せず `json_object` に降格して送るため、JSON を求めた呼び出し側は散文ではなく JSON を受け取れます。両方の一覧に載るモデルでは `noStructuredOutputModels` が優先します。`opencode go` / `opencode zen` プリセットが DeepSeek 経路に既定で載せます。 |
 | `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` の宛先が `developer` ロールを受け付けるかを記録します。`foldDeveloperRoleToSystem` が未設定なら `system`、`true` なら `system`、`false` なら `developer` として送ります。未設定はこの宛先について何も記録されていないことを意味し、`true` は上流がロールを拒否する記録、`false` は受け付ける記録です。いずれの場合もメッセージは会話内の位置を保ち、変わるのはロールだけです。ロールを拒否する宛先は `400 role 'developer' is not allowed` を返してターンが始まらないため、未記録の既定は畳む側にしてあります。 |
 | `parallelToolCalls?` | `boolean` |並列ツール呼び出しを切り替えます。 OpenAI Chat はデフォルトでオンになっています。非チャット アダプターは明示的な `true` でのみアドバタイズします。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` |正確なプレースホルダー ID、欠落している端末 ID、および（`repairInvalidIds` で）正規の `msg_`/`rs_` 接頭辞を欠く message/reasoning ID に対するダウンストリーム SSE 修復はデフォルトで無効になっています。関数呼び出し ID は決して書き換えられません。組み込み DeepSeek は最後の 2 つをデフォルトで有効にします。 |
@@ -150,8 +159,8 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `anthropicEofTolerance?` | `boolean` | `message_stop` 前にストリームが終了しても、可視テキストまたは完全な JSON オブジェクトのツール入力が受信済みの場合に限り完了を許可します（Anthropic 互換ゲートウェイ向け）。デフォルトはオフ。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google トランスポート/認証モード。デフォルトは`ai-studio`です。 |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google 専用です。省略時または `compatible` は互換スキーマと既存の非直接 400 修復を維持します。`reject-lossy` は初期損失または判定不能な上限付き比較を送信前に拒否し、制約を開く Vertex／Cloud Code Assist 修復を保留します。直接 AI Studio はこの修復を行いません。 |
-| `project?` | `string` | Vertex または Antigravity Cloud Code Assist プロジェクト ID。 |
-| `location?` | `string` |頂点の位置。環境フォールバックは `GOOGLE_CLOUD_LOCATION` です。 |
+| `project?` | `string` | Vertex または Antigravity Cloud Code Assist プロジェクト ID。Vertex の API キーは、これが設定されているとプロジェクトエンドポイントを使い、未設定なら `GOOGLE_CLOUD_PROJECT` があっても express モードを使います。ADC は `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` にフォールバックします。 |
+| `location?` | `string` | Vertex のロケーション。API キーのプロジェクトエンドポイントは既定で `global` を使い、`GOOGLE_CLOUD_LOCATION` を無視します。ADC にはこの値か `GOOGLE_CLOUD_LOCATION` フォールバックが必要です。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` |カーソルのみ: 標準入出力またはストリーミング可能な HTTP MCP サーバー。 |
 | `desktopExecutor?` | `DesktopExecutorConfig` |カーソルのみ: 外部コンピュータ使用および画面録画コマンド。 |
 | `unsafeAllowNativeLocalExec?` | `boolean` |カーソルのレガシー ブール値。新しいフィールドが設定されていない場合のみ、`nativeLocalExec: "on"` と同等です。 |
@@ -555,3 +564,8 @@ Vercel AI Gateway は、1 つのモデルを複数の基盤となる推論プロ
 ### `anthropicAccountPool.routes`
 
 `anthropicAccountPool.routes` は Anthropic OAuth の保存済みアカウント ID をモデルに割り当てます。有効なプールでは、大文字小文字を区別する `match` グロブの最初の一致が初回選択と 429 再試行を制限します。`fallback: true` はルート内に適格なアカウントがない場合だけ通常のプールを使います。
+
+
+### `promptLengthPricing`
+
+省略可能な `promptLengthPricing` は4つの基本料金に追加します。`mode: "automatic"`（または省略）はカタログのコンテキスト料金規則を維持し、`mode: "flat"` はその規則を無効にします。`mode: "custom"` では、`thresholdTokens` に正の安全な整数、`comparison` に `"gt"`（>）または `"gte"`（≥）、`rates` に4つの絶対額の代替料金を指定します。判定にはキャッシュの読み書きを含む全プロンプトトークンを使い、出力は含めません。選択された料金は出力を含むリクエスト全体に適用され、しきい値の上下どちらでもカタログの規則を置き換えます。Fast/Priority 調整は料金の選択後に1回だけ適用され、そのモデルについてカタログが公開している Priority との関係に従います。推定値が下限として表示されるのは、カタログがその関係を `lower-bound` と宣言している場合（現在は xAI Grok）だけです。カタログに規則がないモデルでは、Priority 倍率は1回だけ適用されます。**Models → Price** で設定できます。**Reset to automatic** は基本料金と規則を含む上書き全体を削除します。既存設定との互換性は維持され、表示される推定料金だけに関する設定です。

@@ -131,13 +131,23 @@ still cover the rule, which is a judgement only review makes.
   activation checks are the sanctioned pattern. Gated Lab activation also stays synchronous
   until `startServer` returns; see [`compatibility-lab.md`](adapters/compatibility-lab.md).
   Enforced by `tests/lab/core-lab-boundary.test.ts`.
+- **INV-LAYER-01** — The `src/` static value-import graph only gets less cyclic. Every module still
+  on a cycle is listed in `tests/fixtures/import-cycle-baseline.json`; a module outside it joining a
+  cycle fails, and a listed module that leaves every cycle has to be dropped with
+  `bun scripts/import-cycles.ts --update`, which never adds one. `src/config.ts` and the core
+  request-path entrypoints sit on no cycle at all. Type-only imports and dynamic `import()` form no
+  edge, so deferring an edge behind `import()` is a sanctioned way to break a loop (issue #6386).
+  Bun parses the declarations and resolves local file and directory imports, preserving compact
+  syntax, erased type-only specifiers, and the runtime's TypeScript index-file precedence. The
+  scanner canonicalizes the root so symlinked roots and resolved imports share graph identities.
+  Enforced by `tests/ci-workflows/import-cycle-ratchet.test.ts`.
 - **INV-RESTORE-01** — `ocx restore` restores native Codex from the pristine catalog with
   retired bare/account-qualified native rows omitted from the output; the original backup stays
   unchanged. The service-stop and uninstall paths of the same promise are covered
   separately in `tests/cli/restore-completes-shared-teardown.test.ts` and are not bound to this id.
   Enforced by `tests/codex-integration/codex-catalog-restore.test.ts`.
 - **INV-TESTS-01** — `tests/` is organised by domain (`tests/<domain>/`, mirroring `src/`); the explicit map
-  is `scripts/test-layout/layout.json`, with regex seeds and migration state in
+  is `scripts/test-layout/layout.json` plus its `explicitShards` sibling maps, with regex seeds and migration state in
   `scripts/test-layout/seeds.json`, and `tests/test-layout.test.ts` rejects a test outside its
   domain. Only the two layout guards sit at the root. Source-oracle tests reach the repository
   through `tests/helpers/repo-root.ts`, never `import.meta.dir + "/.."`. Provider additions register
@@ -301,4 +311,4 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 Codex compaction can select a request-local model through the
 [existing Responses handlers](transports/responses-failover.md#compaction-routing-overrides) for the configured
-manual and automatic triggers, while subsequent turns keep their conversation settings. The optional [ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary.
+manual and automatic triggers, while subsequent turns keep their conversation settings. The optional [ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary. Only explicit `reasoningRetention.enabled: true` (advanced, default off) makes routed v1/v2 compaction use `src/responses/reasoning-retention.ts` to keep readable reasoning out of the summarizer: text within the smaller of 20% of the compacting window and 100000 estimated tokens (both configurable) returns as exact historical context after a readable summary succeeds; an unknown window uses the absolute cap. Overflow is archived under the resolved OpenCodex home with a path notice. Native compact and opaque compaction output retain their original protocols.

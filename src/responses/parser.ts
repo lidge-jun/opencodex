@@ -1,3 +1,4 @@
+import { anthropicProgressEnvelope, isAnthropicProgressMirror } from "./anthropic-progress";
 import type {
   OcxAssistantMessage,
   OcxContentPart,
@@ -15,11 +16,13 @@ import { createToolChoiceResolver, namespacedToolName } from "../types";
 import { responsesRequestSchema } from "./schema";
 import { providerMetadataFromResponsesFunctionCall } from "./provider-opaque-metadata";
 import { lookupReplayThoughtSignature } from "./thought-signature-replay";
-import { CHECKPOINT_CONTINUATION_NOTE, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "./compaction";
+import { decodeRetainedCompaction, RETAINED_COMPACTION_PREFIX } from "./retained-compaction";
+import { CHECKPOINT_CONTINUATION_NOTE, compactionItemToText, decodeCompactionSummary, isCompactionItemType, SUMMARY_PREFIX } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
 import { hasRoutedIdentity, nameRoutedIdentity } from "../adapters/identity";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
+import { rewriteReplayedWebSearchCells } from "./web-search-replay";
 import { buildImageTool, extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
@@ -28,6 +31,7 @@ import { mapToolChoice, buildTools, customToolNamespaces } from "./parser-tools"
 import { parseTextFormat } from "./parser-text-format";
 import { externalTaskInputContent } from "./task-input";
 import { normalizeVisualizationContext } from "./visualization-directives";
+import { frameCompactionHistory } from "./compaction-history-framing";
 
 /**
  * Wrap a remembered proxy-side signature as provider metadata for a replayed tool call.
@@ -64,6 +68,69 @@ function repairJsonObjectEnvelope(text: string): Record<string, unknown> | undef
     /* fall through to the tolerated-{} path */
   }
   return undefined;
+}
+
+/**
+ * Repair the observed MiMo tool-call corruption: the model emits its proprietary
+ * `</function></tool_call>` closing tags INSIDE the JSON string value of the
+ * function arguments, and drops the JSON object's closing brace. Strip the
+ * suffix, restore the brace, and only accept the repair when the result parses
+ * into an object.
+ */
+function repairMimoToolCallEnvelope(text: string): Record<string, unknown> | undefined {
+  const suffix = "</function></tool_call>";
+  if (!text.endsWith(suffix)) return undefined;
+  const stripped = text.slice(0, -suffix.length);
+  if (!stripped.startsWith("{")) return undefined;
+  // A trailing brace or quote can itself belong to the unterminated string.
+  // Try only the three observed envelope endings, accepting an object parse.
+  for (const candidate of [stripped, `${stripped}}`, `${stripped}"}`]) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (isObj(parsed)) return parsed;
+    } catch {
+      /* try the next bounded envelope ending */
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Decode a function call's serialized arguments the way history replay tolerates them: empty
+ * or non-JSON text becomes `{}` instead of failing every later turn, and the bounded
+ * lost-brace and MiMo closing-tag corruptions above are repaired. Shared with the direct Chat decoder
+ * (`src/protocols/codecs/chat-ir.ts`) so both decode the same call to the same object.
+ */
+export function functionCallArgumentsFromText(callId: string, rawArguments: string | undefined): Record<string, unknown> {
+  let args: Record<string, unknown> = {};
+  const rawArgs = rawArguments?.trim();
+  if (rawArgs) {
+    try {
+      const parsed: unknown = JSON.parse(rawArgs);
+      if (isObj(parsed)) args = parsed;
+    } catch {
+      // Corruptions observed on Xiaomi MiMo routed requests, each with a bounded
+      // repair so a serialized call the model can still see is restored instead
+      // of replaying {} forever.
+      const mimoRepaired = repairMimoToolCallEnvelope(rawArgs);
+      if (mimoRepaired !== undefined) {
+        args = mimoRepaired;
+        console.warn(`[parser] function_call ${callId} repaired MiMo tool-call envelope (tags inside string)`);
+        return args;
+      }
+      // One observed serialization corruption loses exactly the JSON object's opening
+      // brace; the closed envelope is tight enough to repair back into a call the
+      // routed model can still see and retry, instead of replaying {} forever.
+      const repaired = repairJsonObjectEnvelope(rawArgs);
+      if (repaired === undefined) {
+        console.warn(`[parser] function_call ${callId} has non-JSON arguments; defaulting to {}`);
+      } else {
+        args = repaired;
+        console.warn(`[parser] function_call ${callId} arguments lost the JSON opening brace; repaired from history`);
+      }
+    }
+  }
+  return args;
 }
 
 
@@ -160,12 +227,19 @@ export function parseRequest(
   if (!parsed.success) {
     throw new Error(`responses parse error: ${parsed.error.message}`);
   }
-  const data = parsed.data;
+  const data = frameCompactionHistory(parsed.data);
   const now = Date.now();
   const messages: OcxMessage[] = [];
   // Built before the item loop: a custom_tool_call echoed back in `input` needs the
   // namespace from the request's own tool catalog to survive the round trip.
   const customToolNamespacesByName = customToolNamespaces(data.tools);
+  // Stash the hosted web_search config (if Codex enabled it) so the proxy can run searches via the
+  // sidecar for routed providers. buildTools still drops the hosted tool; the sidecar path
+  // re-injects a synthetic function tool only when it will actually handle the call. The same
+  // declaration decides how replayed search cells are rebuilt below.
+  const webSearch = extractHostedWebSearch(data.tools as unknown[] | undefined);
+  // With search declared, replayed hosted cells become web_search call/output pairs (#7269).
+  const webSearchReplay = webSearch && Array.isArray(data.input) ? rewriteReplayedWebSearchCells(data.input) : undefined;
   const systemPrompt: string[] = [];
   // Responses reasoning siblings belong to the following assistant, including across call items.
   // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
@@ -208,8 +282,12 @@ export function parseRequest(
     if (data.previous_response_id) continuationConversationMessageIndex = messages.length;
     messages.push({ role: "user", content: data.input, timestamp: now });
   } else if (data.input) {
-    for (let inputIndex = 0; inputIndex < data.input.length; inputIndex++) {
-      const item = data.input[inputIndex];
+    const inputItems = (webSearchReplay?.items ?? data.input) as typeof data.input;
+    for (let itemIndex = 0; itemIndex < inputItems.length; itemIndex++) {
+      const item = inputItems[itemIndex];
+      // Boundaries are measured on the caller's input, before any replayed-search rewrite.
+      const inputIndex = webSearchReplay?.sourceIndexes[itemIndex] ?? itemIndex;
+      if (itemIndex > 0 && isAnthropicProgressMirror(item, anthropicProgressEnvelope(inputItems[itemIndex - 1]))) continue;
       const effectiveType = (item as { type?: string }).type ?? ("role" in item ? "message" : undefined);
       const itemRole = (item as { role?: string }).role;
       const externalTaskInput = effectiveType === "function_call_output" ? externalTaskInputContent(item) : undefined;
@@ -252,7 +330,7 @@ export function parseRequest(
       }
 
       if (isCompactionItemType(effectiveType)) {
-        // A stored summary from a previous compaction. Decode our ocx1 envelope into plain text so
+        // A stored summary from a previous compaction. Decode our ocx1/ocx2 envelopes into plain text so
         // the routed model keeps the compacted context; real OpenAI-encrypted blobs degrade to a note.
         // `context_compaction` (encrypted_content optional) is codex-rs's local-compaction marker;
         // with no payload it is a pure marker (the summary follows as its own user message), so it
@@ -264,6 +342,13 @@ export function parseRequest(
         if (effectiveType === "context_compaction" && typeof encrypted !== "string") continue;
         if (typeof encrypted === "string" && decodeCompactionSummary(encrypted) !== null) decodedCheckpoint = true;
         pendingReasoning.length = 0;
+        if (typeof encrypted === "string" && encrypted.startsWith(RETAINED_COMPACTION_PREFIX)) {
+          const retained = decodeRetainedCompaction(encrypted);
+          if (!retained) throw new Error("Invalid OpenCodex retained compaction envelope");
+          messages.push({ role: "user", content: `${SUMMARY_PREFIX}\n\n${retained.summary}`, timestamp: now });
+          messages.push(...retained.reasoning.map(content => ({ role: "user" as const, content, timestamp: now })));
+          continue;
+        }
         messages.push({
           role: "user",
           content: compactionItemToText(typeof encrypted === "string" ? encrypted : undefined),
@@ -397,25 +482,7 @@ export function parseRequest(
         const call = item as { id?: string; call_id: string; name: string; arguments?: string; namespace?: string; extra_content?: unknown };
         // Tolerate empty/non-JSON arguments (e.g. a no-arg tool call serialized as "") instead of
         // throwing — a single poisoned history item would otherwise 400 every subsequent turn.
-        let args: Record<string, unknown> = {};
-        const rawArgs = call.arguments?.trim();
-        if (rawArgs) {
-          try {
-            const parsed: unknown = JSON.parse(rawArgs);
-            if (isObj(parsed)) args = parsed;
-          } catch {
-            // One observed serialization corruption loses exactly the JSON object's opening
-            // brace; the closed envelope is tight enough to repair back into a call the
-            // routed model can still see and retry, instead of replaying {} forever.
-            const repaired = repairJsonObjectEnvelope(rawArgs);
-            if (repaired === undefined) {
-              console.warn(`[parser] function_call ${call.call_id} has non-JSON arguments; defaulting to {}`);
-            } else {
-              args = repaired;
-              console.warn(`[parser] function_call ${call.call_id} arguments lost the JSON opening brace; repaired from history`);
-            }
-          }
-        }
+        const args = functionCallArgumentsFromText(call.call_id, call.arguments);
         // Do NOT map Responses item `id` (fc_/ctc_/…) onto `thoughtSignature`. That field is
         // reserved for Gemini/Antigravity opaque thought tokens; forwarding item ids as
         // thoughtSignature 400s Antigravity (Base64 / TYPE_BYTES). Continuity for CCA comes from
@@ -473,9 +540,9 @@ export function parseRequest(
       }
 
       if (effectiveType === "web_search_call") {
-        // Replayed hosted web-search evidence has no paired result payload that routed providers can
-        // consume. Keep it out of assistant-visible text: the old marker was useful as an internal
-        // loop hint, but when no sidecar is available the model can echo it as a fake answer.
+        // Without a search declaration the cell stays out of routed history: a call to an undeclared
+        // tool, or assistant-visible marker text the model could echo as a fake answer, would be
+        // worse than the gap. With one, the cell was already rewritten into a web_search pair.
         pendingReasoning.length = 0;
         continue;
       }
@@ -633,10 +700,6 @@ export function parseRequest(
   if (data.service_tier !== undefined) options.serviceTier = data.service_tier;
   if (data.prompt_cache_key !== undefined) options.promptCacheKey = data.prompt_cache_key;
 
-  // Stash the hosted web_search config (if Codex enabled it) so the proxy can run searches via the
-  // gpt-mini sidecar for routed providers. buildTools still drops the hosted tool; the sidecar path
-  // re-injects a synthetic function tool only when it will actually handle the call.
-  const webSearch = extractHostedWebSearch(data.tools as unknown[] | undefined);
   const imageGen = extractHostedImageGeneration([
     ...(data.tools as unknown[] ?? []),
     ...loadedToolSpecs,
@@ -662,6 +725,7 @@ export function parseRequest(
       ? { _continuationConversationMessageIndex: continuationConversationMessageIndex }
       : {}),
     ...(webSearch ? { _webSearch: webSearch } : {}),
+    ...(webSearchReplay ? { _replayedWebSearchCells: webSearchReplay.cells } : {}),
     ...(imageGen ? { _imageGeneration: imageGen } : {}),
     ...(textFormat ? { _structuredOutput: true } : {}),
     ...(compactionRequest ? { _compactionRequest: true } : {}),

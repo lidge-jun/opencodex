@@ -112,7 +112,7 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 | 플랫폼 | 파일 | 참고 |
 |---|---|---|
 | macOS 13+ (Apple Silicon 및 Intel) | `OpenCodex-<version>-macos.dmg` | 유니버설 빌드, Developer ID로 서명 및 공증됨 |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | 아직 코드 서명되지 않음: SmartScreen이 한 번 물으면 **추가 정보 → 실행**을 선택 |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | SignPath Foundation을 통한 코드 서명 도입 중 ([코드 서명 정책](https://opencodex.me/ko/reference/code-signing/)). 서명되기 전 릴리스는 SmartScreen이 한 번 물으면 **추가 정보 → 실행**을 선택 |
 | Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` 또는 `-linux-amd64.deb` | 트레이는 AppIndicator를 지원하는 데스크톱이 필요 |
 
 릴리스 페이지에서 모든 파일 옆에 `.sha256`이 함께 있습니다. macOS 14 이상에서는 프록시 상태,
@@ -148,10 +148,6 @@ Codex Desktop 로그인처럼 다른 계정이 소진된 뒤에만 쓰고 싶은
 <tr>
 <td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="../assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
 <td><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a>의 후원에 감사합니다. OrcaRouter는 프로덕션용 OpenAI 호환 AI 게이트웨이입니다. 프롬프트를 채점해 기준을 넘는 모델로 보내는 적응형 라우팅, 자동 failover, 코드로 쓰는 라우팅 규칙, 프롬프트 캐싱이 있는 무마진 프로바이더 가격, 그리고 200개 이상 모델의 모든 호출에 붙는 가드레일·에이전트 방화벽·요청 로그를 제공합니다. Add provider 선택기에서 <code>OrcaRouter</code>를 고르거나 <code>ocx provider add orcarouter</code>를 실행하세요. 적응형 라우터는 <code>orcarouter/auto</code>입니다.</td>
-</tr>
-<tr>
-<td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
-<td><a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a>의 후원에 감사합니다. PackyCode는 안정적인 고성능 API 릴레이 프로바이더로, Claude Code, Codex, Gemini 등의 릴레이를 제공합니다. 자동 failover, 스마트 라우팅, 무제한 동시성으로 AI를 실제 생산성 도구로 만듭니다. <a href="https://www.packyapi.com/register?aff=k5KT">이 링크로 등록</a>하고 바로 시작하세요. Add provider 선택기에서 <code>PackyCode</code>를 고르거나 <code>ocx provider add packycode</code>를 실행하세요.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
 <tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
@@ -458,6 +454,16 @@ bun run test
 
 메인테이너가 대신 올리거나 다시 구현해서 들어왔는데 커밋에 원저자가 적히지 않은 기여자 작업은
 **[CREDITS.md](../CREDITS.md)**에 기록해 둡니다.
+
+## 코드 서명 정책 (Code signing policy)
+
+Windows 바이너리에 Authenticode 서명을 도입하고 있습니다 ([#7207](https://github.com/lidge-jun/opencodex/issues/7207)). 도입 현황, 서명 확인 방법, 전체 정책은 [Windows 코드 서명 가이드](https://opencodex.me/ko/reference/code-signing/)에 있습니다.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## 면책 조항
 

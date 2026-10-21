@@ -26,6 +26,42 @@ research-preview access. See
 [Anthropic Fast configuration](/reference/configuration/providers/#anthropic-fast-anthropic-speed)
 for the exact model and recovery scope.
 
+## Tier defaults for CLI and external launchers
+
+In the Claude Code tab, select an Opus, Sonnet, Haiku or Fable default and **Save**.
+These `claudeCode.tierModels` defaults are passed to new `ocx claude` launches. They do not
+change the currently selected main model, reasoning effort or Desktop family assignments.
+
+Applications that launch `claude` directly do not receive the `ocx` launcher's environment.
+After saving, choose **Preview Claude settings**, review the `ANTHROPIC_DEFAULT_*_MODEL`
+changes, then **Apply to Claude settings**. This changes the OpenCodex host's Claude user
+settings, not a remote browser's computer. Start a new Claude process to use the new values;
+the operation does not stop or restart existing sessions. It does not configure routing or
+authentication, so the direct caller must already be connected to OpenCodex.
+
+Selected routing aliases are paired with `ANTHROPIC_DEFAULT_*_MODEL_NAME` labels, using the
+same readable names as the model picker. Preview includes both IDs and label changes; the
+alias remains the submitted model ID. An existing label is managed only if it exactly matches
+the generated name for its current alias. Other labels, including empty values, are preserved.
+A manually entered label identical to that generated name is indistinguishable from a managed label.
+
+Only explicitly selected tier IDs are applied. An unset tier leaves its existing model ID
+and its display label untouched. Replacing an alias with a first-party
+ID or another non-alias also removes its matching generated label. Preview shows label removal
+as an empty replacement; custom labels and unrelated settings remain intact.
+Missing files are supported, but existing empty or corrupt files are
+refused. Changes since preview require a new preview. Apply briefly moves the current
+document into a private `model-default-backups/apply-*/settings.json` directory under the
+Claude config directory, validates the captured document, then publishes exclusively.
+It never replaces a concurrent writer's new file, including during rollback. Avoid editing
+or launching Claude while applying: another reader can see the brief missing-file interval.
+The filesystem must support same-volume moves and hard links; unsupported operations fail
+without an overwrite fallback. After an interrupted apply or a failed automatic restore,
+inspect this backup location and reconcile newer edits before restoring. Windows/Linux
+filesystem behavior must be verified separately; a local test is not cross-platform proof.
+Verify the resolved provider/model in request logs: selecting a tier is not proof of the
+actual model served. This is especially useful for external classifiers requesting Sonnet.
+
 ## Claude OAuth account pool (experimental)
 
 Native Anthropic subscription passthrough retains the upstream `anthropic-ratelimit-*`
@@ -218,6 +254,12 @@ Claude Desktop can use OpenCodex in one of two mutually exclusive modes. Pick it
 **Connect → Claude Desktop → Connection mode** in the dashboard or with `ocx claude desktop apply
 --first-party|--gateway`.
 
+> Desktop library profiles and `_meta.json` must be regular files of at most
+> 4 MiB. OpenCodex also refuses generated profile or metadata output above that
+> limit before replacing files. Back up and reduce oversized configuration
+> manually; a size refusal does not truncate the existing data. Connection-owned
+> stores retain their existing tighter limits.
+
 ### Gateway (default)
 
 New installs use **gateway** by default. Its third-party profile, described below, switches the
@@ -234,6 +276,15 @@ load the new list. The static picker uses Desktop's fallback effort menu; it doe
 not advertise an authoritative per-provider ladder, and the selected provider's
 normal effort normalization still applies. This remains a client-version-specific
 compatibility mechanism.
+
+Gateway apply refuses unreadable or non-regular configuration files, including dangling metadata
+links, before creating a new profile. If the metadata update fails, apply restores the profile's
+previous contents, or removes a profile it had just created, but only while the profile still holds
+what apply wrote; if another program changed it in the meantime, apply keeps that version and
+reports "profile rollback skipped". Apply rechecks the profile before
+backup and replacement; if it detects a concurrent edit, it refuses with `desktop_profile_changed`.
+Review the edit and reapply. If restoring the profile also fails after a metadata error, the
+reported reason includes both failures; reconcile the profile and metadata before retrying.
 
 ### First-party (opt-in)
 
@@ -270,10 +321,15 @@ entries, is kept.
 Claude Desktop first-party routes its Code tab and subagents through OpenCodex. The standalone Claude Code CLI has a separate first-party switch. Both clients read the same `~/.claude/settings.json` proxy and CA settings: if only one switch is on, the other client still transits the local proxy, where TLS terminates, but its Messages requests relay to Anthropic unchanged. Other Anthropic paths relay unchanged and unrelated hosts remain blind tunnels. With the CLI switch on, the standalone `claude` also lists routed models in `/model`; see [Model picker in the CLI](#model-picker-in-the-cli).
 
 :::note[Windows system proxy (Clash, v2rayN, corporate proxies)]
-When a Windows system proxy is on, Claude Desktop hands it to the Code tab as `HTTPS_PROXY`, and
+When picker intent is off at OpenCodex startup, its Windows relay stays unbound. Turning picker
+mode on later starts it within the running service; OpenCodex does not need a restart.
+For picker-off installs or pending installs with no applied picker profile, a Windows system proxy
+is handed to the Code tab as `HTTPS_PROXY`, and
 that value takes precedence over the OpenCodex proxy in `~/.claude/settings.json`. The Code tab
 then goes around OpenCodex and routed models fail there, while the standalone CLI keeps working.
-Add `api.anthropic.com` to your proxy client's system-proxy bypass list (in Clash Verge,
+An applied selected picker profile uses Desktop's fixed egress proxy while it is available, even when
+missing trust leaves the picker pending and `claude.ai` relays blindly. System-proxy bypass advice
+applies when there is no selected available picker profile. Add `api.anthropic.com` to your proxy client's system-proxy bypass list (in Clash Verge,
 `system_proxy_bypass`), then fully quit and reopen Claude Desktop. `ocx doctor` reports this
 under "Claude Desktop first-party vs Windows system proxy". It cannot evaluate a PAC script or
 automatic proxy detection (WPAD, "Automatically detect settings"), so it reports those as unknown;
@@ -304,17 +360,17 @@ hub, so `ocx claude desktop apply` there uses the gateway profile.
 
 ### Picker mode: opencodex models in the first-party Code-tab picker
 
-Picker mode is part of first-party mode. On macOS it is on by default when first-party is selected,
+Picker mode is part of first-party mode. On macOS and Windows it is on by default when first-party is selected,
 unless `claudeCode.intercept.picker: false` is set. It changes the first-party Desktop Code-tab picker
 so it lists available opencodex models by name. The first time it is enabled, macOS may ask you to
-trust a local certificate authority in the login keychain. That authority is constrained to `claude.ai`
+trust a local certificate authority in the login keychain, and Windows may ask you to trust it in the current-user Root store. That authority is constrained to `claude.ai`
 and its subdomains. OpenCodex protects its exportable signing identity in the OS credential store
 and reuses the same validated certificate and key across normal restarts. No plaintext picker signing
 key is stored in the OpenCodex config directory. The full constrained CA validation and OS trust
-verification still apply. With the same approved identity and an available credential store, restarting
-OpenCodex does not add or remove Certificate Trust Settings. Startup restore never installs trust:
+verification still apply, including the exact fingerprint with a verified leaf on Windows. With the same approved identity and an available credential store, restarting
+OpenCodex does not add or remove macOS Certificate Trust Settings. Restart and status never install trust:
 if trust is missing, revoked or unknown, the picker stays pending. Run `ocx claude desktop picker on`
-or `ocx claude desktop picker trust` explicitly to grant trust.
+or `ocx claude desktop picker trust` explicitly to grant trust, including the Windows confirmation when needed.
 Startup also attempts to remove a legacy on-disk picker signing key before checking whether
 interception is enabled. Cleanup is best-effort and does not enable interception or block startup.
 
@@ -322,9 +378,9 @@ One-time migration from an older picker identity may require consent to remove i
 If cleanup cannot finish, the picker stays unavailable and the applied profile uses a blind relay
 until cleanup succeeds; `ocx claude desktop picker status` reports that state. macOS may separately
 ask you to unlock the keychain or approve an application's access to stored credentials. These native
-access prompts can still occur on restart or upgrade.
+access prompts can still occur on restart or upgrade. On Windows, explicit `on` or `trust` may show a confirmation to add the root.
 
-Picker mode remains unsupported on Windows and Linux: OpenCodex starts no picker CA, credential-store
+Picker mode remains unsupported on Linux: OpenCodex starts no picker CA, credential-store
 or proxy work there. The main Claude intercept remains available with ownership, symlink, file-permission
 and Windows ACL checks protecting its local CA files.
 
@@ -384,7 +440,7 @@ next request; Desktop does not need a restart.
 
 Turn on the CLI switch in Connect → Claude, or run `ocx claude config set --first-party on`; use `off` to disable it. The switch is immediate and refuses `{enabled:false, cliFirstParty:true}` before any field is saved; it may also refuse to turn on if the local intercept is unavailable, the CA cannot be prepared, settings cannot be read, or a foreign proxy setting owns the keys. Off persists even when the intercept is unavailable; disabling Claude routing alone leaves an owned settings env untouched. For fully native terminal traffic with only Desktop first-party on, set `NO_PROXY='*'` in the shell. This still carries the first-party account risk stated above.
 Disabling Claude routing leaves the owned settings env untouched. While the bound listener still runs, every Messages request relays unchanged; after it stops, plain `claude` cannot connect until OpenCodex runs or Desktop/CLI first-party is turned off. Native `ocx claude` sets `NO_PROXY=*` only for an owned env without a foreign inherited `HTTPS_PROXY`/`https_proxy`. With a foreign proxy it preserves that value and warns that the settings-owned intercept still applies; turn Desktop/CLI first-party off or unset the setting.
-The UI distinguishes uncertainty about whether settings still point at its proxy (unknown), a token-bearing opencodex proxy with a foreign CA (foreign: fix HTTPS_PROXY / NODE_EXTRA_CA_CERTS manually), and a tokenless loopback proxy beside a foreign CA (local: ownership is unconfirmed; remove HTTPS_PROXY if unused). With matching applied settings and a bound listener but Claude routing off, disabled means requests relay unchanged while it is bound; turn first-party off to remove settings. An owned URL with no listener is stopped; a bound listener with an owned CA but mismatched port or token is broken even when routing is off. With an intent on, stopped or broken plus ineligible interception displays routingOff: Claude routing or the intercept is off, or this machine is a client of another opencodex hub; enable interception on this machine or turn first-party off to remove the settings. When interception is stopped, use **Start interception** or `ocx claude intercept start` to retry within the running OpenCodex service. Saving first-party settings also starts it automatically. A refusal reports disabled routing, client role, an ephemeral public port, an occupied port, or a startup failure. For an occupied port, free it or set `claudeCode.intercept.port`. If a pair is already bound on a different port, the response names both ports; use the bound port or restore the configured value. CLI intent with no proxy is not applied; one intent with a live proxy gets the shared-relay notice; any remaining proxy with neither intent is residual, unless unknown, foreign, or local takes precedence.
+The UI distinguishes uncertainty about whether settings still point at its proxy (unknown), a token-bearing opencodex proxy with a foreign CA (foreign: fix HTTPS_PROXY / NODE_EXTRA_CA_CERTS manually), and a tokenless loopback proxy beside a foreign CA (local: ownership is unconfirmed; remove HTTPS_PROXY if unused). With matching applied settings and a bound listener but Claude routing off, disabled means requests relay unchanged while it is bound; turn first-party off to remove settings. An owned URL with no listener is stopped; a bound listener with an owned CA but mismatched port or token is broken even when routing is off. With an intent on, stopped or broken plus ineligible interception displays routingOff: Claude routing or the intercept is off, or this machine is a client of another opencodex hub; enable interception on this machine or turn first-party off to remove the settings. When interception is stopped, use **Start interception** or `ocx claude intercept start` to retry within the running OpenCodex service. Saving first-party settings also starts it automatically. A refusal reports disabled routing, client role, an ephemeral public port, an occupied port, or a startup failure. For an occupied port, free it or set `claudeCode.intercept.port`. Startup refreshes an existing managed Claude proxy environment only after the intercept proxy binds successfully, using its bound port; an occupied port leaves Claude settings unchanged. If a pair is already bound on a different port, the response names both ports; use the bound port or restore the configured value. CLI intent with no proxy is not applied; one intent with a live proxy gets the shared-relay notice; any remaining proxy with neither intent is residual, unless unknown, foreign, or local takes precedence.
 
 - Gateway discovery (`/model` → "From gateway") is not used, because Claude Code only queries
   `GET /v1/models` on a configured gateway. Routed models reach the picker another way; see
@@ -606,7 +662,7 @@ Both families decode forever — a model saved in `settings.json` under either f
 Each entry carries an honest display name such as `gemini-3-pro (gemini)`, plus full model
 capabilities (reasoning-effort ladder, thinking types) in the official ModelInfo shape so Claude
 Desktop's third-party gateway mode can offer its effort selector. Real Anthropic models keep their
-canonical ids. The synthetic 2026 date is an internal slot, not a release date. Legacy hash aliases and `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` ids from older configs still resolve. A legacy id configured in an OpenCodex model slot (`claudeCode.model`, `tierModels`, `smallFastModel`) is sent to Claude Code in its current spelling automatically. A legacy id saved by Claude Code's own picker still routes, but Claude Code keeps its 200k accounting for that id. Pick `ocx-claude-` for a saved `claude-ocx-` id, and `ocx-claude2-` for a saved escaped `claude-ocx2-` id, so the real context window and compact both apply.
+canonical ids. The synthetic 2026 date is an internal slot, not a release date. Legacy hash aliases and `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` ids from older configs still resolve. A legacy id configured in an OpenCodex model slot (`claudeCode.model`, `tierModels`, `smallFastModel`) is sent to Claude Code in its current spelling automatically. A legacy id saved by Claude Code's own picker still routes, but Claude Code keeps its 200k accounting for that id. Pick `ocx-claude-` for a saved `claude-ocx-` id, and `ocx-claude2-` for a saved escaped `claude-ocx2-` id, so the effective catalog context window and compact both apply.
 
 Older managed profiles exposed their internal `YYYYMMDD` slots directly. Affected Desktop builds strip
 that terminal date when comparing active-session models, so two distinct routes can look identical
@@ -657,7 +713,10 @@ keep their canonical ids on both surfaces.
 
 ### Context-variant `[1m]` marker
 
-Models with an authoritative context window of 1M, or at least the 829,800-token default
+These checks use the effective catalog window, which can include a [custom-provider estimate](/reference/configuration/providers/#context-windows-on-custom-providers).
+An estimate does not verify the relay's actual capacity.
+
+Models with an effective catalog context window of 1M, or at least the 829,800-token default
 compaction threshold, get an extra `…[1m]` picker row; the floor is fixed, so a custom compaction
 value does not lower it, and Claude models on an Anthropic route need a genuine 1M. Turning
 auto-context off limits the row to 1M windows. Selecting it makes Claude Code
@@ -669,8 +728,8 @@ resolution and routing.
 Claude Code accounts 200k tokens for any model it does not recognize. **Auto context** (on by
 default) fixes that:
 
-1. Launch env slots get the `[1m]` marker when the model's real window is above 200k **and** at
-   least the configured auto-compact threshold. Discovery and Desktop picker rows do not follow
+1. Launch env slots get the `[1m]` marker when the model's effective catalog window is above 200k
+   **and** at least the configured auto-compact threshold. Discovery and Desktop picker rows do not follow
    that threshold: they use the fixed 829,800-token floor (a genuine 1M for Claude models on an
    Anthropic route).
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (default `829800`, range `100000`–`1000000`) is injected so
@@ -725,8 +784,9 @@ Desktop 3P (`prefer1m`) and generated subagents. Set `200k` to opt out: nothing 
 automatically, `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is not injected, and Desktop 3P drops `prefer1m`
 while keeping `supports1m`. A selector you mark `[1m]` yourself stays available (generated and
 forced subagents still drop a marker the model's window cannot carry), and discovery still lists
-the `· 1M` rows of genuine 1M models. `200k` wins over auto-context: a compact window you export no
-longer turns automatic marking on, though opencodex leaves your own export in place.
+the `· 1M` rows of models with catalog windows of at least 1M. `200k` wins over auto-context: a
+compact window you export no longer turns automatic marking on, though opencodex leaves your own
+export in place.
 
 ```bash
 ocx claude config set --context-accounting 200k
@@ -910,7 +970,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
 | `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result; preserves loaded-tool names without adding declarations or enabling translated server-side deferral |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
-| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
+| Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. A search or fetch with a matching call and complete input comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. Orphan results are dropped without synthesizing a call, while the surrounding text is preserved. When the client sends a complete pair back in its history, the next `api.anthropic.com` request carries it in place only if the following block uniquely identifies its original turn. Repeated anchors, unmatched or duplicate call/result ids, malformed call input, or a result appearing before its call drop the exchange. Call input must be an object with a nonempty search query or fetch URL string; other destinations never see the exchange |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -1060,7 +1120,7 @@ set (automatic with `ocx claude`). Run `ocx claude` to refresh the gateway model
 `ANTHROPIC_BASE_URL`. Open a new terminal, or re-run `ocx claude`.
 
 **200k context ceiling despite big model** — Select the `[1m]` variant in the picker, or enable
-auto-context (on by default). If the picker shows no `[1m]` row, the model's authoritative context
+auto-context (on by default). If the picker shows no `[1m]` row, the model's effective catalog context
 window may be below the fixed 829,800-token floor.
 
 **High token count from skill loads** — The bundled `claude-api` skill (~136k tokens) auto-loads
@@ -1119,7 +1179,7 @@ the confirmed obsolete token file and applying first-party mode again; never del
 
 ### First-party picker context markers
 
-The Desktop Code-tab picker adds `[1m]` to routed models whose authoritative context window is at least one million tokens or at least the 829,800-token default compaction threshold (for example a native GPT-6 model opted into its 872k window), so Claude uses its 1M accounting instead of the smaller custom-model fallback. Claude models on an Anthropic route still need a genuine 1M. Labels, profile order, and provider routes stay unchanged. Unknown and shorter windows remain unmarked. The picker cannot guarantee that a Desktop or remote runner receives the matching compaction environment, so a long-window model that outgrows its real window gets a `prompt is too long` error, which Claude Code answers by compacting. Desktop 3P `supports1m`/`prefer1m` and generated subagents follow the same rule. The paired auto-context setup for `ocx claude` is unchanged. An existing conversation keeps its saved selector until you select the model again from the refreshed picker.
+The Desktop Code-tab picker adds `[1m]` to routed models whose effective catalog context window is at least one million tokens or at least the 829,800-token default compaction threshold (for example a native GPT-6 model opted into its 872k window), so Claude uses its 1M accounting instead of the smaller custom-model fallback. Claude models on an Anthropic route still need a genuine 1M. Labels, profile order, and provider routes stay unchanged. Unknown and shorter windows remain unmarked. The picker cannot guarantee that a Desktop or remote runner receives the matching compaction environment, so a long-window model that outgrows its real window gets a `prompt is too long` error, which Claude Code answers by compacting. Desktop 3P `supports1m`/`prefer1m` and generated subagents follow the same rule. The paired auto-context setup for `ocx claude` is unchanged. An existing conversation keeps its saved selector until you select the model again from the refreshed picker.
 
 ### Forced Claude Code subagent model
 
@@ -1127,7 +1187,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

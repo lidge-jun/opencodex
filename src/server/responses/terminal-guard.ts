@@ -1,6 +1,6 @@
+import { assistantReplayContent } from "../../responses/assistant-replay";
 import type {
   AdapterEvent,
-  OcxAssistantContentPart,
   OcxAssistantMessage,
   OcxParsedRequest,
   OcxUsage,
@@ -121,21 +121,7 @@ export function analyzeTerminalTurn(parsed: OcxParsedRequest, events: readonly A
 }
 
 function assistantMessageFromEvents(events: readonly AdapterEvent[], timestamp: number): OcxAssistantMessage | undefined {
-  let text = "";
-  let thinking = "";
-  let signature: string | undefined;
-  const redacted: string[] = [];
-  for (const event of events) {
-    if (event.type === "text_delta") text += event.text;
-    else if (event.type === "thinking_delta") thinking += event.thinking;
-    else if (event.type === "thinking_signature") signature = event.signature;
-    else if (event.type === "redacted_thinking") redacted.push(event.data);
-  }
-  const content: OcxAssistantContentPart[] = [];
-  if (thinking || signature || redacted.length > 0) {
-    content.push({ type: "thinking", thinking, ...(signature ? { signature } : {}), ...(redacted.length > 0 ? { redacted } : {}) });
-  }
-  if (text) content.push({ type: "text", text });
+  const content = assistantReplayContent(events);
   if (content.length === 0) return undefined;
   return { role: "assistant", content, timestamp };
 }
@@ -170,7 +156,8 @@ export function isTerminalGuardPassthroughOnly(event: AdapterEvent): boolean {
   return event.type === "heartbeat" || event.type === "tool_call_delta";
 }
 
-function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): OcxUsage | undefined {
+/** Merge two reported usages (canonical Responses convention). Shared with the advisor guard. */
+export function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): OcxUsage | undefined {
   if (!first) return second;
   if (!second) return first;
   const sumOptional = (key: keyof OcxUsage): number | undefined => {
@@ -183,6 +170,7 @@ function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): 
   const cachedInputTokens = sumOptional("cachedInputTokens");
   const cacheReadInputTokens = sumOptional("cacheReadInputTokens");
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
+  const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
   const providerCredits = sumOptional("providerCredits");
   const inputTokens = first.inputTokens + second.inputTokens;
@@ -194,6 +182,7 @@ function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undefined): 
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
     ...(cacheReadInputTokens !== undefined ? { cacheReadInputTokens } : {}),
     ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
+    ...(cacheCreation1hInputTokens !== undefined ? { cacheCreation1hInputTokens } : {}),
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(first.estimated || second.estimated ? { estimated: true } : {}),

@@ -175,6 +175,10 @@ versioned disposition は `passthrough`、`translated`、`degraded`、`unsupport
 `passthrough` 以外のクレームには具体的な制限を記載し、fixture に基づくクレームでは根拠となる正確な
 assertion id を指定してください。秘密情報を含まない request vector を `tests/fixtures/compatibility/` に
 追加し、production adapter に対して実行する集中テストを用意します。
+`passthrough` claim が引用できるのは、manifest test でその feature に紐付けられた selector 上の
+`equals` assertion で、期待値が同じ位置の呼び出し元の値そのものであるものだけです。これにより、削除・
+書き換え・無関係なフィールドを lossless と表示できません。custom tool とその grammar のように、片方だけ
+保たれうる側面は別々の claim にしてください。
 
 compatibility manifest は受動的なデータです。通常の router、Responses handler、server startup path から
 manifest catalog を import したり、Compatibility Lab を有効化したりしてはいけません。

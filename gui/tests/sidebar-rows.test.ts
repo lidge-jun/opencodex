@@ -34,7 +34,8 @@ test("the sidebar is eight group rows, in order, owning every sidebar page once"
     "codex-set": ["codex-set"],
     providers: ["providers"],
     models: ["models"],
-    subagents: ["subagents"],
+    // Advisor is a switcher member beside Subagents, not a row of its own.
+    subagents: ["subagents", "advisor"],
     // Usage leads, so the row opens Usage first.
     "usage-logs": ["usage", "logs", "storage"],
     // Last row, by request.
@@ -49,6 +50,7 @@ test("the sidebar is eight group rows, in order, owning every sidebar page once"
   expect(new Set(owned)).toEqual(new Set([...VALID_PAGES].filter(page => page !== "startup")));
   expect(groupForPage("startup")).toBeNull();
   expect(groupForPage("storage")?.id).toBe("usage-logs");
+  expect(groupForPage("advisor")?.id).toBe("subagents");
   expect(groupForPage("claude")?.id).toBe("connect");
   expect(groupForPage("remote-workspace")?.id).toBe("remote");
 

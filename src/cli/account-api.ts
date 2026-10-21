@@ -16,6 +16,7 @@ import { projectApiKeyQuotaRows } from "./account-key-quota";
 import { projectAccountHealth } from "./account-next-actions";
 import type { OAuthHealthLabel } from "../oauth/health";
 
+import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 export type AccountType = "codex" | "oauth" | "api-key";
 
 export interface AccountRow {
@@ -61,6 +62,7 @@ export interface AccountRow {
    * human listing (#2703).
    */
   paused?: boolean;
+  pauseDetails?: import("../types/account-auto-pause").AccountPauseDetails;
 }
 
 export type ClassifyResult = { type: AccountType } | { error: string };
@@ -306,6 +308,7 @@ export interface ProviderQuotaWindowDto {
   label: string;
   percent: number;
   resetAt?: number;
+  modelId?: string;
 }
 
 export interface ProviderQuotaDto extends CodexQuotaDto {
@@ -341,6 +344,7 @@ interface CodexAccountDto {
   quota?: CodexQuotaDto | null;
   quotaRefresh?: unknown;
   paused?: boolean;
+  pauseDetails?: import("../types/account-auto-pause").AccountPauseDetails;
 }
 
 function projectQuota(quota: CodexQuotaDto | null | undefined): CodexQuotaDto | null {
@@ -414,6 +418,8 @@ export async function fetchCodexRows(
       ? a.autoSwitchThresholdOverride
       : null,
     paused: a.paused === true,
+    // Unknown display details are dropped defensively; the pause state above is retained.
+    pauseDetails: accountPauseDetailsSchema.safeParse(a.pauseDetails).data,
     ...(includeQuota ? {
       quota: projectQuota(a.quota),
       quotaRefresh: projectCodexQuotaRefreshOutcome(a.quotaRefresh),
@@ -431,6 +437,7 @@ interface OAuthAccountDto {
   healthLabel?: unknown;
   /** Present only for providers that support operator pause (generic OAuth pools). */
   paused?: boolean;
+  pauseDetails?: import("../types/account-auto-pause").AccountPauseDetails;
   autoSwitchThresholdOverride?: number | null;
   needsReauthReason?: "verify_account";
   autoSelectable?: boolean;
@@ -474,7 +481,8 @@ async function fetchOAuthRows(
     active: a.active ?? a.id === activeId,
     needsReauth: a.needsReauth,
     ...projectAccountHealth(a, name, a.id),
-    ...(a.paused === true ? { paused: true } : {}),
+    // Unknown display details are dropped defensively; paused remains authoritative.
+    ...(a.paused === true ? { paused: true, pauseDetails: accountPauseDetailsSchema.safeParse(a.pauseDetails).data } : {}),
     ...(isAnthropicOAuthInstance(name) && Object.hasOwn(a, "autoSwitchThresholdOverride") ? { autoSwitchThresholdOverride: a.autoSwitchThresholdOverride } : {}),
     ...(a.needsReauthReason === "verify_account" ? { needsReauthReason: a.needsReauthReason } : {}),
     ...(name === "kiro" && typeof a.autoSelectable === "boolean"
@@ -494,6 +502,8 @@ async function fetchOAuthRows(
 }
 
 interface ApiKeyDto {
+  disabled?: boolean;
+  pauseDetails?: import("../types/account-auto-pause").AccountPauseDetails;
   id: string;
   label?: string;
   masked?: string;
@@ -522,6 +532,9 @@ async function fetchKeyRows(deps: AccountDeps, baseUrl: string, name: string, qu
     label: k.label ?? k.masked,
     masked: k.masked,
     active: k.active ?? k.id === activeId,
+    paused: k.disabled === true,
+    // Unknown display details are dropped defensively; disabled still keeps the key paused.
+    pauseDetails: accountPauseDetailsSchema.safeParse(k.pauseDetails).data,
   }));
   return { rows, activeId, status: 200 };
 }

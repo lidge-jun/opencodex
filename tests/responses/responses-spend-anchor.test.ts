@@ -556,6 +556,8 @@ for (const mode of ["normal", "capacity", "exhausted-limit"] as const) {
         expect(SpendFixtureSocket.instances[0]!.sent).toHaveLength(1);
         expect(JSON.parse(SpendFixtureSocket.instances[0]!.sent[0]!).type).toBe("response.create");
         expect(budget.physicalStarted).toBe(1);
+        // The key-auth WS frame is a send, so its attempt row counts it like an HTTP send.
+        expect(ctx.activeAttempt?.sendCount).toBe(1);
       } else expect(response.status).toBe(429);
       tracker.settle(undefined);
       await ledger.waitForReporterDrain();
@@ -566,6 +568,38 @@ for (const mode of ["normal", "capacity", "exhausted-limit"] as const) {
     }
   }, mode === "capacity" ? 1 : 8));
 }
+
+test("a key reselected at the WS dispatch boundary is not sent over the WS its predecessor was cleared for", async () => withExecutorHome(async () => {
+  const originalSocket = globalThis.WebSocket;
+  SpendFixtureSocket.instances = [];
+  globalThis.WebSocket = SpendFixtureSocket as unknown as typeof WebSocket;
+  const proxies: unknown[] = [];
+  globalThis.fetch = (async (_input, init) => { proxies.push((init as { proxy?: unknown } | undefined)?.proxy); return new Response("fixture", { status: 400 }); }) as typeof fetch;
+  // The key and its egress change together once the dispatch boundary rechecks the selection, so
+  // the route admitted to WS carried neither and the replacement requires an explicit proxy.
+  let rotated = false;
+  const row: Record<string, unknown> = { adapter: "openai-responses", authMode: "key", baseUrl: "https://api.openai.com/v1", upstreamWebsocket: true };
+  Object.defineProperty(row, "apiKey", { enumerable: true, get() {
+    rotated ||= new Error().stack!.includes("matchesConfiguredSelection");
+    return rotated ? "fixture-rotated" : "fixture-only";
+  } });
+  Object.defineProperty(row, "proxy", { enumerable: true, get: () => rotated ? "http://proxy.fixture.test:8080" : undefined });
+  const translatorBudget = createTranslatorBudget();
+  try {
+    await (await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "P/model", input: "hello", stream: true }),
+    }), { port: 0, defaultProvider: "P", providers: { P: row } } as unknown as OcxConfig, { model: "", provider: "" },
+    { translatorBudget, codexWsRuntimeIdentity: "1.4.0" })).text();
+    expect(rotated).toBe(true);
+    expect(SpendFixtureSocket.instances).toHaveLength(0);
+    expect(proxies).toEqual(["http://proxy.fixture.test:8080/"]);
+  } finally {
+    for (const socket of SpendFixtureSocket.instances) socket.close();
+    globalThis.WebSocket = originalSocket;
+    translatorBudget.dispose();
+  }
+}));
 
 test("server stop waits for a native Messages transport reporter after listener stop", async () => withExecutorHome(async (ledger, home) => {
   const lifecycle = acquireSpendLedgerServerLifecycle(home);

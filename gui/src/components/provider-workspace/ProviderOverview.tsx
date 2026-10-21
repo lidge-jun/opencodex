@@ -15,6 +15,7 @@ import type { ProviderUpdatePatch, ProviderUpdateResult } from "./types";
 import ProviderCurrentQuota from "./ProviderCurrentQuota";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import ProviderSponsor from "./ProviderSponsor";
+import ProviderCompletionTest from "./ProviderCompletionTest";
 
 type ConnectionTestResult = {
   applicable?: boolean;
@@ -33,7 +34,7 @@ type ConnectionTestState = {
 
 export default function ProviderOverview({
   item, preset, usageTotals, quotaReport, currentQuotaReading, onRefreshQuota, oauthEmail, oauth,
-  apiBase, connectionIdentity,
+  apiBase, connectionIdentity, availableModels = [],
   onEditSettings, onViewUsage, onUpdateProvider,
   onCreateJevAuto,
   onReauthenticate, onCancelLogin, reauthBusy = false,
@@ -48,6 +49,7 @@ export default function ProviderOverview({
   /** Login state for OAuth summaries that carry no email (e.g. Cursor/Kimi). */
   oauth?: { loggedIn?: boolean };
   apiBase?: string;
+  availableModels?: string[];
   /** Opaque active credential identity used only to invalidate stale probe results. */
   connectionIdentity?: string;
   onEditSettings?: () => void;
@@ -195,6 +197,8 @@ export default function ProviderOverview({
             )}
           </div>
         )}
+        {apiBase && <ProviderCompletionTest key={connectionProbeKey} apiBase={apiBase} provider={item.name}
+          models={[...new Set([...(item.models ?? []), ...availableModels, ...(item.defaultModel ? [item.defaultModel] : [])])]} />}
         {onEditSettings && (
           <button type="button" className="link-btn pws-edit-settings-link" onClick={onEditSettings}>
             {t("pws.editSettings")}

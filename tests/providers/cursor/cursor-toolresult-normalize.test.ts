@@ -204,6 +204,18 @@ describe("native wire decode (#1920 disposition: formatted text at toolResultPar
     expect(result!.content[1]?.content.case).toBe("image");
   });
 
+  test("audio parts decode to their text marker instead of inline-image data", () => {
+    const marker = "[audio: cursor-fallback-marker-7f3a]";
+    const result = decodedToolResult(requestWith([
+      { type: "audio", data: "YWJj", format: "wav", text: marker },
+    ]));
+    expect(result).toBeDefined();
+    expect(result!.content).toHaveLength(1);
+    const first = result!.content[0];
+    expect(first.content.case).toBe("text");
+    expect(first.content.case === "text" ? first.content.value.text : "").toBe(marker);
+  });
+
   test("encrypted text-part results remain unmodified", () => {
     const failureText = "ReferenceError: sky is not defined";
     const result = decodedToolResult(requestWith(

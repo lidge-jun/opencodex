@@ -13,6 +13,10 @@ does not release a hosted hop while its runTurn producer is active; producer set
 unsent hop and clears only its matching pending reference. Standalone Images and direct callers
 retain their existing behavior.
 
+Mistral's registry entry in `src/providers/registry/entries-extended.ts` declares `zai-glm-5-3` native input as text-only, so registry enrichment enrolls that model in the enabled vision sidecar for existing configurations: the catalog advertises image attachments and request preprocessing sends GLM descriptions. Native Mistral vision models and explicit operator modalities retain precedence (`tests/vision/mistral-vision-sidecar.test.ts`).
+
+Final image/video client tool output follows the [explicit empty client-catalog boundary](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire), after internal hosted operations and before client delivery or continuation state. Internal media execution retains its existing behavior.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
@@ -21,6 +25,8 @@ Codex Spark exception; standalone Images retain the separate relay contract belo
 [Responses transport](../transports/responses.md#responses-httpsse).
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
+
+Fetch-based Anthropic model iterations use the [thinking-signature recovery contract](../transports/anthropic-thinking-recovery.md#imagevideo-model-iterations), without repeating completed media calls.
 
 Fetch-based Anthropic image bridge account recovery follows [the revoked-token contract](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery), including output commitment and send-budget gates.
 
@@ -103,7 +109,7 @@ error rather than falling through to a separately billed keyed provider. The out
 has one selected Authorization value, validated before the non-idempotent upstream POST.
 The keyed path never enters `handleResponses`, so `src/server/images.ts` repeats
 `selectProactiveApiKeyTransport` inside the keyed branch and rebuilds Authorization from the
-returned clone rather than the earlier snapshot.
+returned clone rather than the earlier snapshot. Opt-in request-local round-robin uses that same selection seam and maps exhausted-key allocation to retryable 429. Genuine distributed 401/429 responses record the actual selected key cooldown, retaining Retry-After; synthetic replay refusals do not cool keys, and no paid POST is replayed. The standalone Images relay remains a single direct non-idempotent fetch outside the inference request-pacing executor; provider/key pacing limits do not cover that relay.
 
 A configured key's model and provider scope applies to whichever destination the request settles
 on: the ChatGPT forward account, the keyed provider, the xAI Imagine bridge, or the Antigravity

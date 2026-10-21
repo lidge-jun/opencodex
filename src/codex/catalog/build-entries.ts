@@ -4,6 +4,7 @@ import { CODEX_REASONING_LEVELS, type CodexReasoningLevel } from "../../reasonin
 import { clearModelCache } from "../model-cache";
 import { routedSlug, slugEquivalenceKey } from "../../providers/slug-codec";
 import { COMBO_NAMESPACE } from "../../combos";
+import { hasOcxComboAuthorship, hasOcxRoutedAuthorship, reapplyRetainedComboDescription, ROUTED_DESCRIPTION_PREFIX } from "./ownership";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
@@ -48,7 +49,7 @@ import { NATIVE_RESERVE_MODEL } from "./native-models";
 import { isReserveCatalogProjection, type ReserveCatalogProjection } from "./reserve";
 import { deriveEntry, finishUpstreamNativeEntry, isExactComboCatalogEntry } from "./derive-entry";
 import { PICKER_ORDER_PRIORITY_BASE, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
-import { preserveOperatorUltraFastTiers } from "./operator-tiers";
+import { applyConfiguredUltraFast, configuredUltraFastSlugs } from "./configured-tiers";
 import { applyNativeUltraFastTier } from "./native-ultrafast";
 
 export interface ObservedCatalogEntryBuildInput {
@@ -111,6 +112,14 @@ export function buildCatalogEntries(
     accountNativeSlugs,
     accountNativeSlugsBySelector,
   });
+  // Live discovery does not run the disk merge; use the same captured declarations and row fences.
+  const configured = configuredUltraFastSlugs(goModels);
+  for (const entry of entries) {
+    if (typeof entry.slug !== "string" || !entry.slug.includes("/")
+      || isNativeAliasCatalogEntry(entry) || isExactComboCatalogEntry(entry, exactComboSlugs)
+      || trustedAccountBoundNativeCatalogSlug(entry) !== undefined) continue;
+    applyConfiguredUltraFast(entry, undefined, configured.has(entry.slug), false);
+  }
   applyFullModelPickerOrder(entries, modelPickerOrder);
   return entries;
 }
@@ -210,7 +219,7 @@ export function buildCatalogEntriesFromObservedState({
     const routed = deriveEntry(
       template,
       slug,
-      `Routed via opencodex → ${nativeAlias.provider} (${nativeAlias.owned_by ?? nativeAlias.provider}).`,
+      `${ROUTED_DESCRIPTION_PREFIX}${nativeAlias.provider} (${nativeAlias.owned_by ?? nativeAlias.provider}).`,
       5,
       nativeAlias,
       exactComboSlugs,
@@ -268,7 +277,7 @@ export function buildCatalogEntriesFromObservedState({
     const e = deriveEntry(
       template,
       slug,
-      `Routed via opencodex → ${m.provider} (${m.owned_by ?? m.provider}).`,
+      `${ROUTED_DESCRIPTION_PREFIX}${m.provider} (${m.owned_by ?? m.provider}).`,
       5,
       m,
       exactComboSlugs,
@@ -372,15 +381,15 @@ export function orderForModelPicker(
  * True when an existing catalog row was authored by OpenCodex routing (#855).
  * Every generated routed row — current full-slug form, the June–July 2026
  * provider-name form, and legacy combo aliases — carries the stable
- * description prefix `Routed via opencodex → `; foreign rows from Cursor or
+ * description prefix `Routed via opencodex → `, or — when a combo overrides its description
+ * (#7229) — the `opencodex_routed_origin` marker (./ownership); foreign rows from Cursor or
  * user tooling do not. `owned_by` describes upstream ownership, and `comp_hash`
  * describes history compatibility; neither is an authorship signal.
  */
 export function isOcxAuthoredRoutedEntry(entry: RawEntry): boolean {
   if (isNativeAliasCatalogEntry(entry)) return true;
-  const desc = typeof entry.description === "string" ? entry.description : "";
   const slug = typeof entry.slug === "string" ? entry.slug : "";
-  return slug.includes("/") && desc.startsWith("Routed via opencodex → ");
+  return slug.includes("/") && hasOcxRoutedAuthorship(entry);
 }
 
 function recoverableNativeSlug(entry: RawEntry): string | null {
@@ -474,6 +483,8 @@ export function applyFullModelPickerOrder(entries: RawEntry[], order: readonly s
 export interface ObservedCatalogMergeInput {
   /** Preserve operator-supplied Ultra Fast only from the exact persisted routed row. */
   readonly ultraFastTier?: boolean;
+  /** Current captured wire declarations; disk rows and templates never populate this set. */
+  readonly configuredUltraFastSlugs?: ReadonlySet<string>;
   readonly catalogModels: readonly RawEntry[];
   readonly baselineCatalogModels: readonly RawEntry[];
   readonly routedEntries: readonly RawEntry[];
@@ -493,6 +504,11 @@ export interface ObservedCatalogMergeInput {
   readonly multiAgentV2Enabled: boolean;
   readonly keepNativeChatGptOnV1?: boolean;
   readonly exactComboSlugs: ReadonlySet<string>;
+  /**
+   * Current combo row descriptions by public slug (#7229). When supplied, retained combo rows
+   * are re-projected onto it; absent means the caller has no config and leaves them unchanged.
+   */
+  readonly comboDescriptions?: ReadonlyMap<string, string>;
   readonly hasPhysicalComboProvider: boolean;
   readonly includeNativeOpenAi: boolean;
   readonly accountBoundEntries: readonly RawEntry[];
@@ -515,6 +531,7 @@ export interface ObservedCatalogMergeInput {
  */
 export function mergeCatalogEntriesFromObservedState({
   ultraFastTier = false,
+  configuredUltraFastSlugs = new Set(),
   catalogModels,
   baselineCatalogModels,
   routedEntries,
@@ -534,6 +551,7 @@ export function mergeCatalogEntriesFromObservedState({
   multiAgentV2Enabled,
   keepNativeChatGptOnV1,
   exactComboSlugs,
+  comboDescriptions,
   hasPhysicalComboProvider,
   includeNativeOpenAi,
   accountBoundEntries,
@@ -628,8 +646,7 @@ export function mergeCatalogEntriesFromObservedState({
   }
   const freshExactComboEntries = new Set(admittedRoutedEntries.filter(entry => (
     isExactComboCatalogEntry(entry, exactComboSlugs)
-    && typeof entry.description === "string"
-    && entry.description.startsWith(`Routed via opencodex → ${COMBO_NAMESPACE} (`)
+    && hasOcxComboAuthorship(entry)
   )));
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const freshEquivalentKeys = new Set(admittedRoutedEntries.flatMap(entry => (
@@ -791,6 +808,10 @@ export function mergeCatalogEntriesFromObservedState({
       delete entry[SPAWN_PRIORITY_FIELD];
     }
     const slug = String(entry.slug);
+    if (comboDescriptions !== undefined && exactComboSlugs.has(slug)
+      && (isNativeAliasCatalogEntry(entry) || (entry.owned_by === COMBO_NAMESPACE && hasOcxComboAuthorship(entry)))) {
+      reapplyRetainedComboDescription(entry, comboDescriptions.get(slug));
+    }
     if (!isOcxAuthoredRoutedEntry(entry)) continue;
     // The builder no longer copies a template's comp_hash onto routed rows (#5796), but a row
     // kept from disk may still carry one. Custom rows, Codex-forward aliases included, never
@@ -866,7 +887,7 @@ export function mergeCatalogEntriesFromObservedState({
     if (typeof entry.slug !== "string" || !entry.slug.includes("/")
       || isNativeAliasCatalogEntry(entry) || isExactComboCatalogEntry(entry, exactComboSlugs)
       || trustedAccountBoundNativeCatalogSlug(entry) !== undefined) continue;
-    preserveOperatorUltraFastTiers(entry, operatorRows.get(entry.slug), ultraFastTier);
+    applyConfiguredUltraFast(entry, operatorRows.get(entry.slug), configuredUltraFastSlugs.has(entry.slug), ultraFastTier);
   }
   const finalRoutedEntrySet = new Set(finalRoutedEntries);
   const degradedPreservedCount = preservedRoutedEntries.filter(entry => {

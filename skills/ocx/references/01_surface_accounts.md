@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 40.
+Declared capabilities: 42.
 
 ### `ocx account login`
 
@@ -16,7 +16,7 @@ Usage: `ocx account login <provider> [--id <account-id>] [--reauth] [--device] [
 
 Log in to an OAuth provider; Kiro can add a native device account.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -39,8 +39,6 @@ State-changing: yes.
 | `--open-browser` | string | on or off for browser-capable login; rejected for explicit/native device flows. |
 | `--add-account` | string | Fresh generic OAuth login only: on forces a fresh flow, off permits existing import preference. Not supported with reauth/Codex/Kiro method. |
 
-JSON mode: `payload`.
-
 - openai, codex and chatgpt address the Codex pool. Native main uses the separate account main reauth flow.
 - Login is a human authorization handoff. Codes, verification material and credentials must not be copied into agent transcripts. Legacy argv code input warns about exposure; use stdin.
 - No --live flag is implemented. Provider OAuth --id requires --reauth; --method is Kiro add-only.
@@ -53,7 +51,7 @@ Usage: `ocx account history openai <pool-account-id> [--limit <1-200>] [--json]`
 
 Cached quota observations for one stored Codex pool account.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -64,8 +62,6 @@ State-changing: no.
 | `--json` | boolean | Emit the bounded observation history. |
 | `--limit` | number | Return the newest 1 to 200 observations. |
 
-JSON mode: `payload`.
-
 - Use account history openai <pool-account-id>. Reads cached observations only; no refresh or warmup. Native main is not included.
 
 ### `ocx account main reauth`
@@ -74,7 +70,7 @@ Usage: `ocx account main reauth --device [--no-wait] [--json]`
 
 Reauthenticate the native main Codex login with a device code (#3898); headless hubs need no Codex App or keyring.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -89,8 +85,6 @@ State-changing: yes.
 | `--flow` | string | Flow id for status and cancel. |
 | `--json` | boolean | Emit the flow status as JSON. |
 
-JSON mode: `payload`.
-
 - Same-identity native main device reauthentication; pool login endpoints are separate. Human authorization is required and credentials are never printed.
 - Start requires --device; --no-wait returns a flow handle. Follow with account main reauth status --flow <id> or account main reauth cancel --flow <id>. Status/cancel require --flow and reject --device/--no-wait.
 - Returned verification URLs and device codes are human handoff material; keep them out of agent transcripts.
@@ -101,7 +95,7 @@ Usage: `ocx account list [provider] [--all] [--quota [--refresh]] [--json]`
 
 List live Codex, OAuth and API-key accounts with optional quota observations.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -118,8 +112,6 @@ State-changing: no.
 | `--refresh` | boolean | With --quota, bypass quota cache; otherwise has no effect. |
 | `--json` | boolean | Emit the command result as JSON. |
 
-JSON mode: `envelope`.
-
 - Omitting provider discovers OAuth providers and includes configured families. JSON is {accounts,notes}, not a raw server account array.
 - Default listing is observational. --quota can probe provider quotas; --refresh is only acted on together with --quota. A refresh observation is not pending-account validation consent.
 
@@ -129,7 +121,7 @@ Usage: `ocx account import-orca --source <orca-data-directory> --registry <orca-
 
 Preview or register read-only links to Orca-managed Codex accounts without another login.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -139,8 +131,6 @@ Drives no management route.
 | `--registry` | string | The chosen Orca profile's orca-data.json account registry. |
 | `--apply` | boolean | Register new accounts; requires a stopped proxy. Default is preview. |
 | `--json` | boolean | Emit counts and fixed invalid-reason codes without credentials or source paths. |
-
-JSON mode: `envelope`.
 
 - Local files only; never copies refresh tokens or changes Orca authentication files.
 - Skips existing ChatGPT identities. New accounts remain pending until dashboard validation.
@@ -153,7 +143,7 @@ Usage: `ocx account refresh <provider> [--json]`
 
 Refresh account quotas without model validation; pending Codex accounts require dashboard consent.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -165,8 +155,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the refresh result as JSON. |
 
-JSON mode: `envelope`.
-
 - CLI/admin-token refreshes only observe usage. After quota recovery, a human must click Refresh quotas in the dashboard to authorize model validation. Do not mint a GUI session to work around this consent boundary.
 
 ### `ocx account grok-reset-coupons`
@@ -175,7 +163,7 @@ Usage: `ocx account grok-reset-coupons [account-id] [--consume --yes [--token-id
 
 Inspect or redeem Grok billing reset coupons; redemption is journaled and idempotent.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -190,8 +178,6 @@ State-changing: yes.
 | `--operation-id` | string | UUIDv4 making a redemption idempotent: retries replay the journaled outcome. |
 | `--json` | boolean | Emit the coupon list or redemption result as JSON. |
 
-JSON mode: `payload`.
-
 - Without --consume this is a read: remaining coupons and their validity windows.
 - The operation is journaled before the upstream call, so retrying the same --operation-id replays the recorded outcome instead of spending a second coupon.
 
@@ -199,9 +185,9 @@ JSON mode: `payload`.
 
 Usage: `ocx account pause <provider> <account-id|alias|main> [--json]`
 
-Exclude one account in a Codex, Anthropic or supported generic OAuth pool from automatic selection.
+Exclude one account in a Codex, Anthropic, generic OAuth or API-key pool from automatic selection.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -209,22 +195,22 @@ State-changing: yes.
 | PUT | `/api/codex-auth/accounts/pause` |
 | GET | `/api/oauth/accounts` |
 | PUT | `/api/oauth/accounts/pause` |
+| GET | `/api/providers/keys` |
+| PUT | `/api/providers/keys/pause` |
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the pause result as JSON. |
 
-JSON mode: `envelope`.
-
-- Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, a paused-but-selected Codex account still receives requests. Anthropic and generic OAuth pause exclude the account from new requests, failover and refresh, and an all-paused pool answers 403. Credentials and health are preserved; already-sent turns are not cancelled.
+- Codex pause unbinds pinned threads and selects a fallback when possible; with no fallback, the paused account cannot dispatch until resumed. Anthropic and generic OAuth pause exclude the account from new requests, failover and refresh, and an all-paused pool answers 403. Credentials and health are preserved; already-sent turns are not cancelled.
 
 ### `ocx account resume`
 
 Usage: `ocx account resume <provider> <account-id|alias|main> [--json]`
 
-Return a paused account to a Codex, Anthropic or supported generic OAuth pool.
+Return a paused account to a Codex, Anthropic, generic OAuth or API-key pool.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -232,12 +218,12 @@ State-changing: yes.
 | PUT | `/api/codex-auth/accounts/pause` |
 | GET | `/api/oauth/accounts` |
 | PUT | `/api/oauth/accounts/pause` |
+| GET | `/api/providers/keys` |
+| PUT | `/api/providers/keys/pause` |
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the resume result as JSON. |
-
-JSON mode: `envelope`.
 
 ### `ocx account pause-exhausted`
 
@@ -245,7 +231,7 @@ Usage: `ocx account pause-exhausted <provider> [--json]`
 
 Pause every Codex account whose quota is spent.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -255,8 +241,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit paused ids and the checked/failed counts as JSON. |
 
-JSON mode: `envelope`.
-
 - Only Codex account pools are supported. Refreshes quota and may partially fail; nonzero failedAccountCount exits 1 and sets ok:false.
 
 ### `ocx account strategy`
@@ -265,7 +249,7 @@ Usage: `ocx account strategy <provider> [quota|round-robin|fill-first|least-load
 
 Show or set how an account pool picks the next account.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -275,8 +259,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the applied strategy and sticky limit as JSON. |
-
-JSON mode: `envelope`.
 
 - A bare invocation reads and never writes.
 - The APPLIED value is echoed, not the requested one, so a server-side normalization stays visible.
@@ -289,7 +271,7 @@ Usage: `ocx account sticky <provider> [1-100] [--json]`
 
 Show or set how many consecutive requests stay on one account.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -300,8 +282,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the applied strategy and sticky limit as JSON. |
 
-JSON mode: `envelope`.
-
 - Only meaningful under the sticky-capable strategies; the pool strategy is the other half of this setting.
 
 ### `ocx account routes`
@@ -310,7 +290,7 @@ Usage: `ocx account routes anthropic [--file <json-file>|--clear] [--json]`
 
 Read, replace, or clear Anthropic OAuth model account routes.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -323,8 +303,6 @@ State-changing: yes.
 | `--clear` | boolean | Remove the stored routes. |
 | `--json` | boolean | Emit the unified settings response as JSON. |
 
-JSON mode: `payload`.
-
 - Only anthropic is supported. Omitted --file/--clear reads. --clear sends routes:null; file and clear are mutually exclusive. The local JSON file must be a regular file of at most 64 KiB; the server validates its route array.
 
 ### `ocx account auto-switch`
@@ -333,7 +311,7 @@ Usage: `ocx account auto-switch <provider> <status|on|off|threshold <0-100>|inhe
 
 Show or set the usage percentage at which a pool moves to another account.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -350,10 +328,28 @@ State-changing: yes.
 | `--json` | boolean | Emit the stored threshold and whether it is applied. |
 | `--account` | string | Per-account scope for openai or anthropic; openai resolves main/exact ID/unambiguous alias from the selected runtime. |
 
-JSON mode: `envelope`.
-
 - Without --account the existing pool-wide operation remains. OpenAI per-account status reads override plus effective threshold; on writes80, off0, inherit null, threshold a validated0–100 integer.
 - New OpenAI policy writes require successful unambiguous roster evidence and never fall back to a raw unresolved selector. These are routing thresholds, not pool enablement or paid-credit permission.
+
+### `ocx account preserve-signed-in`
+
+Usage: `ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]`
+
+Prefer other Codex identities and reserve the native sign-in as fallback.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/codex-auth/preserve-signed-in` |
+| PUT | `/api/codex-auth/preserve-signed-in` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--apply-to-bound` | boolean | With on, release protected bindings and pins for the next request. |
+| `--json` | boolean | Emit affected entries, next unbound choice and pin/binding semantics. |
+
+- Default/status reads. Custom priorities are preserved. Bound threads and manual pins remain unless explicitly released. Exact-account models override the preference. Fallback can spend signed-in quota; linked pause excludes it instead.
 
 ### `ocx logout`
 
@@ -361,7 +357,7 @@ Usage: `ocx logout <provider> [--live] [--json]`
 
 Remove the active stored OAuth credential for a provider locally.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -372,8 +368,6 @@ State-changing: yes.
 | `--live` | boolean | Use the selected public-OAuth runtime logout; no local credential fallback. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 
-JSON mode: `envelope`.
-
 - No-live retains atomic local removed/not-found results and exits0/4. Live sends one provider-level OAuth logout and reports only its success receipt, not removed:true or global sign-out.
 - Live does not sign out Codex/native-main. Target/argument failure never causes local credential removal.
 
@@ -383,7 +377,7 @@ Usage: `ocx account current <provider> [--json]`
 
 Read the active account or API key for a provider.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -396,8 +390,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit provider, type, activeId and the projected account. |
 
-JSON mode: `envelope`.
-
 - Uses the live route for the configured account family; this does not report the physical native-main profile.
 
 ### `ocx account use`
@@ -406,7 +398,7 @@ Usage: `ocx account use <provider> <account-or-key-id|alias|main|auto> [--json]`
 
 Select a provider's pool account or API key.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -420,8 +412,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the selection receipt, including pin-drain information when present. |
 
-JSON mode: `envelope`.
-
 - Codex resolves IDs and aliases before reserved words; an account actually named auto wins. account clear openai always clears. OAuth and API-key selection pass the ID directly. This does not switch the physical Codex App login.
 
 ### `ocx account clear`
@@ -430,7 +420,7 @@ Usage: `ocx account clear <provider> [--json]`
 
 Clear a Codex pool's manual account selection pin.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -440,8 +430,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the clear receipt. |
 
-JSON mode: `envelope`.
-
 - Only Codex account pools are supported; other families are refused. Sends accountId:null without interpreting auto as an account ID.
 
 ### `ocx account alias`
@@ -450,7 +438,7 @@ Usage: `ocx account alias <provider> <account-or-key-id|alias> <display-name|-> 
 
 Set or clear an account's display alias.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -463,8 +451,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the applied alias, or null after clearing. |
 
-JSON mode: `envelope`.
-
 - - clears with an empty string. Codex resolves existing aliases; other families take an ID. Native main cannot be renamed; aliases are at most 80 printable characters. rename is an existing command alias.
 
 ### `ocx account priority`
@@ -473,7 +459,7 @@ Usage: `ocx account priority <provider> <account-id|alias|main> [<-100..100|firs
 
 Read or change Codex account selection order.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -485,8 +471,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the normalized priority and named preset. |
 
-JSON mode: `envelope`.
-
 - Only Codex pools support selection order. Omitting the value reads; reset sends null. Every write releases any manual pin, even if the value is unchanged; running threads retain their account until drained.
 
 ### `ocx account clear-cooldown`
@@ -495,7 +479,7 @@ Usage: `ocx account clear-cooldown <provider> <account-id|alias|main> [--json]`
 
 Lift an operator-clearable Codex or Anthropic account cooldown.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -508,8 +492,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit whether a cooldown was actually cleared. |
 
-JSON mode: `envelope`.
-
 - Other provider families are refused. Resolves Codex or Anthropic account aliases before writing.
 
 ### `ocx account remove`
@@ -518,7 +500,7 @@ Usage: `ocx account remove <provider> <account-or-key-id|alias> --yes [--json]`
 
 Remove a pool account or provider API key with explicit confirmation.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -535,8 +517,6 @@ State-changing: yes.
 | `--yes` | boolean | Confirm account/key deletion. |
 | `--json` | boolean | Emit removal and promoted-account information. |
 
-JSON mode: `envelope`.
-
 - Native main removal is refused. Reads the account family before and after deletion; a failed post-delete read means deletion may have succeeded. Only Codex resolves aliases here.
 
 ### `ocx account add-key`
@@ -545,7 +525,7 @@ Usage: `ocx account add-key <provider> [--label <label>] [--json]`
 
 Import an existing provider API key from a human-controlled stdin source.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -556,8 +536,6 @@ State-changing: yes.
 | `--label` | string | Optional label for the imported key. |
 | `--json` | boolean | Emit a redacted receipt containing the key ID, never the key. |
 
-JSON mode: `envelope`.
-
 - API-key providers only. Requires non-TTY stdin and reads one secret line; never put plaintext keys in command arguments or agent transcripts. This imports an upstream credential, not an OpenCodex access-key creation workflow.
 
 ### `ocx account import`
@@ -566,7 +544,7 @@ Usage: `ocx account import google-antigravity --format cockpit-tools (--file <pa
 
 Import Google Antigravity accounts from a bounded Cockpit Tools document.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -579,8 +557,6 @@ State-changing: yes.
 | `--stdin` | boolean | Read the document from non-TTY stdin. |
 | `--json` | boolean | Emit sanitized per-record import outcomes. |
 
-JSON mode: `envelope`.
-
 - Human-controlled credential handoff: choose exactly one source. Unsupported providers/formats are refused before source I/O. Partial failures or unsupported records return nonzero; do not echo the document.
 
 ### `ocx account reauth`
@@ -589,7 +565,7 @@ Usage: `ocx account reauth <provider> [--id <account-id>] [--device] [--code -] 
 
 Reauthenticate a provider account through the existing login flow.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -609,8 +585,6 @@ State-changing: yes.
 | `--json` | boolean | Emit login instructions or completion state. |
 | `--open-browser` | string | on or off for browser-capable login; rejected for explicit/native device flows. |
 
-JSON mode: `payload`.
-
 - Alias of account login with --reauth. openai, codex and chatgpt address the pool; native main uses account main reauth. Human completes authorization; keep returned login material out of transcripts. Kiro --method cannot be combined with reauth.
 - Explicit add-account is incompatible with reauth. Browser preference is accepted only by browser-capable flows; device verification remains manual.
 
@@ -620,7 +594,7 @@ Usage: `ocx account code <provider> [--flow <flow-id>] [--code -] [--json]`
 
 Submit a login redirect or authorization code from stdin.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -633,8 +607,6 @@ State-changing: yes.
 | `--code` | string | Use - for stdin; omission also reads stdin. |
 | `--json` | boolean | Emit submission receipt. |
 
-JSON mode: `payload`.
-
 - A short-lived credential is a human handoff. Legacy positional/argv code input exists but warns about exposure; use stdin and never echo it.
 
 ### `ocx account cancel`
@@ -643,7 +615,7 @@ Usage: `ocx account cancel <provider> [--flow <flow-id>] [--json]`
 
 Cancel a pending account login flow.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -655,8 +627,6 @@ State-changing: yes.
 | `--flow` | string | Required for Codex; selects a native Kiro flow when supplied. |
 | `--json` | boolean | Emit cancellation receipt. |
 
-JSON mode: `payload`.
-
 - Codex cancellation sends flowId. Other providers send provider; Kiro additionally forwards a supplied flowId.
 
 ### `ocx account reset-credits`
@@ -665,7 +635,7 @@ Usage: `ocx account reset-credits <account-id|main> [--consume --yes [--operatio
 
 Read Codex reset-credit state, or explicitly consume one with operator authorization.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -679,8 +649,6 @@ State-changing: yes.
 | `--operation-id` | string | UUIDv4 retry identity; only valid with --consume. |
 | `--json` | boolean | Emit reset-credit state or receipt. |
 
-JSON mode: `payload`.
-
 - A bare invocation reads only. main maps to __main__; reads never consume a credit. This does not control credits-after-limit settings.
 
 ### `ocx account main doctor`
@@ -689,7 +657,7 @@ Usage: `ocx account main doctor [--json]`
 
 Diagnose native Codex login profile storage and recovery state.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -699,8 +667,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit diagnosis; this command also prints JSON by default. |
 
-JSON mode: `payload`.
-
 - Reports the physical login in the server's effective CODEX_HOME, independently of pool account selection.
 
 ### `ocx account main list`
@@ -709,7 +675,7 @@ Usage: `ocx account main list [--json]`
 
 List encrypted native Codex login profiles.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -719,15 +685,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit public profile metadata, not stored credentials. |
 
-JSON mode: `payload`.
-
 ### `ocx account main register`
 
 Usage: `ocx account main register <label> [--json]`
 
 Register the current physical Codex login as an encrypted profile.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -737,8 +701,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the registration receipt. |
 
-JSON mode: `payload`.
-
 - Captures the current login in the effective CODEX_HOME; it does not start a new login or select a pool account.
 
 ### `ocx account main add`
@@ -747,7 +709,7 @@ Usage: `ocx account main add <label>`
 
 Add a native login profile through a human-operated official Codex login.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
@@ -755,8 +717,6 @@ State-changing: yes.
 | POST | `/api/native-main-profiles/stage/heartbeat` |
 | POST | `/api/native-main-profiles/stage/finish` |
 | POST | `/api/native-main-profiles/stage/cancel` |
-
-JSON mode: `none`.
 
 - Human handoff: runs official Codex login locally in the server-provided restricted staging home, maintains a writer lease and encrypts the result. No --json, --yes or --rollback mode. Cleanup failure requires account main doctor; never expose writer tokens or credential files.
 
@@ -766,7 +726,7 @@ Usage: `ocx account main reauth status --flow <id> [--json]`
 
 Read an existing same-identity native-main reauthentication flow.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -777,15 +737,13 @@ State-changing: no.
 | `--flow` | string | Flow ID returned by the human-started reauthentication. |
 | `--json` | boolean | Emit flow state; pending state may include human login material. |
 
-JSON mode: `payload`.
-
 ### `ocx account main reauth cancel`
 
 Usage: `ocx account main reauth cancel --flow <id> [--json]`
 
 Cancel a native-main reauthentication flow.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -796,15 +754,13 @@ State-changing: yes.
 | `--flow` | string | Flow ID to cancel. |
 | `--json` | boolean | Emit cancellation state. |
 
-JSON mode: `payload`.
-
 ### `ocx account main switch`
 
 Usage: `ocx account main switch <profile-id-or-label> --yes [--json]`
 
 Switch the physical Codex App/CLI login to a registered profile.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -815,8 +771,6 @@ State-changing: yes.
 | `--yes` | boolean | Confirm the operator has closed Codex App/CLI. |
 | `--json` | boolean | Emit the native-login switch receipt. |
 
-JSON mode: `payload`.
-
 - Changes the effective CODEX_HOME login, independently of account use openai. The operator must stop Codex first and restart it afterwards; no automatic restart is performed.
 
 ### `ocx account main recover`
@@ -825,7 +779,7 @@ Usage: `ocx account main recover [--rollback --yes] [--json]`
 
 Recover an interrupted native-login profile transaction.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -837,8 +791,6 @@ State-changing: yes.
 | `--yes` | boolean | Confirm Codex App/CLI is stopped for rollback. |
 | `--json` | boolean | Emit recovery outcome. |
 
-JSON mode: `payload`.
-
 - Even without --rollback this calls recovery with rollback:false; it is not the doctor read. Rollback writes the native login only after explicit confirmation.
 
 ### `ocx account pool`
@@ -847,7 +799,7 @@ Usage: `ocx account pool <provider> [--enabled <on|off>] [--threshold <0-100>] [
 
 Read or edit the selected runtime's supported pool policy fields.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -858,15 +810,34 @@ State-changing: yes.
 |---|---|---|
 | `--enabled` | string | Stored pool preference; unsupported for Codex. Not equivalent to threshold0. |
 | `--threshold` | number | Auto-switch threshold0–100. |
-| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex, least-loaded is Kiro. |
+| `--strategy` | string | Use a strategy supported by this provider kind; reset-first is Codex or generic OAuth, least-loaded is Kiro. |
 | `--sticky` | number | Sticky limit1–100. |
 | `--quota-window` | string | Anthropic only: five-hour, weekly or max-utilization. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 
-JSON mode: `envelope`.
-
 - Reads the target supported-field list before a narrow PUT. Null/unsupported, stored/effective and generic inert policy stay distinct; disabling does not promise that reactive429 rotation stops.
 - No local classification/defaults are round-tripped into the live target; supported-field reads are not CAS.
+
+### `ocx account use-remaining`
+
+Usage: `ocx account use-remaining openai <id|alias|main> <on|off|status> [--json]`
+
+Choose whether one Codex account keeps using its remaining included quota.
+
+State-changing: yes. JSON mode: `envelope`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/codex-auth/accounts` |
+| GET | `/api/codex-auth/accounts/use-remaining` |
+| PUT | `/api/codex-auth/accounts/use-remaining` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the validated account policy. |
+
+- On disables proactive usage switching for the selected account and raises main-account protection to 100%. Off restores the configured thresholds.
+- This is a persistent preference, not account selection. Pause, reauthentication, cooldown, entitlement and paid-credit policy still apply.
 
 ### `ocx account credits`
 
@@ -874,7 +845,7 @@ Usage: `ocx account credits openai <id|alias|main> <on|off> [--json]; ocx accoun
 
 Explicitly opt one or all current Codex accounts into paid credits after quota limits.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -886,8 +857,6 @@ State-changing: yes.
 | `--all` | boolean | Exclusive with one account selector. On covers current selectable accounts plus main; off clears the opt-in set. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 
-JSON mode: `envelope`.
-
 - Requires explicit operator on/off intent. Showing credit balances does not grant paid-use permission; no login/quota failure auto-enables it.
 - One/all shapes are exclusive. Strict selected-runtime account resolution refuses ambiguity/unavailable roster; the response owns the applied set. It never consumes a reset grant.
 
@@ -897,7 +866,7 @@ Usage: `ocx account quota-activation openai <id|alias|main> --window <fiveHour|w
 
 Enable or disable a Codex account window's automatic quota refresh policy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -909,8 +878,6 @@ State-changing: yes.
 | `--window` | string | fiveHour or weekly; these spellings differ from pool quota-window. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 
-JSON mode: `envelope`.
-
 - Writes only the selected account/window mutation, preserving siblings. Enabling an unavailable window returns conflict; disabling remains allowed.
 - The server may schedule a quota refresh. This does not redeem a reset grant or opt into paid credits.
 
@@ -920,7 +887,7 @@ Usage: `ocx account anthropic-reset-grants [account-id] [--provider anthropic|an
 
 Read Anthropic reset-grant eligibility and pending status without consuming a grant.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -930,8 +897,6 @@ State-changing: no.
 |---|---|---|
 | `--provider` | string | Anthropic OAuth instance: anthropic or anthropic2; omission keeps the legacy Anthropic pool. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
-
-JSON mode: `envelope`.
 
 - Optional identity is the exact Anthropic account ID. Omission delegates active/fallback account choice to the server, not the Codex alias resolver.
 - This GET can refresh access/status information upstream. Empty grants, unavailable status, pending operation and unavailable journal remain distinct. Consume remains a GUI-session-only human handoff; no session acquisition or retry is performed.

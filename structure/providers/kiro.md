@@ -17,7 +17,7 @@ It uses fixed Kiro authorization hosts, guarded outbound POSTs, and a bounded pr
 flow table. A flow ID is returned only at start; status and cancellation require that ID and
 the same management principal kind. Polling follows the server's interval, and only an exact
 approval shape reaches the protected OAuth store. Device codes and tokens never enter
-management responses. Native slots carry `loginOrigin: "kiro-device"`; kiro-cli reauth
+management responses. Social polling accepts `authorized` and the legacy `approved` alias, with the same token and profile checks. Native slots carry `loginOrigin: "kiro-device"`; kiro-cli reauth
 refuses them before starting CLI work. Upstream verification URLs require HTTPS, no credentials
 or control characters, and a 2048-character limit; user codes use 4–32 plain alphanumeric or
 hyphen characters. Completed flow results are consumed once, terminal entries expire after
@@ -76,7 +76,14 @@ observed ID still informs routing preference.
 
 `src/adapters/kiro-refusal.ts` recognizes an exact monthly reason on HTTP 400/429 and a
 confirmed suspension on HTTP 403; ordinary 400/403 remains an error without an account
-verdict. `src/providers/kiro-usage.ts` records monthly exhaustion only for the sent
+verdict. A 400 whose parsed body carries `ValidationException` (as `reason`, or inside `message`)
+and the message "Improperly formed request" is the `profile` kind: the account layer rotates to a
+sibling login like any other account-scoped refusal, and both tokens are required in the parsed
+fields. `isKiroAccountProfileRefusal` applies the same rule to combo failure text (adapter-normalized
+`Kiro invalid request: ...` prose or a JSON body, with or without the `Provider error 400: ` frame).
+It is only consulted when the adapter the failed combo leg resolved is `kiro` (see
+[combo failover](../transports/responses-failover.md)); coverage is
+`tests/providers/kiro/kiro-refusal.test.ts` and `tests/server/server-kiro-refusal-e2e.test.ts`. `src/providers/kiro-usage.ts` records monthly exhaustion only for the sent
 credential generation and login identity, independently of quota observation time. A
 completed response from that same live credential clears an older verdict after disk
 hydration. Suspension is a process-local quarantine; rate refusals use a short cooldown.

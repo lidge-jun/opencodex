@@ -293,6 +293,8 @@ CLI'dan bir görünen ad ekleyin (proxy canlıyken kataloğu hemen senkronize ed
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
+Özel sağlayıcılarda açık bir pencere belirtilmezse katalog, model kimliği tahminleri dahil [bağlam penceresi geri dönüş kurallarını](/tr/reference/configuration/providers/#özel-sağlayıcılarda-bağlam-penceresi) kullanır. Aracı, model üreticisinin penceresinden daha azını destekliyorsa açık bir pencere veya Context cap ayarlayın.
+
 Uzak Codex istemcileri oluşturulan aynı kataloğu yönetim API'si üzerinden
 getirebilir (diğer `/api/*` rotalarıyla aynı kabul belirteci):
 

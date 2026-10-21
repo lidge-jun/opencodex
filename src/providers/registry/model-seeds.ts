@@ -477,7 +477,7 @@ export const COMMAND_CODE_MODEL_INPUT_MODALITIES: Record<string, ["text"] | ["te
   ...Object.fromEntries(COMMAND_CODE_IMAGE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
   ...Object.fromEntries(COMMAND_CODE_TEXT_ONLY_MODELS.map(id => [id, ["text"] as ["text"]])),
 };
-export const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
+export const OPENCODE_ZEN_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
 /*
  * Zen free models that reject `image_url` upstream (#1043, and the reproducible
  * half of #1024).

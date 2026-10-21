@@ -96,7 +96,7 @@ function headroomOf(provider: string, accountId: string, requestedModelId?: stri
   const family = classifyModelFamilyForQuota(provider, requestedModelId);
   if (family) {
     const percents = (quota.customWindows ?? [])
-      .filter(window => windowMatchesFamily(window.label, family))
+      .filter(window => window.modelId === undefined && windowMatchesFamily(window.label, family))
       .map(window => window.percent)
       .filter((value): value is number => typeof value === "number");
     if (percents.length === 0) return null;
@@ -106,7 +106,7 @@ function headroomOf(provider: string, accountId: string, requestedModelId?: stri
     quota.fiveHourPercent,
     quota.weeklyPercent,
     quota.monthlyPercent,
-    ...(quota.customWindows ?? []).map(window => window.percent),
+    ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.percent),
   ].filter((value): value is number => typeof value === "number");
   if (percents.length === 0) return null;
   return 100 - Math.max(...percents);
@@ -138,6 +138,74 @@ export function isAccountQuotaExhausted(
   if (provider === "kiro") return account ? kiroAccountEvidence(account).exhausted === true : false;
   const headroom = headroomOf(provider, accountId, requestedModelId, account);
   return headroom !== null && headroom <= 0;
+}
+
+/**
+ * Earliest future reset timestamp (in ms) for the relevant quota window, or null if unknown.
+ * Prefers weekly reset when multiple windows exist so expiring allowance is consumed first.
+ */
+export function accountResetTimestamp(
+  provider: string,
+  accountId: string,
+  requestedModelId?: string | null,
+  now = Date.now(),
+): number | null {
+  const quota = getCachedProviderAccountQuota(provider, accountId);
+  if (!quota) return null;
+  const family = classifyModelFamilyForQuota(provider, requestedModelId);
+  // Model-attributed rows are diagnostics; one must never become the account's reset time.
+  const windows = (quota.customWindows ?? []).filter(w => w.modelId === undefined && (!family || windowMatchesFamily(w.label, family)));
+  const weekly = windows.find(w => /week/i.test(w.label));
+  let rawReset = weekly?.resetAt ?? quota.weeklyResetAt;
+  if (rawReset === undefined && provider !== "google-antigravity" && provider !== "anthropic") {
+    // Providers without a weekly cadence: prefer an explicitly 5h-labeled window before
+    // falling back to first-window order.
+    const fiveHour = windows.find(w => /5h|five/i.test(w.label)) ?? windows[0];
+    rawReset = fiveHour?.resetAt ?? quota.fiveHourResetAt;
+  } else if (rawReset === undefined) {
+    rawReset = windows[0]?.resetAt ?? quota.fiveHourResetAt;
+  }
+  if (typeof rawReset !== "number" || !Number.isFinite(rawReset)) return null;
+  const ms = rawReset < 1e11 ? rawReset * 1000 : rawReset;
+  return ms > now ? ms : null;
+}
+
+/**
+ * Rank candidates by soonest reset timestamp first among healthy accounts.
+ * Accounts whose quota will reset earliest get priority so allowances do not expire unused.
+ *
+ * When a passive provider has incomplete quota evidence (some ring members with no
+ * cached record), reset timestamps are unreliable: an unknown account converts to
+ * Infinity and always loses to a known near-exhausted one. Fall back to headroom
+ * order instead of inventing a reset ordering.
+ */
+export function rankAccountsByResetFirst(
+  provider: string,
+  ring: readonly string[],
+  requestedModelId?: string | null,
+  now = Date.now(),
+  accounts?: ReadonlyMap<string, ProviderAccount>,
+): string[] {
+  if (ring.length < 2) return [...ring];
+  const ranked = rankAccountsByHeadroom(provider, ring, requestedModelId, accounts);
+  const healthy = ranked.filter(id => !isAccountQuotaExhausted(provider, id, requestedModelId, accounts?.get(id)));
+  if (healthy.length < 2) return ranked;
+  if (
+    hasPassiveAccountQuota(provider)
+    && !ring.every(id => headroomOf(provider, id, requestedModelId, accounts?.get(id)) !== null)
+  ) return ranked;
+
+  const withReset = healthy.map((id, index) => ({
+    id,
+    resetAt: accountResetTimestamp(provider, id, requestedModelId, now) ?? Number.POSITIVE_INFINITY,
+    headroom: headroomOf(provider, id, requestedModelId, accounts?.get(id)) ?? 0,
+    index,
+  }));
+
+  withReset.sort((a, b) => (a.resetAt - b.resetAt) || (b.headroom - a.headroom) || (a.index - b.index));
+  const sortedHealthy = withReset.map(r => r.id);
+  const exhausted = ranked.filter(id => isAccountQuotaExhausted(provider, id, requestedModelId, accounts?.get(id)));
+  return [...sortedHealthy, ...exhausted];
 }
 
 /**

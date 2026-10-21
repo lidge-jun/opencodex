@@ -149,6 +149,8 @@ export function withRequestLogId(response: Response, requestId: string): Respons
 }
 
 export interface StartServerDeps {
+  /** Test-only CONNECT binder; permits kernel-assigned ports without probe-and-release races. */
+  startClaudeInterceptProxy?: typeof import("../../claude/intercept/connect-proxy").startConnectProxy;
   /** Test-only seam; production always initializes its own management credential state. */
   managementAuthState?: ManagementAuthState;
   /** Test-only route dependencies, forwarded only after management admission succeeds. */
@@ -276,4 +278,13 @@ export function warnPlaintextV2AgentMessagesStartup(config: { plaintextV2AgentMe
   console.warn("⚠️  Experimental plaintext V2 agent messages are enabled.");
   console.warn("   Eligible ChatGPT collaboration calls may carry plaintext message arguments. HTTPS remains encrypted, but task text may be retained in Codex history, selected providers, and local response/debug state.");
   console.warn("   This depends on undocumented ChatGPT and Codex behavior; it does not decrypt existing tasks.");
+}
+
+export function logProxyEndpoints(actualPort: number): void {
+  console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
+  console.log(`   POST /v1/responses → provider translation`);
+  console.log(`   POST /v1/chat/completions → OpenAI-compatible clients`);
+  console.log(`   GET  /healthz      → health check`);
+  console.log(`   GET  /api/*        → management API`);
+  console.log(`   GET  /             → GUI dashboard`);
 }

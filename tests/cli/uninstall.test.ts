@@ -332,11 +332,14 @@ function uninstallFixture() {
     finishCleanup: boolean;
     lease?: ClientLifecycleHeld;
     aclReapPending: boolean;
+    picker: { ok: boolean; residual?: string[] };
+    pickerCleanup: Array<{ disconnectsBefore: number; finalLocksBefore: number }>;
     calls: { read: number; cleanup: number; integrations: number; remove: number; finalLock: number };
     cleanupOptions: Array<Parameters<UninstallClientStateDeps["disconnect"]>[0]>;
   } = {
     connection: { kind: "disconnected" }, desktop: { kind: "absent" }, receipt: { kind: "absent" },
     finishCleanup: true, aclReapPending: false,
+    picker: { ok: true }, pickerCleanup: [],
     calls: { read: 0, cleanup: 0, integrations: 0, remove: 0, finalLock: 0 }, cleanupOptions: [],
   };
   const deps: UninstallClientStateDeps = {
@@ -387,6 +390,12 @@ function uninstallFixture() {
       return { status: "removed", residualPaths: [] };
     },
     aclReapPending: () => fixture.aclReapPending,
+    removePickerArtifacts: async () => {
+      // Picker cleanup takes the same L; reaching it here proves uninstall does not hold L yet.
+      withClientLifecycleSync(held => assertClientLifecycleHeld(held), { lockPath });
+      fixture.pickerCleanup.push({ disconnectsBefore: fixture.calls.cleanup, finalLocksBefore: fixture.calls.finalLock });
+      return fixture.picker;
+    },
   };
   const bytes = () => sentinels.map(path => readFileSync(join(configDir, path), "utf8"));
   return { fixtureRoot, configDir, lockPath, fixture, deps, bytes };
@@ -482,6 +491,28 @@ describe("uninstall client cleanup before owner-state deletion", () => {
       await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
         .rejects.toThrow("fixture integration conflict");
       expect(f.fixture.calls.integrations).toBe(1);
+      expect(f.fixture.calls.remove).toBe(0);
+      expect(f.bytes()).toEqual(before);
+    });
+  });
+
+  test("picker trust is retired after disconnect and outside L, before config removal", async () => {
+    await withUninstallFixture(async f => {
+      f.fixture.connection = connectedFixture;
+      f.fixture.desktop = { kind: "active", owner: cleanupOwner };
+      await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps);
+      expect(f.fixture.pickerCleanup).toEqual([{ disconnectsBefore: 1, finalLocksBefore: 0 }]);
+      expect(f.fixture.calls.remove).toBe(1);
+    });
+  });
+
+  test("a picker trust residual preserves the records naming the root and skips removal", async () => {
+    await withUninstallFixture(async f => {
+      f.fixture.picker = { ok: false, residual: ["trust"] };
+      const before = f.bytes();
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .rejects.toThrow("Claude Desktop picker cleanup left trust behind");
+      expect(f.fixture.calls.integrations).toBe(0);
       expect(f.fixture.calls.remove).toBe(0);
       expect(f.bytes()).toEqual(before);
     });
@@ -629,6 +660,7 @@ describe("uninstall restores recorded third-party integrations before deleting r
         return { status: "removed", residualPaths: [] };
       },
       aclReapPending: () => false,
+      removePickerArtifacts: async () => ({ ok: true }),
     };
     return { root, home, env, configDir, clientConfig, store, deps };
   }

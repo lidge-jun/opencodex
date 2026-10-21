@@ -98,6 +98,7 @@ ocx login google-antigravity
 ocx login cursor       # 獨立 Cursor PKCE 登入
 ocx login command-code # Command Code browser OAuth（或匯入 ~/.commandcode/auth.json）
 ocx login devin       # Cognition/Devin：優先匯入 Devin CLI 憑證，否則走 Auth0 瀏覽器登入
+ocx login dsh-account # DeepSeek Harness Desktop（匯入 ~/.dsh/.credentials.yaml 授權）
 ocx login github-copilot  # GitHub device flow → Copilot token（Copilot Pro/Business）
 ocx login codex        # Codex 帳號池（別名：chatgpt、openai；需要 proxy 正在執行）
 ocx logout <provider>
@@ -114,6 +115,7 @@ ocx logout <provider>
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、即時 HTTP/2 transport 與按帳號篩選的模型探索。 |
 | `devin` | `devin` | `https://server.codeium.com` | 實驗性的非官方 Cognition/Devin 橋接。登入會先匯入已安裝 Devin CLI 已持有的憑證（`devin auth login` 會把 `devin-session-token` 寫入它自己的 `credentials.toml`）；沒有則開啟 Auth0 瀏覽器頁面，再以 `RegisterUser` 將貼上的權杖換成長期 API 金鑰。`ocx login devin-cli` 仍作為已棄用別名可用。模型清單依帳號透過 `GetCascadeModelConfigs` 即時取得，串流僅走 Connect-RPC 上的 `runTurn` 路徑。預設不在儀表板預設集內，需手動啟用。 |
+| `dsh-account` | `dsh-account` | `https://api.deepseek.com/anthropic` | 實驗性優先匯入帳號提供者，複用已安裝並登入的 DeepSeek Harness (DSH) Desktop 帳號。在使用者明確匯入時嚴格以唯讀方式讀取 `~/.dsh/.credentials.yaml` 憑據。獨立於 DeepSeek API Key 計費。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 實驗性。GitHub device flow + `copilot_internal` exchange（VS Code OAuth client）。需要有效 Copilot 訂閱；不是官方第三方 API。 |
 
 Google Antigravity 帳戶與供應商的配額查詢（包括模型清單備援）使用固定的 Google 計量端點。這些目標支援透明 Fake-IP DNS，同時保留 TLS 驗證、重新導向拒絕與私有位址檢查。自訂 base URL 只改變模型請求，不改變配額目標；`NO_PROXY` 仍使用直連政策。
@@ -247,9 +249,20 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 `kiro-cli` data path 修復或移除不可讀 database、取消這些 import selector 後重試。沒有既有
 `kiro-cli` session 的新機器登入不受影響。
 
+### DeepSeek Account (DSH)
+
+`dsh-account` 是一個實驗性的、優先匯入既有憑據的帳號提供者，用於複用已安裝且登入的 DeepSeek Harness (DSH) Desktop 應用程式之認證憑據。
+
+- **獨立於 DeepSeek API Key**：`dsh-account` 使用使用者的 DeepSeek 認證工作階段額度（一般/贈送錢包餘額與總支出），而 `deepseek` 提供者則依平台 API Key 餘額扣款。這兩個憑據體系與路由嚴格隔離，互不 fallback。
+- **僅明確匯入**：OpenCodeX 會偵測是否已安裝 DeepSeek Harness 且已登入（`~/.dsh/.credentials.yaml`），但絕不會在未經使用者明確操作（`ocx login dsh-account` 或在 Web 儀表板點選匯入）的情況下自動複製、匯入或使用該權杖。
+- **對 DSH 憑據存放區唯讀**：OpenCodeX 將 `~/.dsh/.credentials.yaml` 視為嚴格唯讀。OpenCodeX 絕不寫入、修改、刪除或變更任何屬於 DeepSeek Harness 的檔案權限。
+- **隔離的憑據複本與登出**：匯入後，OpenCodeX 會透過 DeepSeek 權威身分端點（`/auth-api/v0/users/current`）驗證權杖，並在 OpenCodeX 認證存放區中保存獨立複本。在 OpenCodeX 中登出或移除該帳號僅會刪除 OpenCodeX 本地複本，絕不觸發上游遠端工作階段登出，也不會使 DeepSeek Harness Desktop 登出。
+- **無背景權杖自動輪替與 401 重新匯入**：DSH 工作階段授權不提供自動背景重新整理端點。若上游傳回 HTTP 401（`ACCOUNT_TOKEN_INVALID`），OpenCodeX 會將該帳號標記為 `needsReauth` 並停止路由。若要恢復存取，使用者必須透過 `ocx login dsh-account` 明確重新匯入。
+- **第三方免責聲明**：OpenCodeX 不主張 DeepSeek 官方對第三方客戶端複用工作階段授權提供背書或支援。
+
 ## 3. API 金鑰目錄
 
-opencodex 內建 104 個 preset：85 個 key-based、15 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 104 個 preset：84 個 key-based、16 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
@@ -324,25 +337,13 @@ Sionic 提供的 `deepseek/deepseek-v4.1-flash-ultrafast` 與
 `ocx provider add opengateway` 或在控制台選擇 **OpenGateway**。Chat 請求使用設定的
 Bearer 金鑰；公開模型清單無法驗證金鑰有效性。
 
-**OpenCode Zen**（`opencode-zen`）與無 key 的 **OpenCode Free** preset 共用
-`https://opencode.ai/zen/v1`。該 gateway 的免費模型常遇到短時間 burst limit，約 15–20 requests/minute
-（社群實測；OpenCode 未公布 RPM）。Zen 可能回傳 generic rate-limit 429，而沒有 `Retry-After`／
-`X-RateLimit-*` header。這與 OpenCode 宣告的 keyless desktop quota 是不同限制：`opencode-free` 約每 5
-小時 200 次 Big Pickle／free-model request。Zen 在這類 429 省略 `Retry-After` 時，opencodex 會在 client
-error 加入 provider guidance 與 synthetic `Retry-After`；若上游有 `Retry-After`，仍以上游值為準。
-same-key wait-and-retry 仍需透過 [`retryOn429`](/zh-tw/reference/configuration/) 明確 opt-in。
+**OpenCode Zen**（`opencode-zen`）使用 [opencode.ai/auth](https://opencode.ai/auth) 核發的 API key 存取 `https://opencode.ai/zen/v1`。免費模型可能遇到每分鐘約 15–20 次請求的短時間速率限制（社群測量；OpenCode 未公布 RPM）。速率限制 429 缺少 `Retry-After` 時，opencodex 會加入說明與合成的 `Retry-After`；有效的上游 header 優先。同 key 重試仍須透過 [`retryOn429`](/zh-tw/reference/configuration/) 啟用。
 
-**無 key 的 `opencode-free` tier 目前對第三方 client 關閉。** Zen 會拒絕任何沒有帶 `x-opencode-session`
-header 的 request，回傳 error type `MissingSessionID` 與訊息 "OpenCode's free tier can only be used in
-OpenCode"。這道 gate 只檢查該 header 是否存在，因此 proxy 大可捏造一個值通過，但 opencodex 不這麼做。
-偽造 session identifier 並附上帶版本號的 `opencode/<version>` User-Agent，等於宣稱自己就是 OpenCode
-client，而 OpenCode 並未公布這個 keyless tier 的第三方整合合約；用這種方式取得的 HTTP 200 是繞過
-admission check，而不是取得授權。因此 opencodex 選擇如實回報限制：送往 `opencode-free` 的 request 會
-收到一則說明上游 gate 的 error。
+在標準 `opencode-zen` 提供者中，使用 API 金鑰驗證及官方路由 `https://opencode.ai/zen/v1` 或 `https://opencode.ai/inference/v1` 時，Gemini 會在預設 `googleMode: ai-studio` 下自動使用 Google 原生 API。Zen 模型 ID 維持不變，包括沒有 `-tiered` 後綴的 Flash ID。Claude 使用 Anthropic Messages，不受 `googleMode` 影響。載入已儲存的設定時，僅忽略這些原生模型符合條件的舊 Chat/Responses 覆寫設定，以及符合條件的 Responses 專用 `image_generation` 託管工具偏好。自訂提供者、非金鑰驗證路由及其他偏好維持不變。
 
-通往同一批模型的受支援路徑，是使用 [opencode.ai/auth](https://opencode.ai/auth) 取得的 OpenCode Zen API
-key，走帶 key 的 **`opencode-zen`** preset。若 OpenCode 日後公布 keyless tier 的第三方路徑，opencodex 可以
-跟進；在此之前，這個 preset 的作用是記錄該限制。上游條款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
+**已移除 `opencode-free` 支援。** OpenCode 上游免費層級的限制使所有模型都回傳 `403 permission_denied`（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。載入既有設定時，會在記憶體中停用相關項目與相依的模型參照，每個程序只警告一次，不修改檔案。如果它原為預設供應商，將以標準 OpenAI OAuth 路徑作為預設。請使用 `opencode-go`、需要 key 的 `opencode-zen` 或其他供應商。[OpenCode Zen 條款](https://opencode.ai/docs/zen/)。
+
+保留正常的 Claude Desktop 指派與預設值。來源模型允許清單變空的規則會停用；注入模型遭移除時，也會停用原生子代理同步。後續儲存設定時不會還原已移除的參照，並會保留正常的同時編輯。
 
 大多數 provider 使用帶 bearer key 的 `openai-chat` adapter；**Xiaomi MiMo**（`xiaomi`）等
 相容 Anthropic 的 preset 則使用 `anthropic` adapter（`x-api-key`）。Xiaomi 另有 OpenAI Chat

@@ -1,4 +1,5 @@
 import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
+import { scheduleDesktopCompatibilityStartup } from "./index/desktop-compatibility-startup";
 import { AuxiliaryListenerBindError } from "./ports";
 import { runAdmittedBodyWork } from "./inbound-body-admission";
 import {
@@ -24,6 +25,7 @@ import {
   websocketsEnabled,
 } from "../config";
 import { flushConfigDirHardeningAndReaps } from "../config/paths";
+import { trackBackgroundWork } from "../lib/background-work";
 import { migrateStartupSubagentModels } from "./subagent-models-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { migrateStartupZaiResponses } from "./zai-responses-startup";
@@ -62,6 +64,7 @@ import {
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
 import { startPackageRefresh, stopPackageRefresh } from "../update/refresh-scheduler";
+import { activateAdvisor } from "../lib/advisor-activation";
 import { activateLab, labActivationRequired } from "../lib/lab-activation";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
@@ -198,7 +201,7 @@ import { createReadinessGate, type ReadinessGate } from "./readiness";
 import { createServeOptions, type ServerIngress } from "./index/serve-options";
 import { createOptionalListenerSet, LINK_INGRESS_HOSTNAME } from "./index/optional-listeners";
 import { createPackageTreeIntegrityGuardForServer } from "./index/package-tree-guard";
-import { inspectStartupOwnership, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
+import { inspectStartupOwnership, logProxyEndpoints, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
 import { acquireSpendLedgerServerLifecycle, recordFailedStartRollback, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
 export { waitForFailedStartRollback } from "./index/spend-ledger-lifecycle";
 
@@ -264,17 +267,17 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     startupOwnershipHomes = homes;
     startupOwnershipStatePaths = statePaths;
   } catch { /* inspection below stays unknown */ }
-  const startupCacheOwnership = inspectStartupOwnership(
+  const startupCacheOwnership = shouldSyncCodexOnStart(config) ? inspectStartupOwnership(
     deps,
     startupOwnershipHomes,
     startupOwnershipStatePaths,
     startupWindowsTaskListingCache,
-  );
+  ) : null;
   // Startup cache invalidation is best-effort and applies only when startup sync is enabled.
   // Check OFF before taking K: on Windows K resolves SID + LocalAppData through PowerShell,
   // and run 35093667426 exceeded healthy controls by 33.8 s against that 30 s child budget.
   // The permit callback still re-reads intent under K to close a concurrent disable race.
-  if (shouldSyncCodexOnStart(config) && startupCacheOwnership.ownership === "owned" && startupOwnershipHomes !== null) {
+  if (startupCacheOwnership?.ownership === "owned" && startupOwnershipHomes !== null) {
     try {
       const startupCodexHome = startupOwnershipHomes.codexHome;
       // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
@@ -546,12 +549,12 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // clients; no Codex request can use this lifecycle in that state.
   // Re-probe here instead of trusting the earlier cache decision: startup work
   // between the two sites must not widen the service-install race.
-  const nativeOwnership = inspectStartupOwnership(
+  const nativeOwnership = shouldSyncCodexOnStart(config) ? inspectStartupOwnership(
     deps,
     startupOwnershipHomes,
     startupOwnershipStatePaths,
-  );
-  const preparedNativeMainLifecycle = nativeOwnership.ownership !== "foreign"
+  ) : null;
+  const preparedNativeMainLifecycle = nativeOwnership !== null && nativeOwnership.ownership !== "foreign"
     && startupOwnershipHomes !== null
     ? prepareNativeMainStartupLifecycle(
       deps.nativeMainStartup,
@@ -597,7 +600,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       return retryPreparedNativeMainLifecycle.start();
     },
   };
-  const nativeMainLifecycle: NativeMainStartupLifecycle = shouldSyncCodexOnStart(config)
+  const nativeMainLifecycle: NativeMainStartupLifecycle = nativeOwnership !== null
     ? nativeOwnership.ownership === "owned"
       ? preparedNativeMainLifecycle
         ? preparedNativeMainLifecycle.start()
@@ -638,11 +641,14 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   let unregisterQuotaAutoRefresh: (() => void) | null = null;
   let remoteWorkspaceStopping = false;
   let remoteWorkspaceShutdown: (() => Promise<void>) | undefined;
+  let desktopCompatibilityStartup: ReturnType<typeof scheduleDesktopCompatibilityStartup> | undefined;
+  let desktopCompatibilityShutdown: (() => Promise<void>) | undefined;
   const managementApiDeps: ManagementApiDeps = {
     ...deps.managementApi,
     listLowQuotaEvents: limit => backgroundLifecycle?.listLowQuotaEvents(limit) ?? [],
     remoteWorkspaceStopping: () => remoteWorkspaceStopping,
     onRemoteWorkspaceShutdown: shutdown => { remoteWorkspaceShutdown = shutdown; }, linkSupervisor: () => optionalListeners.linkSupervisor(), linkListener: () => optionalListeners,
+    onDesktopCompatibilityShutdown: shutdown => { desktopCompatibilityShutdown = shutdown; },
   };
   let workspaceRuntimeFlight: Promise<typeof import("../remote-control/workspace-runtime")> | undefined;
   const loadRemoteWorkspaceRuntime = () => {
@@ -732,7 +738,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
         throw new AuxiliaryListenerBindError("hub.managementIngress", managementIngressPort, "127.0.0.1", error);
       }
     }
-    optionalListeners.start({ config, publicPort: server.port ?? listenPort, requestedPort: listenPort,
+    optionalListeners.start({ config, publicPort: server.port ?? listenPort, requestedPort: listenPort, startProxy: deps.startClaudeInterceptProxy,
       maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer) });
   } catch (error) {
     unregisterQuotaAutoRefresh?.();
@@ -772,6 +778,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
             : []),
           () => optionalListeners.stop(),
           async () => { await remoteWorkspaceShutdown?.(); },
+          async () => { await desktopCompatibilityStartup?.shutdown(); await desktopCompatibilityShutdown?.(); },
           async () => {
             try {
               userCostOverlayReconciler?.stop();
@@ -801,13 +808,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   boundPort = actualPort;
   setCorsOrigin(actualPort);
 
-  console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
-  console.log(`   POST /v1/responses → provider translation`);
-  console.log(`   POST /v1/chat/completions → OpenAI-compatible clients`);
-  console.log(`   GET  /healthz      → health check`);
-  console.log(`   GET  /api/*        → management API`);
-  console.log(`   GET  /             → GUI dashboard`);
-
+  logProxyEndpoints(actualPort);
   if (loopbackServer) {
     // Loud on every start, not once at enable time. An operator who inherits a config, or
     // who forgot, has to be able to see that an unauthenticated surface is live without
@@ -843,7 +844,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     && isCanonicalOpenAiForwardProvider(openAiProvider)
     && providerCodexAccountMode("openai", openAiProvider) === "pool"
   ) {
-    import("../codex/plan-from-token")
+    void trackBackgroundWork("codex-pool-quota-prime-startup", import("../codex/plan-from-token")
       .then(({ reconcileCodexPlansFromTokens }) => {
         try {
           reconcileCodexPlansFromTokens(config);
@@ -853,7 +854,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
         return import("../codex/auth-api");
       })
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
-      .catch(() => {});
+      .catch(() => {}));
   }
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
@@ -864,6 +865,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // startServer returns, in the same turn as Bun.serve, so a policy route can never be
   // evaluated before its evidence provider is registered. That ordering is load-bearing:
   // the subagent-fallback chain routes synchronously and has nowhere to await.
+  activateAdvisor(config);
   const labConfigDir = getConfigDir();
   if (labActivationRequired(config, labConfigDir)) {
     activateLab(config, labConfigDir);
@@ -879,6 +881,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   }
 
   startPackageRefresh();
+  desktopCompatibilityStartup = scheduleDesktopCompatibilityStartup(config, { boundHostname: bindHost, boundPort: actualPort, loopbackPort: loopbackServer?.port ?? undefined, readiness: deps.readinessGate });
   return server;
 }
 

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { durableBunPath } from "../lib/bun-runtime";
+import { durableBunChildEnv, durableBunPath } from "../lib/bun-runtime";
 import type { WindowsTrayStatus } from "../tray/windows";
 
 export type WindowsTrayAction = "install" | "start" | "stop" | "status" | "uninstall";
@@ -15,7 +15,7 @@ export function runWindowsTrayAction(action: WindowsTrayAction): Promise<Windows
   return new Promise((resolve, reject) => {
     execFile(bun, [cli, "tray", action, "--json"], {
       encoding: "utf8",
-      env: process.env,
+      env: durableBunChildEnv(process.env),
       timeout: 30_000,
       windowsHide: true,
       maxBuffer: 256 * 1024,

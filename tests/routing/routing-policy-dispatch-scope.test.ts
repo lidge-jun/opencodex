@@ -377,8 +377,9 @@ describe("policy scope through real request preparation", () => {
     const rows: RequestLogEntry[] = [];
     addFinalRequestLog("policy-skipped-candidate", Date.now(), log, response.status, undefined, row => rows.push(row));
     expect(settled).toEqual([lastUsage]);
-    expect(rows[0]).toMatchObject({ provider: expected.at(-1), model: `served-${expected.at(-1)}`, usage: lastUsage,
-      status: response.status, spend: { sends: expected.length, settled: expected.length, unresolved: 0 },
+    // The row totals every physical attempt (10/1 + 20/2), not only the last one.
+    expect(rows[0]).toMatchObject({ provider: expected.at(-1), model: `served-${expected.at(-1)}`,
+      usage: expected.length === 1 ? lastUsage : { inputTokens: 30, outputTokens: 3 }, status: response.status, spend: { sends: expected.length, settled: expected.length, unresolved: 0 },
     });
     expect(rows[0]?.attempts?.map(attempt => attempt.provider)).toEqual(expected);
     expect(rows[0]?.attempts?.every(attempt => attempt.sendCount === 1 && attempt.usage !== undefined)).toBe(true);

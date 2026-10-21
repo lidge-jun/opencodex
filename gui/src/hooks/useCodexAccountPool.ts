@@ -69,6 +69,7 @@ export interface CodexAccountEntry {
   isMain: boolean;
   /** Persisted routing exclusion. Paused accounts remain visible but cannot be selected. */
   paused: boolean;
+  pauseDetails?: { reason: string; pausedAt: number };
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
   /** Null inherits global threshold; 0 disables usage-driven switching for this account. */

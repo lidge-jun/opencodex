@@ -547,11 +547,9 @@ describe("request log metadata", () => {
       1,
       { inputTokens: 4, outputTokens: 1 },
     );
-    const unreported = finishRequestAttempt(
-      beginRequestAttempt(2, "b", "m2", "openai-chat"),
-      503,
-      1,
-    );
+    const sent = beginRequestAttempt(2, "b", "m2", "openai-chat");
+    noteAttemptSend(sent, undefined);
+    const unreported = finishRequestAttempt(sent, 503, 1);
     expect(aggregateAttemptUsage([reported, unreported])).toMatchObject({
       status: "unreported",
       usage: { inputTokens: 4, outputTokens: 1 },
@@ -1527,7 +1525,7 @@ describe("request log metadata", () => {
       new Response("provider says nope", { status: 400, headers: { "content-type": "text/plain" } }),
       "ocx-test-plain-upstream-error",
       Date.now(),
-      { model: "opencode-free/deepseek-v4-flash-free", provider: "opencode-free" },
+      { model: "opencode-zen/deepseek-v4-flash-free", provider: "opencode-zen" },
       entry => entries.push(entry),
     );
 

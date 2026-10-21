@@ -44,6 +44,8 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   machine for `api.anthropic.com`, and `local` (Ollama, vLLM, LM Studio) is the classification for
   traffic that never does. `keyOptional` is the existing exemption from key enforcement, and key
   rows are what `deriveProviderPresets` lists, so the entry needs no `dashboardPreset` flag either.
+The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMeta.beforePhysicalSend` fence after awaited tool-bridge setup and before spending its dispatch permit or spawning. Cancellation and stale selections produce no child process; cleanup still returns permits and removes temporary tool files.
+
 - `cursor` stays direct because its `runTurn` transport and gated native-file fallback are distinct.
 - `devin` is direct for a related reason. It streams Cognition's
   `ApiServerService/GetChatMessage` over Connect-RPC from `runTurn` with hand-written protobuf
@@ -190,7 +192,7 @@ The bridge keeps an open function, custom, or tool-search call incomplete when a
 
 A provider web search still in flight at that truncated terminal is finalized as `failed`, the same status it already receives from the error and explicit-incomplete terminals. It never returned results, so reporting it as `completed` would leave the client showing a finished search for a turn the provider cut short.
 
-`src/adapters/anthropic.ts` maps a `refusal` or `content_filter` stop reason to an explicit `incomplete` adapter event with `reason: "content_filter"` and `retryable: false` instead of `done` with that stopReason (#4312). Codex otherwise treats a filter incomplete without retryable as a dropped stream and retries a refusal that cannot succeed. Partial output, tool-call integrity, and usage are preserved; `max_tokens` remains a `done` so a legitimate truncation can continue.
+`src/adapters/anthropic.ts` maps a `refusal` or `content_filter` stop reason to an explicit `incomplete` adapter event with `reason: "content_filter"` and `retryable: false` instead of `done` with that stopReason (#4312). A `done` with that stopReason would reach the client as an incomplete with no verdict at all. `src/adapters/kiro/stream.ts` emits the same event for a `CONTENT_FILTERED` or `GUARDRAIL_INTERVENED` stop. The verdict alone does not stop Codex, which retries every `response.incomplete`; the Responses bridge turns the Anthropic and Kiro event into a terminal `response.failed` for a Responses client ([Adapter-to-Responses bridge](../transports/responses.md#adapter-to-responses-bridge)). Partial output, tool-call integrity, and usage are preserved; `max_tokens` remains a `done` so a legitimate truncation can continue.
 
 The translated Anthropic stream ends at `message_stop` after emitting its existing terminal
 classification and usage. The parser does not inspect later records in that response body;
@@ -246,12 +248,25 @@ variant; unrelated model families retain their existing suffix precedence.
 ## Untranslated input media
 
 `src/responses/input-media.ts` inspects actual content blocks and typed tool-output arrays
-without parsing text or function arguments, copying attachment payloads, resolving file IDs,
-or fetching URLs. Audio and file-ID-only images have no lossless normalized carrier, and
-neither does a file or document reference that carries no bytes. The scanner returns only an
-input-kind name, never client content.
+without parsing text or function arguments, resolving file IDs, or fetching URLs. It returns only
+an input-kind name, never client content. For the Chat audio path it calls the same
+`audioContentFromRaw` predicate as the parser to decide whether an inline attachment has a
+lossless carrier; the payload is not returned, logged, or included in an error.
 
-A document that carries its own base64 bytes is the one exception, and only in user or
+Inline WAV/MP3 audio is supported only on the effective `openai-chat` wire, in user message
+content and tool output. `src/responses/audio.ts` accepts a data URL, or raw base64 with an
+explicit `wav`/`mp3` format, and produces an `OcxAudioContent` part. The parser in
+`src/responses/parser-content.ts` preserves that part, and
+`src/adapters/openai-chat/messages.ts` emits it as an `input_audio` content part. A tool-result
+audio part cannot ride the text-only `role:"tool"` message; the adapter promotes it into a
+follow-up user message after the paired tool results, including audio from orphan tool results.
+Remote audio, unsupported formats, the
+top-level `audio` spelling, developer audio, and audio in system or assistant content are
+refused. Native Responses, including both Azure aliases, forwards the original body; native Chat
+keeps its existing wire; the separate Chat-to-Responses projection still rejects audio/file
+parts, as described in the inbound compatibility contract.
+
+A document that carries its own base64 bytes is the other lossless carrier, and only in user or
 developer message content: `src/responses/inline-document.ts` decodes it into the
 `OcxDocumentContent` part, which the Anthropic, OpenAI Chat and Gemini wires emit as a native
 document, file part and `inline_data` respectively. Every other position — tool output, system
@@ -261,11 +276,12 @@ the decoder share one predicate so a request cannot be exempted here and reduced
 there.
 
 `src/adapters/input-media-guard.ts` guards adapters created by the registry after effective
-wire selection. A translated `buildRequest` refuses these inputs through the existing 400
-error path; `runTurn` emits one nonretryable `unsupported_input_modality` error without
-starting its underlying transport. `localTerminal` declines a success shortcut for such a
-request, letting the guarded builder return the error instead. The original raw body stays
-unchanged, including when another final adapter is selected after a failed attempt.
+wire selection. It enables the audio exemption only for `openai-chat`. A translated
+`buildRequest` refuses unsupported inputs through the existing 400 error path; `runTurn` emits
+one nonretryable `unsupported_input_modality` error without starting its underlying transport.
+`localTerminal` declines a success shortcut for such a request, letting the guarded builder
+return the error instead. The original raw body stays unchanged, including when another final
+adapter is selected after a failed attempt.
 
 The effective Responses wire, including both Azure aliases, is excluded: it forwards the
 original body and leaves native media acceptance to its upstream. This exception does not
@@ -274,9 +290,16 @@ existing wire; only an actual Chat-to-Responses projection rejects audio/file bl
 losing them. Legacy function-result images fail explicitly because that projection does not
 implement legacy call/result pairing. Modern tool-image carriers are unchanged.
 
-`tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, error events and
+`src/server/responses/input-admission.ts` charges supported inline audio by decoded payload
+size at a conservative 256-bytes-per-token proxy. That is an admission estimate, not an
+upstream token formula; base64 inflation is not charged, and the scanner and guard never log
+the payload.
+
+`tests/adapters/openai/openai-chat-audio.test.ts` covers user and tool-result audio mapping;
+`tests/adapters/adapter-input-media-guard.test.ts` covers hook ordering, refusal positions and
 raw passthrough; `tests/responses/chat-media-translation.test.ts` reaches the real HTTP
-translation boundary and verifies that rejection sends no upstream request.
+translation boundary and verifies that supported audio is forwarded while unsupported media
+sends no upstream request; `tests/server/input-admission.test.ts` covers decoded-byte charging.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.

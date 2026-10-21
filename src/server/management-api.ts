@@ -59,6 +59,7 @@ import { applySystemEnvToggle } from "./system-env";
 
 import type { ManagementApiDeps } from "./management/context";
 import { handleConfigRoutes } from "./management/config-routes";
+import { handleNativeReasoningRetentionRoutes } from "./management/native-reasoning-retention-routes";
 import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
 import { handleStorageLogGuardRoutes } from "./management/storage-log-guard-routes";
 import { handleRequestHistoryRoutes } from "./management/request-history-routes";
@@ -79,6 +80,9 @@ import { handleCodexPromptRoutes } from "./management/codex-prompt-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
 import { handleClaudeDesktopPickerRoutes } from "./management/claude-desktop-picker-routes";
+import { handleDesktopCompatibilityRoutes } from "./management/desktop-compatibility-routes";
+import { handleDesktopCompatibilityRuntimeRoutes } from "./management/desktop-compatibility-runtime-routes";
+import { handleDesktopCompatibilitySettingsRoutes } from "./management/desktop-compatibility-settings-routes";
 import { handleCursorIntegrationRoutes } from "./management/cursor-integration-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal, ManagementSessionControl } from "./management-auth";
@@ -341,6 +345,7 @@ export async function handleManagementAPI(
     ??     (await handleLinkRoutesOnDemand(ctx))
     ??     (await handleRemoteWorkspaceRoutesOnDemand(ctx))
     ??     (await handleConfigRoutes(ctx))
+    ??     (await handleNativeReasoningRetentionRoutes(ctx))
     ??     (await handleStorageLogGuardRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
@@ -360,6 +365,9 @@ export async function handleManagementAPI(
     ??     (await handleNativeIntegrationRoutes(ctx))
     ??     (await handleCursorIntegrationRoutes(ctx))
     ??     (await handleClaudeDesktopPickerRoutes(ctx))
+    ??     (await handleDesktopCompatibilityRoutes(ctx))
+    ??     (await handleDesktopCompatibilityRuntimeRoutes(ctx))
+    ??     (await handleDesktopCompatibilitySettingsRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleCodexPromptRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
@@ -513,7 +521,7 @@ export async function handleManagementAPI(
       const { handleMainDeviceReauthAPI } = await import("../codex/main-device-reauth-api");
       return handleMainDeviceReauthAPI(req, url, config);
     }
-    const { handleCodexAuthAPI } = await import("../codex/auth-api");
+    const { handleCodexAuthAPI } = await import("../codex/auth-api/routes");
     const { ConfigMutationLockError } = await import("../config");
     const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");
     try {

@@ -3,6 +3,14 @@ import type { Capability } from "./capability-types";
 /** Account pool operations and physical native-login profiles have separate owners. */
 export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
   {
+    command: ["account", "preserve-signed-in"], summary: "Prefer other Codex identities and reserve the native sign-in as fallback.",
+    usage: "ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]",
+    routes: [{ method: "GET", path: "/api/codex-auth/preserve-signed-in" }, { method: "PUT", path: "/api/codex-auth/preserve-signed-in" }],
+    flags: [{ name: "--apply-to-bound", value: "boolean", summary: "With on, release protected bindings and pins for the next request." }, { name: "--json", value: "boolean", summary: "Emit affected entries, next unbound choice and pin/binding semantics." }],
+    mutates: true, json: "payload",
+    details: ["Default/status reads. Custom priorities are preserved. Bound threads and manual pins remain unless explicitly released. Exact-account models override the preference. Fallback can spend signed-in quota; linked pause excludes it instead."],
+  },
+  {
     command: ["logout"],
     summary: "Remove the active stored OAuth credential for a provider locally.",
     usage: "ocx logout <provider> [--live] [--json]",
@@ -157,10 +165,21 @@ export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
     usage: "ocx account pool <provider> [--enabled <on|off>] [--threshold <0-100>] [--strategy <name>] [--sticky <1-100>] [--quota-window <five-hour|weekly|max-utilization>] [--json]",
     summary: "Read or edit the selected runtime's supported pool policy fields.",
     routes: [{"method":"GET","path":"/api/pool/settings"},{"method":"PUT","path":"/api/pool/settings"}],
-    flags: [{"name":"--enabled","value":"string","summary":"Stored pool preference; unsupported for Codex. Not equivalent to threshold0."},{"name":"--threshold","value":"number","summary":"Auto-switch threshold0–100."},{"name":"--strategy","value":"string","summary":"Use a strategy supported by this provider kind; reset-first is Codex, least-loaded is Kiro."},{"name":"--sticky","value":"number","summary":"Sticky limit1–100."},{"name":"--quota-window","value":"string","summary":"Anthropic only: five-hour, weekly or max-utilization."},{"name":"--json","value":"boolean","summary":"Emit the validated task result as one JSON document."}],
+    flags: [{"name":"--enabled","value":"string","summary":"Stored pool preference; unsupported for Codex. Not equivalent to threshold0."},{"name":"--threshold","value":"number","summary":"Auto-switch threshold0–100."},{"name":"--strategy","value":"string","summary":"Use a strategy supported by this provider kind; reset-first is Codex or generic OAuth, least-loaded is Kiro."},{"name":"--sticky","value":"number","summary":"Sticky limit1–100."},{"name":"--quota-window","value":"string","summary":"Anthropic only: five-hour, weekly or max-utilization."},{"name":"--json","value":"boolean","summary":"Emit the validated task result as one JSON document."}],
     mutates: true,
     json: "envelope",
     details: ["Reads the target supported-field list before a narrow PUT. Null/unsupported, stored/effective and generic inert policy stay distinct; disabling does not promise that reactive429 rotation stops.","No local classification/defaults are round-tripped into the live target; supported-field reads are not CAS."],
+  },
+  {
+    command: ["account", "use-remaining"],
+    usage: "ocx account use-remaining openai <id|alias|main> <on|off|status> [--json]",
+    summary: "Choose whether one Codex account keeps using its remaining included quota.",
+    routes: [{ method: "GET", path: "/api/codex-auth/accounts" },
+      { method: "GET", path: "/api/codex-auth/accounts/use-remaining" }, { method: "PUT", path: "/api/codex-auth/accounts/use-remaining" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the validated account policy." }],
+    mutates: true, json: "envelope",
+    details: ["On disables proactive usage switching for the selected account and raises main-account protection to 100%. Off restores the configured thresholds.",
+      "This is a persistent preference, not account selection. Pause, reauthentication, cooldown, entitlement and paid-credit policy still apply."],
   },
   {
     command: ["account","credits"],

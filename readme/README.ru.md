@@ -116,7 +116,7 @@ ocx start                         # прокси + панель управлен
 | Платформа | Файл | Примечания |
 |---|---|---|
 | macOS 13+ (Apple Silicon и Intel) | `OpenCodex-<version>-macos.dmg` | Универсальная сборка, подписана Developer ID и нотариализована |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Пока без цифровой подписи: SmartScreen спросит один раз — выберите **Подробнее → Выполнить в любом случае** |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Подпись кода через SignPath Foundation внедряется ([политика подписи кода](https://opencodex.me/ru/reference/code-signing/)); пока релиз не подписан, SmartScreen спросит один раз — выберите **Подробнее → Выполнить в любом случае** |
 | Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` или `-linux-amd64.deb` | Для трея нужен рабочий стол с поддержкой AppIndicator |
 
 Рядом с каждым файлом на странице релиза есть `.sha256`. На macOS 14+ приложение также
@@ -159,10 +159,6 @@ opencodex также умеет управлять **пулом аккаунто
 <tr>
 <td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="../assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
 <td>Благодарим <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a> за спонсорскую поддержку проекта! OrcaRouter — единый OpenAI-совместимый AI-шлюз для продакшена: адаптивная маршрутизация оценивает каждый промпт и отправляет его модели, которая проходит ваш порог, плюс автоматический failover, правила маршрутизации как код, цены провайдеров без наценки с кэшированием промптов, а также guardrails, файрвол агентов и журналы запросов на каждый вызов среди 200+ моделей. Выберите <code>OrcaRouter</code> в селекторе Add provider или выполните <code>ocx provider add orcarouter</code>; <code>orcarouter/auto</code> — адаптивный маршрутизатор.</td>
-</tr>
-<tr>
-<td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
-<td>Благодарим <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> за спонсорскую поддержку проекта! PackyCode — стабильный высокопроизводительный API-релей, предоставляющий релей-сервисы для Claude Code, Codex, Gemini и других. Автоматический failover, умная маршрутизация и неограниченная конкурентность превращают AI в настоящий инструмент продуктивности. <a href="https://www.packyapi.com/register?aff=k5KT">Зарегистрируйтесь по этой ссылке</a> и начните работу! Выберите <code>PackyCode</code> в селекторе Add provider или выполните <code>ocx provider add packycode</code>.<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
 <tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
@@ -489,6 +485,16 @@ bun run test
 Работа контрибьюторов, которая попала через перенос или реимплементацию мейнтейнером,
 если коммит не называет исходного автора, записана в
 **[CREDITS.md](../CREDITS.md)**.
+
+## Политика подписи кода (Code signing policy)
+
+Исполняемые файлы для Windows переводятся на подпись Authenticode ([#7207](https://github.com/lidge-jun/opencodex/issues/7207)). Ход внедрения, проверка подписи и полная политика описаны в [руководстве по подписи кода Windows](https://opencodex.me/ru/reference/code-signing/).
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## Отказ от ответственности
 

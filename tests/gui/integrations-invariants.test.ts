@@ -99,7 +99,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(18);
+    expect(expected).toHaveLength(20);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -252,6 +252,7 @@ describe("the journal is metadata, never a copy of the file", () => {
 describe("every client survives a full lifecycle", () => {
   /** A pre-existing user document in each client's own format. */
   const SEED: Record<IntegrationClientId, string> = {
+    qoder: '{"providers":{"mine":{"api":"http://keep-me"}},"theme":"dark"}\n',
     cline: '{"version":1,"modes":{},"providers":{"mine":{"settings":{"provider":"mine"},"updatedAt":"2026-01-01T00:00:00.000Z","tokenSource":"manual"}}}\n',
     commandcode: '{\n  "provider": {\n    "mine": { "name": "Keep Me", "api": "openai-completions", "baseURL": "http://keep-me/v1", "apiKey": "test-key", "models": {} }\n  }\n}\n',
     droid: '{"theme":"dark","customModels":[{"model":"local","displayName":"Local","baseUrl":"http://127.0.0.1:11434/v1","provider":"generic-chat-completion-api"}]}\n',
@@ -265,6 +266,7 @@ describe("every client survives a full lifecycle", () => {
     dsh: "llm-pi-ai:\n  providers:\n    mine:\n      api: openai-completions\n",
     mcode: "custom_provider:\n  mine:\n    name: Keep Me\n",
     zcode: '{\n  "provider": {\n    "builtin:zai-start-plan": { "name": "Keep Me", "kind": "anthropic" }\n  }\n}\n',
+    "gentle-shell": '{"providers":{"mine":{"api":"http://keep-me"}}}\n',
     // Prime reads Pi's models.json contract, so it seeds the same shape.
     prime: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
     // Aside reads the same models.json contract as Pi and Prime.

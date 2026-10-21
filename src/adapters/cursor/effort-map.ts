@@ -56,6 +56,9 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // glm-5.3 was. Google documents low/medium/high with no `minimal` for this generation,
   // unlike 3.6. The seed is inert until Cursor's live roster lists the id.
   "gemini-3.8-flash": ["low", "medium", "high"],
+  // 261014 preemptive: Gemini 4 Argon, low/medium/high with no `minimal` (a documented 400).
+  // Inert until Cursor's live roster lists the id.
+  "gemini-4-argon": ["low", "medium", "high"],
   // Explicit-thinking variants (260825 live roster). Tiers are the rungs the wire actually
   // lists for each family, which is not always the same set the non-thinking id carries:
   // 4.6-opus thinks only at high/max, 4.5-opus only at high, 4.6-sonnet only at medium.

@@ -245,7 +245,7 @@ intended.
 
 Repair one thread that was compacted through a routed provider before resuming it through native
 Codex. The command reads the exact thread selected by UUID, saves a private byte-for-byte backup,
-then converts only OpenCodeX-owned `ocx1:` compaction state into a plain summary that native Codex
+then converts only OpenCodeX-owned `ocx1:`/`ocx2:` compaction state into a plain summary that native Codex
 can replay. Native encrypted content and other threads are left unchanged. Close the selected
 thread before running the command; a concurrent rollout change makes recovery stop without
 replacing the file.
@@ -437,6 +437,10 @@ read-only SQLite inspection. Zero-byte, empty-unversioned, and rowless states ar
 from catalog/app-server health, so a successful catalog refresh is not mistaken for successful
 Codex config injection.
 
+The pending-history check reads a checkpointed WAL-mode `state_5.sqlite` even when Codex is
+closed and its `-wal`/`-shm` files are absent. Missing sidecars alone do not indicate a history
+integrity failure. Backup manifests and restore targets still undergo integrity validation.
+
 After stopping the OpenCodex proxy/service, explicitly preserve and move a proven non-authoritative
 coordinator, then retry sync:
 
@@ -488,6 +492,8 @@ for target, scope and spending boundaries. A reset-grant status read can contact
 upstream status but never consumes or resumes a grant.
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
+
+An explicitly requested restart also runs after a successful committed `config.toml` change, even if the catalog and cache bytes are unchanged. A configuration-only no-op, refusal, preflight, or rolled-back write does not trigger it. Without a restart flag, sync never automatically restarts Codex.
 
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
 Run it after adding a provider or to refresh available models.
@@ -793,6 +799,23 @@ any stale-baked-path finding.
 On Windows the scheduler backend keeps its own richer status output, which already
 reported Task Scheduler registration separately from proxy reachability.
 
+### Service logs
+
+The managed proxy writes stdout and stderr to `~/.opencodex/service.log`
+(or `$OPENCODEX_HOME/service.log` with a custom home). When `OCX_SERVICE` is set,
+`ocx start` prefixes every console log line, including multiline diagnostics,
+with a UTC ISO-8601 timestamp such as `2026-10-14T03:04:05.678Z`.
+Foreground output and other CLI commands keep their existing format.
+
+The service checks the log size at startup and once per minute. Above 20 MiB it
+copies the newest 20 MiB into `service.log.1`, moves the previous archive to
+`service.log.2`, and truncates the active file in place so the service manager's
+open append handles remain usable. The active file can exceed the threshold
+between checks; each archive is limited to 20 MiB. Rotation failures do not stop
+the service. Copy-truncate can lose lines written during the copy, and an archive
+may begin partway through a line. Existing Windows wrapper messages keep their
+wrapper format.
+
 On macOS this also covers a subtler failure: `launchctl load` reports failure on
 stderr while exiting 0, so a load that did not take used to leave launchd running a
 **previous** version of the service definition while the command printed a checkmark.
@@ -847,6 +870,11 @@ If installation is refused or the wrapper cannot run, the command exits nonzero 
 reports the failure reason. A runnable Unix wrapper counts as a successful install even before
 activation in the current shell; an already-installed healthy shim also counts as success.
 For Windows installations that expose only `codex.exe`, use `ocx service install` for autostart.
+
+On macOS/APFS, a reboot can change filesystem device numbers. An unchanged private wrapper and
+shell environment remain owned after that change, so status, repair, and uninstall continue to
+work. OpenCodex still checks their recorded inodes, paths, owner, permissions, and content/launcher
+binding; replaced or unvalidated files are preserved.
 
 After brew/fnm and other PATH setup, run the activation command printed by install. With the default
 home, it is:
@@ -1009,6 +1037,8 @@ package registry or install an update.
 
 ### `ocx update [--tag latest|preview]`
 
+Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
+
 When OpenCodex is installed through mise, this command exits unsuccessfully before stopping the proxy or changing package files and shows `mise upgrade <tool>`, using the verified local mise alias. Update checks remain available and report the installation as externally managed. An unreadable or inconsistent mise ownership record fails closed without guessing a tool name, and `--tag preview` never changes mise's configured selection.
 
 On Linux, a background service whose recorded launcher is mise's package launcher (`<tool>/latest/node_modules/.bin/ocx`, not a mise shim) follows `mise upgrade` by itself: within about ten seconds of the new version settling, it drains active requests and restarts onto it, and it recovers the same way if mise later prunes the version it was running. On macOS, for a service installed through a mise shim, and for a foreground proxy, restart it yourself after upgrading (on macOS, `ocx service repair` first).
@@ -1111,3 +1141,13 @@ Use `ocx connect <url> --pairing-code-stdin`, `ocx connect status`, `ocx sync`, 
 On Linux, `ocx service install` checks `loginctl show-user <current-user> -p Linger` before printing boot advice. Enabled linger is reported as already enabled. Disabled linger gets the `loginctl enable-linger $USER` hint; missing or unreadable diagnostics state the uncertainty and do not fail installation.
 
 On macOS, `ocx service status` distinguishes a loaded Desktop login item from a valid enabled registration awaiting the next login. `ocx status` credits the latter in restart safety when the same Desktop app currently supervises the proxy. An incorrect plist label or command, a disabled entry, an unverified load probe, or changed process identity still cannot earn protection.
+
+## Custom Codex provider consent
+
+`ocx codex-provider status` lists the provider IDs approved for the selected Codex home.
+`ocx codex-provider allow <id>` asks before allowing URL-only management on start/sync;
+`--yes` is explicit noninteractive consent for that named provider.
+`ocx codex-provider revoke <id>` restores an unchanged managed URL and revokes permission.
+These commands are local and do not require a running proxy. See
+[custom provider routing](/guides/codex-integration/#opt-in-a-custom-provider-to-managed-local-routing)
+for eligibility, restore behavior and transport preservation.

@@ -12,6 +12,7 @@ import {
 } from "../helpers/cold-spawn-warmup";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { spawnTestChild } from "../helpers/spawn-test-child";
 import {
   analyzeWarmupRegistration,
   dispositionComplaints,
@@ -107,6 +108,15 @@ const DISPOSITIONS: Readonly<Record<string, Disposition>> = {
       + "launcher, so the cold cost is shell and process startup rather than a repository module "
       + "graph, and an import scan has nothing to warm. The generated shim never loads a repository "
       + "module in the child: the point of the file is what the shell does with an exit status.",
+  },
+  "tests/codex-integration/codex-shim-bypass-token.test.ts": {
+    warmed: false,
+    why:
+      "Its children are the generated POSIX shim run by /bin/sh plus two throwaway /bin/sh scripts "
+      + "standing in for Bun's ensure and for the real Codex launcher, so the cold cost is shell and "
+      + "process startup rather than a repository module graph, and an import scan has nothing to "
+      + "warm. No repository module loads in the child: the file asserts only which environment the "
+      + "shell hands to the fake Codex under OCX_SHIM_BYPASS.",
   },
 };
 
@@ -285,14 +295,21 @@ describe("warm-up failure policy", () => {
     // SIGKILL at the deadline, then settle.
     const startedAt = performance.now();
     const result = await spawnModuleGraphWarmupChild(
-      "setInterval(() => undefined, 60_000)",
+      'process.stdout.write("work-complete\\n"); setInterval(() => undefined, 60_000)',
       repoRoot(),
       undefined,
       1_000,
     );
     expect(performance.now() - startedAt).toBeLessThan(INTERNAL_DEADLINE_MS);
     expect(result.timedOut).toBe(true);
+    expect(result.reaped).toBe(true);
+    expect(result.stdout).toContain("work-complete");
     expect(result.exitCode).not.toBe(0);
+  });
+
+  test("a child that never starts rejects instead of resolving an empty result", async () => {
+    await expect(spawnTestChild([join(repoRoot(), "no-such-ocx-test-binary")], { cwd: repoRoot(), deadlineMs: 5_000 }))
+      .rejects.toThrow("the child could not be spawned");
   });
 
   test("a descendant holding the child's pipes does not turn exit into a wait for EOF", async () => {
@@ -313,6 +330,8 @@ describe("warm-up failure policy", () => {
     expect(result.exitCode).toBe(0);
     expect(result.timedOut).toBe(false);
     expect(result.stdout).toContain("ok");
+    expect(result.reaped).toBe(true);
+    expect(result.pipesClosed).toBe(false);
   }, INTERNAL_DEADLINE_MS);
 
   test("a real module graph loads, and reports what it loaded", async () => {
@@ -324,3 +343,21 @@ describe("warm-up failure policy", () => {
     });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 });
+
+test("behavior-child runner preserves argv and a complete environment allowlist", async () => {
+  const previous = process.env.OCX_CHILD_EXCLUDED_FIXTURE;
+  process.env.OCX_CHILD_EXCLUDED_FIXTURE = "synthetic";
+  try {
+    const result = await spawnTestChild([process.execPath, "--eval",
+      'console.log(JSON.stringify({ argument: process.argv.at(-1), excluded: !!process.env.OCX_CHILD_EXCLUDED_FIXTURE })); console.error("fixture-error"); process.exit(7);',
+      "fixture-argument"], {
+      cwd: repoRoot(), env: { SystemRoot: process.env.SystemRoot }, deadlineMs: INTERNAL_DEADLINE_MS,
+    });
+    expect(result).toMatchObject({ exitCode: 7, timedOut: false, reaped: true, pipesClosed: true });
+    expect(JSON.parse(result.stdout)).toEqual({ argument: "fixture-argument", excluded: false });
+    expect(result.stderr.trim()).toBe("fixture-error");
+  } finally {
+    if (previous === undefined) delete process.env.OCX_CHILD_EXCLUDED_FIXTURE;
+    else process.env.OCX_CHILD_EXCLUDED_FIXTURE = previous;
+  }
+}, SPAWN_BUDGET_MS);

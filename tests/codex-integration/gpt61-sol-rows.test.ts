@@ -95,7 +95,7 @@ describe("GPT-6.1 Sol native Codex row", () => {
     const entries = buildCatalogEntries(null, [NATIVE_GPT61_SOL_MODEL, NATIVE_GPT6_SOL_MODEL], []);
     const next = entries.find(entry => entry.slug === NATIVE_GPT61_SOL_MODEL);
     expect(next).toMatchObject({
-      context_window: 500_000, max_context_window: 500_000, auto_compact_token_limit: 450_000,
+      context_window: 500_000, max_context_window: 872_000, auto_compact_token_limit: 450_000,
     });
     expect(next?.visibility).toBe("list");
     expect(efforts(next)).toEqual(SOL_LADDER);
@@ -123,7 +123,7 @@ describe("GPT-6.1 Sol native Codex row", () => {
 
   test("a configured compaction limit lowers the 500k row's soft budget", () => {
     expect(builtSol({ modelAutoCompactTokenLimits: { [NATIVE_GPT61_SOL_MODEL]: 320_000 } }))
-      .toMatchObject({ context_window: 500_000, max_context_window: 500_000, auto_compact_token_limit: 320_000 });
+      .toMatchObject({ context_window: 500_000, max_context_window: 872_000, auto_compact_token_limit: 320_000 });
   });
 
   test("long-window opt-in reaches 872k without changing the default tier", () => {
@@ -142,7 +142,7 @@ describe("GPT-6.1 Sol native Codex row", () => {
         ...(slug.includes("/") ? { opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND } : {}),
       };
       expect(mergeRetainedSol(retained))
-        .toMatchObject({ slug, context_window: 500_000, max_context_window: 500_000, auto_compact_token_limit: 450_000 });
+        .toMatchObject({ slug, context_window: 500_000, max_context_window: 872_000, auto_compact_token_limit: 450_000 });
       // The observed merge detaches its input; persistence evidence remains unchanged.
       expect(retained).toMatchObject({ context_window: 272_000, auto_compact_token_limit: 244_800 });
     },

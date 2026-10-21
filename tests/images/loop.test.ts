@@ -8,6 +8,9 @@ import type { AttemptRecoveryKind } from "../../src/usage/log";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { PROVIDER_INPUT_TOO_LARGE_MESSAGE } from "../../src/server/responses/context-overflow";
+import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
+import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { parseStreamWithProgress, type ParseStreamWithProgressOptions } from "../../src/web-search/progress-stream";
 import { TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TRANSLATOR_MAX_TURN_BYTES, translatorLiveBudgetCountForTests } from "../../src/lib/translator-budget";
 
@@ -308,6 +311,75 @@ async function runAndGetSSE(streams: AdapterEvent[][], fulfill?: ImageCallResult
 }
 
 describe("runWithImageBridge", () => {
+  // #7316: once the image turn is streaming, a later iteration's provider overflow must end as the
+  // main path's terminal context_length_exceeded rather than a generic upstream failure.
+  test("a later iteration's HTTP 413 ends as a terminal context_length_exceeded", async () => {
+    streamQueue = [[...imageCallEvents]];
+    let sends = 0;
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: {
+        ...mockAdapter,
+        fetchResponse: async () => (sends++ === 0
+          ? new Response("{}", { status: 200, headers: { "content-type": "application/json" } })
+          : new Response("Request body exceeds the 8 MiB limit", { status: 413 })),
+      },
+    });
+    expect(response.status).toBe(200);
+    const sse = await response.text();
+    expect(sse).toContain("response.failed");
+    expect(sse).toContain('"code":"context_length_exceeded"');
+    expect(sse).toContain(PROVIDER_INPUT_TOO_LARGE_MESSAGE);
+    expect(sends).toBe(2);
+  });
+
+  // A non-replayable turn may already have run; neither the loop nor the bridge's wording
+  // heuristics may turn it into an overflow that invites a compacted resend.
+  test("a later iteration's worded non-replayable 413 keeps its own failure", async () => {
+    streamQueue = [[...imageCallEvents]];
+    let sends = 0;
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: {
+        ...mockAdapter,
+        formatErrorBody: (_status, _headers, body) => body,
+        fetchResponse: async () => {
+          if (sends++ === 0) return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+          const failed = new Response("This model's maximum context length is 8192 tokens", { status: 413 });
+          markResponseNonReplayable(failed);
+          return failed;
+        },
+      },
+    });
+    const sse = await response.text();
+    expect(sse).toContain("response.failed");
+    expect(sse).not.toContain("context_length_exceeded");
+    expect(sends).toBe(2);
+  });
+
+  test("a runTurn adapter's own overflow verdict keeps context_length_exceeded", async () => {
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: {
+        ...mockAdapter,
+        runTurn: async (_parsed: OcxParsedRequest, _incoming: IncomingMeta, emit: (event: AdapterEvent) => void) => {
+          emit({ type: "error", code: "context_length_exceeded", message: "adapter overflow" });
+        },
+      },
+    });
+    const sse = await response.text();
+    expect(sse).toContain('"code":"context_length_exceeded"');
+  });
+
+  test("a pacing-queue overload passes through instead of becoming 502 Provider unreachable", async () => {
+    const overload = new RequestPacingQueueOverloadError("image-test", "queue_full", 2);
+    const result = await runWithImageBridge({
+      parsed: makeParsed(), plan,
+      adapter: { ...mockAdapter, fetchResponse: () => Promise.reject(overload) },
+    }).then(response => response.status, (error: unknown) => error);
+    expect(result).toBe(overload);
+  });
+
   test.each([307, 308])("the direct image-loop send does not follow %i", async status => {
     let targetHits = 0;
     let originHits = 0;
@@ -1297,5 +1369,75 @@ describe.each(["runTurn", "parseStream"] as const)("image-loop provider identity
     await response.text();
     expect(seen.length).toBe(2);
     expect(seen).toEqual(["github-copilot", "github-copilot"]);
+  });
+});
+
+describe("image-loop adapter error usage", () => {
+  const imageCall = (usage: { inputTokens: number; outputTokens: number }): AdapterEvent[] => [
+    { type: "tool_call_start", id: "call_1", name: "image_gen" },
+    { type: "tool_call_delta", arguments: '{"prompt":"a cat"}' },
+    { type: "tool_call_end" },
+    { type: "done", usage },
+  ];
+  const errored: AdapterEvent = { type: "error", message: "provider blew up", usage: { inputTokens: 3, outputTokens: 2 } };
+
+  test("parseStream: an errored iteration's usage is added to the hidden iterations'", async () => {
+    useRealProgressStream = true;
+    streamQueue = [imageCall({ inputTokens: 10, outputTokens: 4 }), [{ type: "text_delta", text: "partial" }, errored]];
+    let seen: unknown = "unset";
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter: mockAdapter, plan, onUsage: usage => { seen = usage; } });
+    const sse = await response.text();
+    expect(sse).toContain("Provider stream error: provider blew up");
+    expect(seen).toEqual({ inputTokens: 13, outputTokens: 6 });
+  });
+
+  test("runTurn: an errored iteration's usage is reported", async () => {
+    const queue = [imageCall({ inputTokens: 10, outputTokens: 4 }), [errored]];
+    const adapter: ProviderAdapter = {
+      ...mockAdapter,
+      runTurn: async (_parsed: OcxParsedRequest, _incoming: IncomingMeta, emit: (e: AdapterEvent) => void) => {
+        for (const e of queue.shift() ?? []) emit(e);
+      },
+    };
+    let seen: unknown = "unset";
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter, plan, onUsage: usage => { seen = usage; } });
+    const sse = await response.text();
+    expect(sse).toContain("provider blew up");
+    expect(seen).toEqual({ inputTokens: 13, outputTokens: 6 });
+  });
+});
+
+describe("image-loop rotated usage", () => {
+  // Hidden rounds before a 429 rotation were spent by the account the loop left. Once the caller
+  // bills them to that account's attempt, the final report must not bill them again; the client
+  // terminal still shows the whole turn.
+  test.each([true, false])("a rotation offers the hidden usage; accepted=%p", async accepted => {
+    streamQueue = [
+      [
+        { type: "tool_call_start", id: "call_1", name: "image_gen" },
+        { type: "tool_call_delta", arguments: '{"prompt":"a cat"}' },
+        { type: "tool_call_end" },
+        { type: "done", usage: { inputTokens: 10, outputTokens: 4 } },
+      ],
+      [{ type: "text_delta", text: "after rotate" }, { type: "done", usage: { inputTokens: 30, outputTokens: 3 } }],
+    ];
+    let sends = 0;
+    const adapter: ProviderAdapter = {
+      ...mockAdapter,
+      fetchResponse: async () => ++sends === 2 ? new Response("rate limited", { status: 429 }) : new Response("{}"),
+    };
+    const offered: unknown[] = [];
+    let reported: unknown;
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), adapter, plan,
+      on429: async () => ({ adapter, recoveryKind: "oauth-account-429" }),
+      onRotatedUsage: usage => { offered.push(usage); return accepted; },
+      onUsage: usage => { reported = usage; },
+    });
+    const sse = await response.text();
+    expect(sends).toBe(3);
+    expect(offered).toEqual([{ inputTokens: 10, outputTokens: 4 }]);
+    expect(reported).toEqual(accepted ? { inputTokens: 30, outputTokens: 3 } : { inputTokens: 40, outputTokens: 7 });
+    expect(sse).toContain('"input_tokens":40');
   });
 });

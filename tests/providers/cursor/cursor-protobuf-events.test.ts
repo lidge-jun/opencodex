@@ -167,7 +167,7 @@ describe("Cursor protobuf tool-call events", () => {
         callId: "call_bad_freeform", modelCallId: "model_bad_freeform", toolCall,
       }),
     }), state)).toEqual([
-      { type: "error", message: "script call had invalid freeform arguments; expected {input:string}" },
+      { type: "error", message: "script call had invalid freeform arguments; expected {input:string} (received keys [+1 other])" },
     ]);
     expect(state.openToolCalls.has("call_bad_freeform")).toBe(false);
     expect(state.completedToolCalls.has("call_bad_freeform")).toBe(true);

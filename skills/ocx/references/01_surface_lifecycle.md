@@ -8,17 +8,31 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 12.
+Declared capabilities: 13.
+
+### `ocx codex-provider`
+
+Usage: `ocx codex-provider <status|allow <id> [--yes]|revoke <id>>`
+
+Inspect, allow or revoke custom Codex provider routing consent.
+
+State-changing: yes. JSON mode: `none`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--yes` | boolean | Explicitly approve the named provider without an interactive prompt. |
+
+- Only local loopback routing for Responses providers using OpenAI authentication is supported. No custom credentials/headers, authless mode or client compaction. Unapproved providers are never changed.
 
 ### `ocx chatgpt`
 
 Experimental ChatGPT app-server shim: launch, restore or status (macOS only).
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Default off; launch requires chatgptDesktop.appServerShim: true. Restore removes the generated launcher.
 
@@ -26,7 +40,7 @@ JSON mode: `none`.
 
 Proxy status, injection state, and version skew between this CLI and the running proxy.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -34,23 +48,19 @@ Drives no management route.
 |---|---|---|
 | `--json` | boolean | Emit the status envelope as JSON. |
 
-JSON mode: `envelope`.
-
 - Reads /healthz plus local config; drives no management API route.
 
 ### `ocx resolve`
 
 One JSON document naming the config home, the effective port, and the identity-checked proxy liveness verdict.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the resolve document as JSON (the shell contract). |
-
-JSON mode: `envelope`.
 
 - Exit 0 carries a trustworthy verdict (live or proven absent); exit 1 means the CLI could not resolve and a caller must refuse to guess — unknown liveness never reads as absent.
 - Built for embedding shells (desktop app): the liveness budgets stay owned by src/server/proxy-liveness.ts.
@@ -59,7 +69,7 @@ JSON mode: `envelope`.
 
 List the declared CLI capabilities and the management routes they drive.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -69,15 +79,13 @@ Drives no management route.
 | `--mutating-only` | boolean | Restrict output to capabilities that mutate state. |
 | `--route` | string | Show which capabilities drive a management route. |
 
-JSON mode: `envelope`.
-
 - Start here when driving ocx programmatically: it is the declared surface index, not a complete verb list.
 
 ### `ocx sync`
 
 Synchronize client catalogs, including Aside profiles through the running server's mutation owner.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
@@ -85,11 +93,9 @@ State-changing: yes.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--restart-codex` | boolean | Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog or cache write, on macOS, Linux and Windows. |
+| `--restart-codex` | boolean | Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog, cache, or changed configuration write, on macOS, Linux and Windows. |
 | `--restart-app-server-only` | boolean | Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given. |
 | `--restart-desktop-app` | boolean | Deprecated alias of --restart-codex. |
-
-JSON mode: `none`.
 
 - The Aside refresh uses the live server; other catalog synchronization also performs local work.
 
@@ -99,7 +105,7 @@ Usage: `ocx service install [--native|--scheduler]`
 
 Install the local background service.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
 
@@ -107,8 +113,6 @@ Drives no management route.
 |---|---|---|
 | `--native` | boolean | Windows WinSW backend; exclusive with --scheduler. |
 | `--scheduler` | boolean | Scheduled backend; exclusive with --native. |
-
-JSON mode: `none`.
 
 - Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.
 - Backend options apply only to install; other verbs use the installed backend.
@@ -119,11 +123,9 @@ Usage: `ocx service repair`
 
 Repair local service registration and verify serving health.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.
 - Backend options apply only to install; other verbs use the installed backend.
@@ -134,11 +136,9 @@ Usage: `ocx service restart`
 
 Restart the local background service.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.
 - Backend options apply only to install; other verbs use the installed backend.
@@ -149,11 +149,9 @@ Usage: `ocx service start`
 
 Start the registered local service.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.
 - Backend options apply only to install; other verbs use the installed backend.
@@ -164,11 +162,9 @@ Usage: `ocx service stop`
 
 Stop the registered local service.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.
 - Backend options apply only to install; other verbs use the installed backend.
@@ -179,11 +175,9 @@ Usage: `ocx service status`
 
 Inspect local service-manager status.
 
-State-changing: no.
+State-changing: no. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.
 - Backend options apply only to install; other verbs use the installed backend.
@@ -194,11 +188,9 @@ Usage: `ocx service uninstall`
 
 Uninstall the local service.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.
 - remove is an alias for uninstall.

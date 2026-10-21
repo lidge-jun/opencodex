@@ -413,6 +413,8 @@ describe("Windows tray packaging and command safety", () => {
     // child whose stdout pipe is drained asynchronously; the 3s tick only touches the
     // completed read task, so a slow or hung diagnostic can never freeze the tray menu.
     expect(source).toContain("ReadToEndAsync()");
+    const tick = source.slice(source.indexOf("function Update-TrayState"), source.indexOf("$timer = New-Object"));
+    expect(tick).not.toContain(".WaitForExit(");
     expect(source).toContain("$script:startupProbeProcess");
     // A timed-out diagnostic must be terminated, not left to become an orphaned
     // Bun process on the next refresh.
@@ -425,7 +427,9 @@ describe("Windows tray packaging and command safety", () => {
     // A probe still in flight when the tray shuts down must not outlive it: the
     // finally block kills the active probe, waits briefly, then completes it.
     expect(source).toContain("terminating active startup-health probe on tray shutdown");
-    expect(source).toContain("startupProbeProcess.WaitForExit(3000)");
+    expect(source).toContain("Stop-StartupHealthProbe -Shutdown");
+    const stopProbe = source.slice(source.indexOf("function Stop-StartupHealthProbe"), source.indexOf("function Initialize-UpdateBadgeReader"));
+    expect(stopProbe).toMatch(/if \(\$Shutdown\) \{[\s\S]*WaitForExit\(500\)/);
     // Placement proof that runs on every platform: the behavioral test below is
     // win32-only and the Windows CI leg runs on dispatch rather than on PRs,
     // so merge-time coverage needs a lightweight check here too. The timeout
@@ -448,9 +452,10 @@ describe("Windows tray packaging and command safety", () => {
     // server-side parser instead of accepting any non-null rebootSafe value.
     expect(source).toContain("($parsed.rebootSafe -is [bool])");
     // If the async pipe setup fails after the child started, the child must be
-    // terminated, not merely disposed and lost. That catch block logs a
-    // distinct string, which breaks if the branch is deleted.
-    expect(source).toContain("startup-health probe launch cleanup failed");
+    // terminated, not merely disposed and lost. The catch retains the process
+    // through the same later-tick reap as an ordinary timeout.
+    const launchCatch = source.slice(source.indexOf('Write-ActionLog "startup-health probe launch failed'), source.indexOf("function Complete-StartupHealthProbe"));
+    expect(launchCatch).toContain("Stop-StartupHealthProbe");
   });
 
   test("drops CODEX_HOME for tray children only when the default home is still missing", () => {
@@ -514,19 +519,9 @@ describe("Windows tray packaging and command safety", () => {
       const openCodexHome = join(directory, "ohome");
       mkdirSync(codexHome, { recursive: true });
       mkdirSync(openCodexHome, { recursive: true });
-      // The fake CLI name stays simple ASCII on purpose: the child engine here
-      // is powershell.exe (not bun), and its -Command parsing mangles paths
-      // with spaces or `&` even when quoted.
-      const hangChild = join(directory, "hangchild.ps1");
-      writeFileSync(hangChild, [
-        // Prove readiness is observed, not guessed from a fixed 500ms sleep.
-        ...(scenario === "Online" ? ["Start-Sleep -Milliseconds 1500"] : []),
-        "$pidFile = $env:OCX_PROBE_TEST_PID_FILE",
-        "if ($pidFile) { Add-Content -LiteralPath $pidFile -Value $PID }",
-        ...(scenario === "BadgeOverflowStdout" ? ["[Console]::Out.Write('x' * 32768)"] : []),
-        ...(scenario === "BadgeOverflowStderr" ? ["[Console]::Error.Write('x' * 32768)"] : []),
-        ...(scenario === "BadgeStaleFailure" ? ["exit 1"] : ["Start-Sleep -Seconds 120"]),
-      ].join("\r\n"));
+      // Production probes run Bun. A nested PowerShell cold start used to consume
+      // the readiness deadline before any lifecycle assertion (run 38503986851).
+      const hangChild = helperPath("windows-tray-probe-child.ts");
       const pidFile = join(directory, "pids.txt");
       const resultPath = join(directory, "verdict.json");
       let server: ReturnType<typeof Bun.serve> | undefined;
@@ -558,7 +553,7 @@ describe("Windows tray packaging and command safety", () => {
           "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
           "-File", driver,
           "-TrayScriptPath", trayScript,
-          "-ChildEnginePath", psExe,
+          "-ChildEnginePath", process.execPath,
           "-HangChildPath", hangChild,
           "-CodexHome", codexHome,
           "-OpenCodexHome", openCodexHome,
@@ -567,7 +562,7 @@ describe("Windows tray packaging and command safety", () => {
         ], {
           stdout: "pipe",
           stderr: "pipe",
-          env: { ...process.env, OCX_PROBE_TEST_PID_FILE: pidFile },
+          env: { ...process.env, OCX_PROBE_TEST_PID_FILE: pidFile, OCX_PROBE_TEST_SCENARIO: scenario },
         });
         const stdoutPromise = new Response(child.stdout).text();
         const stderrPromise = new Response(child.stderr).text();
@@ -613,6 +608,10 @@ describe("Windows tray packaging and command safety", () => {
         expect(verdict.childTerminated, `${scenario}: hung probe child ${verdict.childPid} survived the timeout`).toBe(true);
         expect(verdict.probeCleared, `${scenario}: probe reference was not released after the kill`).toBe(true);
         expect(verdict.launches, `${scenario}: expected exactly 1 probe launch, saw ${verdict.launches}`).toBe(1);
+        if (scenario !== "BadgeStaleFailure") {
+          expect(verdict.terminatingAfterMaintenance, `${scenario}: no terminating state after kill`).toBe(true);
+          expect(verdict.trackedAfterMaintenance, `${scenario}: disposed on the timeout tick`).toBe(true);
+        }
         if (scenario.startsWith("Badge")) {
           expect(verdict.maxTickMs, `${scenario}: UI tick blocked`).toBeLessThan(250);
           if (scenario === "BadgeStaleFailure") {
@@ -627,8 +626,7 @@ describe("Windows tray packaging and command safety", () => {
             expect(verdict.updateItemVisibleAfterMaintenance).toBe(false);
             expect(verdict.updateItemEnabledAfterMaintenance).toBe(false);
           } else {
-            expect(verdict.terminatingAfterMaintenance, `${scenario}: no terminating state after kill`).toBe(true);
-            expect(verdict.trackedAfterMaintenance, `${scenario}: disposed on the timeout tick`).toBe(true);
+            expect(verdict.observedAtAfterMaintenance).toBe(verdict.observedAtBeforeMaintenance);
           }
         } else {
           expect(verdict.totalMs, `${scenario}: two ticks took ${verdict.totalMs}ms; a UI-thread block would hang until the 120s sleeper exits`).toBeLessThan(20_000);
@@ -649,6 +647,53 @@ describe("Windows tray packaging and command safety", () => {
       }
     }
   }, { timeout: SPAWN_BUDGET_MS });
+
+  test("Bun probe fixture reports readiness and real overflow/failure on every platform", async () => {
+    for (const scenario of ["Offline", "Online", "BadgeOverflowStdout", "BadgeOverflowStderr", "BadgeStaleFailure"]) {
+      const directory = mkdtempSync(join(tmpdir(), "ocx-tray-fixture-"));
+      const pidFile = join(directory, "pids.txt");
+      const child = Bun.spawn([process.execPath, helperPath("windows-tray-probe-child.ts"), "__startup-health"], {
+        env: { ...process.env, OCX_PROBE_TEST_PID_FILE: pidFile, OCX_PROBE_TEST_SCENARIO: scenario },
+        stdout: "pipe", stderr: "pipe",
+      });
+      let overflowReady!: () => void;
+      const overflow = new Promise<void>(resolve => { overflowReady = resolve; });
+      const drain = async (stream: ReadableStream<Uint8Array>) => {
+        let size = 0;
+        for await (const chunk of stream) {
+          size += chunk.length;
+          if (size >= 32768) overflowReady();
+        }
+        return size;
+      };
+      const stdout = drain(child.stdout);
+      const stderr = drain(child.stderr);
+      try {
+        const deadline = Date.now() + INTERNAL_DEADLINE_MS;
+        while (!existsSync(pidFile) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(10);
+        expect(existsSync(pidFile), scenario).toBe(true);
+        expect(readFileSync(pidFile, "utf8").trim(), scenario).toBe(String(child.pid));
+        if (scenario.startsWith("BadgeOverflow")) {
+          expect(await Promise.race([overflow.then(() => true), Bun.sleep(INTERNAL_DEADLINE_MS).then(() => false)]), scenario).toBe(true);
+        }
+        if (scenario === "BadgeStaleFailure") expect(await child.exited).toBe(1);
+        else {
+          expect(child.exitCode, scenario).toBeNull();
+          child.kill();
+          await child.exited;
+        }
+        const sizes = await Promise.all([stdout, stderr]);
+        expect(sizes).toEqual([
+          scenario === "BadgeOverflowStdout" ? 32768 : 0,
+          scenario === "BadgeOverflowStderr" ? 32768 : 0,
+        ]);
+      } finally {
+        if (child.exitCode === null) child.kill();
+        await Promise.all([child.exited, stdout, stderr]);
+        removeTreeWithRetry(directory);
+      }
+    }
+  }, SPAWN_BUDGET_MS);
 
   // This test really does launch PowerShell, which really does launch a Bun child, and
   // then rebinds the port to prove the child did not inherit the listen socket. Those

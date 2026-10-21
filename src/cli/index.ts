@@ -16,7 +16,6 @@ import { UpdateRestartRequired } from "./update-restart-candidate";
 import { describeUpdateRestartFailure, restartFromCurrentInstallation } from "./update-restart";
 import { findGuiDist } from "../server/gui-static";
 import { inspectGuiBundleFreshness, staleGuiBundleLines } from "../server/gui-freshness";
-
 // Best-effort recovery for runtime execution and spawned children if launched
 // from an unlinked/deleted working directory (runs after hoisted ESM module imports).
 try {
@@ -159,7 +158,6 @@ import { ENSURE_READY_TIMEOUT_MS, ensureKeepWaiting, waitForLiveProxy } from "./
 import { productionDesktopColdStartDeps, runDesktopColdStart } from "./ensure-desktop-cold-start";
 import { refreshOwnedCatalogIntegrations } from "../integrations/catalog-refresh";
 import { loadExportModels } from "../server/management/model-rows";
-
 import { removeOwnedConfigAfterDesktopCleanup } from "./uninstall-client-state";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
@@ -170,6 +168,7 @@ import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
+import { startServiceLogging } from "../service/logging";
 
 /**
  * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
@@ -209,6 +208,7 @@ async function refreshOwnedRaycastCatalog(
   }
 }
 
+if (process.argv[2] === "start" && process.env.OCX_SERVICE) startServiceLogging(join(getConfigDir(), "service.log"));
 const updateRestartChild = admitUpdateRestartChild(process.argv.slice(2));
 initializeNodeLauncherContext();
 // The compiled executable is also the capture-only MCP server's launcher.
@@ -283,6 +283,7 @@ async function chooseListenPort(
       `Port ${preferred} is reserved for unauthenticatedLoopbackListener; choose a different proxy port.`,
     );
   }
+  await (await import("./auxiliary-listener-preflight")).assertAuxiliaryListenerPortsAvailable(config);
   // Soft start: brief prefer-retry then ephemeral hop.
   // Explicit `--port` (service wrappers / update restart): wait for the pinned port
   // to free without killing any listener (healthy ocx / foreign). Never hop.
@@ -659,7 +660,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     }
     removePid(process.pid);
     removeRuntimePort(process.pid);
-    if (teardown.restoreNativeCodex && !currentExternalCodexModelProvider()) {
+    if (teardown.restoreNativeCodex) {
       try {
         if (!codexHomeIsAbsent(getCodexHome())) {
           const restored = restoreNativeCodex();

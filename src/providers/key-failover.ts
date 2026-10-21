@@ -8,9 +8,13 @@
  *
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
+import { isKeyInCooldown, getKeyCooldownUntil, setKeyCooldown } from "./api-key-cooldowns";
+export { clearKeyCooldowns, getKeyCooldownUntil, sweepExpiredApiKeyCooldowns } from "./api-key-cooldowns";
 import { commitProviderApiKeySelection, providerApiKeySelectionIsCurrent } from "./api-key-selection";
+import { RequestPacingQueueOverloadError } from "./request-pacing";
+import { isCanonicalMistralChat } from "./mistral-transport";
 import type { ProviderApiKeySelection } from "../types/provider";
-import { routedProviderConfig } from "../router";
+import { routedProviderConfig } from "./routed-config";
 import { getProviderRegistryEntry } from "./registry";
 import { isCanonicalCommandCodeBaseUrl, normalizedBaseUrl } from "./quota/vendor-probes-key";
 import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, ResetReplayPolicy, TransientRetryPolicy } from "../types";
@@ -23,10 +27,6 @@ import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { cachedApiKeyQuota } from "./quota-key-accounts";
 
 // ---- cooldown state (in-memory, same as codex/routing.ts) ----
-
-interface KeyCooldown {
-  cooldownUntil: number;
-}
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000; // cap at 10 min for api-key rotation
@@ -347,11 +347,6 @@ const DEFAULT_RESET_REPLAY = {
 } as const satisfies Required<ResetReplayPolicy>;
 
 /** Map<`${providerName}\0${keyId}`, KeyCooldown> */
-const keyCooldowns = new Map<string, KeyCooldown>();
-
-function cooldownKey(providerName: string, keyId: string): string {
-  return `${providerName}\0${keyId}`;
-}
 
 /**
  * Parse an upstream `Retry-After` header: numeric seconds (including `0`) or an HTTP-date.
@@ -379,16 +374,6 @@ function parseRetryAfterMs(value: string | null | undefined, now = Date.now()): 
  * True while the given key is inside its 429 cooldown window (lazily evicting the entry once the
  * window expires). Used to skip keys that the upstream just rate-limited during failover.
  */
-function isKeyInCooldown(providerName: string, keyId: string, now = Date.now()): boolean {
-  const entry = keyCooldowns.get(cooldownKey(providerName, keyId));
-  if (!entry) return false;
-  if (entry.cooldownUntil <= now) {
-    keyCooldowns.delete(cooldownKey(providerName, keyId));
-    return false;
-  }
-  return true;
-}
-
 // ---- public API ----
 
 /**
@@ -418,9 +403,11 @@ const keyRotationCursor = new Map<string, string>();
 export function forgetApiKeyRotationCursor(providerName?: string): void {
   if (!providerName) {
     keyRotationCursor.clear();
+    dispatchKeyCursor.clear();
     return;
   }
   keyRotationCursor.delete(providerName);
+  dispatchKeyCursor.delete(providerName);
 }
 
 /** The pool entry shape is inline on OcxProviderConfig; name it once rather than re-spelling it. */
@@ -507,9 +494,9 @@ export function selectProactiveApiKey(
 
   const activeEntry = pool.find(entry => entry.key === provider.apiKey);
   // A healthy committed key wins, whether the operator chose it or a previous rotation did.
-  if (activeEntry && !isKeyInCooldown(providerName, activeEntry.id, now)) return null;
+  if (activeEntry && !activeEntry.disabled && !isKeyInCooldown(providerName, activeEntry.id, now)) return null;
 
-  const eligible = pool.filter(entry => !isKeyInCooldown(providerName, entry.id, now));
+  const eligible = pool.filter(entry => !entry.disabled && !isKeyInCooldown(providerName, entry.id, now));
   if (eligible.length === 0) return null;
 
   let chosen = eligible[0]!;
@@ -518,7 +505,7 @@ export function selectProactiveApiKey(
     const lastIndex = lastId ? pool.findIndex(entry => entry.id === lastId) : -1;
     for (let offset = 1; offset <= pool.length; offset += 1) {
       const candidate = pool[(lastIndex + offset) % pool.length]!;
-      if (isKeyInCooldown(providerName, candidate.id, now)) continue;
+      if (candidate.disabled || isKeyInCooldown(providerName, candidate.id, now)) continue;
       chosen = candidate;
       break;
     }
@@ -532,11 +519,11 @@ export function selectProactiveApiKey(
   const outcome = commitProviderApiKeySelection<string | null>(config, providerName, freshProvider => {
     const freshPool = freshProvider.apiKeyPool ?? [];
     const target = freshPool.find(entry => entry.id === chosen.id);
-    if (!target) return { changed: false, value: null };
+    if (!target || target.disabled) return { changed: false, value: null };
     if (freshProvider.apiKey === target.key) return { changed: false, value: null };
     const freshActive = freshPool.find(entry => entry.key === freshProvider.apiKey);
     // Re-check under the lock: a concurrent manual selection may have landed a healthy key.
-    if (freshActive && !isKeyInCooldown(providerName, freshActive.id, now)) {
+    if (freshActive && !freshActive.disabled && !isKeyInCooldown(providerName, freshActive.id, now)) {
       return { changed: false, value: null };
     }
     freshProvider.apiKey = target.key;
@@ -566,9 +553,31 @@ export function selectProactiveApiKeyTransport(
   promptCacheKey?: string,
   now = Date.now(),
 ): OcxProviderTransport | null {
+  const configured = config.providers[providerName];
+  if (configured?.requestPacing?.enabled && configured.requestPacing.keySelection === "round-robin"
+    && hasKeyPoolFailover(configured)) {
+    return applyRotatedTransport(providerName, routedProvider, allocateDistributedKey(providerName, configured, now), promptCacheKey);
+  }
   const committed = selectProactiveApiKey(config, providerName, now);
   if (!committed) return null;
   return applyRotatedTransport(providerName, routedProvider, committed, promptCacheKey);
+}
+
+const dispatchKeyCursor = new Map<string, string>();
+function allocateDistributedKey(providerName: string, provider: OcxProviderConfig, now: number): OcxProviderConfig {
+  const pool = (provider.apiKeyPool ?? []).filter(entry => !entry.disabled).filter((entry, index, all) => all.findIndex(other => other.key === entry.key) === index);
+  const previous = dispatchKeyCursor.get(providerName);
+  const start = pool.findIndex(entry => entry.id === previous);
+  for (let offset = 1; offset <= pool.length; offset++) {
+    const entry = pool[(start + offset) % pool.length]!;
+    if (isKeyInCooldown(providerName, entry.id, now)) continue;
+    dispatchKeyCursor.set(providerName, entry.id);
+    return { ...provider, apiKey: entry.key, _apiKeyAttempt: {
+      entryId: entry.id, reference: entry.key, revision: provider.apiKeySelectionRevision, distributed: true,
+    } };
+  }
+  const next = pool.length ? Math.min(...pool.map(entry => getKeyCooldownUntil(providerName, entry.id, now) ?? now + 1000)) : now + 1000;
+  throw new RequestPacingQueueOverloadError(providerName, "keys_exhausted", Math.max(1, Math.ceil((next - now) / 1000)));
 }
 
 /**
@@ -577,7 +586,7 @@ export function selectProactiveApiKeyTransport(
  * (subscription traffic such as Muse Spark) falls back to a patient same-key policy so a
  * burst 429 waits and replays instead of surfacing to the client and aborting a long
  * session; key-auth Command Code at its canonical endpoints gets the same fallback (#5180), and
- * every other provider without the knob keeps today's fail-fast behavior.
+ * canonical Mistral Chat uses a slower fallback; other destinations stay fail-fast.
  * OAuth/forward/local credentials are never replayed on the same token. The returned
  * policy is fully defaulted so callers never re-check fields.
  */
@@ -601,8 +610,15 @@ export function rateLimitRetryPolicyFor(
       respectRetryAfter: policy.respectRetryAfter ?? DEFAULT_RATE_LIMIT_RETRY.respectRetryAfter,
     };
   }
-  // No explicit knob: patient fallback for OpenCode Go and canonical Command Code only.
+  // No explicit knob: destination-specific fallbacks, never OAuth or local credentials.
   if (provider.authMode !== undefined && provider.authMode !== "key") return null;
+  // Mistral's token-throughput and temporary capacity refusals both use HTTP 429.
+  // Keep relays and other wire adapters opt-in, and reuse the existing send budget.
+  if (typeof provider.baseUrl === "string" && typeof provider.adapter === "string" && isCanonicalMistralChat({
+    adapter: provider.adapter, authMode: provider.authMode, baseUrl: provider.baseUrl,
+  })) {
+    return { ...DEFAULT_RATE_LIMIT_RETRY, attempts: 6, intervalMs: 10_000 };
+  }
   if (isOpenCodeGoDestination(provider)) return { ...OPENCODE_GO_RATE_LIMIT_RETRY };
   // Command Code's Provider API rate-limits long muse-spark turns the same way (#5180): a single
   // key cannot fail over, and the Codex client does not retry a 429, so the turn aborts. The key
@@ -695,6 +711,24 @@ export function rateLimitRetryDelayMs(
  * rebuilds from this committed row, reapplies registry metadata, and retains only explicit
  * runtime transport state (`fetch` and generated OpenCode session affinity).
  */
+/** Record a request-local key failure without selecting or sending a replacement. */
+export function recordDistributedKeyFailure(
+  config: OcxConfig, providerName: string, selection: ProviderApiKeySelection | undefined,
+  status: 401 | 429 | "billing", now = Date.now(), retryAfter?: string | null, quotaResetAt?: number,
+): boolean {
+  const provider = config.providers[providerName];
+  if (!selection?.distributed || !provider || provider.authMode === "oauth" || provider.authMode === "forward") return false;
+  const failed = provider.apiKeyPool?.find(entry => entry.id === selection.entryId && entry.key === selection.reference);
+  if (!failed || failed.disabled || provider.apiKeySelectionRevision !== selection.revision) return false;
+  const delay = status === "billing" ? ANTHROPIC_BILLING_COOLDOWN_MS : status === 401 ? MAX_COOLDOWN_MS : quotaResetAt !== undefined
+    ? Math.max(1, quotaResetAt - now) : parseRetryAfterMs(retryAfter, now) ?? DEFAULT_COOLDOWN_MS;
+  for (const entry of provider.apiKeyPool ?? []) if (entry.key === failed.key) {
+    setKeyCooldown(providerName, entry.id, now + delay);
+  }
+  sweepExpiredOnWrite(now);
+  return true;
+}
+
 function rotateKeyAfterFailure(
   config: OcxConfig,
   providerName: string,
@@ -709,6 +743,13 @@ function rotateKeyAfterFailure(
   const provider = config.providers[providerName];
   if (!provider) return null;
   if (provider.authMode === "oauth" || provider.authMode === "forward") return null;
+
+  if (attemptedSelection?.distributed) {
+    if (acceptsFreshProvider && !acceptsFreshProvider(provider)) return null;
+    if (!recordDistributedKeyFailure(config, providerName, attemptedSelection, failureStatus, now, retryAfterHeader, quotaResetAt)) return null;
+    if (!(provider.apiKeyPool ?? []).some(entry => !entry.disabled && !isKeyInCooldown(providerName, entry.id, now))) return null;
+    return allocateDistributedKey(providerName, provider, now);
+  }
 
   const failedKey = attemptedSelection?.reference ?? attemptedKey ?? provider.apiKey;
   type Rotation =
@@ -731,7 +772,7 @@ function rotateKeyAfterFailure(
 
     if (freshProvider.apiKey !== failedKey) {
       const activeEntry = pool.find(entry => entry.key === freshProvider.apiKey);
-      if (activeEntry && !isKeyInCooldown(providerName, activeEntry.id, now)) {
+      if (activeEntry && !activeEntry.disabled && !isKeyInCooldown(providerName, activeEntry.id, now)) {
         return {
           changed: false,
           value: { failedId: failedEntry?.id },
@@ -743,7 +784,7 @@ function rotateKeyAfterFailure(
     const candidateCount = failedEntry ? pool.length - 1 : pool.length;
     for (let offset = 1; offset <= candidateCount; offset += 1) {
       const candidate = pool[(currentIndex + offset) % pool.length]!;
-      if (isKeyInCooldown(providerName, candidate.id, now)) continue;
+      if (candidate.disabled || isKeyInCooldown(providerName, candidate.id, now)) continue;
       freshProvider.apiKey = candidate.key;
       return {
         changed: true,
@@ -778,7 +819,7 @@ function rotateKeyAfterFailure(
       : quotaResetAt !== undefined
         ? Math.max(quotaResetAt - now, 1)
         : parseRetryAfterMs(retryAfterHeader, now) ?? DEFAULT_COOLDOWN_MS;
-    keyCooldowns.set(cooldownKey(providerName, outcome.value.failedId), { cooldownUntil: now + cooldownMs });
+    setKeyCooldown(providerName, outcome.value.failedId, now + cooldownMs);
     sweepExpiredOnWrite(now);
   }
   if ("exhaustedCount" in outcome.value) {
@@ -829,16 +870,6 @@ export function rotateKeyOn401(
   attemptedSelection?: ProviderApiKeySelection,
 ): OcxProviderConfig | null {
   return rotateKeyAfterFailure(config, providerName, 401, null, now, attemptedKey, attemptedSelection);
-}
-
-export function sweepExpiredApiKeyCooldowns(now = Date.now()): number {
-  let removed = 0;
-  for (const [key, cooldown] of keyCooldowns) {
-    if (cooldown.cooldownUntil > now) continue;
-    keyCooldowns.delete(key);
-    removed += 1;
-  }
-  return removed;
 }
 
 interface RotateProviderTransportOptions {
@@ -933,23 +964,4 @@ function applyRotatedTransport(
       : {}),
   };
   return resolveProviderTransport(providerName, retryProvider, promptCacheKey);
-}
-
-/** Clear cooldown state for a provider (e.g. after manual key management). */
-export function clearKeyCooldowns(providerName?: string): void {
-  if (!providerName) {
-    keyCooldowns.clear();
-    return;
-  }
-  const prefix = `${providerName}\0`;
-  for (const key of keyCooldowns.keys()) {
-    if (key.startsWith(prefix)) keyCooldowns.delete(key);
-  }
-}
-
-/** Visible-for-testing: get the cooldown-until timestamp for a key. */
-export function getKeyCooldownUntil(providerName: string, keyId: string, now = Date.now()): number | null {
-  const entry = keyCooldowns.get(cooldownKey(providerName, keyId));
-  if (!entry) return null;
-  return entry.cooldownUntil > now ? entry.cooldownUntil : null;
 }

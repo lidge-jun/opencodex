@@ -14,7 +14,7 @@ import {
   resolveTrustedWindowsPowerShellExe,
   resolveTrustedWindowsTaskkillExe,
 } from "../lib/windows-elevation";
-import { readCodexCatalogPath } from "./catalog/parsing";
+import { readCodexCatalogPath } from "./paths";
 
 export const STALE_CODEX_APP_SERVER_HINT =
   "If Codex still shows an older model list, run `ocx sync --restart-codex`: it restarts the long-lived app-server "
@@ -332,6 +332,32 @@ export function isCodexAppServerCommandLine(commandLine: string, executable?: st
   return false;
 }
 
+/**
+ * True when the command line is ANY live Codex session, not just an app-server.
+ *
+ * The update-blocking contract needs the broader reading: an interactive TUI, a
+ * one-shot `codex exec`, or an app-server all have the package's binaries in use,
+ * so every subcommand counts. The executable identity stays exactly as strict as
+ * {@link isCodexAppServerCommandLine} - only the argv discipline is dropped. A
+ * coincidental codex-shaped argument can never open this matcher.
+ */
+export function isCodexSessionCommandLine(commandLine: string, executable?: string): boolean {
+  const trimmed = commandLine.trim();
+  let tokens = tokenizeCommandLine(trimmed);
+  if (executable) {
+    if (isCodeModeHostToken(executable) || isCodexExecutableToken(executable)) return true;
+  }
+  if (tokens.length === 0) return false;
+  if (isCodeModeHostProcess(tokens)) return true;
+  // Same interpreter unwrap the app-server matcher uses: a codex-shaped token must
+  // immediately follow the interpreter so an interpreter flag value is never read
+  // as the entrypoint.
+  if (isInterpreterToken(tokens[0]!) && tokens.length > 1 && isCodexExecutableToken(tokens[1]!)) {
+    tokens = tokens.slice(1);
+  }
+  return isCodexExecutableToken(tokens[0]!);
+}
+
 function parseUnixProcStatusUid(status: string): number | undefined {
   const match = /^Uid:\s+(\d+)/m.exec(status);
   if (!match) return undefined;
@@ -339,7 +365,7 @@ function parseUnixProcStatusUid(status: string): number | undefined {
   return Number.isSafeInteger(uid) ? uid : undefined;
 }
 
-function listUnixProcSnapshots(uid: number | undefined): ProcessSnapshot[] {
+function listUnixProcSnapshots(uid: number | undefined, requireComplete = true): ProcessSnapshot[] {
   // procfs missing on a Linux-shaped platform is an enumeration failure, not
   // "no processes" — the staleness collector must not read it as not_running.
   if (!existsSync("/proc")) throw new Error("procfs_unavailable");
@@ -359,8 +385,10 @@ function listUnixProcSnapshots(uid: number | undefined): ProcessSnapshot[] {
       const commandLine = argv.join(" ").trim();
       if (!commandLine) continue;
       out.push({ pid, commandLine, executable: argv[0], uid: processUid });
-    } catch {
-      /* process exited mid-scan */
+    } catch (error) {
+      // Complete observations may ignore only disappearance. Restart target
+      // enumeration can skip an unreadable PID while retaining verified ones.
+      if (requireComplete && (error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
     }
   }
   return out;
@@ -518,10 +546,10 @@ async function listWindowsSnapshotsAsync(): Promise<ProcessSnapshot[]> {
   return parseWindowsSnapshotOutput(output);
 }
 
-function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | undefined): ProcessSnapshot[] {
+function defaultListSnapshots(platform: NodeJS.Platform, getuid: () => number | undefined, requireComplete = true): ProcessSnapshot[] {
   if (platform === "win32") return listWindowsSnapshots();
   if (platform === "darwin") return listDarwinSnapshots(getuid());
-  return listUnixProcSnapshots(getuid());
+  return listUnixProcSnapshots(getuid(), requireComplete);
 }
 
 export interface ListProcessSnapshotsOptions {
@@ -565,7 +593,7 @@ export function listCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): C
     // Restart/kill contract (#476): enumeration failure means no targets —
     // never signal a process we could not verify.
     try {
-      snapshots = defaultListSnapshots(platform, getuid);
+      snapshots = defaultListSnapshots(platform, getuid, false);
     } catch {
       snapshots = [];
     }
@@ -579,6 +607,68 @@ export function listCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): C
     matched.push({ pid: snapshot.pid, commandLine: snapshot.commandLine });
   }
   return matched;
+}
+
+/**
+ * Enumeration outcome for callers that must DEFER on an unreadable process table.
+ *
+ * {@link listCodexAppServerProcesses} maps enumeration failure to an empty list because its
+ * kill contract must never signal a process it could not verify. The Codex CLI update
+ * workflow needs the opposite reading: "no matches" and "could not look" lead to different
+ * decisions, and only the first one may allow an install to proceed.
+ */
+export type CodexAppServerProcessScan =
+  | Readonly<{ kind: "observed"; processes: readonly CodexAppServerProcess[] }>
+  | Readonly<{ kind: "unavailable" }>;
+
+function scanProcessSnapshots(
+  io: CodexAppServerProcessIo,
+  matches: (commandLine: string, executable?: string) => boolean,
+): CodexAppServerProcessScan {
+  const platform = io.platform ?? process.platform;
+  const getuid = io.getuid ?? (() => {
+    try {
+      return typeof process.getuid === "function" ? process.getuid() : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  let snapshots: ProcessSnapshot[];
+  try {
+    snapshots = io.listSnapshots ? io.listSnapshots() : defaultListSnapshots(platform, getuid);
+  } catch {
+    return Object.freeze({ kind: "unavailable" as const });
+  }
+  const seen = new Set<number>();
+  const matched: CodexAppServerProcess[] = [];
+  for (const snapshot of snapshots) {
+    if (seen.has(snapshot.pid)) continue;
+    if (!matches(snapshot.commandLine, snapshot.executable)) continue;
+    seen.add(snapshot.pid);
+    matched.push({ pid: snapshot.pid, commandLine: snapshot.commandLine });
+  }
+  return Object.freeze({ kind: "observed" as const, processes: Object.freeze(matched) });
+}
+
+/** Same matcher and snapshot sources as {@link listCodexAppServerProcesses}, failing closed. */
+export function scanCodexAppServerProcesses(io: CodexAppServerProcessIo = {}): CodexAppServerProcessScan {
+  return scanProcessSnapshots(io, isCodexAppServerCommandLine);
+}
+
+/**
+ * {@link isCodexSessionCommandLine} over the same snapshot sources, failing closed.
+ *
+ * Any live Codex session counts - TUI, exec or app-server all hold the installed
+ * package open while npm would be replacing it, and a missed TUI was the reported
+ * source of a half-written install on Linux. The kill path keeps the narrower
+ * {@link isCodexAppServerCommandLine} because a signal must never leave its
+ * verified contract; this scan decides whether it is SAFE to install, so it may
+ * only err toward deferring.
+ */
+export function scanCodexSessionProcesses(io: CodexAppServerProcessIo = {}): CodexAppServerProcessScan {
+  // Shared installs may be held open by another readable user's session. This
+  // read-only scan is broader than the unchanged same-user restart/kill path.
+  return scanProcessSnapshots({ ...io, getuid: io.getuid ?? (() => undefined) }, isCodexSessionCommandLine);
 }
 
 export function formatStaleCodexAppServerWarning(

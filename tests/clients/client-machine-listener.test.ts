@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
 import { startMachineListener } from "../../src/client/machine-listener";
+import { handleMachineApi } from "../../src/client/machine-api";
 import { serveGuiFile } from "../../src/server/gui-static";
 import type { OcxClientConnectionConfig, OcxConfig } from "../../src/types";
 import { RemoteWorkspaceSessionService } from "../../src/remote-control/workspace-sessions";
@@ -265,6 +266,30 @@ describe("client machine listener", () => {
     expect(response.status).toBe(403);
     expect(disconnected).toBe(false);
     expect(recycled).toBe(false);
+  });
+
+  test("machine api disconnect recycles through the injected schedule and skips it on failure", async () => {
+    const recycled: string[] = [];
+    const state = connection();
+    const url = new URL("/api/machine/disconnect", "https://client.example.test");
+    const request = (): Request => new Request(url, { method: "POST", body: JSON.stringify({}) });
+    const deps = {
+      sync: async () => ({ catalogWritten: false, cacheSynced: true, injected: true, stale: false }),
+      disconnect: async () => ({ restored: true, tokenRemoved: true, catalogRemoved: true, apiKeyId: state.apiKeyId }),
+      scheduleStandaloneRecycle: (tokenFingerprint: string) => { recycled.push(tokenFingerprint); },
+    };
+
+    const okResponse = await handleMachineApi(request(), url, state, deps);
+    expect(okResponse?.status).toBe(202);
+    expect(recycled).toEqual([state.tokenFingerprint]);
+
+    recycled.length = 0;
+    const failedResponse = await handleMachineApi(request(), url, state, {
+      ...deps,
+      disconnect: async () => { throw new Error("disconnect failed"); },
+    });
+    expect(failedResponse?.status).toBe(409);
+    expect(recycled).toEqual([]);
   });
 
   test("refuses startup without matching durable connected state", () => {

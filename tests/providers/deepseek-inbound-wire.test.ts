@@ -423,7 +423,10 @@ describe("the inbound scope survives the handleResponses replay", () => {
         { inboundTransport: "websocket" },
       );
       await followup.text();
+      // The relayed turn carried no reasoning item, so the strict wire gets the fixed placeholder
+      // ahead of the call (#7298), exactly as the Chat wire injects `reasoning_content: " "`.
       expect(requestBodies[1]?.input).toEqual([
+        { type: "reasoning", summary: [], content: [{ type: "reasoning_text", text: " " }] },
         { type: "function_call", call_id: "call_ws", name: "probe", arguments: "{\"text\":\"OK\"}" },
         { type: "function_call_output", call_id: "call_ws", output: "OK" },
       ]);

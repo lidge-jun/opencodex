@@ -14,6 +14,29 @@ Messages API를 통해 사용하는 Devin 경로(SWE-2 포함)에서는 늦게 �
 이 출력 순서 수정으로 Cognition이 생성된 일부 시스템 텍스트를 거부하는 별개의 문제가 해결되지는 않아요.
 시스템 지시와 안전 제약은 그대로 유지해요.
 
+## CLI와 외부 실행 앱의 티어 기본값
+
+Claude Code 탭에서 Opus, Sonnet, Haiku, Fable 기본 모델을 선택한 뒤 **저장**하세요.
+`claudeCode.tierModels` 값은 새 `ocx claude` 실행에 전달되며, 현재 주 모델이나 추론 강도,
+Desktop의 모델 계열 할당은 바꾸지 않아요.
+
+`claude`를 직접 실행하는 앱에는 `ocx`의 환경 변수가 전달되지 않아요. 저장 후
+**Claude 설정 미리보기**에서 `ANTHROPIC_DEFAULT_*_MODEL` 변경을 확인하고 **Claude 설정에 적용**을
+누르세요. 변경 대상은 브라우저가 있는 PC가 아니라 OpenCodex 호스트의 Claude 사용자 설정이에요.
+새 값을 사용하려면 새 Claude 프로세스를 실행해야 해요. 기존 세션을 강제 재시작하지 않으며,
+라우팅이나 인증 연결도 설정하지 않으므로 직접 실행하는 앱의 OpenCodex 연결은 이미 준비되어 있어야 해요.
+
+명시적으로 선택한 티어만 적용해요. **미지정**은 기존 Claude 설정을 유지하며 네이티브 모델로
+초기화하지 않아요. 파일이 없으면 생성할 수 있지만, 기존의 빈 파일이나 손상된 JSON은 거부해요.
+미리보기 이후 설정이 바뀌면 다시 미리보기가 필요해요.
+
+적용 시 실제 파일을 Claude 설정 디렉터리의 비공개 `model-default-backups/apply-*/settings.json`으로
+잠시 이동해 내용을 확인하고, 대상에 다른 파일이 없을 때만 새 설정을 게시해요. 충돌이나 복원 중에도
+다른 프로그램이 만든 파일을 덮어쓰지 않아요. 잠깐 파일이 없는 구간이 있으므로 적용 중에는 설정 편집이나
+Claude 실행을 피하세요. 같은 볼륨의 이동과 하드 링크를 지원해야 하며, 실패 시 덮어쓰기 방식으로 우회하지 않아요.
+중단이나 자동 복원 실패 후에는 이 백업과 최신 변경을 대조해서 복원하세요. Windows와 Linux 동작은
+별도로 검증해야 해요. 실제 제공된 모델은 요청 로그로 확인하세요. Sonnet을 요청하는 외부 분류기에도 유용해요.
+
 ## 빠른 시작
 
 ```bash
@@ -169,21 +192,21 @@ unknown은 설정이 아직 opencodex 프록시를 가리키는지 판단할 수
 
 ### Picker 모드: 1P Code 탭에 opencodex 모델 표시하기
 
-Picker 모드는 1P 모드의 일부예요. macOS에서 1P를 선택하면 기본으로 켜지지만,
+Picker 모드는 1P 모드의 일부예요. macOS와 Windows에서 1P를 선택하면 기본으로 켜지지만,
 `claudeCode.intercept.picker: false`를 설정하면 꺼져요. 1P Desktop의 Code 탭 모델 선택기를 바꿔서
-사용 가능한 opencodex 모델을 이름으로 보여줘요. 처음 켤 때 macOS 로그인 키체인에서 로컬 인증 기관을
+사용 가능한 opencodex 모델을 이름으로 보여줘요. 처음 켤 때 macOS 로그인 키체인이나 Windows 현재 사용자 Root 저장소에서 로컬 인증 기관을
 신뢰하라는 메시지가 표시될 수 있어요. 이 인증 기관은 `claude.ai`와 그 하위 도메인으로 제한돼요.
 내보낼 수 있는 서명용 인증서와 키는 OS 자격 증명 저장소로 보호하며, 일반적인 재시작에서는 같은 것을 재사용해요.
 OpenCodex 설정 디렉터리에 Picker 서명 키를 평문으로 저장하지 않아요. 제한된 CA의 전체 검증과 OS 신뢰 확인은
-계속 적용돼요. 승인한 인증서와 키가 같고 자격 증명 저장소를 사용할 수 있다면 재시작 시 인증서 신뢰 설정을
-추가하거나 삭제하지 않아요. 시작 시 복원은 신뢰를 설치하지 않아요. 신뢰가 없거나 철회됐거나 확인할 수 없다면
+계속 적용돼요(Windows에서는 정확한 지문과 확인된 리프로 검증해요). 승인한 인증서와 키가 같고 자격 증명 저장소를 사용할 수 있다면 재시작 시 macOS 인증서 신뢰 설정을
+추가하거나 삭제하지 않아요. 시작 시 복원이나 상태 확인은 신뢰를 설치하지 않아요. 신뢰가 없거나 철회됐거나 확인할 수 없다면
 Picker는 대기 상태로 남아요. `ocx claude desktop picker on` 또는 `ocx claude desktop picker trust`를 직접 실행해
-신뢰를 부여하면 돼요.
+신뢰를 부여하면 돼요(Windows에서는 확인 창이 나올 수 있어요).
 
 이전 인증서에서 한 번 마이그레이션할 때는 기존 신뢰를 제거하기 위한 동의가 필요할 수 있어요. 정리가 끝나지
 않으면 Picker는 사용할 수 없고 적용된 프로필은 복호화하지 않는 중계로 동작해요. 키체인 잠금 해제나 앱의
-자격 증명 접근 허용은 별도의 macOS 동작이며, 재시작이나 업데이트 때도 메시지가 나올 수 있어요.
-Windows와 Linux에서는 Picker를 지원하지 않으며 Picker CA, 자격 증명 저장소, 프록시 작업을 시작하지 않아요.
+자격 증명 접근 허용은 별도의 macOS 동작이며, 재시작이나 업데이트 때도 메시지가 나올 수 있어요. Windows에서는 `on`이나 `trust`를 직접 실행할 때 루트 추가 확인이 나올 수 있어요.
+Linux에서는 Picker를 지원하지 않으며 Picker CA, 자격 증명 저장소, 프록시 작업을 시작하지 않아요.
 기본 Claude 인터셉트는 계속 사용할 수 있고, 로컬 CA 파일에 소유자, 심볼릭 링크, 파일 권한, Windows ACL 검사를 적용해요.
 
 Picker 모드가 켜져 있는 동안 Claude Desktop의 네트워크는 OpenCodex를 거쳐요. OpenCodex가 중단되면
@@ -286,7 +309,7 @@ import/export는 로컬 설정만 다뤄요. 허브 프로필을 바꾸지 않�
 능력 정보(추론 강도 사다리, thinking 타입)를 실어 보냅니다 — Claude Desktop의 서드파티
 게이트웨이 모드가 추론 강도 선택 UI를 열 수 있게 하기 위해서입니다. 실제 Anthropic 모델은
 원래 id를 그대로 유지합니다. 합성된 2026 날짜는 내부 슬롯이며 출시일이 아닙니다. 구버전의
-해시 별칭과 `claude-ocx-<provider>--<model>`, `claude-ocx2-<provider>--<model>` 별칭도 계속 해석됩니다. 저장된 `claude-ocx-`는 `ocx-claude-`로, 이스케이프된 `claude-ocx2-`는 `ocx-claude2-`로 한 번 다시 고르면 실제 컨텍스트 창과 compact가 함께 적용됩니다. 컨텍스트가 1M이거나 기본 압축 임곗값(829,800) 이상인 모델에는
+해시 별칭과 `claude-ocx-<provider>--<model>`, `claude-ocx2-<provider>--<model>` 별칭도 계속 해석됩니다. 저장된 `claude-ocx-`는 `ocx-claude-`로, 이스케이프된 `claude-ocx2-`는 `ocx-claude2-`로 한 번 다시 고르면 카탈로그의 유효 컨텍스트 창과 compact가 함께 적용됩니다. 컨텍스트가 1M이거나 기본 압축 임곗값(829,800) 이상인 모델에는
 `…[1m]` 행이 하나 더 생깁니다 — 이걸 고르면 Claude Code가 그 모델의 컨텍스트를 1M로 계산합니다
 (자동 요약 유지, 프록시가 표식을 떼고 라우팅). 선택하면 Claude Code의
 `settings.json` `model` 필드에 저장되고, 인바운드 요청에서
@@ -346,7 +369,9 @@ v2 별칭은 이스케이프를 펼쳐요. 읽기 쉬운 형식으로 표현할 
 
 ### 컨텍스트 변형 `[1m]` 표식
 
-공식 컨텍스트 창이 1M이거나 기본 압축 임곗값(829,800) 이상인 모델에는 `…[1m]` 선택기 행이 하나 더
+이 판단에는 카탈로그의 유효 컨텍스트 창을 쓰며, [사용자 지정 공급자의 추정값](/ko/reference/configuration/providers/#사용자-지정-공급자의-컨텍스트)이 포함될 수 있어요. 추정값은 중계 서비스의 실제 용량을 보장하지 않아요.
+
+카탈로그의 유효 컨텍스트 창이 1M이거나 기본 압축 임곗값(829,800) 이상인 모델에는 `…[1m]` 선택기 행이 하나 더
 생겨요. 이 기준은 고정이라 압축 값을 직접 바꿔도 낮아지지 않고, Anthropic 경로의 Claude 모델은 실제 1M이어야
 해요. 자동 컨텍스트를 끄면 1M 모델만 해당해요. 실제 창을 넘으면 `prompt is too long` 오류가 오고 Claude Code가 자동으로 압축해요. 이 행을 선택하면 Claude Code가
 전체 1M 컨텍스트를 계산해요. 프록시는 별칭 해석과 라우팅 전에 대소문자를 구분하지 않고 `[1m]`
@@ -357,7 +382,7 @@ v2 별칭은 이스케이프를 펼쳐요. 읽기 쉬운 형식으로 표현할 
 Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산해요. 기본으로 켜져 있는 **자동
 컨텍스트**는 이 문제를 해결해요.
 
-1. 실행 환경 슬롯에는 실제 컨텍스트 창이 200k보다 크고 설정한 자동 압축 임곗값 이상일 때
+1. 실행 환경 슬롯에는 카탈로그의 유효 컨텍스트 창이 200k보다 크고 설정한 자동 압축 임곗값 이상일 때
    `[1m]` 표식이 붙어요. 디스커버리와 Desktop 선택기 행은 그 임곗값을 따르지 않고, 고정된 829,800 토큰 하한
    (Anthropic 경로의 Claude 모델은 실제 1M)을 써요.
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW`(기본값 `829800`, 범위 `100000`–`1000000`)를 주입해 해당
@@ -387,7 +412,7 @@ Claude Code는 알 수 없는 모델의 컨텍스트를 200k 토큰으로 계산
 긴 컨텍스트 모델이 실행 환경 슬롯, Desktop 선택기, Desktop 3P(`prefer1m`), 생성된 서브에이전트에서 1M으로
 잡혀요. `200k`로 바꾸면 자동 `[1m]` 표식을 붙이지 않고 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`도 넣지 않으며,
 Desktop 3P는 `supports1m`은 남기고 `prefer1m`만 빼요. 직접 `[1m]`을 붙인 선택은 계속 쓸 수 있어요(생성된
-서브에이전트와 강제 서브에이전트는 모델 창이 감당하지 못하는 표식을 여전히 떼요). 디스커버리 목록에는 실제 1M 모델의
+서브에이전트와 강제 서브에이전트는 모델 창이 감당하지 못하는 표식을 여전히 떼요). 디스커버리 목록에는 카탈로그 창이 1M 이상인 모델의
 `· 1M` 행이 계속 나와요. `200k`는 자동 컨텍스트보다 우선해요. 직접 export한 압축 값이 있어도 자동 표식은 다시 켜지지
 않고, 그 export 값은 opencodex가 건드리지 않아요.
 
@@ -552,7 +577,7 @@ Messages → Responses로 변환되는 요청에서는 Claude Code의 `/effort` 
 | 사용자 `tool_result` | `function_call_output`(`is_error` → `[tool error]` 접두사) |
 | 도구 결과의 `tool_reference` | 짝지어진 결과에 `Tool loaded: <tool_name>` 텍스트로 보존합니다. 도구 선언을 추가하거나 번역 경로의 서버 측 지연 로딩을 활성화하지는 않습니다. |
 | `thinking` / `redacted_thinking` 재생 | 서명과 비공개 페이로드를 제한된 `ocxr1` 봉투에 담은 `reasoning` 항목 |
-| Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`) |
+| Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com`으로 번역하여 보내는 경로에서는 타입이 지정된 `web_search_*`와 `web_fetch_*` 선언도 Anthropic에 전달되어 서버에서 실행됩니다. 웹 검색 사이드카가 `web_search`를 제공하면 사이드카가 우선합니다. 검색과 가져오기 결과는 `server_tool_use` 및 대응하는 `web_search_tool_result` / `web_fetch_tool_result` 블록으로 클라이언트에 반환됩니다 |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, 이름 지정 함수→`{type:"function",name}`, 호스팅 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
@@ -689,7 +714,7 @@ Anthropic 백엔드를 명시하면 의도적으로 실패 후 중단해요.
 `ANTHROPIC_BASE_URL`이 오래된 값일 수 있어요. 새 터미널을 열거나 `ocx claude`를 다시 실행하세요.
 
 **대형 모델인데도 컨텍스트가 200k로 제한됨** — 선택기에서 `[1m]` 변형을 고르거나 기본으로
-켜져 있는 자동 컨텍스트를 사용하세요. 선택기에 `[1m]` 행이 없다면 모델의 공식 컨텍스트 창이
+켜져 있는 자동 컨텍스트를 사용하세요. 선택기에 `[1m]` 행이 없다면 카탈로그에 표시된 모델의 유효 컨텍스트 창이
 고정된 829,800 토큰 하한보다 작을 수 있어요.
 
 **스킬을 불러올 때 토큰 수가 많음** — 번들 `claude-api` 스킬(약 136k 토큰)은 Claude 모델을
@@ -710,7 +735,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

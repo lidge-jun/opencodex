@@ -1,3 +1,4 @@
+import { inheritAccountAutoPauseResponse } from "../lib/account-auto-pause-response";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
 
@@ -40,9 +41,9 @@ export async function normalizeUpstreamHttpErrorResponse(
   const headers = new Headers(res.headers);
   headers.delete("content-encoding");
   headers.delete("content-length");
-  return new Response(await opts.formatMessage(payloadText), {
+  return inheritAccountAutoPauseResponse(res, new Response(await opts.formatMessage(payloadText), {
     status: res.status,
     statusText: res.statusText,
     headers,
-  });
+  }));
 }

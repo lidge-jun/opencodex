@@ -113,7 +113,7 @@ ocx start                         # プロキシとダッシュボードが loca
 | プラットフォーム | ファイル | 備考 |
 |---|---|---|
 | macOS 13 以降（Apple Silicon と Intel） | `OpenCodex-<version>-macos.dmg` | ユニバーサルビルド。Developer ID で署名・公証済み |
-| Windows（x64） | `OpenCodex-<version>-windows-x64.msi` | まだコード署名なし。SmartScreen が一度だけ確認するので、**詳細情報 → 実行**を選択 |
+| Windows（x64） | `OpenCodex-<version>-windows-x64.msi` | SignPath Foundation によるコード署名を導入中（[コード署名ポリシー](https://opencodex.me/ja/reference/code-signing/)）。署名前のリリースでは SmartScreen が一度だけ確認するので、**詳細情報 → 実行**を選択 |
 | Linux（x86_64） | `OpenCodex-<version>-linux-x86_64.AppImage` または `-linux-amd64.deb` | トレイには AppIndicator 対応のデスクトップが必要 |
 
 リリースページでは各ファイルの横に `.sha256` があります。macOS 14 以降では、プロキシの状態、
@@ -151,10 +151,6 @@ failover、アカウントの除外、affinity の失効、401/403 や 429 か�
 <tr>
 <td width="180"><a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme"><img src="../assets/sponsors/orcarouter.png" alt="OrcaRouter" width="150"></a></td>
 <td>このプロジェクトを支援してくださる <a href="https://www.orcarouter.ai/?utm_source=opencodex&utm_medium=readme">OrcaRouter</a> に感謝します。OrcaRouter は本番の AI 向けに作られた OpenAI 互換の AI ゲートウェイです。すべてのプロンプトを採点して基準を満たすモデルへ送る適応型ルーティング、自動 failover、コードとして書けるルーティングルール、プロンプトキャッシュ付きのマークアップなしプロバイダー価格、そして 200 以上のモデルへのすべての呼び出しに付くガードレール・エージェントファイアウォール・リクエストログを備えています。Add provider ピッカーで <code>OrcaRouter</code> を選ぶか <code>ocx provider add orcarouter</code> を実行してください。適応型ルーターは <code>orcarouter/auto</code> です。</td>
-</tr>
-<tr>
-<td width="180"><a href="https://www.packyapi.com/register?aff=k5KT"><img src="../assets/sponsors/packycode.png" alt="PackyCode" width="150"></a></td>
-<td>このプロジェクトを支援してくださる <a href="https://www.packyapi.com/register?aff=k5KT">PackyCode</a> に感謝します。PackyCode は安定した高性能の API リレープロバイダーで、Claude Code、Codex、Gemini などのリレーを提供しています。自動 failover、スマートルーティング、無制限の同時実行によって、AI を実際の生産性ツールに変えます。<a href="https://www.packyapi.com/register?aff=k5KT">このリンクから登録</a>してすぐに始めてください。Add provider ピッカーで <code>PackyCode</code> を選ぶか <code>ocx provider add packycode</code> を実行してください。<br><sub>PackyCode 是一家稳定、高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等多种中转服务。具备自动故障转移、智能路由和无限并发等多种功能，让 AI 编程成为真正的生产力工具。<a href="https://www.packyapi.com/register?aff=k5KT">点此链接注册</a>，立即开始使用！</sub></td>
 </tr>
 <tr>
 <td width="180"><a href="https://tokenlab.sh/r/OPENCODEX"><picture><source media="(prefers-color-scheme: dark)" srcset="../assets/sponsors/tokenlab-dark.png"><img src="../assets/sponsors/tokenlab-light.png" alt="TokenLab" width="150"></picture></a></td>
@@ -475,6 +471,16 @@ bun run test
 
 メンテナーが代わりに取り込んだり作り直したりして入ったものの、コミットに原作者が記されていない
 コントリビューターの作業は **[CREDITS.md](../CREDITS.md)** に記録しています。
+
+## コード署名ポリシー (Code signing policy)
+
+Windows 向けバイナリは Authenticode 署名へ移行中です（[#7207](https://github.com/lidge-jun/opencodex/issues/7207)）。移行状況、署名の確認方法、ポリシー全文は [Windows コード署名ガイド](https://opencodex.me/ja/reference/code-signing/) を参照してください。
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## 免責事項
 

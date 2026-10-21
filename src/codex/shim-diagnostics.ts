@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER } from "./shim-templates";
+import { SHIM_MARKER, UNIX_SHIM_REVISION_MARKER, WINDOWS_SHIM_REVISION_MARKER } from "./shim-templates";
 import { readStateResult, stateFiles, statePath } from "./shim-state-file";
 import { overlayDiagnostic } from "./shim-overlay";
 
@@ -16,6 +16,7 @@ function isHealthyShim(path: string, platform: NodeJS.Platform): boolean {
     const content = readFileSync(path, "utf8");
     if (content.length < 180 || !content.includes(SHIM_MARKER) || !content.includes("ensure")) return false;
     if (platform !== "win32" && !content.includes(UNIX_SHIM_REVISION_MARKER)) return false;
+    if (platform === "win32" && !content.includes(WINDOWS_SHIM_REVISION_MARKER) && !content.includes(UNIX_SHIM_REVISION_MARKER)) return false;
     if (platform !== "win32" && (lstatSync(path).mode & 0o111) === 0) return false;
     return true;
   } catch {

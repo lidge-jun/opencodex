@@ -30,6 +30,11 @@ export interface OcxProtocolsConfig {
     managedMessagesNativeOAuth?: boolean;
     /** Chat and Messages clients are encoded directly from adapter events. */
     directEncoders?: boolean;
+    /**
+     * Chat requests to a concrete Google Antigravity route decode straight into the IR and are
+     * answered through the direct encoders, with no internal Responses body in either direction.
+     */
+    antigravityDirect?: boolean;
     /** Compare the dispatch plan with the observed path; never sends a second request. */
     shadowPlan?: boolean;
   };
@@ -344,6 +349,12 @@ export interface OcxApiKeyEntry {
    * that is the only point at which the model about to be billed is known.
    */
   allowedModels?: string[];
+  /**
+   * Lets this key reach combo targets marked `metered`. Absent means no: an issued key stops
+   * at the last unmetered target. The environment token never qualifies. A loopback bind
+   * reads no key; local operator consent is instead declared on the combo.
+   */
+  allowMeteredComboTargets?: boolean;
 }
 
 export interface OcxPendingApiKeyRotation {
@@ -565,6 +576,21 @@ export interface OcxConfig {
   /** Enable the shipped model alias patterns for providers without an override. */
   defaultModelAliases?: boolean;
   /**
+   * When `true`, the raw OpenAI-compatible `/v1/models` list publishes a safe alias (e.g.
+   * `SEK-glm-4.7-flash`) as the row `id` instead of `provider/nativeId`
+   * (e.g. `Seek/glm-4.7-flash`).  The original `provider/nativeId` moves to a
+   * new `native_id` field so clients that need it can still read it.
+   *
+   * **Default: `false`** — the historical `provider/nativeId` form remains the
+   * published `id`, and the alias is in the informational `alias_of` field.
+   *
+   * Codex (`client_version`) and Anthropic-specific discovery retain their own
+   * identities and are unchanged. Ambiguous or shadowed short aliases retain the
+   * qualified ID, as do aliases with unparseable synthetic Fast siblings.
+   * Existing requests using `provider/nativeId` continue to work unchanged.
+   */
+  preferModelAliasIds?: boolean;
+  /**
    * Opt-in Cursor Private Inference compatibility rows. When true, `/v1/models`
    * adds `<base-id>--<effort>` selectors for reasoning-capable model ids absent
    * from Cursor's built-in effort table. Omitted/false preserves discovery output.
@@ -601,12 +627,21 @@ export interface OcxConfig {
   /** Per-window percentages: short defaults to 90, long to 98; integers 80..100, short <= long. */
   codexMainAccountHardLockThresholds?: { short?: number; long?: number };
   /**
+   * Extended hard-lock settings: while the lock blocks and no Codex account can serve a
+   * qualifying request, the request reroutes to `model` (with `reasoningEffort` when set)
+   * instead of failing. The lock itself stays on and releases on its own as before; an
+   * absent section or model means the refusal behavior is unchanged.
+   */
+  codexMainAccountHardLockFallback?: { enabled?: boolean; model?: string; reasoningEffort?: string };
+  /**
    * Who refreshes the native main ChatGPT login in CODEX_HOME (#2999). "codex" asks the Codex
    * binary through app-server `getAuthStatus` and never writes auth.json; "opencodex" keeps the
    * guarded writer. Absent means "codex" when a Codex binary at or above the supported version
    * is found, otherwise "opencodex". "codex" also falls back when no such binary exists.
    */
   nativeMainRefresh?: "codex" | "opencodex";
+  /** Use included quota to 100% for these accounts; preserves thresholds and credit-spending policy. */
+  codexUseRemainingQuotaAccountIds?: string[];
   /** Explicit top-level deletion intent used by stale whole-config rebases. */
   configRebaseProvenance?: OcxConfigRebaseProvenance | Record<string, unknown>;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
@@ -778,6 +813,15 @@ export interface OcxConfig {
   };
   /** Opt-in failure-only recovery; never replaces the initial compaction model. */
   compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
+  /** Explicit opt-in (enabled === true), default off, for routed v1/v2 readable reasoning retention.
+   * Defaults: 20% of the compacting model's context window and 100,000 tokens (the smaller limit).
+   * Unknown windows use maxTokens alone; overflow is archived locally with a path notice.
+   * Native and opaque compaction output keep their existing protocols. */
+  reasoningRetention?: { enabled?: boolean; maxContextPercent?: number; maxTokens?: number };
+  /** Canonical ChatGPT reasoning replay allowances; both default off. */
+  nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean };
+  /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
+  desktopCompatibility?: { startOnProxyStart: boolean };
   /**
    * Destination model for Codex's own memory pipeline, per phase
    * (src/server/responses/memory-models.ts).
@@ -835,6 +879,19 @@ export interface OcxConfig {
    /** Optional override of intercepted source-model prefixes (default: gpt-6-luna, gpt-5.6-luna). */
    sourceModels?: string[];
  };
+  /**
+   * Global auto-review (approval reviewer) selector for every catalog row, written by the
+   * Models settings panel. During catalog sync OpenCodex stamps it as
+   * `auto_review_model_override` on rows that carry no provider-scoped stamp, so an enabled block
+   * wins over Codex's own root `auto_review_model`; disabling it restores that fallback.
+   * `autoReviewModel` keeps its precedence on its own provider's rows.
+   */
+  autoReviewOverride?: {
+    /** When true, the configured model replaces the reviewer on every unowned row. */
+    enabled?: boolean;
+    /** Public catalog selector in `provider/model` form; blank or absent clears the override. */
+    model?: string;
+  };
   /**
    * Optional map of blocked model IDs to their replacement model IDs.
    * When configured, incoming requests targeting a blocked model (including
@@ -1032,10 +1089,24 @@ export interface OcxConfig {
   modelCacheTtlMs?: number;
   /** Evictable retained app-state budget in MiB. Default 256; valid 64..4096. */
   appOwnedMemoryBudgetMb?: number;
-  /** Anthropic prompt-cache retention: "short" = 5-min ephemeral (default), "long" = 1-hour extended, "none" = disabled. */
+  /**
+   * Anthropic prompt-cache retention: "short" = 5-min ephemeral, "long" = 1-hour extended,
+   * "none" = disabled. Unset = "long" on first-party api.anthropic.com, "short" on
+   * Anthropic-compatible endpoints (adapters/anthropic/cache-retention.ts).
+   */
   cacheRetention?: "none" | "short" | "long";
   /** Web-search sidecar: route web_search for non-OpenAI models through a gpt-mini via ChatGPT passthrough. */
   webSearchSidecar?: OcxWebSearchSidecarConfig;
+  /**
+   * Advisor sidecar: an OpenCodex-owned expert consultation runtime. The proxy injects a synthetic
+   * `advisor` tool into routed worker turns, executes the configured expert model itself (loopback
+   * through the normal routing authority, so the advisor may be ANY routable provider/model), and
+   * reinjects the advice so the original worker continues. `policy: "preflight"` additionally
+   * attempts one automatic consultation per task without worker cooperation, once the task has
+   * produced orientation evidence. Task context is sent only after
+   * `contextSharingConsent` is the current version; `enabled` does not grant that consent.
+   */
+  advisor?: OcxAdvisorConfig;
   /** Vision sidecar: describe images via a gpt vision model so text-only models can "see" them. */
   visionSidecar?: OcxVisionSidecarConfig;
   /** /v1/images relay for codex's built-in image_gen tool. */
@@ -1046,6 +1117,9 @@ export interface OcxConfig {
   codexAccounts?: CodexAccount[];
   /** Account ids administratively excluded from future pool selection until resumed. */
   pausedCodexAccountIds?: string[];
+  /** Internal policy epochs; null marks malformed disk input and suppresses automatic pause. */
+  accountAutoPausePolicyRevisions?: Record<string, string> | null;
+  codexAccountPauseState?: Record<string, { revision: string; details?: import("./account-auto-pause").AccountPauseDetails }>;
   /**
    * Account ids, `__main__` included, allowed to keep serving from ChatGPT credits once one of
    * their usage windows is full. Every other account is skipped by selection at 100% until its
@@ -1190,6 +1264,8 @@ export interface OcxConfig {
   autoSwitchThreshold?: number;
   /** Opt-in: return bound quota-strategy tasks to recovered higher-priority accounts. */
   codexAccountPriorityFailback?: boolean;
+  /** Prefer other identities, reserving the current native sign-in as pool fallback. */
+  codexPreserveSignedInAccount?: boolean;
   /** New-session account rotation strategy for the Codex pool. Default quota (today's behaviour). */
   accountPoolStrategy?: OcxAccountPoolRotationStrategy | "reset-first";
   /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
@@ -1224,6 +1300,13 @@ export interface OcxConfig {
    * that work today — on Azure and custom Responses gateways as well, whose limits are unknown.
    */
   maxUpstreamBodyBytes?: number;
+  /**
+   * Opt-in compression of native ChatGPT Responses HTTP request bodies (#7247): "gzip" or "zstd".
+   * Omitted, "off", or any other value = identity, the default. Applies only at the final HTTP send
+   * to chatgpt.com Codex responses/compact, to string bodies from 1 KiB to 16 MiB; WebSocket turns
+   * and every other destination are unchanged. Compression runs synchronously on the event loop.
+   */
+  upstreamRequestCompression?: "off" | "gzip" | "zstd";
   /**
    * Opt-in ceiling, in bytes, on a decompressed INBOUND data-plane request body (#3573).
    *
@@ -1321,10 +1404,18 @@ export interface OcxComboTarget {
    * see `OcxComboConfig.cooldownWaitPolicy` (#5691).
    */
   lastResort?: boolean;
+  /**
+   * Pay-per-use target (for example an API-key row behind subscription targets). Only the
+   * configured keys with `allowMeteredComboTargets: true`, or a loopback-only combo
+   * with `allowMeteredTargets: true`, may reach it.
+   */
+  metered?: boolean;
 }
 
 export interface OcxComboConfig {
   targets: OcxComboTarget[];
+  /** Operator consent for metered targets on a loopback-only proxy. Default false; public listeners still require key consent. */
+  allowMeteredTargets?: boolean;
   /** Ordered failover (default), round-robin, weighted random, least-used, or quota reset-window selection. */
   strategy?: OcxComboStrategy;
   /** Successful requests retained on one RR selection batch. Default 1; range 1..100. */
@@ -1377,6 +1468,8 @@ export interface OcxComboConfig {
   nativeAlias?: boolean;
   /** Display-only label for the public catalog row. Required for native aliases. */
   displayName?: string;
+  /** Display-only description for the public catalog row; unset keeps the generated text (#7229). */
+  description?: string;
   /**
    * `strategy: "jev"` only: provider id of the decision service. Omitted or `"jev"` uses the
    * canonical TypeSafe endpoint; any other id must name a configured `adapter: "jev-decision"`
@@ -1392,6 +1485,10 @@ export interface OcxComboConfig {
    * whose first call may include a cold model load.
    */
   decisionTimeoutMs?: number;
+  /** JEV-only advisory loaded quota evidence; off/unset leaves request bytes unchanged. */
+  decisionQuotaSignals?: boolean | null;
+  /** Partial 0..100 tier overrides; defaults limited 70/nearlyExhausted 90. null clears. */
+  decisionQuotaTiers?: import("../combos/jev-quota-config").JevQuotaTiers | null;
 }
 
 export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";
@@ -1560,6 +1657,39 @@ export interface OcxVisionSidecarConfig {
   timeoutMs?: number;
 }
 
+/**
+ * Advisor sidecar configuration. Automatic triggers require deterministic task evidence.
+ */
+export interface OcxAdvisorConfig {
+  /** Master switch. Default: false — the advisor stays off the request path entirely. */
+  enabled?: boolean;
+  /**
+   * The expert model consulted by the sidecar. Any model string the routing authority accepts:
+   * a bare native model ("gpt-6-astra"), an explicit "provider/model" ("anthropic/claude-...",
+   * "xai/grok-..."), or an account-qualified native model ("<namespace>/gpt-6-astra").
+   */
+  model?: string;
+  /** Reasoning effort for the advisor call. Validated against the canonical effort ladder. */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  /**
+   * When the advisor is consulted. "manual" (default): only when the worker explicitly calls the
+   * synthetic `advisor` tool. "preflight": OpenCodex additionally attempts one automatic
+   * consultation per task once the task has produced orientation evidence (an assistant tool call
+   * or a tool result after the latest user message).
+   */
+  policy?: "manual" | "preflight" | "adaptive";
+  /** Adaptive task consultation attempts (manual + automatic). Integer 1–3, default 3. */
+  maxConsultationsPerTask?: number;
+  /** Advisor fetch timeout (ms). Default 120000. */
+  timeoutMs?: number;
+  /**
+   * Operator consent to send task conversation and tool results to the configured Advisor
+   * provider. Only `"v1"` is current. Absent or any other value means the runtime must not
+   * send task context. `enabled: true` does not grant this, and upgrades do not write it.
+   */
+  contextSharingConsent?: "v1";
+}
+
 export interface OcxWebSearchSidecarConfig {
   /** Explicit Anthropic account pool; unset inherits the request's instance. */
   anthropicInstance?: AnthropicInstanceId;
@@ -1647,6 +1777,8 @@ export interface CodexLowQuotaProtectionConfig {
   actions: {
     pause: boolean;
     notify: boolean;
+    /** Opt-in: also hand each notice to this host's OS notifier (macOS, Linux). Requires notify. */
+    desktop?: boolean;
   };
   windows: {
     short: boolean;

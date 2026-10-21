@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClaudeInterceptLifecycle } from "../../src/server/index/claude-intercept-lifecycle";
 import { startConnectProxy } from "../../src/claude/intercept/connect-proxy";
+import { claudeInterceptCaCertPath } from "../../src/claude/intercept/local-ca";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { saveConfig, loadConfig } from "../../src/config";
 import { flushConfigDirHardeningAndReaps } from "../../src/config/paths";
@@ -76,11 +77,16 @@ test("stopped lifecycle refuses new work and joins a pending startup", async () 
 test("CONNECT bind EADDRINUSE records its occupied port", async () => {
   const blocker = await startConnectProxy(0, { interceptPort: 1 });
   try {
+    const settingsPath = join(root, "claude", "settings.json");
+    mkdirSync(join(root, "claude"));
+    const original = JSON.stringify({ env: { HTTPS_PROXY: "http://127.0.0.1:10200", NODE_EXTRA_CA_CERTS: claudeInterceptCaCertPath(root) } });
+    writeFileSync(settingsPath, original);
     const live = config(); live.claudeCode = { enabled: true, intercept: { port: blocker.port } };
     const lifecycle = owner();
     lifecycle.start({ config: live, publicPort: 10100, configDir: root, dispatch: async () => new Response() });
     expect(await lifecycle.ensure()).toEqual({ ok: false, reason: "port_in_use", port: blocker.port });
     expect(lifecycle.lastOutcome()).toEqual({ ok: false, reason: "port_in_use", port: blocker.port });
+    expect(readFileSync(settingsPath, "utf8")).toBe(original);
   } finally { await blocker.close(); }
 });
 

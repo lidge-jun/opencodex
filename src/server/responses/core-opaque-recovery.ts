@@ -259,8 +259,15 @@ export function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
       }
     }
 
-    // The flat stream-error envelope carries type/message at the top level rather than under
-    // an error object; the same anchored identity applies there.
+    // Flat SSE error events carry their code/message beside type:error, without a nested
+    // error object. Match only the same dedicated code or exact verification identity.
+    if ((record.error === undefined || record.error === null)
+      && (record.type === "error" || record.type === "invalid_request_error")
+      && (record.code === "invalid_encrypted_content" || ((record.code === null || record.code === undefined)
+        && typeof record.message === "string" && record.message.startsWith("The encrypted content ")
+        && record.message.endsWith(" could not be verified. Reason: Encrypted content could not be decrypted or parsed.")))) return true;
+
+    // The caller-mismatch identity also arrives as a flat typed error.
     if (
       record.type === "invalid_request_error"
       && typeof record.message === "string"
@@ -277,7 +284,40 @@ export function isSelfIdentifiedOpaqueBlobRejection(bodyText: string): boolean {
 
 
 /**
- * Whether an upstream Responses 4xx authoritatively rejected opaque replay state.
+ * Opaque state can be refused inside a 200 stream rather than as an HTTP 4xx. The passthrough
+ * inspects its bounded zero-output prelude even when a restored thread has no serving record;
+ * successful native ciphertext remains unchanged and blobless turns do not gain inspection.
+ */
+export function retainedReasoningStreamCandidate(parsed: OcxParsedRequest, outboundBody: string | undefined): boolean {
+  // A restored thread has no process-local serving record. Inspect its actual outbound
+  // opaque state too; only an explicit zero-output rejection can authorize the rebuild.
+  return parsed._stripReasoningEncryptedContent !== true
+    && outboundResponsesBodyCarriesOpaqueBlob(outboundBody);
+}
+
+/**
+ * Whether a stream-prelude payload is a self-identified refusal of retained ciphertext. A match marks
+ * the projected failure as the 4xx it is, so the shared single-shot trigger accepts it.
+ */
+export function retainedReasoningStreamRejection(
+  payload: unknown,
+  parsed: OcxParsedRequest,
+  outboundBody: string | undefined,
+  preflightLog: RequestLogContext,
+): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!retainedReasoningStreamCandidate(parsed, outboundBody)) return false;
+  const { type, response } = payload as { type?: unknown; response?: { error?: unknown } };
+  if (type !== "error" && type !== "response.failed") return false;
+  const envelope = type === "error" ? payload : { error: response?.error };
+  if (!isSelfIdentifiedOpaqueBlobRejection(JSON.stringify(envelope))) return false;
+  preflightLog.terminalHttpStatus = 400;
+  return true;
+}
+
+
+/**
+ * Whether an upstream Responses 4xx or explicitly identified 502 rejected opaque replay state.
  *
  * The outbound-body check is intentional: the inbound transcript may contain a proxy envelope or
  * compaction blob that the adapter already lowered, in which case a replay would be byte-identical.
@@ -296,8 +336,10 @@ export function shouldAttemptOpaqueBlobRecovery(args: {
   const acceptedStatus = (args.status >= 400 && args.status < 500)
     || (
       args.status === 502
-      && outboundResponsesBodyCarriesEncryptedFunctionOutput(args.outboundBody)
-      && isEncryptedFunctionOutputRejection(args.errorBody)
+      // Gateways can project a reasoning-only rejection as 502. The existing strict
+      // identity classifier below still excludes generic gateway/transport failures.
+      && (!isEncryptedFunctionOutputRejection(args.errorBody)
+        || outboundResponsesBodyCarriesEncryptedFunctionOutput(args.outboundBody))
     );
   return acceptedStatus
     && adapterSpeaksResponsesWire(args.adapterName)
@@ -411,6 +453,8 @@ export async function consoleGoUploadRejectionBody(
 
 export function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
   parsed._stripReasoningEncryptedContent = true;
+  delete parsed._nativeReasoningRetainedAcrossRoute;
+  parsed._stripNativeCompactionEncryptedContent = true;
   // The destination rejected state another serving identity minted. A reasoning item's id names
   // an item in that identity's store, so it goes with the blob.
   parsed._dropForeignReasoningItemIds = true;

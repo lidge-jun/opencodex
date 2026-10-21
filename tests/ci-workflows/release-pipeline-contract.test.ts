@@ -146,7 +146,8 @@ describe("release pipeline contract", () => {
     // no indentation here.
     expect(archive!.run).toMatch(/^ *cd \.\.\/\.\.$/m);
     const upload = release.jobs?.["package-standalone"]?.steps
-      ?.find(candidate => candidate.uses?.startsWith("actions/upload-artifact@"));
+      ?.find(candidate => candidate.uses?.startsWith("actions/upload-artifact@")
+        && String(candidate.with?.name).startsWith("standalone-"));
     expect(String(upload?.with?.path)).toContain("dist/ocx-*.sha256");
 
     const download = release.jobs?.["verify-release"]?.steps

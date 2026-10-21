@@ -205,7 +205,7 @@ transport behavior.
 The first-party DeepSeek `deepseek-flash` native `text`/`image` declaration is likewise scoped to
 the DeepSeek provider and does not alter xAI metadata or transport behavior; explicit capability
 overrides remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and
-`deepseek-v4-flash` remain sidecar-backed by default. The Zen tiers (`opencode-zen`, `opencode-free`) could not be measured (HTTP 402) and keep their existing classifications.
+`deepseek-v4-flash` remain sidecar-backed by default. The keyed Zen tier (`opencode-zen`) could not be measured (HTTP 402) and keeps its existing classifications.
 OpenCode Go's `deepseek-v4.1-flash` was reclassified as native vision on 2026-09-19 (probed on
 that gateway); its sibling `deepseek-v4-flash` stays sidecar-backed. None of this alters xAI
 metadata or routing.

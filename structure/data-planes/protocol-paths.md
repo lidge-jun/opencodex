@@ -37,6 +37,10 @@ specifiers and fails on anything else.
 `src/protocols/path.ts` turns an ingress lane (`native` or `bridge`) and the final adapter's
 upstream wire into the request and response paths. The observed trace and the planner both
 call it, so a preview and the log of the same request apply one rule.
+A third lane, `direct`, is the [Antigravity direct lane](#antigravity-direct-lane): a Chat or
+Messages ingress toward an `other` upstream gets `[inbound, ir, other]` and
+`[other, ir, inbound]`. Toward any other wire `direct` falls back to the bridge rule, so an
+inconsistent mark cannot claim a path that does not exist.
 
 ## Feature dispositions
 
@@ -47,6 +51,10 @@ Same-wire hops are passthrough. A hop into `other` has no entry, and an absent e
 unknown is spelled — never as a fifth disposition. `featureEffectsForPath` reports, for the
 features a request carries, the worst disposition met along its path, keeping a loss declared on
 a known hop even when a later hop is unknown.
+On the direct path `[chat|messages, ir, other]` the decode hop reads the `<inbound>>responses`
+row: the direct codecs are held to `parseRequest` of the Responses projection, so they keep and
+drop exactly what that projection does. The direct path therefore reports the same effects as the
+bridge path, and the `reject` guard refuses the same features on both.
 
 The current-code claims follow the translators: `chatCompletionsToResponsesBody` in
 `src/chat/inbound.ts` copies an explicit field list without `n`, `logprobs`, `logit_bias`,
@@ -162,7 +170,7 @@ provenance collapses onto four public sources in `protocolAdapterSource`: `hard-
 
 Model overrides are resolved for a Responses client. The candidates are the explicit
 `modelAdapters` keys, the registry's `modelWireDefaults` keys, the exact-id hard pins
-(`captureWireAdapterHardPins`), the default model and the listed models, at most 1024 of them; a
+(`captureWireAdapterHardPins`, using the historically pinned canonical destination for the Go preset), the default model and the listed models, at most 1024 of them; a
 model is listed when its source is not `provider-default` or its adapter differs from the
 provider's. The list is sorted, capped at `PROTOCOL_PROVIDER_OVERRIDE_LIMIT` (64) and marked
 `modelOverridesTruncated` past it. Prefix pins cannot be enumerated, so only a listed model they
@@ -221,7 +229,7 @@ converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/ou
 `chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
 `anthropicIncompleteOutcome`, `anthropicFailedStatus`, the message snapshot, the web-search pair),
 so the frames a client receives are the converters' frames. A fold is the encoded stream read by
-the existing collector.
+the existing collector. Explicit incomplete reasons use the [shared normalization contract](../transports/responses-wire-shapes.md#adapter-incomplete-reasons) before the writers classify the outcome.
 
 Deliberate equivalences, pinned by the parity tests: a Chat function call is delivered as one
 complete tool-call chunk when it completes, as the converter always did; Messages streams
@@ -238,7 +246,101 @@ The server side is `src/server/inference/client-encoder-delivery.ts`, described 
 attempt is traced with `markAttemptProtocolPath`: the request path is still the bridge path
 (`[inbound, "responses-internal", "ir", upstream]`, mode `legacy-bridge`) because the request
 side still decodes through the Responses projection, and the response path is
-`[upstream, "ir", inbound]`.
+`[upstream, "ir", inbound]`. When the encoder option carries `requestLane: "direct"` (the
+Antigravity direct lane) the request path is `[inbound, "ir", upstream]` and the mode
+`translated`.
+
+## Antigravity direct lane
+
+Behind `protocols.rollout.antigravityDirect`, the one rollout switch that defaults on: an absent value
+takes the lane, only an explicit `false` turns it off, and a non-boolean value or a malformed
+`protocols` container fails closed. Every request the eligibility rule declines falls back to the
+bridge. A Chat or Messages request whose settled route is one concrete Google provider in Cloud
+Code Assist mode (Antigravity) skips the internal Responses body in both directions.
+Antigravity's `google` adapter has the `other` wire, so neither native
+lane can take it, and on the bridge its Chat traffic was decoded twice (Chat body -> Responses
+items -> IR) and encoded twice unless `directEncoders` was on.
+
+`antigravityDirectDeclineReason` in `src/server/antigravity-direct-eligibility.ts` names the
+first rule that keeps a route off the lane: `rollout-disabled`; `not-migrated` (not Google in
+Cloud Code Assist mode, judged with `effectiveGoogleMode` so a saved provider without
+`googleMode` gets the registry's); `combo-or-policy-route`; `hosted-tool` (a `web_search` tool
+the sidecar reads from the parsed Responses body); `vision-preprocessing` (an image for a model
+`requiresVisionPreprocessing` declares unable to read it); `bridge-only-policy` (the shadow-call
+intercept could rewrite the model before parsing; a `<skills_instructions>` block in a system or
+developer message, which the per-session skills snapshot rewrites on the bridge body; a generated
+image link in assistant history, whose hosted display path the bridge body redacts; or, as a
+runtime fact only the ingress supplies, an observing cache diagnostic recorder, which records the
+body the core receives). The Chat ingress and the planner both ask it; the planner judges a
+standalone route only and cannot see body content no Chat feature describes (a hosted tool, the
+rewritten text). A declined Antigravity route adds its reason to the bridge entry mark;
+`rollout-disabled` and `not-migrated` add nothing.
+
+On the lane the ingress validates the Chat body by decoding it, with
+`chatConversationToIr` (`src/protocols/codecs/chat-ir.ts`), and sends the core
+`chatSettingsToResponsesBody`: the bridge body's settings (model, stream, store, tool choice,
+limits, sampling, penalties, stop, user, tier, cache key, metadata, reasoning, text format) with
+`input: []` and no `instructions` or `tools`. Both bodies are built by one `applyChatSettings`,
+so the settings and their validation cannot drift. Everything the core decides from settings keeps
+its owner: routing, Antigravity account rotation and failover, effort pins and caps, tier, spend,
+usage and the request log. The conversation travels as `HandleResponsesOptions.directRequest`:
+
+- `decode` runs at the parse seam in `prepareResponsesRequest`, inside the same `try` as
+  `parseRequest`, and replaces the settings-only parse's empty context with the decoded one. It
+  decodes again if the core settled a different model id, because identity naming (#5217) and the
+  assistant placeholder carry it, and it re-checks a named tool choice against the decoded
+  catalog, which the settings-only parse could not see.
+- `evidence` replaces `evidenceFromBody(parsed._rawBody)` for policy routing, with the values the
+  bridge body would have given (a non-empty catalog; an image in a user message, not in a tool
+  result, which that scan never read).
+- `bridgeConversation` builds the bridge's `input`, `instructions` and `tools`. When a route
+  assignment (the initial resolution or a subagent fallback, checked by
+  `leaveDirectLaneIfRerouted` right after each, and once more before final-route normalization)
+  is not the Antigravity route the lane was decided for, or the body reaches the combo dispatcher,
+  `restoreDirectRequestConversation` puts them back on the raw body before canonical
+  sanitization, ciphertext stripping or injected guidance can read or write it, re-marks the entry
+  as the bridge with `not-migrated`, and drops the encoder's direct request lane. The decoded IR
+  stays, because it equals what the parser builds from the restored body.
+- Ambiguous-resend replay (`adapter-dispatch.ts`) judges self-containment on the settings body
+  merged with `bridgeConversation()`, built only if a reset asks, so its answer is the bridge's.
+
+The contract that makes this safe is parity. For every Chat body the bridge accepts, the lane's
+parsed request equals `parseRequest(chatCompletionsToResponsesBody(body))` apart from `_rawBody`
+and timestamps; every body the bridge refuses is refused with the same message. The decoder mirrors
+the Chat translator's walk (leading-system hoist, held mid-batch instructions, tool-call naming,
+legacy function pairing) and the parser's assembly for the item kinds that walk produces (pending
+reasoning and its merge, the assistant placeholder, reasoning after its call #950, tool-result
+naming, the unsigned-reasoning placeholder signature, tool deduplication, visualization
+directives). The Google adapter reads only the IR (never `_rawBody`), so it compiles the same
+wire. `_rawBody` readers that matter only to other wires, Codex surfaces or the hosted tools the
+lane declines see an empty conversation, which is why the lane is limited to this route.
+
+The ingress asks for the direct encoder (`requestLane: "direct"`) whatever `directEncoders` says,
+so the response half is `[other, ir, chat]` as well.
+
+### Messages on the lane
+
+The Messages ingress routes after translating, so `planMessagesAntigravityDirect` (`src/server/messages-antigravity-direct.ts`)
+plans first on `anthropicSettingsTranslation`: the bridge body's settings with `input: []`, completed by the same
+`applyAnthropicSettings`, so the resolved model, prompt-cache key, tool choice and reasoning are the bridge's. It
+previews the route on that model, asks `antigravityMessagesDeclineReason` (the Chat rules, spelled for Messages:
+`web_search_*` tools or a forced WebSearch choice, images in user turns or tool results, the intercept on the
+resolved model, system and assistant text the core rewrites), then decodes with `messagesConversationToIr`
+(`src/protocols/codecs/messages-ir.ts`). Routing uses `messagesRouteEvidence`; a settled route that is not the
+planned eligible one gets the full translation from `leaveDirectPlan` before route shaping. A settings error or an
+undecodable ocxr1 envelope (retried by the bridge through `nativeAnthropicProjection`) yields no plan, so it
+refuses exactly as before. The decoder reproduces blocked-skill elision, the `stabilizePromptCache` relocation,
+tool-result errors, images, documents and `tool_reference` markers, and thinking envelopes (encoded and charged as
+the translator does, decoded as the parser does) plus the native replay map. The Google adapter still sends no
+thinking text on either lane, only call-bound `thoughtSignature`s.
+
+`tests/responses/protocol-chat-ir-parity.test.ts` holds the decoder to the bridge over a fixture
+corpus, refusals included, and pins routing evidence and feature effects;
+`tests/responses/protocol-antigravity-direct-eligibility.test.ts` pins the rule and the plan;
+`tests/responses/protocol-antigravity-direct-chat.test.ts` sends the same Chat request on both
+lanes to a fake Cloud Code Assist upstream and requires the same wire body, the same answer and
+the `chat -> ir -> other` trace. `tests/responses/protocol-messages-ir-parity.test.ts` and
+`protocol-antigravity-direct-messages.test.ts` do the same for Messages.
 
 ## Native Chat candidates in combos
 
@@ -287,7 +389,7 @@ managed-client steps already applied to the body (alias/modelMap resolution, `oc
 directives). The caller-forward passthrough is decided earlier, on the caller's own credential,
 and returns before this point; the two branches share no credential and no header. The body sent
 is `envelope.freshBody()` when a source envelope exists, otherwise the ingress's own body.
-`src/server/messages-native.ts` is imported lazily, only for an eligible route.
+`src/server/messages-native.ts` is imported lazily, only for an eligible route. Native Messages errors reuse the shared OpenCode Zen guidance before resolving client retry headers. A Zen rate-limit 429, identified by message or explicit `rate_limit_error` type, without an upstream retry hint receives the same 15-second hint as the translated path; quota/billing and spent-usage-limit errors remain unchanged and valid upstream retry headers retain precedence. Both native Messages and `src/server/responses/adapter-dispatch.ts` forward parsed error types and codes to the shared guidance.
 
 Configured admission-key model scope also applies to separately billed Advisor models before
 managed native key or OAuth dispatch. `src/server/messages-native-scope.ts` resolves active
@@ -313,18 +415,13 @@ placement the Anthropic adapter uses (`resolveAnthropicMessagesUrl`, `anthropicB
 builder never mutates its input. A dropped field has no name in the feature vocabulary, so it
 records no feature effect.
 
-Caller betas. The ingress hands over `anthropic-beta` explicitly; caller `Authorization` and
-`x-api-key` never reach the managed provider.
-`src/adapters/anthropic/beta-allowlist.ts` keeps a value only when it is on the list for the
-destination's class and re-emits it in the list's own spelling: `interleaved-thinking-2025-05-14`
-for generic callers to `api.anthropic.com`, plus the native-client allowance described below for
-recognized native clients; nothing for an Anthropic-compatible host. Independently of client
-recognition, a caller-requested `inline-tools-2026-09-15` is retained when outgoing system-message
-content directly contains typed inline definitions or tool references in additions/removals.
-Arguments, schemas and nested/unknown containers do not activate that feature allowance; no beta
-is injected. Proxy-owned betas (the OAuth
-pair) are set by the builder, and an operator's configured beta is merged, not replaced. Any
-dropped value adds `anthropic-beta-dropped` to the trace; the value itself is never recorded.
+Caller betas. The ingress hands over `anthropic-beta` explicitly; caller credentials never reach
+the managed provider. `src/adapters/anthropic/beta-allowlist.ts` emits only canonical allowlisted
+values: interleaved thinking and thinking-binding controls for generic first-party callers, plus
+the native-client allowance below. Typed outgoing inline-tool changes independently admit their
+beta; arguments and unknown containers do not. Compatible hosts receive no caller beta. Proxy-owned
+OAuth betas and operator-configured betas are merged. Drops add only `anthropic-beta-dropped` to
+the trace; logs name only closed-list published betas, once per distinct set, counting unknowns.
 
 Opaque state and credential domains. `src/protocols/opaque-state.ts` defines a credential domain
 as the provider's base host plus its credential class (`key`, `oauth`, ...); first-party means
@@ -340,6 +437,8 @@ re-selection moves to another domain — decides from the full envelope copy the
 Client identity. `src/adapters/anthropic/client-identity.ts` captures a bounded observed CLI or Desktop Code bundle
 on an opaque request-local handle: recognized CLI/SDK/Desktop Code UA plus valid session UUID, `X-App: cli`, JS and Node
 SDK markers are required. Optional allowlisted SDK and request-id fields retain valid scalars.
+The TypeScript Agent SDK's `sdk-ts` entrypoint is accepted alongside `cli`, `sdk-cli` and `sdk`,
+with the same required headers and bounds, so its first-party native feature betas are retained.
 Duplicates, oversized/invalid values and headers named by `Connection` cannot gain forwarding
 authority. The handle stores its headers privately in a WeakMap and serializes without them.
 The native builder applies it only for first-party Anthropic, independently of bearer/UUID
@@ -398,8 +497,17 @@ Observed native CLI and Desktop Code compatibility bundles preserve an existing 
 and known identity preamble through `src/adapters/anthropic/native-client-preamble.ts`; the proxy
 does not generate or sign billing text. Counting uses the same observed bundle. The first-party
 native beta allowance retains the source-listed inline-tool, per-turn control, thinking display,
-advisor and scoped-cache schemas. Advisor may perform sub-inference already requested by the caller;
-no feature or beta-gated body is injected. Generic managed callers keep the narrower allowance,
+advisor, scoped-cache and context-management schemas. The table in
+`src/adapters/anthropic/beta-body-pairs.ts` owns admission and final-header pairing for
+`context_management` and `thinking.block_binding`. First-party key and OAuth requests admit
+`thinking-binding-controls-2026-08-01` for every caller; `context-management-2025-06-27` retains
+its observed-native-client requirement. After caller and operator betas merge, the builder removes
+unsupported or unpaired fields copy-on-write; binding also requires adaptive or enabled thinking.
+Operator betas can enable first-party fields; compatible and cloud destinations receive neither caller
+beta nor paired field. Header-only thinking controls remain valid for transformation diagnostics. OAuth rewrites context edits' `exclude_tools`
+to the prefixed wire names of declared client tools. Translated Responses constructs its own thinking
+configuration and never copies these native-only fields. Advisor may perform sub-inference
+already requested by the caller; no feature or beta-gated body is injected. Generic managed callers keep the narrower allowance,
 and compatible destinations receive no first-party allowance. These handles grant no credential authority.
 
 Managed native Messages record validated caller controls as `requestedEffort` on the final row
@@ -416,12 +524,13 @@ guard and the tool-call-id repair the caller-forward passthrough runs. A streami
 upstream SSE relayed through `tapAnthropicSseForLog`, which records usage and the
 terminal and applies the body stall and size guards; a non-streaming caller gets the upstream JSON
 (or a folded stream). Either way `model` is rewritten to the selector the client sent, as the
-translated lane answers (`message_start.message.model` on a stream, found within the first 64 KiB;
-everything else is relayed as is). Upstream errors answer in Anthropic shape with the translated lane's status
+translated lane answers (`message_start.message.model` in the first 64 KiB); explicit empty catalogs apply the
+[declared-tool guard](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire). Upstream errors answer in Anthropic shape with the translated lane's status
 policy (transient 5xx as 529, replay refusals kept non-retryable). `count_tokens` estimates the
 body the builder would send when the route is eligible, and sends nothing.
 `tests/adapters/anthropic/anthropic-messages-passthrough.test.ts`,
 `tests/adapters/anthropic/anthropic-beta-allowlist.test.ts`,
+`tests/adapters/anthropic/anthropic-beta-body-pairs.test.ts`,
 `tests/adapters/anthropic/anthropic-messages-passthrough-oauth.test.ts`,
 `tests/responses/protocol-opaque-state.test.ts`,
 `tests/responses/messages-native-oauth-eligibility.test.ts`,
@@ -440,9 +549,11 @@ only readers of the `apiSurfaces` and `protocols` config keys. Responses and Cha
 always served. The Messages surface uses an explicit `apiSurfaces.messages.enabled` boolean when
 present, closes when that value is present but malformed, and otherwise inherits
 `claudeCode.enabled !== false`. The unrepresentable policy defaults to `legacy` and every
-`protocols.rollout` switch defaults off; the OAuth native-Messages switch is effective only with
+`protocols.rollout` switch defaults off except `antigravityDirect`; the OAuth native-Messages switch is effective only with
 the key-auth one. The Chat and Messages ingresses read the unrepresentable policy (above);
-`directEncodersApply` reads `directEncoders` on both; the Chat ingress reads `nativeChatCombos`
+`directEncodersApply` reads `directEncoders` on both; `antigravityDirectDeclineReason` reads
+`antigravityDirect` for the Chat ingress and the planner, and `antigravityMessagesDeclineReason` for
+the Messages ingress and the planner; the Chat ingress reads `nativeChatCombos`
 for combo routes (above); `managedMessagesNative` and `managedMessagesNativeOAuth` are read
 through `nativeMessagesDeclineReason` by the Messages ingress, `count_tokens` and the planner
 (above); `shadowPlan` is read by `recordProtocolShadowPlan` ([Shadow plan](#shadow-plan)). Every

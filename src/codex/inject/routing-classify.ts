@@ -1,3 +1,4 @@
+import { isApprovedCodexProviderUrl } from "../provider-routing";
 import { existsSync, readFileSync } from "node:fs";
 import {
   hasInjectedCodexRouting,
@@ -54,7 +55,7 @@ export function classifyRoutingEndpoint(value: string): RoutingEndpointKind {
 }
 
 /** Classify actual routing dependency separately from opencodex ownership. */
-export function classifyCodexRouting(content: string): CodexRoutingKind {
+export function classifyCodexRouting(content: string, approvedProviderUrl?: (id: string, url: string) => boolean): CodexRoutingKind {
   const rootBaseUrl = rootTomlString(content, "openai_base_url");
   if (rootBaseUrl) {
     const endpoint = classifyRoutingEndpoint(rootBaseUrl);
@@ -74,7 +75,7 @@ export function classifyCodexRouting(content: string): CodexRoutingKind {
     if (providerBaseUrl) {
       const endpoint = classifyRoutingEndpoint(providerBaseUrl);
       if (endpoint === "unknown") return "unknown";
-      if (rootProvider === "opencodex") return "opencodex-local";
+      if (rootProvider === "opencodex" || endpoint === "local" && approvedProviderUrl?.(rootProvider, providerBaseUrl)) return "opencodex-local";
       return endpoint === "local" ? "custom-local" : "custom-remote";
     }
     if (
@@ -102,7 +103,7 @@ export function getCodexRoutingKind(): CodexRoutingKind {
   const path = CODEX_CONFIG_PATH;
   if (!existsSync(path)) return "native";
   try {
-    return classifyCodexRouting(readFileSync(path, "utf8"));
+    return classifyCodexRouting(readFileSync(path, "utf8"), isApprovedCodexProviderUrl);
   } catch {
     return "unknown";
   }

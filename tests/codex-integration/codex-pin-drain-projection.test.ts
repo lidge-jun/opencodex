@@ -4,10 +4,10 @@ import { join } from "node:path";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
-  handleCodexAuthAPI,
   markAccountNeedsReauth,
   updateAccountQuota,
 } from "../../src/codex/auth-api";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import { pinnedCodexAccountId } from "../../src/codex/account-priority";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";

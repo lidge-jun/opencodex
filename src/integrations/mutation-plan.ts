@@ -131,8 +131,10 @@ export const DYNAMIC_SEGMENT = "*";
  * paths silently have no declaration.
  */
 const CLIENT_MANAGED_PATHS = {
+  qoder: [["providers", OPENCODE_PROVIDER_ID], ["modelConfigs", "customModels", DYNAMIC_SEGMENT]],
   opencode: [["provider", OPENCODE_PROVIDER_ID], ["providers", OPENCODE_PROVIDER_ID]],
   pi: [["providers", OPENCODE_PROVIDER_ID]],
+  "gentle-shell": [["providers", OPENCODE_PROVIDER_ID]],
   omp: [["providers", OPENCODE_PROVIDER_ID]],
   hermes: [["providers", OPENCODE_PROVIDER_ID]],
   openclaw: [["models", "providers", OPENCODE_PROVIDER_ID]],

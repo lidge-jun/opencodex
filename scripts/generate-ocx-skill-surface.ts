@@ -16,10 +16,10 @@ const PREAMBLE = `<!-- ${OWNER}. Do not edit by hand. -->\n<!-- Regenerate: bun 
 
 // Navigation groups, not command dispatch. New roots require an explicit assignment.
 const DOMAINS = [
-  { name: "lifecycle", roots: ["chatgpt", "status", "resolve", "capabilities", "sync", "start", "stop", "restart", "service", "gui"] },
+  { name: "lifecycle", roots: ["codex-provider", "chatgpt", "status", "resolve", "capabilities", "sync", "start", "stop", "restart", "service", "gui"] },
   { name: "providers-models", roots: ["provider", "models", "alias"] },
   { name: "accounts", roots: ["account", "auth", "login", "logout"] },
-  { name: "agents-routing", roots: ["agent", "combo", "route", "v2", "effort", "memory", "message"] },
+  { name: "agents-routing", roots: ["agent", "combo", "route", "v2", "effort", "memory", "message", "advisor"] },
   { name: "integrations", roots: ["claude", "integration", "commandcode", "grok", "codex-shim"] },
   { name: "observe-system", roots: ["companion", "usage", "logs", "storage", "inspect", "system", "observe", "debug", "export", "import", "cost", "update", "config", "tray"] },
   { name: "access-remote", roots: ["link", "remote-workspace", "hub", "connect", "api", "access"] },
@@ -112,7 +112,7 @@ function renderCapability(cap: Capability): string[] {
   const lines = [capabilityHeading(invocation), ""];
   if (handoff) lines.push("Human-only handoff: ask the operator to perform this in their own terminal or dashboard; do not capture the secret-bearing result.", "");
   if (!handoff && cap.usage !== undefined) lines.push(`Usage: \`${cap.usage}\``, "");
-  lines.push(cap.summary, "", `State-changing: ${cap.mutates ? "yes" : "no"}.`, "");
+  lines.push(cap.summary, "", `State-changing: ${cap.mutates ? "yes" : "no"}. JSON mode: \`${cap.json}\`.`, "");
   if (cap.routes.length > 0) {
     lines.push("| Method | Route |", "|---|---|");
     for (const route of cap.routes) lines.push(`| ${route.method} | \`${route.path}\` |`);
@@ -125,7 +125,7 @@ function renderCapability(cap: Capability): string[] {
     for (const flag of cap.flags) lines.push(`| \`${flag.name}\` | ${tableCell(flag.value)} | ${tableCell(flag.summary)} |`);
     lines.push("");
   }
-  lines.push(`JSON mode: \`${cap.json}\`.`, "");
+
   for (const detail of cap.details ?? []) lines.push(`- ${detail}`);
   if ((cap.details ?? []).length > 0) lines.push("");
   return lines;

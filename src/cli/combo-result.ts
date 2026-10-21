@@ -1,3 +1,4 @@
+import { normalizeJevQuotaTiers } from "../combos/jev-quota-config";
 import { parseComboTargets } from "./combo-input";
 import { printCatalogResult } from "./catalog-command-result";
 
@@ -7,7 +8,7 @@ const ENUMS: Readonly<Record<string, readonly (string | null)[]>> = {
   defaultEffortMode: ["fallback", "force"], reasoningEffortMode: ["strict", "adaptive"],
   imageInput: ["auto", "disabled"], cooldownWaitPolicy: ["before-last-resort"],
 };
-const STRINGS = new Set(["alias", "displayName", "decisionProvider", "decisionModel"]);
+const STRINGS = new Set(["alias", "displayName", "description", "decisionProvider", "decisionModel"]);
 const RANGES: Readonly<Record<string, readonly [number, number]>> = {
   stickyLimit: [1, 100], cooldownMs: [1, 600_000], waitForCooldownMs: [0, 600_000],
   decisionTimeoutMs: [1_000, 120_000],
@@ -33,7 +34,12 @@ function publicCombo(value: unknown): Record<string, unknown> {
     } else if (Object.hasOwn(RANGES, key)) {
       const [min, max] = RANGES[key]!;
       if (typeof child !== "number" || !Number.isSafeInteger(child) || child < min || child > max) invalid();
-    } else if (key === "nativeAlias") {
+    } else if (key === "decisionQuotaTiers") {
+      const tiers = normalizeJevQuotaTiers(child);
+      if (!tiers) invalid();
+      result[key] = tiers;
+      continue;
+    } else if (key === "nativeAlias" || key === "allowMeteredTargets" || key === "decisionQuotaSignals") {
       if (typeof child !== "boolean") invalid();
     } else invalid();
     result[key] = child;

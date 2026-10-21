@@ -146,18 +146,18 @@ unknown 表示 opencodex 無法確定設定是否仍指向自己的代理。外�
 
 ### Picker 模式：在第一方 Code 分頁顯示 opencodex 模型
 
-Picker 模式是第一方模式的一部分。在 macOS 上選擇第一方時預設開啟；設定
+Picker 模式是第一方模式的一部分。在 macOS 和 Windows 上選擇第一方時預設開啟；設定
 `claudeCode.intercept.picker: false` 後會保持關閉。它會修改第一方 Desktop 的 Code 分頁模型選擇器，
-依名稱列出可用的 opencodex 模型。首次開啟時，macOS 可能會要求你在登入鑰匙圈中信任本機憑證授權單位。
+依名稱列出可用的 opencodex 模型。首次開啟時，macOS 可能會要求你在登入鑰匙圈中、Windows 可能會要求你在目前使用者根存放區中信任本機憑證授權單位。
 該授權單位限制為 `claude.ai` 及其子網域。可匯出的簽章身分由 OS 認證資料儲存區保護，一般重新啟動會重用相同的憑證與金鑰。
-OpenCodex 設定目錄不會儲存明文 Picker 簽章金鑰。受限 CA 的完整驗證與 OS 信任檢查仍然適用。
-已核准的身分不變且認證資料儲存區可用時，重新啟動不會新增或移除憑證信任設定。啟動復原絕不會安裝信任：
+OpenCodex 設定目錄不會儲存明文 Picker 簽章金鑰。受限 CA 的完整驗證與 OS 信任檢查仍然適用(Windows 按精確指紋與已驗證葉片驗證)。
+已核准的身分不變且認證資料儲存區可用時，重新啟動不會新增或移除 macOS 憑證信任設定。啟動復原與狀態檢查絕不會安裝信任：
 若信任缺失、遭撤銷或無法確認，Picker 會維持待處理狀態。請明確執行 `ocx claude desktop picker on`
-或 `ocx claude desktop picker trust` 來授予信任。
+或 `ocx claude desktop picker trust` 來授予信任(Windows 需要時含確認)。
 
 從舊身分進行一次性移轉時，清除原有信任可能需要同意。清理未完成時，Picker 無法使用，已套用的設定檔
-會使用不解密的中繼。macOS 也可能另外要求解鎖鑰匙圈或核准應用程式存取憑證，重新啟動或升級時也可能出現這些提示。
-Windows 與 Linux 仍不支援 Picker，不會啟動 Picker CA、認證資料儲存區或代理作業。主要 Claude 攔截功能仍可用，
+會使用不解密的中繼。macOS 也可能另外要求解鎖鑰匙圈或核准應用程式存取憑證，重新啟動或升級時也可能出現這些提示。Windows 上明確執行 `on` 或 `trust` 可能顯示新增根的確認。
+Linux 仍不支援 Picker，不會啟動 Picker CA、認證資料儲存區或代理作業。主要 Claude 攔截功能仍可用，
 其本機 CA 檔案受到擁有者、符號連結、檔案權限及 Windows ACL 檢查保護。
 
 Picker 模式開啟期間，Claude Desktop 會透過 OpenCodex 存取網路。如果 OpenCodex 停止，Desktop 會離線，
@@ -342,7 +342,7 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 代�
 也同樣可解析。已儲存的舊 id 仍會路由，但 Claude Code 對它仍按 200k 計算。把已儲存的 `claude-ocx-`
 重新選一次對應的 `ocx-claude-`，跳脫的 `claude-ocx2-` 重新選一次 `ocx-claude2-`，即可同時用上真實上下文
 視窗與 compact。
-權威上下文視窗為 1M 或不低於預設壓縮閾值（829,800）的模型會多出一個 `…[1m]` 選擇器列：選中後 Claude Code 會按完整 1M 上下文
+目錄中的有效上下文視窗為 1M 或不低於預設壓縮閾值（829,800）的模型會多出一個 `…[1m]` 選擇器列：選中後 Claude Code 會按完整 1M 上下文
 計算該模型（自動壓縮仍開啟）——代理在路由前會去掉該標記。
 選中後會儲存到 Claude Code 的 `settings.json` `model` 欄位；入站請求會將別名解析回路由
 模型。在較舊的 Claude Code 版本中，選擇器保持原生——可透過 `ANTHROPIC_MODEL` 設定槽位，或在
@@ -372,7 +372,9 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 
 ### 上下文變體 `[1m]` 標記
 
-權威上下文視窗為 1M 或不低於預設壓縮閾值（829,800）的模型會多出一個帶 `…[1m]` 的選擇器條目。
+這些判斷使用目錄中的有效視窗，其中可能包含[自訂供應商的推斷值](/zh-tw/reference/configuration/providers/#自訂供應商的上下文視窗)。推斷值並不證明中轉的實際容量。
+
+目錄中的有效上下文視窗為 1M 或不低於預設壓縮閾值（829,800）的模型會多出一個帶 `…[1m]` 的選擇器條目。
 該下限是固定的，修改壓縮值不會降低它；Anthropic 路由上的 Claude 模型必須真正達到 1M；關閉自動上下文後只對 1M 模型生效。
 超出真實視窗時會回傳 `prompt is too long` 錯誤，Claude Code 會自動壓縮。選擇它後，Claude Code 會按完整的 1M 上下文計算。
 代理會在進行別名解析和路由之前移除不區分大小寫的 `[1m]` 字尾。
@@ -382,7 +384,7 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 對於任何無法識別的模型，Claude Code 都會按 200k token 計算。預設開啟的**自動上下文**可解決
 這一問題：
 
-1. 啟動環境槽位會在實際視窗大於 200k **且**至少達到所設定的自動壓縮閾值時帶上
+1. 啟動環境槽位會在目錄中的有效視窗大於 200k **且**至少達到所設定的自動壓縮閾值時帶上
    `[1m]` 標記。探索列表和 Desktop 選擇器條目不跟隨該閾值：它們使用固定的 829,800 token 下限（Anthropic 路由上的 Claude 模型必須真正達到 1M）。
 2. 系統會注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`（預設 `829800`，範圍 `100000`–`1000000`），
    使對話在該位置自動進行摘要。
@@ -408,7 +410,7 @@ v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` /
 `claudeCode.contextAccounting` 決定 opencodex 預設選用的值。未設定（`1m`，預設）時，長上下文模型在啟動環境槽位、
 Desktop 選擇器、Desktop 3P（`prefer1m`）和產生的子代理中按 1M 提供。設為 `200k` 即可退出：不再自動加上 `[1m]` 標記，
 不注入 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，Desktop 3P 保留 `supports1m` 但移除 `prefer1m`。你自己標記 `[1m]` 的選擇仍可使用
-（產生的子代理和強制子代理仍會移除模型視窗無法承載的標記），探索清單中真正 1M 模型的 `· 1M` 條目也仍然存在。`200k` 優先於
+（產生的子代理和強制子代理仍會移除模型視窗無法承載的標記），探索清單中目錄視窗至少為 1M 的模型的 `· 1M` 條目也仍然存在。`200k` 優先於
 自動上下文：你自行匯出的壓縮值不會重新啟用自動標記，但 opencodex 不會改動你匯出的值。
 
 ```bash
@@ -662,7 +664,7 @@ OAuth 活動帳號未標記 `needsReauth`。顯式選擇 Anthropic 卻沒有可�
 `ANTHROPIC_BASE_URL` 可能已經過時。請開啟一個新終端，或重新執行 `ocx claude`。
 
 **大模型仍受 200k 上下文上限限制**——在選擇器中選擇 `[1m]` 變體，或啟用自動上下文
-（預設開啟）。如果選擇器中沒有 `[1m]` 條目，該模型的權威上下文視窗可能低於固定的 829,800 token 下限。
+（預設開啟）。如果選擇器中沒有 `[1m]` 條目，該模型在目錄中的有效上下文視窗可能低於固定的 829,800 token 下限。
 
 **技能載入導致 token 數量過高**——內建的 `claude-api` 技能（約 136k token）會在提及
 Claude 模型時自動載入。對於原生透傳，這是正常現象；對於已路由模型，opencodex 預設會將其
@@ -685,7 +687,7 @@ The Subagents page offers **Force all subagents onto one model**, off by default
 
 `ocx agent subagents force combo/tev-auto` sets `claudeCode.subagentModelForce`; `ocx agent subagents force -` clears it. `ocx agent status` reports the setting. `GET /api/subagent-models` returns `force`, `forceAvailable`, and `forceStatus`; `PUT` accepts `{ "force": "combo/tev-auto" }` or `{ "force": null }` without changing the roster. Omitting `force` leaves it unchanged. Invalid or unexposed targets are rejected on write; stale targets are reported and skipped at launch.
 
-This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the authoritative window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
+This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_CODE_SUBAGENT_MODEL` as an explicit proxy alias (with `[1m]` when the effective catalog window reaches the fixed 829,800-token floor, and only for a genuine 1M window on Anthropic Claude models and bare `claude-*` selectors; native Claude targets use a reversible native alias) and `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`. Each nonempty shell-exported variable independently wins. Native launches inject neither variable; plain `claude` is not affected. No plugin files or `settings.json` are modified by this setting.
 
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 

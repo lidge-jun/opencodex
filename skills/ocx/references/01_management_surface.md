@@ -25,12 +25,12 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 | Chapter | Declared capabilities |
 |---|---|
-| [lifecycle](01_surface_lifecycle.md) | 12 |
-| [providers-models](01_surface_providers-models.md) | 47 |
-| [accounts](01_surface_accounts.md) | 40 |
-| [agents-routing](01_surface_agents-routing.md) | 50 |
+| [lifecycle](01_surface_lifecycle.md) | 13 |
+| [providers-models](01_surface_providers-models.md) | 49 |
+| [accounts](01_surface_accounts.md) | 42 |
+| [agents-routing](01_surface_agents-routing.md) | 62 |
 | [integrations](01_surface_integrations.md) | 41 |
-| [observe-system](01_surface_observe-system.md) | 92 |
+| [observe-system](01_surface_observe-system.md) | 96 |
 | [access-remote](01_surface_access-remote.md) | 32 |
 | [lab](01_surface_lab.md) | 21 |
 
@@ -46,6 +46,10 @@ Check the chapter's flags, the requested authority and the operating skill's con
 ## Canonical invocation index
 
 Original invocation order. These headings preserve links to the previous single-file reference.
+
+### `ocx codex-provider`
+
+[State-changing task](01_surface_lifecycle.md#ocx-codex-provider)
 
 ### `ocx chatgpt`
 
@@ -267,6 +271,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_observe-system.md#ocx-system-codex-cli-update-attest)
 
+### `ocx system codex-cli-update plan`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-system-codex-cli-update-plan)
+
 ### `ocx system codex-restart`
 
 [State-changing task](01_surface_observe-system.md#ocx-system-codex-restart)
@@ -475,6 +483,14 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_providers-models.md#ocx-models-shadow-set)
 
+### `ocx models auto-review status`
+
+[Read-oriented task](01_surface_providers-models.md#ocx-models-auto-review-status)
+
+### `ocx models auto-review set`
+
+[State-changing task](01_surface_providers-models.md#ocx-models-auto-review-set)
+
 ### `ocx alias list`
 
 [Read-oriented task](01_surface_providers-models.md#ocx-alias-list)
@@ -518,6 +534,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx models order reset`
 
 [State-changing task](01_surface_providers-models.md#ocx-models-order-reset)
+
+### `ocx account preserve-signed-in`
+
+[State-changing task](01_surface_accounts.md#ocx-account-preserve-signed-in)
 
 ### `ocx logout`
 
@@ -611,6 +631,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_accounts.md#ocx-account-pool)
 
+### `ocx account use-remaining`
+
+[State-changing task](01_surface_accounts.md#ocx-account-use-remaining)
+
 ### `ocx account credits`
 
 [State-changing task](01_surface_accounts.md#ocx-account-credits)
@@ -630,6 +654,54 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx message send`
 
 [State-changing task](01_surface_agents-routing.md#ocx-message-send)
+
+### `ocx advisor`
+
+[State-changing task](01_surface_agents-routing.md#ocx-advisor)
+
+### `ocx message enable`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-enable)
+
+### `ocx message disable`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-disable)
+
+### `ocx message status`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-message-status)
+
+### `ocx message serve`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-serve)
+
+### `ocx message hosts probe`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-message-hosts-probe)
+
+### `ocx message hosts add`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-add)
+
+### `ocx message hosts allow-inbound`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-allow-inbound)
+
+### `ocx message hosts deny-inbound`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-deny-inbound)
+
+### `ocx message hosts list`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-message-hosts-list)
+
+### `ocx message hosts remove`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-remove)
+
+### `ocx message hosts abandon`
+
+[State-changing task](01_surface_agents-routing.md#ocx-message-hosts-abandon)
 
 ### `ocx agent status`
 
@@ -919,6 +991,14 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_observe-system.md#ocx-observe-logs)
 
+### `ocx logs history`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-logs-history)
+
+### `ocx logs get`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-logs-get)
+
 ### `ocx logs explain`
 
 [Read-oriented task](01_surface_observe-system.md#ocx-logs-explain)
@@ -934,6 +1014,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx observe usage`
 
 [Read-oriented task](01_surface_observe-system.md#ocx-observe-usage)
+
+### `ocx usage compare`
+
+[Read-oriented task](01_surface_observe-system.md#ocx-usage-compare)
 
 ### `ocx observe storage`
 
@@ -1389,6 +1473,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 335
-- of those, state-changing: 204
+- declared capabilities: 356
+- of those, state-changing: 217
 - head-resolved invocations: 2

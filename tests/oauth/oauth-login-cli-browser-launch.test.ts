@@ -91,6 +91,24 @@ afterEach(() => {
 });
 
 describe("CLI OAuth login reports the browser launch (#5261)", () => {
+  test("an instruction-only Keychain hint never launches an empty browser URL", async () => {
+    let launches = 0;
+    const lines: string[] = [];
+    const capture = spyOn(console, "log").mockImplementation(line => { lines.push(String(line)); });
+    try {
+      await handleOAuthLogin(anyOAuthProvider(), {
+        runLogin: async (_provider, ctrl) => {
+          ctrl.onAuth?.({ url: "", instructions: "Approve the Muse Code Keychain prompt." });
+          return {} as OAuthCredentials;
+        },
+        openUrl: async () => { launches++; return { status: "started" }; },
+      });
+      expect(launches).toBe(0);
+      expect(lines.join(" ")).toContain("Approve the Muse Code Keychain prompt.");
+      expect(lines.join(" ")).not.toContain("Opening browser");
+    } finally { capture.mockRestore(); }
+  });
+
   test("a browser that never opened is on screen before the paste prompt", async () => {
     const events: string[] = [];
     let settleLaunch: (result: OpenUrlResult) => void = () => {};

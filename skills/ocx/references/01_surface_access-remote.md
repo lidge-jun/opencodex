@@ -16,7 +16,7 @@ Usage: `ocx link probe <alias> [--json]`
 
 Probe an SSH host fingerprint and OpenCodex version without trusting it.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -26,8 +26,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit alias, fingerprint, key type and version as JSON. |
 
-JSON mode: `payload`.
-
 - Requires loopback admin authority on the Home. Stores only a temporary pending offer; does not persist host trust or issue a link key.
 
 ### `ocx link add`
@@ -36,7 +34,7 @@ Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]`
 
 Connect an SSH Child to this Home after confirming its fingerprint.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -49,8 +47,6 @@ State-changing: yes.
 | `--expect-fingerprint` | string | Exact SHA256 host fingerprint; required without an interactive TTY. |
 | `--json` | boolean | Emit the verified link result as JSON. |
 
-JSON mode: `payload`.
-
 - Requires loopback admin authority on the Home. Without a fingerprint, requires a TTY and explicit yes after showing the offered fingerprint. Never prints the link key.
 - Preflights bound Child restart support and curl, connects, restarts once and verifies a fresh authenticated catalog relay before success. Post-connect failures can leave Child config; run ocx disconnect and ocx restart there before retrying.
 
@@ -60,15 +56,13 @@ Usage: `ocx link port [--json]`
 
 Allocate a free loopback port for a remote home link.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the selected port as JSON. |
-
-JSON mode: `envelope`.
 
 - Local temporary loopback socket allocation; no management API request.
 - Always emits a CLI-shaped {port} JSON object, even without --json.
@@ -79,7 +73,7 @@ Human-only handoff: ask the operator to perform this in their own terminal or da
 
 Issue one link credential and record its tunnel metadata.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -91,8 +85,6 @@ State-changing: yes.
 | `--tunnel-port` | number | Remote loopback port for the reverse tunnel. |
 | `--json` | boolean | Emit the issue result as JSON. |
 
-JSON mode: `payload`.
-
 - Human-only handoff: issues a credential and prints its plaintext once. Never capture it in an agent transcript. Requires loopback admin authority; tunnel port must be 1024-65535.
 
 ### `ocx link status`
@@ -101,7 +93,7 @@ Usage: `ocx link status [--json]`
 
 Read link listener and tunnel status.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -111,8 +103,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the K16 status payload as JSON. |
 
-JSON mode: `payload`.
-
 - Reads live listener/tunnel metadata; when no proxy is found, falls back to the local link store. Always emits JSON.
 
 ### `ocx link revoke`
@@ -121,7 +111,7 @@ Usage: `ocx link revoke --link-id <id> [--force --yes] [--json]`
 
 Revoke a link credential and remove its link record.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -134,8 +124,6 @@ State-changing: yes.
 | `--force` | boolean | Explicitly skip remote disconnect while retiring the local link; requires --yes. |
 | `--yes` | boolean | Confirms force only; refused without --force. |
 
-JSON mode: `envelope`.
-
 - Requires a valid link ID and loopback admin authority. Explicit force additionally requires --yes.
 - Ordinary revoke always emits {linkId} JSON; forced revoke has human output or a JSON cleanup receipt. Already-revoked link_not_found is idempotent success.
 - Ordinary revoke retains its no-body and idempotent behavior. Forced success reports remoteCleanup:skipped from invocation intent; already-missing link reports unverified. Neither proves the remote client disconnected.
@@ -147,7 +135,7 @@ Usage: `ocx link reconnect --link-id <id> [--json]`
 
 Restart a Home-initiated link's SSH tunnel now.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -157,8 +145,6 @@ State-changing: yes.
 |---|---|---|
 | `--link-id` | string | Home-initiated link id whose tunnel to restart. |
 | `--json` | boolean | Emit the restarted link id as JSON. |
-
-JSON mode: `envelope`.
 
 - Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.
 - A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.
@@ -170,7 +156,7 @@ Usage: `ocx remote-workspace pair <hub-url> --pairing-code-stdin --root <absolut
 
 Enroll this executor with one Hub using a one-time code from stdin and locally approved roots.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 Drives no management route.
 
@@ -183,8 +169,6 @@ Drives no management route.
 | `--executor-helper` | string | Select a reviewed native helper file. |
 | `--name` | string | Name this executor. |
 
-JSON mode: `payload`.
-
 - Executor-local state/control; no Hub management API routes.
 - Pairing consumes a human-provided one-time code from stdin and persists enrollment; approved roots and platform confinement determine capabilities.
 
@@ -194,11 +178,9 @@ Usage: `ocx remote-workspace agent`
 
 Keep the paired executor connected to its Hub.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 Drives no management route.
-
-JSON mode: `none`.
 
 - Executor-local state/control; no Hub management API routes.
 - Maintains the enrolled executor connection to the Hub until interrupted.
@@ -209,15 +191,13 @@ Usage: `ocx remote-workspace status [--json]`
 
 Read local executor enrollment and available capabilities without printing credentials.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the public local executor status. |
-
-JSON mode: `payload`.
 
 - Executor-local state/control; no Hub management API routes.
 - Reports local enrollment and platform/helper capabilities without credentials; not Hub device/runtime/session inventory.
@@ -228,7 +208,7 @@ Human-only handoff: ask the operator to perform this in their own terminal or da
 
 Mint a single-use pairing code on a hub and print the exact `ocx connect` line for one more machine.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -238,8 +218,6 @@ Drives no management route.
 | `--data-url` | string | Advertise this data origin instead of hub.dataPublicOrigin or the bind address. |
 | `--management-url` | string | Confirm the management origin; it must equal hub.managementPublicOrigin. |
 | `--clients` | string | Pre-select codex and/or claude in the printed connect command. |
-
-JSON mode: `envelope`.
 
 - Hub only: refuses when runtimeRole is not hub, and requires a running attested proxy.
 - The code is secret, single-use and short-lived; it is bound to hub.managementPublicOrigin and to the connecting machine's loopback browser origin.
@@ -252,7 +230,7 @@ JSON mode: `envelope`.
 
 Rotate the connected client's data key against the hub, with commit and abort.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -266,8 +244,6 @@ State-changing: yes.
 | `--admin-token-stdin` | boolean | Read the hub admin token from stdin as the rotation authority. |
 | `--json` | boolean | Emit the rotation result as JSON. |
 
-JSON mode: `payload`.
-
 - Requires transient authority on stdin; the credential is never persisted or echoed.
 - A rotation left pending by a crash is resumed here — startup and status stop rather than guess which key generation is live.
 
@@ -277,7 +253,7 @@ Usage: `ocx api protocols [--provider <name>] [--json]`
 
 Read the protocol contract version, API surfaces, protocol settings and feature vocabulary.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -288,15 +264,13 @@ State-changing: no.
 | `--provider` | string | Add one configured provider's upstream wire and who decided it. |
 | `--json` | boolean | Emit the GET /api/protocols body. |
 
-JSON mode: `payload`.
-
 ### `ocx api explain`
 
 Usage: `ocx api explain --model <id> --inbound <responses|chat|messages> [--feature <key>[,<key>]]... [--json]`
 
 Preview the request path a model would take from one inbound API, computed from config.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -309,8 +283,6 @@ State-changing: no.
 | `--feature` | string | Request feature key to judge; repeatable or comma-separated. |
 | `--json` | boolean | Emit the ProtocolPlanV1 preview. |
 
-JSON mode: `payload`.
-
 - A read-only POST: nothing is sent upstream, no combo state advances and the input is not logged.
 
 ### `ocx api policy`
@@ -319,7 +291,7 @@ Usage: `ocx api policy [--messages <on|off>] [--unrepresentable <legacy|reject>]
 
 Read the protocol policy, or change the Messages surface, unrepresentable policy and rollout switches.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -330,10 +302,8 @@ State-changing: yes.
 |---|---|---|
 | `--messages` | string | Open or close the Messages API: on or off. Off also turns the Claude integration off. |
 | `--unrepresentable` | string | legacy keeps today's behavior; reject refuses a request its path cannot carry. |
-| `--rollout` | string | One switch as name=on or name=off; repeatable. Every switch defaults off. |
+| `--rollout` | string | One switch as name=on or name=off; repeatable. Every switch defaults off except antigravityDirect. |
 | `--json` | boolean | Emit the resulting GET /api/protocols body. |
-
-JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 - A setting flag changes the operator's config; run it only when the operator asks for that change.
@@ -344,7 +314,7 @@ Usage: `ocx hub disable [--revoke-clients --client-key <id> ...] [--json]`
 
 Return a hub to standalone in one validated config write.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -353,8 +323,6 @@ Drives no management route.
 | `--revoke-clients` | boolean | Revoke only explicitly selected saved client key IDs. |
 | `--client-key` | string | Exact saved key ID to revoke; repeatable, requires --revoke-clients. |
 | `--json` | boolean | Emit the result and restart guidance as JSON. |
-
-JSON mode: `envelope`.
 
 - Removes hub, unauthenticatedLoopbackListener, runtimeRole and hostname atomically after validation; non-hub roles refuse without changes.
 - Existing keys have no verified client origin. Names never select keys; --revoke-clients requires exact --client-key IDs when keys exist. Unselected keys remain.
@@ -366,7 +334,7 @@ Usage: `ocx access key list [--json]`
 
 Manage API access keys and inspect masked metadata.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -382,8 +350,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Mixed family: list/get read masked metadata; scope edits, revocation and rotation change authorization.
 - Creation and rotation initiation return plaintext secrets once and are human-only handoffs. Ask the operator to perform them in their terminal or dashboard; never capture the returned credential.
 - Use the separately documented safe follow-up leaves. keys and top-level api-key are aliases.
@@ -394,7 +360,7 @@ Usage: `ocx access key list [--json]`
 
 List masked access keys, usage, endpoints and pending rotations.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -403,8 +369,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - No plaintext secret is returned by the list route.
 
@@ -414,7 +378,7 @@ Usage: `ocx access key get <id-or-name> [--json]`
 
 Read one masked key and its access scope.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -424,8 +388,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Case-insensitive ID takes precedence over name; ambiguous names are refused.
 
 ### `ocx access key set`
@@ -434,7 +396,7 @@ Usage: `ocx access key set <id-or-name> [--allow-provider <name>]... [--allow-mo
 
 Replace selected provider/model scope dimensions.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -448,8 +410,6 @@ State-changing: yes.
 | `--clear` | boolean | Clear both dimensions; submitted allow options then override their dimension. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - At least one scope option is required. Unspecified dimensions are preserved; this command does not rename keys.
 
 ### `ocx access key rotate commit`
@@ -458,7 +418,7 @@ Usage: `ocx access key rotate commit <id> <rotation-id> [--json]`
 
 Commit a pending key rotation.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -468,8 +428,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Use IDs from the human-authorized rotation. Commit only after the client accepts the replacement; the old credential is retired.
 
 ### `ocx access key rotate abort`
@@ -478,7 +436,7 @@ Usage: `ocx access key rotate abort <id> <rotation-id> [--json]`
 
 Abort a pending key rotation.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -488,8 +446,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Use IDs from the human-authorized rotation. Abort discards the pending replacement credential.
 
 ### `ocx access key remove`
@@ -498,7 +454,7 @@ Usage: `ocx access key remove <id> --yes [--json]`
 
 Revoke one API access key.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -509,8 +465,6 @@ State-changing: yes.
 | `--yes` | boolean | Required confirmation before revoking the key. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Uses the exact ID, not name resolution; delete is an alias.
 
 ### `ocx access endpoints`
@@ -519,7 +473,7 @@ Usage: `ocx access endpoints [--json]`
 
 Read endpoint URLs from the access-key metadata.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -529,8 +483,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `envelope`.
-
 - Projects only baseUrl, endpoint and fields ending in Endpoint; use key list for the full metadata payload.
 
 ### `ocx access models`
@@ -539,15 +491,13 @@ Usage: `ocx access models [--json]`
 
 Read the public external-model catalog.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - Data-plane GET /v1/models via the runtime client; differs from management models live. The routes field indexes management API routes only.
 
@@ -557,7 +507,7 @@ Usage: `ocx access test <model> [--protocol <chat|responses|messages>] [--api-ke
 
 Send a small inference request through the selected protocol.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -566,8 +516,6 @@ Drives no management route.
 | `--protocol` | string | chat \| responses \| messages; default chat. |
 | `--json` | boolean | Emit the result as JSON. |
 | `--api-key-stdin` | boolean | Read one explicit data key from bounded piped stdin; no secret argv/env or management/enrolled-key fallback. |
-
-JSON mode: `envelope`.
 
 - Data-plane model POSTs are not management routes. The request may spend provider quota; run only for an explicitly authorized model probe. Legacy unkeyed behavior/JSON remains unchanged.
 - Explicit-key mode first sends a credentialless malformed-body control to the same protocol endpoint. Only the native key-required401 permits one16-token keyed request. Authless/unrecognized targets refuse before inference.
@@ -580,7 +528,7 @@ Usage: `ocx remote-workspace hub status [--json]`
 
 Read Hub devices, runtime availability and sessions.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -589,8 +537,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit one validated task result as JSON. |
-
-JSON mode: `payload`.
 
 - Existing remote-workspace status remains executor-local. These fixed reads use the selected management Hub; they do not create pairing grants, sessions or remote commands.
 - Available empty lists succeed. Disabled Hub observations return explicit available:false and exit1; malformed or refused responses are not presented as empty success. Runtime reads can perform availability probes.
@@ -601,7 +547,7 @@ Usage: `ocx remote-workspace hub runtimes [--json]`
 
 Read Codex, Claude and Pi availability on the Hub.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -610,8 +556,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit one validated task result as JSON. |
-
-JSON mode: `payload`.
 
 - Existing remote-workspace status remains executor-local. These fixed reads use the selected management Hub; they do not create pairing grants, sessions or remote commands.
 - Available empty lists succeed. Disabled Hub observations return explicit available:false and exit1; malformed or refused responses are not presented as empty success. Runtime reads can perform availability probes.
@@ -622,7 +566,7 @@ Usage: `ocx remote-workspace hub sessions [--json]`
 
 Read Hub sessions and their public recent events.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -631,8 +575,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit one validated task result as JSON. |
-
-JSON mode: `payload`.
 
 - Existing remote-workspace status remains executor-local. These fixed reads use the selected management Hub; they do not create pairing grants, sessions or remote commands.
 - Available empty lists succeed. Disabled Hub observations return explicit available:false and exit1; malformed or refused responses are not presented as empty success. Runtime reads can perform availability probes.
@@ -643,7 +585,7 @@ Usage: `ocx access key rename <id-or-name> <name> [--json]`
 
 Rename an unambiguously selected API key while preserving its scopes.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -654,8 +596,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the command result as JSON. |
 
-JSON mode: `payload`.
-
 - Resolves a unique ID/name from the pinned management roster and sends only id/name. Duplicate-ID ambiguity is refused; no plaintext, scope clear, rotation or deletion is involved.
 - Name follows existing trimmed nonempty64-unit/control-character rules. Resolution is not revision CAS; API-key root alias shares the operation.
 
@@ -665,7 +605,7 @@ Usage: `ocx access audio transcribe <file> --model <gpt-4o-transcribe|gpt-4o-min
 
 Transcribe an explicitly chosen bounded audio file with a supplied data key.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 Drives no management route.
 
@@ -674,8 +614,6 @@ Drives no management route.
 | `--model` | string | Required supported transcription model; no silent model fallback. |
 | `--api-key-stdin` | boolean | Required bounded explicit data key on piped stdin; no management/enrolled-key substitution. |
 | `--json` | boolean | Emit the command result as JSON. |
-
-JSON mode: `payload`.
 
 - Fixed data-plane POST /v1/audio/transcriptions with file/model/response_format=json. May use provider quota; requires explicit upload/inference authority.
 - File must be nonempty regular input≤25,000,000bytes; multipart≤32MiB, response≤2MiB, request130s. Only the requested text result is returned, with exact supplied-key redaction.
@@ -687,7 +625,7 @@ Usage: `ocx access audio live-check --model <id> --api-key-stdin [--json]`
 
 Check actual live-session readiness, then close the connection.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -696,8 +634,6 @@ Drives no management route.
 | `--model` | string | Required live model; sent to the existing live route. |
 | `--api-key-stdin` | boolean | Required bounded printableASCII key, encoded only in the established audio subprotocol. |
 | `--json` | boolean | Emit the command result as JSON. |
-
-JSON mode: `envelope`.
 
 - Fixed data-plane WebSocket /v1/live with the existing audio key carrier and session.update, then session.close. It contacts upstream and may incur provider usage; no microphone, audio upload, tool execution or voice-roundtrip claim.
 - Version1 report distinguishes readiness from confirmed normal close. Socket-open alone is not ready.15s readiness,2s close deadline; stuck/abnormal closure remains unverified/nonzero, with local socket termination.

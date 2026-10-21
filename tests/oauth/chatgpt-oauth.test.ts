@@ -111,18 +111,35 @@ describe("ChatGPT OAuth JWT helpers", () => {
     const access = fakeJwt({ email: "access@test.com" });
     expect(extractEmail(id, access)).toBe("id@test.com");
   });
+
+  test("extractEmail extracts and lowercases email from profile claim", () => {
+    const jwt = fakeJwt({
+      "https://api.openai.com/profile": { email: " ProfileUser@Example.COM " },
+    });
+    expect(extractEmail(jwt)).toBe("profileuser@example.com");
+  });
+
+  test("extractEmail falls back to access_token profile claim if id_token has no email", () => {
+    const id = fakeJwt({ sub: "id-without-email" });
+    const access = fakeJwt({
+      "https://api.openai.com/profile": { email: "access-profile@example.com" },
+    });
+    expect(extractEmail(id, access)).toBe("access-profile@example.com");
+  });
 });
 
 describe("ChatGPT OAuth constants", () => {
   test("uses auth.openai.com endpoints (not auth0.openai.com)", async () => {
-    const source = await Bun.file("src/oauth/chatgpt.ts").text();
+    const source = await Bun.file("src/oauth/chatgpt.ts").text()
+      + await Bun.file("src/oauth/chatgpt-shared.ts").text();
     expect(source).toContain('auth.openai.com/oauth/authorize');
     expect(source).toContain('auth.openai.com/oauth/token');
     expect(source).not.toContain("auth0.openai.com");
   });
 
   test("uses official Codex client_id", async () => {
-    const source = await Bun.file("src/oauth/chatgpt.ts").text();
+    const source = await Bun.file("src/oauth/chatgpt.ts").text()
+      + await Bun.file("src/oauth/chatgpt-shared.ts").text();
     expect(source).toContain("app_EMoamEEZ73f0CkXaXp7hrann");
     expect(source).not.toContain("DRivsnm2Mu42T3KOpqdtwB3NYviHYzwD");
   });

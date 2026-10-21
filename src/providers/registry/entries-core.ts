@@ -1,4 +1,14 @@
+import { OPENCODE_GO_BASE_URL, OPENCODE_GO_RESPONSES_DEFAULTS } from "../../types/opencode-go";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "../kiro-models";
+import {
+  DSH_ACCOUNT_MODELS,
+  DSH_ACCOUNT_DEFAULT_MODEL,
+  DSH_ACCOUNT_MODEL_CONTEXT_WINDOWS,
+  DSH_ACCOUNT_MODEL_INPUT_MODALITIES,
+  DSH_ACCOUNT_MODEL_MAX_OUTPUT_TOKENS,
+  DSH_ACCOUNT_MODEL_REASONING_EFFORTS,
+  DSH_ACCOUNT_MODEL_DISPLAY_NAMES,
+} from "../dsh-account-models";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_MODEL_EFFORTS, DEVIN_DEFAULT_EFFORTS } from "../../adapters/devin/live-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS, ANTIGRAVITY_MODEL_INPUT_MODALITIES } from "../antigravity-models";
 import {
@@ -507,6 +517,27 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     parallelToolCalls: false,
   },
   {
+    id: "dsh-account",
+    label: "DeepSeek Account (DSH)",
+    adapter: "dsh-account",
+    baseUrl: "https://api.deepseek.com/anthropic",
+    authKind: "oauth",
+    oauthId: "dsh-account",
+    featured: false,
+    dashboardPreset: true,
+    note: "Import-first: reuses your installed and signed-in DeepSeek Harness Desktop account. Add account imports the grant from ~/.dsh/.credentials.yaml and verifies it with the DeepSeek platform.",
+    dashboardUrl: "https://platform.deepseek.com",
+    // Static catalog: the account token never authorizes model discovery (src/oauth/model-discovery-auth.ts).
+    liveModels: false,
+    defaultModel: DSH_ACCOUNT_DEFAULT_MODEL,
+    models: [...DSH_ACCOUNT_MODELS],
+    modelContextWindows: DSH_ACCOUNT_MODEL_CONTEXT_WINDOWS,
+    modelInputModalities: DSH_ACCOUNT_MODEL_INPUT_MODALITIES,
+    modelMaxOutputTokens: DSH_ACCOUNT_MODEL_MAX_OUTPUT_TOKENS,
+    modelReasoningEfforts: DSH_ACCOUNT_MODEL_REASONING_EFFORTS,
+    modelDisplayNames: DSH_ACCOUNT_MODEL_DISPLAY_NAMES,
+  },
+  {
     id: "orcarouter-oauth",
     label: "OrcaRouter - Auth",
     adapter: "openai-chat",
@@ -824,7 +855,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     escapeBuiltinToolNames: true,
   },
   {
-    id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
+    id: "opencode-go", label: "opencode go", adapter: "openai-chat", baseUrl: OPENCODE_GO_BASE_URL,
+    destinationAliases: [{ adapter: "openai-chat", baseUrl: "https://opencode.ai/inference/go/v1" }],
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
     jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
     // Zen Go can close a Chat stream after a fully assembled function call without sending
@@ -846,13 +878,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     - 다른 대안 대신 이 방식을 선택한 이유: OpenCode Go documents sibling models on Chat or Anthropic endpoints, and an exact registry default preserves both those routes and explicit opt-out precedence.
     - 장점, 단점 및 영향: Each listed model reaches `/responses` from every inbound surface without changing siblings; a future upstream endpoint change requires an evidence-backed registry update.
     */
-    modelWireDefaults: {
-      "gpt-5.6-luna": "openai-responses",
-      "grok-4.6": "openai-responses",
-      "grok-4.7": "openai-responses",
-      "muse-spark-1.3-contributor": "openai-responses",
-      "muse-spark-1.2-contributor": "openai-responses",
-    },
+    modelWireDefaults: OPENCODE_GO_RESPONSES_DEFAULTS,
     modelContextWindows: {
       "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
       // Zen Go discovers only the gateway id, so carry DeepSeek's official 1M V4.1
@@ -909,6 +935,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     },
     modelReasoningEfforts: {
       "gpt-5.6-luna": OPENAI_API_GPT56_REASONING_EFFORTS,
+      // Gemini's native thinkingLevel ladder; higher Codex efforts clamp to high.
+      // https://ai.google.dev/gemini-api/docs/models/gemini-4-argon
+      "gemini-4-argon-contributor": ["low", "medium", "high"],
       "grok-4.6": ["low", "medium", "high", "xhigh"],
       "grok-4.7": ["low", "medium", "high", "xhigh"],
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
@@ -1140,10 +1169,8 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // https://cf.api.fan/v1 — GET /v1/models answers 401 without a key, so the host is live and
     // discovery narrows to what the key's token group allows. Model ids are bare OpenAI-style
     // ids (the Codex token group lists gpt-5.5 / gpt-5.1-codex).
-    // Standard sponsor under SPONSORS.md; the dashboardUrl carries their affiliate code.
     id: "packycode", label: "PackyCode", adapter: "openai-chat", baseUrl: "https://cf.api.fan/v1",
-    authKind: "key", dashboardUrl: "https://www.packyapi.com/register?aff=k5KT",
-    sponsor: { tier: "standard", url: "https://www.packyapi.com/register?aff=k5KT" },
+    authKind: "key", dashboardUrl: "https://www.packyapi.com",
     defaultModel: "gpt-5.5",
     models: ["gpt-5.5", "gpt-5.1-codex"],
     liveModels: true,
@@ -1170,13 +1197,16 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
   {
     id: "google", label: "Google Gemini", adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", authKind: "key", featured: true,
-    dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
-    modelContextWindows: { "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
-    modelInputModalities: { "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
+    dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
+    modelContextWindows: { "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
+    modelInputModalities: { "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
     modelReasoningEfforts: {
       // 3.7 and 3.8 omit `minimal`: Google documents it as a validation error on both model
       // pages, so advertising it hands the user a rung the API rejects. 3.5/3.6 keep theirs —
       // their pages still list it, and this unit has no evidence to change them.
+      // Gemini 4 Argon (GA 2026-10-13): low/medium(default)/high; `minimal` and thinking_budget
+      // return HTTP 400 per ai.google.dev/gemini-api/docs/models/gemini-4-argon.
+      "gemini-4-argon": ["low", "medium", "high"],
       "gemini-3.8-flash": ["low", "medium", "high"],
       "gemini-3.7-flash": ["low", "medium", "high"],
       "gemini-3.6-flash": ["minimal", "low", "medium", "high"],

@@ -5,6 +5,12 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 供應商告訴 opencodex 模型在哪裡、它使用哪種 wire adapter，以及請求如何被認證。
 
+## 自訂供應商的上下文視窗
+
+自訂供應商未回報或設定模型視窗時，OpenCodex 依序使用 Azure 中繼資料、按模型 ID 查詢的內建廠商／聚合中繼資料、已啟用的 Context cap，最後回退至 128k。已發現值與設定值取較小者，Context cap 仍限制視窗，內建供應商行為不變。精確 ID 優先，大小寫或點號／連字號變體僅在無衝突時匹配；未知或浮動別名不猜測。推斷影響 Codex 壓縮預算及其他客戶端目錄（含 Claude 長上下文選擇），但不作為路由的實測能力。同名模型不保證中轉支援官方視窗；請用 modelContextWindows 或 Context cap 設定實際上限。不會自動啟用 cap，也不會呼叫模型探測。OpenAI API 視窗不代表 Codex 訂閱視窗。
+
+此推斷預設關閉，需按供應商設定 `inferContextWindow: true` 開啟。未開啟時，缺少視窗的模型使用已啟用的 Context cap，否則回退至 128k。
+
 ## 首次註冊時的模型選擇
 
 新的非 OAuth 連線會先等待可靠的模型清單，再公開模型。如果 Models 分頁中去重後的模型列達到20個，所有模型開關初始為 OFF，但供應商本身保持 ACTIVE。實際驗證方式為 OAuth 或 ChatGPT 登入的連線保留預設值。
@@ -44,7 +50,7 @@ ocx models provider openrouter on
 | `codexPinnedTransientPolicy?` | `"hold" \| "detour-new-threads"` | `"hold"` | 手動釘選帳號降級時，`hold` 繼續使用並記錄警告；`detour-new-threads` 只把新執行緒放到其他帳號。不會改派進行中的請求。 |
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 選用：同一帳號與執行緒的 Codex WebSocket 跨回合重用。開啟後忙碌 socket 最多等待 750ms，模型或層級變更時最多保留 2 個 socket。 |
 | `modelCacheTtlMs?` | `number` | `300000` | Per-供應商 `/models` 快取的新鮮度視窗。 |
-| `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic prompt-cache 政策：停用、5 分鐘臨時或 1 小時延長。 |
+| `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic 官方端點：`"long"`；其他 Anthropic 相容端點：`"short"` | Anthropic prompt-cache 政策：停用、5 分鐘臨時或 1 小時延長。未設定時，送往 `api.anthropic.com`（API 金鑰或 OAuth 帳號池）的請求使用 1 小時 TTL，相容閘道與廠商端點維持 5 分鐘 TTL。明確設定的值一律優先。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | off | 可選的主動 OAuth refresh 與 Codex 帳號暖機政策。 |
 
 這些策略均使用各帳戶的有效閾值：存在 `codexAccountAutoSwitchThresholds` 項目時使用該值，否則繼承全域 `autoSwitchThreshold`。覆寫值為 0 僅關閉基於用量的主動切換；啟動綁定、硬鎖、冷卻、模型使用資格檢查和故障復原仍然生效。
@@ -63,9 +69,12 @@ ocx models provider openrouter on
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`ollama-native`、`azure-openai`（或別名 `azure`）之一。 |
 | `baseUrl` | `string` | 上游 API base URL。多數內建固定端點忽略不符；碰撞安全的金鑰預設保留較舊的同名自訂目的地。 |
-| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models? }` | 選用的用戶端出站請求啟動節流，與上游用量、計費及限流指標彼此獨立。`maxConcurrentRequests` 是限制進行中請求數的正整數，供應商或模型規則都可單獨設定此項。供應商限制適用於所有模型，`models` 依上游模型精確 ID 比對，並可增加延遲或收緊並發限制。排隊等待不計入回應標頭逾時。涵蓋 HTTP 及明確的適配器 `fetchResponse`/`runTurn` 呼叫。設定並行上限時，標準 Responses WebSocket 請求改用 HTTP/SSE，以便在回應本文完成、出錯或取消時釋放並行名額。 對包含 Cursor 的 `runTurn` 適配器，並行上限計算進行中的回合數，而非實體傳送數：同一回合內的 RunSSE 與 BidiAppend 可重疊，其他回合仍須等待。後續傳送仍遵守啟動間隔。 |
+| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models?, keySelection?, keys? }` | 選用的用戶端出站請求啟動節流，與上游用量、計費及限流指標彼此獨立。`maxConcurrentRequests` 是限制進行中請求數的正整數，供應商或模型規則都可單獨設定此項。供應商限制適用於所有模型，`models` 依上游模型精確 ID 比對，並可增加延遲或收緊並發限制。排隊等待不計入回應標頭逾時。涵蓋 HTTP 及明確的適配器 `fetchResponse`/`runTurn` 呼叫。設定並行上限時，標準 Responses WebSocket 請求改用 HTTP/SSE，以便在回應本文完成、出錯或取消時釋放並行名額。 對包含 Cursor 的 `runTurn` 適配器，並行上限計算進行中的回合數，而非實體傳送數：同一回合內的 RunSSE 與 BidiAppend 可重疊，其他回合仍須等待。後續傳送仍遵守啟動間隔。 |
+| `requestPacing.keySelection?` | `"active"`, `"round-robin"` | 正常請求的金鑰選擇：預設 `active` 保留已儲存金鑰及既有錯誤切換；`round-robin` 依序分配可用池金鑰，不修改已儲存選擇。均衡的是分配次數，而非權杖或費用。 |
+| `requestPacing.keys?` | `{ requestsPerMinute?, minIntervalMs?, maxConcurrentRequests? }` | 依金鑰參照設定統一 RPM、最小啟動間隔及並行上限，跨模型共享，並同時受供應商及模型上限約束。相同參照共享容量；同一上游專案的不同參照不代表獨立配額。不管理 TPM 或每日配額。 |
 | `responsesPath?` | `string` | Key-auth `openai-responses` 請求的相對資源路徑。必須以 `/` 開頭且不含 scheme、query 或 fragment。 |
 | `chatCompletionsPath?` | `string` | `openai-chat` 請求的相對資源路徑，為 `responsesPath` 的對應項，適用相同的路徑規則。當同一上游以不同前綴提供 Chat Completions 與 Responses 時需要此設定：按模型的 wire override 只更換適配器而不改動 `baseUrl`，否則已啟用的 Chat 請求會送往 Responses base。隨附範例為 Z.AI。 |
+| `projectResponsesLiteHostedSearchHistory?` | `boolean` | 預設關閉。僅實際布林值 `true` 可為此供應商明確啟用有損 hosted-search 歷史投影，且只作用於最終目的地精確為標準 ChatGPT Codex `/responses`、明確選擇 Responses Lite 的一般請求及原生 v2 `compaction_trigger` 壓縮請求。省略或設為 `false` 時保留結構化歷史；字串和數字無效。不會啟用 Lite、變更傳輸，也不影響原生 v1 `/responses/compact`、公開 OpenAI API／其他目的地或既有 portable/routed compaction 投影。詳見[Lite 搜尋歷史](/zh-tw/reference/proxy-formats/#codex-原生一般-lite-請求的搜尋歷史)。 |
 | `upstreamWebsocket?` | `boolean` | 為 `openai-responses` 請求選用上游 Responses WebSocket 傳輸（預設 `false`）。僅對第一方 `https://api.openai.com/v1` 上游生效；自訂供應商端點一律使用有界 HTTP/SSE，因為 Bun 無法在配置完整訊息之前對傳入 WebSocket 訊息套用大小限制。對於規範 ChatGPT `openai` 供應商，省略此欄位會在符合條件的回合使用上游 WebSocket，`false` 會以 HTTP/SSE 傳送串流回合，`true` 會被拒絕；設為 `false` 時，原生回合中操控與注入無法使用。此欄位獨立於用戶端 `websockets` 設定，且不會變更端點或認證資料。一般 HTTP 仍使用 SSE；非 Responses 路徑與 `openai-chat` 請求仍使用 HTTP。 |
 | `disabled?` | `boolean` | 將供應商保留在磁碟上但排除於路由與模型／目錄清單。 |
 | `apiKey?` | `string` | API 金鑰，或在請求時解析的 `${ENV_VAR}` / `$ENV_VAR` 參考。 |
@@ -77,9 +86,10 @@ ocx models provider openrouter on
 | `selectedModels?` | `string[]` | 探索後的目錄允許清單。非空時僅暴露那些 id；空或省略時暴露所有探索的模型。 |
 | `contextWindow?` | `number` | 供應商範圍的 Codex 可見 context 上限。較小的即時中繼資料被保留。 |
 | `modelContextWindows?` | `Record<string, number>` | Per-model context 上限。這些覆寫 `contextWindow` 且永不提高較小的即時中繼資料。 |
+| `inferContextWindow?` | `boolean` | 僅限自訂供應商，預設關閉。設為 `true` 時以內建模型中繼資料補足缺少的視窗；這是估計值，不代表中轉的實測容量。 |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model 輸入提示，如 `["text"]` 或 `["text", "image"]`。 |
 | `modelMaxInputTokens?` | `Record<string, number>` | 用於目錄自動壓縮提示的正數 per-model max input 限制。 |
-| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Per-model 正安全整數型 soft 自動壓縮預算。此值只能降低「context 或 max input 的 90%」這個有效上限；沒有已知的權威 context window 時不會輸出。對 canonical `openai` 而言，key 必須是受支援的精確 native model ID，且不得含 provider 或 account-selector 前綴。Provider PATCH 會合併項目；將單一 key 設為 `null` 會刪除該 key，將整個欄位設為 `null` 會清空 map。這些 `null` tombstone 僅供 PATCH 使用。 |
+| `modelAutoCompactTokenLimits?` | `Record<string, number>` | Per-model 正安全整數型 soft 自動壓縮預算。此值只能降低「context 或 max input 的 90%」這個有效上限；無法解析出有效 context window 時不會輸出。對 canonical `openai` 而言，key 必須是受支援的精確 native model ID，且不得含 provider 或 account-selector 前綴。Provider PATCH 會合併項目；將單一 key 設為 `null` 會刪除該 key，將整個欄位設為 `null` 會清空 map。這些 `null` tombstone 僅供 PATCH 使用。 |
 | `defaultMaxOutputTokens?` | `number` | 當客戶端省略 `max_output_tokens` 時的供應商範圍 `openai-chat` 後備。 |
 | `modelMaxOutputTokens?` | `Record<string, number>` | 正數 per-model `openai-chat` 後援預算；精確／模式比對勝過供應商預設。 |
 | `headers?` | `Record<string, string>` | 額外上游標頭。Authorization、cookie、API-key 標頭、內嵌換行與無效名稱被拒絕。 |
@@ -105,7 +115,7 @@ ocx models provider openrouter on
 | `noStopModels?` | `string[]` | 拒絕呼叫者指定 `stop` 的模型。`openai-chat` 轉接器、Chat 直通與 Responses 直通會為這些模型省略該欄位。內建 `xai` 預設在此列出 xAI 文件說明會拒絕該參數的推理模型(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)；`grok-4.20-0309-non-reasoning`, `grok-composer-2.5-fast` 保留呼叫者的 `stop`。 |
 | `noPenaltyModels?` | `string[]` | 拒絕 presence/frequency penalty 的模型。 內建 `xai` 預設在此列出 xAI 文件說明會拒絕這些參數的推理模型(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)；非推理模型保留呼叫者的 penalty。 |
 | `noStructuredOutputModels?` | `string[]` | 其 `openai-chat` 端點拒絕 `response_format` 的精確模型 ID。僅精確符合的請求模型會省略該欄位；structured-output 轉譯對其他每個 `openai-chat` 模型保持啟用。 |
-| `noJsonSchemaModels?` | `string[]` | 其 `openai-chat` 端點拒絕 `json_schema` 形式但仍接受 `json_object` 的精確模型 ID。這類請求會降級為 `json_object` 而非被丟棄，因此要求 JSON 的呼叫端仍會拿到 JSON。同一模型同時列在兩份清單時，以 `noStructuredOutputModels` 為準。`opencode go`、`opencode zen`、`opencode free` 預設已為其 DeepSeek 路由內建。 |
+| `noJsonSchemaModels?` | `string[]` | 其 `openai-chat` 端點拒絕 `json_schema` 形式但仍接受 `json_object` 的精確模型 ID。這類請求會降級為 `json_object` 而非被丟棄，因此要求 JSON 的呼叫端仍會拿到 JSON。同一模型同時列在兩份清單時，以 `noStructuredOutputModels` 為準。`opencode go`、`opencode zen` 預設已為其 DeepSeek 路由內建。 |
 | `foldDeveloperRoleToSystem?` | `boolean` | 記錄某個 `openai-chat` 目的地是否接受 `developer` 角色。`foldDeveloperRoleToSystem` 未設定時以 `system` 傳送，`true` 時以 `system` 傳送，`false` 時以 `developer` 傳送。未設定表示尚未記錄該目的地的情況；`true` 記錄上游拒絕該角色；`false` 記錄其接受該角色。無論何者，訊息都保留在對話中的原有位置，只有角色改變。拒絕該角色的目的地會回應 `400 role 'developer' is not allowed`，該回合根本無法開始，這就是未記錄狀態預設摺疊的原因。 |
 | `parallelToolCalls?` | `boolean` | 切換平行工具呼叫。OpenAI Chat 預設開啟；非 chat adapter 僅在明確 `true` 時廣告。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | 預設停用的下游 SSE 修復，用於精確佔位 id 與缺失的終端 id。Function-call id 永不被重寫。 |
@@ -121,8 +131,8 @@ ocx models provider openrouter on
 | `escapeBuiltinToolNames?` | `boolean` | 為 Anthropic 相容閘道轉義內建工具名稱，並在回傳的呼叫中還原它們。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google 傳輸／認證模式。預設 `ai-studio`。 |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | 僅限 Google。省略或設為 `compatible` 時保留相容結構描述與既有的非直接 400 修復。`reject-lossy` 會在傳送前拒絕初始損失或結果不確定的有界比較，並阻止會放寬限制的 Vertex 或 Cloud Code Assist 修復。直接 AI Studio 不會執行該修復。 |
-| `project?` | `string` | Vertex 或 Antigravity Cloud Code Assist 專案 id。 |
-| `location?` | `string` | Vertex 位置；環境後備為 `GOOGLE_CLOUD_LOCATION`。 |
+| `project?` | `string` | Vertex 或 Antigravity Cloud Code Assist 專案 id。設定後，Vertex API 金鑰使用專案端點；未設定時，即使有 `GOOGLE_CLOUD_PROJECT` 也使用 express 模式。ADC 後備為 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`。 |
+| `location?` | `string` | Vertex 位置。API 金鑰的專案端點預設為 `global`，並忽略 `GOOGLE_CLOUD_LOCATION`；ADC 需要此欄位或 `GOOGLE_CLOUD_LOCATION` 後備。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | 僅 Cursor：stdio 或 Streamable HTTP MCP 伺服器。 |
 | `desktopExecutor?` | `DesktopExecutorConfig` | 僅 Cursor：外部 computer-use 與 record-screen 指令。 |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 舊版布林值，僅在較新欄位未設定時等同於 `nativeLocalExec: "on"`。 |
@@ -503,3 +513,8 @@ Vercel AI Gateway 可在多個底層推論供應商之間路由一個模型。`v
 ### `anthropicAccountPool.routes`
 
 `anthropicAccountPool.routes` 將模型綁定至已儲存的 Anthropic OAuth 帳戶 ID。啟用帳戶池後，區分大小寫的 `match` 萬用模式依順序採用第一個符合的規則，限制首次選擇與 429 重試。僅當該規則沒有可用帳戶時，`fallback: true` 才會回退到一般帳戶池。
+
+
+### `promptLengthPricing`
+
+選用欄位 `promptLengthPricing` 擴充四項基礎費率。`mode: "automatic"`（或省略欄位）保留目錄的上下文計價規則；`mode: "flat"` 停用這些規則。`mode: "custom"` 使用正安全整數 `thresholdTokens`、值為 `"gt"`（>）或 `"gte"`（≥）的 `comparison`，以及含四項絕對替代費率的 `rates`。門檻計算所有提示詞 token，包括快取讀取與寫入，不包括輸出。所選費率適用於包含輸出的整個請求，並在門檻兩側皆取代目錄上下文規則。Fast/Priority 調整在選定費率後只套用一次，並遵循目錄為該模型公布的 Priority 關係；僅當目錄將該關係宣告為 `lower-bound`（目前為 xAI Grok）時，估算才會標示為下限；沒有目錄規則的模型只套用一次 Priority 倍率。可在 **Models → Price** 中設定。**Reset to automatic** 刪除包含基礎費率與規則的整個覆寫設定。舊設定保持相容；這些設定僅涉及顯示的費用估算。

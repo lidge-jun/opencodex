@@ -1,5 +1,7 @@
+import { canInferVendorContext, vendorContextInference } from "./vendor-context";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
+import { supportsConfiguredUltraFast } from "./configured-tiers";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -250,6 +252,18 @@ export function configuredReasoningSummarySupport(prov: OcxProviderConfig | unde
   return modelRecordValue(prov.modelReasoningSummaryDelivery, id) !== undefined ? true : undefined;
 }
 
+/** Add attachment metadata at publication time, independently of cached provider evidence. */
+export function withVisionSidecarInput(
+  model: CatalogModel,
+  provider: OcxProviderConfig | undefined,
+  enabled = true,
+): CatalogModel {
+  if (!enabled || !provider || !isModelVisionSidecarConsumer(provider, model.id)) return model;
+  const modalities = model.inputModalities ?? ["text"];
+  return modalities.includes("image") ? model : { ...model, inputModalities: [...modalities, "image"] };
+}
+
+/** Reapply configured limits and captured wire capabilities without trusting stale discovery hints. */
 export function applyProviderConfigHints(
   name: string,
   prov: OcxProviderConfig,
@@ -258,6 +272,7 @@ export function applyProviderConfigHints(
   metadataModelIdCaseFold?: boolean,
   effectiveAlias?: string | null,
   metadataConfigDir?: string,
+  includeVisionSidecar = true,
 ): CatalogModel {
   const staticPolicy = resolveModelPolicy({
     providerName: name,
@@ -286,18 +301,7 @@ export function applyProviderConfigHints(
   // Removing an exact capability row therefore returns this projection to legacy-map inference.
   const resolvedModalities = staticPolicy.model.inputModalities ?? model.inputModalities
     ?? (azureMetadata?.input ? modelInputModalities({ id: model.id, input_modalities: azureMetadata.input }, undefined) : undefined);
-  let inputModalities = resolvedModalities ? [...resolvedModalities] : undefined;
-  // The shared vision-sidecar consumer predicate keeps catalog advertisement and request-time
-  // planning aligned. The catalog must still advertise image input — the Codex app
-  // gates attachments client-side on input_modalities, and a text-only entry would block images
-  // before the sidecar ever runs ("This model does not support image inputs"). Discovery-derived
-  // text-only rows stay untouched: the runtime predicate only reads these two config sources, so
-  // it would not convert those.
-  const sidecarCovered = isModelVisionSidecarConsumer(prov, model.id);
-  if (sidecarCovered) {
-    const base = inputModalities ?? model.inputModalities ?? ["text"];
-    inputModalities = base.includes("image") ? [...base] : [...base, "image"];
-  }
+  const inputModalities = resolvedModalities ? [...resolvedModalities] : undefined;
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const suppressSyntheticMax = modelRecordValue(prov.modelSuppressSyntheticMax, model.id)
     ?? (model.antigravityEffortWireModelIds !== undefined);
@@ -309,7 +313,12 @@ export function applyProviderConfigHints(
   // owns catalog publication, including an explicit provider-level false.
   const supportsServiceTier = serviceTierSupportFromPolicy(fastPolicy);
   const {
+    contextWindowInference: _staleContextInference,
+    contextWindow: _previousContextWindow,
+    contextCap: previousContextCap,
+    contextCapped: previousContextCapped,
     supportsServiceTier: _staleServiceTier,
+    supportsUltraFastTier: _staleUltraFastTier,
     fastTierDescription: _staleFastTierDescription,
     providerAlias: _staleProviderAlias,
     suppressSyntheticMax: _staleSuppressSyntheticMax,
@@ -317,16 +326,23 @@ export function applyProviderConfigHints(
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
   const discoveredWindow = githubCopilotCatalogContextWindow(name, prov, model.id,
-    typeof model.contextWindow === "number" && model.contextWindow > 0 ? model.contextWindow : undefined);
+    !model.contextWindowInference && typeof model.contextWindow === "number" && model.contextWindow > 0 ? model.contextWindow : undefined);
   const projectedLimits = clampObservedModelLimits(staticPolicy.model, {
     ...(discoveredWindow !== undefined ? { contextWindow: discoveredWindow } : {}),
     ...(typeof model.maxInputTokens === "number" && model.maxInputTokens > 0 ? { maxInputTokens: model.maxInputTokens } : {}),
   });
+  const azureWindow = positiveSafeInteger(azureMetadata?.contextWindow);
+  const inferredWindow = projectedLimits.contextWindow === undefined && azureWindow === undefined && canInferVendorContext(name, prov)
+    ? vendorContextInference(model.id) : undefined;
   const hintedWindow = projectedLimits.contextWindow
-    ?? positiveSafeInteger(azureMetadata?.contextWindow)
+    ?? azureWindow
+    ?? inferredWindow?.contextWindow
     ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined);
-  const hinted = {
+  const hinted = withVisionSidecarInput({
     ...modelWithoutServiceTier,
+    ...(!model.contextWindowInference && previousContextCap !== undefined
+      ? { contextCap: previousContextCap, contextCapped: previousContextCapped } : {}),
+    ...(inferredWindow ? { contextWindowInference: inferredWindow } : {}),
     ...(displayName !== undefined ? { displayName } : {}),
     ...(providerAlias !== undefined ? { providerAlias } : {}),
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),
@@ -343,6 +359,7 @@ export function applyProviderConfigHints(
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsVerbosity === "boolean" ? { supportsVerbosity } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
+    supportsUltraFastTier: supportsConfiguredUltraFast(fastPolicy),
     ...(supportsServiceTier === true && fastPolicy.fastTierDescription !== undefined
       ? { fastTierDescription: fastPolicy.fastTierDescription }
       : {}),
@@ -352,7 +369,7 @@ export function applyProviderConfigHints(
       ? { parallelToolCalls: true }
       : {}),
     ...(prov.codexToolMode !== undefined ? { codexToolMode: prov.codexToolMode } : {}),
-  };
+  }, prov, includeVisionSidecar);
   const capped = applyProviderContextCap(hinted.contextWindow, providerCap);
   const withCap = providerCap !== undefined
     ? capped !== hinted.contextWindow
@@ -381,6 +398,7 @@ export function applyProviderConfigHints(
   };
 }
 
+/** Project a configured row, optionally deferring sidecar attachment metadata until publication. */
 export function catalogHintsFromProviderConfig(
   name: string,
   prov: OcxProviderConfig,
@@ -389,12 +407,14 @@ export function catalogHintsFromProviderConfig(
   metadataModelIdCaseFold?: boolean,
   effectiveAlias?: string | null,
   metadataConfigDir?: string,
+  includeVisionSidecar = true,
 ): Partial<CatalogModel> {
-  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir);
+  const hinted = applyProviderConfigHints(name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir, includeVisionSidecar);
   const { provider: _provider, id: _id, ...hints } = hinted;
   return hints;
 }
 
+/** Reapply current hints to cached rows without mutating their provider evidence. */
 export function applyConfigHintsToCachedModels(
   name: string,
   prov: OcxProviderConfig,
@@ -403,8 +423,9 @@ export function applyConfigHintsToCachedModels(
   metadataModelIdCaseFold?: boolean,
   effectiveAlias?: string | null,
   metadataConfigDir?: string,
+  includeVisionSidecar = true,
 ): CatalogModel[] {
-  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir));
+  return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir, includeVisionSidecar));
 }
 
 /** Catalog slugs whose configured model must not gain a missing synthetic max rung. */
@@ -431,7 +452,9 @@ export function suppressedSyntheticMaxCatalogSlugs(
   }
   return slugs;
 }
-export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai"]);
+// google-antigravity: the static lineup is an entitlement superset (Claude 5.5 and Gemini 4 Argon
+// are per-account), so a live roster that omits some of it is the expected case, not drift.
+export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai", "google-antigravity"]);
 
 export const CALLABLE_CONFIGURED_COMPATIBILITY_MODELS: Readonly<Record<string, ReadonlySet<string>>> = {
   // CodeBuddy's vendor defaults are real callable selectors — both the bundled manifests

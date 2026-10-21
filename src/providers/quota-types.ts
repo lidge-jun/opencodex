@@ -20,6 +20,13 @@ export interface ProviderQuotaWindow {
   percent: number;
   resetAt?: number;
   /**
+   * Model this window is attributed to: the exact CCA wire model of a fallback measurement, or
+   * the canonical model of a quota-summary bucket dedicated to one model (Antigravity's Gemini 4
+   * Argon pool). Display evidence only, never eligibility: routing, exhaustion, reset ordering
+   * and reset notifications ignore every window that carries it.
+   */
+  modelId?: string;
+  /**
    * Set only when the PRODUCER proved this window covers one model family, structurally rather
    * than by reading its label: an Anthropic `seven_day_<family>` body key, or a limit with
    * `kind: "weekly_scoped"` and a recognized `scope.model.display_name`.

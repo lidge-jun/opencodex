@@ -55,17 +55,49 @@ export class UnknownComboError extends Error {
 export class NoAvailableComboTargetsError extends Error {
   readonly code = "combo_unavailable";
 
-  constructor(readonly comboId: string) {
-    super(`No available targets for combo: ${comboId}`);
+  constructor(readonly comboId: string, readonly reasons = "") {
+    super(`No available targets for combo: ${comboId}${reasons ? ` (${reasons})` : ""}`);
     this.name = "NoAvailableComboTargetsError";
   }
 }
 
+function providerExclusionReason(config: OcxConfig, target: OcxComboTarget, now: number): string | undefined {
+  const provider = Object.hasOwn(config.providers, target.provider) ? config.providers[target.provider] : undefined;
+  if (!provider) return "provider missing";
+  if (provider.disabled === true) return "provider disabled";
+  return cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now, target.model)
+    ? "quota exhausted"
+    : undefined;
+}
+
 function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget, now: number): boolean {
-  if (!Object.hasOwn(config.providers, target.provider)) return false;
-  const provider = config.providers[target.provider];
-  if (!provider || provider.disabled === true) return false;
-  return !cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now, target.model);
+  return providerExclusionReason(config, target, now) === undefined;
+}
+
+/**
+ * Why each target of a combo cannot be picked right now, for a zero-attempt refusal. Only the
+ * configured provider/model and a coarse label are named, never account or request data.
+ */
+export function comboExclusionReasons(
+  config: OcxConfig,
+  comboId: string,
+  eligible?: (target: NormalizedComboTarget) => boolean,
+  now = Date.now(),
+): string {
+  return (getCombo(config, comboId)?.targets ?? []).flatMap(target => {
+    let reason = providerExclusionReason(config, target, now);
+    const cooldown = reason ? undefined : earliestComboCooldown(comboId, [target], now);
+    if (cooldown) reason = `cooldown ${Math.max(1, Math.ceil((cooldown.expiry - now) / 1000))}s`;
+    if (!reason && eligible) {
+      try {
+        if (!eligible(target)) reason = "ineligible for this request";
+      } catch {
+        // An eligibility check can exhaust the translator budget; the target still was not picked.
+        reason = "ineligible for this request";
+      }
+    }
+    return reason ? [`${targetKey(target)}: ${reason}`] : [];
+  }).join("; ");
 }
 
 /** Capture usable providers' quota cooldowns; request eligibility is deferred to exhaustion. */
@@ -100,6 +132,9 @@ function quotaWindowExhausted(percent: number | undefined, resetAt: number | und
 const MODEL_FAMILY_WINDOW_LABELS = new Set(["fable", "opus", "sonnet"]);
 
 function customWindowAppliesToModel(window: ProviderQuotaWindow, model: string | undefined): boolean {
+  // Exact Antigravity model readings are diagnostic only. They are not permission or
+  // provider-wide exhaustion evidence until a separate eligibility contract consumes them.
+  if (window.modelId !== undefined) return false;
   if (window.scope !== "model" || model === undefined) return true;
   const family = window.label.trim().toLowerCase();
   if (!MODEL_FAMILY_WINDOW_LABELS.has(family)) return true;
@@ -408,9 +443,10 @@ export function advanceComboAfterFailure(
   // including the pool's OWN "all accounts are cooled" 429, which refuses locally before it picks
   // one. That is what keeps this from trading a blackhole for a hammer: when nothing else is
   // holding the target back, the target cooldown still does.
-  const accountScoped = options.cooldownScope === "target"
-    && options.status === 429
-    && options.failedAccount !== undefined;
+  // A 402 credit refusal is the provider-scoped twin: the caller names an account only after the
+  // pool has cooled it and still holds an eligible sibling.
+  const accountScoped = options.failedAccount !== undefined
+    && (options.status === 429 ? options.cooldownScope === "target" : options.status === 402);
   // "none" records no cooldown at all: the failure described the request, not the target, so
   // the target must stay immediately selectable for the next (differently shaped) request.
   if (options.cooldownScope !== "none" && !accountScoped) {
@@ -612,6 +648,6 @@ export function tryPickComboModel(config: OcxConfig, modelId: string, preview = 
   if (!comboId) return null;
   if (!getCombo(config, comboId)) throw new UnknownComboError(comboId);
   const picked = pickComboTarget(config, comboId, { preview });
-  if (!picked) throw new NoAvailableComboTargetsError(comboId);
+  if (!picked) throw new NoAvailableComboTargetsError(comboId, comboExclusionReasons(config, comboId));
   return picked;
 }

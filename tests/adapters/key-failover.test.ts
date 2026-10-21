@@ -3,6 +3,7 @@ import { mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { providerFetch } from "../../src/server/responses/fetch-helpers";
 import {
   getConfigPath,
   loadConfig,
@@ -34,6 +35,7 @@ import { subscribeAccountSelections } from "../../src/lib/account-selection-even
 import { providerManagementConfigError, safeConfigDTO } from "../../src/server/auth-cors";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../src/providers/api-key-selection";
 
 let home: string;
 const previousHome = process.env.OPENCODEX_HOME;
@@ -462,6 +464,64 @@ describe("rotateKeyOn401", () => {
 
   describe("proactive key selection", () => {
     const now = 2_000_000;
+
+    test("request-local round-robin keeps parallel keys stable without changing saved selection", async () => {
+      clearKeyCooldowns("distributed");
+      const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3(),
+        requestPacing: { enabled: true, keySelection: "round-robin" } });
+      const row = config.providers.p!;
+      config.providers.distributed = row;
+      const selected = Array.from({ length: 6 }, () => selectProactiveApiKeyTransport(config, "distributed", routedProviderConfig("distributed", row), undefined, now)!);
+      expect(selected.map(provider => provider._apiKeyAttempt?.entryId)).toEqual(["k1", "k2", "k3", "k1", "k2", "k3"]);
+      expect(config.providers.distributed!.apiKey).toBe(row.apiKey);
+      expect(loadConfig().providers.p!.apiKey).toBe(row.apiKey);
+      for (const provider of selected) {
+        expect(providerApiKeySelectionIsCurrent(config, "distributed", provider)).toBe(true);
+        expect(resolveCurrentProviderApiKeyTransport(config, "distributed", provider)?.apiKey).toBe(provider.apiKey);
+      }
+      const sent: string[] = [];
+      await Promise.all(selected.map(async provider => {
+        const transport = resolveCurrentProviderApiKeyTransport(config, "distributed", provider)!;
+        transport.fetch = Object.assign(async (_input: unknown, init?: RequestInit) => {
+          sent.push(new Headers(init?.headers).get("authorization")!);
+          return new Response("ok");
+        }, { preconnect() {} }) as typeof fetch;
+        const parsed: OcxParsedRequest = { modelId: "fake-model", context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] }, stream: false, options: {} };
+        const request = createOpenAIChatAdapter(transport).buildRequest(parsed);
+        const response = await providerFetch(transport, undefined, { providerName: "distributed" })(request.url, {
+          method: "POST", headers: request.headers, body: request.body,
+        });
+        await response.text();
+      }));
+      expect(sent).toEqual(selected.map(provider => `Bearer ${provider.apiKey}`));
+      row.apiKeySelectionRevision = "manual-edit";
+      expect(providerApiKeySelectionIsCurrent(config, "distributed", selected[0]!)).toBe(false);
+      expect(resolveCurrentProviderApiKeyTransport(config, "distributed", selected[0]!)).toBeNull();
+    });
+
+    test("distributed 429 and 401 exclude only attempted keys and exhaustion refuses allocation", () => {
+      const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3(),
+        requestPacing: { enabled: true, keySelection: "round-robin" } });
+      const row = config.providers.p!;
+      config.providers.distributedFailure = row;
+      clearKeyCooldowns("distributedFailure");
+      let transport = selectProactiveApiKeyTransport(config, "distributedFailure", routedProviderConfig("distributedFailure", row), undefined, now)!;
+      transport = rotateProviderTransportOn429(config, "distributedFailure", transport, { retryAfter: "60", now })!;
+      expect(getKeyCooldownUntil("distributedFailure", "k1", now)).toBe(now + 60_000);
+      transport = rotateProviderTransportOn401(config, "distributedFailure", transport, { now })!;
+      expect(rotateProviderTransportOn429(config, "distributedFailure", transport, { now })).toBeNull();
+      expect(() => selectProactiveApiKeyTransport(config, "distributedFailure", routedProviderConfig("distributedFailure", row), undefined, now)).toThrow("No eligible API key");
+      expect(row.apiKey).toBe("key-alpha-000111222333");
+    });
+
+    test("an active-key permit cannot dispatch a manually replaced key under per-key limits", () => {
+      const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3(),
+        requestPacing: { enabled: true, keys: { maxConcurrentRequests: 1 } } });
+      const transport = routedProviderConfig("p", config.providers.p!);
+      expect(selectProactiveApiKeyTransport(config, "p", transport, undefined, now)).toBeNull();
+      config.providers.p!.apiKey = "key-beta-444555666777";
+      expect(resolveCurrentProviderApiKeyTransport(config, "p", transport)).toBeNull();
+    });
 
     test("does nothing without a configured strategy", () => {
       const config = makeConfig({ apiKey: "key-alpha-000111222333", apiKeyPool: pool3() });

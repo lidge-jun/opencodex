@@ -1,6 +1,6 @@
 import { isCodexAccountGenerationLive } from "../account-store";
 import { NATIVE_RESERVE_MODEL } from "../catalog/native-models";
-import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
+import { MAIN_CODEX_ACCOUNT_ID } from "../account-id";
 import { POOL_KEY_CODEX } from "../pool-rotation";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import type { OcxConfig } from "../../types";
@@ -163,7 +163,7 @@ export function deleteScopedHealth(accountId: string, scope: CodexQuotaScope): v
 }
 
 /** Live quota-refusal avoidance for an account, including the lane the request belongs to. */
-function codexQuotaAvoidUntil(
+export function codexQuotaAvoidUntil(
   accountId: string,
   quotaScope: CodexQuotaScope | undefined,
   now: number,

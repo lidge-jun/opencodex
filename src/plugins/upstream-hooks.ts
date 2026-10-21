@@ -31,18 +31,30 @@ interface Registration {
 }
 
 const registrations: Registration[] = [];
+// Changes on every registration and removal, so an observer can tell that no rewriter could
+// have touched a send between two points even when the slot is empty at both.
+let registrationEpoch = 0;
 
 export function registerUpstreamRewriter(name: string, rewrite: UpstreamRewriter): () => void {
   const registration: Registration = { name, rewrite, disabled: false };
   registrations.push(registration);
+  registrationEpoch += 1;
   return () => {
     const index = registrations.indexOf(registration);
-    if (index >= 0) registrations.splice(index, 1);
+    if (index >= 0) {
+      registrations.splice(index, 1);
+      registrationEpoch += 1;
+    }
   };
 }
 
 export function hasUpstreamRewriters(): boolean {
   return registrations.length > 0;
+}
+
+/** Monotonic registration epoch; equal values bracket a window with no registration change. */
+export function upstreamRewriterEpoch(): number {
+  return registrationEpoch;
 }
 
 /**
@@ -116,4 +128,5 @@ export function rewriteWebSocketDial(
 
 export function resetUpstreamRewritersForTests(): void {
   registrations.length = 0;
+  registrationEpoch += 1;
 }

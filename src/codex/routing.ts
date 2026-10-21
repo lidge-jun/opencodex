@@ -23,7 +23,7 @@ import {
   failureWindowSteersNewThreads,
   forgetCodexFailureWindow,
   forgetCodexFailureWindows,
-  noteCodexFailureWindowSample,
+  noteCodexFailureWindowOutcome,
   settleCodexSuccessStreak,
 } from "./routing/failure-window";
 
@@ -220,6 +220,7 @@ export {
   isEffectiveCodexAccountPinned,
 } from "./routing/active-account";
 export { codexAccountPinDrainReason } from "./routing/pin-drain";
+export { codexFailureWindowOutcomeMeta } from "./routing/failure-window";
 export type { CodexPinDrainReason } from "./routing/pin-drain";
 
 // A shared refresh can outlive the request that opened it. Register the affinity
@@ -1305,7 +1306,7 @@ export function recordCodexUpstreamOutcome(
    */
   dropSpentCredentialFailure(accountId);
   if (outcomeClass === "success") {
-    noteCodexFailureWindowSample(config, accountId, false, now);
+    noteCodexFailureWindowOutcome(config, accountId, false, now, meta);
     // The operator's one-shot is spent by a dispatch that actually worked, and only by that.
     // A failed lookup leaves it unspent so the intent survives the failure.
     consumeManualPreference(accountId, codexPoolKeyForScope(quotaScope));
@@ -1555,7 +1556,7 @@ export function recordCodexUpstreamOutcome(
   // A transient failure concludes an owning probe; an unrelated 5xx must not
   // consume someone else's live lease or drop hard-cooldown bookkeeping (#433).
   const transientBase = ownsProbeLease(current, meta) ? withProbeLeaseReleased(current!, now) : current;
-  noteCodexFailureWindowSample(config, accountId, true, now);
+  noteCodexFailureWindowOutcome(config, accountId, true, now, meta);
   const stale = current?.lastFailureAt ? now - current.lastFailureAt > CODEX_FAILURE_WINDOW_MS : false;
   const hardCooldownUntil = getCodexAccountCooldownUntil(accountId, now) ?? undefined;
   // Soft avoid + affinity clears are part of failover. When threshold is 0, leave

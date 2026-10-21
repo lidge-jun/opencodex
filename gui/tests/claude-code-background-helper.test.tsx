@@ -4,6 +4,8 @@ import { LanguageProvider } from "../src/i18n/provider";
 import { SmallFastModelSetting } from "../src/pages/ClaudeCode";
 import { backgroundHelperOptions } from "../src/pages/claude-code-helper-options";
 import { modelLabel } from "../src/model-display";
+import { ClaudeCodeTierDefaults } from "../src/pages/claude-code-tier-defaults";
+import type { ClaudeCodeState } from "../src/pages/claude-code-types";
 
 let originalLanguageDescriptor: PropertyDescriptor | undefined;
 
@@ -27,6 +29,20 @@ const options = [
   { value: "", label: "Let Claude Code choose (native model)" },
   { value: "gemini/gemini-3-flash", label: "gemini/gemini-3-flash" },
 ];
+
+test("CLI tiers retain configured combos and require saved state before settings preview", () => {
+  const html = renderToStaticMarkup(<LanguageProvider><ClaudeCodeTierDefaults
+    state={{ tierModels: { opus: "combo/opus", sonnet: "combo/sonnet", haiku: "combo/haiku" } } as ClaudeCodeState}
+    options={options} onChange={() => {}} apiBase="http://localhost" dirty={true}
+  /></LanguageProvider>);
+  for (const tier of ["Opus", "Sonnet", "Haiku", "Fable"]) expect(html).toContain(`aria-label="${tier}"`);
+  for (const model of ["combo/opus", "combo/sonnet", "combo/haiku"]) expect(html).toContain(model);
+  expect(html).toContain("Preview Claude settings");
+  expect(html).toContain("disabled");
+  expect(html).not.toContain("Apply to Claude settings");
+  expect(html).toContain("Unset (keep existing Claude setting)");
+  expect(html).not.toContain("Let Claude Code choose (native model)");
+});
 
 function renderSetting(value: string, tierHaikuModel?: string): string {
   return renderToStaticMarkup(

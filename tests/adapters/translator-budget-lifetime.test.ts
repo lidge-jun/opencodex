@@ -3,7 +3,10 @@ import {
   createTranslatorBudget, finalizeTranslatorBudgetResponse, translatorLiveBudgetCountForTests,
   translatorObservedBufferSnapshot,
 } from "../../src/lib/translator-budget";
-import { finalizeOwnedTranslatorBudget } from "../../src/server/responses/core-lifetime";
+import {
+  finalizeAccountLease, finalizeOwnedTranslatorBudget, runTurnAdapterSseResponses,
+} from "../../src/server/responses/core-lifetime";
+import { isNonReplayableResponse, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import {
   markNativePassthroughSseResponse, isNativePassthroughSseResponse,
   markEagerRelaySseResponse, isEagerRelaySseResponse,
@@ -117,6 +120,7 @@ for (const [mark, inspect] of [
   [markNativePassthroughSseResponse, isNativePassthroughSseResponse],
   [markEagerRelaySseResponse, isEagerRelaySseResponse],
   [markPreinspectedJsonResponse, isPreinspectedJsonResponse],
+  [(response: Response) => { markResponseNonReplayable(response); return response; }, isNonReplayableResponse],
 ] as const) {
   test(`Responses retains ${inspect.name} through budget wrapping`, async () => {
     const source = mark(new Response("unchanged"));
@@ -125,6 +129,51 @@ for (const [mark, inspect] of [
     expect(inspect(wrapped)).toBe(true);
     expect(await wrapped.text()).toBe("unchanged");
   });
+}
+
+for (const outerLease of [false, true]) {
+  for (const mode of ["before", "after", "cancel"] as const) {
+    test(`Responses runTurn/nonreplayable classification survives ${mode} cleanup (lease=${outerLease})`, async () => {
+      const baseline = translatorLiveBudgetCountForTests();
+      const budget = createTranslatorBudget();
+      budget.chargeRetained(512, { kind: "reasoning" });
+      const controller = new AbortController();
+      let release!: () => void;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      let cancellations = 0;
+      let leaseReleases = 0;
+      const source = new Response(new ReadableStream<Uint8Array>({
+        cancel() { cancellations++; return held; },
+      }), { status: 503, headers: { "x-should-retry": "false" } });
+      markResponseNonReplayable(source);
+      runTurnAdapterSseResponses.add(source);
+      if (mode === "before") controller.abort();
+      const finalized = finalizeOwnedTranslatorBudget(source, budget, controller.signal);
+      const response = outerLease
+        ? finalizeAccountLease(finalized, () => { leaseReleases++; }) : finalized;
+      let cancelled: Promise<void> | undefined;
+      try {
+        if (mode === "after") controller.abort();
+        if (mode === "cancel") cancelled = response.body!.cancel("client gone");
+        await Promise.resolve();
+        expect(translatorLiveBudgetCountForTests()).toBe(baseline);
+        expect(budget.snapshot().currentBytes).toBe(0);
+        expect(isNonReplayableResponse(response)).toBe(true);
+        expect(runTurnAdapterSseResponses.has(response)).toBe(true);
+        expect(response.status).toBe(503);
+        expect(response.headers.get("x-should-retry")).toBe("false");
+        expect(cancellations).toBe(mode === "cancel" ? 1 : 0);
+        expect(leaseReleases).toBe(0);
+      } finally {
+        cancelled ??= response.body!.cancel("cleanup");
+        release();
+        await cancelled;
+        budget.dispose();
+      }
+      expect(cancellations).toBe(1);
+      expect(leaseReleases).toBe(outerLease ? 1 : 0);
+    });
+  }
 }
 
 for (const surface of ["responses", "chat-completions", "claude-messages"] as const) {

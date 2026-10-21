@@ -7,6 +7,8 @@ import { repoPath } from "./repo-root";
  */
 export const RESPONSES_CORE_MODULES = [
   "core.ts",
+  "core-pipeline.ts",
+  "compaction-retention.ts",
   "core-options.ts",
   "native-response-control.ts",
   "native-tool-results.ts",
@@ -31,6 +33,8 @@ export const RESPONSES_CORE_MODULES = [
   "deferred-send-reporter.ts",
   "combo-requested-effort.ts",
   "core-combo-native.ts",
+  // Reached from core-combo.ts: tool-loop continuations stay on the lane's previous target (#7298).
+  "combo-tool-loop-pin.ts",
   // Reached from core-combo.ts: the JEV model backend's internal decision turn.
   "jev-model-invoke.ts",
   "request-prepare.ts",
@@ -38,17 +42,29 @@ export const RESPONSES_CORE_MODULES = [
   "skills-snapshot.ts",
   "shadow-target-availability.ts",
   "compaction-routing.ts",
+  "main-hard-lock-routing.ts",
   "compaction-recovery.ts",
   "compaction-recovery-policy.ts",
   "memory-models.ts",
   "request-transport.ts",
+  // Reached from request-transport.ts: opt-in DeepSeek upload-backed image replay.
+  "deepseek-image-files.ts",
   "request-sidecar-auth.ts",
   "response-effects.ts",
+  "response-tool-ownership.ts",
   "request-send-budget.ts",
+  "account-auto-pause-recovery.ts",
   "passthrough-execution.ts",
   "passthrough-dispatch.ts",
+  // Reached from passthrough-dispatch.ts: exact-URL OpenGateway empty-completion recovery.
+  "passthrough-completion.ts",
+  "opengateway-completion-guard.ts",
+  "passthrough-observations.ts",
+  "passthrough-key-rotation.ts",
   // Reached from passthrough/adapter dispatch, compact and runTurn: local spend-ledger refusal mapping.
   "spend-storage-error.ts",
+  // Reached from passthrough dispatch: local pacing refusals retain 429 and Retry-After.
+  "pacing-overload.ts",
   "reset-replay.ts",
   "passthrough-delivery.ts",
   "buffered-sse-json.ts",
@@ -62,6 +78,10 @@ export const RESPONSES_CORE_MODULES = [
   "antigravity-validation-refusal.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
+  "anthropic-thinking-recovery.ts",
+  "advisor-slot.ts",
+  "advisor-retention.ts",
+  "advisor-plan-slot.ts",
   "policy-refusal.ts",
 ] as const;
 

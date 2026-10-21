@@ -69,13 +69,16 @@ returns a `reason` you can read.
 ## 3. Trace one conversation end to end
 
 ```bash
-ocx logs --conversation <conversation-id> --jsonl
+ocx logs history --conversation <conversation-id> --json
+ocx logs get <request-id> --json
 ocx logs explain <request-id>
 ```
 
-**There is no `ocx request-history` command.** `ocx logs explain <request-id>` is the route-decision
-view; it returns `routeDecision` with `routeKind`, every `candidates[]` entry with its `eligible`
-flag and `exclusions`, and `selected` naming the winner and the `reason` it won.
+`ocx logs history` pages the derived request-history index (not the recent ring). `--json` includes
+`nextCursor` when another page exists; pass it back as `--cursor`. `ocx logs get <request-id>` is
+the canonical stored row. `ocx logs explain <request-id>` is the route-decision view; it returns
+`routeDecision` with `routeKind`, every `candidates[]` entry with its `eligible` flag and
+`exclusions`, and `selected` naming the winner and the `reason` it won.
 
 `--jsonl` rows carry `requestId`, `conversationId`, `provider`, `model`, `status`, `durationMs`, and
 `attempts[]`. Human output prints `conv=<id>` so a conversation filter can be distinguished from an
@@ -88,7 +91,11 @@ actually served it, not only the one requested.
 
 ```bash
 ocx usage --range 7d --json
+ocx usage compare --range 7d --json
 ```
+
+`ocx usage compare` reads the named range and the previous equal window. `--range all` is refused.
+`--json` carries `delta` and `change` (percent). The two reads are sequential.
 
 Read `accounts[]`. Two things to respect:
 
@@ -697,7 +704,7 @@ The target's `supported` list decides which fields can be written. Preserve null
 `enabledEffective`, and optional `inert`: null is not false, stored policy is not
 proof of an available account, and threshold zero is not the pool enable switch.
 OpenAI has no pool `--enabled` or `--quota-window` writer. `reset-first` strategy
-is OpenAI-only; `least-loaded` is Kiro-only. Anthropic pool windows are
+is for OpenAI and generic OAuth pools, never Anthropic; `least-loaded` is Kiro-only. Anthropic pool windows are
 `five-hour`, `weekly`, `max-utilization`. For a requested supported policy edit:
 
 ```bash

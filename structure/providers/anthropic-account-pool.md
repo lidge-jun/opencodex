@@ -25,7 +25,9 @@ existing auth-store write lock. Display identities do not establish a duplicate.
 Refresh intent paths and credential-owner checks retain the actual instance.
 Pool 2 config publication rechecks the latest provider row under the config mutation
 lock; a collision preserves the custom row and reports any already-written orphan
-credential. No default-provider change accompanies that publication.
+credential. No default-provider change accompanies that publication. CLI preflight checks raw
+config ownership before tolerant loading and reports a custom-row collision or unreadable/malformed
+config through the fixed `configuration_error` reporter before prompting.
 
 Regression coverage: `tests/providers/provider-anthropic-instance.test.ts`,
 `tests/config/config-anthropic-instance-pool.test.ts`,
@@ -171,6 +173,14 @@ quota epoch, configured row, account incarnation and login identity are unchange
 `src/providers/quota/account-cache.ts` are per instance, so clearing Pool 2 quota never
 invalidates the primary pool.
 
+A probe that yields no quota names one closed `quotaFailure` code from
+`src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could
+be obtained (no request is sent), the HTTP status class (`access_denied`, `rate_limited`,
+`upstream_error`, `redirect_blocked`), `response_unusable` for an unparsable or empty body,
+and `timeout` or `transport_error` for a thrown dispatch. Ownership and cooldown refusals set
+no code. The code is published only while the flight is current, never carries upstream text,
+and never changes account health or `needsReauth`.
+
 `src/providers/anthropic-reset-grant-ledger.ts` names the journal by instance:
 `anthropic-reset-grant-ledger.json` keeps the primary pool's existing bytes and records,
 and Pool 2 uses `anthropic2-reset-grant-ledger.json`.
@@ -298,11 +308,16 @@ only canonical Fable, Opus, or Sonnet labels after removing terminal controls; u
 
 `src/oauth/anthropic-account-refusal.ts` accepts an HTTP 403 only when a complete bounded
 JSON `error` envelope has `permission_error` or `billing_error` and a whole-message
-account subscription/Claude Code entitlement or Anthropic credit-balance refusal.
+account subscription/Claude Code entitlement or Anthropic credit-balance refusal, or when
+the envelope carries the structured `oauth_org_not_allowed` type or code (organization disabled
+Claude subscription access; also matched by its whole message under `permission_error`).
 Generic permission, resource/model access, content policy, quoted diagnostics, conflicting
 error codes and incomplete/malformed bodies remain terminal. The shared physical dispatch
 in `src/server/responses/request-transport.ts` binds the refusal to the stored bearer it sent;
 overridden headers, additional API keys and replaced credentials cannot cool that account.
+Combo 402 credit-balance refusals carry that immutable send proof across bounded error
+normalization in `src/server/responses/core-combo-failure.ts`. The combo rechecks instance,
+account incarnation, credential generation and pause/reauth state before recording entitlement cooldown.
 
 `src/oauth/anthropic-routing.ts` records a process-local cooldown, clears account affinity,
 and applies the existing strategy, pause/reauth exclusions, model route and selection commit.
@@ -311,6 +326,8 @@ A usage probe cannot clear this non-reset-derived cooldown. Plan renewal therefo
 no permanent reauthentication flag, though a renewed account waits for cooldown expiry.
 The main dispatch, pre-output empty-completion retry, web-search and image bridge use the
 same bounded recovery and record the final refusal even when no retry sends remain.
+Each records the rotated send as `oauth-account-403` (cause `credential-rejected`), not the
+quota recovery `anthropic-oauth-429`, as the native Messages path already did.
 A streamed terminal continuation after assistant output and search after live output or a
 published search call cannot rotate on 403. Non-streaming buffered continuations may recover.
 No eligible replacement preserves the upstream 403; generic 401 handling is unchanged.
@@ -450,3 +467,24 @@ updating live state. A confirmed published write followed by bookkeeping failure
 pool and returns a fixed warning; an unpublished failure keeps old state. Unknown outcomes require
 reload and are not represented as a successful save. The GUI checkbox is a saved preference rather
 than a promise that a route is eligible; explicit rollout opt-outs still apply.
+
+The shared conversation-key precedence is implemented by `src/oauth/session-affinity-key.ts` and re-exported as `anthropicSessionKeyFromParts`; Anthropic routing semantics remain owned here. [Generic OAuth affinity](generic-account-pool.md#conversation-affinity) uses independent request-local receipts.
+
+## JEV advisory publication
+
+While a live JEV combo enables quota signals, auth-store load/persist and accepted quota producer
+boundaries hand bounded secret-free rosters/windows to the core slot `src/lib/decision-quota-sink.ts`,
+which forwards them to the activation-owned snapshot; otherwise those calls are no-ops
+([activation](jev-decision.md#loaded-advisory-quota)). These owner-observed generations
+are separate from display caches and serving-account selection. Request decisions consume only
+loaded evidence; cold or mismatched generations remain unknown. Usability, partial-window clocks
+and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-advisory-quota). Only the primary `anthropic` pool publishes; `anthropic2` is excluded and stays unknown.
+
+## Permanent refusal auto-pause
+
+The separate `providers.<instance>.accountAutoPause` policy is default off. Physical
+Responses and native Messages sends observe their captured bearer before recovery. Exact
+organization/OAuth or subscription refusals can persist `pauseDetails` with a fixed reason
+and timestamp through `src/oauth/store.ts`. `pauseRevision` changes on resume, so late
+pre-resume responses cannot pause the resumed account. The existing selectors rebuild an
+eligible sibling within their send budgets; proactive-pool activation is not required.

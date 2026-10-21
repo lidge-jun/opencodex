@@ -1,3 +1,4 @@
+import { expandRetainedCompactionInput } from "../../responses/retained-compaction";
 import { createHash } from "node:crypto";
 import { COMPACT_PROMPT, appendCheckpointContinuationNote, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
 import { debugProviderDiagnostic } from "../../lib/debug";
@@ -5,6 +6,26 @@ import { modelInList } from "../../types";
 import { isPlainObject } from "./internal";
 import { activateDeferredTool } from "./tool-schema";
 import { stripOpenAiOnlyWebSearchFields } from "./web-search";
+
+/**
+ * Provider-opaque replay metadata is client history, not an OpenAI input-item field (#7111).
+ * The caller gates this on OpenAI-operated destinations; arbitrary gateways may accept it.
+ * Strip only the known extension, never an item-field allowlist that can erase newer wire fields
+ * or nested tool data. Copy on write so a later Google route can still replay its signature.
+ */
+export function stripProviderInputItemMetadata(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let input: unknown[] | undefined;
+  for (let index = 0; index < body.input.length; index += 1) {
+    const item = body.input[index];
+    if (!isPlainObject(item) || !Object.hasOwn(item, "extra_content")) continue;
+    const next = { ...item };
+    delete next.extra_content;
+    input ??= [...body.input];
+    input[index] = next;
+  }
+  return input ? { ...body, input } : body;
+}
 
 export function stripInvalidItemIds(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
@@ -246,7 +267,7 @@ export function stripItemIdsWhenUnstored(
  * Normalize replayed compaction items for the destination backend.
  *
  * A compaction item carries an `encrypted_content` blob the client replays verbatim on every later
- * turn, and only the backend that minted it can decode it. Proxy-minted `ocx1:` envelopes are
+ * turn, and only the backend that minted it can decode it. Proxy-minted `ocx1:` and structured `ocx2:` envelopes are
  * transparent base64 rather than encryption, so no upstream can read them and they always become
  * plain user messages. Native blobs have multiple possible minters, so a destination's ability to
  * decode its own blobs does not make a blob from a previous serving identity portable. On a known
@@ -264,9 +285,10 @@ export function scrubOcxCompactionItems(
 ): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
 
-  let changed = false;
+  const expanded = expandRetainedCompactionInput(body.input) as unknown[];
+  let changed = expanded !== body.input;
   let decodedCheckpoint = false;
-  const input = body.input.map(item => {
+  const input = expanded.map(item => {
     if (!isPlainObject(item) || !isCompactionItemType(item.type)) return item;
     const encrypted = typeof item.encrypted_content === "string" ? item.encrypted_content : undefined;
     if (encrypted === undefined) return item;

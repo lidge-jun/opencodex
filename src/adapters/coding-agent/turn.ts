@@ -121,6 +121,8 @@ export interface CodingAgentTurnInput {
   parsed: OcxParsedRequest;
   incoming: IncomingMeta;
   emit: (event: AdapterEvent) => void;
+  /** Observes accepted CLI result/stderr failures, before client-side error decoration. */
+  onCliOutputError?: (message: string) => void;
   /** Family-specific headless argument builder (tools disabled, model, reasoning, system prompt). */
   buildArgs: (profile: CodingAgentProviderProfile, parsed: OcxParsedRequest, provider: OcxProviderConfig) => string[];
   /** Family-specific scoped env builder (credential + region switch on top of baseScopedEnv). */
@@ -133,6 +135,8 @@ export interface CodingAgentTurnInput {
   toolBridge?: CodingAgentToolBridgeInput;
   /** Vendor semantics and recovery permission stay with the adapter. */
   classifyFailure?: (failure: CodingAgentFailure) => Extract<AdapterEvent, { type: "error" }>;
+  /** Family-specific replay projection; other coding-agent providers keep their existing layout. */
+  conversationInput?: typeof buildConversationInput;
   deps: CodingAgentDeps;
 }
 
@@ -146,6 +150,9 @@ export interface CodingAgentToolBridgeInput {
   tools: ReadonlyArray<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
   /** CLI-emitted tool name (`mcp__<server>__<tool>`) to the request's wire tool name. */
   emittedNameMap: Map<string, string>;
+  /** Claude replay may emit an exact selected wire name instead of its MCP transport name.
+   * These aliases are output-only: they never enter the CLI's --allowedTools list. */
+  acceptWireToolNames?: boolean;
   /** Tool_use blocks accepted in one assistant message. */
   maxTurnToolCalls: number;
   /** Render prior tool calls with the CLI-emitted names. Off by default so CodeBuddy history is unchanged. */
@@ -237,6 +244,9 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   }
 
   const toolBridge = input.toolBridge;
+  const wireToolNames = toolBridge?.acceptWireToolNames
+    ? new Set(toolBridge.emittedNameMap.values())
+    : undefined;
   const writeToolBridgeFile = deps.writeToolBridgeFile ?? writeFile;
   let toolBridgeDir: string | undefined;
   let toolBridgeMcpConfigPath: string | undefined;
@@ -304,12 +314,19 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   let producer: { close(): void } | undefined;
   let permit: SingleUseDispatchPermit | undefined;
   try {
+  if (incoming.abortSignal?.aborted) {
+    emit({ type: "error", message: "Coding-agent turn was aborted before start.", retryable: false });
+    return;
+  }
   producer = incoming.sendBudget?.beginSpendProducer?.();
   const decision = incoming.sendBudget?.reserveDispatch({
     sendClass: "initial", targetKey: `${provider.adapter}|${profile.canonicalBaseUrl}|${parsed.modelId}`,
   });
   if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
   permit = decision?.allowed ? decision.permit : undefined;
+  // Setup above awaits private catalog writes. Fence the actual CLI dispatch, outside
+  // spawn-error mapping so the selection owner can rebuild a refused turn.
+  incoming.beforePhysicalSend?.();
   if (permit && !permit.use()) throw new SendBudgetExhaustedError();
   incoming.onPhysicalSend?.({ ordinal: 1 });
   let child: ChildProcess;
@@ -353,10 +370,17 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   });
 
   let terminalEmitted = false;
-  const emitOnce = (event: AdapterEvent): void => {
+  const emitOnce = (event: AdapterEvent, cliOutputError?: string): void => {
     if (event.type === "done" || event.type === "error" || event.type === "incomplete") {
       if (terminalEmitted) return;
       terminalEmitted = true;
+    }
+    if (event.type === "error" && cliOutputError !== undefined) {
+      try {
+        input.onCliOutputError?.(cliOutputError);
+      } catch {
+        // An observer failure must never drop the client's terminal event or turn it into a rejection.
+      }
     }
     emit(event);
   };
@@ -451,7 +475,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       const vendorNameByWire = toolBridge?.projectHistoryToolNames
         ? new Map([...toolBridge.emittedNameMap].map(([emitted, wire]) => [wire, emitted]))
         : undefined;
-      for (const line of buildConversationInput(parsed, { maxHistoryChars: historyCharLimit, vendorNameByWire })) stdin.write(`${line}\n`);
+      for (const line of (input.conversationInput ?? buildConversationInput)(parsed, { maxHistoryChars: historyCharLimit, vendorNameByWire })) stdin.write(`${line}\n`);
       stdin.end();
     }
     const stdout = child.stdout;
@@ -549,7 +573,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             break;
           }
           if (toolBridge && event.type === "tool_call_start") {
-            const wireName = toolBridge.emittedNameMap.get(event.name);
+            const wireName = toolBridge.emittedNameMap.get(event.name)
+              ?? (wireToolNames?.has(event.name) ? event.name : undefined);
             if (wireName === undefined) {
               emitOnce({
                 type: "error",
@@ -632,7 +657,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           }
           emitOnce(event.type === "error"
             ? { ...event, message: redactSecrets(event.message, profile.tokenEnv, apiKey) }
-            : event);
+            : event, event.type === "error" && message.type === "result"
+              ? redactSecrets(event.message, profile.tokenEnv, apiKey) : undefined);
         }
         if (failClosed) break;
         const sawToolTurnStop = sawSelectedToolTurnStop();
@@ -746,7 +772,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       };
       emitOnce(input.classifyFailure
         ? input.classifyFailure({ source: "process-exit", exitCode: child.exitCode, stderr, error, profile })
-        : error);
+        : error, stderr || undefined);
     } else if (toolBridge && deferredResultDone !== undefined && !sawSelectedToolTurnStop()) {
       emitOnce({
         type: "error",
@@ -767,7 +793,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         errorType: "upstream_error",
         code: "protocol_error",
         retryable: false,
-      });
+      }, stderr || undefined);
     }
   }
   } finally {

@@ -99,6 +99,9 @@ are not required. Download the archive for your platform, extract it, and run:
 The extracted `gui/dist` and `keyring` directories must stay beside the binary. The first serves
 the dashboard; the second carries the platform-native OS credential-store binding.
 
+On Windows, [Windows Code Signing](/reference/code-signing/) explains how `ocx.exe` is signed and
+how to verify it.
+
 ### Release channels
 
 The stable `latest` channel already includes GPT-5.6 Sol/Terra/Luna catalog support for ChatGPT,

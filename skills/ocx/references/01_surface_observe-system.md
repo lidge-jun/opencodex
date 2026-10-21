@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 92.
+Declared capabilities: 96.
 
 ### `ocx companion`
 
@@ -16,7 +16,7 @@ Usage: `ocx companion show [--json] | ocx companion set <key>=<value> [...] [--j
 
 Inspect companion settings, filtered usage and timeline, and configure preferences.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -26,8 +26,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit companion settings as JSON. |
-
-JSON mode: `payload`.
 
 - show/default reads settings; set key=value and reset write settings. Values parse as JSON when valid.
 - usage reads today and 30-day totals using saved display filters; partial range failure returns exit1 and keeps available results.
@@ -39,7 +37,7 @@ Usage: `ocx usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|g
 
 Token and estimated-cost report over a time range.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -57,11 +55,10 @@ State-changing: no.
 | `--api-key-id` | string | Exact nonblank management key scope; connected clients refuse this before reading their enrolled key. |
 | `--search` | string | Model-row substring view over model/provider/resolvedModel; top100 by tokens. Whole-report totals stay unchanged. |
 
-JSON mode: `payload`.
-
 - Alias of observe usage. Connected clients read only their enrolled-key Hub report through /v1/usage; caller --api-key-id is refused before key read/transport and never grants management authority.
 - Nonclient --api-key-id uses /api/usage and requires matching filter acknowledgment. An unknown acknowledged key is empty/matched:false, not404. Custom-window acknowledgment remains required.
 - --search filters only returned model rows after scope acknowledgment. Blank search selects the top100 model rows; modelView reports match/return counts without recomputing totals.
+- Nested compare reads the named range and the previous equal window; --range all is refused.
 
 ### `ocx logs`
 
@@ -69,7 +66,7 @@ Usage: `ocx logs [--provider <name>] [--model <id>] [--status <code>] [--convers
 
 Recent request log rows, filterable by provider, model, conversation, account, and status.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -90,12 +87,10 @@ State-changing: no.
 | `--jsonl` | boolean | Emit one row per JSON line; exclusive with --json. |
 | `--events` | boolean | Versioned snapshot/append JSONL; requires --follow, conflicts with --json. Redundant --jsonl is accepted. |
 
-JSON mode: `payload`.
-
 - Follow uses the server cursor and a bounded ordered window, preserving same-ID amendments and repeated row occurrences. It never enables logging.
 - --events emits version1 snapshots/appends with cursor and limit for observed-window reconstruction. Legacy row JSONL cannot express removals or resets exactly; neither mode promises lossless history between polls.
 - Follow limit is1–2000, default200. Polling is serial and cancellable; SIGINT exits130 and SIGTERM143. Malformed/oversized/unavailable responses stop without a fabricated empty snapshot or retry.
-- Nested explain reads recorded decisions; rebuild-index and index-status touch the local derived index and retain separate declarations.
+- Nested history pages the derived index and get reads one canonical row; explain reads recorded decisions; rebuild-index and index-status touch the local derived index and retain separate declarations.
 
 ### `ocx storage report`
 
@@ -103,7 +98,7 @@ Usage: `ocx storage report [--json]`
 
 Disk usage under CODEX_HOME, with the log-guard protection report.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -113,15 +108,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the storage report as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx storage cleanup`
 
 Usage: `ocx storage cleanup --percent <0-100> [--mode <quarantine|permanent>] [--yes] [--json]`
 
 Preview or delete the oldest archived sessions by percentage.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -135,8 +128,6 @@ State-changing: yes.
 | `--yes` | boolean | Required to actually delete; without it this is a preview. |
 | `--json` | boolean | Emit the preview or result as JSON. |
 
-JSON mode: `payload`.
-
 - Without `--yes` it prints what WOULD be freed and exits 0 having changed nothing.
 - There is no interactive confirmation: a prompt an agent can answer is not a safety boundary.
 - `--mode quarantine` moves files to trash, so `storage trash restore` can undo it; `permanent` cannot be undone.
@@ -147,7 +138,7 @@ Usage: `ocx storage trash [list] [--json] | ocx storage trash restore <entry-id>
 
 List quarantined cleanup batches, or restore one.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -159,8 +150,6 @@ State-changing: yes.
 | `--yes` | boolean | Required for restore, which moves files and reconciles database rows. |
 | `--json` | boolean | Emit the trash list or restore result as JSON. |
 
-JSON mode: `payload`.
-
 - Restore fails with a named 409 when the destination already exists, rather than overwriting it.
 - Mixed family: list/default reads quarantine batches; restore moves files and reconciles database rows only with --yes.
 
@@ -170,7 +159,7 @@ Usage: `ocx storage policy [show] [--json] | ocx storage policy set [--enabled <
 
 Show, change, or run the automatic archived-session cleanup policy.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -187,8 +176,6 @@ State-changing: yes.
 | `--yes` | boolean | Required for `policy run`, which deletes immediately. |
 | `--json` | boolean | Emit the policy or run state as JSON. |
 
-JSON mode: `payload`.
-
 - `policy set` never enables implicitly: omitting `--enabled` keeps the stored value.
 - `policy run` forces a run regardless of schedule, so it needs `--yes`.
 - Mixed family: show/default reads; set persists submitted fields; run requires --yes and starts immediate cleanup. At least one setting is required by set.
@@ -197,7 +184,7 @@ JSON mode: `payload`.
 
 The effective merged configuration the proxy is running.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -207,13 +194,11 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the config as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx inspect catalog`
 
 The generated model catalog served to clients.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -223,13 +208,11 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the catalog as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx inspect routing-analytics`
 
 Aggregate routing outcomes per provider and model.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -239,13 +222,11 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the analytics payload as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx inspect pacing`
 
 Request-pacing state for one provider or all of them.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -256,15 +237,13 @@ State-changing: no.
 | `--name` | string | Restrict to one provider; omitted means every provider. |
 | `--json` | boolean | Emit the pacing state as JSON. |
 
-JSON mode: `payload`.
-
 - An unknown provider name is a 404 rather than an empty result.
 
 ### `ocx inspect key-providers`
 
 Providers that authenticate with an API key rather than OAuth.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -274,13 +253,11 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the provider list as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx inspect codex-prompt`
 
 The Codex system prompt state, or the prompt text itself.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -292,15 +269,13 @@ State-changing: no.
 | `--text` | boolean | Print the prompt body verbatim instead of its metadata. |
 | `--json` | boolean | Emit the prompt metadata as JSON. |
 
-JSON mode: `payload`.
-
 - Read-only by design: the six mutating prompt routes require a dashboard session.
 
 ### `ocx inspect client-config`
 
 The generated configuration snippet for a supported client.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -311,13 +286,11 @@ State-changing: no.
 | `--client` | string | Required client id; the route names every accepted value on error. |
 | `--json` | boolean | Emit the snippet payload as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx inspect star`
 
 Whether this repository is starred by the signed-in GitHub account.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -327,15 +300,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the star status as JSON. |
 
-JSON mode: `payload`.
-
 - Starring is never available from the CLI; the verb says so rather than offering a flag that cannot work.
 
 ### `ocx inspect windows-tray`
 
 Windows tray helper state.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -345,15 +316,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the tray state as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx system codex-app-server`
 
 Usage: `ocx system codex-app-server [--json]`
 
 Codex app-server reachability and process state, as the dashboard sees it.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -363,8 +332,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the app-server state as JSON. |
 
-JSON mode: `payload`.
-
 - The GUI reads this state directly; without a verb an agent could not tell whether the Codex app-server was reachable at all.
 
 ### `ocx system codex-cli-update check`
@@ -373,7 +340,7 @@ Usage: `ocx system codex-cli-update check [--json]`
 
 Inspect a configured Codex CLI candidate and its ownership provenance.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -381,9 +348,7 @@ Drives no management route.
 |---|---|---|
 | `--json` | boolean | Emit the redacted provenance report as JSON. |
 
-JSON mode: `envelope`.
-
-- Proof-bound published-launcher context authenticates the configured candidate snapshot, not successful Codex execution; this check does not attest or admit a selected runtime.
+- Proof-bound published-launcher context authenticates the configured candidate snapshot, not successful Codex execution; the selection is attested only when the runtime resolver picks the same canonical path, and even then this check reports rather than admits a runtime.
 - On Windows this first slice performs no candidate or configuration filesystem I/O: only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels; every other Windows candidate fails closed.
 - Makes no package-registry request.
 - Does not execute Codex or npm, install or repair software, control a process, or write configuration or cache state.
@@ -394,7 +359,7 @@ Usage: `ocx system codex-cli-update attest [--candidate <absolute-path> --npm-pr
 
 Observe the selected or explicitly named Windows npm Codex installation files without enabling updates.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -406,21 +371,40 @@ Drives no management route.
 | `--node` | string | Absolute node.exe path; observed, never executed. |
 | `--json` | boolean | Emit the path-free installation identity observation. |
 
-JSON mode: `envelope`.
-
 - Opt-in Windows x64 local-volume inspection using held native file handles; refuses reparse points, active writers and unsupported layouts.
 - Without explicit paths, the proof-bound launcher snapshot identifies the selected candidate: the configured CODEX_CLI_PATH or the first codex on the captured PATH, with an OpenCodex wrapper resolving to its codex.opencodex-real backing. Discovery only proposes paths; the held-handle observation remains the authority.
 - Success binds observed file identities and bytes, not selected-runtime admission or installer ownership.
 - selectionAttested, managed and applyAllowed remain false. The digest is an observation, not a durable update permit.
 - Does not run the named Codex/npm/Node files, query a registry, install software, control processes or persist state.
 
+### `ocx system codex-cli-update plan`
+
+Usage: `ocx system codex-cli-update plan [--channel latest] [--json]`
+
+Dry-run a Codex CLI update and print the plan id binding the decision's evidence.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--channel` | string | Registry channel to resolve. Only the stable latest channel is offered. |
+| `--json` | boolean | Emit the plan as JSON. |
+
+- Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.
+- The registry evidence is pinned to the official npm registry with project/user npm configuration isolated, so a redirected .npmrc cannot supply the answer.
+- Installs nothing and mutates no application state; registry evidence is gathered under an isolated temporary npm root (npmrc, cwd, cache and logs) removed best-effort afterwards. A refusal is a normal dry-run answer and still exits 0.
+- The plan id is a digest of the evidence the decision rests on — ownership, the installed version, a digest of the canonical install root, the resolved target — not a stored job. There is no plan state on disk to expire, collide or clean up.
+- An unreadable process table refuses rather than reading as no live session.
+
 ### `ocx system codex-restart`
 
 Usage: `ocx system codex-restart --yes [--json]`
 
-Restart the Codex desktop app and app-servers.
+Restart the Codex app-servers, and the desktop app when its model picker predates the catalog.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -428,13 +412,11 @@ State-changing: yes.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--yes` | boolean | Required: fully quits and relaunches the operator's Codex desktop app, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts; also restarts its app-servers. |
+| `--yes` | boolean | Required: restarts the Codex app-servers, interrupting running turns, and fully quits and relaunches the operator's Codex desktop app when its model picker predates the current catalog or that cannot be determined, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts. |
 | `--json` | boolean | Emit the restart result as JSON. |
 
-JSON mode: `payload`.
-
-- `sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.
-- Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.
+- `sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog, cache, or changed configuration write, so it cannot restart a healthy install on request.
+- Restarts the app-servers through the same module the CLI uses. The desktop app is quit and relaunched when its model picker predates the current catalog or this request changes the `model_catalog_json` binding, because the picker is built at launch; otherwise it is left running and respawns its own app-server, keeping unsaved client state. An unreadable desktop or catalog state falls back to the full restart. When the proxy itself runs inside the Codex app the desktop restart is refused, because restarting the app would kill the request.
 - --yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand.
 
 ### `ocx logs filter`
@@ -443,7 +425,7 @@ Usage: `ocx logs filter [--surface <all|codex|claude|grok>] [--model <id>] [--pr
 
 Select a bounded log snapshot with dashboard filters.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -466,8 +448,6 @@ State-changing: no.
 | `--limit` | number | 1-2000 matching rows returned; default 200. |
 | `--json` | boolean | Versioned view with filters, cursor and observed-window counts. |
 | `--jsonl` | boolean | Matching rows only; exclusive with --json. |
-
-JSON mode: `envelope`.
 
 - One snapshot: filters run locally over the raw server window before the output limit. No follow/events; existing logs behavior remains available.
 - JSON schemaVersion1 reports scanLimit, loaded, matched, returned and limit for this observed window only. Cursor is not a resumable filter token.
@@ -479,7 +459,7 @@ Usage: `ocx observe logs filter [--surface <all|codex|claude|grok>] [--model <id
 
 Select a bounded log snapshot with dashboard filters.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -503,8 +483,6 @@ State-changing: no.
 | `--json` | boolean | Versioned view with filters, cursor and observed-window counts. |
 | `--jsonl` | boolean | Matching rows only; exclusive with --json. |
 
-JSON mode: `envelope`.
-
 - One snapshot: filters run locally over the raw server window before the output limit. No follow/events; existing logs behavior remains available.
 - JSON schemaVersion1 reports scanLimit, loaded, matched, returned and limit for this observed window only. Cursor is not a resumable filter token.
 - Empty matches succeed; malformed, refused, oversized or unavailable responses fail. SIGINT130/SIGTERM143 preserve cancellation.
@@ -515,7 +493,7 @@ Usage: `ocx companion usage [--json]`
 
 Read today and 30-day totals using saved companion filters.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -525,8 +503,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Versioned filtered ranges, settings provenance and partial status. |
-
-JSON mode: `envelope`.
 
 - Reads saved settings then two usage ranges on the same runtime; this is not an atomic snapshot. No connected-client management relay or local fallback.
 - Preserves null/default/corrupt settings provenance, missing measurements and incomplete reports. Filters follow saved model and hidden-provider preferences.
@@ -538,7 +514,7 @@ Usage: `ocx observe logs [--provider <name>] [--model <id>] [--status <code>] [-
 
 Read or follow request logs.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -559,11 +535,62 @@ State-changing: no.
 | `--jsonl` | boolean | Emit one row per JSON line; exclusive with --json. |
 | `--events` | boolean | Versioned snapshot/append JSONL; requires --follow, conflicts with --json. Redundant --jsonl is accepted. |
 
-JSON mode: `payload`.
-
 - Follow uses the server cursor and a bounded ordered window, preserving same-ID amendments and repeated row occurrences. It never enables logging.
 - --events emits version1 snapshots/appends with cursor and limit for observed-window reconstruction. Legacy row JSONL cannot express removals or resets exactly; neither mode promises lossless history between polls.
 - Follow limit is1–2000, default200. Polling is serial and cancellable; SIGINT exits130 and SIGTERM143. Malformed/oversized/unavailable responses stop without a fabricated empty snapshot or retry.
+
+### `ocx logs history`
+
+Usage: `ocx logs history [--provider <name>] [--model <id>] [--requested-model <id>] [--status <code>] [--conversation <id>] [--surface <name>] [--protocol <responses|chat|messages>] [--api-key-id <id>] [--profile <id>] [--fallback <true|false>] [--from <epoch-ms|ISO-datetime>] [--to <epoch-ms|ISO-datetime>] [--cursor <token>] [--limit <1-100>] [--json|--jsonl]`
+
+Page the indexed request-history ledger with filters and a resumable cursor.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/request-history` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--provider` | string | Filter provider, including failover attempts. |
+| `--model` | string | Filter served model, including failover attempts. |
+| `--requested-model` | string | Filter the model the client asked for. |
+| `--status` | number | HTTP status 100-599. |
+| `--conversation` | string | Conversation ID or stored hash. |
+| `--conversationId` | string | Alias of --conversation. |
+| `--surface` | string | Calling client surface recorded on the row. |
+| `--protocol` | string | Inbound wire: responses, chat or messages. |
+| `--api-key-id` | string | Exact management key id recorded on the row. |
+| `--profile` | string | Routing profile id. |
+| `--fallback` | string | true selects rows that failed over; false selects rows that did not. |
+| `--from` | string | Inclusive start as epoch milliseconds or ISO datetime with timezone. |
+| `--to` | string | Inclusive end as epoch milliseconds or ISO datetime with timezone. |
+| `--cursor` | string | Opaque nextCursor from a previous page. |
+| `--limit` | number | 1-100 rows; default 50. |
+| `--json` | boolean | Emit the management payload, including hasMore, nextCursor and index. |
+| `--jsonl` | boolean | Matching rows only; hasMore and nextCursor go to stderr. |
+
+- Pages the derived request-history index, not the recent /api/logs ring. Empty matches succeed. Also accepted after observe logs.
+- JSON is the management payload. JSONL emits entries only; resume with --cursor from stderr when hasMore is true.
+
+### `ocx logs get`
+
+Usage: `ocx logs get <request-id> [--json]`
+
+Read one canonical request-history row by request ID.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/request-history/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the canonical row as JSON. |
+
+- The request ID is URI-encoded. This is the stored row, not the route-decision view from logs explain. A missing id is a 404. Also accepted after observe logs.
 
 ### `ocx logs explain`
 
@@ -571,7 +598,7 @@ Usage: `ocx logs explain <request-id> [--json]`
 
 Explain the recorded routing decision for one request.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -580,8 +607,6 @@ State-changing: no.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - The request ID is URI-encoded; this reads an existing decision and sends no model request.
 - Also accepted after observe logs.
@@ -592,15 +617,13 @@ Usage: `ocx logs rebuild-index [--json]`
 
 Rebuild the local request-history index.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - Local derived SQLite index rebuild from the canonical ledger; no management API request.
 - Also accepted after observe logs.
@@ -611,7 +634,7 @@ Usage: `ocx logs index-status [--json]`
 
 Read and refresh local request-history index metadata.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 Drives no management route.
 
@@ -619,18 +642,16 @@ Drives no management route.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Local index open may create, ingest or rebuild the derived SQLite index; this is not a write-free file inspection.
 - Also accepted after observe logs.
 
 ### `ocx observe usage`
 
-Usage: `ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--json]`
+Usage: `ocx observe usage [--range <today|1d|7d|30d|all>] [--surface <all|codex|claude|grok>] [--since <epoch-ms|ISO-datetime>] [--until <epoch-ms|ISO-datetime>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--search <text>] [--top <1-1000>] [--json]`
 
 Read token and estimated-cost usage.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -646,13 +667,36 @@ State-changing: no.
 | `--model` | string | Filter model. |
 | `--json` | boolean | Emit the result as JSON. |
 | `--api-key-id` | string | Exact nonblank management key scope; connected clients refuse this before reading their enrolled key. |
-| `--search` | string | Model-row substring view over model/provider/resolvedModel; top100 by tokens. Whole-report totals stay unchanged. |
-
-JSON mode: `payload`.
+| `--top` | number | 1-1000 human model rows; default 10, or 100 with --search. Applied after search; ignored with --json. Totals unchanged. |
+| `--search` | string | Model-row substring view over model/provider/resolvedModel; default top100 by tokens. Whole-report totals stay unchanged. |
 
 - Also available as ocx usage. Connected clients read only their enrolled-key Hub report through /v1/usage; caller --api-key-id is refused before key read/transport and never grants management authority.
 - Nonclient --api-key-id uses /api/usage and requires matching filter acknowledgment. An unknown acknowledged key is empty/matched:false, not404. Custom-window acknowledgment remains required.
-- --search filters only returned model rows after scope acknowledgment. Blank search selects the top100 model rows; modelView reports match/return counts without recomputing totals.
+- --search filters only returned model rows after scope acknowledgment. Blank search selects the top100 model rows by default; modelView reports match/return counts without recomputing totals.
+
+### `ocx usage compare`
+
+Usage: `ocx usage compare [--range <today|1d|7d|30d>] [--surface <all|codex|claude|grok>] [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]`
+
+Compare a usage range with the previous equal window.
+
+State-changing: no. JSON mode: `envelope`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/usage` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--range` | string | today \| 1d \| 7d \| 30d; default 30d. all is refused. |
+| `--surface` | string | all \| codex \| claude \| grok; default all. |
+| `--provider` | string | Filter provider. |
+| `--model` | string | Filter model. |
+| `--api-key-id` | string | Exact nonblank management key scope; connected clients refuse this. |
+| `--json` | boolean | Emit current, previous, delta and change percentages. |
+
+- Two sequential GET /api/usage reads: the named range at now, then the same range shifted back one equal window. Custom since/until must be acknowledged on both. --range all is refused.
+- Also accepted after observe usage. Default range is 30d. This is not an atomic snapshot.
 
 ### `ocx observe storage`
 
@@ -660,7 +704,7 @@ Usage: `ocx observe storage [--limit <n>] [--json]`
 
 Read storage diagnostics.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -671,8 +715,6 @@ State-changing: no.
 | `--limit` | number | Positive limit forwarded to the endpoint; endpoint semantics apply. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Reads the running proxy management API.
 
 ### `ocx observe memory`
@@ -681,7 +723,7 @@ Usage: `ocx observe memory [--limit <n>] [--json]`
 
 Read memory diagnostics.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -692,8 +734,6 @@ State-changing: no.
 | `--limit` | number | Positive limit forwarded to the endpoint; endpoint semantics apply. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Reads the running proxy management API.
 
 ### `ocx observe debug`
@@ -702,7 +742,7 @@ Usage: `ocx observe debug [--limit <n>] [--json]`
 
 Read debug diagnostics.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -713,8 +753,6 @@ State-changing: no.
 | `--limit` | number | Positive limit forwarded to the endpoint; endpoint semantics apply. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Reads the running proxy management API.
 
 ### `ocx observe claude-inbound`
@@ -723,7 +761,7 @@ Usage: `ocx observe claude-inbound [--limit <n>] [--json]`
 
 Read claude-inbound diagnostics.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -734,8 +772,6 @@ State-changing: no.
 | `--limit` | number | Positive limit forwarded to the endpoint; endpoint semantics apply. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Snapshot read; no follow or cursor option.
 
 ### `ocx observe injection`
@@ -744,7 +780,7 @@ Usage: `ocx observe injection [--limit <n>] [--json]; ocx observe injection --fo
 
 Read or follow the existing injection diagnostic buffer.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -757,8 +793,6 @@ State-changing: no.
 | `--jsonl` | boolean | Follow only: emit one diagnostic row per line. |
 | `--json` | boolean | Emit the command result as JSON. |
 
-JSON mode: `payload`.
-
 - --json stays one-shot; --jsonl requires --follow. Empty polls stay silent and do not prove capture is disabled.
 - The API has no epoch or gap marker. Detected runtime changes stop with restart-follow guidance; undetected restarts and burst/ring loss cannot be excluded. No settings writes or automatic reconnect.
 - SIGINT130/SIGTERM143 cancel request/body/wait and release invocation resources.
@@ -769,7 +803,7 @@ Usage: `ocx storage codex-logs status [--json]`
 
 Inspect Codex Log Guard state.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -779,8 +813,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Also accepted after observe storage codex-logs. Omitted action defaults to status.
 
 ### `ocx storage codex-logs protect`
@@ -789,7 +821,7 @@ Usage: `ocx storage codex-logs protect [--mode <compat|quiet>] [--json]`
 
 Protect Codex logs in compat or quiet mode.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -800,8 +832,6 @@ State-changing: yes.
 | `--mode` | string | compat \| quiet; default compat. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Also accepted after observe storage codex-logs. Mutates logs or their protection immediately; this handler has no --yes option.
 
 ### `ocx storage codex-logs unprotect`
@@ -810,7 +840,7 @@ Usage: `ocx storage codex-logs unprotect [--json]`
 
 Remove Codex log protection.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -820,8 +850,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Also accepted after observe storage codex-logs. Mutates logs or their protection immediately; this handler has no --yes option.
 
 ### `ocx storage codex-logs repair`
@@ -830,7 +858,7 @@ Usage: `ocx storage codex-logs repair [--json]`
 
 Repair Codex log protection.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -840,8 +868,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Also accepted after observe storage codex-logs. Mutates logs or their protection immediately; this handler has no --yes option.
 
 ### `ocx storage codex-logs compact`
@@ -850,7 +876,7 @@ Usage: `ocx storage codex-logs compact [--json]`
 
 Compact Codex logs.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -860,8 +886,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Also accepted after observe storage codex-logs. Mutates logs or their protection immediately; this handler has no --yes option.
 
 ### `ocx storage trash list`
@@ -870,7 +894,7 @@ Usage: `ocx storage trash list [--json]`
 
 Read quarantine batches.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -880,15 +904,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx storage policy show`
 
 Usage: `ocx storage policy show [--json]`
 
 Read cleanup policy and job state.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -898,15 +920,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx storage trash restore`
 
 Usage: `ocx storage trash restore <entry-id> --yes [--json]`
 
 Restore one quarantined session batch.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -917,8 +937,6 @@ State-changing: yes.
 | `--yes` | boolean | Required confirmation before restoring stored sessions. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Moves files and reconciles database rows; partial outcomes remain in the response.
 
 ### `ocx storage policy set`
@@ -927,7 +945,7 @@ Usage: `ocx storage policy set [--enabled <true|false>] [--archived-bytes-over <
 
 Save submitted cleanup policy fields.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -944,8 +962,6 @@ State-changing: yes.
 | `--reduce-to-bytes` | number | Nonnegative safe integer cleanup target, exclusive with either percentage spelling. |
 | `--remove-oldest-percent` | number | Canonical integer percentage spelling; mutually exclusive with --percent and byte target. |
 
-JSON mode: `payload`.
-
 - Only supplied fields are written. Omitted enabled/mode/schedule remain unchanged; setting a policy does not run cleanup or implicitly enable it.
 - Both percentage spellings use integer CLI grammar and server range validation. The alias cannot be combined with the canonical percentage flag.
 
@@ -955,7 +971,7 @@ Usage: `ocx storage policy run --yes [--json]`
 
 Run the stored cleanup policy immediately.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -966,8 +982,6 @@ State-changing: yes.
 | `--yes` | boolean | Required confirmation for immediate archived-session cleanup. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Run acceptance is not completion; inspect storage policy show for job state.
 
 ### `ocx debug provider`
@@ -976,14 +990,12 @@ Usage: `ocx debug provider [status|on|off|reset]`
 
 Read or change the provider debug override.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | GET | `/api/debug` |
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Mixed family: omitted action/status reads; on/off/reset change runtime overrides. No JSON mode.
 - Reset follows the environment default. Logs have a separate child command.
@@ -994,13 +1006,11 @@ Usage: `ocx debug provider status`
 
 Read provider debug state.
 
-State-changing: no.
+State-changing: no. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | GET | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1010,13 +1020,11 @@ Usage: `ocx debug provider on`
 
 Set provider debug override on.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1026,13 +1034,11 @@ Usage: `ocx debug provider off`
 
 Set provider debug override off.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1042,13 +1048,11 @@ Usage: `ocx debug provider reset`
 
 Set provider debug override reset.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1058,7 +1062,7 @@ Usage: `ocx debug provider logs [-f|--follow]`
 
 Read or follow provider debug log lines.
 
-State-changing: no.
+State-changing: no. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
@@ -1069,8 +1073,6 @@ State-changing: no.
 | `-f` | boolean | Follow new sequence numbers. |
 | `--follow` | boolean | Alias of -f. |
 
-JSON mode: `none`.
-
 - Text lines only; initial limit 500, then sequence-based polling.
 
 ### `ocx debug usage`
@@ -1079,14 +1081,12 @@ Usage: `ocx debug usage [status|on|off|reset]`
 
 Read or change the usage debug override.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | GET | `/api/debug` |
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Mixed family: omitted action/status reads; on/off/reset change runtime overrides. No JSON mode.
 - Reset follows the environment default. Logs have a separate child command.
@@ -1097,13 +1097,11 @@ Usage: `ocx debug usage status`
 
 Read usage debug state.
 
-State-changing: no.
+State-changing: no. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | GET | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1113,13 +1111,11 @@ Usage: `ocx debug usage on`
 
 Set usage debug override on.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1129,13 +1125,11 @@ Usage: `ocx debug usage off`
 
 Set usage debug override off.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1145,13 +1139,11 @@ Usage: `ocx debug usage reset`
 
 Set usage debug override reset.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1161,7 +1153,7 @@ Usage: `ocx debug usage logs [-f|--follow]`
 
 Read or follow usage debug log lines.
 
-State-changing: no.
+State-changing: no. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
@@ -1172,8 +1164,6 @@ State-changing: no.
 | `-f` | boolean | Follow new sequence numbers. |
 | `--follow` | boolean | Alias of -f. |
 
-JSON mode: `none`.
-
 - Text lines only; initial limit 500, then sequence-based polling.
 
 ### `ocx debug injection`
@@ -1182,14 +1172,12 @@ Usage: `ocx debug injection [status|on|off|reset]`
 
 Read or change the injection debug override.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | GET | `/api/debug` |
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Mixed family: omitted action/status reads; on/off/reset change runtime overrides. No JSON mode.
 - Reset follows the environment default. Buffered reads use observe injection.
@@ -1200,13 +1188,11 @@ Usage: `ocx debug injection status`
 
 Read injection debug state.
 
-State-changing: no.
+State-changing: no. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | GET | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1216,13 +1202,11 @@ Usage: `ocx debug injection on`
 
 Set injection debug override on.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1232,13 +1216,11 @@ Usage: `ocx debug injection off`
 
 Set injection debug override off.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1248,13 +1230,11 @@ Usage: `ocx debug injection reset`
 
 Set injection debug override reset.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1264,14 +1244,12 @@ Usage: `ocx debug claude [status|on|off|reset]`
 
 Read or change the claude debug override.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | GET | `/api/debug` |
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Mixed family: omitted action/status reads; on/off/reset change runtime overrides. No JSON mode.
 - Reset follows the environment default. Buffered reads use observe claude-inbound.
@@ -1282,13 +1260,11 @@ Usage: `ocx debug claude status`
 
 Read claude debug state.
 
-State-changing: no.
+State-changing: no. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | GET | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1298,13 +1274,11 @@ Usage: `ocx debug claude on`
 
 Set claude debug override on.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1314,13 +1288,11 @@ Usage: `ocx debug claude off`
 
 Set claude debug override off.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1330,13 +1302,11 @@ Usage: `ocx debug claude reset`
 
 Set claude debug override reset.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `none`.
 
 | Method | Route |
 |---|---|
 | PUT | `/api/debug` |
-
-JSON mode: `none`.
 
 - Requires a running proxy; legacy text output only.
 
@@ -1346,7 +1316,7 @@ Usage: `ocx system status [--json]`
 
 Read settings, startup health and memory together.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -1358,8 +1328,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `envelope`.
-
 - Default system action. The CLI bundles three payloads; this does not call /api/system/health.
 
 ### `ocx system settings`
@@ -1368,7 +1336,7 @@ Usage: `ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-
 
 Read or update supported runtime settings.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 | Method | Route |
 |---|---|
@@ -1388,8 +1356,6 @@ State-changing: yes.
 | `--ultra-fast-tier` | string | on/off routing tier; confirmed by same-target read-back. |
 | `--fast-rows` | string | on/off Fast model rows, separate from provider Fast. |
 
-JSON mode: `envelope`.
-
 - Mixed read/write: no setting flags reads; setting flags write only submitted fields. Stored, effective and config-apply states can differ.
 - New-option writes use narrow fields and actual observed values. ultraFastTier is read back because the PUT response omits it; missing/mismatching evidence stays saved-but-unverified and nonzero.
 - catalogRefreshPending is not a full catalog disposition. Native apply can remain deferred/refused separately. Old no-new-option settings output remains compatible.
@@ -1400,7 +1366,7 @@ Usage: `ocx system startup health [--json]`
 
 Read startup protection.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1410,8 +1376,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - health is the default; status is its alias.
 
 ### `ocx system startup install-service`
@@ -1420,7 +1384,7 @@ Usage: `ocx system startup install-service [--json]`
 
 Request startup install-service.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1429,8 +1393,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - The server invokes the platform-local service repair or shim installation and reports its outcome.
 
@@ -1440,7 +1402,7 @@ Usage: `ocx system startup install-shim [--json]`
 
 Request startup install-shim.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1450,8 +1412,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - The server invokes the platform-local service repair or shim installation and reports its outcome.
 
 ### `ocx system diagnostics`
@@ -1460,7 +1420,7 @@ Usage: `ocx system diagnostics [--json]`
 
 Read project-config diagnostics.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1470,8 +1430,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Runs against the serving proxy; inspect the returned saved/applied or failure result.
 
 ### `ocx system sync`
@@ -1480,7 +1438,7 @@ Usage: `ocx system sync [--json]`
 
 Synchronize client catalogs and configuration.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1490,8 +1448,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Runs against the serving proxy; inspect the returned saved/applied or failure result.
 
 ### `ocx system update check`
@@ -1500,7 +1456,7 @@ Usage: `ocx system update check [--channel <latest|preview>] [--json]`
 
 Check the package update channel.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1511,8 +1467,6 @@ State-changing: no.
 | `--channel` | string | latest \| preview; default latest. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Checks registry availability; does not install.
 
 ### `ocx system update run`
@@ -1521,7 +1475,7 @@ Usage: `ocx system update run [--channel <latest|preview>] [--restart <on|off>] 
 
 Start a package update job.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1534,8 +1488,6 @@ State-changing: yes.
 | `--yes` | boolean | Required confirmation for package update. |
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Installs software and may restart the proxy. Acceptance is not completion; inspect system update status with the returned job ID.
 
 ### `ocx system update status`
@@ -1544,7 +1496,7 @@ Usage: `ocx system update status <job-id> [--json]`
 
 Read one package update job.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1554,15 +1506,13 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 ### `ocx config show`
 
 Usage: `ocx config show [--json] [--source]`
 
 Local configuration show.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -1570,8 +1520,6 @@ Drives no management route.
 |---|---|---|
 | `--source` | boolean | Include source diagnostics. |
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local config/file operation; no management API request or automatic live convergence.
 - Displayed credential values are masked.
@@ -1583,15 +1531,13 @@ Usage: `ocx config get <dot.path> [--json]`
 
 Local configuration get.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - Local config/file operation; no management API request or automatic live convergence.
 - Displayed credential values are masked.
@@ -1602,15 +1548,13 @@ Usage: `ocx config set <dot.path> <json-or-string> [--json]`
 
 Local configuration set.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local config/file operation; no management API request or automatic live convergence.
 - Displayed credential values are masked.
@@ -1621,15 +1565,13 @@ Usage: `ocx config unset <dot.path> [--json]`
 
 Local configuration unset.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local config/file operation; no management API request or automatic live convergence.
 
@@ -1639,15 +1581,13 @@ Usage: `ocx config validate [path|-] [--json]`
 
 Local configuration validate.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local config/file operation; no management API request or automatic live convergence.
 
@@ -1657,15 +1597,13 @@ Human-only handoff: ask the operator to perform this in their own terminal or da
 
 Raw configuration export with an optional JSON file receipt.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit a JSON receipt for a file destination; stdout export stays raw. |
-
-JSON mode: `payload`.
 
 - Local config/file operation; no management API request or automatic live convergence.
 - Human-only secret-bearing export: raw credentials are included. Keep the file and stdout out of agent transcripts. --json emits {ok:true,path} for a file destination; export to - always emits the raw config.
@@ -1676,7 +1614,7 @@ Usage: `ocx config import <path|-> --yes [--json]`
 
 Local configuration import.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -1684,8 +1622,6 @@ Drives no management route.
 |---|---|---|
 | `--yes` | boolean | Required confirmation before replacing local config. |
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local config/file operation; no management API request or automatic live convergence.
 - Replaces local configuration after schema validation; requires --yes. Restart or explicitly sync if needed.
@@ -1696,7 +1632,7 @@ Usage: `ocx companion show [--json]`
 
 Read companion settings, defaults and presence.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1706,8 +1642,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Settings only; no usage timeline request.
 
 ### `ocx companion set`
@@ -1716,7 +1650,7 @@ Usage: `ocx companion set <key>=<value> [...] [--json]`
 
 Save selected companion settings.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1725,8 +1659,6 @@ State-changing: yes.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `payload`.
 
 - Values are parsed as JSON when valid, otherwise as strings.
 
@@ -1736,7 +1668,7 @@ Usage: `ocx companion reset [--json]`
 
 Restore companion defaults.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1746,8 +1678,6 @@ State-changing: yes.
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
 
-JSON mode: `payload`.
-
 - Settings only; no usage timeline request.
 
 ### `ocx tray install`
@@ -1756,7 +1686,7 @@ Usage: `ocx tray install [--no-start] [--json]`
 
 Windows tray install.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
@@ -1764,8 +1694,6 @@ Drives no management route.
 |---|---|---|
 | `--no-start` | boolean | Install without starting the tray. |
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Windows-only tray lifecycle; no management API. Status on other platforms reports unsupported.
 - Lifecycle writes require Windows.
@@ -1776,15 +1704,13 @@ Usage: `ocx tray start [--json]`
 
 Windows tray start.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Windows-only tray lifecycle; no management API. Status on other platforms reports unsupported.
 - Lifecycle writes require Windows.
@@ -1795,15 +1721,13 @@ Usage: `ocx tray stop [--json]`
 
 Windows tray stop.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Windows-only tray lifecycle; no management API. Status on other platforms reports unsupported.
 - Lifecycle writes require Windows.
@@ -1814,15 +1738,13 @@ Usage: `ocx tray status [--json]`
 
 Windows tray status.
 
-State-changing: no.
+State-changing: no. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Windows-only tray lifecycle; no management API. Status on other platforms reports unsupported.
 - Lifecycle writes require Windows.
@@ -1833,15 +1755,13 @@ Usage: `ocx tray uninstall [--json]`
 
 Windows tray uninstall.
 
-State-changing: yes.
+State-changing: yes. JSON mode: `envelope`.
 
 Drives no management route.
 
 | Flag | Value | Meaning |
 |---|---|---|
 | `--json` | boolean | Emit the result as JSON. |
-
-JSON mode: `envelope`.
 
 - Local Windows-only tray lifecycle; no management API. Status on other platforms reports unsupported.
 - remove aliases uninstall.
@@ -1852,7 +1772,7 @@ Usage: `ocx system health [--json]`
 
 Read authenticated service health and spend-ledger diagnostics.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1862,8 +1782,6 @@ State-changing: no.
 |---|---|---|
 | `--json` | boolean | Emit the command result as JSON. |
 
-JSON mode: `payload`.
-
 - Distinct from root health liveness and system status aggregation. An ok endpoint can have a degraded ledger; this is an observation, not an all-subsystems health certificate.
 
 ### `ocx companion timeline`
@@ -1872,7 +1790,7 @@ Usage: `ocx companion timeline [--hours <6|24|72|168>] [--bucket-minutes <1-1440
 
 Read usage timeline buckets with explicit completeness and filter metadata.
 
-State-changing: no.
+State-changing: no. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
@@ -1888,8 +1806,6 @@ State-changing: no.
 | `--model` | string | Repeat exact provider/model IDs; encoded as the existing models list, up to100. |
 | `--hide-provider` | string | Repeat providers to exclude; this is not positive provider inclusion. |
 | `--json` | boolean | Emit the command result as JSON. |
-
-JSON mode: `payload`.
 
 - start/end are epoch seconds. The end must match the request-time bucket or its immediate successor after an observed rollover; stale windows are refused. Empty series still includes metadata; missingMeasurements and truncated remain visible instead of implying measured complete zero traffic.
 - Uses existing query validation and checks applied model/provider-exclusion scope. It does not change companion settings or request inference.

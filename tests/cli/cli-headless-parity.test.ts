@@ -13,7 +13,7 @@ import { handleProviderRuntimeCommand } from "../../src/cli/provider-runtime";
 import { providerQuotaLine } from "../../src/cli/account-extended";
 import { formatAccountTable } from "../../src/cli/account";
 import { handleConnectCommand } from "../../src/cli/connect";
-import { handleSystemCommand } from "../../src/cli/system-command";
+import { codexRestartLines, handleSystemCommand } from "../../src/cli/system-command";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -29,6 +29,8 @@ describe("ocx system codex-restart confirmation", () => {
       expect(requests).toHaveLength(0);
       const warning = errors.mock.calls.flat().join(" ");
       expect(warning).toContain("requires --yes");
+      expect(warning).toContain("restarts the Codex app-servers");
+      expect(warning).toContain("model picker predates the current catalog");
       expect(warning).toContain("fully quits and relaunches the Codex desktop app");
       expect(warning).toContain("unsaved composer drafts");
       expect(warning).toContain("model-picker selections");
@@ -49,14 +51,30 @@ describe("ocx system codex-restart confirmation", () => {
       const text = output.mock.calls.flat().join("\n");
       if (wantsJson) expect(JSON.parse(text)).toEqual(result);
       else {
-        expect(text).toContain("Codex desktop app");
-        expect(text).toContain("restart requested.");
-        expect(text).toContain("Unsaved composer drafts");
-        expect(text).toContain("model-picker selections");
-        expect(text).toContain("pending approval prompts");
-        expect(text).not.toContain("restarted");
+        expect(text).toContain("No Codex app-server needed stopping.");
+        expect(text).toContain("The Codex desktop app was not restarted (self_ancestry).");
+        expect(text).not.toContain("relaunched");
       }
     } finally { output.mockRestore(); }
+  });
+
+  test.each([
+    [{ code: "stopped", stopped: [1, 2], desktopApp: { attempted: false, relaunch: "skipped", reason: "picker_current" } },
+      ["Stopped 2 Codex app-server(s)", "left running", "unsaved drafts and pending approvals were kept"], ["may have been lost"]],
+    [{ code: "stopped", stopped: [1], desktopApp: { attempted: true, relaunch: "started", stopped: [9], surviving: [], pickerState: "stale" } },
+      ["quit and relaunched", "predated the current catalog", "may have been lost"], ["left running", "could not be confirmed"]],
+    [{ code: "stopped", stopped: [1], desktopApp: { attempted: true, relaunch: "started", stopped: [9], surviving: [], pickerState: "unknown" } },
+      ["quit and relaunched", "could not be confirmed current", "may have been lost"], ["predated"]],
+    [{ code: "stopped", stopped: [1], desktopApp: { attempted: true, relaunch: "started", stopped: [9], surviving: [] } },
+      ["quit and relaunched", "could not be confirmed current"], ["predated"]],
+    [{ code: "nothing_running", stopped: [], desktopApp: { attempted: true, relaunch: "skipped", reason: "relaunch_failed" } },
+      ["restart did not complete (relaunch_failed)", "may have been lost"], ["left running"]],
+    [{ code: "enumeration_unavailable", stopped: [], desktopApp: { attempted: false, relaunch: "skipped", reason: "no_targets" } },
+      ["Could not list Codex app-servers", "is not running"], ["may have been lost"]],
+  ])("reports whether unsaved desktop state survived (%#)", (result, present, absent) => {
+    const text = codexRestartLines(result).join("\n");
+    for (const fragment of present) expect(text).toContain(fragment);
+    for (const fragment of absent) expect(text).not.toContain(fragment);
   });
 });
 
@@ -564,6 +582,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/logs", "ocx observe"],
       ["/api/lab", "ocx lab"],
       ["/api/config", "ocx config"],
+      ["/api/advisor", "ocx advisor"],
       ["/api/companion", "ocx companion"],
       // The client machine plane. These are served by the connected client's own loopback
       // listener rather than the hub, and each one mirrors a connect-family command:
@@ -579,8 +598,12 @@ describe("headless GUI parity CLI", () => {
       // Claude reset grants: reading is an owed CLI verb (deferred-verb in the route
       // registry) and spending is dashboard-session-only by design.
       ["/api/anthropic/reset-grants", "(none — GUI reset-grant dialog; spend requires a dashboard session)"],
+      // The registry records read-only status as an owed CLI verb; trust, launch,
+      // settings and the account-wide trial intentionally require local GUI consent.
+      ["/api/codex/desktop-compatibility", "(none — local GUI confirmation; status CLI deferred in clients/codex-desktop.md)"],
       ["/api/protocols", "ocx api protocols/explain/policy"],
       ["/api/settings", "ocx system"],
+      ["/api/native-reasoning-retention", "(none — dedicated live CLI deferred; local policy via ocx config)"],
       // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
       // `ocx route policy`. Analytics is GUI-first for now; the same request
       // history remains available through observe/index tooling.
@@ -597,6 +620,7 @@ describe("headless GUI parity CLI", () => {
       // `ocx link port|issue` plus `ocx connect --link`, which the apply flow drives over SSH.
       ["/api/link", "ocx link"],
       ["/api/shadow", "ocx models"],
+      ["/api/auto-review-settings", "ocx models auto-review"],
       ["/api/sidecar", "ocx agent"],
       ["/api/startup", "ocx system"],
       ["/api/stop", "ocx stop"],
@@ -1188,13 +1212,17 @@ describe("headless GUI parity CLI", () => {
 
   test("remote connect status is headless and revoke refuses disconnected state before hub traffic", async () => {
     let requests = 0;
+    const lockRoot = mkdtempSync(join(tmpdir(), "ocx-connect-parity-lock-"));
+    const lifecycleLockDeps = { lockPath: join(lockRoot, "client-lifecycle.sqlite") };
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(await handleConnectCommand(["status", "--json"], {
+        lifecycleLockDeps,
         fetchImpl: async () => { requests += 1; return new Response(); },
       })).toBe(0);
       expect(await handleConnectCommand(["revoke", "--admin-token-stdin", "--json"], {
+        lifecycleLockDeps,
         stdinImpl: Readable.from(["ocx_admin_test\n"]),
         fetchImpl: async () => { requests += 1; return new Response(); },
       })).toBe(1);
@@ -1202,6 +1230,7 @@ describe("headless GUI parity CLI", () => {
     } finally {
       logSpy.mockRestore();
       errorSpy.mockRestore();
+      removeTreeWithRetry(lockRoot);
     }
   });
 
