@@ -98,6 +98,7 @@ import { getMainReserveAuthorization, isMainReserveAuthorizationLive, nativeUser
 import { UpstreamRetryEvidenceError } from "../lib/upstream-retry";
 import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 import { CODEX_MAIN_DUPLICATE_ACTION, configuredCodexMainDuplicate } from "./collision-identity";
+import { AgentAssertionUnsupportedError, authorizationCredential, hasAgentAssertionAuthorization } from "../lib/authorization-scheme";
 
 /**
  * A request-owned bearer cannot inspect the physical main credential for its plan, but cached
@@ -701,7 +702,7 @@ async function authorizeReserveCredential(
 
 function selectedCodexToken(headers: Headers): { accessToken: string; chatgptAccountId: string } {
   return {
-    accessToken: headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ?? "",
+    accessToken: authorizationCredential(headers) ?? "",
     chatgptAccountId: headers.get("chatgpt-account-id") ?? "",
   };
 }
@@ -716,7 +717,7 @@ function selectedCodexToken(headers: Headers): { accessToken: string; chatgptAcc
 export function callerCodexWorkspaceAccountId(headers: Headers): string | undefined {
   const explicit = headers.get("chatgpt-account-id");
   if (explicit) return explicit;
-  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(headers);
   return bearer ? extractAccountId(undefined, bearer) : undefined;
 }
 
@@ -807,7 +808,7 @@ function assertMainAccountPolicy(
 
 /** No auth-file I/O: an unsigned claim alone never identifies a caller as stored main. */
 function callerMatchesObservedMain(headers: Headers): boolean {
-  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(headers);
   if (!bearer) return false;
   const effectiveAccountId = headers.get("chatgpt-account-id")
     ?? extractAccountId(undefined, bearer);
@@ -831,7 +832,7 @@ function sameCredentialMaterial(a: string, b: string): boolean {
  * cooldown — the safe direction.
  */
 function callerIsCooledPoolAccount(headers: Headers, config: OcxConfig, accountId: string): boolean {
-  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(headers);
   if (!bearer) return true;
   const callerAccountId = headers.get("chatgpt-account-id") ?? extractAccountId(undefined, bearer);
   if (callerAccountId === undefined) return true;
@@ -1767,7 +1768,7 @@ export class CodexMainSubstitutionUnavailableError extends Error {
 
 /** Dispatch identity comes only from an owned observation of the selected credential. */
 function selectedMainQuotaDispatch(selected: Headers): MainQuotaDispatch | undefined {
-  const bearer = selected.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(selected);
   if (!bearer) return undefined;
   const accountId = selected.get("chatgpt-account-id") ?? extractAccountId(undefined, bearer);
   return captureMainQuotaDispatch(bearer, accountId, captureConfigGeneration());
@@ -1792,6 +1793,8 @@ export function materializeCodexUpstreamAuth(
   ctx: CodexAuthContext,
   options: CodexAuthMaterializationOptions = {},
 ): Headers {
+  // assertion_only must never be answered with a pool, stored-main, or other substituted Bearer.
+  if (hasAgentAssertionAuthorization(headers)) throw new AgentAssertionUnsupportedError();
   if (ctx.kind === "main") ctx.mainQuotaDispatch = undefined;
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
@@ -1814,7 +1817,7 @@ export function materializeCodexUpstreamAuth(
   }
   if (ctx.kind === "main" && options.substituteMainCredential !== true
     && !selected.has("chatgpt-account-id")) {
-    const bearer = selected.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+    const bearer = authorizationCredential(selected);
     const accountId = bearer ? extractAccountId(undefined, bearer) : undefined;
     if (accountId) selected.set("chatgpt-account-id", accountId);
   }
@@ -1892,6 +1895,7 @@ export async function materializeCodexUpstreamAuthAsync(
   ctx: CodexAuthContext,
   options: CodexAuthMaterializationOptions = {},
 ): Promise<Headers> {
+  if (hasAgentAssertionAuthorization(headers)) throw new AgentAssertionUnsupportedError();
   if (ctx.kind === "main") ctx.mainQuotaDispatch = undefined;
   if (requiresReserveAuthorization(options.config, options.modelId, options.admission)) {
     return materializeReserveUpstreamAuth(headers, ctx, options);

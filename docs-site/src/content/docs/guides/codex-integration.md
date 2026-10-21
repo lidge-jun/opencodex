@@ -1012,6 +1012,22 @@ has reached Codex the turn is never sent again. If every attempt is declined, Co
 the same error it would have received without the retries. Native compact requests move to
 another Pool account on a server error in the same way.
 
+### Runtime agent instances (Codex 0.164+)
+
+Codex 0.164 can sign each request with a runtime agent assertion when
+`features.runtime_agent_instances` is enabled (it is off by default). opencodex supports one of
+its two modes:
+
+- `mode = "dual_header"` keeps the normal `Authorization: Bearer` credential and adds an
+  `x-openai-agent-assertion` header. opencodex treats the request exactly as before. The assertion
+  is forwarded only when the turn goes to ChatGPT Direct with your own credential. It is removed
+  when a Pool account, a stored main credential, a routed provider, or a sidecar serves the request,
+  because it belongs to the credential Codex sent.
+- `mode = "assertion_only"` replaces the bearer with `Authorization: AgentAssertion <jwt>`.
+  opencodex refuses these requests with HTTP 400 and error code `agent_assertion_unsupported`.
+  It never substitutes a Pool or provider credential for the assertion, and it never forwards or
+  logs the assertion. Use `dual_header`, or turn the feature off, when Codex runs through opencodex.
+
 ### Codex autostart shim
 
 Run `ocx codex-shim install` to install the optional launcher wrapper. It runs

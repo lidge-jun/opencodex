@@ -217,6 +217,7 @@
   "adapter-usage.test.ts": "adapters", "agent-driven.test.ts": "cli",
   "agent-task-recovery-cache.test.ts": "server", "agent-task-recovery-combo.test.ts": "server",
   "agent-task-recovery-fallback.test.ts": "server", "agent-task-recovery-security.test.ts": "server",
+  "agent-assertion-auth.test.ts": "server", "agent-assertion-routes.test.ts": "responses", "authorization-scheme.test.ts": "lib",
   "agent-task-recovery.test.ts": "server", "alias-management-api.test.ts": "server",
   "alibaba-intl-token-plan.test.ts": "gui", "alibaba-region-backup.test.ts": "providers",
   "alibaba-region-migration.test.ts": "providers", "alibaba-region-startup.test.ts": "providers",
