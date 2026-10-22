@@ -1,4 +1,4 @@
-import { splitSourceLines, type SourceLine } from "./toml-source-lines";
+import { sourceAssignment, splitSourceLines, type SourceLine } from "./toml-source-lines";
 
 /**
  * Pure, ownership-aware edits for Codex's native `[agents]` defaults.
@@ -313,16 +313,6 @@ function invalidInput(content: string, error: string): ManagedSubagentDefaultsTr
   return { ok: false, changed: false, content, conflicts: [], error };
 }
 
-/** The decoded string value of a single-line `key = "value"` assignment, or null. */
-function assignedString(line: SourceLine, key: ManagedSubagentDefaultKey): string | null {
-  try {
-    const value = (Bun.TOML.parse(line.text) as Record<string, unknown>)[key];
-    return typeof value === "string" ? value : null;
-  } catch { // no-excuse-ok: catch -- an unparsable value is not edit evidence; the replace step rejects it.
-    return null;
-  }
-}
-
 /**
  * Marker lines whose value differs from what OpenCodex recorded writing. The
  * marker is dropped so the line reads as what it now is: a user-owned value.
@@ -337,8 +327,10 @@ function userEditedMarkers(
   for (const definition of shape.definitions.values()) {
     const recorded = written[definition.key];
     if (!definition.owned || typeof recorded !== "string") continue;
-    const current = assignedString(lines[definition.index]!, definition.key);
-    if (current !== null && current !== recorded) stale.push(definition.index - 1);
+    // The whole assignment, so a value rewritten as a multiline string still decodes. An
+    // undecodable value is not edit evidence; the single-line replace step rejects it later.
+    const current = sourceAssignment(lines, definition.index, shape.agentsEnd ?? lines.length)?.value;
+    if (typeof current === "string" && current !== recorded) stale.push(definition.index - 1);
   }
   return stale;
 }

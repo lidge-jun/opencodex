@@ -409,8 +409,8 @@ copies, and never overwrites a user-owned root `openai_base_url`; if one exists,
 catalog but reports that routing was not injected.
 
 Sync and restore also leave a root `model_context_window` in place, since OpenCodex never writes
-that key. Codex applies it to every model ahead of the catalog's per-model windows, so delete it
-yourself if you want each model to report its own window.
+that key. Codex uses it instead of each model's catalog window, capped at that model's maximum
+window, so delete it yourself if you want each model to report its own window.
 :::
 
 ## Shared model catalog

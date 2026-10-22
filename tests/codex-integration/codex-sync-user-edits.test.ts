@@ -162,6 +162,14 @@ describe("managed sub-agent default ownership evidence", () => {
     expect(removal.content).toBe('[agents]\ndefault_subagent_model = "user/x"\n');
   });
 
+  test("an edit rewritten as a multiline string is still recognized as the user's", () => {
+    const multiline = '[agents]\n' + MANAGED_SUBAGENT_DEFAULT_MARKER + '\ndefault_subagent_model = """\nuser/x"""\n';
+    const result = transformManagedSubagentDefaults(multiline, { model: "ocx/b" }, { default_subagent_model: "ocx/a" });
+    expect(result.ok).toBe(true);
+    expect(result.conflicts.map(conflict => conflict.key)).toEqual(["default_subagent_model"]);
+    expect(result.content).toBe('[agents]\ndefault_subagent_model = """\nuser/x"""\n');
+  });
+
   test("without a journaled record the marker alone decides, as before", () => {
     const result = transformManagedSubagentDefaults(marked("user/x"), { model: "ocx/b" }, null);
     expect(result.content).toContain('default_subagent_model = "ocx/b"');
