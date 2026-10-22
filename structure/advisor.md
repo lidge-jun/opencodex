@@ -96,6 +96,8 @@ a non-whitespace overflow marker for the builder's generic truncation notice.
 `buildAdvisorUserPrompt` returns before reading parsed task state. The
 synthetic tool requires a self-contained question; both the runtime and low-level consultation
 executor reject empty questions without dispatch. The runtime re-reads the mode before dispatch.
+Its synchronous admission hook also prevents invalid question-only calls from consuming the guard's
+consultation allowance. Worker continuations retain their independent hard limit, including invalid calls.
 Automatic preflight and adaptive repair consultation are disabled in this mode because they have
 no worker-written question. Existing consent, request limits and adaptive task budgets still apply.
 The management API, CLI `--context-mode` and dashboard checkbox configure the same field.

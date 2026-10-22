@@ -61,6 +61,8 @@ export interface AdvisorConsultOutcome {
 
 /** The structural plan the optional advisor subsystem registers per request. */
 export interface AdvisorPlan {
+  /** Synchronous admission: invalid question-only calls do not reserve a consultation. */
+  shouldCountManualConsultation?(question: string | undefined): boolean;
   /**
    * Run one consultation for the current conversation state. Implementations own dedup,
    * logging, and usage accounting; the guard only consumes the outcome.
@@ -296,7 +298,8 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
       if (assistant) messages.push(assistant);
 
       for (const call of advisorCalls) {
-        if (consultations >= maxConsultations) {
+        const counts = plan.shouldCountManualConsultation?.(call.question) !== false;
+        if (counts && consultations >= maxConsultations) {
           // Runtime-owned limit text: not advice, and never a genuine advice wrapper.
           const outcome = {
             ok: false,
@@ -306,7 +309,7 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
           messages.push(retention.history(jsonUtf8Bytes(outcome) + jsonUtf8Bytes(call.id) + 256, () => advisorToolResult(call, outcome, timestamp))!);
           continue;
         }
-        consultations += 1;
+        if (counts) consultations += 1;
         // Later calls in the same leg must see what came before them: the rebuilt worker turn
         // and every earlier advisor result in this leg's accumulated messages.
         const consultParsed: OcxParsedRequest = {

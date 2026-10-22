@@ -345,6 +345,8 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   };
 
   const plan: AdvisorPlan = {
+    shouldCountManualConsultation: question =>
+      liveSettings().contextMode !== "question-only" || Boolean(question?.trim()),
     consult: (parsed, reason, question) => runConsultation(parsed, reason, question),
     // The guard's own failure/limit text goes through the same runtime-owned, marker-neutralized
     // formatter so no guard path can emit text that looks like a genuine advice wrapper.
@@ -357,6 +359,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     // own loops, so they get preflight support but never the tool (documented limitation).
     toolEnabled: initial.enabled,
     get tool() { return buildAdvisorTool(liveSettings().contextMode); },
+    shouldCountManualConsultation: plan.shouldCountManualConsultation,
     consult: plan.consult,
     formatUnavailable: plan.formatUnavailable,
     preflightInject,

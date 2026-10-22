@@ -93,7 +93,7 @@ function advisorConfig(advisor: OcxConfig["advisor"], workerFetch: typeof fetch)
   return config;
 }
 
-const advisorCallFramesFor = (question: string) => [
+const advisorCallFramesFor = (question?: string) => [
   { choices: [{ delta: { content: "Let me consult the expert." }, finish_reason: null }] },
   {
     choices: [{
@@ -149,6 +149,26 @@ function workerRequest(input: unknown, threadId?: string, stream = true, tools?:
 }
 
 describe("advisor responses wiring (end-to-end)", () => {
+  test.each([true, false])("question-only invalid calls preserve consultation allowance and bound continuations (corrected=%s)", async corrected => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = []; const chatRequests: string[] = [];
+    const legs = (corrected ? [undefined, "", "   ", "Where do I start?"] : [undefined]).map(advisorCallFramesFor);
+    const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1",
+      policy: "manual", contextMode: "question-only" }, workerProviderFetch(corrected ? [...legs, plainFrames("Done after correction.")] : legs, workerBodies));
+    loopbackInterceptor(config, { chatRequests });
+    const response = await handleResponses(workerRequest("Task", "invalid-question-retry"), config, logCtx);
+    const frames = await collectSse(response.body!);
+    expect(workerBodies).toHaveLength(5);
+    expect(chatRequests).toHaveLength(corrected ? 1 : 0);
+    if (corrected) {
+      expect(chatRequests[0]).toContain("Where do I start?");
+      expect(workerBodies[4]).toContain(ADVISOR_ADVICE);
+      expect(JSON.stringify(frames)).toContain("Done after correction.");
+    } else {
+      expect(JSON.stringify(frames)).toContain("advisor_continuation_limit");
+    }
+  });
+
   test.each([
     ["short", "Where do I start?", "Where do I start?"],
     ["at limit", "q".repeat(2_000), "q".repeat(2_000)],
