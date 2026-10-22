@@ -187,6 +187,8 @@ export const ja: Record<TKey, string> = {
   "advisor.modelsEmpty": "選択できるモデルがありません。プロバイダーとモデルを有効にして再試行してください。",
   "advisor.effort": "推論強度",
   "advisor.policy": "ポリシー",
+  "advisor.questionOnly": "ワーカーの質問のみ送信",
+  "advisor.questionOnlyNote": "ワーカーの質問（最大2000文字）と固定のアドバイザー指示のみを送信します。会話履歴、ツール結果、タスクの文脈は自動添付されません。必要な背景情報はワーカーが質問に含めます。自動相談は停止し、既存の回数制限は引き続き適用されます。",
   "advisor.policy.manual": "手動 — Worker が要求したときのみ",
   "advisor.policy.preflight": "Preflight — 方向性の証拠が出たら自動相談を試みる",
   "advisor.policy.adaptive": "適応型 — 初期調査と修正失敗時に相談",

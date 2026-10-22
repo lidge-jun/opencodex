@@ -167,6 +167,19 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
         ),
       };
     }
+    if (current.contextMode === "question-only") {
+      // A mode change after an automatic claim is operator policy, not a provider failure.
+      if (reason !== "manual") {
+        return { ok: false, isError: true, blocked: "settings", content: "" };
+      }
+      if (!question?.trim()) {
+        return {
+          ok: false,
+          isError: true,
+          content: formatAdvisorUnavailable("manual", "Question-only mode requires a self-contained question. Include the necessary background in question; no consultation sent."),
+        };
+      }
+    }
     // Same-consultation dedup within this request: identical trigger + focus returns a
     // non-advice outcome instead of a second expert call.
     const fingerprint = `${reason}|${question ?? ""}|${evidence?.id ?? ""}`;
@@ -208,6 +221,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
           workerIdentity: deps.workerIdentity,
           advisorModel: current.model,
           reason,
+          contextMode: current.contextMode,
           ...(evidence ? { evidence } : {}),
           ...(question !== undefined ? { question } : {}),
         },
@@ -259,7 +273,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   const preflightInject = async (parsed: OcxParsedRequest): Promise<boolean> => {
     const task = identify(parsed);
     const current = liveSettings();
-    if (current.policy === "manual" || preflightUsed || deps.abortSignal?.aborted) return false;
+    if (current.contextMode === "question-only" || current.policy === "manual" || preflightUsed || deps.abortSignal?.aborted) return false;
     // No consent, disabled, or no model: do not claim, do not inject, do not send task context.
     if (!current.enabled || current.model.trim() === "" || current.contextSharingConsent === null) return false;
     // A genuine MANUAL consultation already advised this task (verifiable tool-result
@@ -342,7 +356,7 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
     // The synthetic tool is only safe where the guard can intercept: run-turn adapters own their
     // own loops, so they get preflight support but never the tool (documented limitation).
     toolEnabled: initial.enabled,
-    tool: buildAdvisorTool(),
+    get tool() { return buildAdvisorTool(liveSettings().contextMode); },
     consult: plan.consult,
     formatUnavailable: plan.formatUnavailable,
     preflightInject,

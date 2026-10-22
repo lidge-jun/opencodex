@@ -148,6 +148,36 @@ function workerRequest(input: unknown, threadId?: string, stream = true, tools?:
 }
 
 describe("advisor responses wiring (end-to-end)", () => {
+  test("question-only reaches the expert provider without worker context and returns advice to the worker", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = []; const chatRequests: string[] = []; const expertBodies: string[] = [];
+    const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1",
+      policy: "preflight", contextMode: "question-only" }, workerProviderFetch([advisorCallFrames, plainFrames("Done with advice.")], workerBodies));
+    config.providers.expert!.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+      expertBodies.push(String(init?.body));
+      return chatCompletion(ADVISOR_ADVICE);
+    }) as typeof fetch;
+    loopbackInterceptor(config, { chatRequests });
+    const history = [
+      { role: "user", content: "PRIVATE_TASK_SENTINEL" },
+      { type: "function_call", call_id: "read_1", name: "read_file", arguments: '{"path":"PRIVATE_FILE_SENTINEL"}' },
+      { type: "function_call_output", call_id: "read_1", output: "PRIVATE_RESULT_SENTINEL" },
+    ];
+    const response = await handleResponses(workerRequest(history, "question-only-wiring"), config, logCtx);
+    expect(response.status).toBe(200);
+    const frames = await collectSse(response.body!);
+    expect(chatRequests).toHaveLength(1); // No automatic preflight despite orientation evidence.
+    expect(expertBodies).toHaveLength(1);
+    expect(expertBodies[0]).toContain("Where do I start?");
+    for (const marker of ["PRIVATE_TASK_SENTINEL", "PRIVATE_FILE_SENTINEL", "PRIVATE_RESULT_SENTINEL"]) {
+      expect(workerBodies[0]).toContain(marker);
+      expect(expertBodies[0]).not.toContain(marker);
+    }
+    expect(workerBodies[0]).toContain('"required":["question"]');
+    expect(workerBodies[1]).toContain(ADVISOR_ADVICE);
+    expect(JSON.stringify(frames)).toContain("Done with advice.");
+  });
+
   test.each([true, false])("delivery and empty-completion retry pass the same request budget (stream=%s)", async stream => {
     releaseSpendHome = acquireOwnedSpendHome();
     let sends = 0;

@@ -23,6 +23,39 @@ const baseInput = {
 };
 
 describe("consultAdvisor", () => {
+  test("question-only sends only the question over real loopback independently of history size", async () => {
+    const bodies: { messages: { role: string; content: string }[] }[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+      bodies.push(await req.json());
+      return Response.json({ choices: [{ message: { content: "Check the refresh boundary." } }] });
+    } });
+    try {
+      for (const size of [1, 100_000]) {
+        const input = { ...baseInput, contextMode: "question-only" as const, question: "How should I test token expiry?",
+          parsed: parseRequest({ model: "worker", input: [{ role: "user", content: "HISTORY_SENTINEL".repeat(size) }],
+            tools: [{ type: "function", name: "private_tool", description: "CATALOG_SENTINEL", parameters: {} }] }) };
+        expect((await consultAdvisor(input, {}, "medium", 5_000, undefined, `http://127.0.0.1:${server.port}`)).ok).toBe(true);
+      }
+      expect(bodies).toHaveLength(2);
+      expect(bodies[0]).toEqual(bodies[1]);
+      expect(bodies[0]!.messages).toHaveLength(2);
+      expect(bodies[0]!.messages[1]).toEqual({ role: "user", content: "How should I test token expiry?" });
+      const wire = JSON.stringify(bodies[0]);
+      for (const omitted of ["HISTORY_SENTINEL", "CATALOG_SENTINEL", "private_tool", baseInput.workerIdentity]) expect(wire).not.toContain(omitted);
+    } finally { server.stop(true); }
+  });
+
+  test("question-only rejects empty questions without sending a request", async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return Response.json({}); }) as typeof fetch;
+    for (const question of [undefined, "", "   "]) {
+      const result = await consultAdvisor({ ...baseInput, contextMode: "question-only", question }, {}, "max", 5000);
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("question");
+    }
+    expect(calls).toBe(0);
+  });
+
   test("sends the advisor chat completion through the loopback with the internal fence header", async () => {
     let seenUrl = "";
     let seenHeaders: Record<string, string> = {};

@@ -26,6 +26,7 @@ const initialSettings: AdvisorSettings = {
   model: "expert/gpt-6-astra",
   effort: "medium",
   policy: "manual",
+  contextMode: "context",
   timeoutMs: 5000,
   contextSharingConsent: "v1",
 };
@@ -101,6 +102,31 @@ async function clickSave(container: HTMLElement): Promise<void> {
     await new Promise(r => setTimeout(r, 0));
   });
 }
+
+test("question-only mode saves explicitly, pauses policy selection and can be switched back", async () => {
+  const submitted: Record<string, unknown>[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body));
+    submitted.push(body);
+    return Response.json({ settings: body, runnable: true });
+  }) as typeof fetch;
+  const { root, container } = await mountEditor();
+  try {
+    const checkbox = container.querySelector<HTMLInputElement>("#advisor-question-only")!;
+    const policy = container.querySelector<HTMLSelectElement>("#advisor-policy")!;
+    expect(checkbox.checked).toBe(false);
+    await act(async () => { checkbox.click(); });
+    expect(policy.disabled).toBe(true);
+    expect(container.textContent).toContain("Automatic consultations are paused");
+    await clickSave(container);
+    expect(submitted[0]!.contextMode).toBe("question-only");
+    expect(submitted[0]!.model).toBe(initialSettings.model);
+    await act(async () => { checkbox.click(); });
+    expect(policy.disabled).toBe(false);
+    await clickSave(container);
+    expect(submitted[1]!.contextMode).toBe("context");
+  } finally { await act(async () => root.unmount()); }
+});
 
 test("adaptive policy exposes and saves the server-enforced task allowance", async () => {
   let submitted: unknown;

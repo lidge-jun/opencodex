@@ -81,6 +81,8 @@ export const pt: Record<TKey, string> = {
   "advisor.modelsEmpty": "Nenhum modelo selecionável. Ative um provedor e um modelo e tente novamente.",
   "advisor.effort": "Raciocínio",
   "advisor.policy": "Política",
+  "advisor.questionOnly": "Enviar apenas a pergunta do worker",
+  "advisor.questionOnlyNote": "Apenas a pergunta do worker (até 2000 caracteres) e uma instrução fixa são enviadas. Histórico, resultados de ferramentas e contexto da tarefa não são anexados. O worker deve incluir as informações essenciais. As consultas automáticas ficam pausadas; os limites existentes continuam válidos.",
   "advisor.policy.manual": "Manual — somente quando o worker solicitar",
   "advisor.policy.preflight": "Preflight — tentativa automática após evidência de orientação",
   "advisor.policy.adaptive": "Adaptativo — orientação e falha após correção",

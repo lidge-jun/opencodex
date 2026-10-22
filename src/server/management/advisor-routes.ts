@@ -20,10 +20,12 @@ import {
   isCurrentAdvisorContextSharingConsent,
   isValidAdvisorEffort,
   isValidAdvisorPolicy,
+  isValidAdvisorContextMode,
   isValidAdvisorTaskLimit,
   resolveAdvisorSettings,
   type AdvisorEffort,
   type AdvisorPolicy,
+  type AdvisorContextMode,
 } from "../../advisor/settings";
 import { advisorActivityStore } from "../../advisor/activity";
 
@@ -34,6 +36,7 @@ interface AdvisorPatch {
   model?: string;
   effort?: AdvisorEffort;
   policy?: AdvisorPolicy;
+  contextMode?: AdvisorContextMode;
   timeoutMs?: number;
   maxConsultationsPerTask?: number;
   /** "v1" records current consent. null removes it. Enabling does not imply this field. */
@@ -43,7 +46,7 @@ interface AdvisorPatch {
 
 type ParsedPatch = { ok: true; patch: AdvisorPatch } | { ok: false; code: string; message: string };
 
-const PATCH_KEYS = new Set(["enabled", "model", "effort", "policy", "timeoutMs", "maxConsultationsPerTask", "contextSharingConsent", "reset"]);
+const PATCH_KEYS = new Set(["enabled", "model", "effort", "policy", "contextMode", "timeoutMs", "maxConsultationsPerTask", "contextSharingConsent", "reset"]);
 
 type Rec = Record<string, unknown>;
 function isRec(value: unknown): value is Rec {
@@ -55,7 +58,7 @@ export function parseAdvisorSettingsPatch(body: unknown): ParsedPatch {
   if (!isRec(body)) return { ok: false, code: "invalid_body", message: "body must be a JSON object" };
   if (Object.keys(body).length === 0) return { ok: false, code: "empty_body", message: "body must set at least one supported advisor setting or reset" };
   for (const key of Object.keys(body)) {
-    if (!PATCH_KEYS.has(key)) return { ok: false, code: "unknown_field", message: "body accepts only enabled, model, effort, policy, timeoutMs, maxConsultationsPerTask, contextSharingConsent and reset" };
+    if (!PATCH_KEYS.has(key)) return { ok: false, code: "unknown_field", message: "body accepts only enabled, model, effort, policy, contextMode, timeoutMs, maxConsultationsPerTask, contextSharingConsent and reset" };
   }
   const patch: AdvisorPatch = {};
   if (body.reset !== undefined) {
@@ -92,6 +95,10 @@ export function parseAdvisorSettingsPatch(body: unknown): ParsedPatch {
       return { ok: false, code: "invalid_policy", message: 'policy must be "manual", "preflight" or "adaptive"' };
     }
     patch.policy = body.policy;
+  }
+  if (body.contextMode !== undefined) {
+    if (!isValidAdvisorContextMode(body.contextMode)) return { ok: false, code: "invalid_context_mode", message: 'contextMode must be "context" or "question-only"' };
+    patch.contextMode = body.contextMode;
   }
   if (body.timeoutMs !== undefined) {
     if (typeof body.timeoutMs !== "number" || !Number.isFinite(body.timeoutMs) || body.timeoutMs < 1_000 || body.timeoutMs > 600_000) {
@@ -145,6 +152,7 @@ function applyPatchInMemory(config: ManagementContext["config"], patch: AdvisorP
   if (patch.model !== undefined) current.model = patch.model;
   if (patch.effort !== undefined) current.effort = patch.effort;
   if (patch.policy !== undefined) current.policy = patch.policy;
+  if (patch.contextMode !== undefined) current.contextMode = patch.contextMode;
   if (patch.timeoutMs !== undefined) current.timeoutMs = patch.timeoutMs;
   if (patch.maxConsultationsPerTask !== undefined) current.maxConsultationsPerTask = patch.maxConsultationsPerTask;
   if (patch.contextSharingConsent === null) delete current.contextSharingConsent;

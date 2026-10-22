@@ -9,6 +9,7 @@
 import type { OcxMessage, OcxParsedRequest } from "../types";
 import type { AdvisorTrigger } from "./activity";
 import type { AdvisorRepairEvidence } from "./evidence";
+import type { AdvisorContextMode } from "./settings";
 
 /** Per-message text cap. Tool outputs (shell/test logs) are the usual oversize offenders. */
 const MAX_MESSAGE_CHARS = 4_000;
@@ -31,6 +32,7 @@ export interface AdvisorContextInput {
   evidence?: AdvisorRepairEvidence;
   /** Optional worker-supplied focus question (synthetic tool argument). */
   question?: string;
+  contextMode?: AdvisorContextMode;
 }
 
 function clip(value: string, max: number): string {
@@ -126,6 +128,8 @@ export const ADVISOR_SYSTEM_INSTRUCTION =
 
 export function buildAdvisorUserPrompt(input: AdvisorContextInput): string {
   const focus = input.question ? clip(input.question, MAX_QUESTION_CHARS) : "";
+  // Do not read parsed task state in this mode, including identities, tools or repair evidence.
+  if (input.contextMode === "question-only") return focus;
   return [
     `# Worker identity\n${input.workerIdentity}`,
     `# Advisor identity\n${input.advisorModel} (independent expert advisor, consulted ${input.reason === "manual" ? "at the worker's explicit request" : input.reason === "preflight" ? "automatically before the worker's first substantive turn" : "automatically after a failed repair"})`,
@@ -142,6 +146,12 @@ export function buildAdvisorUserPrompt(input: AdvisorContextInput): string {
     "Provide your advice for the worker now.",
   ].join("\n\n");
 }
+
+export const ADVISOR_QUESTION_ONLY_INSTRUCTION =
+  "You are an independent expert advisor. Answer only the question provided by the worker. "
+  + "You have no access to the worker's conversation, files, tools or hidden reasoning. "
+  + "Give concise, actionable advice. If essential information is missing, state what is needed; "
+  + "do not invent context. You cannot execute tools or edit files.";
 
 /** Fixed developer policy only; all Advisor bytes travel in a separate user message. */
 export const ADVISOR_TRANSPORT_INSTRUCTION = [

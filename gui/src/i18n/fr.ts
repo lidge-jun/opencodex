@@ -185,6 +185,8 @@ export const fr: Record<TKey, string> = {
   "advisor.modelsEmpty": "Aucun modèle disponible. Activez un fournisseur et un modèle, puis réessayez.",
   "advisor.effort": "Intensité de raisonnement",
   "advisor.policy": "Politique",
+  "advisor.questionOnly": "Envoyer uniquement la question du worker",
+  "advisor.questionOnlyNote": "Seules la question du worker (2000 caractères maximum) et une instruction fixe sont envoyées. Aucun historique, résultat d’outil ou contexte de tâche n’est joint. Le worker doit inclure les informations essentielles. Les consultations automatiques sont suspendues ; les limites existantes restent actives.",
   "advisor.policy.manual": "Manuel — uniquement à la demande du worker",
   "advisor.policy.preflight": "Preflight — tentative automatique dès qu'une preuve d'orientation existe",
   "advisor.policy.adaptive": "Adaptatif — orientation et réparation en échec",

@@ -38,6 +38,19 @@ function parsedWithHistory() {
 }
 
 describe("advisorTranscript", () => {
+  test("question-only never reads the parsed conversation and bounds the question", () => {
+    const input = {
+      get parsed(): never { throw new Error("Context must not be read"); },
+      workerIdentity: "WORKER_SENTINEL", advisorModel: "MODEL_SENTINEL", reason: "manual" as const,
+      contextMode: "question-only" as const, question: "  Review this standalone question.  ",
+    };
+    expect(buildAdvisorUserPrompt(input)).toBe("Review this standalone question.");
+    input.question = "x".repeat(2100);
+    const long = buildAdvisorUserPrompt(input);
+    expect(long.startsWith("x".repeat(2000))).toBe(true);
+    expect(long).not.toContain("x".repeat(2001));
+  });
+
   test("renders user, tool calls, and tool results the worker produced", () => {
     const transcript = advisorTranscript(parsedWithHistory());
     expect(transcript).toContain("[user] Fix the failing auth tests");

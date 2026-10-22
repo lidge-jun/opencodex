@@ -1678,6 +1678,8 @@ export interface OcxAdvisorConfig {
    * or a tool result after the latest user message).
    */
   policy?: "manual" | "preflight" | "adaptive";
+  /** question-only sends only the worker's explicit question and disables automatic consultations. */
+  contextMode?: "context" | "question-only";
   /** Adaptive task consultation attempts (manual + automatic). Integer 1–3, default 3. */
   maxConsultationsPerTask?: number;
   /** Advisor fetch timeout (ms). Default 120000. */
