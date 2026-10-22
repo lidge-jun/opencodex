@@ -61,6 +61,7 @@ export type CodexCliUpdateRefusal =
   | "windows_inspection_deferred"
   | "not_managed"
   | "installed_version_unverified"
+  | "install_content_unverified"
   | "target_unresolved"
   | "already_current"
   | "target_not_newer"
@@ -100,6 +101,13 @@ export interface CodexCliUpdatePlan {
   readonly targetVersion: string | null;
   readonly targetIntegrity: string | null;
   readonly session: CodexCliUpdateSession;
+  /**
+   * The bounded content observation the installation report produced: digest of
+   * the manifest, declared entrypoint and resolved platform backing the plan's
+   * identity is pinned to. Not an execution guarantee — an apply phase must
+   * re-observe before it can rely on the same bytes.
+   */
+  readonly installContentDigest: string | null;
   /** Indicative install argv for the operator to read; the apply phase this plan precedes verifies a packed tarball against the bound sha512 rather than trusting a moving spec. */
   readonly command: readonly string[] | null;
 }
@@ -157,6 +165,7 @@ export function codexCliUpdatePlanId(bound: {
   readonly provenance: CodexCliInstallKind;
   readonly installedVersion: string;
   readonly installDigest: string | null;
+  readonly installContentDigest: string;
   readonly channel: CodexCliUpdateChannel;
   readonly targetVersion: string;
   readonly targetIntegrity: string;
@@ -170,6 +179,7 @@ export function codexCliUpdatePlanId(bound: {
     ["provenance", bound.provenance],
     ["installedVersion", bound.installedVersion],
     ["installDigest", bound.installDigest ?? ""],
+    ["installContentDigest", bound.installContentDigest],
     ["channel", bound.channel],
     ["targetVersion", bound.targetVersion],
     ["targetIntegrity", bound.targetIntegrity],
@@ -453,6 +463,7 @@ function refusedPlan(
     targetVersion: target?.kind === "resolved" ? target.version : null,
     targetIntegrity: target?.kind === "resolved" ? target.integrity : null,
     session,
+    installContentDigest: report.installContentDigest,
     command: null,
   });
 }
@@ -473,7 +484,9 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   const channel: CodexCliUpdateChannel = deps.channel ?? "latest";
   const platform = deps.platform ?? process.platform;
   const inspect = deps.inspect ?? inspectCodexCliInstall;
-  const report = await inspect(deps.inspectionDeps ?? {});
+  // The planId binds the observed file set, so the plan is the one caller that
+  // pays the bounded content read; a bare ownership check leaves it unobserved.
+  const report = await inspect({ ...(deps.inspectionDeps ?? {}), observeInstallContent: true });
 
   // Phase 1 performs no candidate filesystem I/O at all on Windows, so there is no
   // ownership evidence to build a plan on. This stays dormant until the handle-bound
@@ -492,6 +505,12 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   const installedSemver = installedVersion ? parseStrictSemver(installedVersion) : null;
   if (!installedVersion || !installedSemver) {
     return refusedPlan("installed_version_unverified", report, channel, null, NOT_EVALUATED);
+  }
+
+  // A managed install whose observed content could not be bound produces no
+  // usable plan id — spending a registry query on it can only widen the claim.
+  if (!report.installContentDigest) {
+    return refusedPlan("install_content_unverified", report, channel, null, NOT_EVALUATED);
   }
 
   // The npm evidence channels are bound to the same environment snapshot the
@@ -543,6 +562,7 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
       provenance: report.provenance,
       installedVersion,
       installDigest: report.installDigest,
+      installContentDigest: report.installContentDigest,
       channel,
       targetVersion: target.version,
       targetIntegrity: target.integrity,
@@ -555,6 +575,7 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     targetVersion: target.version,
     targetIntegrity: target.integrity,
     session: Object.freeze({ state: "none" as const, matches: 0 }),
+    installContentDigest: report.installContentDigest,
     command: codexCliUpdateCommand(target.version),
   });
 }

@@ -24,6 +24,8 @@ export type TrustedNodeLaunchContext = {
     codexCliPath: string | null;
     path: string | null;
     pathExt: string | null;
+    home: string | null;
+    nodePath: string | null;
     managerRoots: CodexCliVersionManagerRoots | null;
     configDir: string;
   }> | null;
@@ -70,7 +72,7 @@ export function initializeNodeLauncherContext(
   delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
   trustedContext = null;
 
-  if (proofArgs.length !== 1 || !raw || raw.length > 64 * 1024) return null;
+  if (proofArgs.length !== 1 || !raw || raw.length > NODE_LAUNCH_CONTEXT_MAX_CHARS) return null;
   const proof = proofArgs[0]!;
   if (!isLaunchProof(proof)) return null;
 
@@ -102,6 +104,12 @@ export function initializeNodeLauncherContext(
           const value = (inspection as Record<string, unknown>)[key];
           return value === null || typeof value === "string";
         })
+        // Older launchers predate the lookup-seed slots; absent stays null so
+        // the fallback lane simply remains unverifiable rather than untrusted.
+        && ["home", "nodePath"].every(key => {
+          const value = (inspection as Record<string, unknown>)[key];
+          return value === undefined || value === null || typeof value === "string";
+        })
         && typeof (inspection as Record<string, unknown>).configDir === "string"
         && (inspection as Record<string, string>).configDir.length > 0
         && (inspection as Record<string, string>).configDir.length <= 32 * 1024
@@ -110,6 +118,8 @@ export function initializeNodeLauncherContext(
             codexCliPath: (inspection as Record<string, string | null>).codexCliPath ?? null,
             path: (inspection as Record<string, string | null>).path ?? null,
             pathExt: (inspection as Record<string, string | null>).pathExt ?? null,
+            home: (inspection as Record<string, string | null>).home ?? null,
+            nodePath: (inspection as Record<string, string | null>).nodePath ?? null,
             managerRoots,
             configDir: (inspection as Record<string, string>).configDir,
           })
@@ -125,4 +135,7 @@ export function initializeNodeLauncherContext(
 export function trustedNodeLauncherContext(): TrustedNodeLaunchContext | null {
   return trustedContext;
 }
-import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../update/codex-cli-update-launch-policy.mjs";
+import {
+  CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
+  NODE_LAUNCH_CONTEXT_MAX_CHARS,
+} from "../update/codex-cli-update-launch-policy.mjs";

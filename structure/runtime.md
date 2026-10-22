@@ -312,6 +312,7 @@ Codex CLI update inspection is split from mutation. `system codex-cli-update che
 package-registry request and reads bounded provenance evidence for the configured launcher candidate, npm ownership layout,
 package metadata, and shim binding. The proof-bound launcher snapshot does not attest successful Codex execution;
 POSIX selection is attested when the runtime resolver selects the same canonical environment candidate without executing it. A linked npm-global manifest can then establish managed ownership; persisted candidates stay unattested.
+A manifest-owned POSIX npm-global install can also report an opt-in bounded content digest over the manifest, declared entrypoint, and the platform backing files at the layout's modeled locations; it is an observation claim, not execution proof.
 On Windows this first slice performs no candidate/configuration filesystem I/O: it preserves only proof-captured
 absolute environment candidates for lexical app-bundle/version-manager reporting and otherwise fails closed. That
 fail-closed result records which observation was missing: a run with no proof-captured environment candidate reports
