@@ -10,17 +10,24 @@ const ENTROPY = new TextEncoder().encode(PURPOSE);
 // Only the PowerShell fallback is bounded by a clock. A cold Windows PowerShell that must also load
 // System.Security has been measured past 10s on a loaded machine (Windows CI run 38591626343).
 const DPAPI_TIMEOUT_MS = 20_000;
+// Cmdlet-free on purpose. The first cmdlet a PowerShell session runs (Add-Type, ConvertFrom-Json)
+// sends it through command discovery and module auto-loading, which without a module-analysis cache
+// for the profile scans the modules on PSModulePath. The test runner gives every run a fresh profile
+// and CI images carry large module sets, so that scan, not DPAPI, is what cold runs waited on.
+// Assembly loading, string splitting and base64 are plain .NET calls outside command discovery.
+// The request is "<operation>\n<base64 data>" on stdin.
 const SCRIPT = [
   "$ErrorActionPreference='Stop'",
-  "Add-Type -AssemblyName System.Security",
-  "$r=[Console]::In.ReadToEnd()|ConvertFrom-Json",
-  "$data=[Convert]::FromBase64String($r.data)",
+  "[void][Reflection.Assembly]::Load('System.Security, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a')",
+  "$r=[Console]::In.ReadToEnd().Split([char]10)",
+  "if($r.Length -ne 2){throw 'Invalid request'}",
+  "$data=[Convert]::FromBase64String($r[1])",
   `if($data.Length -eq 0 -or $data.Length -gt ${MAX_INPUT}){throw 'Invalid data size'}`,
   `$entropy=[Text.Encoding]::UTF8.GetBytes('${PURPOSE}')`,
   "$scope=[Security.Cryptography.DataProtectionScope]::CurrentUser",
-  "if($r.operation -eq 'protect'){",
+  "if($r[0] -ceq 'protect'){",
   " $out=[Security.Cryptography.ProtectedData]::Protect($data,$entropy,$scope)",
-  "}elseif($r.operation -eq 'unprotect'){",
+  "}elseif($r[0] -ceq 'unprotect'){",
   " $out=[Security.Cryptography.ProtectedData]::Unprotect($data,$entropy,$scope)",
   "}else{throw 'Invalid operation'}",
   "[Console]::Out.Write([Convert]::ToBase64String($out))",
@@ -126,7 +133,7 @@ function runPowerShellDpapi(operation: Operation, data: Uint8Array, timeoutMs = 
       resolve(bytes);
     });
     child.stdin?.on("error", () => { /* execFile's completion reports the failed child. */ });
-    child.stdin?.end(JSON.stringify({ operation, data: Buffer.from(data).toString("base64") }));
+    child.stdin?.end(`${operation}\n${Buffer.from(data).toString("base64")}`);
   });
 }
 
@@ -162,4 +169,9 @@ export function powerShellAuthorityKeyProtectionForTests(timeoutMs: number): Aut
 /** Test-only: whether this process protects keys in-process rather than through PowerShell. */
 export function usesNativeDpapiForTests(): boolean {
   return process.platform === "win32" && loadNativeDpapi() !== null;
+}
+
+/** Test-only: the PowerShell helper's script, so its cmdlet-free contract can be checked anywhere. */
+export function powerShellDpapiScriptForTests(): string {
+  return SCRIPT;
 }

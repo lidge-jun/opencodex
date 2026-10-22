@@ -11,6 +11,7 @@ import { statusWinswRaw, type WinswStatus } from "../lib/winsw";
 import { withWindowsServiceMutationLock } from "../lib/windows-service-mutation-lock";
 import { maybeShowStarPrompt } from "../cli/star-prompt";
 import { serviceStatusReport } from "./diagnostics";
+import { collectServiceStatusJson } from "./status-json";
 import { assertServiceAuthEnvironment } from "./auth-preflight";
 import { assertServiceEnvironmentMatchesInstall } from "./guards";
 import { resolveServiceListenPort } from "./definition";
@@ -47,10 +48,14 @@ export function normalizeServiceSubcommand(sub?: string): string {
   return sub ?? "install";
 }
 
+const SERVICE_JSON_STATUS_ONLY = "--json applies to `ocx service status` only.";
+
 export interface ParsedServiceArgs {
   sub: string;
   backend: ServiceBackend | null;
   invalid: string[];
+  /** `--json`: accepted for `status` only; planServiceCommand rejects it elsewhere. */
+  json: boolean;
 }
 
 export type ServiceInstallationState = "installed" | "absent" | "unknown";
@@ -140,6 +145,9 @@ export function planServiceCommand(
   if (parsed.invalid.length > 0) {
     return { ok: false, message: `Unknown service option: ${parsed.invalid.join(" ")}` };
   }
+  if (parsed.json && parsed.sub !== "status") {
+    return { ok: false, message: SERVICE_JSON_STATUS_ONLY };
+  }
   if (parsed.backend && parsed.sub !== "install") {
     return { ok: false, message: "--native/--scheduler apply to `ocx service install` only; other subcommands use the installed backend." };
   }
@@ -174,9 +182,11 @@ export function planServiceCommand(
 export function parseServiceArgs(args: string[]): ParsedServiceArgs {
   let sub: string | undefined;
   let backend: ServiceBackend | null = null;
+  let json = false;
   const invalid: string[] = [];
   for (const arg of args) {
-    if (arg === "--native") {
+    if (arg === "--json") json = true;
+    else if (arg === "--native") {
       if (backend === "scheduler") { invalid.push("--native (conflicts with --scheduler)"); continue; }
       backend = "native";
     }
@@ -188,7 +198,7 @@ export function parseServiceArgs(args: string[]): ParsedServiceArgs {
     else if (sub === undefined) sub = arg;
     else invalid.push(arg);
   }
-  return { sub: normalizeServiceSubcommand(sub), backend, invalid };
+  return { sub: normalizeServiceSubcommand(sub), backend, invalid, json };
 }
 
 /** Remove the service credential only when no client connection can own it. */
@@ -243,6 +253,12 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       process.exitCode = 1;
       return;
     }
+  // Answered before platformOps() resolves: the JSON status reaches no install, start, stop,
+  // repair or migration path, and an unsupported platform still gets a document, not an exit.
+  if (command === "status" && parsed.json) {
+    console.log(JSON.stringify(await collectServiceStatusJson(), null, 2));
+    return;
+  }
   if (command === "repair" || command === "restart") {
     const verb: ServiceRepairVerb = command === "restart" ? "restart" : "repair";
     assertServiceEnvironmentMatchesInstall();
@@ -488,6 +504,13 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
   };
 
   const preliminary = parseServiceArgs(filteredArgs);
+  // `claim` parses its own --json. Any other verb is refused here, before the Desktop check
+  // and the Windows mutation lock, so a misplaced --json never reaches either.
+  if (preliminary.json && preliminary.sub !== "status" && preliminary.sub !== "claim") {
+    console.error(SERVICE_JSON_STATUS_ONLY);
+    process.exitCode = 1;
+    return;
+  }
   if (preliminary.invalid.length === 0) {
     const refusal = desktopServiceCommandRefusal(preliminary.sub, undefined, supervisionLatch);
     if (refusal) {
