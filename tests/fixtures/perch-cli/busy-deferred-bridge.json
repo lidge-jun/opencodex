@@ -1,0 +1,49 @@
+{
+ "ok": false,
+ "status": "failed",
+ "runId": "cli-turn-0000000000000-fixture",
+ "assistantText": "",
+ "events": [
+  {
+   "type": "diagnostic",
+   "code": "mcp_tools_deferred",
+   "message": "Holding back 16 MCP tool schema(s) behind loadMcpTools; they load on demand."
+  },
+  {
+   "type": "model_call_started",
+   "provider": "auto"
+  },
+  {
+   "type": "diagnostic",
+   "code": "interrupted_turn_context_persisted",
+   "message": "Persisted interrupted turn context, evidence, and context meter state."
+  },
+  {
+   "type": "turn_failed",
+   "error": "The model is busy right now. Wait a moment and try again, or pick a different model from the model menu.",
+   "errorCode": "runtime_error",
+   "rawError": "Streaming exhausted in chat pool exhausted after 28 attempted fallbacks: openrouter is not configured for auto routing; missing API key."
+  }
+ ],
+ "contextSnapshot": {
+  "rows": [
+   {
+    "id": "tool-schemas",
+    "status": "sent_raw",
+    "content": "validateWorkspaceRoot bash run_in_background check_background_task list_background_tasks kill_background_task wait_for_background_task glob grep readLocalFile writeLocalFile moveLocalFile copyLocalFile createDirectory deleteLocalFile editLocalFile apply_patch statPath readProjectMemory saveToMemory listLocalSources readLocalSourceFile generateAPAuditPacket prepare_ap_evidence query_ap_cases render_ap_control_graph runManagedPlaybook send_worker_message task_stop spawn_worker spawn_worker_batch dispatch_agent run_sandbox_code ctxInspect toolSearch configInspect syntheticOutput todoWrite create_artifact update_artifact loadSkill askUserQuestion brief listMcpServers searchKnowledge webSearch webFetch scholarSearch get_market_signal query_market_signal_log explain_market_signal list_market_strategies run_market_backtest get_market_track_record loadMcpTools"
+   },
+   {
+    "id": "project-perch-md",
+    "status": "sent_raw"
+   },
+   {
+    "id": "project-rule-.perch\\rules\\10-instructions-01.md",
+    "status": "sent_raw"
+   },
+   {
+    "id": "project-rule-.perch\\rules\\20-conversation-01.md",
+    "status": "sent_raw"
+   }
+  ]
+ }
+}

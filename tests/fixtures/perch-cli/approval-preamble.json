@@ -1,0 +1,111 @@
+{
+ "ok": false,
+ "status": "approval_required",
+ "runId": "tkt-cli-0000000000000-fixture",
+ "assistantText": "I'll read the README.md file for you.",
+ "events": [
+  {
+   "type": "turn_started"
+  },
+  {
+   "type": "model_call_started",
+   "provider": "auto"
+  },
+  {
+   "type": "content_delta",
+   "text": "I"
+  },
+  {
+   "type": "content_delta",
+   "text": "'ll"
+  },
+  {
+   "type": "content_delta",
+   "text": " read"
+  },
+  {
+   "type": "content_delta",
+   "text": " the"
+  },
+  {
+   "type": "content_delta",
+   "text": " README"
+  },
+  {
+   "type": "content_delta",
+   "text": ".md"
+  },
+  {
+   "type": "content_delta",
+   "text": " file"
+  },
+  {
+   "type": "content_delta",
+   "text": " for"
+  },
+  {
+   "type": "content_delta",
+   "text": " you"
+  },
+  {
+   "type": "content_delta",
+   "text": "."
+  },
+  {
+   "type": "model_call_completed",
+   "provider": "auto"
+  },
+  {
+   "type": "assistant_preamble",
+   "text": "I'll read the README.md file for you."
+  },
+  {
+   "type": "tool_call_requested",
+   "toolName": "mcp__ocxprobe__read_project_file",
+   "toolCallId": "chatcmpl-tool-d13d767bc9a549ae9e7cd5e467e6fb60",
+   "input": {
+    "path": "README.md"
+   }
+  },
+  {
+   "type": "tool_call_started",
+   "toolName": "mcp__ocxprobe__read_project_file",
+   "toolCallId": "chatcmpl-tool-d13d767bc9a549ae9e7cd5e467e6fb60",
+   "input": {
+    "path": "README.md"
+   }
+  },
+  {
+   "type": "tool_call_failed",
+   "toolName": "mcp__ocxprobe__read_project_file",
+   "toolCallId": "chatcmpl-tool-d13d767bc9a549ae9e7cd5e467e6fb60",
+   "error": "`read_project_file` on ocxprobe does not say whether it changes anything, so Perch treats it as a change. Approve to run it.",
+   "errorCode": "tool_requires_approval"
+  },
+  {
+   "type": "assistant_response",
+   "text": "I'll read the README.md file for you."
+  },
+  {
+   "type": "turn_completed"
+  }
+ ],
+ "contextSnapshot": {
+  "rows": [
+   {
+    "id": "tool-schemas",
+    "status": "sent_raw",
+    "content": "[{\"type\":\"function\",\"function\":{\"name\":\"validateWorkspaceRoot\"}},{\"type\":\"function\",\"function\":{\"name\":\"bash\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_in_background\"}},{\"type\":\"function\",\"function\":{\"name\":\"check_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"list_background_tasks\"}},{\"type\":\"function\",\"function\":{\"name\":\"kill_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"wait_for_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"glob\"}},{\"type\":\"function\",\"function\":{\"name\":\"grep\"}},{\"type\":\"function\",\"function\":{\"name\":\"readLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"writeLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"moveLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"copyLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"createDirectory\"}},{\"type\":\"function\",\"function\":{\"name\":\"deleteLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"editLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"apply_patch\"}},{\"type\":\"function\",\"function\":{\"name\":\"statPath\"}},{\"type\":\"function\",\"function\":{\"name\":\"readProjectMemory\"}},{\"type\":\"function\",\"function\":{\"name\":\"saveToMemory\"}},{\"type\":\"function\",\"function\":{\"name\":\"listLocalSources\"}},{\"type\":\"function\",\"function\":{\"name\":\"readLocalSourceFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"generateAPAuditPacket\"}},{\"type\":\"function\",\"function\":{\"name\":\"prepare_ap_evidence\"}},{\"type\":\"function\",\"function\":{\"name\":\"query_ap_cases\"}},{\"type\":\"function\",\"function\":{\"name\":\"render_ap_control_graph\"}},{\"type\":\"function\",\"function\":{\"name\":\"runManagedPlaybook\"}},{\"type\":\"function\",\"function\":{\"name\":\"send_worker_message\"}},{\"type\":\"function\",\"function\":{\"name\":\"task_stop\"}},{\"type\":\"function\",\"function\":{\"name\":\"spawn_worker\"}},{\"type\":\"function\",\"function\":{\"name\":\"spawn_worker_batch\"}},{\"type\":\"function\",\"function\":{\"name\":\"dispatch_agent\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_sandbox_code\"}},{\"type\":\"function\",\"function\":{\"name\":\"ctxInspect\"}},{\"type\":\"function\",\"function\":{\"name\":\"toolSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"configInspect\"}},{\"type\":\"function\",\"function\":{\"name\":\"syntheticOutput\"}},{\"type\":\"function\",\"function\":{\"name\":\"todoWrite\"}},{\"type\":\"function\",\"function\":{\"name\":\"create_artifact\"}},{\"type\":\"function\",\"function\":{\"name\":\"update_artifact\"}},{\"type\":\"function\",\"function\":{\"name\":\"loadSkill\"}},{\"type\":\"function\",\"function\":{\"name\":\"askUserQuestion\"}},{\"type\":\"function\",\"function\":{\"name\":\"propose_plan\"}},{\"type\":\"function\",\"function\":{\"name\":\"enterPlanMode\"}},{\"type\":\"function\",\"function\":{\"name\":\"exitPlanMode\"}},{\"type\":\"function\",\"function\":{\"name\":\"brief\"}},{\"type\":\"function\",\"function\":{\"name\":\"listMcpServers\"}},{\"type\":\"function\",\"function\":{\"name\":\"searchKnowledge\"}},{\"type\":\"function\",\"function\":{\"name\":\"webSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"webFetch\"}},{\"type\":\"function\",\"function\":{\"name\":\"scholarSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"get_market_signal\"}},{\"type\":\"function\",\"function\":{\"name\":\"query_market_signal_log\"}},{\"type\":\"function\",\"function\":{\"name\":\"explain_market_signal\"}},{\"type\":\"function\",\"function\":{\"name\":\"list_market_strategies\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_market_backtest\"}},{\"type\":\"function\",\"function\":{\"name\":\"get_market_track_record\"}},{\"type\":\"function\",\"function\":{\"name\":\"mcp__ocxprobe__read_project_file\"}}]"
+   },
+   {
+    "id": "project-perch-md",
+    "status": "sent_raw"
+   }
+  ],
+  "turnApiUsage": {
+   "inputTokens": 24217,
+   "outputTokens": 41,
+   "totalTokens": 24258
+  }
+ }
+}

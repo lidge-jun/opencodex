@@ -1,0 +1,573 @@
+{
+ "ok": true,
+ "status": "completed",
+ "runId": "cli-turn-0000000000000-fixture",
+ "assistantText": "The README.md file doesn't exist in the current workspace, and the src directory is empty.",
+ "events": [
+  {
+   "type": "turn_started"
+  },
+  {
+   "type": "model_call_started",
+   "provider": "auto"
+  },
+  {
+   "type": "content_delta",
+   "text": "I"
+  },
+  {
+   "type": "content_delta",
+   "text": " need"
+  },
+  {
+   "type": "content_delta",
+   "text": " to"
+  },
+  {
+   "type": "content_delta",
+   "text": " find"
+  },
+  {
+   "type": "content_delta",
+   "text": " the"
+  },
+  {
+   "type": "content_delta",
+   "text": " correct"
+  },
+  {
+   "type": "content_delta",
+   "text": " tool"
+  },
+  {
+   "type": "content_delta",
+   "text": " names"
+  },
+  {
+   "type": "content_delta",
+   "text": "."
+  },
+  {
+   "type": "content_delta",
+   "text": " I"
+  },
+  {
+   "type": "content_delta",
+   "text": " don"
+  },
+  {
+   "type": "content_delta",
+   "text": "'t"
+  },
+  {
+   "type": "content_delta",
+   "text": " see"
+  },
+  {
+   "type": "content_delta",
+   "text": " `"
+  },
+  {
+   "type": "content_delta",
+   "text": "read"
+  },
+  {
+   "type": "content_delta",
+   "text": "_project"
+  },
+  {
+   "type": "content_delta",
+   "text": "_file"
+  },
+  {
+   "type": "content_delta",
+   "text": "`"
+  },
+  {
+   "type": "content_delta",
+   "text": " or"
+  },
+  {
+   "type": "content_delta",
+   "text": " `"
+  },
+  {
+   "type": "content_delta",
+   "text": "list"
+  },
+  {
+   "type": "content_delta",
+   "text": "_dir"
+  },
+  {
+   "type": "content_delta",
+   "text": "`"
+  },
+  {
+   "type": "content_delta",
+   "text": " in"
+  },
+  {
+   "type": "content_delta",
+   "text": " my"
+  },
+  {
+   "type": "content_delta",
+   "text": " available"
+  },
+  {
+   "type": "content_delta",
+   "text": " tools"
+  },
+  {
+   "type": "content_delta",
+   "text": "."
+  },
+  {
+   "type": "content_delta",
+   "text": " The"
+  },
+  {
+   "type": "content_delta",
+   "text": " closest"
+  },
+  {
+   "type": "content_delta",
+   "text": " equivalents"
+  },
+  {
+   "type": "content_delta",
+   "text": " I"
+  },
+  {
+   "type": "content_delta",
+   "text": " have"
+  },
+  {
+   "type": "content_delta",
+   "text": " are"
+  },
+  {
+   "type": "content_delta",
+   "text": " `"
+  },
+  {
+   "type": "content_delta",
+   "text": "read"
+  },
+  {
+   "type": "content_delta",
+   "text": "Local"
+  },
+  {
+   "type": "content_delta",
+   "text": "File"
+  },
+  {
+   "type": "content_delta",
+   "text": "`"
+  },
+  {
+   "type": "content_delta",
+   "text": " and"
+  },
+  {
+   "type": "content_delta",
+   "text": " `"
+  },
+  {
+   "type": "content_delta",
+   "text": "list"
+  },
+  {
+   "type": "content_delta",
+   "text": "Local"
+  },
+  {
+   "type": "content_delta",
+   "text": "Sources"
+  },
+  {
+   "type": "content_delta",
+   "text": "`."
+  },
+  {
+   "type": "content_delta",
+   "text": " However"
+  },
+  {
+   "type": "content_delta",
+   "text": ","
+  },
+  {
+   "type": "content_delta",
+   "text": " since"
+  },
+  {
+   "type": "content_delta",
+   "text": " you"
+  },
+  {
+   "type": "content_delta",
+   "text": "'ve"
+  },
+  {
+   "type": "content_delta",
+   "text": " instructed"
+  },
+  {
+   "type": "content_delta",
+   "text": " me"
+  },
+  {
+   "type": "content_delta",
+   "text": " to"
+  },
+  {
+   "type": "content_delta",
+   "text": " issue"
+  },
+  {
+   "type": "content_delta",
+   "text": " those"
+  },
+  {
+   "type": "content_delta",
+   "text": " exact"
+  },
+  {
+   "type": "content_delta",
+   "text": " two"
+  },
+  {
+   "type": "content_delta",
+   "text": " tool"
+  },
+  {
+   "type": "content_delta",
+   "text": " calls"
+  },
+  {
+   "type": "content_delta",
+   "text": ","
+  },
+  {
+   "type": "content_delta",
+   "text": " let"
+  },
+  {
+   "type": "content_delta",
+   "text": " me"
+  },
+  {
+   "type": "content_delta",
+   "text": " use"
+  },
+  {
+   "type": "content_delta",
+   "text": " the"
+  },
+  {
+   "type": "content_delta",
+   "text": " available"
+  },
+  {
+   "type": "content_delta",
+   "text": " tools"
+  },
+  {
+   "type": "content_delta",
+   "text": " that"
+  },
+  {
+   "type": "content_delta",
+   "text": " match"
+  },
+  {
+   "type": "content_delta",
+   "text": " your"
+  },
+  {
+   "type": "content_delta",
+   "text": " intent"
+  },
+  {
+   "type": "content_delta",
+   "text": ":"
+  },
+  {
+   "type": "content_delta",
+   "text": " `"
+  },
+  {
+   "type": "content_delta",
+   "text": "read"
+  },
+  {
+   "type": "content_delta",
+   "text": "Local"
+  },
+  {
+   "type": "content_delta",
+   "text": "File"
+  },
+  {
+   "type": "content_delta",
+   "text": "`"
+  },
+  {
+   "type": "content_delta",
+   "text": " with"
+  },
+  {
+   "type": "content_delta",
+   "text": " path"
+  },
+  {
+   "type": "content_delta",
+   "text": " \""
+  },
+  {
+   "type": "content_delta",
+   "text": "README"
+  },
+  {
+   "type": "content_delta",
+   "text": ".md"
+  },
+  {
+   "type": "content_delta",
+   "text": "\""
+  },
+  {
+   "type": "content_delta",
+   "text": " and"
+  },
+  {
+   "type": "content_delta",
+   "text": " `"
+  },
+  {
+   "type": "content_delta",
+   "text": "list"
+  },
+  {
+   "type": "content_delta",
+   "text": "Local"
+  },
+  {
+   "type": "content_delta",
+   "text": "Sources"
+  },
+  {
+   "type": "content_delta",
+   "text": "`"
+  },
+  {
+   "type": "content_delta",
+   "text": " with"
+  },
+  {
+   "type": "content_delta",
+   "text": " path"
+  },
+  {
+   "type": "content_delta",
+   "text": " \""
+  },
+  {
+   "type": "content_delta",
+   "text": "src"
+  },
+  {
+   "type": "content_delta",
+   "text": "\"."
+  },
+  {
+   "type": "model_call_completed",
+   "provider": "auto"
+  },
+  {
+   "type": "assistant_preamble",
+   "text": "I need to find the correct tool names. I don't see `read_project_file` or `list_dir` in my available tools. The closest equivalents I have are `readLocalFile` and `listLocalSources`. However, since you've instructed m..."
+  },
+  {
+   "type": "tool_call_requested",
+   "toolName": "readLocalFile",
+   "toolCallId": "chatcmpl-tool-e2ab340d62ec4a14be5aae9fc95af8a1",
+   "input": {
+    "path": "README.md"
+   }
+  },
+  {
+   "type": "tool_call_started",
+   "toolName": "readLocalFile",
+   "toolCallId": "chatcmpl-tool-e2ab340d62ec4a14be5aae9fc95af8a1",
+   "input": {
+    "path": "README.md"
+   }
+  },
+  {
+   "type": "tool_call_requested",
+   "toolName": "listLocalSources",
+   "toolCallId": "chatcmpl-tool-8a5fac03cbfd44a4bece3a536d06d6ae",
+   "input": {
+    "path": "src"
+   }
+  },
+  {
+   "type": "tool_call_started",
+   "toolName": "listLocalSources",
+   "toolCallId": "chatcmpl-tool-8a5fac03cbfd44a4bece3a536d06d6ae",
+   "input": {
+    "path": "src"
+   }
+  },
+  {
+   "type": "tool_call_failed",
+   "toolName": "readLocalFile",
+   "toolCallId": "chatcmpl-tool-e2ab340d62ec4a14be5aae9fc95af8a1",
+   "error": "File does not exist: /workspace",
+   "errorCode": "tool_execution_failed"
+  },
+  {
+   "type": "tool_output_delta",
+   "text": "File does not exist: /workspace",
+   "toolName": "readLocalFile",
+   "toolCallId": "chatcmpl-tool-e2ab340d62ec4a14be5aae9fc95af8a1"
+  },
+  {
+   "type": "tool_result",
+   "text": "File does not exist: /workspace",
+   "toolName": "readLocalFile",
+   "toolCallId": "chatcmpl-tool-e2ab340d62ec4a14be5aae9fc95af8a1"
+  },
+  {
+   "type": "tool_call_completed",
+   "toolName": "listLocalSources",
+   "toolCallId": "chatcmpl-tool-8a5fac03cbfd44a4bece3a536d06d6ae"
+  },
+  {
+   "type": "tool_output_delta",
+   "text": "0 local source(s) found",
+   "toolName": "listLocalSources",
+   "toolCallId": "chatcmpl-tool-8a5fac03cbfd44a4bece3a536d06d6ae"
+  },
+  {
+   "type": "tool_result",
+   "text": "0 local source(s) found",
+   "toolName": "listLocalSources",
+   "toolCallId": "chatcmpl-tool-8a5fac03cbfd44a4bece3a536d06d6ae"
+  },
+  {
+   "type": "model_call_started",
+   "provider": "auto"
+  },
+  {
+   "type": "content_delta",
+   "text": "The"
+  },
+  {
+   "type": "content_delta",
+   "text": " README"
+  },
+  {
+   "type": "content_delta",
+   "text": ".md"
+  },
+  {
+   "type": "content_delta",
+   "text": " file"
+  },
+  {
+   "type": "content_delta",
+   "text": " doesn"
+  },
+  {
+   "type": "content_delta",
+   "text": "'t"
+  },
+  {
+   "type": "content_delta",
+   "text": " exist"
+  },
+  {
+   "type": "content_delta",
+   "text": " in"
+  },
+  {
+   "type": "content_delta",
+   "text": " the"
+  },
+  {
+   "type": "content_delta",
+   "text": " current"
+  },
+  {
+   "type": "content_delta",
+   "text": " workspace"
+  },
+  {
+   "type": "content_delta",
+   "text": ","
+  },
+  {
+   "type": "content_delta",
+   "text": " and"
+  },
+  {
+   "type": "content_delta",
+   "text": " the"
+  },
+  {
+   "type": "content_delta",
+   "text": " src"
+  },
+  {
+   "type": "content_delta",
+   "text": " directory"
+  },
+  {
+   "type": "content_delta",
+   "text": " is"
+  },
+  {
+   "type": "content_delta",
+   "text": " empty"
+  },
+  {
+   "type": "content_delta",
+   "text": "."
+  },
+  {
+   "type": "model_call_completed",
+   "provider": "auto"
+  },
+  {
+   "type": "assistant_response",
+   "text": "The README.md file doesn't exist in the current workspace, and the src directory is empty."
+  },
+  {
+   "type": "turn_completed"
+  }
+ ],
+ "contextSnapshot": {
+  "rows": [
+   {
+    "id": "tool-schemas",
+    "status": "sent_raw",
+    "content": "[{\"type\":\"function\",\"function\":{\"name\":\"validateWorkspaceRoot\"}},{\"type\":\"function\",\"function\":{\"name\":\"bash\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_in_background\"}},{\"type\":\"function\",\"function\":{\"name\":\"check_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"list_background_tasks\"}},{\"type\":\"function\",\"function\":{\"name\":\"kill_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"wait_for_background_task\"}},{\"type\":\"function\",\"function\":{\"name\":\"glob\"}},{\"type\":\"function\",\"function\":{\"name\":\"grep\"}},{\"type\":\"function\",\"function\":{\"name\":\"readLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"writeLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"moveLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"copyLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"createDirectory\"}},{\"type\":\"function\",\"function\":{\"name\":\"deleteLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"editLocalFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"apply_patch\"}},{\"type\":\"function\",\"function\":{\"name\":\"statPath\"}},{\"type\":\"function\",\"function\":{\"name\":\"readProjectMemory\"}},{\"type\":\"function\",\"function\":{\"name\":\"saveToMemory\"}},{\"type\":\"function\",\"function\":{\"name\":\"listLocalSources\"}},{\"type\":\"function\",\"function\":{\"name\":\"readLocalSourceFile\"}},{\"type\":\"function\",\"function\":{\"name\":\"generateAPAuditPacket\"}},{\"type\":\"function\",\"function\":{\"name\":\"prepare_ap_evidence\"}},{\"type\":\"function\",\"function\":{\"name\":\"query_ap_cases\"}},{\"type\":\"function\",\"function\":{\"name\":\"render_ap_control_graph\"}},{\"type\":\"function\",\"function\":{\"name\":\"runManagedPlaybook\"}},{\"type\":\"function\",\"function\":{\"name\":\"send_worker_message\"}},{\"type\":\"function\",\"function\":{\"name\":\"task_stop\"}},{\"type\":\"function\",\"function\":{\"name\":\"spawn_worker\"}},{\"type\":\"function\",\"function\":{\"name\":\"spawn_worker_batch\"}},{\"type\":\"function\",\"function\":{\"name\":\"dispatch_agent\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_sandbox_code\"}},{\"type\":\"function\",\"function\":{\"name\":\"ctxInspect\"}},{\"type\":\"function\",\"function\":{\"name\":\"toolSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"configInspect\"}},{\"type\":\"function\",\"function\":{\"name\":\"syntheticOutput\"}},{\"type\":\"function\",\"function\":{\"name\":\"todoWrite\"}},{\"type\":\"function\",\"function\":{\"name\":\"create_artifact\"}},{\"type\":\"function\",\"function\":{\"name\":\"update_artifact\"}},{\"type\":\"function\",\"function\":{\"name\":\"loadSkill\"}},{\"type\":\"function\",\"function\":{\"name\":\"askUserQuestion\"}},{\"type\":\"function\",\"function\":{\"name\":\"propose_plan\"}},{\"type\":\"function\",\"function\":{\"name\":\"enterPlanMode\"}},{\"type\":\"function\",\"function\":{\"name\":\"exitPlanMode\"}},{\"type\":\"function\",\"function\":{\"name\":\"brief\"}},{\"type\":\"function\",\"function\":{\"name\":\"listMcpServers\"}},{\"type\":\"function\",\"function\":{\"name\":\"searchKnowledge\"}},{\"type\":\"function\",\"function\":{\"name\":\"webSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"webFetch\"}},{\"type\":\"function\",\"function\":{\"name\":\"scholarSearch\"}},{\"type\":\"function\",\"function\":{\"name\":\"get_market_signal\"}},{\"type\":\"function\",\"function\":{\"name\":\"query_market_signal_log\"}},{\"type\":\"function\",\"function\":{\"name\":\"explain_market_signal\"}},{\"type\":\"function\",\"function\":{\"name\":\"list_market_strategies\"}},{\"type\":\"function\",\"function\":{\"name\":\"run_market_backtest\"}},{\"type\":\"function\",\"function\":{\"name\":\"get_market_track_record\"}},{\"type\":\"function\",\"function\":{\"name\":\"mcp__ocx__read_project_file\"}},{\"type\":\"function\",\"function\":{\"name\":\"mcp__ocx__list_dir\"}}]"
+   },
+   {
+    "id": "project-perch-md",
+    "status": "sent_raw"
+   }
+  ],
+  "turnApiUsage": {
+   "inputTokens": 42750,
+   "outputTokens": 159,
+   "cacheReadInputTokens": 6368,
+   "totalTokens": 49277
+  }
+ }
+}
