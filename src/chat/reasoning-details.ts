@@ -32,6 +32,15 @@ function isRec(value: unknown): value is Rec {
 /** OpenRouter's `format` for Anthropic thinking entries. */
 export const ANTHROPIC_REASONING_DETAIL_FORMAT = "anthropic-claude-v1";
 
+/** Whether a Chat body contains provider-issued Anthropic state that another provider must not see. */
+export function chatBodyCarriesAnthropicReasoningState(body: Rec): boolean {
+  if (!Array.isArray(body.messages)) return false;
+  return body.messages.some(message => isRec(message)
+    && Array.isArray(message.reasoning_details)
+    && message.reasoning_details.some(detail => isRec(detail)
+      && detail.format === ANTHROPIC_REASONING_DETAIL_FORMAT));
+}
+
 /** One closed reasoning item, as either outbound path sees it. */
 export interface ReasoningDetailSource {
   /** The thinking text the client was shown for this item. */

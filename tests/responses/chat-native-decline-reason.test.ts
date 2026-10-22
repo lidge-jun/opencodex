@@ -43,6 +43,23 @@ describe("native Chat decline reasons", () => {
     expect(nativeChatDeclineReason(route(), { tools: [{ type: "web_search" }] })).toBe("hosted-tool");
   });
 
+  test("Anthropic reasoning state cannot cross the native provider boundary", () => {
+    const assistant = { role: "assistant", content: null, reasoning_details: [
+      { type: "reasoning.text", text: "thinking", signature: "opaque", format: "anthropic-claude-v1" },
+      { type: "reasoning.encrypted", data: "ciphertext", format: "anthropic-claude-v1" },
+    ] };
+    expect(nativeChatDeclineReason(route(), { messages: [{ role: "user", content: "hi" }, assistant] }))
+      .toBe("opaque-state-stripped");
+    expect(isNativeChatRouteEligible(route(), { messages: [assistant] })).toBe(false);
+  });
+
+  test("another provider's reasoning details remain native-eligible", () => {
+    const assistant = { role: "assistant", reasoning_details: [
+      { type: "reasoning.text", text: "thinking", format: "minimax-response-v1" },
+    ] };
+    expect(nativeChatDeclineReason(route(), { messages: [assistant] })).toBeUndefined();
+  });
+
   test("the first failing rule wins", () => {
     expect(nativeChatDeclineReason(route({ authMode: "oauth", routeKind: "policy" } as Partial<RouteResult>), { store: true }))
       .toBe("auth-mode-not-native");
