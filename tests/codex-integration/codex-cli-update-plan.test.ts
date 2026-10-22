@@ -474,15 +474,29 @@ describe("registry configuration isolation", () => {
     };
   }
 
-  test("the bound launcher snapshot supplies npm's PATH and PATHEXT, not the ambient ones", () => {
+  test("the bound launcher snapshot supplies executable and transport trust inputs", () => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-    const boundEnv = markerBoundEnv();
-    const target = resolveCodexCliUpdateTarget("latest", spawn, boundEnv);
-    expect(target.kind).toBe("resolved");
-    for (const call of calls) {
-      const env = call.options.env as NodeJS.ProcessEnv;
-      expect(env.PATH).toBe(boundEnv.PATH);
-      expect(env.PATHEXT).toBe(boundEnv.PATHEXT);
+    const boundEnv = { ...markerBoundEnv(), HTTPS_PROXY: "http://trusted-proxy", NODE_EXTRA_CA_CERTS: "/trusted/ca.pem" };
+    const previous = { HTTPS_PROXY: process.env.HTTPS_PROXY, ALL_PROXY: process.env.ALL_PROXY,
+      NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS };
+    try {
+      process.env.HTTPS_PROXY = "http://project-dotenv-proxy";
+      process.env.ALL_PROXY = "http://project-dotenv-fallback";
+      process.env.NODE_EXTRA_CA_CERTS = "/project/dotenv-ca.pem";
+      expect(resolveCodexCliUpdateTarget("latest", spawn, boundEnv).kind).toBe("resolved");
+      for (const call of calls) {
+        const env = call.options.env as NodeJS.ProcessEnv;
+        expect(env.PATH).toBe(boundEnv.PATH);
+        expect(env.PATHEXT).toBe(boundEnv.PATHEXT);
+        expect(env.HTTPS_PROXY).toBe(boundEnv.HTTPS_PROXY);
+        expect(env.ALL_PROXY).toBeUndefined();
+        expect(env.NODE_EXTRA_CA_CERTS).toBe(boundEnv.NODE_EXTRA_CA_CERTS);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 
@@ -601,8 +615,8 @@ describe("registry configuration isolation", () => {
         for (const [key, value] of Object.entries(sentinels)) {
           // Match case-insensitively: the child env is a plain object, so a
           // Windows-normalized casing must not make a supported channel look absent.
-          const entry = Object.entries(env).find(([name]) => name.toLowerCase() === key.toLowerCase());
-          expect(entry?.[1]).toBe(value);
+          const entry = env[key] ?? Object.entries(env).find(([name]) => name.toLowerCase() === key.toLowerCase())?.[1];
+          expect(entry).toBe(value);
         }
       }
     } finally {
