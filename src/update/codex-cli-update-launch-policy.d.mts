@@ -23,3 +23,5 @@ export function codexCliInspectionLookupSeeds(
   nodePath: string | null,
   serializedContextChars: number,
 ): { home: string | null; nodePath: string | null };
+export const CODEX_CLI_TRANSPORT_ENV_KEYS: readonly string[];
+export function captureCodexCliTransportEnv(env: Readonly<NodeJS.ProcessEnv>): Record<string, string>;

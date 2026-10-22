@@ -59,6 +59,8 @@ import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/updat
 import { bootRestoreProbe, launcherUsableAfterNpmUpdate, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
 import { manualUpdateFailureGuidance, npmUpdateFailureGuidance } from "../src/update/update-failure-guidance.mjs";
 import {
+  captureCodexCliTransportEnv,
+  CODEX_CLI_TRANSPORT_ENV_KEYS,
   CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
   codexCliInspectionLookupSeeds,
   isCodexCliUpdateInspectionArgv,
@@ -1206,6 +1208,10 @@ function createNodeLaunchContext() {
       return typeof value === "string" && value !== "" ? [[name, value]] : [];
     }),
   );
+  // Proxy/CA settings are captured once, here, before Bun can add project dotenv
+  // values. They are part of the required selection snapshot, so they count
+  // against the context budget below before any optional lookup seed does.
+  const preBunTransportEnv = captureCodexCliTransportEnv(process.env);
   const launchProof = randomBytes(32).toString("base64url");
   const serializeContext = lookupSeeds => JSON.stringify({
     version: 1,
@@ -1218,6 +1224,7 @@ function createNodeLaunchContext() {
       home: lookupSeeds.home,
       nodePath: lookupSeeds.nodePath,
       managerRoots: preBunCodexCliManagerRoots,
+      transportEnv: preBunTransportEnv,
       configDir: configDir(),
     } : null,
   });
@@ -1233,7 +1240,7 @@ function createNodeLaunchContext() {
   if (lookupSeeds.home !== preBunHome || lookupSeeds.nodePath !== preBunNodePath) {
     launchContext = serializeContext(lookupSeeds);
   }
-  // The inspection snapshot above already carries PATH, PATHEXT, and the manager-root slots as
+  // The inspection snapshot above already carries PATH, PATHEXT, manager roots and proxy/CA settings as
   // proof-bound values, and `inspectCodexCliInstall` reads them from that snapshot rather than
   // from the live environment. Inheriting them again would spend the 32,767-character Windows
   // environment block twice, so a large-but-valid shell environment could stop the Bun child
@@ -1246,7 +1253,8 @@ function createNodeLaunchContext() {
   const inheritedEnv = { ...process.env };
   if (codexCliUpdateInspection) {
     const snapshotted = new Set(
-      ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase()),
+      ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
+        ...CODEX_CLI_TRANSPORT_ENV_KEYS].map(name => name.toLowerCase()),
     );
     for (const name of Object.keys(inheritedEnv)) {
       if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];

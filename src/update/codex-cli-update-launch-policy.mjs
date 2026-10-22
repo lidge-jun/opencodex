@@ -16,6 +16,16 @@ export const CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS = Object.freeze([
   "VOLTA_HOME",
 ]);
 
+export const CODEX_CLI_TRANSPORT_ENV_KEYS = Object.freeze([
+  "http_proxy", "https_proxy", "all_proxy", "no_proxy", "node_extra_ca_certs",
+]);
+
+/** Preserve spelling, aliases and empty values before Bun loads project dotenv. */
+export function captureCodexCliTransportEnv(env) {
+  return Object.fromEntries(Object.entries(env).filter(([name, value]) =>
+    CODEX_CLI_TRANSPORT_ENV_KEYS.includes(name.toLowerCase()) && typeof value === "string"));
+}
+
 /**
  * Detect the read-only Codex CLI updater inspection namespace before Bun loads.
  * Keep this exact and argument-position based: malformed actions still inherit
