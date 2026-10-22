@@ -20,7 +20,7 @@ import {
   CONFIGURABLE_JSON_BODY_ROUTES,
   UNGATED_LOOPBACK_ROUTES,
 } from "../../src/server/inbound-body-admission";
-import { createInboundBodyBudget, inboundBodyBudget } from "../../src/server/inbound-body-budget";
+import { configureInboundBodyBudget, createInboundBodyBudget, inboundBodyBudget } from "../../src/server/inbound-body-budget";
 import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 import { saturateInboundBodyBudget } from "../helpers/inbound-body-budget";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -667,9 +667,10 @@ describe("raised inbound body admission lifetime", () => {
 });
 // END raised-body admission regressions.
 
-test("the public singleton admits eight tiny parsed bodies with live responses", async () => {
+test("the explicitly raised public singleton admits eight tiny parsed bodies with live responses", async () => {
   const empty = { reservedBytes: 0, activeLeases: 0, queuedRequests: 0 };
   assert.deepEqual(inboundBodyBudget.snapshot(), empty);
+  configureInboundBodyBudget(4 * RAISED_BODY_LIMIT);
   const responses: Response[] = [];
   let measuredBytes = 0;
   let cancellations = 0;
@@ -694,6 +695,7 @@ test("the public singleton admits eight tiny parsed bodies with live responses",
     assert.equal(responses.length, 8);
   } finally {
     await Promise.all(responses.map(response => response.body?.cancel().catch(() => undefined)));
+    configureInboundBodyBudget();
   }
   assert.equal(cancellations, 8);
   assert.deepEqual(inboundBodyBudget.snapshot(), empty);
@@ -769,6 +771,7 @@ describe("raised inbound body admission at the real HTTP boundary", () => {
     codexHome = installIsolatedCodexHome("ocx-inbound-body-admission-codex-");
   });
   afterEach(async () => {
+    configureInboundBodyBudget();
     await drainAndRemoveFixtureRoots({
       roots: [{ path: fixtureHome }, { path: codexHome.path }],
       restoreEnvironment() {
@@ -778,6 +781,27 @@ describe("raised inbound body admission at the real HTTP boundary", () => {
       },
     });
   });
+
+  for (const capacity of [undefined, 0, RAISED_BODY_LIMIT, 2 * RAISED_BODY_LIMIT, 4 * RAISED_BODY_LIMIT]) {
+    test(`startup captures shared capacity ${String(capacity)} until the next restart`, async () => {
+      saveConfig({ ...getDefaultConfig(), providers: {}, maxInboundBodyBytes: RAISED_BODY_LIMIT,
+        maxConcurrentInboundBodyBytes: capacity });
+      const server = startServer(0);
+      try {
+        const expected = capacity || RAISED_BODY_LIMIT;
+        assert.equal(inboundBodyBudget.capacity(), expected);
+        saveConfig({ ...getDefaultConfig(), providers: {}, maxInboundBodyBytes: RAISED_BODY_LIMIT,
+          maxConcurrentInboundBodyBytes: capacity === 4 * RAISED_BODY_LIMIT ? RAISED_BODY_LIMIT : 4 * RAISED_BODY_LIMIT });
+        assert.equal(inboundBodyBudget.capacity(), expected, "a disk edit must not replace live accounting");
+        const response = await fetch(`http://127.0.0.1:${server.port}/v1/chat/completions`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+        });
+        assert.equal(response.status, 400);
+        await response.text();
+        assert.equal(inboundBodyBudget.capacity(), expected, "handling traffic must retain startup policy");
+      } finally { await server.stop(true); }
+    }, 30_000);
+  }
 
   test("all configured JSON routes refuse before protocol parsing and recover after release", async () => {
     saveConfig({ ...getDefaultConfig(), providers: {}, maxInboundBodyBytes: RAISED_BODY_LIMIT });

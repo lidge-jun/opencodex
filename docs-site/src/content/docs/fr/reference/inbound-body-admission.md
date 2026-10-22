@@ -9,12 +9,36 @@ reste 256 MiB et les valeurs configurées restent comprises entre 1 MiB et 512 M
 proxy après avoir modifié la limite afin que l'écouteur et les lecteurs utilisent ensemble la
 valeur voulue.
 
+Conserver l'ancien budget partagé par défaut de 512 MiB ne supprime pas les compromis
+décrits ci-dessous concernant la file et la rétention pendant le cycle de vie des réponses.
+
+## Choisir explicitement le budget partagé
+
+`maxConcurrentInboundBodyBytes` est un réglage facultatif de **premier niveau** dans
+`config.json`, exprimé en octets. Sa valeur par défaut reste **512 MiB (`536870912`)**,
+comme auparavant. Une valeur absente, `0` ou invalide utilise cette valeur par défaut.
+Un entier positif valide est borné à **512 MiB–2 GiB (`536870912`–`2147483648`)** lors
+de son utilisation. Redémarrez le proxy après modification. Tous les écouteurs d'un même
+processus partagent un seul budget, distinct de `appOwnedMemoryBudgetMb`.
+
+Pour choisir une limite de 512 MiB par requête et activer explicitement un budget partagé
+de 2 GiB, ajoutez ces champs au premier niveau de votre `config.json`, puis redémarrez :
+
+```json
+{
+  "maxInboundBodyBytes": 536870912,
+  "maxConcurrentInboundBodyBytes": 2147483648
+}
+```
+
+Ce choix de l'opérateur augmente le pic potentiel de consommation mémoire. Le proxy ne
+détecte pas automatiquement la RAM disponible et ne choisit pas le budget en fonction de celle-ci.
+
 ## Augmenter la limite modifie la simultanéité
 
 Quand la limite effective dépasse 256 MiB, chaque requête HTTP concernée doit réserver toute
-sa marge par requête **avant toute lecture du corps**. Le budget d'admission partagé par le
-processus passe de 512 MiB à **2 GiB**, y compris lorsque plusieurs écouteurs partagent ce
-processus. Ce budget est distinct de `appOwnedMemoryBudgetMb`.
+sa marge par requête **avant toute lecture du corps**. Ces réservations partagent le budget
+`maxConcurrentInboundBodyBytes` du processus, dont la valeur par défaut reste **512 MiB**.
 
 Avant la fin de l'analyse JSON avec contrôle de taille, ni un petit `Content-Length` ni un petit
 corps compressé sur le réseau ne réduisent la réservation. L'admission ne considère pas ces
@@ -28,11 +52,18 @@ normalisé supérieure à cette marge ne l'augmente jamais. Les contrôles UTF-8
 resérialisé sont conservés ; la longueur d'entrée ne remplace pas la taille potentiellement
 plus grande du JSON normalisé.
 
-Avec une limite par requête de 512 MiB, le budget peut admettre jusqu'à **4 envois réservant
-chacun 512 MiB** avant la mesure et la réduction des réservations. Ce n'est pas une limite fixe
-de 4 requêtes après l'analyse : par exemple, **8 très petites requêtes peuvent diffuser leur
-réponse simultanément** lorsque les réservations réduites laissent de la place aux admissions
-suivantes, sous réserve du budget partagé et des autres limites.
+Avec le **budget partagé par défaut de 512 MiB** et une **limite de 512 MiB par requête**,
+**un seul envoi non encore analysé** peut réserver toute sa marge. Même si l'analyse réduit
+sa réservation à **un octet**, la capacité restante est inférieure à 512 MiB. La prochaine
+marge complète doit donc attendre qu'assez de capacité soit libérée. La valeur par défaut
+**ne résout pas** le problème initial de simultanéité avec une limite de 512 MiB par requête.
+
+Définir explicitement `maxConcurrentInboundBodyBytes` à `2147483648` choisit **2 GiB** et
+permet jusqu'à **4 envois réservant chacun 512 MiB** avant l'analyse et les réductions après
+mesure. Ce budget de 2 GiB ne fixe pas un plafond de 4 requêtes après l'analyse : par exemple,
+**8 très petites requêtes peuvent diffuser leur réponse simultanément** lorsque les réservations
+réduites laissent de la place aux admissions suivantes, sous réserve du budget partagé et
+des autres limites.
 
 La réservation réduite reste détenue pendant le travail asynchrone et l'attente du fournisseur,
 jusqu'à la fin du flux de réponse (EOF), une erreur ou la fin de l'annulation. L'analyse seule
@@ -48,15 +79,18 @@ existantes par corps. Les traductions directes internes et les appels combo ne r
 une deuxième marge HTTP. Les limites de gestion, d'audio, d'historique de contexte et de
 WebSocket restent inchangées.
 
-Un réglage absent ou égal à zéro, ou une limite effective inférieure ou égale à 256 MiB,
-n'active pas ce contrôle supplémentaire de simultanéité. Les limites existantes sur le nombre
-de requêtes et les autres ressources continuent de s'appliquer.
+Ce contrôle supplémentaire ne s'applique que si la valeur effective de `maxInboundBodyBytes`
+dépasse 256 MiB. Omettre ce réglage par requête ou le définir à `0` conserve sa valeur par
+défaut de 256 MiB et laisse le contrôle inactif. Omettre ou mettre à zéro
+`maxConcurrentInboundBodyBytes` choisit au contraire le budget partagé par défaut de 512 MiB,
+sans désactiver un contrôle déjà actif. Les limites existantes sur le nombre de requêtes et
+les autres ressources continuent de s'appliquer.
 
 ## Refus temporaire ou corps trop volumineux
 
 Si la marge complète est temporairement indisponible, la requête peut rejoindre une **file
 FIFO de 32 requêtes en attente au maximum**, avec une **attente limitée à 120 secondes**.
-Les corps restent non lus pendant l'attente. Une réduction après mesure ou une libération
+Pendant l'attente, l'application ne lit pas les corps des requêtes. Une réduction après mesure ou une libération
 finale permet d'admettre les requêtes dans l'ordre de la file. Une requête abandonnée pendant
 l'attente est retirée de la file et son corps non lu est annulé sans être consommé.
 
@@ -78,18 +112,17 @@ occupé.
 
 ## Ce que mesure le budget
 
-Le budget de **2 GiB** compte des unités d'admission : les marges complètes avant l'analyse,
-puis les réservations mesurées. Il **ne borne ni la RSS du processus ni le tas des objets
-analysés** et ne garantit pas une consommation mémoire inférieure à 2 GiB. Le décodage, les
-chaînes, les graphes d'objets, les copies de requêtes et les autres états de l'application
-consomment davantage de mémoire.
+Le budget configuré compte des unités d'admission : les marges complètes avant l'analyse,
+puis les réservations mesurées. Il **ne préalloue ni 2 GiB ni le volume configuré** et
+**ne borne ni la RSS du processus ni le tas des objets analysés**. Le décodage, les chaînes,
+les graphes d'objets, les copies de requêtes et les autres états de l'application consomment
+de la mémoire supplémentaire ; la consommation réelle peut donc dépasser le budget.
 
-Le passage du budget partagé de 512 MiB à 2 GiB quadruple la réservation totale possible.
-Les déploiements qui choisissent une limite supérieure à 256 MiB peuvent désormais admettre
-4 envois réservant chacun 512 MiB au lieu d'un seul : leur pic potentiel de consommation
-mémoire augmente. Les objets analysés et les copies peuvent porter la mémoire réelle au-delà
-du budget d'admission. Les limites par défaut ou inférieures n'activent pas ce contrôle et
-conservent leur comportement existant.
+Choisir 2 GiB au lieu du budget partagé par défaut de 512 MiB quadruple la réservation totale
+possible. Avec une limite de 512 MiB par requête, ce choix explicite admet jusqu'à quatre envois
+complets avant l'analyse au lieu d'un, ce qui augmente le pic potentiel de consommation mémoire.
+Choisissez le budget selon la marge mémoire de votre déploiement. Une limite par requête
+inférieure ou égale à 256 MiB laisse ce contrôle inactif, quel que soit le budget partagé.
 
 Conservez si possible la limite par requête par défaut. Augmentez-la volontairement si un
 parcours avec un historique volumineux l'exige, en tenant compte du pic mémoire potentiellement

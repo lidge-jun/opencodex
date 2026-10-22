@@ -1,5 +1,5 @@
-/** Admission units for raised HTTP bodies, not a process RSS or parsed-heap limit. */
-export const MAX_CONCURRENT_INBOUND_BODY_BYTES = 2 * 1024 * 1024 * 1024;
+import { DEFAULT_CONCURRENT_INBOUND_BODY_BYTES, resolveConcurrentInboundBodyLimitBytes } from "../lib/inbound-body-policy";
+export { DEFAULT_CONCURRENT_INBOUND_BODY_BYTES, MAX_CONCURRENT_INBOUND_BODY_BYTES } from "../lib/inbound-body-policy";
 export const MAX_QUEUED_INBOUND_BODIES = 32;
 export const INBOUND_BODY_QUEUE_TIMEOUT_MS = 120_000;
 
@@ -49,6 +49,14 @@ export function createInboundBodyBudget(capacity: number, maxQueued = MAX_QUEUED
     };
   };
   return {
+    /** Report the current shared allowance without confusing it with measured charges. */
+    capacity: () => capacity,
+    /** Startup configuration changes the same owner; existing leases and FIFO waiters survive. */
+    setCapacity(bytes: number): void {
+      if (!Number.isSafeInteger(bytes) || bytes <= 0) throw new RangeError("Invalid inbound body capacity");
+      capacity = bytes;
+      drain();
+    },
     /** Observe counters without exposing request bodies or identities. */
     snapshot: () => ({ reservedBytes, activeLeases, queuedRequests: pending.length }),
     /** Wait for an entire upload allowance; null preserves the caller's overload response. */
@@ -100,8 +108,13 @@ export function createInboundBodyBudget(capacity: number, maxQueued = MAX_QUEUED
 }
 
 export type InboundBodyBudget = ReturnType<typeof createInboundBodyBudget>;
-export const inboundBodyBudget = createInboundBodyBudget(MAX_CONCURRENT_INBOUND_BODY_BYTES);
+export const inboundBodyBudget = createInboundBodyBudget(DEFAULT_CONCURRENT_INBOUND_BODY_BYTES);
 const requestLeases = new WeakMap<Request, InboundBodyLease>();
+
+/** Adopt one startup policy for every listener without resetting live accounting. */
+export function configureInboundBodyBudget(configured?: number): void {
+  inboundBodyBudget.setCapacity(resolveConcurrentInboundBodyLimitBytes(configured));
+}
 
 /** Connect only the admitted HTTP request to its bounded reader; internal reads own no lease. */
 export function bindInboundBodyLease(req: Request, lease: InboundBodyLease): () => void {
