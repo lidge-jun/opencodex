@@ -358,7 +358,7 @@ function isolatedNpmTarget(args: readonly string[], isolation: NpmConfigIsolatio
 export function resolveCodexCliUpdateTarget(
   channel: CodexCliUpdateChannel,
   spawn: typeof spawnSync = spawnSync,
-  /** Proof-bound launcher snapshot env; executable resolution reads only its PATH/PATHEXT. */
+  /** Proof-bound pre-dotenv PATH/PATHEXT and proxy/CA env; absent settings stay absent. */
   boundEnv?: NodeJS.ProcessEnv,
 ): CodexCliUpdateTarget {
   // The pinned registry and the isolation directory together are the boundary: the
@@ -497,8 +497,8 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   }
 
   // The npm evidence channels are bound to the same environment snapshot the
-  // ownership inspection ran against: PATH/PATHEXT from the proof-bound launcher
-  // context, never the ambient ones a project dotenv could point at a fake npm.
+  // ownership inspection ran against: PATH/PATHEXT and proxy/CA from the proof-bound
+  // pre-dotenv launcher context, never ambient executable or transport overrides.
   // When the caller had no trusted snapshot, inspectionDeps.env is the fail-closed
   // { PATH: "" } form, so this resolution cannot silently fall back to ambient.
   const resolveTarget = deps.resolveTarget

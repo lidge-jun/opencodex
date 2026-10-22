@@ -8,6 +8,15 @@ and explicit Windows observation follows its [separate read-only contract](runti
 Explicit Codex CLI installation observation does not discover a Codex home or read/write its state. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
 
 The read-only CLI update plan binds npm executable selection to the inspected launcher PATH.
+`bin/ocx.mjs` captures proxy variables (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY,
+in any case) and NODE_EXTRA_CA_CERTS before Bun loads project dotenv. The proof-bound
+snapshot preserves each key's spelling and value, including aliases and empty strings;
+`src/cli/launcher-context.ts` validates and freezes that allowlisted transport map.
+`src/cli/codex-cli-update.ts` forwards it with the inspected PATH/PATHEXT to the plan's
+npm resolver. The resolver replaces all ambient aliases with the captured entries:
+project dotenv cannot supply missing settings or change the captured precedence.
+An older snapshot without a transport map conveys no transport settings, with no
+ambient fallback. Snapshot values are internal inputs, never report or diagnostic fields.
 Registry integrity requires a canonical base64 SHA-512 digest of exactly 64 bytes; malformed or truncated tokens refuse the target.
 Selection observation uses the runtime resolver with provenance's bounded no-follow, nonblocking state reader and local executable-path policy. Windows returns before invoking the resolver; its deferred inspection performs no candidate or configuration I/O.
 Its child environment drops npm configuration overrides, named Node startup/output controls,

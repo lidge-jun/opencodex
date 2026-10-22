@@ -221,6 +221,7 @@ function inspectionDeps(commandDeps: CodexCliUpdateCommandDeps): CodexCliInstall
   return {
     env: {
       ...trusted.managerRoots,
+      ...trusted.transportEnv,
       CODEX_CLI_PATH: trusted.codexCliPath ?? undefined,
       PATH: trusted.path ?? undefined,
       PATHEXT: trusted.pathExt ?? undefined,

@@ -25,6 +25,7 @@ export type TrustedNodeLaunchContext = {
     path: string | null;
     pathExt: string | null;
     managerRoots: CodexCliVersionManagerRoots | null;
+    transportEnv: Readonly<Record<string, string>>;
     configDir: string;
   }> | null;
 };
@@ -48,6 +49,16 @@ function parseVersionManagerRoots(value: unknown): CodexCliVersionManagerRoots |
     return undefined;
   }
   return Object.freeze(Object.fromEntries(entries)) as CodexCliVersionManagerRoots;
+}
+
+function parseTransportEnv(value: unknown): Readonly<Record<string, string>> | undefined {
+  // Older snapshots convey no transport settings. Never fill them from Bun's ambient env.
+  if (value === undefined) return Object.freeze({});
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value);
+  if (entries.some(([name, setting]) => !CODEX_CLI_TRANSPORT_ENV_KEYS.includes(name.toLowerCase())
+    || typeof setting !== "string" || setting.length > 32 * 1024)) return undefined;
+  return Object.freeze(Object.fromEntries(entries));
 }
 
 /** Consume the internal proof before normal CLI argument parsing. */
@@ -95,6 +106,9 @@ export function initializeNodeLauncherContext(
     const managerRoots = inspection && typeof inspection === "object" && !Array.isArray(inspection)
       ? parseVersionManagerRoots((inspection as Record<string, unknown>).managerRoots)
       : null;
+    const transportEnv = inspection && typeof inspection === "object" && !Array.isArray(inspection)
+      ? parseTransportEnv((inspection as Record<string, unknown>).transportEnv)
+      : undefined;
     const codexCliInspectionEnv = inspection === null || inspection === undefined
       ? null
       : inspection && typeof inspection === "object" && !Array.isArray(inspection)
@@ -106,11 +120,13 @@ export function initializeNodeLauncherContext(
         && (inspection as Record<string, string>).configDir.length > 0
         && (inspection as Record<string, string>).configDir.length <= 32 * 1024
         && managerRoots !== undefined
+        && transportEnv !== undefined
         ? Object.freeze({
             codexCliPath: (inspection as Record<string, string | null>).codexCliPath ?? null,
             path: (inspection as Record<string, string | null>).path ?? null,
             pathExt: (inspection as Record<string, string | null>).pathExt ?? null,
             managerRoots,
+            transportEnv,
             configDir: (inspection as Record<string, string>).configDir,
           })
         : undefined;
@@ -125,4 +141,4 @@ export function initializeNodeLauncherContext(
 export function trustedNodeLauncherContext(): TrustedNodeLaunchContext | null {
   return trustedContext;
 }
-import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../update/codex-cli-update-launch-policy.mjs";
+import { CODEX_CLI_TRANSPORT_ENV_KEYS, CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../update/codex-cli-update-launch-policy.mjs";

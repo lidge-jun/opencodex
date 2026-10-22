@@ -59,6 +59,8 @@ import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/updat
 import { bootRestoreProbe, launcherUsableAfterNpmUpdate, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
 import { manualUpdateFailureGuidance, npmUpdateFailureGuidance } from "../src/update/update-failure-guidance.mjs";
 import {
+  captureCodexCliTransportEnv,
+  CODEX_CLI_TRANSPORT_ENV_KEYS,
   CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
   isCodexCliUpdateInspectionArgv,
 } from "../src/update/codex-cli-update-launch-policy.mjs";
@@ -1208,10 +1210,11 @@ function createNodeLaunchContext() {
       path: preBunPath,
       pathExt: preBunPathExt,
       managerRoots: preBunCodexCliManagerRoots,
+      transportEnv: captureCodexCliTransportEnv(process.env),
       configDir: configDir(),
     } : null,
   });
-  // The inspection snapshot above already carries PATH, PATHEXT, and the manager-root slots as
+  // The inspection snapshot carries PATH, PATHEXT, manager roots and proxy/CA settings as
   // proof-bound values, and `inspectCodexCliInstall` reads them from that snapshot rather than
   // from the live environment. Inheriting them again would spend the 32,767-character Windows
   // environment block twice, so a large-but-valid shell environment could stop the Bun child
@@ -1224,7 +1227,8 @@ function createNodeLaunchContext() {
   const inheritedEnv = { ...process.env };
   if (codexCliUpdateInspection) {
     const snapshotted = new Set(
-      ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase()),
+      ["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
+        ...CODEX_CLI_TRANSPORT_ENV_KEYS].map(name => name.toLowerCase()),
     );
     for (const name of Object.keys(inheritedEnv)) {
       if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];
