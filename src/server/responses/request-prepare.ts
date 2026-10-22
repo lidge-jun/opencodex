@@ -34,6 +34,7 @@ import {
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
 import { resolveContextPrincipal } from "../auth-cors";
+import { responseTurnMembership } from "./turn-membership";
 import { resolveSkillsSnapshotScopeKey, snapshotSkillsCatalogInBody } from "./skills-snapshot";
 import {
   isShadowSourceModel,
@@ -461,6 +462,11 @@ export async function prepareResponsesRequest(
   });
   // Substitutes a known snapshot now; a new catalog is only stored once the request is prepared.
   const commitSkillsSnapshot = snapshotSkillsCatalogInBody(body, skillsSnapshotScopeKey, config);
+
+  const turnMembership = responseTurnMembership(req, config, options.admission);
+  if (turnMembership && body && typeof body === "object" && "input" in body && Array.isArray(body.input)) {
+    body.input = turnMembership.normalize(body.input);
+  }
 
   let parsed: OcxParsedRequest;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
@@ -1592,6 +1598,8 @@ export async function prepareResponsesRequest(
   commitSkillsSnapshot?.();
   return {
     inboundWire,
+    ...(turnMembership ? { turnMembership } : {}),
+    ...(turnMembership && inboundWire === "responses" && parsed.stream && !parsed._compactionRequest ? { completedToolBlocks: true as const } : {}),
     clientDeclaredEmptyToolCatalog: options.clientDeclaredEmptyToolCatalog === true,
     clientToolCatalogRestriction,
     // Admission facts later route rewrites must not re-derive: the selector the caller sent and

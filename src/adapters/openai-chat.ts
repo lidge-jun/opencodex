@@ -3,8 +3,7 @@ import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary
 import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
 import { applyExplicitChatReasoningWirePolicy } from "./openai-chat/reasoning-wire";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
-import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
-import { modelInList } from "../types";
+import { modelInList, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage } from "../types";
 import { mapReasoningEffort } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
@@ -49,6 +48,7 @@ import { openAIChatTransport, stripBracketedModelSuffix } from "./openai-chat/wi
 import { toolChoiceToChatFormat, toolsToChatFormatForProvider } from "./openai-chat/tool-schema";
 import { freeformToolsByWireName, type FreeformToolIdentity, reconcileStructuredToolCall, reconcileStructuredToolCalls } from "./openai-chat/serialized-tool-call-content";
 import { StandaloneBareToolCallBuffer, reconcileStandaloneBareToolCallEvents } from "./openai-chat/standalone-bare-tool-calls";
+import { COMPLETED_TOOL_BLOCKS_PROTOCOL, completedToolBlocksEnabled, completedToolPrefix, observeCompletedToolBlock, type PendingChatToolCall } from "./openai-chat/completed-tool-blocks";
 
 export { stripBracketedModelSuffix } from "./openai-chat/wire";
 export { buildOpenAIChatPassthroughRequest } from "./openai-chat/passthrough";
@@ -98,7 +98,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
     buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       lastRequestedModelId = parsed.modelId;
+      const completedToolBlocks = incoming?.completedToolBlocks === true;
       const { url, headers, hasCredential } = openAIChatTransport(provider);
+      if (!completedToolBlocks) {
+        for (const key of Object.keys(headers)) if (key.toLowerCase() === "x-opencodex-tool-completion") delete headers[key];
+      }
+
       const messages = toolNames.messages(parsed, provider.baseUrl, messagesToChatFormat(parsed, provider));
       freeformTools = freeformToolsByWireName(parsed.context.tools, tool => toolNames.registry().alias(tool));
       const finish = (): AdapterRequest => {
@@ -274,6 +279,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       response: Response,
       budget: TranslatorBudget,
       tierMetadata?: AdapterTierMetadata,
+      streamContext?: { completedToolBlocks?: boolean },
     ): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "No response body" };
@@ -285,26 +291,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       const budgetEncoder = new TextEncoder();
       let buffer = "";
       let bufferBytes = 0;
-      interface PendingToolCall {
-        key: string;
-        indexKey?: string;
-        id: string;
-        name: string;
-        args: string;
-        argsBytes: number;
-        /**
-         * Whether this call has ever received `arguments` as an actual string, empty included.
-         * An empty string still counts: it proves the upstream sent the field with the right
-         * wire type, which is what a later malformed repeat of that field would be padding for.
-         * A canonical NAME is not evidence about the ARGUMENTS field and must not stand in.
-         */
-        sawArgumentsString: boolean;
-      }
-      const pendingToolCalls: PendingToolCall[] = [];
+      const completedBlocksEnabled = completedToolBlocksEnabled(streamContext?.completedToolBlocks === true, provider, response.headers, lastRequestedModelId ?? "");
+      const pendingToolCalls: PendingChatToolCall[] = [];
       const toolCallContent = new StandaloneBareToolCallBuffer(budget, lastRequestedModelId, freeformTools);
       const heldText = (): AdapterEvent[] => toolCallContent.drain([]);
       let toolCallSeq = 0;
-      const closeToolCalls = (): PendingToolCall[] => {
+      const closeToolCalls = (): PendingChatToolCall[] => {
         const calls = [...pendingToolCalls];
         for (const call of calls) budget.closeCall(call.key);
         pendingToolCalls.length = 0;
@@ -341,6 +333,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         yield* toolCallContent.recoverStandalone(calls.length === 0 && terminal, () => `call_${++toolCallSeq}`, name => toolNames.restore(name));
         yield* toolCallContent.drain(references);
         for (const call of calls) {
+          if (call.emittedEarly) continue;
           if (!call.id) call.id = `call_${++toolCallSeq}`;
           yield { type: "tool_call_start", id: call.id, name: toolNames.restore(call.name) };
           if (call.args.length > 0) yield { type: "tool_call_delta", arguments: call.args };
@@ -514,6 +507,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               let call = key !== undefined ? pendingToolCalls.find(c => c.key === key) : undefined;
               if (!call && indexKey !== undefined) call = pendingToolCalls.find(c => c.indexKey === indexKey);
               if (!call && idDelta) call = pendingToolCalls.find(c => c.id === idDelta);
+              const completion = completedBlocksEnabled
+                ? observeCompletedToolBlock(call, rawToolCall.x_opencodex_completed, indexKey, idDelta, rawFunction !== undefined)
+                : "ordinary";
+              if (completion === "invalid") return yield* terminateWithError({ type: "error", message: "invalid negotiated tool completion sequence" });
+              if (completion === "completed") continue;
               if (!call) {
                 call = {
                   key: key ?? `seq:${pendingToolCalls.length}`,
@@ -583,6 +581,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               }
             }
           }
+          if (completedBlocksEnabled) yield* completedToolPrefix(pendingToolCalls, toolCallContent.hasHeldEvents(), freeformTools, name => toolNames.restore(name));
         }
 
         if (typeof choice.finish_reason === "string" && choice.finish_reason) {
