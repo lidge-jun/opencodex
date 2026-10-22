@@ -49,7 +49,11 @@ describe("spawnReplacementStart notReady", () => {
       { spawnChild, findLive: async () => null, deadlineAt: Date.now() + 300, logPath: null, termWaitMs: 300, killWaitMs: 2_000 },
     ).catch((caught: unknown) => caught);
     expect((error as NodeJS.ErrnoException).code).toBe("not_ready");
-    expect(spawned[0]!.signalCode).toBe("SIGKILL");
+    expect(exited(spawned[0]!)).toBe(true);
+    // POSIX delivers SIGTERM, the child ignores it, and the SIGKILL escalation stops it. On
+    // Windows, Node's kill("SIGTERM") is TerminateProcess, so a handler cannot ignore it and the
+    // first signal is already the observed exit; there is nothing left to escalate.
+    expect(spawned[0]!.signalCode).toBe(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
   });
 
   test("the default still hands off to a slow replacement and leaves it running", async () => {
