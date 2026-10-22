@@ -2,7 +2,7 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import { npmInvocation } from "../update/npm-invocation.mjs";
@@ -315,7 +315,11 @@ function createNpmConfigIsolation(dir?: string, boundEnv?: NodeJS.ProcessEnv): N
     const globalNpmrc = join(root, "ocx-update-global.npmrc");
     writeFileSync(globalNpmrc, "");
     const cache = join(root, "npm-cache");
-    return { dir: root, npmrc, globalNpmrc, cache, env: codexCliUpdateBoundEnv(boundEnv) };
+    const env = codexCliUpdateBoundEnv(boundEnv);
+    // npm enables Node's compile cache itself. Dropping the ambient output path
+    // alone recreates <tmpdir>/node-compile-cache outside this owned lifetime.
+    env.NODE_COMPILE_CACHE = resolve(root, "node-compile-cache");
+    return { dir: root, npmrc, globalNpmrc, cache, env };
   } catch (error) {
     // A mid-setup failure must not leak a directory this call created; a
     // caller-supplied directory stays the caller's responsibility.
