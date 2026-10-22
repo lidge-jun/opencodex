@@ -191,6 +191,21 @@ test("a credential rotated while the actual probe awaits cannot publish its late
   await collect(); expect(signal("claude-sonnet-5").tier).toBe("unknown");
 });
 
+test("a models-endpoint fallback naming a family never becomes or restamps family evidence", async () => {
+  // The summary endpoint fails and fetchAvailableModels labels one exhausted model's counter "Gem".
+  const fallback = { models: { "gemini-3.8-flash": { quotaInfo: { remainingFraction: 0, resetTime: reset + 60_000 } } } };
+  setAntigravityAccountQuotaTransportForTests({
+    resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+    pinnedPost: async url => Response.json(displayOnly ? (url.endsWith("retrieveUserQuotaSummary") ? {} : fallback) : summary),
+  });
+  displayOnly = true;
+  const first = await collect();
+  expect(first.quota.customWindows?.some(row => row.label === "Gem" && row.percent === 100)).toBe(true);
+  expect(signal("gemini-3.8-flash").tier).toBe("unknown");
+  displayOnly = false; await collect(); clock += 60_000; displayOnly = true; await collect();
+  expect(signal("gemini-3.8-flash")).toMatchObject({ tier: "healthy", usedPercent: 36, window: "5h", resetsInSeconds: 3540 });
+});
+
 test("a root change withdraws evidence and old receipts cannot be rebound to the new root", async () => {
   const held = await collect(); const other = createTempHome("ocx-jq-ag-root-");
   try {

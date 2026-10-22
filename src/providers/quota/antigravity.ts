@@ -372,7 +372,10 @@ export async function fetchAntigravityQuota(provider: string, config: OcxProvide
   const result = await probeAntigravityUsageQuota(accessToken, credential.projectId);
   if (result.kind === "available") {
     const value = report(provider, result.source, result.quota);
-    if (value && receipt) antigravityEvidence.set(value, { receipt, windows: Object.freeze(antigravityDecisionWindows(result.quota).map(row => Object.freeze(row))) });
+    // Only the summary endpoint reports real family buckets. The models fallback labels one model's
+    // counter Gem/Cla, so it stays display-only: no windows, and retained summary clocks survive.
+    const windows = result.source === "google-antigravity:retrieveUserQuotaSummary" ? antigravityDecisionWindows(result.quota) : [];
+    if (value && receipt) antigravityEvidence.set(value, { receipt, windows: Object.freeze(windows.map(row => Object.freeze(row))) });
     return value;
   }
   if (result.legacy.kind === "throw") throw result.legacy.error;
