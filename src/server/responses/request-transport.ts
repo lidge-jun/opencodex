@@ -79,7 +79,7 @@ import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuo
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
-import { sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
+import { assignNativeLogConversationId, sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
@@ -1198,9 +1198,7 @@ export async function prepareResponsesTransport(
     codexAuthContext: admissionState.authCtx,
     forwardHeaders: requestState.selectedForwardHeaders,
   });
-  if (!logCtx.conversationId && parsed._cursorConversationId) {
-    logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
-  }
+  assignNativeLogConversationId(logCtx, normalizeLogConversationId(parsed._cursorConversationId));
   logCtx.providerAdapter = adapter.name;
   // Ordinary requests receive one durable attempt only after their final initial
   // adapter is resolved. Combo children own their attempt and retries keep it.

@@ -111,13 +111,6 @@ export interface HandleResponsesOptions {
   claudeGoAffinity?: { sessionLane?: string };
   /** Validated Claude metadata identity; projected only into final canonical attempt headers. */
   claudeNativeSessionId?: string;
-  /**
-   * Chat-surface log correlation id written to `logCtx.conversationId` before translation so
-   * pre-dispatch refusals stay correlated. Request preparation treats it as provisional: a native
-   * Responses identity (client thread, cursor, or session/thread header) replaces it. Log-only;
-   * never a routing, lane, or turn-termination identity.
-   */
-  chatLogConversationFallbackId?: string;
   /** Original live policy owner; separate from caller-specific routing/sidecar snapshots. */
   codexAuthPolicy?: CodexAuthPolicyConfig;
   turnAdmissionLease?: AdmissionLease;

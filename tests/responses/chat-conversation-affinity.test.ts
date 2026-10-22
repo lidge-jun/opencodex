@@ -279,18 +279,21 @@ describe("Responses preparation keeps the Hermes log id a fallback", () => {
     expect(response.status).toBe(200);
   }
 
-  test("a native identity resolved in preparation replaces the provisional Chat fallback", async () => {
+  test("a native identity resolved in preparation replaces the Hermes fallback", async () => {
     const seen = mockNativeWire();
-    const logCtx = { model: "", provider: "", conversationId: hermesLogId } as Parameters<typeof handleResponses>[2];
-    await responses({ session_id: "native-bridge-session" }, logCtx, { chatLogConversationFallbackId: hermesLogId });
+    const logCtx = { model: "", provider: "", conversationId: hermesLogId,
+      conversationIdIsHermesFallback: true } as Parameters<typeof handleResponses>[2];
+    await responses({ session_id: "native-bridge-session" }, logCtx);
     expect(seen).toHaveLength(1);
     expect(logCtx.conversationId).toBe(normalizeLogConversationId("native-bridge-session"));
+    expect(logCtx.conversationIdIsHermesFallback).toBeUndefined();
   });
 
-  test("the provisional Chat fallback survives when preparation resolves no native identity", async () => {
+  test("the Hermes fallback survives when preparation resolves no native identity", async () => {
     const seen = mockNativeWire();
-    const logCtx = { model: "", provider: "", conversationId: hermesLogId } as Parameters<typeof handleResponses>[2];
-    await responses({}, logCtx, { chatLogConversationFallbackId: hermesLogId });
+    const logCtx = { model: "", provider: "", conversationId: hermesLogId,
+      conversationIdIsHermesFallback: true } as Parameters<typeof handleResponses>[2];
+    await responses({}, logCtx);
     expect(seen).toHaveLength(1);
     expect(logCtx.conversationId).toBe(hermesLogId);
   });
@@ -299,7 +302,7 @@ describe("Responses preparation keeps the Hermes log id a fallback", () => {
     const seen = mockNativeWire();
     const callerOwned = normalizeLogConversationId("routed-claude-metadata")!;
     const logCtx = { model: "", provider: "", conversationId: callerOwned } as Parameters<typeof handleResponses>[2];
-    await responses({ session_id: "native-bridge-session" }, logCtx, { chatLogConversationFallbackId: hermesLogId });
+    await responses({ session_id: "native-bridge-session" }, logCtx);
     expect(seen).toHaveLength(1);
     expect(logCtx.conversationId).toBe(callerOwned);
   });

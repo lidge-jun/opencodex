@@ -195,31 +195,30 @@ export function nativeLogConversationIdFromHeaders(headers: Headers): string | u
   );
 }
 
-/**
- * Select Chat completions log identity: native thread/session headers strictly take precedence over Hermes fallback.
- * Validates and normalizes each candidate individually so empty or whitespace headers cannot suppress subsequent valid identities.
- * Preserves the canonical Responses identity order: parent-thread -> session -> thread-id.
- */
-export function conversationIdFromChatHeaders(headers: Headers): string | undefined {
-  return nativeLogConversationIdFromHeaders(headers) ?? conversationIdFromHermesHeader(headers);
+/** The request-log context's conversation slot; structural so callers need not import request-log. */
+export interface LogConversationSlot {
+  conversationId?: string;
+  conversationIdIsHermesFallback?: boolean;
 }
 
 /**
- * Select the persisted Responses log identity:
- * 1. An explicitly resolved native conversation identity (clientThreadId, cursor, or canonical header resolver).
- * 2. Independent evaluation of native header candidates (parent-thread -> session_id -> session-id -> thread-id),
- *    ensuring that an empty session header does not mask a valid thread-id.
- * 3. Fallback to Hermes log-only correlation header.
+ * Record a native log identity. Fills an empty slot or replaces the log-only Hermes fallback,
+ * so a native id found late (Responses preparation, a Cursor conversation created mid-turn)
+ * still wins. A caller-owned id already in the slot (routed Claude metadata) is kept.
  */
-export function logConversationIdFromResponsesRequest(
-  nativeConversationId: string | undefined,
-  headers: Headers,
-): string | undefined {
-  return (
-    nativeConversationId ??
-    nativeLogConversationIdFromHeaders(headers) ??
-    conversationIdFromHermesHeader(headers)
-  );
+export function assignNativeLogConversationId(slot: LogConversationSlot, nativeId: string | undefined): void {
+  if (!nativeId || (slot.conversationId && !slot.conversationIdIsHermesFallback)) return;
+  slot.conversationId = nativeId;
+  delete slot.conversationIdIsHermesFallback;
+}
+
+/** Fill an empty slot with the log-only Hermes digest, marked so any native id replaces it. */
+export function fillHermesLogConversationFallback(slot: LogConversationSlot, headers: Headers): void {
+  if (slot.conversationId) return;
+  const hermes = conversationIdFromHermesHeader(headers);
+  if (!hermes) return;
+  slot.conversationId = hermes;
+  slot.conversationIdIsHermesFallback = true;
 }
 
 /**

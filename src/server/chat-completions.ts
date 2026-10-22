@@ -40,7 +40,9 @@ import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import { resolveOpenCodeGoTransport } from "../providers/opencode-go-transport";
 import {
-  conversationIdFromChatHeaders,
+  assignNativeLogConversationId,
+  fillHermesLogConversationFallback,
+  nativeLogConversationIdFromHeaders,
   getOrAllocateRequestSessionLane,
   linkRequestSessionLane,
 } from "./request-log-conversation";
@@ -115,18 +117,13 @@ export async function handleChatCompletions(
   logCtx: RequestLogContext,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
 ): Promise<Response> {
-  // Provisional log correlation for pre-dispatch refusals; the Responses bridge replaces it with
-  // any native identity it resolves, so the log-only Hermes header never outranks one.
-  let chatLogConversationFallbackId: string | undefined;
-  if (!logCtx.conversationId) {
-    chatLogConversationFallbackId = conversationIdFromChatHeaders(req.headers);
-    logCtx.conversationId = chatLogConversationFallbackId;
-  }
+  // Set before routing so pre-dispatch refusals stay correlated. A Hermes-only id is marked as a
+  // fallback, so a native id resolved later on the Responses bridge still replaces it.
+  assignNativeLogConversationId(logCtx, nativeLogConversationIdFromHeaders(req.headers));
+  fillHermesLogConversationFallback(logCtx, req.headers);
   const translatorBudget = createTranslatorBudget();
   try {
-    let response = await handleChatCompletionsWithBudget(
-      req, config, logCtx, translatorBudget, logIds, chatLogConversationFallbackId,
-    );
+    let response = await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds);
     if (isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER))) response = attachAdvisorReasoning(response, logCtx);
     return finalizeTranslatorBudgetResponse(
       response,
@@ -153,7 +150,6 @@ async function handleChatCompletionsWithBudget(
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
-  chatLogConversationFallbackId?: string,
 ): Promise<Response> {
   let chatBody: Rec;
   try {
@@ -501,7 +497,6 @@ async function handleChatCompletionsWithBudget(
 
   const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, config, logCtx, {
-    ...(chatLogConversationFallbackId ? { chatLogConversationFallbackId } : {}),
     openAiSidecarAuth,
     allowStoredOpenAiSidecarAuth: !!(callerAuthorizationRoute && settledRoute
       && !isCanonicalOpenAiForwardProvider(settledRoute.provider)),
