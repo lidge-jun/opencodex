@@ -21,7 +21,8 @@ Registry integrity requires a canonical base64 SHA-512 digest of exactly 64 byte
 Plan identity also binds a bounded content observation (installContentDigest): a versioned file set
 fixed by the supported npm-global layout — the package manifest, its declared bin/codex.js
 entrypoint, and the platform backing manifest plus vendored binary at the layout's modeled
-locations. The actually selected launcher stays bound through the existing canonical-path and
+locations. The vendored binary is streamed in chunks under a finite 1 GiB bound sized for the
+published backings (about 297 MB for linux-x64 at 0.163.0). The actually selected launcher stays bound through the existing canonical-path and
 manifest-linkage provenance; the observation covers those files' bytes only and claims nothing about
 which file a launcher run would execute, artifact authenticity, or the rest of the install tree. The
 modeled locations follow Node's module lookup evaluated against the bound inspection environment

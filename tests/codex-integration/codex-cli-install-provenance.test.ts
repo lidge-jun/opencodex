@@ -12,6 +12,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +20,7 @@ import { dirname, join } from "node:path";
 import {
   inspectCodexCliInstall,
   isAppBundledCodexPath,
+  MAX_NATIVE_BACKING_BYTES,
   isCodexCliUpdateVersionManagerPath,
   type CodexCliInstallProvenanceDeps,
 } from "../../src/codex/cli-install-provenance";
@@ -1110,5 +1112,50 @@ describe("install content binding", () => {
     // Selection still classified; only the content observation refused.
     expect(report.managed).toBe(true);
     expect(report.installContentDigest).toBeNull();
+  });
+
+  // POSIX only (the native held-descriptor reader). Sparse files keep this
+  // cheap: the accepted size streams holes, and the over-limit size is refused
+  // by fstat before any read.
+  test.skipIf(process.platform === "win32")("a published-size native backing binds and one past the finite bound refuses", async () => {
+    const backing: Record<string, { triple: string; pkg: string }> = {
+      "linux:x64": { triple: "x86_64-unknown-linux-musl", pkg: "@openai/codex-linux-x64" },
+      "linux:arm64": { triple: "aarch64-unknown-linux-musl", pkg: "@openai/codex-linux-arm64" },
+      "darwin:x64": { triple: "x86_64-apple-darwin", pkg: "@openai/codex-darwin-x64" },
+      "darwin:arm64": { triple: "aarch64-apple-darwin", pkg: "@openai/codex-darwin-arm64" },
+    };
+    const selected = backing[process.platform + ":" + process.arch];
+    expect(selected).toBeDefined();
+
+    const root = tempRoot("ocx-cli-content-large-");
+    const { launcher, packageRoot } = createPosixNpmGlobal(join(root, "npm-prefix"));
+    const backingPkg = join(packageRoot, "node_modules", "@openai", selected!.pkg.split("/")[1]);
+    const backingBin = join(backingPkg, "vendor", selected!.triple, "bin", "codex");
+    mkdirSync(dirname(backingBin), { recursive: true });
+    writeFileSync(join(backingPkg, "package.json"), JSON.stringify({ name: selected!.pkg, version: "1.2.3" }) + "\n");
+    const deps: CodexCliInstallProvenanceDeps = {
+      platform: process.platform,
+      arch: process.arch,
+      configDir: join(root, "config"),
+      env: { CODEX_CLI_PATH: launcher, PATH: "", HOME: join(root, "home") },
+      selectionAttested: true,
+      selectedCommand: launcher,
+      observeInstallContent: true,
+      inspectShim: () => ({ status: "not-tracked" }),
+    };
+
+    // The size of @openai/codex@0.163.0-linux-x64's binary, above the former 256 MiB bound.
+    const publishedSize = 296_865_480;
+    expect(publishedSize).toBeGreaterThan(256 * 1024 * 1024);
+    writeFileSync(backingBin, "");
+    truncateSync(backingBin, publishedSize);
+    const published = await inspectCodexCliInstall(deps);
+    expect(published.managed).toBe(true);
+    expect(published.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+
+    truncateSync(backingBin, MAX_NATIVE_BACKING_BYTES + 1);
+    const oversized = await inspectCodexCliInstall(deps);
+    expect(oversized.managed).toBe(true);
+    expect(oversized.installContentDigest).toBeNull();
   });
 });

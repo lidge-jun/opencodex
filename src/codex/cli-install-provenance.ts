@@ -36,8 +36,15 @@ const MAX_RUNTIME_STATE_BYTES = 256 * 1024;
 const MAX_MANIFEST_ANCESTORS = 12;
 /** The published package entrypoint is a few KB; 1 MiB leaves wide headroom. */
 const MAX_PACKAGE_ENTRYPOINT_BYTES = 1024 * 1024;
-/** The native companion binary is streamed in chunks and never buffered whole. */
-const MAX_NATIVE_BACKING_BYTES = 256 * 1024 * 1024;
+/**
+ * The native companion binary is streamed in HELD_READ_CHUNK_BYTES chunks and
+ * never buffered whole, so this bound limits read time, not memory. Published
+ * backings outgrew the former 256 MiB: `@openai/codex@0.163.0-linux-x64` ships a
+ * 296,865,480-byte binary, in platform packages of 341-430 MB unpacked. 1 GiB
+ * leaves more than 3x headroom over that binary while staying finite; larger
+ * files are refused by fstat before any read.
+ */
+export const MAX_NATIVE_BACKING_BYTES = 1024 * 1024 * 1024;
 const HELD_READ_CHUNK_BYTES = 1024 * 1024;
 
 export type CodexCliInstallKind =
