@@ -177,10 +177,13 @@
       "documents": [
         "src/codex/cli-update-plan.ts",
         "src/codex/cli-update-apply.ts",
+        "src/codex/cli-update-job.ts",
+        "src/codex/cli-update-inspection-context.ts",
         "src/codex/cli-update-artifacts.ts",
         "src/codex/cli-update-files.ts",
         "src/codex/cli-update-lease.ts",
-        "src/codex/app-server-processes.ts"
+        "src/codex/app-server-processes.ts",
+        "src/cli/codex-cli-update.ts"
       ]
     },
     {

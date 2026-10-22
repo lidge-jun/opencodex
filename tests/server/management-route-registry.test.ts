@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MANAGEMENT_ROUTES } from "../../src/server/management/route-registry";
+import { handleCodexCliUpdateRoutes } from "../../src/server/management/codex-cli-update-routes";
+import type { ManagementContext } from "../../src/server/management/context";
+import { initializeNodeLauncherContext, NODE_LAUNCH_CONTEXT_ENV, NODE_LAUNCH_PROOF_PREFIX } from "../../src/cli/launcher-context";
 import { SIBLING_REFUSED_MANAGEMENT_PATHS, siblingRefusesManagementRequest } from "../../src/server/management/sibling-guard";
 import { markSiblingStart, resetSiblingStartForTests } from "../../src/codex/sibling-start";
 import { scanRoutes, distinctRoutes } from "../helpers/management-route-scan";
@@ -59,6 +62,95 @@ const moduleOf = (file: string): string => file.replace(/^src\//, "").replace(/\
 const key = (method: string, path: string): string => `${method} ${path}`;
 
 describe("management route registry reconciliation", () => {
+  test("dashboard plan uses the shared proof-bound production inspection path", async () => {
+    const proof = "P".repeat(43);
+    const root = process.platform === "win32" ? "C:\\fixture-only" : "/tmp/fixture-only";
+    const candidate = process.platform === "win32" ? "C:\\fixture-only\\codex.cmd" : "/tmp/fixture-only/codex";
+    const env: NodeJS.ProcessEnv = { [NODE_LAUNCH_CONTEXT_ENV]: JSON.stringify({ version: 1, proof, anthropicEnvSlots: [],
+      codexCliInspectionEnv: { codexCliPath: candidate, path: root, pathExt: null, managerRoots: {}, transportEnv: {},
+        arch: process.arch, configDir: root } }) };
+    initializeNodeLauncherContext(["bun", "test", `${NODE_LAUNCH_PROOF_PREFIX}${proof}`], env);
+    try {
+      const request = new Request("http://localhost/api/codex/cli-update/plan");
+      const ctx: ManagementContext = { req: request, url: new URL(request.url), config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig,
+        deps: {}, version: "test", principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
+        convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+        syncClaudeAgentDefsBestEffort: async () => {} };
+      const response = await handleCodexCliUpdateRoutes(ctx);
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toMatchObject({ applicable: false, schemaVersion: 1 });
+    } finally { initializeNodeLauncherContext(["bun", "test"], {}); }
+  });
+
+  test("Codex CLI HTTP apply requires a GUI session and trusted loopback before admission", async () => {
+    const config = { port: 10100, providers: {} } as import("../../src/types").OcxConfig;
+    const request = new Request("http://localhost/api/codex/cli-update/apply", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestId: "retry-key-00001", planId: "a".repeat(32), confirmed: true }),
+    });
+    const ctx: ManagementContext = { req: request, url: new URL(request.url), config, deps: {}, version: "test",
+      principal: "admin-token", trustedLoopbackIngress: true, guiSessionIssuance: null,
+      convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+      syncClaudeAgentDefsBestEffort: async () => {} };
+    const response = await handleCodexCliUpdateRoutes(ctx);
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toEqual({ error: "local_dashboard_confirmation_required" });
+    ctx.principal = "gui-session";
+    ctx.trustedLoopbackIngress = false;
+    const untrustedIngress = await handleCodexCliUpdateRoutes(ctx);
+    expect(untrustedIngress?.status).toBe(403);
+    expect(await untrustedIngress?.json()).toEqual({ error: "local_dashboard_confirmation_required" });
+    ctx.trustedLoopbackIngress = true;
+    ctx.req = new Request(request.url, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestId: "retry-key-00001", planId: "a".repeat(32), confirmed: false }) });
+    const unconfirmed = await handleCodexCliUpdateRoutes(ctx);
+    expect(unconfirmed?.status).toBe(400);
+    ctx.req = new Request(request.url, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestId: "retry-key-00001", planId: "a".repeat(32), confirmed: true,
+        prefix: "/tmp/ignored", executable: "/tmp/ignored", managed: true, selectionAttested: true }) });
+    const clientEvidence = await handleCodexCliUpdateRoutes(ctx);
+    expect(clientEvidence?.status).toBe(400);
+  });
+
+  test("HTTP apply retry returns the durable job without scheduling a second engine run", async () => {
+    if (process.platform === "win32" || process.geteuid?.() === undefined) return;
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-cli-update-http-test-"));
+    chmodSync(configDir, 0o700);
+    const oldHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = configDir;
+    try {
+      const makeRequest = () => new Request("http://localhost/api/codex/cli-update/apply", { method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ requestId: "lost-response-retry-01", planId: "e".repeat(32), confirmed: true }) });
+      const ctx: ManagementContext = { req: makeRequest(), url: new URL("http://localhost/api/codex/cli-update/apply"),
+        config: { port: 10100, providers: {} } as import("../../src/types").OcxConfig, deps: {}, version: "test",
+        principal: "gui-session", trustedLoopbackIngress: true, guiSessionIssuance: "loopback",
+        convergeCodexCatalog: async () => ({ status: "skipped", reason: "not-requested", retryable: false }),
+        syncClaudeAgentDefsBestEffort: async () => {} };
+      const first = await handleCodexCliUpdateRoutes(ctx);
+      const firstBody = await first!.json();
+      ctx.req = makeRequest();
+      const retry = await handleCodexCliUpdateRoutes(ctx);
+      const retryBody = await retry!.json();
+      expect(first?.status).toBe(202);
+      expect(retry?.status).toBe(202);
+      expect(retryBody.job.jobId).toBe(firstBody.job.jobId);
+      let status: { jobId?: string; ownerState?: string; outcome?: string; reason?: string } = {};
+      for (let i = 0; i < 100; i += 1) {
+        const statusRequest = new Request(`http://localhost/api/codex/cli-update/jobs/${firstBody.job.jobId}`);
+        ctx.req = statusRequest; ctx.url = new URL(statusRequest.url);
+        status = await (await handleCodexCliUpdateRoutes(ctx))!.json() as typeof status;
+        if (status.ownerState === "finished") break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(status).toMatchObject({ jobId: firstBody.job.jobId, ownerState: "finished", outcome: "refused" });
+      expect(["not_managed", "mutation_evidence_unverified"].includes(status.reason ?? "")).toBe(true);
+    } finally {
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(configDir, { recursive: true });
+    }
+  });
+
   test("data-key reveal is declared as a dashboard-session-only read", () => {
     expect(MANAGEMENT_ROUTES.find(route => route.method === "POST" && route.path === "/api/keys/reveal"))
       .toMatchObject({ module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "session-only" } });

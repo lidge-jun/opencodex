@@ -188,6 +188,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`remote-messaging.md`](remote-messaging.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/cli/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
+| `src/cli/codex-cli-update.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/cli/codex-provider.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
@@ -212,6 +213,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/cli-update-apply.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-artifacts.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-files.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-inspection-context.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-job.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-lease.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-plan.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |

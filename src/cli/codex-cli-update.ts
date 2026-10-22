@@ -1,6 +1,5 @@
 import {
   inspectCodexCliInstall,
-  observeCodexCliSelectedCommand,
   type CodexCliInstallProvenanceDeps,
   type CodexCliInstallReport,
 } from "../codex/cli-install-provenance";
@@ -23,20 +22,26 @@ import {
   type ResolveCodexRuntimeResult,
 } from "../codex/runtime";
 import { CliUsageError, isJsonOption, printData, runCliAction } from "./runtime-api";
+import { codexCliUpdateInspectionDeps } from "../codex/cli-update-inspection-context";
+export { codexCliUpdateInspectionDeps } from "../codex/cli-update-inspection-context";
 import { trustedNodeLauncherContext } from "./launcher-context";
 import type { CodexCliApplyDeps, CodexCliApplyResult } from "../codex/cli-update-apply";
+import { randomUUID } from "node:crypto";
+import { admitCodexCliUpdateJob, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../codex/cli-update-job";
 
 export const CODEX_CLI_UPDATE_USAGE = `Usage:
   ocx system codex-cli-update check [--json]
   ocx system codex-cli-update attest [--json]
   ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
   ocx system codex-cli-update plan [--channel latest] [--json]
-  ocx system codex-cli-update apply --plan-id <32-hex> --yes [--json]`;
+  ocx system codex-cli-update apply --plan-id <32-hex> --yes [--request-id <key>] [--json]
+  ocx system codex-cli-update status <job-id> [--json]`;
 
 export type ParsedCodexCliUpdateArgs =
   | Readonly<{ action: "check"; json: boolean }>
   | Readonly<{ action: "plan"; json: boolean; channel: CodexCliUpdateChannel }>
-  | Readonly<{ action: "apply"; json: boolean; planId: string }>
+  | Readonly<{ action: "apply"; json: boolean; planId: string; requestId: string }>
+  | Readonly<{ action: "status"; json: boolean; jobId: string }>
   | Readonly<{ json: boolean; attest: CodexCliInstallationIdentityInput | "selected" }>;
 
 export interface CodexCliUpdateCommandDeps {
@@ -165,12 +170,14 @@ export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCli
     }) });
   }
   const action = rest[0];
-  if (action !== "check" && action !== "plan" && action !== "apply") {
-    throw new CliUsageError("codex-cli-update action must be check, attest, plan or apply", CODEX_CLI_UPDATE_USAGE);
+  if (action !== "check" && action !== "plan" && action !== "apply" && action !== "status") {
+    throw new CliUsageError("codex-cli-update action must be check, attest, plan, apply or status", CODEX_CLI_UPDATE_USAGE);
   }
 
   if (action === "apply") {
     let planId: string | undefined;
+    let requestId: string = randomUUID();
+    let seenRequestId = false;
     let yes = false;
     for (let index = 1; index < rest.length;) {
       const token = rest[index]!;
@@ -181,12 +188,26 @@ export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCli
         index = value.next;
         continue;
       }
+      if (isOption(token, "request-id") && !seenRequestId) {
+        const value = optionValue(rest, index, "request-id");
+        requestId = value.value; seenRequestId = true; index = value.next; continue;
+      }
       throw new CliUsageError("unsupported or duplicate apply option", CODEX_CLI_UPDATE_USAGE);
     }
     if (!yes || !planId || !/^[0-9a-f]{32}$/.test(planId)) {
       throw new CliUsageError("apply requires --plan-id <32 lowercase hex> and --yes", CODEX_CLI_UPDATE_USAGE);
     }
-    return Object.freeze({ action, json, planId });
+    if (!/^[A-Za-z0-9._:-]{8,128}$/.test(requestId)) {
+      throw new CliUsageError("--request-id must be 8-128 safe characters", CODEX_CLI_UPDATE_USAGE);
+    }
+    return Object.freeze({ action, json, planId, requestId });
+  }
+
+  if (action === "status") {
+    if (rest.length !== 2 || !/^[0-9a-f-]{36}$/.test(rest[1]!)) {
+      throw new CliUsageError("status requires one job id", CODEX_CLI_UPDATE_USAGE);
+    }
+    return Object.freeze({ action, json, jobId: rest[1]! });
   }
 
   if (action === "check") {
@@ -227,44 +248,6 @@ export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCli
  * evidence, not selected-runtime admission. A direct Bun or source launch has no such
  * proof, so nothing ambient or persisted is inspected at all.
  */
-function inspectionDeps(commandDeps: CodexCliUpdateCommandDeps): CodexCliInstallProvenanceDeps {
-  const trusted = trustedNodeLauncherContext()?.codexCliInspectionEnv;
-  if (!trusted || trusted.managerRoots === null) return { env: { PATH: "" }, configDir: "." };
-  // Attestation also requires the runtime resolver to pick the snapshot's
-  // candidate. probeVersion: false keeps this read-only — no codex --version
-  // executes on a check/plan path — while still refusing attestation when the
-  // resolver would settle on a different executable.
-  const selectedCommand = observeCodexCliSelectedCommand({
-    env: {
-      CODEX_CLI_PATH: trusted.codexCliPath ?? undefined,
-      PATH: trusted.path ?? undefined,
-      PATHEXT: trusted.pathExt ?? undefined,
-    },
-    configDir: trusted.configDir,
-  }, commandDeps.resolveSelectedRuntime);
-  return {
-    env: {
-      ...trusted.managerRoots,
-      ...trusted.transportEnv,
-      CODEX_CLI_PATH: trusted.codexCliPath ?? undefined,
-      PATH: trusted.path ?? undefined,
-      PATHEXT: trusted.pathExt ?? undefined,
-      // The lookup seeds the inspection models against the launch-time
-      // capture; ambient values are never consulted.
-      HOME: trusted.home ?? undefined,
-      NODE_PATH: trusted.nodePath ?? undefined,
-    },
-    configDir: trusted.configDir,
-    // Content observation picks the platform backing by the Node launcher's
-    // arch, which can differ from this Bun process's under Rosetta.
-    arch: trusted.arch ?? undefined,
-    // The snapshot is proof-bound to the launcher, but the report may only attest
-    // the environment candidate when the resolver picks the same canonical path —
-    // managed requires both.
-    selectionAttested: true,
-    selectedCommand,
-  };
-}
 
 export async function handleCodexCliUpdateCommand(
   argv: readonly string[],
@@ -315,14 +298,21 @@ export async function handleCodexCliUpdateCommand(
       return;
     }
     if (parsed.action === "check") {
-      const report = await (deps.inspectInstall ?? inspectCodexCliInstall)(inspectionDeps(deps));
+      const report = await (deps.inspectInstall ?? inspectCodexCliInstall)(codexCliUpdateInspectionDeps(deps));
       printData(report, parsed.json, installSummary(report));
+      return;
+    }
+    if (parsed.action === "status") {
+      const job = readCodexCliUpdateJob(parsed.jobId);
+      if (!job) { console.error("Codex CLI update job was not found or is unavailable."); return; }
+      printData(job, parsed.json, [`job: ${job.jobId}`, `status: ${job.status}`, `outcome: ${job.outcome ?? "pending"}`,
+        `reason: ${job.reason ?? "none"}`, `owner-state: ${job.ownerState}`]);
       return;
     }
     if (parsed.action === "plan") {
       const plan = await (deps.createPlan ?? createCodexCliUpdatePlan)({
         channel: parsed.channel,
-        inspectionDeps: inspectionDeps(deps),
+        inspectionDeps: codexCliUpdateInspectionDeps(deps),
         inspect: deps.inspectInstall,
       });
       printData(plan, parsed.json, planSummary(plan));
@@ -330,13 +320,13 @@ export async function handleCodexCliUpdateCommand(
     }
     if (parsed.action === "apply") {
       const apply = deps.applyUpdate ?? (await import("../codex/cli-update-apply")).applyCodexCliUpdate;
-      const report = await apply(parsed.planId, { inspectionDeps: inspectionDeps(deps) });
-      printData(report, parsed.json, [`outcome: ${report.outcome}`, `reason: ${report.reason}`,
-        `installed-version: ${report.installedVersion ?? "unavailable"}`,
-        `target-version: ${report.targetVersion ?? "unavailable"}`,
-        `lease-retained: ${report.leaseRetained ? "yes" : "no"}`,
-        `verification-pid: ${report.verificationPid ?? "none"}`,
-        `cleanup-errors: ${report.cleanupErrors.join(",") || "none"}`]);
+      const admitted = admitCodexCliUpdateJob({ requestId: parsed.requestId, planId: parsed.planId });
+      const job = admitted.kind === "accepted"
+        ? await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
+          () => apply(parsed.planId, { inspectionDeps: codexCliUpdateInspectionDeps(deps) }))
+        : admitted.job;
+      printData(job, parsed.json, [`job: ${job.jobId}`, `status: ${job.status}`, `outcome: ${job.outcome ?? "pending"}`,
+        `reason: ${job.reason ?? "none"}`, `owner-state: ${job.ownerState}`]);
     }
   });
   return code;

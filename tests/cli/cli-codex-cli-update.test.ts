@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { handleCodexCliUpdateCommand, parseCodexCliUpdateArgs } from "../../src/cli/codex-cli-update";
+import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../../src/codex/cli-update-job";
 import {
   initializeNodeLauncherContext,
   NODE_LAUNCH_CONTEXT_ENV,
@@ -40,6 +45,78 @@ const identityReport: CodexCliInstallationIdentityReport = {
 };
 
 describe("Codex CLI update CLI", () => {
+  test("apply retry keys deduplicate durable jobs and status exposes only the shared public DTO", async () => {
+    if (process.platform === "win32" || process.geteuid?.() === undefined) return;
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-cli-update-job-test-"));
+    chmodSync(configDir, 0o700);
+    try {
+      const requestId = "retry-key-0000001";
+      const planId = "a".repeat(32);
+      const accepted = admitCodexCliUpdateJob({ requestId, planId, configDir });
+      const replay = admitCodexCliUpdateJob({ requestId, planId, configDir });
+      expect(accepted.kind).toBe("accepted");
+      expect(replay.kind).toBe("duplicate");
+      expect(replay.job.jobId).toBe(accepted.job.jobId);
+      expect(() => admitCodexCliUpdateJob({ requestId, planId: "b".repeat(32), configDir })).toThrow("idempotency_conflict");
+      const previousHome = process.env.OPENCODEX_HOME;
+      process.env.OPENCODEX_HOME = configDir;
+      const statusLogs: string[] = [];
+      const oldLog = console.log;
+      try {
+        console.log = (...values: unknown[]) => statusLogs.push(values.map(String).join(" "));
+        expect(await handleCodexCliUpdateCommand(["status", accepted.job.jobId, "--json"])).toBe(0);
+        expect(JSON.parse(statusLogs[0]!)).toMatchObject({ jobId: accepted.job.jobId, ownerState: "active" });
+      } finally {
+        console.log = oldLog;
+        if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
+      }
+
+      let installerRuns = 0;
+      const terminal = await runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, async () => {
+        expect(readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "running", ownerState: "active" });
+        installerRuns += 1;
+        return { outcome: "applied", reason: "verified_target", planId, installedVersion: "1.0.0", targetVersion: "1.1.0",
+          installerExitCode: 0, leaseRetained: false, verificationPid: null, cleanupErrors: [] };
+      }, configDir);
+      expect(installerRuns).toBe(1);
+      expect(terminal).toMatchObject({ status: "applied", outcome: "applied", ownerState: "finished" });
+      expect(JSON.stringify(terminal)).not.toMatch(/ownerPid|generation|payloadHash|requestKey|token|path/i);
+      const stale = finishCodexCliUpdateJob(accepted.job.jobId, accepted.generation, 1,
+        { outcome: "refused", reason: "late_result", planId, installedVersion: null, targetVersion: null,
+          installerExitCode: null, leaseRetained: false, verificationPid: null, cleanupErrors: [] }, configDir);
+      expect(stale?.status).toBe("applied");
+      expect(readCodexCliUpdateJob(accepted.job.jobId, configDir)?.status).toBe("applied");
+    } finally { rmSync(configDir, { recursive: true }); }
+  });
+
+  test("a persisted running job from a restarted owner is ambiguous, not assumed stopped", () => {
+    if (process.platform === "win32" || process.geteuid?.() === undefined) return;
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-cli-update-restart-test-"));
+    chmodSync(configDir, 0o700);
+    try {
+      const accepted = admitCodexCliUpdateJob({ requestId: "restart-key-00001", planId: "c".repeat(32), configDir });
+      const modulePath = new URL("../../src/codex/cli-update-job.ts", import.meta.url).href;
+      const script = `import { readCodexCliUpdateJob } from ${JSON.stringify(modulePath)}; console.log(JSON.stringify(readCodexCliUpdateJob(${JSON.stringify(accepted.job.jobId)})));`;
+      const child = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 5_000,
+        env: { ...process.env, OPENCODEX_HOME: configDir } });
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      const dto = JSON.parse(child.stdout.trim());
+      expect(dto).toMatchObject({ status: "ambiguous", outcome: "ambiguous", ownerState: "unknown", lifetimeUncertain: true,
+        reason: "owner_state_unknown" });
+    } finally { rmSync(configDir, { recursive: true }); }
+  });
+
+  test("parses job status and stable apply request IDs", () => {
+    const planId = "d".repeat(32);
+    const jobId = "12345678-1234-1234-1234-123456789012";
+    expect(parseCodexCliUpdateArgs(["apply", "--plan-id", planId, "--yes", "--request-id", "retry-key-123456"])).toMatchObject({
+      action: "apply", planId, requestId: "retry-key-123456",
+    });
+    expect(parseCodexCliUpdateArgs(["status", jobId])).toEqual({ action: "status", json: false, jobId });
+    expect(() => parseCodexCliUpdateArgs(["apply", "--plan-id", planId, "--yes", "--request-id", "short"])).toThrow();
+  });
+
   test("bare attest selects the proof-bound candidate and forwards the derived input", async () => {
     expect(parseCodexCliUpdateArgs(["attest"])).toEqual({ json: false, attest: "selected" });
     expect(parseCodexCliUpdateArgs(["attest", "--json"])).toEqual({ json: true, attest: "selected" });
