@@ -68,7 +68,8 @@ describe("Codex CLI updater launcher policy", () => {
     // HOME/NODE_PATH remain inherited for the child; only the optional proof
     // copy is removed. Every case spelling of the mandatory duplicate fields
     // is removed by the existing lowercase match before spawning.
-    expect(capture).toContain('["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase())');
+    expect(capture).toContain('["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,');
+    expect(capture).toContain("...CODEX_CLI_TRANSPORT_ENV_KEYS].map(name => name.toLowerCase())");
     expect(capture).toContain("if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];");
   });
 });

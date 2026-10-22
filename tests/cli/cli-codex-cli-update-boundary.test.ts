@@ -272,19 +272,34 @@ describe("Codex CLI selection inspection boundary", () => {
       env,
     });
 
-    const first = runPlan();
-    expect(first.error).toBeUndefined();
-    expect(first.status).toBe(0);
-    const plan = JSON.parse(first.stdout);
-    expect(plan.applicable).toBe(true);
-    expect(plan.managed).toBe(true);
-    expect(plan.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
-    const planId = plan.planId;
+    // The real process scan sees every Codex session on this host, and the plan
+    // rightly refuses while one runs. That refusal still reports the content
+    // digest, so the digest is the host-independent binding; plan ids are
+    // compared as well whenever both runs found an idle host (as on CI).
+    const bound = (result: ReturnType<typeof runPlan>) => {
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      const plan = JSON.parse(result.stdout);
+      expect(plan.managed).toBe(true);
+      expect(plan.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+      if (!plan.applicable) {
+        expect(plan.refusal).toBe("blocked_active_session");
+        expect(plan.session.state).toBe("active");
+      }
+      return { digest: plan.installContentDigest as string, planId: plan.applicable ? plan.planId as string : null };
+    };
+    const expectSame = (a: ReturnType<typeof bound>, b: ReturnType<typeof bound>) => {
+      expect(b.digest).toBe(a.digest);
+      if (a.planId !== null && b.planId !== null) expect(b.planId).toBe(a.planId);
+    };
+    const expectChanged = (a: ReturnType<typeof bound>, b: ReturnType<typeof bound>) => {
+      expect(b.digest).not.toBe(a.digest);
+      if (a.planId !== null && b.planId !== null) expect(b.planId).not.toBe(a.planId);
+    };
+    const first = bound(runPlan());
 
     // Re-running on untouched bytes reproduces the same plan.
-    const again = runPlan();
-    expect(again.status).toBe(0);
-    expect(JSON.parse(again.stdout).planId).toBe(planId);
+    expectSame(first, bound(runPlan()));
 
     // An oversized NODE_PATH cannot overflow the serialized launch context:
     // the launcher drops the optional lookup seed instead, so the snapshot
@@ -292,10 +307,7 @@ describe("Codex CLI selection inspection boundary", () => {
     // unaffected, and the same plan is produced — only lanes that would need
     // the dropped seed become unverifiable. 80KiB stays under Linux's
     // per-string MAX_ARG_STRLEN so the spawn itself is not the refusal.
-    const oversized = runPlan({ ...planEnv, NODE_PATH: "/d".repeat(40 * 1024) });
-    expect(oversized.error).toBeUndefined();
-    expect(oversized.status).toBe(0);
-    expect(JSON.parse(oversized.stdout).planId).toBe(planId);
+    expectSame(first, bound(runPlan({ ...planEnv, NODE_PATH: "/d".repeat(40 * 1024) })));
 
     // A same-length byte change to the entrypoint is a different install. The
     // mtime is restored too, so only content can drive the plan-id change.
@@ -310,11 +322,8 @@ describe("Codex CLI selection inspection boundary", () => {
       utimesSync(path, stat.atime, stat.mtime);
     };
     mutate(entrypoint, "synthetic fixture", "synthetic FIXTURE");
-    const entryChanged = runPlan();
-    expect(entryChanged.status).toBe(0);
-    const entryPlan = JSON.parse(entryChanged.stdout);
-    expect(entryPlan.applicable).toBe(true);
-    expect(entryPlan.planId).not.toBe(planId);
+    const entryPlan = bound(runPlan());
+    expectChanged(first, entryPlan);
 
     // A same-length change to the vendored native backing is a different plan too.
     const backingPkgName = selected.pkg.split("/")[1];
@@ -323,13 +332,10 @@ describe("Codex CLI selection inspection boundary", () => {
       "vendor", selected.triple, "bin", "codex",
     );
     mutate(installedBackingExe, "native-backing", "native-BACKING");
-    const backingChanged = runPlan();
-    expect(backingChanged.status).toBe(0);
-    const backingPlan = JSON.parse(backingChanged.stdout);
-    expect(backingPlan.applicable).toBe(true);
-    expect(backingPlan.planId).not.toBe(entryPlan.planId);
+    expectChanged(entryPlan, bound(runPlan()));
 
     // Removing the required backing makes the plan refuse, never silently rebind.
+    // This refusal precedes the session scan, so it holds on every host.
     rmSync(join(prefix, "lib", "node_modules", "@openai", backingPkgName), { recursive: true, force: true });
     const removed = runPlan();
     expect(removed.status).toBe(0);

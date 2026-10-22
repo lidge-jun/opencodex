@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import { npmInvocation } from "../update/npm-invocation.mjs";
+import { CODEX_CLI_TRANSPORT_ENV_KEYS } from "../update/codex-cli-update-launch-policy.mjs";
 import {
   inspectCodexCliInstall,
   type CodexCliInstallKind,
@@ -273,9 +274,8 @@ function codexCliUpdateNpmEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
 function codexCliUpdateBoundEnv(bound: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
   const merged = codexCliUpdateNpmEnv();
   if (bound === undefined) return merged;
-  const boundKeys = new Set([
-    "path", "pathext", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "node_extra_ca_certs",
-  ]);
+  // Derived from the launcher's allowlist so capture, parsing and the npm child cannot drift.
+  const boundKeys = new Set<string>(["path", "pathext", ...CODEX_CLI_TRANSPORT_ENV_KEYS]);
   for (const key of Object.keys(merged)) {
     const k = key.toLowerCase();
     if (boundKeys.has(k)) delete merged[key];

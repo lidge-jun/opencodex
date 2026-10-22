@@ -1063,6 +1063,8 @@ describe("install content binding", () => {
       version: "1.2.3",
     }) + "\n");
     writeFileSync(backingBin, "#!/bin/sh\n# synthetic fixture backing\n");
+    // realpath reports canonical paths; macOS temp roots sit behind /var -> /private/var.
+    const canonicalBackingBin = realpathSync.native(backingBin);
     const swapped = join(root, "elsewhere", "codex.js");
     mkdirSync(dirname(swapped), { recursive: true });
     writeFileSync(swapped, "// swapped-in entrypoint\n");
@@ -1090,7 +1092,7 @@ describe("install content binding", () => {
         if (backingSeen && !flipped && path === launcher) {
           if (process.platform === "linux") {
             const backingHeld = readdirSync("/proc/self/fd").some(fd => {
-              try { return readlinkSync("/proc/self/fd/" + fd) === backingBin; }
+              try { return readlinkSync("/proc/self/fd/" + fd) === canonicalBackingBin; }
               catch { return false; }
             });
             expect(backingHeld).toBe(true);
@@ -1100,7 +1102,7 @@ describe("install content binding", () => {
           symlinkSync(swapped, launcher);
         }
         const resolved = realpathSync.native(path);
-        if (resolved === backingBin) backingSeen = true;
+        if (resolved === canonicalBackingBin) backingSeen = true;
         return resolved;
       },
     });

@@ -144,7 +144,8 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     // leave the duplicate behind. The match must be on the lowercase form of every key.
     expect(source).toContain("if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];");
     expect(source).toContain('...CODEX_CLI_TRANSPORT_ENV_KEYS].map(name => name.toLowerCase())');
-    expect(source).toContain('transportEnv: captureCodexCliTransportEnv(process.env)');
+    expect(source).toContain("const preBunTransportEnv = captureCodexCliTransportEnv(process.env);");
+    expect(source).toContain("transportEnv: preBunTransportEnv,");
 
     // The de-duplication is scoped to the one-shot inspection launch; every other launch
     // must still inherit PATH, or the long-running proxy child loses its tooling lookup.
