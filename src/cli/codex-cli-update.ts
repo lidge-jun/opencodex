@@ -231,6 +231,9 @@ function inspectionDeps(commandDeps: CodexCliUpdateCommandDeps): CodexCliInstall
       NODE_PATH: trusted.nodePath ?? undefined,
     },
     configDir: trusted.configDir,
+    // Content observation picks the platform backing by the Node launcher's
+    // arch, which can differ from this Bun process's under Rosetta.
+    arch: trusted.arch ?? undefined,
     // The snapshot is proof-bound to the launcher, but the report may only attest
     // the environment candidate when the resolver picks the same canonical path —
     // managed requires both.

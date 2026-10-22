@@ -1225,6 +1225,10 @@ function createNodeLaunchContext() {
       nodePath: lookupSeeds.nodePath,
       managerRoots: preBunCodexCliManagerRoots,
       transportEnv: preBunTransportEnv,
+      // The published Codex entrypoint selects its native backing by the arch of
+      // the Node that runs it; a Bun override or PATH fallback can run another
+      // arch under Rosetta, so this Node launcher's arch is the bound value.
+      arch: process.arch,
       configDir: configDir(),
     } : null,
   });

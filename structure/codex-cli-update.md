@@ -26,7 +26,10 @@ manifest-linkage provenance; the observation covers those files' bytes only and 
 which file a launcher run would execute, artifact authenticity, or the rest of the install tree. The
 modeled locations follow Node's module lookup evaluated against the bound inspection environment
 — the captured PATH/NODE_PATH/HOME and the node binary that PATH resolves — never the
-inspecting process's own runtime globals. The optional HOME/NODE_PATH seeds are withheld on
+inspecting process's own runtime globals. The backing is selected by the Node launcher's
+`process.arch`, carried in the same snapshot, because a Bun override or PATH fallback may run a
+different architecture under Rosetta; a snapshot without it falls back to the inspecting process's
+arch, and an unknown value invalidates the context. The optional HOME/NODE_PATH seeds are withheld on
 Windows, where the modeled lookup never runs, and dropped when they would push the serialized
 launch context past its cap, so the selection snapshot survives: a local optional-package lane can
 still bind, while the global and vendor-fallback lanes stay unmodelable and fail closed. Missing

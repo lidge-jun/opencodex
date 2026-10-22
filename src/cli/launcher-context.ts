@@ -28,6 +28,7 @@ export type TrustedNodeLaunchContext = {
     nodePath: string | null;
     managerRoots: CodexCliVersionManagerRoots | null;
     transportEnv: Readonly<Record<string, string>>;
+    arch: NodeJS.Architecture | null;
     configDir: string;
   }> | null;
 };
@@ -61,6 +62,17 @@ function parseTransportEnv(value: unknown): Readonly<Record<string, string>> | u
   if (entries.some(([name, setting]) => !CODEX_CLI_TRANSPORT_ENV_KEYS.includes(name.toLowerCase())
     || typeof setting !== "string" || setting.length > 32 * 1024)) return undefined;
   return Object.freeze(Object.fromEntries(entries));
+}
+
+const NODE_ARCHITECTURES: ReadonlySet<string> = new Set<NodeJS.Architecture>([
+  "arm", "arm64", "ia32", "loong64", "mips", "mipsel", "ppc64", "riscv64", "s390x", "x64",
+]);
+
+function parseLauncherArch(value: unknown): NodeJS.Architecture | null | undefined {
+  // Older snapshots predate the field; absent stays null (Bun's own arch is the
+  // pre-existing fallback). Any other non-architecture value is untrusted.
+  if (value === undefined || value === null) return null;
+  return typeof value === "string" && NODE_ARCHITECTURES.has(value) ? value as NodeJS.Architecture : undefined;
 }
 
 /** Consume the internal proof before normal CLI argument parsing. */
@@ -111,6 +123,9 @@ export function initializeNodeLauncherContext(
     const transportEnv = inspection && typeof inspection === "object" && !Array.isArray(inspection)
       ? parseTransportEnv((inspection as Record<string, unknown>).transportEnv)
       : undefined;
+    const arch = inspection && typeof inspection === "object" && !Array.isArray(inspection)
+      ? parseLauncherArch((inspection as Record<string, unknown>).arch)
+      : undefined;
     const codexCliInspectionEnv = inspection === null || inspection === undefined
       ? null
       : inspection && typeof inspection === "object" && !Array.isArray(inspection)
@@ -129,6 +144,7 @@ export function initializeNodeLauncherContext(
         && (inspection as Record<string, string>).configDir.length <= 32 * 1024
         && managerRoots !== undefined
         && transportEnv !== undefined
+        && arch !== undefined
         ? Object.freeze({
             codexCliPath: (inspection as Record<string, string | null>).codexCliPath ?? null,
             path: (inspection as Record<string, string | null>).path ?? null,
@@ -137,6 +153,7 @@ export function initializeNodeLauncherContext(
             nodePath: (inspection as Record<string, string | null>).nodePath ?? null,
             managerRoots,
             transportEnv,
+            arch,
             configDir: (inspection as Record<string, string>).configDir,
           })
         : undefined;

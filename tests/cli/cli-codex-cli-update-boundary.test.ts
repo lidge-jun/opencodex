@@ -122,10 +122,11 @@ describe("Codex CLI selection inspection boundary", () => {
   test.skipIf(process.platform === "win32")("plan identity binds the bytes a real npm-global install placed", () => {
     const node = Bun.which("node");
     const npm = Bun.which("npm");
-    const bun = Bun.which("bun") ?? process.env.OPENCODEX_BUN_PATH;
+    // The suite runs under Bun, so its own executable is always a usable fallback.
+    const bun = Bun.which("bun") ?? process.execPath;
     expect(node).not.toBeNull();
     expect(npm).not.toBeNull();
-    expect(bun).not.toBeNull();
+    expect(typeof bun).toBe("string");
 
     const BACKING: Record<string, { triple: string; pkg: string }> = {
       "linux:x64": { triple: "x86_64-unknown-linux-musl", pkg: "@openai/codex-linux-x64" },
@@ -345,15 +346,43 @@ describe("Codex CLI selection inspection boundary", () => {
   });
 });
 
-function inspectionContext(transportEnv?: unknown) {
+function inspectionContext(transportEnv?: unknown, extra: Record<string, unknown> = {}) {
   const proof = "T".repeat(43);
   return initializeNodeLauncherContext(["bun", "cli", `${NODE_LAUNCH_PROOF_PREFIX}${proof}`], {
     [NODE_LAUNCH_CONTEXT_ENV]: JSON.stringify({ version: 1, proof, anthropicEnvSlots: [],
       codexCliInspectionEnv: { codexCliPath: null, path: "", pathExt: null, managerRoots: {},
-        configDir: "/fixture", transportEnv },
+        configDir: "/fixture", transportEnv, ...extra },
     }),
   });
 }
+
+describe("Codex CLI launcher architecture snapshot", () => {
+  // An arch this Bun process is not running, so the forwarded value is
+  // distinguishable from the process.arch fallback on every host.
+  const foreign = process.arch === "x64" ? "arm64" : "x64";
+
+  test("a known launcher arch is kept and an absent one stays null", () => {
+    expect(inspectionContext(undefined, { arch: foreign })?.codexCliInspectionEnv?.arch).toBe(foreign);
+    expect(inspectionContext(undefined, {})?.codexCliInspectionEnv?.arch).toBeNull();
+  });
+
+  test.each(["x86_64", "", 64, ["x64"]].map(value => ({ value })))("an unknown arch fails the context closed %#", row => {
+    expect(inspectionContext(undefined, { arch: row.value })).toBeNull();
+  });
+
+  test("inspection selects the backing by the Node launcher's arch, not Bun's", async () => {
+    inspectionContext(undefined, { arch: foreign });
+    let inspectedArch: string | undefined;
+    expect(await handleCodexCliUpdateCommand(["check", "--json"], {
+      resolveSelectedRuntime: () => ({ runtime: null, failures: [] }),
+      inspectInstall: async deps => {
+        inspectedArch = deps.arch;
+        return inspectCodexCliInstall(deps);
+      },
+    })).toBe(0);
+    expect(inspectedArch).toBe(foreign);
+  });
+});
 
 describe("Codex CLI transport snapshot validation", () => {
   test("capture and parser preserve alias precedence, empty values and absence", () => {

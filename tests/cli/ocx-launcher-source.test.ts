@@ -146,6 +146,8 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     expect(source).toContain('...CODEX_CLI_TRANSPORT_ENV_KEYS].map(name => name.toLowerCase())');
     expect(source).toContain("const preBunTransportEnv = captureCodexCliTransportEnv(process.env);");
     expect(source).toContain("transportEnv: preBunTransportEnv,");
+    // The backing arch is the Node launcher's, bound before Bun (possibly another arch) starts.
+    expect(source).toContain("arch: process.arch,");
 
     // The de-duplication is scoped to the one-shot inspection launch; every other launch
     // must still inherit PATH, or the long-running proxy child loses its tooling lookup.
