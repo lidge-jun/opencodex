@@ -6,6 +6,8 @@ import { gatherRoutedModels as gatherRoutedModelsDirect } from "../../../src/cod
 import { clearModelCache } from "../../../src/codex/model-cache";
 import {
   antigravityModelUnlistedMessage,
+  antigravityModelRefusal,
+  antigravityReplacementUnavailableMessage,
   antigravitySelectedAccountUnlistedMessage,
   clearGenericFailoverHealth,
   hasEligibleGenericOAuthFailoverTarget,
@@ -239,7 +241,14 @@ describe("model routing fails closed on a proven roster omission (#7500)", () =>
     for (const enabled of [undefined, false]) {
       expect(routeAntigravityModel(config(enabled), PROVIDER, "acct-46", "claude-opus-5-5"))
         .toEqual({ kind: "refuse", message: antigravitySelectedAccountUnlistedMessage("claude-opus-5-5") });
+      expect(antigravityModelRefusal(config(enabled), PROVIDER, "acct-46", "claude-opus-5-5"))
+        .toBe(antigravitySelectedAccountUnlistedMessage("claude-opus-5-5"));
     }
+    // With failover on, an omitting account that still resolved means the replacement failed;
+    // the refusal must not advise enabling a setting that is already on.
+    expect(antigravityModelRefusal(config(true), PROVIDER, "acct-46", "claude-opus-5-5"))
+      .toBe(antigravityReplacementUnavailableMessage("claude-opus-5-5"));
+    expect(antigravityModelRefusal(config(true), PROVIDER, "acct-55", "claude-opus-5-5")).toBeNull();
   });
 
   test("429 rotation and its target probe never pick a sibling whose roster omits the model", () => {

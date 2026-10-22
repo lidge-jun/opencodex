@@ -342,13 +342,23 @@ export function routeAntigravityModel(
   return { kind: "reroute", accountId: best };
 }
 
+/**
+ * Client-facing refusal when failover is on and a sibling may serve the model, but the request
+ * still resolved to an omitting account (the sibling could not be resolved or admitted).
+ */
+export function antigravityReplacementUnavailableMessage(model: string): string {
+  return `The selected Google Antigravity account does not list the model "${model}" in its model discovery, `
+    + "and no account that may serve it could be used for this request. Retry the request.";
+}
+
 /** The refusal for an account that already resolved, or null when it may serve the model. */
 export function antigravityModelRefusal(
   config: OcxConfig, providerName: string, accountId: string, model: string | null | undefined, now = Date.now(),
 ): string | null {
   const verdict = routeAntigravityModel(config, providerName, accountId, model, now);
   if (verdict.kind === "keep") return null;
-  return verdict.kind === "refuse" ? verdict.message : antigravitySelectedAccountUnlistedMessage(model!);
+  // A reroute verdict exists only with failover on, so advising to enable it would be wrong.
+  return verdict.kind === "refuse" ? verdict.message : antigravityReplacementUnavailableMessage(model!);
 }
 
 function kiroModelListingHasRoom(config: OcxConfig, accountId: string, model: string): boolean {

@@ -251,6 +251,8 @@ OpenCodex refuses the request locally with HTTP 403 `permission_denied` and send
 
 - `The selected Google Antigravity account does not list the model "<model>" in its model discovery. Select an account that lists it, or enable oauthAccountFailover so OpenCodex can choose one.`
   Another usable account may serve the model, but failover is off.
+- `The selected Google Antigravity account does not list the model "<model>" in its model discovery, and no account that may serve it could be used for this request. Retry the request.`
+  Failover is on and chose another account, but that account could not be used for this request.
 - `No usable Google Antigravity account lists the model "<model>" in its model discovery. Choose a model your accounts list, or add an account that has access to it.`
   Every usable account's current list omits the model.
 
