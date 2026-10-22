@@ -1028,7 +1028,7 @@ describe("install content binding", () => {
     rmSync(backingBin, { recursive: true, force: true });
     const fd = openSync(backingBin, "w");
     try {
-      ftruncateSync(fd, 257 * 1024 * 1024);
+      ftruncateSync(fd, MAX_NATIVE_BACKING_BYTES + 1);
     } finally {
       closeSync(fd);
     }
