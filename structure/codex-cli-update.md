@@ -1,4 +1,4 @@
-# Codex CLI Update Plan
+# Codex CLI Update
 
 `src/codex/cli-update-plan.ts` constructs the read-only update plan;
 `src/codex/app-server-processes.ts` supplies its process observation.
@@ -39,7 +39,7 @@ retargeted selection link, or an unmodelable global lookup all fail closed. The 
 links are checked after the final file-identity pass while native descriptors remain open; this
 observes linkage at that boundary and does not prevent later symlink mutation. A managed install with
 no bound content is refused install_content_unverified before any registry query. The digest is
-observation only — it carries no execution guarantee — so a future apply phase must re-observe
+observation only — it carries no execution guarantee — so the apply phase re-observes
 rather than rely on it. The observation is opt-in: the plan path requests it because the planId
 binds it, while a bare check leaves the digest null rather than paying the bounded read.
 Selection observation uses the runtime resolver with provenance's bounded no-follow, nonblocking state reader and local executable-path policy. Windows returns before invoking the resolver; its deferred inspection performs no candidate or configuration I/O.
@@ -55,3 +55,40 @@ Linux per-process `status`/`cmdline` read failures invalidate a complete observa
 (a process that disappeared); incomplete observation refuses with `blocked_process_state_unknown`;
 the restart/kill path skips unreadable entries while retaining independently verified same-user app-server targets. This plan neither installs a runtime nor signals
 an existing Codex session. Windows enumeration/installation limits remain unchanged.
+
+## Explicit POSIX apply
+
+`src/cli/codex-cli-update.ts` accepts `apply --plan-id <32 lowercase hex> --yes` with optional JSON output.
+`src/codex/cli-update-apply.ts` applies only a selected, managed, non-shim POSIX npm-global installation.
+The inspector provides process-local canonical prefix/launcher/package evidence through an internal WeakMap;
+public report locations are display-only and are never reconstructed into write targets.
+`src/codex/cli-update-lease.ts` acquires one installation-prefix mutex without reentrancy, delegation,
+waiting, or automatic stale/empty/suspicious-owner recovery. Only a matching owned directory and owner
+file can be released. This apply lease is separate from service ownership leases.
+
+Under that lease, a fresh applicable plan must match the approved ID. Main and platform metadata include
+exact versions, canonical SHA-512 integrity and official registry tarball URLs; all artifact fields,
+platform and inspection architecture contribute to plan identity. Platform aliases whose published
+manifest name is also `@openai/codex` are modeled explicitly. The existing isolated npm environment,
+cwd, cache and distinct npmrc boundary is reused for metadata, exact-version pack and install calls.
+`src/codex/cli-update-artifacts.ts` streams compressed integrity and tar validation with independent
+256 MiB compressed, 512 MiB total unpacked, 384 MiB member and 4,096 member bounds. Only small
+manifest/entrypoint bytes are retained; native and auxiliary members retain size/mode/hash metadata.
+Links, traversal, unsupported tar records, dependency-bearing manifests and missing backing files refuse.
+
+After artifact preparation, selection/content, the approved metadata and active/unknown process blockers
+are re-observed. npm receives only two verified local tarball specs and an explicit canonical prefix,
+with offline mode, optional dependencies omitted, lifecycle scripts disabled and no audit/fund/lockfile
+side effects. Main manifests are not rewritten to make installation succeed. Cancelled preparation
+refuses; cancellation during an admitted npm child waits for its close rather than killing it. The lease
+and staging remain held while the installer is live or uncertain. There is no automatic retry or rollback.
+`src/codex/cli-update-files.ts` compares the complete bounded regular-file sets after installation,
+including auxiliary members and executable status; original-state readback also compares original modes.
+Required launcher/native paths must also pass the current user's X_OK check; another user's executable bit alone is insufficient.
+After file/selection readback, the selected launcher runs with `--version` in an owned home/temp sandbox,
+with 16 KiB output and an eight-second deadline. Normal exit and the exact target version are required.
+Only this verification's new POSIX process group may be terminated on a deadline; an unconfirmed close/group
+exit retains lease/staging and reports its PID with an ambiguous result. Existing sessions are never signalled.
+Verified target readback and execution are `applied` even after nonzero installer exit; unchanged full original evidence
+is `not_applied` even after exit zero. Partial, unreadable or uncertain results are `ambiguous`.
+Windows apply remains refused. Eligible shim recovery, management/status and dashboard apply are separate work.

@@ -28,7 +28,7 @@ Persisted config, the Codex home it writes into, and the model catalog it publis
 | [`codex-provider-routing.md`](codex-provider-routing.md) | Explicit provider-ID routing consent, URL-only publication and recovery. |
 | [`codex-home.md`](codex-home.md) | CODEX_HOME resolution, the files opencodex manages there, and Codex-home diagnostics. |
 | [`codex-prompts.md`](codex-prompts.md) | Prompt-layer repair, base import previews and bounded text-probe sources. |
-| [`codex-cli-update.md`](codex-cli-update.md) | Read-only update planning, isolated npm environment, and complete process observation. |
+| [`codex-cli-update.md`](codex-cli-update.md) | Content-bound planning and explicit POSIX apply with isolated npm, artifact validation, installation leases and readback. |
 | [`catalog.md`](catalog.md) | Shared Codex catalog assembly, account namespaces, pool rotation, and effort ladders. |
 | [`catalog-vendor-context.md`](catalog-vendor-context.md) | Bundled model-ID window fallback, ambiguity handling, and inferred-capacity provenance. |
 | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) | Persisted effort-clamp observation identity and idempotent sync notices. |
@@ -209,6 +209,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/catalog/parsing.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/routed-gather.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`providers/opengateway.md`](providers/opengateway.md) |
 | `src/codex/catalog/vendor-context.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
+| `src/codex/cli-update-apply.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-artifacts.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-files.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-lease.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-plan.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |

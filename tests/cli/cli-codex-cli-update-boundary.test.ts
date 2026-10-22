@@ -247,8 +247,18 @@ describe("Codex CLI selection inspection boundary", () => {
     // and node directories. Everything the spawned npm view needs is answered
     // by the script; nothing else on the PATH can shadow it.
     const integrity = "sha512-" + Buffer.alloc(64, 7).toString("base64");
+    const backingVersion = "9.9.9-" + selected.pkg.slice("@openai/codex-".length);
+    const mainMetadata = JSON.stringify({ name: "@openai/codex", version: "9.9.9",
+      optionalDependencies: { [selected.pkg]: "npm:@openai/codex@" + backingVersion },
+      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-9.9.9.tgz" } });
+    const backingMetadata = JSON.stringify({ name: "@openai/codex", version: backingVersion,
+      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-" + backingVersion + ".tgz" } });
     writeFileSync(join(fakeBin, "npm"), [
       "#!/bin/sh",
+      'case "$*" in',
+      `  *codex@${backingVersion}*--json*) printf '%s\\n' '${backingMetadata}'; exit 0 ;;`,
+      `  *--json*) printf '%s\\n' '${mainMetadata}'; exit 0 ;;`,
+      "esac",
       'case "$*" in',
       '  *dist.integrity*) printf "%s\n" ' + JSON.stringify(integrity) + " ;;",
       '  *dist.tarball*) printf "%s\n" "https://registry.npmjs.org/@openai/codex/-/codex-9.9.9.tgz" ;;',

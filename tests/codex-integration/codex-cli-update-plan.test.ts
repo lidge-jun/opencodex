@@ -446,6 +446,13 @@ describe("registry configuration isolation", () => {
       };
       calls.push(call);
       const field = queriedField(call);
+      if (argvLine(call).includes("--json")) {
+        const version = (outputs.version ?? "").trim();
+        const backing = argvLine(call).includes("@openai/codex-linux-x64@");
+        return { status: 0, stdout: JSON.stringify({ name: backing ? "@openai/codex-linux-x64" : "@openai/codex", version,
+          optionalDependencies: backing ? undefined : { "@openai/codex-linux-x64": version },
+          dist: { integrity: (outputs["dist.integrity"] ?? "").trim(), tarball: (outputs["dist.tarball"] ?? "").trim() } }), stderr: "" };
+      }
       return { status: 0, stdout: outputs[field] ?? "", stderr: "" };
     }) as never;
     return { calls, spawn };

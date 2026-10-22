@@ -24,16 +24,19 @@ import {
 } from "../codex/runtime";
 import { CliUsageError, isJsonOption, printData, runCliAction } from "./runtime-api";
 import { trustedNodeLauncherContext } from "./launcher-context";
+import type { CodexCliApplyDeps, CodexCliApplyResult } from "../codex/cli-update-apply";
 
 export const CODEX_CLI_UPDATE_USAGE = `Usage:
   ocx system codex-cli-update check [--json]
   ocx system codex-cli-update attest [--json]
   ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <absolute-path> --npm-cli <absolute-path> --node <absolute-path> [--json]
-  ocx system codex-cli-update plan [--channel latest] [--json]`;
+  ocx system codex-cli-update plan [--channel latest] [--json]
+  ocx system codex-cli-update apply --plan-id <32-hex> --yes [--json]`;
 
 export type ParsedCodexCliUpdateArgs =
   | Readonly<{ action: "check"; json: boolean }>
   | Readonly<{ action: "plan"; json: boolean; channel: CodexCliUpdateChannel }>
+  | Readonly<{ action: "apply"; json: boolean; planId: string }>
   | Readonly<{ json: boolean; attest: CodexCliInstallationIdentityInput | "selected" }>;
 
 export interface CodexCliUpdateCommandDeps {
@@ -44,6 +47,7 @@ export interface CodexCliUpdateCommandDeps {
   ) => Promise<CodexCliInstallationTargetDerivation>;
   readonly createPlan?: (deps: CodexCliUpdatePlanDeps) => Promise<CodexCliUpdatePlan>;
   readonly resolveSelectedRuntime?: (deps: ResolveCodexRuntimeDeps) => ResolveCodexRuntimeResult;
+  readonly applyUpdate?: (planId: string, deps: CodexCliApplyDeps) => Promise<CodexCliApplyResult>;
 }
 
 function identitySummary(report: CodexCliInstallationIdentityReport): string[] {
@@ -93,7 +97,7 @@ function planSummary(plan: CodexCliUpdatePlan): string[] {
     `session: ${plan.session.state}${plan.session.matches === null ? "" : ` (${plan.session.matches})`}`,
   ];
   if (plan.planId) lines.push(`plan: ${plan.planId}`);
-  if (plan.command) lines.push(`command: ${plan.command.join(" ")} (indicative — a future apply phase verifies the packed tarball and installs the verified file)`);
+  if (plan.command) lines.push(`command: ${plan.command.join(" ")} (indicative — apply verifies both packed archives and installs their local files)`);
   return lines;
 }
 
@@ -161,8 +165,28 @@ export function parseCodexCliUpdateArgs(argv: readonly string[]): ParsedCodexCli
     }) });
   }
   const action = rest[0];
-  if (action !== "check" && action !== "plan") {
-    throw new CliUsageError("codex-cli-update action must be check, attest or plan", CODEX_CLI_UPDATE_USAGE);
+  if (action !== "check" && action !== "plan" && action !== "apply") {
+    throw new CliUsageError("codex-cli-update action must be check, attest, plan or apply", CODEX_CLI_UPDATE_USAGE);
+  }
+
+  if (action === "apply") {
+    let planId: string | undefined;
+    let yes = false;
+    for (let index = 1; index < rest.length;) {
+      const token = rest[index]!;
+      if (token === "--yes" && !yes) { yes = true; index++; continue; }
+      if (isOption(token, "plan-id") && planId === undefined) {
+        const value = optionValue(rest, index, "plan-id");
+        planId = value.value;
+        index = value.next;
+        continue;
+      }
+      throw new CliUsageError("unsupported or duplicate apply option", CODEX_CLI_UPDATE_USAGE);
+    }
+    if (!yes || !planId || !/^[0-9a-f]{32}$/.test(planId)) {
+      throw new CliUsageError("apply requires --plan-id <32 lowercase hex> and --yes", CODEX_CLI_UPDATE_USAGE);
+    }
+    return Object.freeze({ action, json, planId });
   }
 
   if (action === "check") {
@@ -303,6 +327,15 @@ export async function handleCodexCliUpdateCommand(
       });
       printData(plan, parsed.json, planSummary(plan));
       return;
+    }
+    if (parsed.action === "apply") {
+      const apply = deps.applyUpdate ?? (await import("../codex/cli-update-apply")).applyCodexCliUpdate;
+      const report = await apply(parsed.planId, { inspectionDeps: inspectionDeps(deps) });
+      printData(report, parsed.json, [`outcome: ${report.outcome}`, `reason: ${report.reason}`,
+        `installed-version: ${report.installedVersion ?? "unavailable"}`,
+        `target-version: ${report.targetVersion ?? "unavailable"}`,
+        `lease-retained: ${report.leaseRetained ? "yes" : "no"}`,
+        `verification-pid: ${report.verificationPid ?? "none"}`]);
     }
   });
   return code;

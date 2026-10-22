@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import { npmInvocation } from "../update/npm-invocation.mjs";
 import { CODEX_CLI_TRANSPORT_ENV_KEYS } from "../update/codex-cli-update-launch-policy.mjs";
+import { codexCliArtifactSet, codexCliArtifactSetDigest, type CodexCliArtifactSet } from "./cli-update-artifacts";
 import {
   inspectCodexCliInstall,
   type CodexCliInstallKind,
@@ -83,7 +84,7 @@ export interface CodexCliUpdateSession {
 }
 
 export type CodexCliUpdateTarget =
-  | Readonly<{ kind: "resolved"; version: string; integrity: string }>
+  | Readonly<{ kind: "resolved"; version: string; integrity: string; artifacts?: CodexCliArtifactSet }>
   | Readonly<{ kind: "unresolved"; reason: string }>;
 
 export interface CodexCliUpdatePlan {
@@ -101,6 +102,7 @@ export interface CodexCliUpdatePlan {
   readonly location: string | null;
   readonly targetVersion: string | null;
   readonly targetIntegrity: string | null;
+  readonly targetArtifacts?: CodexCliArtifactSet;
   readonly session: CodexCliUpdateSession;
   /**
    * The bounded content observation the installation report produced: digest of
@@ -170,6 +172,7 @@ export function codexCliUpdatePlanId(bound: {
   readonly channel: CodexCliUpdateChannel;
   readonly targetVersion: string;
   readonly targetIntegrity: string;
+  readonly targetArtifactsDigest?: string;
 }): string {
   // Ordered pairs, not object key order: the digest must not depend on how a caller
   // happened to build the record.
@@ -187,6 +190,7 @@ export function codexCliUpdatePlanId(bound: {
   ];
   const hash = createHash("sha256");
   for (const [key, value] of fields) hash.update(`${key}=${value}\n`);
+  if (bound.targetArtifactsDigest) hash.update(`targetArtifactsDigest=${bound.targetArtifactsDigest}\n`);
   return hash.digest("hex").slice(0, PLAN_ID_LENGTH);
 }
 
@@ -317,7 +321,7 @@ interface NpmConfigIsolation {
  * and the env filter removes the env-var channel. What remains is exactly the pinned
  * --registry flag plus proxy/CA values captured before project dotenv loading.
  */
-function createNpmConfigIsolation(dir?: string, boundEnv?: NodeJS.ProcessEnv): NpmConfigIsolation {
+export function createNpmConfigIsolation(dir?: string, boundEnv?: NodeJS.ProcessEnv): NpmConfigIsolation {
   const ownsRoot = dir === undefined;
   const root = dir ?? mkdtempSync(join(tmpdir(), "ocx-codex-cli-meta-"));
   try {
@@ -351,7 +355,7 @@ function isolatedNpmArgs(args: readonly string[], isolation: NpmConfigIsolation)
   ];
 }
 
-function isolatedNpmTarget(args: readonly string[], isolation: NpmConfigIsolation): NpmTarget | null {
+export function isolatedNpmTarget(args: readonly string[], isolation: NpmConfigIsolation): NpmTarget | null {
   const target = npmTarget(isolatedNpmArgs(args, isolation), isolation.env);
   if (!target) return null;
   return {
@@ -447,6 +451,35 @@ export function resolveCodexCliUpdateTarget(
   }
 }
 
+/** Resolve both exact archives, including the publisher's platform-package alias. */
+export function resolveCodexCliUpdateArtifactTarget(channel: CodexCliUpdateChannel,
+  spawn: typeof spawnSync = spawnSync, boundEnv?: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform, arch: string = process.arch): CodexCliUpdateTarget {
+  let isolation: NpmConfigIsolation | undefined;
+  try {
+    isolation = createNpmConfigIsolation(undefined, boundEnv);
+    const query = (spec: string) => {
+      const invocation = isolatedNpmTarget(["view", spec, "--json"], isolation!);
+      if (!invocation) throw new Error("npm unavailable");
+      const result = spawn(invocation.bin, invocation.args, { encoding: "utf8", timeout: REGISTRY_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024, windowsHide: true, ...invocation.options });
+      if (result.status !== 0) throw new Error("registry query failed");
+      return JSON.parse(result.stdout);
+    };
+    const latest = query(`${CODEX_CLI_PACKAGE}@${channel}`);
+    if (!parseStrictSemver(latest.version)) throw new Error("target version unavailable");
+    const pinned = query(`${CODEX_CLI_PACKAGE}@${latest.version}`);
+    if (pinned.version !== latest.version) throw new Error("target version drift");
+    const artifacts = codexCliArtifactSet(pinned, query, platform, arch);
+    return Object.freeze({ kind: "resolved", version: artifacts.main.version,
+      integrity: artifacts.main.integrity, artifacts });
+  } catch {
+    return Object.freeze({ kind: "unresolved", reason: "main/platform artifact metadata unverified" });
+  } finally {
+    if (isolation) { try { rmSync(isolation.dir, { recursive: true }); } catch { /* owned metadata residue */ } }
+  }
+}
+
 function refusedPlan(
   refusal: CodexCliUpdateRefusal,
   report: CodexCliInstallReport,
@@ -525,7 +558,8 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   // When the caller had no trusted snapshot, inspectionDeps.env is the fail-closed
   // { PATH: "" } form, so this resolution cannot silently fall back to ambient.
   const resolveTarget = deps.resolveTarget
-    ?? (ch => resolveCodexCliUpdateTarget(ch, deps.spawnProcess ?? spawnSync, deps.inspectionDeps?.env));
+    ?? (ch => resolveCodexCliUpdateArtifactTarget(ch, deps.spawnProcess ?? spawnSync, deps.inspectionDeps?.env,
+      platform, deps.inspectionDeps?.arch ?? process.arch));
   const target = resolveTarget(channel);
   if (target.kind !== "resolved") {
     return refusedPlan("target_unresolved", report, channel, target, NOT_EVALUATED);
@@ -572,6 +606,7 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
       channel,
       targetVersion: target.version,
       targetIntegrity: target.integrity,
+      targetArtifactsDigest: target.artifacts ? codexCliArtifactSetDigest(target.artifacts) : undefined,
     }),
     provenance: report.provenance,
     managed: report.managed,
@@ -580,6 +615,7 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     location: report.location,
     targetVersion: target.version,
     targetIntegrity: target.integrity,
+    ...(target.artifacts ? { targetArtifacts: target.artifacts } : {}),
     session: Object.freeze({ state: "none" as const, matches: 0 }),
     installContentDigest: report.installContentDigest,
     command: codexCliUpdateCommand(target.version),
