@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveCodexAuthContext, CodexPoolAuthenticationError } from "../../src/codex/auth-context";
+import { resolveCodexAuthContext, CodexPoolAuthenticationError, CodexAccountCooldownError } from "../../src/codex/auth-context";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearThreadAccountMap, clearCodexUpstreamHealth, recordCodexUpstreamOutcome } from "../../src/codex/routing";
 import { clearAccountQuota } from "../../src/codex/quota";
@@ -68,7 +68,7 @@ test("an exact pool binding refuses cooldown instead of using caller main", asyn
   recordCodexUpstreamOutcome(cfg, "pool-a", 429, { resetAt: Date.now() + 600_000, fixedAccount: true });
   await expect(resolveCodexAuthContext(inbound(), cfg, "pool", {
     requestScopedMainCredential: true, accountId: "pool-a",
-  })).rejects.toThrow();
+  })).rejects.toBeInstanceOf(CodexAccountCooldownError);
   expect(info).not.toHaveBeenCalled();
 });
 

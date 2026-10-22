@@ -146,6 +146,8 @@ ocx status --json
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+> **Remote Link Child：** `ocx sync` 也會套用 Home 的 Codex 設定；如果用戶端執行階段在該次套用之前啟動，即使沒有重新啟動旗標也會重新啟動執行階段。重新啟動失敗時，原有執行階段會繼續提供服務，指令以非零狀態結束。`ocx status --json` 與 `ocx link status --json` 的相關欄位請見 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
+
 明確指定重新啟動旗標後，即使目錄和快取的位元組未變，成功提交 `config.toml` 變更也會觸發重新啟動。僅處理設定的操作若沒有變更、遭拒、只做預先檢查或寫入已回復，則不會觸發重新啟動。未指定重新啟動旗標時，sync 不會自動重新啟動 Codex。
 
 從每個已設定的供應商擷取即時模型清單，並將合併後的目錄重新注入 Codex。在新增供應商後或要重新整理可用模型時執行它。

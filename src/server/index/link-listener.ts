@@ -1,4 +1,5 @@
 import { createLinkRelaySessions } from "./link-relay-sessions";
+import { createLinkPeerObservations, type LinkPeerEntry } from "../../link/peer-report";
 import type { Server } from "bun";
 import {
   emptyLinkStore,
@@ -51,6 +52,8 @@ export interface LinkListenerLifecycle<T> {
   linkAdmissionKeyIds(): ReadonlySet<string>;
   onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
   notifyAuthenticatedCatalog(apiKeyId: string): void;
+  /** What this Home last learned of a Child over the link; empty until it relays a request. */
+  peerObservation(linkId: string): LinkPeerEntry;
   status(): LinkListenerStatus;
   close(): Promise<void>;
   stop(): Promise<void>;
@@ -76,6 +79,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   let stopped = false;
   const authenticatedCatalogListeners = new Set<(apiKeyId: string) => void>();
   let lifecycleStatus: LinkListenerStatus = { state: "off", port: null, reason: null };
+  const peers = createLinkPeerObservations();
 
   const setStatus = (state: LinkListenerStatus["state"], port: number | null, reason: string | null): void => {
     lifecycleStatus = { state, port, reason };
@@ -104,7 +108,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       return;
     }
     const requestedPort = store.listenerPort ?? 0;
-    const sessions = createLinkRelaySessions({ fingerprints: (keyId, linkId) => {
+    const sessions = createLinkRelaySessions({ peers, fingerprints: (keyId, linkId) => {
       if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
       return startContext?.keyFingerprints?.(keyId) ?? [];
     } });
@@ -214,6 +218,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     notifyAuthenticatedCatalog(apiKeyId) {
       for (const listener of authenticatedCatalogListeners) listener(apiKeyId);
     },
+    peerObservation: linkId => peers.get(linkId),
     status() {
       return { ...lifecycleStatus };
     },

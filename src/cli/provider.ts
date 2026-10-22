@@ -28,6 +28,8 @@ import type { RuntimeApiDeps } from "./runtime-api";
 import { redactSecretArgs } from "./secret-args";
 import { projectLocalSyncResult, type LocalSyncResult } from "./local-sync-result";
 import { providerManagementConfigError } from "../server/auth-cors";
+import { readClientConnectionState, type ClientConnectionState } from "../client/state";
+import { SENSITIVE_KEY_PATTERN } from "../lib/redact";
 
 export interface ProviderCommandDeps extends RuntimeApiDeps {
   syncModels?: typeof syncModelsToCodex;
@@ -102,7 +104,46 @@ function validateAndSave(config: ReturnType<typeof loadConfig>): void {
 // provider list
 // ---------------------------------------------------------------------------
 
-function handleList(args: string[]): void {
+/**
+ * Does this device's own provider config serve requests? A device linked to a Home — a Remote
+ * Link Child or a Hub-mode client — routes through the Home, so its local rows are shadowed.
+ * A standalone device and a Hub serve their own rows. An unreadable or inconsistent client
+ * state is not a link, the same reading `readLinkChildContext` takes.
+ */
+export function localProvidersActive(read: () => ClientConnectionState = readClientConnectionState): boolean {
+  try {
+    return read().kind !== "connected";
+  } catch {
+    return true;
+  }
+}
+
+const SENSITIVE_QUERY_KEY = /key|token|secret|password|passwd|signature|^sig$|auth|credential/i;
+
+/**
+ * The baseUrl as `provider list` prints it. Validation already rejects embedded credentials;
+ * this also covers a hand-edited config, dropping userinfo and masking credential-shaped query
+ * values while keeping ordinary parameters such as `api-version`.
+ */
+export function providerListBaseUrl(baseUrl: string): string {
+  let parsed: URL;
+  try { parsed = new URL(baseUrl); } catch { return baseUrl; }
+  let changed = false;
+  if (parsed.username || parsed.password) {
+    parsed.username = "";
+    parsed.password = "";
+    changed = true;
+  }
+  for (const key of [...new Set(parsed.searchParams.keys())]) {
+    if (SENSITIVE_KEY_PATTERN.test(key) || SENSITIVE_QUERY_KEY.test(key)) {
+      parsed.searchParams.set(key, "redacted");
+      changed = true;
+    }
+  }
+  return changed ? parsed.toString() : baseUrl;
+}
+
+function handleList(args: string[], active: boolean = localProvidersActive()): void {
   const wantsJson = consumeFlag(args, "--json");
   const wantsJsonl = consumeFlag(args, "--jsonl");
   rejectUnknownArgs(args, "Usage: ocx provider list [--json|--jsonl]");
@@ -120,12 +161,13 @@ function handleList(args: string[]): void {
     return {
       name,
       adapter: prov.adapter,
-      baseUrl: prov.baseUrl,
+      baseUrl: providerListBaseUrl(prov.baseUrl),
       authMode: prov.authMode ?? "key",
       defaultModel: prov.defaultModel ?? null,
       isDefault: name === config.defaultProvider,
       source: registryEntry ? "registry" : "custom",
       models: prov.models ?? [],
+      active,
     };
   });
 

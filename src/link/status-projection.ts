@@ -2,6 +2,9 @@ import type { LinkStore } from "./store";
 import type { LinkTunnelStatus } from "./supervisor";
 import type { TunnelState } from "./tunnel-state";
 import { readCompensation, type CompensationStore } from "./compensation";
+import { EMPTY_LINK_CHILD_PARITY, type LinkChildParity } from "./child-parity";
+import { linkPeerStatus, type LinkLocalPeer, type LinkPeerStatus } from "./compatibility";
+import type { LinkPeerEntry } from "./peer-report";
 import type { OcxClientConnectionConfig } from "../types";
 
 export type LinkWireState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
@@ -9,7 +12,7 @@ export type LinkWireState = "connecting" | "connected" | "reconnecting" | "faile
 export interface LinkStatusDto {
   role: "standalone" | "home" | "child";
   listener: { state: "off" | "listening" | "failed"; port: number | null };
-  links: Array<{
+  links: Array<LinkChildParity & {
     id: string;
     alias: string;
     direction: "hub-initiated" | "client-initiated";
@@ -17,6 +20,8 @@ export interface LinkStatusDto {
     since: string;
     reason: string | null;
     tunnelPort: number;
+    /** Home only: what the link carried from this Child, and the compatibility verdict. */
+    peer?: LinkPeerStatus;
   }>;
   child: null | {
     alias: string;
@@ -24,6 +29,17 @@ export interface LinkStatusDto {
     since: string;
     reason: string | null;
   };
+  /** This build's version and link protocol, the side every `peer` verdict compares against. */
+  local?: LinkLocalPeer;
+}
+
+/** Add this build's identity and, on a Home, each Child's observed peer status. */
+export function attachLinkPeers(dto: LinkStatusDto, local: LinkLocalPeer, observation: (linkId: string) => LinkPeerEntry): LinkStatusDto {
+  if (dto.role === "home") {
+    for (const link of dto.links) link.peer = linkPeerStatus(local, observation(link.id));
+  }
+  dto.local = local;
+  return dto;
 }
 
 export interface ClientLinkIdentity { direction: "hub-initiated" | "client-initiated"; alias?: string }
@@ -75,6 +91,8 @@ export function projectLinkStatus(
   compensation: CompensationStore = readCompensation(),
   clientChild: LinkStatusDto["child"] = null,
   identity: ClientLinkIdentity | null = null,
+  /** The Home's view of each Child's last apply (OCX-6); every field is null without a report. */
+  parity: (linkId: string) => LinkChildParity = () => EMPTY_LINK_CHILD_PARITY,
 ): LinkStatusDto {
   const byId = new Map(supervisorStates.map(status => [status.linkId, status]));
   const links = store.links.map(record => ({
@@ -83,6 +101,7 @@ export function projectLinkStatus(
     direction: record.direction,
     ...stateDetails(record, byId.get(record.id), compensation),
     tunnelPort: record.tunnelPort,
+    ...parity(record.id),
   }));
   const childRecord = config.runtimeRole === "client"
     ? (config.client?.transport === "link" ? store.links.find(record => record.id === config.client?.link?.linkId) : store.links[0])
@@ -101,7 +120,10 @@ export function projectLinkStatus(
     : client?.link ? { alias: identity?.alias ?? client.serverUrl, state: "idle" as const, since: client.connectedAt, reason: null } : null);
   if (client?.link && child && identity) {
     const active = links.find(link => link.id === client.link!.linkId);
-    const projected = { id: client.link.linkId, direction: identity.direction, tunnelPort: client.link.tunnelPort, ...child, alias: identity.alias ?? child.alias };
+    const projected = {
+      id: client.link.linkId, direction: identity.direction, tunnelPort: client.link.tunnelPort, ...child, alias: identity.alias ?? child.alias,
+      ...parity(client.link.linkId),
+    };
     if (active) Object.assign(active, projected, compensation.entries[active.id] && childRecord ? stateDetails(childRecord, byId.get(active.id), compensation) : {});
     else links.push(projected);
   }

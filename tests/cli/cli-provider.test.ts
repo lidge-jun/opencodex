@@ -183,6 +183,7 @@ describe("ocx provider", () => {
           isDefault: false,
           source: "registry",
           models: [],
+          active: true,
         },
         {
           name: "custom.models-1",
@@ -193,6 +194,7 @@ describe("ocx provider", () => {
           isDefault: true,
           source: "custom",
           models: ["plain-model", escapedModel],
+          active: true,
         },
       ]);
     } finally {

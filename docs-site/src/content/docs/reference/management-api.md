@@ -658,6 +658,23 @@ API page. The CLI drives these routes with `ocx api protocols`, `ocx api explain
 [API surfaces](/reference/configuration/server/#api-surfaces-apisurfaces) for how the Messages
 setting interacts with `claudeCode.enabled` across upgrades and downgrades.
 
+### Home identity and the served-by header
+
+`GET /healthz` includes `instanceId`, this install's opaque Home id: `home_` followed by 32 hex
+characters, generated at random once per install. It is the same value as `producer.homeId` in
+`GET /api/quota-pool`, it stays the same across restarts, and it is never a hostname or derived from
+one. Every response to `GET /v1/models` carries the same value in the `x-opencodex-served-by`
+header, so a client can tell which Home answered without reading logs. A Remote Link Child relays the
+Home's header unchanged, and a Hub-mode client's Codex reads the Hub's response directly, so on any
+device the header names the Home that served the model list. `GET /readyz` lists
+`served-by-header` in `features` when the build sends it.
+
+Right after a fresh install starts, before its identity file exists, or when that file is
+unreadable, both the `instanceId` field and the header are left out; an empty value is never sent.
+Deleting `quota-pool-identity.json` from the OpenCodex home rotates the id together with every
+quota-pool account reference when the proxy next starts; a running proxy keeps reporting the id it
+already read.
+
 ### Providers
 
 | Method and path | Purpose | Notable errors |

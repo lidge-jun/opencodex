@@ -238,6 +238,8 @@ single-flight/lock 파일을 만들 수 있는지, 건강하지 않은 OAuth 또
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+> **Remote Link Child:** `ocx sync`는 Home의 Codex 설정도 적용하며, 클라이언트 런타임이 그 적용보다 먼저 시작되었으면 재시작 플래그 없이도 런타임을 재시작합니다. 재시작이 실패하면 이전 런타임이 계속 서비스하고 명령은 0이 아닌 코드로 끝납니다. `ocx status --json`과 `ocx link status --json`의 관련 필드는 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)(영문)를 참고하세요.
+
 재시작 플래그를 명시하면 카탈로그와 캐시 바이트가 같아도 `config.toml` 변경이 성공적으로 커밋된 뒤 재시작합니다. 설정만 다루는 작업이 변경 없음, 거부, 사전 검증 또는 롤백으로 끝나면 재시작하지 않습니다. 재시작 플래그가 없으면 sync는 Codex를 자동으로 재시작하지 않습니다.
 
 설정된 모든 공급자에서 라이브 모델 목록을 가져와 병합된 카탈로그를 Codex에 다시 주입합니다.

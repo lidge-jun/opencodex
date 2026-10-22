@@ -6,6 +6,8 @@ import { CAPABILITIES } from "../../src/cli/capabilities";
 import { DISPATCH_COMMANDS } from "../../src/cli/dispatch";
 import { findCommand } from "../../src/cli/registry";
 
+const NO_PARITY = { lastApplyAt: null, runtimeStartedAt: null, appliedCodexSettingsDigest: null, reportedAt: null };
+
 type RequestCall = { url: string; init: RequestInit | undefined };
 
 function captureOutput(): { stdout: string[]; stderr: string[]; restore: () => void } {
@@ -137,8 +139,12 @@ describe("ocx link", () => {
         readAdminToken: () => "ocx_admin_test-token",
       });
       expect(code).toBe(0);
-      expect(JSON.parse(output.stdout[0]!)).toEqual(statusResponse);
-      expect(calls[0]?.url).toBe("http://127.0.0.1:19101/api/link/status");
+      // An older runtime omits the OCX-6 parity fields; the CLI prints them as null.
+      expect(JSON.parse(output.stdout[0]!)).toEqual({
+        ...statusResponse,
+        links: statusResponse.links.map(link => ({ ...link, ...NO_PARITY })),
+      });
+      expect(calls[0]?.url).toBe("http://127.0.0.1:19101/api/link/status?compatibility=1");
       expect(new Headers(calls[0]?.init?.headers).get("x-opencodex-api-key")).toBe("ocx_admin_test-token");
     } finally {
       output.restore();
@@ -177,6 +183,7 @@ describe("ocx link", () => {
           since: "2026-09-25T00:00:00.000Z",
           reason: null,
           tunnelPort: 19200,
+          ...NO_PARITY,
         }],
         child: null,
       });
@@ -273,7 +280,7 @@ describe("ocx link", () => {
     }
   });
 
-  test("registers the canonical command and all seven capability leaves", () => {
+  test("registers the canonical command and all eight capability leaves", () => {
     expect(findCommand("link")?.name).toBe("link");
     expect(DISPATCH_COMMANDS).toContain("link");
     expect(CAPABILITIES.filter(cap => cap.command[0] === "link").map(cap => cap.command.join(" "))).toEqual([
@@ -283,7 +290,7 @@ describe("ocx link", () => {
       "link issue",
       "link status",
       "link revoke",
-      "link reconnect",
+      "link reconnect", "link cleanup",
     ]);
   });
 });

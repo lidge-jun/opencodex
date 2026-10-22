@@ -156,6 +156,8 @@ ocx status --json
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+> **Remote Link Child:** `ocx sync` は Home の Codex 設定も適用し、クライアントランタイムがその適用より前に起動していた場合は、再起動フラグなしでもランタイムを再起動します。再起動に失敗した場合は以前のランタイムが動作し続け、コマンドは 0 以外で終了します。`ocx status --json` と `ocx link status --json` の関連フィールドは [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英語）を参照してください。
+
 再起動フラグを明示した場合、カタログとキャッシュのバイト列が変わらなくても、`config.toml` の変更が正常にコミットされれば再起動します。設定だけを扱う操作が変更なし、拒否、事前検証、ロールバックとなった場合は再起動しません。再起動フラグがなければ、sync が Codex を自動的に再起動することはありません。
 
 構成されているすべてのプロバイダーからライブ モデル リストを取得し、マージされたカタログを Codex に再挿入します。プロバイダーを追加した後、または利用可能なモデルを更新するために実行します。

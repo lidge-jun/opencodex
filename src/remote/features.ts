@@ -10,6 +10,8 @@
  * - `link-management-relay` when the Remote Link management read table is non-empty.
  * - `served-by-header` when the served-by emitter says responses carry the header.
  * - `relay-auth/<n>` with the connection-bound link relay auth version.
+ * - `link-peer-report/<n>` with the version of the report a Child sends on the relay challenge and a
+ *   Home records for `ocx link status` (`src/link/peer-report.ts`).
  *
  * The ids are static strings. They carry no account, credential or configuration data, which is
  * what keeps the unauthenticated `/readyz` body safe. `parseRemoteReadyMetadata` accepts at most
@@ -17,6 +19,7 @@
  * full registry to that.
  */
 import { LINK_MANAGEMENT_READ_PATHS } from "../link/management-routes";
+import { LINK_PEER_REPORT_VERSION } from "../link/peer-report";
 import { LINK_RELAY_AUTH_VERSION } from "../link/relay-auth";
 import { MANAGEMENT_ROUTES, type ManagementRoute } from "../server/management/route-registry";
 import { SERVED_BY_HEADER_EMITTED } from "./served-by";
@@ -29,6 +32,7 @@ export interface PeerFeatureSources {
   readonly linkManagementReadPaths: readonly string[];
   readonly servedByHeaderEmitted: boolean;
   readonly relayAuthVersion: string;
+  readonly linkPeerReportVersion: string;
 }
 
 /** One feature: its id when the sources say it is served, otherwise null. */
@@ -40,6 +44,7 @@ export const PEER_FEATURES: readonly PeerFeature[] = [
   s => s.linkManagementReadPaths.length > 0 ? "link-management-relay" : null,
   s => s.servedByHeaderEmitted ? "served-by-header" : null,
   s => `relay-auth/${s.relayAuthVersion}`,
+  s => `link-peer-report/${s.linkPeerReportVersion}`,
 ];
 
 export function currentPeerFeatureSources(): PeerFeatureSources {
@@ -48,6 +53,7 @@ export function currentPeerFeatureSources(): PeerFeatureSources {
     linkManagementReadPaths: LINK_MANAGEMENT_READ_PATHS,
     servedByHeaderEmitted: SERVED_BY_HEADER_EMITTED,
     relayAuthVersion: LINK_RELAY_AUTH_VERSION,
+    linkPeerReportVersion: LINK_PEER_REPORT_VERSION,
   };
 }
 

@@ -86,7 +86,7 @@
   "cli-account-key-quota.test.ts": "cli",
   "cli-observe-snapshot.test.ts": "cli",
   "cli-access-data-plane.test.ts": "cli", "cli-access-key-guard.test.ts": "cli", "cli-access-rename.test.ts": "cli", "cli-access-audio.test.ts": "cli", "cli-access-audio-live.test.ts": "cli", "cli-log-follow.test.ts": "cli", "cli-injection-follow.test.ts": "cli", "cli-usage-scope.test.ts": "cli", "cli-system-health.test.ts": "cli", "cli-companion-timeline.test.ts": "cli", "server-cli-key-probe-admission.test.ts": "server",
-  "cli-integration-preview.test.ts": "cli", "cli-integration-droid.test.ts": "cli", "cli-integration-journal.test.ts": "cli", "cli-aside-sync.test.ts": "cli", "cli-claude-desktop-profile.test.ts": "cli", "cli-integration-cursor.test.ts": "cli", "cli-remote-workspace-hub.test.ts": "cli", "cli-storage-policy-fields.test.ts": "cli", "cli-link-force.test.ts": "cli",
+  "cli-integration-preview.test.ts": "cli", "cli-integration-droid.test.ts": "cli", "cli-integration-journal.test.ts": "cli", "cli-aside-sync.test.ts": "cli", "cli-claude-desktop-profile.test.ts": "cli", "cli-integration-cursor.test.ts": "cli", "cli-remote-workspace-hub.test.ts": "cli", "cli-storage-policy-fields.test.ts": "cli", "cli-link-force.test.ts": "cli", "cli-link-cleanup.test.ts": "cli",
   "cli-account-policy.test.ts": "cli", "cli-account-login-options.test.ts": "cli", "cli-logout-runtime.test.ts": "cli", "cli-agent-settings.test.ts": "cli", "cli-v2-runtime.test.ts": "cli", "cli-agent-runtime-settings.test.ts": "cli", "cli-system-settings-parity.test.ts": "cli",
   "cli-catalog-command-result.test.ts": "cli",
   "cli-models-local-result.test.ts": "cli",
@@ -174,7 +174,7 @@
   "discovered-native-models.test.ts": "codex-integration", "responses-hosted-image-delivery.test.ts": "responses",
   "responses-hosted-image-display.test.ts": "responses", "responses-hosted-image-limits.test.ts": "responses",
   "cursor-local-installer.test.ts": "providers/cursor", "codex-quota-query-backoff.test.ts": "codex-integration",
-  "link-relay-bound-transport.test.ts": "clients", "pnpm-command-isolation.test.ts": "update",
+  "link-relay-bound-transport.test.ts": "clients", "link-peer-compatibility.test.ts": "clients", "pnpm-command-isolation.test.ts": "update",
   "dsh-login.test.ts": "oauth",
   "dsh-account.test.ts": "providers",
   "dsh-account-adapter.test.ts": "adapters",
@@ -429,6 +429,7 @@
   "cli-models-runtime-dispatch.test.ts": "cli", "cli-models-set.test.ts": "cli",
   "cli-models.test.ts": "cli", "cli-native-profile.test.ts": "cli",
   "cli-observe-logs.test.ts": "cli", "cli-provider.test.ts": "cli",
+  "cli-provider-list-active.test.ts": "cli",
   "cli-ready-subprocess.test.ts": "cli", "cli-ready.test.ts": "cli",
   "cli-registry.test.ts": "cli", "cli-resolve-subprocess.test.ts": "cli",
   "cli-resolve.test.ts": "cli", "cli-restart-health.test.ts": "cli",
@@ -1023,7 +1024,7 @@
   "provider-workspace-data.test.ts": "gui", "provider-workspace-rail.test.ts": "gui",
   "provider-workspace-state.test.ts": "gui", "proxy-env-macos.test.ts": "server",
   "proxy-env.test.ts": "server", "proxy-liveness-package-tree-fence.test.ts": "server",
-  "proxy-liveness.test.ts": "server", "readyz-features.test.ts": "server", "qoder-adapter.test.ts": "providers",
+  "proxy-liveness.test.ts": "server", "readyz-features.test.ts": "server", "served-by-header.test.ts": "server", "qoder-adapter.test.ts": "providers",
   "qoder-live-models.test.ts": "providers", "qoder-mcp-server.test.ts": "providers", "qoder-scaffold-guard.test.ts": "providers",
   "quota-401-recovery-runtime.test.ts": "usage", "quota-401-recovery.test.ts": "usage",
   "quota-bars-rows.test.ts": "gui", "quota-reset-account-key.test.ts": "usage",
@@ -1392,4 +1393,6 @@
   "server-desktop-compatibility-startup.test.ts": "server",
   "codex-set-prompt.test.ts": "gui", "codex-prompt-writes.test.ts": "codex-integration", "codex-prompt-scalar-scope.test.ts": "codex-integration",
   "advisor-settings.test.ts": "advisor", "advisor-context.test.ts": "advisor", "advisor-state.test.ts": "advisor", "advisor-guard.test.ts": "advisor", "advisor-consult.test.ts": "advisor", "advisor-plan.test.ts": "advisor", "advisor-responses-wiring.test.ts": "advisor", "advisor-routes.test.ts": "server", "advisor-internal-authority.test.ts": "advisor", "advisor-core-boundary.test.ts": "advisor", "advisor-continuation-limit.test.ts": "advisor", "advisor-authority-transport.test.ts": "advisor", "advisor-evidence.test.ts": "advisor", "advisor-budget.test.ts": "advisor", "advisor-adaptive.test.ts": "advisor"
+  ,"link-codex-settings-digest.test.ts": "clients", "link-apply-record.test.ts": "clients", "client-runtime-restart.test.ts": "clients", "link-parity-reporter.test.ts": "clients",
+  "link-apply-restart.test.ts": "cli", "link-child-parity.test.ts": "server", "restart-replacement-not-ready.test.ts": "server"
 }

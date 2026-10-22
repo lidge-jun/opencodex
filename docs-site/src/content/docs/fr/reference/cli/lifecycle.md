@@ -155,6 +155,8 @@ La section **OAuth reliability** indique si le stockage des identifiants est acc
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
+> **Enfant Remote Link :** `ocx sync` applique aussi les réglages Codex du Home et, si le runtime client a démarré avant cette application, le redémarre même sans option de redémarrage. Si le redémarrage échoue, l'ancien runtime continue de servir et la commande se termine avec un code non nul. Les champs correspondants de `ocx status --json` et `ocx link status --json` sont décrits dans [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity) (en anglais).
+
 Un redémarrage explicitement demandé a également lieu après une modification de `config.toml` validée et enregistrée, même si les octets du catalogue et du cache restent identiques. Une opération sans changement de configuration, un refus, une validation préalable ou une écriture annulée ne le déclenche pas. Sans option de redémarrage, sync ne redémarre jamais Codex automatiquement.
 
 Récupère la liste active des modèles de chaque fournisseur configuré et réinjecte le catalogue fusionné dans Codex. Exécutez cette commande après l’ajout d’un fournisseur ou pour actualiser les modèles disponibles.

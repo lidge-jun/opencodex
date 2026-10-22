@@ -156,7 +156,7 @@ export interface ManagementApiDeps {
   codexPromptPaths?: CodexPromptPaths;
   /** Link seams are getters so the optional listener and supervisor are singletons. */
   linkSupervisor?: () => LinkSupervisor;
-  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog"> & Partial<Pick<import("../index/optional-listeners").OptionalListenerSet<unknown>, "ensureClaudeIntercept" | "claudeInterceptOutcome">>;
+  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog"> & Partial<Pick<LinkListenerLifecycle<unknown>, "peerObservation">> & Partial<Pick<import("../index/optional-listeners").OptionalListenerSet<unknown>, "ensureClaudeIntercept" | "claudeInterceptOutcome">>;
   readLinkStore?: () => LinkStore;
   writeLinkStore?: (store: LinkStore) => void;
   linkKnownHostsPath?: () => string;

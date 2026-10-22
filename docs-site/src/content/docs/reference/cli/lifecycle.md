@@ -153,6 +153,14 @@ Eligibility refusals name the reason and next action: use the owning installatio
 owning service/desktop app on Windows. Unknown ancestry or a changed target calls for
 `ocx status` before any restart.
 
+On a connected client runtime (a Remote Link Child or a hub client), `ocx restart` asks the runtime
+to start its own replacement on the same port. If the replacement does not answer within the
+restart budget it is stopped, and the old runtime binds the port again and keeps serving; the
+command then reports the restart as not completed. A client runtime run by a background service or
+the desktop app refuses the request and keeps serving ("Restart not performed; the running client
+runtime was kept"); restart it with `ocx service restart` or from the app. See
+[Remote Link apply parity](#remote-link-apply-parity).
+
 If package files or the Bun runtime remain incomplete after the installer exited or failed,
 run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or
 desktop app), then reinstall with the same package manager and start it again. See
@@ -279,6 +287,9 @@ only in build metadata; neither side is called older. Versions are not trimmed a
 is not normalized. JSON exposes the same advice in `versionSkew`, whose fields remain
 `cliVersion`, `proxyVersion`, `skewed`, and `warning`.
 
+On a Remote Link Child and its Home, `--json` also reports `appliedCodexSettingsDigest`,
+`lastApplyAt` and `runtimeStartedAt`; see [Remote Link apply parity](#remote-link-apply-parity).
+
 Print a read-only diagnostic summary: proxy PID, `/healthz` reachability, dashboard URL, config path,
 default provider, Codex autostart setting, service state, shim state, and the redacted effective Codex
 home. Only the explicit, high-confidence Windows Orca runtime-home signature adds an actionable App-home
@@ -402,7 +413,8 @@ use for the management plane: the configured `hub.managementPublicOrigin` when `
 HTTP(S) origin is rejected rather than answered with a guess.
 `features` lists the peer features this build serves, so a peer can check a capability without
 comparing versions: `relay-auth/<n>` names the Remote Link relay authentication version,
-`link-management-relay` the read-only Remote Link management relay, `quota-pool/1` the
+`link-management-relay` the read-only Remote Link management relay, `link-peer-report/<n>` that
+a Remote Link Home reports each Child's version and compatibility in `ocx link status`, `quota-pool/1` the
 `GET /api/quota-pool` management read, and `served-by-header` the `x-opencodex-served-by` response
 header. A feature this build does not serve is absent. The list holds fixed names only, never
 account or configuration data. Old proxies without `/readyz` fail
@@ -500,6 +512,9 @@ upstream status but never consumes or resumes a grant.
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
 
 An explicitly requested restart also runs after a successful committed `config.toml` change, even if the catalog and cache bytes are unchanged. A configuration-only no-op, refusal, preflight, or rolled-back write does not trigger it. Without a restart flag, sync never automatically restarts Codex.
+
+On a Remote Link Child, `ocx sync` also applies the Home's Codex settings and, when the client runtime
+started before that apply, restarts it; see [Remote Link apply parity](#remote-link-apply-parity).
 
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
 Run it after adding a provider or to refresh available models.
@@ -1102,6 +1117,46 @@ The new-field receipt is `{ok:true,policy,job:{status}}`, with observed trigger,
 target, mode, schedule and optional last/next-run facts. `job.status` describes an
 existing idle/running state, not a cleanup started by this command. Read back on
 an unknown outcome rather than replaying the write.
+
+## Remote Link apply parity
+
+A Remote Link Child applies its Home's OpenCodex-owned Codex settings when it is linked
+(`ocx link add` on the Home) and on every `ocx sync`. Three facts let a peer check that the
+Child really runs under the settings it applied, without reading either machine's configuration.
+
+`ocx status --json`, on any device, carries:
+
+| Field | Meaning |
+| --- | --- |
+| `appliedCodexSettingsDigest` | Lowercase hex SHA-256 of the applied settings (below). On a Child, the values its last recorded apply wrote. On a Home or standalone install, the settings document it serves its Children right now, computed from its current configuration. `null` on a hub client, on a Child with no recorded apply, and on a Child whose apply of changed settings is in progress or failed (the previous digest is withdrawn first, so it is never reported for values Codex no longer has). |
+| `lastApplyAt` | Child only: epoch milliseconds of the last successful apply that changed the applied settings. Re-applying the same values is not a new apply and keeps it, so an unchanged `ocx sync` never forces a restart. `null` elsewhere. |
+| `runtimeStartedAt` | Child only: epoch milliseconds the running client runtime started. `null` when no client runtime answers. |
+
+The digest is computed over this compact UTF-8 JSON, with the keys in exactly this order and no
+whitespace, from the values actually applied:
+
+```json
+{"version":1,"settings":{"fastMode":true,"multiAgentMode":"v1","webSearchSidecarEnabled":false,"subagentDefaults":null}}
+```
+
+`subagentDefaults` is `null` when unset, otherwise `{"model":…,"reasoningEffort":…}` in that order.
+The example above hashes to `57c751eff89844f93db71a6ee4acdac03afbc29fec52734ade80a40193e826cd`. The digest
+never contains a setting value, and the Home's name and version are not part of it, so a Home and
+a Child that applied the same values report the same digest.
+
+On the Home, every row of `ocx link status --json` carries what that Child last reported:
+`lastApplyAt`, `runtimeStartedAt`, `appliedCodexSettingsDigest` (same meanings as above) and
+`reportedAt` (epoch milliseconds, the Home's clock). A linked Child reports shortly after its runtime
+starts and then once a minute; the Home keeps reports in memory only, so after a Home restart the
+fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
+running an older runtime than its last apply.
+
+After `ocx sync` applies the Home's settings on a Child, it restarts the Child's client runtime when
+that runtime started before `lastApplyAt`, using the same restart as `ocx restart`. A runtime that
+already started after the apply is left alone, nothing is started when no client runtime is
+running, and a failed restart exits nonzero while the previous runtime keeps serving; run
+`ocx sync` or `ocx restart` again to retry. Two applies on one Child never interleave: a second
+`ocx sync` while one is applying fails fast and changes nothing.
 
 ## Forced link revoke and remote recovery
 

@@ -9,6 +9,7 @@
   "desktop-supervised-restart.test.ts": "clients",
   "link-home-settings.test.ts": "clients",
   "link-relay-bound-transport.test.ts": "clients",
+  "link-peer-compatibility.test.ts": "clients",
   "aside-profile-identity.test.ts": "clients",
   "aside-profile-paths.test.ts": "clients",
   "aside-profile-sync-owner.test.ts": "clients",
@@ -130,5 +131,9 @@
   "link-status-projection.test.ts": "clients",
   "link-admission-wait.test.ts": "clients",
   "link-fingerprint.test.ts": "clients",
-  "link-compensation.test.ts": "clients"
+  "link-compensation.test.ts": "clients",
+  "link-codex-settings-digest.test.ts": "clients",
+  "link-apply-record.test.ts": "clients",
+  "client-runtime-restart.test.ts": "clients",
+  "link-parity-reporter.test.ts": "clients"
 }

@@ -54,6 +54,13 @@ ocx models live --provider ark --json
 Use it for scripts that process one configured provider object per line.
 `--json` and `--jsonl` cannot be combined.
 
+Each configured row also has `active`. It is `false` when this device is linked to a Home
+(a Remote Link Child or a Hub-mode client): the row is local configuration that the Home's
+providers shadow, so it does not serve requests while the link is connected. It is `true` when the
+row actually serves, including when the link state cannot be read. Rows never carry credential
+values: `baseUrl` drops embedded userinfo and masks credential-shaped query values such as `key`
+or `token`, while keeping ordinary parameters such as `api-version`.
+
 :::caution[Custom headers are not a credential channel]
 `--headers` is for non-secret request metadata — routing hints, tenant or
 project selectors, tracing ids. It is **not** a place to put authentication

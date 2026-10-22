@@ -1153,7 +1153,7 @@ export async function upsertCredentialByIdentity(
       return Boolean(
         safe.email
         && account.credential.email
-        && account.credential.email.toLowerCase() === safe.email.toLowerCase(),
+        && account.credential.email.trim().toLowerCase() === safe.email.trim().toLowerCase(),
       );
     };
     const existing = safe.accountId

@@ -188,8 +188,13 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`remote-messaging.md`](remote-messaging.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/cli/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
 | `src/cli/codex-provider.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
+| `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
+| `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
+| `src/client/link-home.ts` | [`remote-link.md`](remote-link.md) |
+| `src/client/link-parity-reporter.ts` | [`remote-link.md`](remote-link.md) |
+| `src/client/runtime-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md) |
 | `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`subagent-capacity.md`](subagent-capacity.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/codex/account-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
@@ -265,10 +270,12 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-combo-boundaries.md`](transports/responses-combo-boundaries.md)<br>[`transports/policy-fallback.md`](transports/policy-fallback.md)<br>[`transports/streaming-health.md`](transports/streaming-health.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/images.md`](data-planes/images.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`adapters/registry.md`](adapters/registry.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
+| `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/inference/advisor-diagnostics.ts` | [`advisor.md`](advisor.md) |
 | `src/server/management/` | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md) |
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
+| `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
 | `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |

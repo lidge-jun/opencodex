@@ -9,6 +9,9 @@ import { projectLinkStatus } from "../../src/link/status-projection";
 import type { LinkStore } from "../../src/link/store";
 import type { CompensationStore } from "../../src/link/compensation";
 
+/** OCX-6: every link row carries the Child's last apply report; null without one. */
+const NO_PARITY = { lastApplyAt: null, runtimeStartedAt: null, appliedCodexSettingsDigest: null, reportedAt: null };
+
 const store: LinkStore = {
   version: 1,
   listenerPort: 19001,
@@ -41,6 +44,7 @@ test("projects tunnel state and listener status into K16", () => {
       since: "2026-09-25T00:01:00.000Z",
       reason: null,
       tunnelPort: 19002,
+      ...NO_PARITY,
     }],
     child: null,
   });
@@ -92,7 +96,7 @@ test.each(["connected", "reconnecting", "failed"] as const)("an empty-store Home
   }, { version: 1, entries: {} }, clientChild, { direction: "hub-initiated" });
   expect(dto).toEqual({
     role: "child", listener: { state: "off", port: null },
-    links: [{ id: store.links[0]!.id, direction: "hub-initiated", tunnelPort: 19002, ...clientChild }],
+    links: [{ id: store.links[0]!.id, direction: "hub-initiated", tunnelPort: 19002, ...clientChild, ...NO_PARITY }],
     child: clientChild,
   });
 });

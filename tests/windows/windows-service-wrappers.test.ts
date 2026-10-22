@@ -81,6 +81,10 @@ describe("which command lines the wrapper killer stops", () => {
     expect(killsCommandLine('findstr /c:"opencodex-service-launcher.vbs" log.txt', patterns)).toBe(false);
   });
 
+  test("a native WinSW command line is not treated as a scheduler wrapper", () => {
+    expect(killsCommandLine('"C:\\pkg\\bun.exe" "C:\\pkg\\src\\cli\\index.ts" start --port 10100', patterns)).toBe(false);
+  });
+
   test("matching is case-insensitive, as Windows paths are", () => {
     expect(killsCommandLine(`cmd.exe /c "${script(HOME_A).toUpperCase()}"`, patterns)).toBe(true);
   });

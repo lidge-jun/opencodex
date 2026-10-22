@@ -4,6 +4,9 @@ import { Readable } from "node:stream";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 import { serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { clearableDeadline } from "../lib/abort";
+import { packageVersion } from "../lib/package-version";
+import { linkPeerReportHeaders } from "../link/peer-report";
+import { buildPeerFeatures } from "../remote/features";
 import {
   LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION,
   LINK_RELAY_SESSION_HEADER, linkRelayChallenge, linkRelayProofMatches,
@@ -148,6 +151,8 @@ async function responseOnConnection(incoming: IncomingMessage, agent: SingleConn
   }, { highWaterMark: 0 }), { status, headers });
 }
 
+let peerReport: Record<string, string> | undefined;
+
 /** Authenticate and stream one request on the SAME socket; never fall back to an ordinary fetch. */
 export async function fetchBoundLinkRelay(target: BoundLinkRelayTarget, destination: string, init: RequestInit): Promise<Response> {
   if (!target.linkId || !target.apiKeyId) throw new LinkRelayAuthenticationError();
@@ -160,7 +165,9 @@ export async function fetchBoundLinkRelay(target: BoundLinkRelayTarget, destinat
   const agent = new SingleConnectionAgent({ keepAlive: true, maxSockets: 1, maxFreeSockets: 1 });
   const deadline = clearableDeadline(LINK_RELAY_AUTH_TIMEOUT_MS, init.signal ?? undefined);
   try {
-    const response = await requestOnConnection(probe, { method: "GET", signal: deadline.signal }, agent);
+    // The challenge also carries this Child's version and features for the Home's link status.
+    peerReport ??= linkPeerReportHeaders(packageVersion("0.0.0"), buildPeerFeatures());
+    const response = await requestOnConnection(probe, { method: "GET", signal: deadline.signal, headers: peerReport }, agent);
     const socket = agent.socket;
     const proof = response.headers["x-opencodex-link-proof"];
     if (response.statusCode !== 204 || typeof proof !== "string" || !linkRelayProofMatches(proof, challenge.expected)) {

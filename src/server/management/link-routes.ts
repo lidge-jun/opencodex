@@ -6,7 +6,11 @@ import { clearCompensationFailed, compensationPath, readCompensation } from "../
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
-import { projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
+import { attachLinkPeers, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
+import { homeLinkChildParity } from "../../link/child-parity";
+import { localLinkPeer } from "../../link/compatibility";
+import { packageVersion } from "../../lib/package-version";
+import { buildPeerFeatures } from "../../remote/features";
 import { isLinkPort } from "../../link/ports";
 import { joinHome, type ClientLinkJoinDeps } from "../../client/link-join";
 import { clientLinkStatusIdentity } from "../../client/link-status";
@@ -268,6 +272,7 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
       store, state.supervisor.status(), listenerStatus, ctx.config, readCompensation(),
       ctx.config.runtimeRole === "client" ? clientLinkTunnelStatus() : null,
       ctx.config.runtimeRole === "client" && ctx.config.client?.link ? clientLinkStatusIdentity(ctx.config.client.link.linkId) : null,
+      linkId => homeLinkChildParity.get(linkId),
     );
     for (const link of dto.links) {
       const failure = state.compensationFailures?.get(link.id);
@@ -276,6 +281,12 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     if (dto.child && store.links[0]) {
       const failure = state.compensationFailures?.get(store.links[0].id);
       if (failure) Object.assign(dto.child, { state: "failed" as const, since: failure.since, reason: failure.reason });
+    }
+    // Opt-in: an older `ocx link status` validates the document key by key and would reject the
+    // added fields, so only a caller that asks for compatibility gets `local` and `peer`.
+    if (url.searchParams.get("compatibility") === "1") {
+      attachLinkPeers(dto, localLinkPeer(packageVersion("0.0.0"), buildPeerFeatures()),
+        linkId => state.listener.peerObservation?.(linkId) ?? { observed: null, refused: null });
     }
     // A dashboard session also learns why it cannot join as a Child. The admin-token answer stays
     // the exact K16 document that `ocx link status` validates key by key.
