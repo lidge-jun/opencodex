@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
@@ -12,7 +14,6 @@ import { clearComboRecallForTests } from "../../src/server/responses/combo-sessi
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 type Rec = Record<string, any>;
@@ -22,19 +23,21 @@ const PRIVATE = "synthetic owner reasoning";
 const CALL = "call_bridge_principal";
 const originalFetch = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
-let home: string;
+let home: string | undefined;
 let releaseSpend: (() => void) | undefined;
 function clearRouteState() {
   clearComboSelectionState(); clearComboTargetCooldowns(); clearComboRecallForTests(); clearKeyCooldowns();
 }
 beforeEach(() => {
-  home = mkdtempSync(repoPath(".tmp", "bridge-replay-principal-"));
+  home = undefined;
+  home = mkdtempSync(join(tmpdir(), "ocx-bridge-replay-principal-"));
   process.env.OPENCODEX_HOME = home;
   releaseSpend = acquireOwnedSpendHome();
   clearRouteState(); clearReasoningReplayCacheForTests(); clearResponseStateForTests();
   resetThoughtSignatureReplayForTests();
 });
 afterEach(async () => {
+  if (!home) return;
   releaseSpend?.(); releaseSpend = undefined;
   closeRequestHistoryIndex(); await flushResponseState(); clearResponseStateForTests();
   globalThis.fetch = originalFetch;
