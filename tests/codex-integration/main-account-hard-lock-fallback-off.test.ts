@@ -4,6 +4,7 @@
  * without contacting the configured fallback; allowed, the reroute is unchanged.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { readdirSync } from "node:fs";
 import { applyMainHardLockFallbackOverride } from "../../src/server/responses/main-hard-lock-routing";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, setAccountQuotaFromParsed, type StoredAccountQuota } from "../../src/codex/quota";
@@ -54,6 +55,34 @@ function config(fallback?: OcxFallbackConfig): OcxConfig {
 }
 
 describe("hard-lock fallback with fallback off", () => {
+  test("classifying a routing-profile target reads config only: nothing opens under OPENCODEX_HOME", async () => {
+    observe({ weeklyPercent: 98 });
+    const cfg = {
+      ...config({ provider: false }),
+      providers: {
+        ...config().providers,
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      },
+      routingProfiles: { rescue: { alias: "chosen-policy", candidates: [{ provider: "openai", model: "gpt-5.4" }, { provider: "deepseek", model: "deepseek-chat" }] } },
+    } as OcxConfig;
+    for (const model of ["policy/rescue", "chosen-policy"]) {
+      cfg.codexMainAccountHardLockFallback = { model };
+      // The evaluator would open routing-history.sqlite here, and on Windows its handle blocks
+      // the home's removal. The hop is classified from the declared candidates instead.
+      const before = readdirSync(home.root).sort();
+      let thrown: unknown;
+      try {
+        await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(readdirSync(home.root).sort()).toEqual(before);
+      expect(thrown).toBeInstanceOf(FallbackRefusedError);
+      const refusal = await (thrown as FallbackRefusedError).response.json() as { error: { fallback: Record<string, string> } };
+      expect(refusal.error.fallback).toMatchObject({ kind: "provider", from: "openai/gpt-5.3", to: "deepseek/deepseek-chat" });
+    }
+  });
+
   test("provider fallback off: the reroute is refused and the body is untouched", async () => {
     observe({ weeklyPercent: 98 });
     const body: Record<string, unknown> = { model: "gpt-5.3", reasoning: { effort: "high" } };

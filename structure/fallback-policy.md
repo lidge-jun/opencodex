@@ -57,6 +57,12 @@ leaves is the failed child's resolved provider and model. Two selectors under on
 to different providers make a provider hop; a routing profile's `current` advances to the redirected
 candidate.
 
+The hard-lock site classifies its one proactive hop from config alone, before anything is sent: a
+combo, account namespace or concrete target through `previewRouteModel`, and a routing profile from
+its declared candidates (any candidate on another provider makes a provider hop) without running the
+evaluator, which would open `routing-history.sqlite` under `OPENCODEX_HOME`. The profile's own
+dispatch still evaluates it.
+
 ## Refusal contract
 
 `fallbackRefusedResponse`: `error.type` and `error.code` `fallback_refused`, `error.fallback` with

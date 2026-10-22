@@ -1,8 +1,8 @@
 import type { OcxConfig } from "../../types";
 import { resolveComboId } from "../../combos";
-import { isBareOpenAiFamilyModel, previewRouteModel } from "../../router";
+import { isBareOpenAiFamilyModel, previewRouteModel, routeConcreteModel } from "../../router";
 import { resolveChosenTarget } from "./shadow-target-availability";
-import { getRoutingProfile, resolvePolicyProfileId } from "../../routing/profile";
+import { getRoutingProfile, resolvePolicyProfileId, type NormalizedRoutingProfile } from "../../routing/profile";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
   getMainAccountHardLockStatus,
@@ -12,7 +12,7 @@ import { codexQuotaScopeForModel } from "../../codex/routing/health-store";
 import { getEligiblePoolAccounts } from "../../codex/routing/selection";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { FallbackRefusedError, guardFallbackHop, type FallbackAdmission } from "../../routing/fallback-policy";
+import { FallbackRefusedError, guardFallbackHop, type FallbackAdmission, type FallbackTarget } from "../../routing/fallback-policy";
 /** Resolves to a synchronous ownership proof, or null when the caller does not own the locked main. */
 export type MainHardLockCallerCheck = (sourceModel: string) => Promise<(() => boolean) | null>;
 
@@ -128,7 +128,7 @@ export async function applyMainHardLockFallbackOverride(
     site: "hard-lock",
     route: parsed.model,
     from: { provider: OPENAI_CODEX_PROVIDER_ID, model: parsed.model },
-    to: hardLockTargetOf(config, fallback.model),
+    to: hardLockTargetOf(config, parsed.model, fallback.model),
     trigger: "hard_lock",
     admission,
     ...(now !== undefined ? { now } : {}),
@@ -150,7 +150,18 @@ export async function applyMainHardLockFallbackOverride(
   return { sourceModel: parsed.model, targetModel: fallback.model };
 }
 
-function hardLockTargetOf(config: OcxConfig, model: string): { provider: string; model: string } {
+/**
+ * The hop's destination for the fallback policy, read from config only. A routing profile picks
+ * its candidate from request-history evidence, and evaluating it here would open that index under
+ * OPENCODEX_HOME just to classify the hop (on Windows the open handle then outlives the request's
+ * home); the profile's own dispatch still evaluates it. Its declared candidates are classified
+ * instead, as the hop the profile could take: a candidate on another provider makes it a provider
+ * hop. Combos, account namespaces and concrete targets resolve from config alone.
+ */
+function hardLockTargetOf(config: OcxConfig, sourceModel: string, model: string): FallbackTarget {
+  const policyId = resolvePolicyProfileId(config, model);
+  const profile = policyId ? getRoutingProfile(config, policyId) : undefined;
+  if (profile) return profileHopTarget(config, sourceModel, profile);
   try {
     const route = previewRouteModel(config, model);
     return { provider: route.providerName, model: route.modelId };
@@ -158,4 +169,18 @@ function hardLockTargetOf(config: OcxConfig, model: string): { provider: string;
     const slash = model.indexOf("/");
     return slash > 0 ? { provider: model.slice(0, slash), model: model.slice(slash + 1) } : { provider: "", model };
   }
+}
+
+function profileHopTarget(config: OcxConfig, sourceModel: string, profile: NormalizedRoutingProfile): FallbackTarget {
+  const targets = profile.candidates.map((candidate): FallbackTarget => {
+    try {
+      const route = routeConcreteModel(config, candidate.provider + "/" + candidate.model);
+      return { provider: route.providerName, model: route.modelId };
+    } catch {
+      return { provider: candidate.provider, model: candidate.model };
+    }
+  });
+  return targets.find(target => target.provider !== OPENAI_CODEX_PROVIDER_ID)
+    ?? targets.find(target => target.model !== sourceModel)
+    ?? { provider: OPENAI_CODEX_PROVIDER_ID, model: sourceModel };
 }
