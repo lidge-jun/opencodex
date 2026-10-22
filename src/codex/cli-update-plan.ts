@@ -230,8 +230,8 @@ function npmTarget(args: readonly string[], env?: NodeJS.ProcessEnv): NpmTarget 
  * shared modules from. None of these is input the updater child needs, so
  * ambient values stay out of the spawned npm. This is a denylist for
  * process-startup/output channels, not a claim that every ambient variable is
- * allowlisted. Ordinary OS environment, proxy settings and the supported
- * NODE_EXTRA_CA_CERTS extension remain available.
+ * allowlisted. When a proof-bound launcher snapshot is available, proxy and
+ * CA settings are replaced from that snapshot below.
  */
 const NPM_ENV_DROP_KEYS: ReadonlySet<string> = new Set([
   "node_options",
@@ -265,23 +265,25 @@ function codexCliUpdateNpmEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
 }
 
 /**
- * Ambient environment with the executable-selection channels replaced by the proof-bound
- * launcher snapshot. HOME, proxy variables and NODE_EXTRA_CA_CERTS stay ambient because npm
- * itself needs them; PATH/PATHEXT are the channels a project dotenv could use to supply a
- * fake npm, so they come only from the captured snapshot. A snapshot without PATH means no
- * trusted PATH at all — an empty one fails the spawn closed rather than falling back.
+ * Ambient environment with executable-selection and transport-trust channels replaced by
+ * the proof-bound launcher snapshot. Bun may add project dotenv values after that snapshot,
+ * so PATH/PATHEXT, proxies and NODE_EXTRA_CA_CERTS must all come from the captured context.
+ * A snapshot without PATH means no trusted PATH at all — an empty one fails the spawn closed.
  */
 function codexCliUpdateBoundEnv(bound: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
   const merged = codexCliUpdateNpmEnv();
   if (bound === undefined) return merged;
+  const boundKeys = new Set([
+    "path", "pathext", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "node_extra_ca_certs",
+  ]);
   for (const key of Object.keys(merged)) {
     const k = key.toLowerCase();
-    if (k === "path" || k === "pathext") delete merged[key];
+    if (boundKeys.has(k)) delete merged[key];
   }
   let hasTrustedPath = false;
   for (const [key, value] of Object.entries(bound)) {
     const k = key.toLowerCase();
-    if ((k === "path" || k === "pathext") && value !== undefined) {
+    if (boundKeys.has(k) && value !== undefined) {
       merged[key] = value;
       if (k === "path") hasTrustedPath = true;
     }
@@ -313,7 +315,7 @@ interface NpmConfigIsolation {
  * the operator's real ancestors. The sentinel package.json anchors the walk here,
  * where no .npmrc exists. --userconfig/--globalconfig replace the two file configs,
  * and the env filter removes the env-var channel. What remains is exactly the pinned
- * --registry flag plus deliberately supported proxy/CA env.
+ * --registry flag plus proxy/CA values captured before project dotenv loading.
  */
 function createNpmConfigIsolation(dir?: string, boundEnv?: NodeJS.ProcessEnv): NpmConfigIsolation {
   const ownsRoot = dir === undefined;
