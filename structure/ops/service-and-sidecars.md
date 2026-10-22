@@ -58,7 +58,7 @@ without running handlers is not covered by this forwarding mechanism.
 systemd unit. State and ownership resolve from those captured bytes. Each present regular file contributes SHA-256 content and bigint device, inode, size, nanosecond mtime/ctime,
 mode, uid and gid. The opened descriptor must be regular and match device/inode before any read. Each record is limited to 1 MiB, read in bounded chunks with growth beyond that limit
 refused. Descriptor stats bracket the read; a final pathname stat must agree. Symlinks, inconsistent reads, malformed state, unreadable candidates and membership drift
-refuse. Canonical directory aliases remain equivalent. Lock, PID and runtime records are excluded.
+refuse. Homes compare canonical path plus exact bigint `dev:ino` (`fileId`); rounded doubles merge NTFS ids above 2^53. Aliases stay equivalent. Lock, PID and runtime records are excluded.
 
 `src/cli/update-restart.ts` requires known versions and a detached POSIX target with PID-1
 parent, no ownership claim and no client/sibling role. An installed record without a claim

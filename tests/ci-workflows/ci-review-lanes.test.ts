@@ -410,6 +410,10 @@ describe("Windows and nightly CI contracts", () => {
       { path: "src/example.ts", before: "plain\n", after: "WIN32\n", expected: "true" },
       // An added spawnSync line is Windows-sensitive by content, outside the path filter too (#7468).
       { path: "tests/update/example-host-guard.test.ts", before: "plain\n", after: "const original = Bun.spawnSync;\n", expected: "true" },
+      // Process-signal code behaves differently on Windows (kill("SIGTERM") is TerminateProcess), #7484/#7502.
+      { path: "src/server/example-restart.ts", before: "plain\n", after: 'child.kill("SIGTERM");\n', expected: "true" },
+      { path: "tests/server/example-restart.test.ts", before: "plain\n", after: "expect(child.signalCode).toBe(\"SIGKILL\");\n", expected: "true" },
+      { path: "src/lib/example-stop.ts", before: "plain\n", after: "process.kill(pid, 0);\n", expected: "true" },
       { path: "tests/example.ts", before: "plain\n", after: "ordinary\n", expected: "false" },
       { path: "src/example.ts", before: "powershell\nplain\n", after: "plain\n", expected: "false" },
       { path: "docs/example.md", before: "plain\n", after: "pwsh\n", expected: "false" },

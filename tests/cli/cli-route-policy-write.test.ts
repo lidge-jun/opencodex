@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { handleRoutePolicyWriteCommand } from "../../src/cli/route-policy-write";
 import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { spawnTestChild } from "../helpers/spawn-test-child";
@@ -191,8 +192,7 @@ describe("routing profile wire contract and output", () => {
 
 // A separate process contains Lab's process-global slots and all server imports.
 // Its empty homes keep automation disabled; injected transports never open a listener.
-test("actual routing editor preserves stale/create/update/alias/delete authority", async () => {
-  const script = `
+const ROUTING_EDITOR_SCRIPT = `
     import assert from "node:assert/strict";
     import { writeFileSync, mkdirSync } from "node:fs";
     import { join } from "node:path";
@@ -257,15 +257,27 @@ test("actual routing editor preserves stale/create/update/alias/delete authority
       originalLog(JSON.stringify({ scenarios: 9, saves, refreshes, requests: requests.length, automationEnabled: false }));
     } finally { resetLabActivationForTests(); }
   `;
-  const childHome = join(home, "real-handler");
-  childCompleted = false;
-  const result = await spawnTestChild([process.execPath, "--eval", script], { cwd: repoRoot(), deadlineMs: 20_000,
-    env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, NODE_ENV: "test", HOME: childHome,
-      USERPROFILE: childHome, APPDATA: childHome, XDG_CONFIG_HOME: childHome, OPENCODEX_HOME: childHome,
-      CODEX_HOME: join(childHome, "codex"), NO_COLOR: "1" },
-  });
-  childCompleted = !result.timedOut && result.reaped && result.pipesClosed;
-  // Keep child diagnostics in the failure instead of leaving a live process after Bun times out.
-  expect(result).toMatchObject({ exitCode: 0, stderr: "", timedOut: false, reaped: true, pipesClosed: true });
-  expect(JSON.parse(result.stdout.trim())).toEqual({ scenarios: 9, saves: 3, refreshes: 3, requests: 9, automationEnabled: false });
-}, SPAWN_BUDGET_MS);
+
+describe("routing editor child", () => {
+  // The child loads the management API, routing and Lab graphs. On a cold Windows runner that
+  // load alone used most of the 20s child deadline, so pay it once here and time a warm child.
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "cli/route-policy-write-editor", source: ROUTING_EDITOR_SCRIPT });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+  test("actual routing editor preserves stale/create/update/alias/delete authority", async () => {
+    const childHome = join(home, "real-handler");
+    childCompleted = false;
+    const result = await spawnTestChild([process.execPath, "--eval", ROUTING_EDITOR_SCRIPT], { cwd: repoRoot(), deadlineMs: 20_000,
+      env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, NODE_ENV: "test", HOME: childHome,
+        USERPROFILE: childHome, APPDATA: childHome, XDG_CONFIG_HOME: childHome, OPENCODEX_HOME: childHome,
+        CODEX_HOME: join(childHome, "codex"), NO_COLOR: "1",
+        // The run-private cache the warm-up filled; without it this child transpiles cold again.
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH },
+    });
+    childCompleted = !result.timedOut && result.reaped && result.pipesClosed;
+    // Keep child diagnostics in the failure instead of leaving a live process after Bun times out.
+    expect(result).toMatchObject({ exitCode: 0, stderr: "", timedOut: false, reaped: true, pipesClosed: true });
+    expect(JSON.parse(result.stdout.trim())).toEqual({ scenarios: 9, saves: 3, refreshes: 3, requests: 9, automationEnabled: false });
+  }, SPAWN_BUDGET_MS);
+});

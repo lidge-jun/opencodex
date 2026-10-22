@@ -621,11 +621,11 @@ export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["service", "status"], summary: "Inspect local service-manager status.",
-    usage: "ocx service status",
+    usage: "ocx service status [--json]",
     routes: [],
-    flags: [],
-    mutates: false, json: "none",
-    details: ["Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.", "Backend options apply only to install; other verbs use the installed backend."],
+    flags: [{"name": "--json", "value": "boolean", "summary": "Emit the passive service status document as JSON."}],
+    mutates: false, json: "payload",
+    details: ["Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API.", "--json is passive: schemaVersion 1 with installed, running, enabled, viable, stale, conflict, backend (launchd|systemd|schtasks|winsw|none), label, serving {probed, ok, port}, summary, logPath, ownershipLease and desktopLogin. It starts, stops, installs and repairs nothing.", "Backend options apply only to install; other verbs use the installed backend."],
   },
   {
     command: ["service", "uninstall"], summary: "Uninstall the local service.",
