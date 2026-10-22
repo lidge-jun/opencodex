@@ -576,7 +576,7 @@ describe("selective opaque-blob rejection memos", () => {
   test("falls back to the old blanket entry when a valid set cannot fit beside a near-limit key", () => {
     const current = scope().current!;
     const identity = JSON.stringify([current.providerName, current.providerDestinationDurableIdentity, current.adapterName, current.modelId, current.credentialDurableIdentity]);
-    const overhead = Buffer.byteLength(JSON.stringify(["", identity]));
+    const overhead = Buffer.byteLength(JSON.stringify([JSON.stringify([null, ""]), identity]));
     const nearLimit = { ...scope(), clientThreadId: "t".repeat(256 * 1024 - overhead - 1) };
     rememberReasoningReplayOpaqueBlobRejection(nearLimit, new Set([digest(1)]));
     expect(getReasoningReplayOpaqueBlobRejection(nearLimit)).toEqual({ mode: "blanket" });

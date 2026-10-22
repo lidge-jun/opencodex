@@ -116,6 +116,7 @@ import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo
 import { createJevModelInvoker } from "./jev-model-invoke";
 import { comboRequestedEffortLabel } from "./combo-requested-effort";
 import { clientWireOf } from "../inference/client-wire";
+import { resolveContextPrincipal } from "../auth-cors";
 
 /**
  * Sends one combo target may run on its own before the ladder moves on. A target is a whole
@@ -465,6 +466,7 @@ export async function executeComboResponses(
       const unavailable = mandatoryResponsesReasoningReplayUnavailable({
         body,
         clientThreadId: reasoningReplayConversationId,
+        clientPrincipalId: resolveContextPrincipal(req, config, options.admission),
         providerName: route.providerName,
         provider: route.provider,
         adapterName: route.provider.adapter,

@@ -16,9 +16,10 @@ Native Chat's retained plaintext `reasoning_content` replay cells require an aut
 principal in addition to the conversation, route, credential, model, adapter, and tool call. Native
 Chat and Responses resolve that principal from data-plane admission before capture or replay; a
 keyless caller cannot retrieve another principal's plaintext reasoning. This rule describes the
-plaintext replay cache only. Opaque serving and rejection memos and Google's durable signature
-bindings use their own physical identity and validation rules; they are not all caller-principal
-scoped.
+plaintext replay cache only. Process-local opaque serving and rejection memos also separate
+authenticated principals, with a distinct keyless namespace that preserves physical route-change
+and rejection safeguards. Google's durable signature bindings retain their own physical identity
+and validation rules. Keyless processes sharing a thread remain indistinguishable to these memos.
 
 `src/server/responses/request-prepare.ts` snapshots the resolved policy into trusted parsed state. `src/server/responses/core-replay.ts` applies it to the selected concrete route, including each fresh Combo candidate. Retention is eligible only on the canonical ChatGPT Responses forward destination, with an unchanged provider, adapter and durable endpoint. A known model change requires `modelSwitch`; a known credential change requires `accountSwitch`; simultaneous changes require both. It does not widen the serving identity used for reasoning caches or strict plaintext Combo eligibility. Unknown or expired serving provenance retains the existing destination-only behavior rather than inventing a compatibility match.
 
