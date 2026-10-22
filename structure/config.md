@@ -182,8 +182,8 @@ env_key = "OPENCODEX_API_AUTH_TOKEN"
 ```
 
 Root TOML keys must be written before the first `[table]`. Re-injection strips the stale form of
-both shapes — opencodex blocks, injected root base-url overrides, stale root context-window
-overrides, and stale catalog paths — before rewriting, so switching between forms leaves no residue.
+both shapes — opencodex blocks, injected root base-url overrides, and stale catalog paths — before
+rewriting, so switching between forms leaves no residue. A root context-window override is user-owned.
 
 The `name` field is the only presentation value in that table, and `codexProviderDisplayName`
 chooses it (default `OpenCodex Proxy`). `resolveCodexProviderDisplayName` in
