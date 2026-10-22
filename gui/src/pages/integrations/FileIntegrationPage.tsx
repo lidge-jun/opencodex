@@ -90,6 +90,7 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   kilo: "integrations.semantics.kilo",
   droid: "integrations.semantics.droid",
   qoder: "integrations.semantics.qoder",
+  t3code: "integrations.semantics.t3code",
 };
 
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
@@ -113,6 +114,7 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   kilo: "integrations.tab.kilo",
   droid: "integrations.tab.droid",
   qoder: "integrations.tab.qoder",
+  t3code: "integrations.tab.t3code",
 };
 
 type FileIntegrationPageProps = {

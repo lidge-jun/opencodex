@@ -28,6 +28,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "droid",
   "qoder",
   "gentle-shell",
+  "t3code",
 ] as const;
 
 export const INTEGRATION_REFUSAL_REASONS: ReadonlySet<string> = new Set<IntegrationRefusalReason>([
@@ -68,6 +69,7 @@ const PLAN_SCHEMA_PATHS = new Set([
   "catalog.providers.opencodex",
   "customModels.*",
   "modelConfigs.customModels.*",
+  "providerInstances.opencodex",
   // ZCode reads its providers from a second file; a plan for it publishes that
   // file's templates, and a path missing here is rejected as an invalid preview.
   "config.providerConfigRules.providerRules.[providerId=opencodex]",

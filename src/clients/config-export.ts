@@ -87,6 +87,8 @@ export type { CommandCodeGeneratedConfig, CommandCodeModelEntry, CommandCodeProv
 export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution, commandCodeProviderRoot };
 import { buildQoderClientConfig, summarizeQoder, buildQoderContribution, qoderConfigPath } from "./config-export/qoder";
 export { buildQoderClientConfig, qoderConfigPath, qoderHomeDir, type QoderGeneratedConfig } from "./config-export/qoder";
+import { buildT3CodeClientConfig, summarizeT3Code, buildT3CodeContribution, t3codeConfigPath } from "./config-export/t3code";
+export { buildT3CodeClientConfig, t3codeConfigPath, t3codeHomeDir, type T3CodeGeneratedConfig } from "./config-export/t3code";
 
 
 
@@ -1683,6 +1685,18 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
       const doc = buildPiClientConfig(ctx, PI_EXPORT_OPTIONS);
       return singleFragment("gentle-shell", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
     },
+    loopbackOnly: true,
+  },
+  t3code: {
+    id: "t3code",
+    filename: "t3code-settings.json",
+    destination: env => t3codeConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "Merge providerInstances.opencodex into T3 Code's settings.json; it reloads the file. Loopback needs no key.",
+    build: buildT3CodeClientConfig,
+    format: "json",
+    summarize: summarizeT3Code,
+    buildContribution: buildT3CodeContribution,
     loopbackOnly: true,
   },
 };

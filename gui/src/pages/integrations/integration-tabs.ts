@@ -58,6 +58,7 @@ export const TABS: readonly TabDefinition[] = [
   { id: "cline", hash: "integrations/cline", labelKey: "integrations.tab.cline" },
   { id: "kilo", hash: "integrations/kilo", labelKey: "integrations.tab.kilo" },
   { id: "droid", hash: "integrations/droid", labelKey: "integrations.tab.droid" },
+  { id: "t3code", hash: "integrations/t3code", labelKey: "integrations.tab.t3code" },
 ] as const;
 
 export const FILE_CLIENTS = new Set<FileIntegrationClientId>([
@@ -81,4 +82,5 @@ export const FILE_CLIENTS = new Set<FileIntegrationClientId>([
   "kilo",
   "droid",
   "qoder",
+  "t3code",
 ]);

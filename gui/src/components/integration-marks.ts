@@ -66,6 +66,7 @@ export const INTEGRATION_MARKS: Record<OverviewClientId, string | null> = {
   kilo: CLIENT_MARKS.kilo ?? null,
   droid: CLIENT_MARKS.droid ?? null,
   qoder: CLIENT_MARKS.qoder ?? null,
+  t3code: CLIENT_MARKS.t3code ?? null,
 };
 
 /**

@@ -561,9 +561,14 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       if (!(error instanceof ClientPathError)) throw error;
       return jsonResponse({ error: error.message }, 400, req, config);
     }
-    if ((requested === "raycast" || requested === "droid" || requested === "qoder") && shouldInjectApiAuthHeader(config)) {
+    const keylessExportLabel = requested === "raycast" ? "Raycast"
+      : requested === "droid" ? "Factory Droid"
+      : requested === "qoder" ? "Qoder"
+      : requested === "t3code" ? "T3 Code"
+      : undefined;
+    if (keylessExportLabel !== undefined && shouldInjectApiAuthHeader(config)) {
       return jsonResponse({
-        error: `${requested === "droid" ? "Factory Droid" : requested === "qoder" ? "Qoder" : "Raycast"} export requires an unauthenticated loopback destination; this listener requires an admission header the client cannot supply.`,
+        error: `${keylessExportLabel} export requires an unauthenticated loopback destination; this listener requires an admission header the client cannot supply.`,
         reason: "non_loopback",
       }, 400, req, config);
     }

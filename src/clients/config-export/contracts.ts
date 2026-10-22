@@ -221,7 +221,8 @@ export type ExportClientId =
   | "commandcode"
   | "kilo"
   | "droid"
-  | "gentle-shell";
+  | "gentle-shell"
+  | "t3code";
 
 export interface ExportClientSpec {
   id: ExportClientId;
