@@ -115,12 +115,18 @@ export async function handleChatCompletions(
   logCtx: RequestLogContext,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
 ): Promise<Response> {
+  // Provisional log correlation for pre-dispatch refusals; the Responses bridge replaces it with
+  // any native identity it resolves, so the log-only Hermes header never outranks one.
+  let chatLogConversationFallbackId: string | undefined;
   if (!logCtx.conversationId) {
-    logCtx.conversationId = conversationIdFromChatHeaders(req.headers);
+    chatLogConversationFallbackId = conversationIdFromChatHeaders(req.headers);
+    logCtx.conversationId = chatLogConversationFallbackId;
   }
   const translatorBudget = createTranslatorBudget();
   try {
-    let response = await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds);
+    let response = await handleChatCompletionsWithBudget(
+      req, config, logCtx, translatorBudget, logIds, chatLogConversationFallbackId,
+    );
     if (isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER))) response = attachAdvisorReasoning(response, logCtx);
     return finalizeTranslatorBudgetResponse(
       response,
@@ -147,6 +153,7 @@ async function handleChatCompletionsWithBudget(
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
+  chatLogConversationFallbackId?: string,
 ): Promise<Response> {
   let chatBody: Rec;
   try {
@@ -494,6 +501,7 @@ async function handleChatCompletionsWithBudget(
 
   const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, config, logCtx, {
+    ...(chatLogConversationFallbackId ? { chatLogConversationFallbackId } : {}),
     openAiSidecarAuth,
     allowStoredOpenAiSidecarAuth: !!(callerAuthorizationRoute && settledRoute
       && !isCanonicalOpenAiForwardProvider(settledRoute.provider)),

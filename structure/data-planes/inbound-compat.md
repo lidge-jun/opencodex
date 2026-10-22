@@ -247,6 +247,10 @@ normalized independently in priority order before considering Hermes, ensuring t
 candidate does not mask a valid native identity. Configuring `session_affinity_header: x-hermes-conversation-id`
 on Hermes replaces the client's `session-id` header, trading away native session identity and lane scoping
 for log-only correlation; `session-id` remains the generated default.
+On the Chat bridge the header-derived id is provisional (`chatLogConversationFallbackId`): it keeps
+pre-dispatch refusals correlated, and `prepareResponsesRequest` replaces it with any native identity its
+own resolution finds, while a caller-owned pre-populated id (routed Claude) is kept. Covered by
+`tests/responses/chat-conversation-affinity.test.ts`.
 
 ## Chat streaming client with a JSON upstream result
 
