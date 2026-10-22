@@ -985,6 +985,7 @@ describe("install content binding", () => {
       bin: { codex: "bin/codex.js" },
     }, null, 2) + "\n");
     writeFileSync(join(pkgRoot, "bin", "codex.js"), "#!/usr/bin/env node\n// synthetic fixture\n");
+    chmodSync(join(pkgRoot, "bin", "codex.js"), 0o755);
     writeFileSync(join(backingPkg, "package.json"), JSON.stringify({
       name: backingName,
       version: "1.2.3",
