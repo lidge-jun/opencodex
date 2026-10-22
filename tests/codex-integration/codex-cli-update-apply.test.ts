@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyCodexCliUpdate, type CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
@@ -10,6 +10,7 @@ import { createCodexCliApplyFixture } from "../helpers/codex-cli-apply-fixture";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { codexCliPlatformBacking } from "../../src/codex/cli-install-provenance";
+import { observeCodexCliFileSet, sameCodexCliFiles } from "../../src/codex/cli-update-files";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
@@ -55,6 +56,20 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     expect(calls[0]!.filter(arg => arg.includes("@file:"))).toHaveLength(2);
     expect(calls[0]!.join(" ")).not.toContain("@latest");
     expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+  }, 120_000);
+  test("published CLI packs and applies through a symlinked TMPDIR using canonical staging", () => {
+    const f = fixture(); const alias = join(f.root, "tmp-alias");
+    symlinkSync(f.temporaryRoot, alias, "dir"); f.env.TMPDIR = alias;
+    const plan = cli(f, ["plan"]); expect(plan.applicable).toBe(true);
+    const result = cli(f, ["apply", "--plan-id", plan.planId, "--yes"]);
+    expect(result.outcome).toBe("applied"); expect(result.installedVersion).toBe("1.1.0");
+    expect(result.leaseRetained).toBe(false);
+    const calls = readFileSync(f.trace, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+    expect(calls).toHaveLength(1);
+    const archives = calls[0]!.filter(arg => arg.includes("@file:")).map(arg => arg.split("@file:")[1]!);
+    expect(archives).toHaveLength(2);
+    for (const archive of archives) { expect(archive.startsWith(f.temporaryRoot + "/")).toBe(true); expect(archive.startsWith(alias + "/")).toBe(false); }
+    expect(readdirSync(f.temporaryRoot)).toEqual([]);
   }, 120_000);
 
   test.each(["stale-content", "same-version-integrity", "active", "unknown", "archive-tamper", "missing-backing"] as const)(
@@ -114,6 +129,28 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     const f = fixture(); const id = await approved(f);
     const result = await applyCodexCliUpdate(id, depsFor(f, { install: async () => ({ terminal: true, exitCode: 0 }) }));
     expect(result.outcome).toBe("not_applied"); expect(result.installerExitCode).toBe(0);
+  }, 120_000);
+  test("a newly installed sibling backing with unchanged nested-old main is ambiguous", async () => {
+    const f = fixture();
+    const mainRoot = join(f.prefix, "lib", "node_modules", "@openai", "codex");
+    const sibling = join(f.prefix, "lib", "node_modules", ...f.old.artifacts.backing.installName.split("/"));
+    const nestedScope = join(mainRoot, "node_modules", "@openai"); mkdirSync(nestedScope, { recursive: true });
+    renameSync(sibling, join(nestedScope, f.old.artifacts.backing.installName.split("/")[1]!));
+    const before = readFileSync(join(mainRoot, "package.json"), "utf8");
+    const originalFiles = observeCodexCliFileSet([mainRoot]);
+    expect(existsSync(sibling)).toBe(false);
+    const id = await approved(f); let installs = 0;
+    const result = await applyCodexCliUpdate(id, depsFor(f, { install: async invocation => {
+      installs++;
+      f.privateNpm(invocation.args.filter(arg => !arg.startsWith(f.target.artifacts.main.installName + "@file:")));
+      return { terminal: true, exitCode: 17 };
+    } }));
+    expect(installs).toBe(1); expect(result.outcome).toBe("ambiguous");
+    expect(result.reason).toBe("installation_readback_unverified"); expect(result.leaseRetained).toBe(false);
+    expect(result.installedVersion).toBe("1.0.0");
+    expect(sameCodexCliFiles(originalFiles, observeCodexCliFileSet([mainRoot]))).toBe(true);
+    expect(readFileSync(join(mainRoot, "package.json"), "utf8")).toBe(before);
+    expect(JSON.parse(readFileSync(join(sibling, "package.json"), "utf8")).version).toBe(f.target.artifacts.backing.version);
   }, 120_000);
   test.each(["complete-nonzero", "missing-auxiliary", "changed-auxiliary", "main-only", "native-nonexecutable"] as const)(
     "%s is classified by complete readback, not installer exit", async scenario => {

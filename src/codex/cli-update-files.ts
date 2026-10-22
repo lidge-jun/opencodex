@@ -1,10 +1,45 @@
 import { createHash } from "node:crypto";
 import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { MAX_CODEX_MEMBER_BYTES, MAX_CODEX_UNPACKED_BYTES, type CodexArchiveFiles } from "./cli-update-artifacts";
 
 interface FileProof { readonly size: number; readonly digest: string; readonly executable: boolean; readonly mode?: number }
 export type CodexCliFileSet = Map<string, FileProof>;
+export interface CodexCliPreimage {
+  readonly presentRoots: readonly string[];
+  readonly absentRoots: readonly string[];
+  readonly files: CodexCliFileSet;
+}
+/** An absent planned root is evidence too. Reject link/invalid ancestor lanes
+ * instead of treating an inaccessible or redirected tree as simply absent.
+ */
+function rootAbsent(path: string): boolean {
+  try { lstatSync(path); return false; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  let ancestor = dirname(path);
+  for (;;) {
+    try {
+      const stat = lstatSync(ancestor);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync.native(ancestor) !== ancestor) throw new Error("install_tree_unverified");
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" || dirname(ancestor) === ancestor) throw error;
+      ancestor = dirname(ancestor);
+    }
+  }
+}
+export function observeCodexCliPreimage(roots: readonly string[]): CodexCliPreimage {
+  const presentRoots: string[] = [], absentRoots: string[] = [];
+  for (const root of new Set(roots)) (rootAbsent(root) ? absentRoots : presentRoots).push(root);
+  const files = observeCodexCliFileSet(presentRoots);
+  if (absentRoots.some(root => !rootAbsent(root))) throw new Error("install_tree_changed");
+  return { presentRoots, absentRoots, files };
+}
+export function sameCodexCliPreimage(left: CodexCliPreimage, right: CodexCliPreimage): boolean {
+  const sameRoots = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every(root => b.includes(root));
+  return sameRoots(left.presentRoots, right.presentRoots) && sameRoots(left.absentRoots, right.absentRoots)
+    && sameCodexCliFiles(left.files, right.files);
+}
 /** Full bounded regular-file observation of the selected package roots only.
  * Ancestor/path links, nonregular files and changed identities refuse it.
  * Big members are hashed in 64 KiB chunks, never retained in memory.

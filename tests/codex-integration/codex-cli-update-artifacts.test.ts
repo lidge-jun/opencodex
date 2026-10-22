@@ -4,13 +4,13 @@ import { codexCliUpdatePlanId } from "../../src/codex/cli-update-plan";
 import { fixtureArtifact, fixtureArtifactSet, fixtureTar } from "../helpers/codex-cli-apply-artifact";
 import { applyCodexCliUpdate, verifyInstalledCodexVersion } from "../../src/codex/cli-update-apply";
 import { parseCodexCliUpdateArgs, handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
-import { closeSync, ftruncateSync, mkdtempSync, openSync, readFileSync } from "node:fs";
+import { closeSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCodexCliApplyFixture } from "../helpers/codex-cli-apply-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { sameCodexCliFiles, type CodexCliFileSet } from "../../src/codex/cli-update-files";
+import { observeCodexCliPreimage, sameCodexCliPreimage, sameCodexCliFiles, type CodexCliFileSet } from "../../src/codex/cli-update-files";
 
 describe("Codex CLI apply artifacts", () => {
   test("real npm installs main and platform aliases from local tarballs into a private prefix offline", () => {
@@ -54,6 +54,22 @@ describe("Codex CLI apply artifacts", () => {
     expect(sameCodexCliFiles(target, observed)).toBe(false);
     const original: CodexCliFileSet = new Map([["data", { size: 1, digest: "same", executable: false, mode: 0o644 }]]);
     expect(sameCodexCliFiles(original, new Map([["data", { size: 1, digest: "same", executable: false, mode: 0o600 }]]))).toBe(false);
+  });
+  test("preimage tracks absent target roots in addition to the unchanged selected main/nested backing", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-apply-preimage-")));
+    try {
+      const main = join(root, "main"), nested = join(main, "node_modules", "backing"), target = join(root, "new-backing");
+      mkdirSync(nested, { recursive: true }); writeFileSync(join(main, "package.json"), "old main\n");
+      writeFileSync(join(nested, "native"), "old native\n");
+      const roots = [main, nested, main, target];
+      const before = observeCodexCliPreimage(roots);
+      expect(before.absentRoots).toEqual([target]); expect(before.presentRoots).toEqual([main, nested]);
+      expect(sameCodexCliPreimage(before, observeCodexCliPreimage(roots))).toBe(true);
+      mkdirSync(target); // Even an empty newly created root is a partial mutation.
+      expect(sameCodexCliPreimage(before, observeCodexCliPreimage(roots))).toBe(false);
+      writeFileSync(join(target, "native"), "new native\n");
+      expect(sameCodexCliPreimage(before, observeCodexCliPreimage(roots))).toBe(false);
+    } finally { removeTreeWithRetry(root); }
   });
   test("same-version backing integrity drift changes the approved plan identity", () => {
     const f = fixtureArtifactSet();

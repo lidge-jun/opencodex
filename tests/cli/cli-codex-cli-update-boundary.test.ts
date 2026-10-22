@@ -479,9 +479,15 @@ const result = await handleCodexCliUpdateCommand(process.argv.slice(4), {
       requireEvidence(equal(captureCodexCliTransportEnv(options.env)), "npm transport mismatch");
       requireEvidence(options.env.PATH === ${JSON.stringify(tools)}, "npm PATH mismatch");
       queries++;
-      return { status: 0, stdout: args.includes("version") ? "1.1.0"
-        : args.includes("dist.integrity") ? "sha512-" + Buffer.alloc(64, 7).toString("base64")
-        : "https://registry.npmjs.org/@openai/codex/-/codex-1.1.0.tgz", stderr: "" };
+      requireEvidence(args[0] === "view" && args.includes("--json"), "exact artifact metadata query missing");
+      const requested = args[1].slice(args[1].lastIndexOf("@") + 1);
+      const version = requested === "latest" ? "1.1.0" : requested;
+      return { status: 0, stdout: JSON.stringify({ name: "@openai/codex", version,
+        optionalDependencies: version === "1.1.0" ? Object.fromEntries(
+          ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"]
+            .map(suffix => ["@openai/codex-" + suffix, "npm:@openai/codex@1.1.0-" + suffix])) : undefined,
+        dist: { integrity: "sha512-" + Buffer.alloc(64, 7).toString("base64"),
+          tarball: "https://registry.npmjs.org/@openai/codex/-/codex-" + version + ".tgz" } }), stderr: "" };
     },
   }),
 });

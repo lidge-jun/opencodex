@@ -21,6 +21,7 @@ export function privateNpm(root: string, args: string[]) {
  * This exercises published Node -> Bun CLI -> resolver/provenance -> plan/apply.
  */
 export function createCodexCliApplyFixture(root: string, platform: NodeJS.Platform = process.platform, arch = process.arch, targetNativeSource?: string) {
+  root = realpathSync.native(root);
   const prefix = join(root, "prefix"), home = join(root, "home"), temporaryRoot = join(root, "tmp"), fakeBin = join(root, "bin");
   for (const dir of [prefix, home, temporaryRoot, fakeBin]) mkdirSync(dir, { recursive: true });
   const versions = ["1.0.0", "1.1.0"].map(version => {

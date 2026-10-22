@@ -12,7 +12,7 @@ import { verifyCodexCliArchive,
   verifiedCodexCliContent, type CodexCliArtifact } from "./cli-update-artifacts";
 import { acquireCodexCliApplyLease } from "./cli-update-lease";
 import { scanCodexSessionProcesses } from "./app-server-processes";
-import { observeCodexCliFileSet, codexCliExpectedFiles, sameCodexCliFiles } from "./cli-update-files";
+import { observeCodexCliFileSet, observeCodexCliPreimage, sameCodexCliPreimage, codexCliExpectedFiles, sameCodexCliFiles } from "./cli-update-files";
 
 export interface CodexCliApplyResult {
   readonly outcome: "refused" | "applied" | "not_applied" | "ambiguous";
@@ -154,6 +154,7 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     if (!artifacts || artifacts.platform !== (deps.platform ?? process.platform)
       || artifacts.arch !== (deps.inspectionDeps?.arch ?? process.arch)) return result("refused", "target_artifacts_unverified");
     staging = mkdtempSync(join(deps.temporaryRoot ?? tmpdir(), "ocx-codex-cli-apply-"));
+    staging = realpathSync.native(staging);
     const paths: string[] = [];
     for (const [index, artifact] of [artifacts.main, artifacts.backing].entries()) {
       let path: string;
@@ -169,8 +170,10 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     const main = await verifyCodexCliArchive(paths[0]!, artifacts.main);
     const backing = await verifyCodexCliArchive(paths[1]!, artifacts.backing);
     const expectedContent = verifiedCodexCliContent(artifacts, main, backing);
-    const originalRoots = [evidence.packageRoot, ...(evidence.backingRoot ? [evidence.backingRoot] : [])];
-    const originalFiles = observeCodexCliFileSet(originalRoots);
+    const targetMainRoot = join(prefix, "lib", "node_modules", ...artifacts.main.installName.split("/"));
+    const backingRoot = join(prefix, "lib", "node_modules", ...artifacts.backing.installName.split("/"));
+    const originalRoots = [evidence.packageRoot, ...(evidence.backingRoot ? [evidence.backingRoot] : []), targetMainRoot, backingRoot];
+    const original = observeCodexCliPreimage(originalRoots);
     // Metadata, content, selection and process observation are renewed after
     // potentially slow downloads; a final synchronous process check precedes spawn.
     const finalPlan = await freshPlan();
@@ -209,7 +212,6 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     if (realpathSync.native(prefix) !== prefix || prefixAfter.dev !== prefixIdentity.dev || prefixAfter.ino !== prefixIdentity.ino) {
       return result("ambiguous", "installation_prefix_changed");
     }
-    const backingRoot = join(prefix, "lib", "node_modules", ...artifacts.backing.installName.split("/"));
     if (after.managed && afterEvidence?.prefix === prefix && afterEvidence.launcher === evidence.launcher
       && after.packageVersion === targetVersion && after.installContentDigest === expectedContent
       && sameCodexCliFiles(codexCliExpectedFiles([[afterEvidence.packageRoot, main], [backingRoot, backing]]),
@@ -228,7 +230,7 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     }
     if (afterEvidence?.prefix === prefix && after.managed && after.packageVersion === first.packageVersion
       && after.installContentDigest === plan.installContentDigest
-      && sameCodexCliFiles(originalFiles, observeCodexCliFileSet(originalRoots))
+      && sameCodexCliPreimage(original, observeCodexCliPreimage(originalRoots))
       && codexCliMutationSelectionMatches(afterEvidence, freshInspection(deps))) return result("not_applied", "original_install_unchanged");
     return result("ambiguous", "installation_readback_unverified");
   } catch {

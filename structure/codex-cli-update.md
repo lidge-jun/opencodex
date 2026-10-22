@@ -71,6 +71,8 @@ exact versions, canonical SHA-512 integrity and official registry tarball URLs; 
 platform and inspection architecture contribute to plan identity. Platform aliases whose published
 manifest name is also `@openai/codex` are modeled explicitly. The existing isolated npm environment,
 cwd, cache and distinct npmrc boundary is reused for metadata, exact-version pack and install calls.
+The owned staging directory is canonicalized immediately after creation, so symlinked temporary roots
+and macOS's /var alias are supported without accepting a linked archive file.
 `src/codex/cli-update-artifacts.ts` streams compressed integrity and tar validation with independent
 256 MiB compressed, 512 MiB total unpacked, 384 MiB member and 4,096 member bounds. Only small
 manifest/entrypoint bytes are retained; native and auxiliary members retain size/mode/hash metadata.
@@ -84,6 +86,9 @@ refuses; cancellation during an admitted npm child waits for its close rather th
 and staging remain held while the installer is live or uncertain. There is no automatic retry or rollback.
 `src/codex/cli-update-files.ts` compares the complete bounded regular-file sets after installation,
 including auxiliary members and executable status; original-state readback also compares original modes.
+The preimage covers selected roots and every planned main/backing mutation root, recording both full
+existing file sets and absent roots. A newly created sibling backing cannot be called unchanged merely
+because the previously selected nested backing and main package still match.
 Required launcher/native paths must also pass the current user's X_OK check; another user's executable bit alone is insufficient.
 After file/selection readback, the selected launcher runs with `--version` in an owned home/temp sandbox,
 with 16 KiB output and an eight-second deadline. Normal exit and the exact target version are required.
