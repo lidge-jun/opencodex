@@ -730,6 +730,7 @@
     "codex-transition-state-race.test.ts": "codex-integration",
     "codex-transition-state.test.ts": "codex-integration",
     "codex-user-identity.test.ts": "codex-integration",
+    "codex-windows-current-sid.test.ts": "codex-integration",
     "codex-v2-gate.test.ts": "codex-integration",
     "codex-agent-thread-limit.test.ts": "codex-integration",
     "codex-warmup.test.ts": "codex-integration",
