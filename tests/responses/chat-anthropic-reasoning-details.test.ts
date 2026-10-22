@@ -394,4 +394,35 @@ describe("Anthropic reasoning state stays off the native Chat lane to other prov
     // Native passthrough preserves caller message objects verbatim — scope stays Anthropic-only.
     expect(wireAssistant.reasoning_details).toEqual(foreign);
   });
+
+  test("state on non-assistant messages reaches the openai-chat upstream as plaintext only", async () => {
+    // The eligibility scan is role-agnostic on purpose: the native lane forwards caller
+    // message objects verbatim on any role, so Anthropic state sitting on a user, system or
+    // developer message would disclose the signature and redacted ciphertext exactly as an
+    // assistant slot would. The bridge projects only plaintext whatever the slot.
+    const bodies = chatTransport();
+    const details = ANTHROPIC_HISTORY[0]![1];
+    await sendChat([
+      { role: "user", content: "hi", reasoning_details: details },
+      { role: "system", content: "s", reasoning_details: details },
+      { role: "developer", content: "d", reasoning_details: details },
+    ]);
+    expect(bodies).toHaveLength(1);
+    const serialized = JSON.stringify(bodies[0]);
+    expect(serialized).not.toContain(SIGNATURES[0]);
+    expect(serialized).not.toContain(REDACTED);
+    expect(serialized).not.toContain("reasoning_details");
+  });
+
+  test("another provider's reasoning details keep the native passthrough on a non-assistant role", async () => {
+    // The lane is verbatim on every role, which is why the Anthropic-state scan cannot
+    // afford to look at assistant messages only.
+    const bodies = chatTransport();
+    const foreign = [
+      { type: "reasoning.text", text: THINKING[0], format: "minimax-response-v1", index: 0 },
+    ];
+    await sendChat([{ role: "user", content: "hi", reasoning_details: foreign }]);
+    const wireUser = (bodies[0]!.messages as Item[]).find(m => m.role === "user")!;
+    expect(wireUser.reasoning_details).toEqual(foreign);
+  });
 });

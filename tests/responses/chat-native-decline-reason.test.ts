@@ -64,6 +64,22 @@ describe("native Chat decline reasons", () => {
     expect(isNativeChatRouteEligible(route(), { messages: [assistant] })).toBe(false);
   });
 
+  test("the same state on a user, system, developer or tool message declines the same way", () => {
+    // Native passthrough preserves every caller message object, not only assistant turns, so
+    // the scan is role-agnostic: a signature or redacted payload is the same disclosure in
+    // whichever slot it sits.
+    const details = [
+      { type: "reasoning.encrypted", data: "ciphertext", format: "anthropic-claude-v1" },
+      { type: "reasoning.text", text: "thinking", signature: "SyntheticStepOneSignature0000==", format: "anthropic-claude-v1" },
+    ];
+    for (const role of ["user", "system", "developer"]) {
+      expect(nativeChatDeclineReason(route(), { messages: [{ role, content: "hi", reasoning_details: details }] }))
+        .toBe("opaque-state-stripped");
+    }
+    expect(nativeChatDeclineReason(route(), { messages: [{ role: "tool", tool_call_id: "call_1", content: "r", reasoning_details: details }] }))
+      .toBe("opaque-state-stripped");
+  });
+
   test("unsigned or foreign-format reasoning details remain native-eligible", () => {
     const assistant = { role: "assistant", reasoning_details: [
       { type: "reasoning.text", text: "thinking", format: "minimax-response-v1" },
