@@ -130,4 +130,15 @@ describe("Command Code insufficient-credit refusal", () => {
     expect(response.headers.get("x-opencodex-upstream-status")).toBe("400");
     expect(await response.json()).toEqual(CREDITS_EXHAUSTED);
   });
+
+  test("re-throws the caller abort reason instead of failing open", async () => {
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled");
+    const adapter = adapterWith((async () => {
+      controller.abort(reason);
+      return new Response(JSON.stringify(CREDITS_EXHAUSTED), { status: 400 });
+    }) as typeof globalThis.fetch);
+    await expect(adapter.fetchResponse(await adapter.buildRequest(parsed()), { abortSignal: controller.signal }))
+      .rejects.toBe(reason);
+  });
 });

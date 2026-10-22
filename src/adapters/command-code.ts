@@ -512,7 +512,8 @@ async function normalizeCommandCodeCreditRefusal(response: Response, signal?: Ab
     headers.set("x-opencodex-upstream-status", "400");
     headers.set("x-opencodex-refusal", "insufficient-credits");
     return new Response(response.body, { status: 429, statusText: "Too Many Requests", headers });
-  } catch {
+  } catch (error) {
+    if (signal?.aborted && error === signal.reason) throw error;
     return response;
   }
 }
