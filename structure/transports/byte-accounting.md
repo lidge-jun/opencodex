@@ -93,7 +93,12 @@ still measure the uncompressed body.
 ## Raised HTTP body admission
 
 `src/server/inbound-body-admission.ts` reserves the full resolved `maxInboundBodyBytes` allowance
-from the process-wide 2 GiB budget in `src/server/inbound-body-budget.ts` when it exceeds the 256 MiB default.
+from the process-wide budget in `src/server/inbound-body-budget.ts` when it exceeds the 256 MiB default.
+`maxConcurrentInboundBodyBytes` preserves a 512 MiB default; an operator may explicitly select
+512 MiB through 2 GiB. `src/lib/inbound-body-policy.ts` resolves omission, zero or invalid numbers to
+512 MiB and clamps positive safe integers to that range. Startup captures the setting for all
+listeners; a config edit requires restart. Configuration changes the existing owner without
+discarding active leases or FIFO waiters; lowering capacity cannot erase outstanding charges.
 `src/server/index.ts` owns this lease in `runAdmittedHttpTurn`, after authentication and origin
 checks, before any request body is read. Default and smaller allowances do not consume this budget.
 Missing or small Content-Length and compressed wire bodies do not reduce the upload reservation.
@@ -122,9 +127,11 @@ protocol handlers, with HTTP 503, `Retry-After: 1`, and code
 `server_busy`; Messages/count_tokens use the Anthropic `error`/`overloaded_error` envelope.
 The HTTP owner preserves receiving-listener CORS and records the refusal without reading the body.
 
-This is an allowance budget, not a measured RSS or parsed-heap cap. Raising its ceiling from 512 MiB
-to 2 GiB permits four full 512 MiB uploads and increases potential peak memory on raised-limit
-deployments. Parsed small requests can overlap beyond four while their measured charges fit.
+This is an allowance budget, not a measured RSS or parsed-heap cap. Explicitly selecting 2 GiB
+permits four full 512 MiB uploads and increases potential peak memory on raised-limit deployments.
+With the default 512 MiB budget, even a one-byte charge prevents another full 512 MiB allowance;
+shrinking alone does not resolve that case. Parsed small requests with an explicitly larger
+budget can overlap beyond four while their measured charges fit. Host RAM is not auto-detected.
 It does not bound state beyond the HTTP lifetime or change default-cap concurrency.
 `tests/server/inbound-body-admission.test.ts` covers lifecycle, cancellation races, protocol
 envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` covers FIFO/accounting.

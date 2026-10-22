@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import {
   inboundBodyBudget,
-  MAX_CONCURRENT_INBOUND_BODY_BYTES,
   MAX_QUEUED_INBOUND_BODIES,
 } from "../../src/server/inbound-body-budget";
 
 /** Fill admission counters and its queue without allocating request-sized bodies. */
 export async function saturateInboundBodyBudget(): Promise<() => Promise<void>> {
+  const capacity = inboundBodyBudget.capacity();
   const holder = await inboundBodyBudget.acquire(
-    MAX_CONCURRENT_INBOUND_BODY_BYTES, new AbortController().signal, 0,
+    capacity, new AbortController().signal, 0,
   );
   assert.ok(holder, "fixture requires an idle shared inbound body budget");
   const controllers: AbortController[] = [];
@@ -29,7 +29,7 @@ export async function saturateInboundBodyBudget(): Promise<() => Promise<void>> 
       waiting.push(inboundBodyBudget.acquire(1, controller.signal).catch(error => error));
     }
     assert.deepEqual(inboundBodyBudget.snapshot(), {
-      reservedBytes: MAX_CONCURRENT_INBOUND_BODY_BYTES,
+      reservedBytes: capacity,
       activeLeases: 1,
       queuedRequests: MAX_QUEUED_INBOUND_BODIES,
     });

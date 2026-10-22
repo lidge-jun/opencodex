@@ -8,7 +8,7 @@ import { addFinalRequestLog, markLocalRequestLogRefusal } from "./request-log";
 import type { WorkflowRefusalLog } from "./workflow-refusal";
 import { inboundBodyBudget, bindInboundBodyLease, type InboundBodyBudget } from "./inbound-body-budget";
 
-export { MAX_CONCURRENT_INBOUND_BODY_BYTES } from "./inbound-body-budget";
+export { configureInboundBodyBudget, MAX_CONCURRENT_INBOUND_BODY_BYTES } from "./inbound-body-budget";
 
 // Match the HTTP routes whose JSON readers use maxInboundBodyBytes. Keep the
 // current image/search/count_tokens support; management, audio, context relay,

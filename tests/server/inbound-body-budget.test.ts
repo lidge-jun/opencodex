@@ -2,6 +2,9 @@ import { describe, expect, spyOn, test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   createInboundBodyBudget,
+  configureInboundBodyBudget,
+  DEFAULT_CONCURRENT_INBOUND_BODY_BYTES,
+  inboundBodyBudget,
   INBOUND_BODY_QUEUE_TIMEOUT_MS,
   MAX_CONCURRENT_INBOUND_BODY_BYTES,
   MAX_QUEUED_INBOUND_BODIES,
@@ -17,9 +20,67 @@ function assertEmpty(budget: InboundBodyBudget) {
 
 describe("inbound body budget", () => {
   test("bounds the shared allowance, waiting uploads and wait duration", () => {
+    expect(DEFAULT_CONCURRENT_INBOUND_BODY_BYTES).toBe(512 * 1024 * 1024);
     expect(MAX_CONCURRENT_INBOUND_BODY_BYTES).toBe(2 * 1024 * 1024 * 1024);
     expect(MAX_QUEUED_INBOUND_BODIES).toBe(32);
     expect(INBOUND_BODY_QUEUE_TIMEOUT_MS).toBe(120_000);
+  });
+
+  test("explicit startup settings preserve the same shared owner and zero restores its default", async () => {
+    const owner = inboundBodyBudget;
+    const lease = await owner.acquire(1, freshSignal(), 0);
+    assert.ok(lease);
+    try {
+      configureInboundBodyBudget(MAX_CONCURRENT_INBOUND_BODY_BYTES);
+      assert.equal(inboundBodyBudget, owner);
+      assert.equal(owner.capacity(), MAX_CONCURRENT_INBOUND_BODY_BYTES);
+      configureInboundBodyBudget(0);
+      assert.equal(owner.capacity(), DEFAULT_CONCURRENT_INBOUND_BODY_BYTES);
+      assert.deepEqual(owner.snapshot(), { reservedBytes: 1, activeLeases: 1, queuedRequests: 0 });
+    } finally { lease.release(); configureInboundBodyBudget(); }
+  });
+
+  test("raising capacity wakes FIFO waiters without erasing active charges", async () => {
+    const budget = createInboundBodyBudget(100);
+    const first = await budget.acquire(100, freshSignal());
+    assert.ok(first);
+    const pending = budget.acquire(80, freshSignal());
+    budget.setCapacity(200);
+    const second = await pending;
+    assert.ok(second);
+    try {
+      assert.deepEqual(budget.snapshot(), { reservedBytes: 180, activeLeases: 2, queuedRequests: 0 });
+    } finally { first.release(); second.release(); }
+    assertEmpty(budget);
+  });
+
+  test("lowering capacity retains outstanding charges until the FIFO head fits", async () => {
+    const budget = createInboundBodyBudget(100);
+    const first = await budget.acquire(80, freshSignal());
+    assert.ok(first);
+    const pending = budget.acquire(60, freshSignal());
+    let second: InboundBodyLease | null = null;
+    try {
+      budget.setCapacity(60);
+      assert.deepEqual(budget.snapshot(), { reservedBytes: 80, activeLeases: 1, queuedRequests: 1 });
+      assert.equal(await budget.acquire(1, freshSignal(), 0), null);
+      first.shrink(20);
+      assert.deepEqual(budget.snapshot(), { reservedBytes: 20, activeLeases: 1, queuedRequests: 1 });
+      first.release();
+      second = await pending;
+      assert.ok(second);
+      assert.deepEqual(budget.snapshot(), { reservedBytes: 60, activeLeases: 1, queuedRequests: 0 });
+    } finally { first.release(); (second ?? await pending)?.release(); }
+    assertEmpty(budget);
+  });
+
+  test("invalid capacity changes preserve the current budget", () => {
+    const budget = createInboundBodyBudget(100);
+    for (const invalid of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => budget.setCapacity(invalid), RangeError);
+      assert.equal(budget.capacity(), 100);
+    }
+    assertEmpty(budget);
   });
 
   for (const capacity of [0, -1, 0.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1]) {
