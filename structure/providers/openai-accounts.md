@@ -361,13 +361,9 @@ Entries are bounded, process-local and expiring, and are keyed by the admission 
 root session. Two keys therefore cannot observe or overwrite each other's ownership even when both
 resolve to one ChatGPT workspace, and rotating a key mints a new principal instead of inheriting
 the previous holder's sessions. `resolveContextPrincipal` resolves that principal from the opencodex API key the request
-presents, on both the recording and the relay path so the two agree. A remote bind supplies it
-through admission. A loopback bind admits without reading a token, so the key is resolved from the
-request only for a loopback admission; this adds identity where the caller volunteered it rather
-than admitting anyone new, and changes neither admission nor which credential goes upstream. The
-built-in loopback injection cannot carry that header, so the relay is unavailable through the
-default Codex integration and refuses instead of inferring an owner. Making loopback callers
-identifiable is an open maintainer decision, not a gap to be closed by relaxing the refusal.
+presents, on both the recording and the relay path so the two agree. A remote bind supplies it through admission. On loopback, Responses and context-relay routes identify a valid optional opencodex key and retain its principal and credential source alongside `listener: "loopback"`; requests without a matched key retain anonymous loopback admission. Context routes preserve their `x-api-key` support. An opencodex Bearer key on these routes enables stored-main credential substitution in Direct mode, so the proxy key is not forwarded upstream. Listener provenance continues to govern local-only behavior independently of key identity.
+
+The built-in loopback injection does not supply an opencodex key. Context relay therefore remains unavailable through the default Codex integration; a client must explicitly supply a recognized key to establish ownership. Missing identity is refused rather than inferred from the local connection.
 
 A workspace id identifies an organization, so an entry also binds the stable user claim carried by
 the accepted credential. That claim is read without signature verification, which is why upstream
