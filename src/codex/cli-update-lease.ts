@@ -13,6 +13,7 @@ export function acquireCodexCliApplyLease(prefix: string): { release(): boolean 
   const record = JSON.stringify({ version: 1, pid: process.pid, token: randomUUID() });
   const release = () => {
     let current: number | undefined;
+    let released = false;
     try {
       if (!lockIdentity || !ownerIdentity) return false;
       const directory = lstatSync(path);
@@ -28,9 +29,12 @@ export function acquireCodexCliApplyLease(prefix: string): { release(): boolean 
       unlinkSync(owner);
       rmdirSync(path);
       lockIdentity = undefined;
-      return true;
+      released = true;
     } catch { return false; }
-    finally { if (current !== undefined) closeSync(current); }
+    finally {
+      if (current !== undefined) { try { closeSync(current); } catch { released = false; } }
+    }
+    return released;
   };
   try {
     const root = lstatSync(prefix);
@@ -41,11 +45,15 @@ export function acquireCodexCliApplyLease(prefix: string): { release(): boolean 
     fd = openSync(owner, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     ownerIdentity = fstatSync(fd);
     writeFileSync(fd, record);
-    closeSync(fd);
+    const completed = fd;
     fd = undefined;
+    closeSync(completed);
     return { release };
   } catch {
-    if (fd !== undefined) closeSync(fd);
+    if (fd !== undefined) {
+      const owned = fd; fd = undefined;
+      try { closeSync(owned); } catch { return null; }
+    }
     // Only a positively identified owner is eligible for cleanup. Empty or
     // suspicious directories intentionally remain busy for operator inspection.
     if (ownerIdentity) release();

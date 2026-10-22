@@ -23,6 +23,20 @@ export interface CodexCliApplyResult {
   readonly installerExitCode: number | null;
   readonly leaseRetained: boolean;
   readonly verificationPid: number | null;
+  readonly cleanupErrors: readonly CodexCliApplyCleanupError[];
+}
+export type CodexCliApplyCleanupError = "lease_release_unverified" | "lease_release_exception" | "staging_cleanup_failed";
+/** Every cleanup phase is attempted even if another fails. Preserve the
+ * computed readback outcome and expose path-free cleanup uncertainty separately.
+ */
+export function cleanupCodexCliApply(lease: ReturnType<typeof acquireCodexCliApplyLease>, staging?: string) {
+  const cleanupErrors: CodexCliApplyCleanupError[] = [];
+  let leaseRetained = false;
+  try { if (lease && !lease.release()) { leaseRetained = true; cleanupErrors.push("lease_release_unverified"); } }
+  catch { leaseRetained = true; cleanupErrors.push("lease_release_exception"); }
+  try { if (staging) rmSync(staging, { recursive: true }); }
+  catch { cleanupErrors.push("staging_cleanup_failed"); }
+  return Object.freeze({ leaseRetained, cleanupErrors: Object.freeze(cleanupErrors) });
 }
 interface VersionResult { readonly terminal: boolean; readonly ok: boolean; readonly pid: number | null }
 export interface CodexCliApplyDeps extends CodexCliUpdatePlanDeps {
@@ -130,7 +144,7 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
   let verificationPid: number | null = null;
   let output: CodexCliApplyResult | undefined;
   const result = (outcome: CodexCliApplyResult["outcome"], reason: string): CodexCliApplyResult =>
-    output = { outcome, reason, planId, installedVersion, targetVersion, installerExitCode: exitCode, leaseRetained: keepLease, verificationPid };
+    output = { outcome, reason, planId, installedVersion, targetVersion, installerExitCode: exitCode, leaseRetained: keepLease, verificationPid, cleanupErrors: [] };
   try {
     if (!/^[0-9a-f]{32}$/.test(planId)) return result("refused", "invalid_plan_id");
     if ((deps.platform ?? process.platform) === "win32") return result("refused", "windows_inspection_deferred");
@@ -237,9 +251,9 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     return result(started ? "ambiguous" : "refused", started ? "installer_or_readback_error" : "preparation_failed");
   } finally {
     if (!keepLease) {
-      if (lease && !lease.release() && output) (output as { leaseRetained: boolean }).leaseRetained = true;
-      if (staging) { try { rmSync(staging, { recursive: true }); } catch { /* owned residue; never retry install */ } }
+      const cleanup = cleanupCodexCliApply(lease, staging);
+      if (output) Object.assign(output, cleanup);
     }
-    if (output) Object.freeze(output);
+    if (output) { Object.freeze(output.cleanupErrors); Object.freeze(output); }
   }
 }

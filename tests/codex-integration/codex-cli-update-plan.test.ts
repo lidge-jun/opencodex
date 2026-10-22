@@ -448,9 +448,10 @@ describe("registry configuration isolation", () => {
       const field = queriedField(call);
       if (argvLine(call).includes("--json")) {
         const version = (outputs.version ?? "").trim();
-        const backing = argvLine(call).includes("@openai/codex-linux-x64@");
-        return { status: 0, stdout: JSON.stringify({ name: backing ? "@openai/codex-linux-x64" : "@openai/codex", version,
-          optionalDependencies: backing ? undefined : { "@openai/codex-linux-x64": version },
+        const backing = argvLine(call).match(/@openai\/codex-(?:linux|darwin)-(?:x64|arm64)(?=@)/)?.[0];
+        return { status: 0, stdout: JSON.stringify({ name: backing ?? "@openai/codex", version,
+          optionalDependencies: backing ? undefined : Object.fromEntries(["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]
+            .map(suffix => [`@openai/codex-${suffix}`, version])),
           dist: { integrity: (outputs["dist.integrity"] ?? "").trim(), tarball: (outputs["dist.tarball"] ?? "").trim() } }), stderr: "" };
       }
       return { status: 0, stdout: outputs[field] ?? "", stderr: "" };
@@ -581,14 +582,14 @@ describe("registry configuration isolation", () => {
     }
   });
 
-  test("the plan resolves registry evidence through the attested launcher environment", async () => {
+  test.each(["x64", "arm64"] as const)("the plan resolves registry evidence through the attested %s launcher environment", async arch => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
     const boundEnv = markerBoundEnv();
     const plan = await applicablePlan({
       // Dropping the resolveTarget stub exercises the real resolver wiring: the
       // provenance snapshot env must reach npm's spawn options.
       resolveTarget: undefined,
-      inspectionDeps: { env: boundEnv },
+      inspectionDeps: { env: boundEnv, arch },
       spawnProcess: spawn,
     });
     expect(plan.targetVersion).toBe("1.4.2");

@@ -77,6 +77,9 @@ and macOS's /var alias are supported without accepting a linked archive file.
 256 MiB compressed, 512 MiB total unpacked, 384 MiB member and 4,096 member bounds. Only small
 manifest/entrypoint bytes are retained; native and auxiliary members retain size/mode/hash metadata.
 Links, traversal, unsupported tar records, dependency-bearing manifests and missing backing files refuse.
+After ReadStream construction it exclusively owns the archive descriptor. The held-fd identity check
+precedes explicit stream destruction, and verification waits for the close event on success and failure;
+pipeline settlement alone is not close completion and the caller never closes that raw fd again.
 
 After artifact preparation, selection/content, the approved metadata and active/unknown process blockers
 are re-observed. npm receives only two verified local tarball specs and an explicit canonical prefix,
@@ -96,4 +99,7 @@ Only this verification's new POSIX process group may be terminated on a deadline
 exit retains lease/staging and reports its PID with an ambiguous result. Existing sessions are never signalled.
 Verified target readback and execution are `applied` even after nonzero installer exit; unchanged full original evidence
 is `not_applied` even after exit zero. Partial, unreadable or uncertain results are `ambiguous`.
+Cleanup failures are path-free `cleanupErrors` alongside the computed outcome. A failed or thrown
+lease release marks retention unverified without preventing staging cleanup; cleanup does not replace
+the readback outcome. Uncertain live installer/version children still retain both lease and staging.
 Windows apply remains refused. Eligible shim recovery, management/status and dashboard apply are separate work.

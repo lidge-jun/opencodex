@@ -335,7 +335,8 @@ export async function handleCodexCliUpdateCommand(
         `installed-version: ${report.installedVersion ?? "unavailable"}`,
         `target-version: ${report.targetVersion ?? "unavailable"}`,
         `lease-retained: ${report.leaseRetained ? "yes" : "no"}`,
-        `verification-pid: ${report.verificationPid ?? "none"}`]);
+        `verification-pid: ${report.verificationPid ?? "none"}`,
+        `cleanup-errors: ${report.cleanupErrors.join(",") || "none"}`]);
     }
   });
   return code;

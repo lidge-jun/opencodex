@@ -1,14 +1,16 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { codexCliArtifactSet, codexCliArtifactSetDigest, MAX_CODEX_ARCHIVE_BYTES, MAX_CODEX_MEMBER_BYTES, verifyCodexCliArchive, verifiedCodexCliContent } from "../../src/codex/cli-update-artifacts";
 import { codexCliUpdatePlanId } from "../../src/codex/cli-update-plan";
 import { fixtureArtifact, fixtureArtifactSet, fixtureTar } from "../helpers/codex-cli-apply-artifact";
-import { applyCodexCliUpdate, verifyInstalledCodexVersion } from "../../src/codex/cli-update-apply";
+import { applyCodexCliUpdate, cleanupCodexCliApply, verifyInstalledCodexVersion } from "../../src/codex/cli-update-apply";
+import { acquireCodexCliApplyLease } from "../../src/codex/cli-update-lease";
 import { parseCodexCliUpdateArgs, handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
 import { closeSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCodexCliApplyFixture } from "../helpers/codex-cli-apply-fixture";
+import { createCodexCliApplyFixture, waitForApplyAdmission } from "../helpers/codex-cli-apply-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { observeCodexCliPreimage, sameCodexCliPreimage, sameCodexCliFiles, type CodexCliFileSet } from "../../src/codex/cli-update-files";
 
@@ -85,6 +87,81 @@ describe("Codex CLI apply artifacts", () => {
     const f = fixtureArtifactSet(); const changed = Buffer.from(f.main); changed[changed.length - 1] ^= 1;
     await expect(verifyCodexCliArchive(changed, f.artifacts.main)).rejects.toThrow();
   });
+  test.each(["valid", "corrupt"] as const)("real-file archive %s closes its stream before return and preserves a reused sentinel fd", async kind => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-archive-lifetime-")));
+    const f = fixtureArtifactSet(), path = join(root, "artifact.tgz"), sentinelPath = join(root, "sentinel");
+    writeFileSync(path, kind === "valid" ? f.main : Buffer.from("not gzip")); writeFileSync(sentinelPath, "sentinel");
+    const create = fs.createReadStream;
+    let captured: { fd: number; closed: boolean; heldAtEnd: boolean; close: Promise<void> } | undefined;
+    const spy = spyOn(fs, "createReadStream").mockImplementation((...args) => {
+      const stream = create(...args);
+      const observed = { fd: Number((args[1] as { fd: number }).fd), closed: false, heldAtEnd: false, close: Promise.resolve() };
+      observed.close = new Promise<void>(resolve => stream.once("close", () => { observed.closed = true; resolve(); }));
+      stream.once("end", () => { try { observed.heldAtEnd = fs.fstatSync(observed.fd).isFile(); } catch { /* assertion below */ } });
+      captured = observed;
+      return stream;
+    });
+    let sentinel: number | undefined;
+    let sentinelIdentity: { dev: number; ino: number } | undefined;
+    try {
+      const verified = await verifyCodexCliArchive(path, f.artifacts.main).then(() => true, () => false);
+      const observed = captured!;
+      expect(observed).toBeDefined();
+      const closedAtReturn = observed.closed;
+      // A stale asynchronous archive close used to target this immediately reused fd.
+      sentinel = openSync(sentinelPath, "r");
+      sentinelIdentity = fs.fstatSync(sentinel);
+      await observed.close;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      let sentinelAlive = false;
+      try {
+        const after = fs.fstatSync(sentinel), bytes = Buffer.alloc(8);
+        sentinelAlive = after.dev === sentinelIdentity.dev && after.ino === sentinelIdentity.ino
+          && fs.readSync(sentinel, bytes, 0, 8, 0) === 8 && bytes.toString() === "sentinel";
+      } catch { /* assertion below */ }
+      expect({ kind, verified, closedAtReturn, sentinelAlive, sentinelReused: sentinel === observed.fd })
+        .toEqual({ kind, verified: kind === "valid", closedAtReturn: true, sentinelAlive: true, sentinelReused: true });
+      if (kind === "valid") expect(observed.heldAtEnd).toBe(true);
+    } finally {
+      spy.mockRestore();
+      if (captured) await captured.close;
+      if (sentinel !== undefined) {
+        try {
+          const owned = fs.fstatSync(sentinel);
+          if (owned.dev === sentinelIdentity?.dev && owned.ino === sentinelIdentity?.ino) closeSync(sentinel);
+        } catch { /* old implementation may have closed the sentinel; no unknown fd is closed */ }
+      }
+      removeTreeWithRetry(root);
+    }
+  });
+  test.skipIf(process.platform === "win32")("real-file archive closure precedes repeated lease acquire/release without touching a sentinel fd", async () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-archive-lease-")));
+    const f = fixtureArtifactSet(), path = join(root, "artifact.tgz"); writeFileSync(path, f.main);
+    const sentinel = openSync(join(root, "sentinel"), "wx+");
+    try {
+      fs.writeSync(sentinel, "sentinel");
+      for (let index = 0; index < 12; index++) {
+        await verifyCodexCliArchive(path, f.artifacts.main);
+        const lease = acquireCodexCliApplyLease(root); expect(lease).not.toBeNull();
+        expect(lease!.release()).toBe(true);
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(fs.fstatSync(sentinel).size).toBe(8);
+      }
+    } finally { closeSync(sentinel); removeTreeWithRetry(root); }
+  });
+  test.skipIf(process.platform === "win32")("lease descriptor-close failure is structured and still permits staging cleanup", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-lease-close-failure-")));
+    const stage = join(root, "stage"); mkdirSync(stage);
+    const lease = acquireCodexCliApplyLease(root); expect(lease).not.toBeNull();
+    const close = fs.closeSync;
+    const spy = spyOn(fs, "closeSync").mockImplementation(fd => {
+      close(fd); throw Object.assign(new Error("injected post-close failure"), { code: "EBADF" });
+    });
+    try {
+      expect(cleanupCodexCliApply(lease, stage)).toEqual({ leaseRetained: true, cleanupErrors: ["lease_release_unverified"] });
+      expect(fs.existsSync(stage)).toBe(false);
+    } finally { spy.mockRestore(); removeTreeWithRetry(root); }
+  });
   test("an oversized tar member refuses from its header before reading or allocating its body", async () => {
     const tar = gunzipSync(fixtureTar({ "package.json": "{}" }));
     tar.write((MAX_CODEX_MEMBER_BYTES + 1).toString(8).padStart(11, "0") + "\0", 124, 12);
@@ -118,6 +195,37 @@ describe("Codex CLI apply artifacts", () => {
   });
 });
 describe("Codex CLI apply consumer", () => {
+  test("admission observes early outcomes and rejections without waiting for an unentered installer", async () => {
+    const never = new Promise<void>(() => {});
+    const result = { outcome: "refused" as const, reason: "installation_busy", planId: "a".repeat(32), installedVersion: null,
+      targetVersion: null, installerExitCode: 17, leaseRetained: false, verificationPid: null, cleanupErrors: [] };
+    await expect(waitForApplyAdmission(never, Promise.resolve(result))).rejects.toThrow("outcome=refused reason=installation_busy installerExitCode=17");
+    await expect(waitForApplyAdmission(never, Promise.reject(new TypeError("fixture rejection")))).rejects.toThrow("apply rejected before admission: TypeError");
+  });
+  test("a lease cleanup exception is structured and cannot prevent staging cleanup", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-apply-cleanup-")));
+    const stage = join(root, "stage"); mkdirSync(stage); writeFileSync(join(stage, "artifact"), "owned fixture");
+    try {
+      const cleanup = cleanupCodexCliApply({ release: () => { throw new Error("private native error"); } }, stage);
+      expect(cleanup).toEqual({ leaseRetained: true, cleanupErrors: ["lease_release_exception"] });
+      expect(fs.existsSync(stage)).toBe(false);
+      expect(Object.isFrozen(cleanup.cleanupErrors)).toBe(true);
+    } finally { removeTreeWithRetry(root); }
+  });
+  test("lease and staging cleanup failures are both retained without native error text", () => {
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-apply-cleanup-")));
+    const stage = join(root, "stage"); mkdirSync(stage);
+    const remove = fs.rmSync;
+    const spy = spyOn(fs, "rmSync").mockImplementation((path, options) => {
+      if (path === stage) throw new Error("private stage path"); return remove(path, options);
+    });
+    try {
+      expect(cleanupCodexCliApply({ release: () => false }, stage)).toEqual({
+        leaseRetained: true, cleanupErrors: ["lease_release_unverified", "staging_cleanup_failed"],
+      });
+      expect(fs.existsSync(stage)).toBe(true);
+    } finally { spy.mockRestore(); removeTreeWithRetry(root); }
+  });
   test("the owned version probe waits for terminal exit and rejects unrelated version output", async () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-apply-version-"));
     try {
@@ -142,7 +250,7 @@ describe("Codex CLI apply consumer", () => {
   test("confirmed apply reaches its consumer with the exact plan ID and prints its public result", async () => {
     const planId = "a".repeat(32); let calls = 0; const logs: string[] = [], log = console.log;
     const report = { outcome: "not_applied" as const, reason: "original_install_unchanged", planId,
-      installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false, verificationPid: null };
+      installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false, verificationPid: null, cleanupErrors: [] };
     try {
       console.log = value => { logs.push(String(value)); };
       expect(await handleCodexCliUpdateCommand(["apply", "--plan-id", planId, "--yes", "--json"], {

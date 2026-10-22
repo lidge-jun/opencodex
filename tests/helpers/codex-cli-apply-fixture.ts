@@ -3,6 +3,19 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFil
 import { dirname, join } from "node:path";
 import { createNpmConfigIsolation, isolatedNpmTarget } from "../../src/codex/cli-update-plan";
 import { fixtureArtifact, fixtureArtifactSet } from "./codex-cli-apply-artifact";
+import type { CodexCliApplyResult } from "../../src/codex/cli-update-apply";
+
+/** Admission waits must also observe an early refusal/rejection. Otherwise a
+ * diagnostic failure before install/fetch entry becomes a misleading timeout.
+ */
+export async function waitForApplyAdmission(admitted: Promise<void>, running: Promise<CodexCliApplyResult>): Promise<void> {
+  const first = await Promise.race([
+    admitted.then(() => ({ kind: "admitted" as const })),
+    running.then(result => ({ kind: "early" as const, result }), error => ({ kind: "rejected" as const, code: error?.code ?? error?.name ?? "unknown" })),
+  ]);
+  if (first.kind === "early") throw new Error(`apply ended before admission: outcome=${first.result.outcome} reason=${first.result.reason} installerExitCode=${first.result.installerExitCode}`);
+  if (first.kind === "rejected") throw new Error(`apply rejected before admission: ${first.code}`);
+}
 
 /** All npm config/cache/prefix/temp effects belong to root; no network or scripts. */
 export function privateNpm(root: string, args: string[]) {

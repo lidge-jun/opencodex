@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { applyCodexCliUpdate, type CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { acquireCodexCliApplyLease } from "../../src/codex/cli-update-lease";
-import { createCodexCliApplyFixture } from "../helpers/codex-cli-apply-fixture";
+import { createCodexCliApplyFixture, waitForApplyAdmission } from "../helpers/codex-cli-apply-fixture";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { codexCliPlatformBacking } from "../../src/codex/cli-install-provenance";
@@ -29,7 +29,7 @@ function depsFor(f: ReturnType<typeof fixture>, overrides: Partial<CodexCliApply
 }
 async function approved(f: ReturnType<typeof fixture>, deps = depsFor(f)) {
   const plan = await createCodexCliUpdatePlan(deps);
-  expect(plan.applicable).toBe(true); expect(plan.planId).toMatch(/^[0-9a-f]{32}$/);
+  expect(plan.applicable, JSON.stringify(plan)).toBe(true); expect(plan.planId).toMatch(/^[0-9a-f]{32}$/);
   return plan.planId!;
 }
 function cli(f: ReturnType<typeof fixture>, args: string[]) {
@@ -59,7 +59,8 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
   }, 120_000);
   test("published CLI packs and applies through a symlinked TMPDIR using canonical staging", () => {
     const f = fixture(); const alias = join(f.root, "tmp-alias");
-    symlinkSync(f.temporaryRoot, alias, "dir"); f.env.TMPDIR = alias;
+    symlinkSync(f.temporaryRoot, alias, "dir");
+    Object.assign(f.env, { TMPDIR: alias, NODE_COMPILE_CACHE: join(f.root, "node-compile-cache") });
     const plan = cli(f, ["plan"]); expect(plan.applicable).toBe(true);
     const result = cli(f, ["apply", "--plan-id", plan.planId, "--yes"]);
     expect(result.outcome).toBe("applied"); expect(result.installedVersion).toBe("1.1.0");
@@ -128,7 +129,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
   test("exit zero with original full files is not_applied", async () => {
     const f = fixture(); const id = await approved(f);
     const result = await applyCodexCliUpdate(id, depsFor(f, { install: async () => ({ terminal: true, exitCode: 0 }) }));
-    expect(result.outcome).toBe("not_applied"); expect(result.installerExitCode).toBe(0);
+    expect(result.outcome, JSON.stringify(result)).toBe("not_applied"); expect(result.installerExitCode).toBe(0);
   }, 120_000);
   test("a newly installed sibling backing with unchanged nested-old main is ambiguous", async () => {
     const f = fixture();
@@ -165,7 +166,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
           "vendor", codexCliPlatformBacking(process.platform, process.arch)!.triple, "bin/codex"), 0o644);
         return { terminal: true, exitCode: scenario === "complete-nonzero" ? 17 : 0 };
       } }));
-      expect(result.outcome).toBe(scenario === "complete-nonzero" ? "applied" : "ambiguous");
+      expect(result.outcome, JSON.stringify(result)).toBe(scenario === "complete-nonzero" ? "applied" : "ambiguous");
       expect(result.leaseRetained).toBe(false);
     }, 120_000,
   );
@@ -184,7 +185,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     const result = await applyCodexCliUpdate(id, depsFor(f, { install: async invocation => {
       f.privateNpm([...invocation.args]); return { terminal: true, exitCode: 0 };
     } }));
-    expect(result.outcome).toBe("ambiguous"); expect(result.reason).toBe("version_readback_unverified");
+    expect(result.outcome, JSON.stringify(result)).toBe("ambiguous"); expect(result.reason, JSON.stringify(result)).toBe("version_readback_unverified");
     expect(result.leaseRetained).toBe(false); expect(result.verificationPid).toBeNull();
   }, 120_000);
   test("uncertain owned version child retains lease/staging and exposes its PID", async () => {
@@ -216,10 +217,12 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     const first = applyCodexCliUpdate(id, depsFor(f, { fetchArtifact: async artifact => {
       entered(); await pending; return artifact.version === "1.1.0" ? f.target.main.bytes : f.target.backing.bytes;
     }, install: async () => ({ terminal: false, exitCode: null }) }));
-    await admitted;
-    const other = await applyCodexCliUpdate(id, depsFor(f));
-    expect(other.reason).toBe("installation_busy");
-    resume(); const result = await first;
+    try {
+      await waitForApplyAdmission(admitted, first);
+      const other = await applyCodexCliUpdate(id, depsFor(f));
+      expect(other.reason, JSON.stringify(other)).toBe("installation_busy");
+    } finally { resume(); await first.catch(() => {}); }
+    const result = await first;
     expect(result.outcome).toBe("ambiguous"); expect(result.leaseRetained).toBe(true);
     expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(true);
     expect(acquireCodexCliApplyLease(f.prefix)).toBeNull();
@@ -243,11 +246,13 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     const running = applyCodexCliUpdate(id, depsFor(f, { signal: controller.signal, install: async () => {
       admitted(); await terminal; return { terminal: true, exitCode: 0 };
     } })).then(result => { done = true; return result; });
-    await started; controller.abort(); await Promise.resolve();
-    expect(done).toBe(false); expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(true);
-    expect(readdirSync(f.temporaryRoot).length).toBeGreaterThan(0);
-    close(); const result = await running;
-    expect(result.outcome).toBe("not_applied"); expect(result.leaseRetained).toBe(false);
+    try {
+      await waitForApplyAdmission(started, running); controller.abort(); await Promise.resolve();
+      expect(done).toBe(false); expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(true);
+      expect(readdirSync(f.temporaryRoot).length).toBeGreaterThan(0);
+    } finally { close(); await running.catch(() => {}); }
+    const result = await running;
+    expect(result.outcome, JSON.stringify(result)).toBe("not_applied"); expect(result.leaseRetained).toBe(false);
     expect(readdirSync(f.temporaryRoot)).toEqual([]);
   }, 120_000);
   test.each(["cancel", "error"] as const)("%s during preparation releases only its own lease", async kind => {
@@ -260,5 +265,18 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     expect(result.outcome).toBe("refused"); expect(installs).toBe(0);
     expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
     expect(readdirSync(f.temporaryRoot)).toEqual([]);
+  }, 120_000);
+  test("lease cleanup failure preserves the original outcome and still removes staging", async () => {
+    const f = fixture(); const id = await approved(f);
+    const result = await applyCodexCliUpdate(id, depsFor(f, {
+      acquireLease: prefix => {
+        const owned = acquireCodexCliApplyLease(prefix); if (!owned) return null;
+        return { release: () => { owned.release(); throw new Error("injected cleanup failure"); } };
+      },
+      install: async () => ({ terminal: true, exitCode: 0 }),
+    }));
+    expect(result.outcome, JSON.stringify(result)).toBe("not_applied");
+    expect(result.cleanupErrors).toEqual(["lease_release_exception"]);
+    expect(result.leaseRetained).toBe(true); expect(readdirSync(f.temporaryRoot)).toEqual([]);
   }, 120_000);
 });

@@ -83,7 +83,16 @@ export async function verifyCodexCliArchive(source: Buffer | string, target: Cod
     try { before = fstatSync(fd); } catch (error) { closeSync(fd); throw error; }
     if (!before.isFile() || before.size > MAX_CODEX_ARCHIVE_BYTES) { closeSync(fd); throw new Error("artifact_file_unverified"); }
   }
-  const input = typeof source === "string" ? createReadStream(source, { fd, autoClose: false, highWaterMark: 64 * 1024 }) : Readable.from([source]);
+  let input: Readable;
+  try {
+    input = typeof source === "string" ? createReadStream(source, { fd, autoClose: false, emitClose: true, highWaterMark: 64 * 1024 }) : Readable.from([source]);
+  } catch (error) { if (fd !== undefined) closeSync(fd); throw error; }
+  // The stream exclusively owns fd after construction. In Bun destroy closes
+  // even with autoClose:false; that option keeps the fd held through our final
+  // identity check, not through an explicit destroy. Never close the raw fd too.
+  let inputError: Error | undefined;
+  input.on("error", error => { inputError = error; });
+  const inputClosed = new Promise<void>(resolve => input.once("close", resolve));
   const archiveHash = createHash("sha512");
   let compressed = 0, unpacked = 0, count = 0, headerSize = 0, padding = 0, trailer = 0;
   let ended = false;
@@ -92,15 +101,17 @@ export async function verifyCodexCliArchive(source: Buffer | string, target: Cod
   const names = new Set<string>();
   let current: { name: string; size: number; mode: number; remaining: number; keep: boolean;
     chunks: Buffer[]; hash: ReturnType<typeof createHash> } | undefined;
-  const tracker = new Transform({ transform(chunk: Buffer, _encoding, callback) {
-    compressed += chunk.length;
-    if (compressed > MAX_CODEX_ARCHIVE_BYTES) return callback(new Error("artifact_compressed_limit"));
-    archiveHash.update(chunk); callback(null, chunk);
-  } });
-  const gunzip = createGunzip({ chunkSize: 64 * 1024 });
-  const pumping = pipeline(input, tracker, gunzip);
-  void pumping.catch(() => {});
+  let tracker: Transform | undefined, gunzip: ReturnType<typeof createGunzip> | undefined, pumping: Promise<void> | undefined;
+  let verified = false;
   try {
+    tracker = new Transform({ transform(chunk: Buffer, _encoding, callback) {
+      compressed += chunk.length;
+      if (compressed > MAX_CODEX_ARCHIVE_BYTES) return callback(new Error("artifact_compressed_limit"));
+      archiveHash.update(chunk); callback(null, chunk);
+    } });
+    gunzip = createGunzip({ chunkSize: 64 * 1024 });
+    pumping = pipeline(input, tracker, gunzip);
+    void pumping.catch(() => {});
     for await (const data of gunzip) {
       const chunk = Buffer.from(data);
       unpacked += chunk.length;
@@ -167,10 +178,13 @@ export async function verifyCodexCliArchive(source: Buffer | string, target: Cod
         || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || lexical.isSymbolicLink()
         || lexical.dev !== before.dev || lexical.ino !== before.ino) throw new Error("artifact_file_changed");
     }
+    verified = true;
   } finally {
-    input.destroy(); tracker.destroy(); gunzip.destroy();
-    await pumping.catch(() => {});
-    if (fd !== undefined) closeSync(fd);
+    input.destroy(); tracker?.destroy(); gunzip?.destroy();
+    await pumping?.catch(() => {});
+    // Reawaiting the pipeline alone does not wait for ReadStream's async close.
+    await inputClosed;
+    if (verified && inputError) throw new Error("artifact_close_unverified");
   }
   const manifestBytes = files.get("package.json")?.bytes;
   if (!manifestBytes || manifestBytes.length > 256 * 1024 || files.has("npm-shrinkwrap.json") || files.has("package-lock.json")) throw new Error("artifact_manifest_unverified");
