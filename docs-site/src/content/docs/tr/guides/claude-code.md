@@ -219,7 +219,7 @@ seçildikten sonra Claude Desktop'ı tamamen kapatıp yeniden açın.
 Picker modu first-party'nin parçasıdır; bu nedenle [first-party hesap riski](#first-party-isteğe-bağlı)
 aynı şekilde geçerlidir.
 
-Üst sunucunun ilk yanıtından önce, 60 saniye boyunca ilerlemeyen picker yüklemesi kapatılır. Üst sunucunun geri basıncı nedeniyle aktarım duraklatıldığında bu boşta kalma sayacı da duraklatılır; yükleme tamamlandığında veya ilk yanıt geldiğinde kaldırılır. Toplam yükleme süresine sabit bir sınır konmaz: ilerleyen büyük ekler ve uzun süre açık kalan yanıt akışları desteklenmeye devam eder.
+Üst sunucunun ilk yanıtından önce, 60 saniye boyunca ilerlemeyen picker yüklemesi kapatılır. Üst sunucunun geri basıncı nedeniyle aktarım duraklatıldığında bu boşta kalma sayacı da duraklatılır; yükleme tamamlandığında veya ilk yanıt geldiğinde kaldırılır. Bu boşta kalma koruması toplam yükleme süresine ek bir sınır getirmez; mevcut çalışma zamanı ve protokol sınırları geçerliliğini korur. Yanıt akışları bu sayacın kapsamı dışındadır.
 
 ## Claude Desktop profili
 
