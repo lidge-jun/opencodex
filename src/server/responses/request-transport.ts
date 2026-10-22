@@ -41,12 +41,14 @@ import {
 import {
   GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST,
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  antigravityModelRefusal,
   eligibleFailoverAccounts,
   forgetGenericFailoverRoster,
   isGenericFailoverProvider,
   isProactivePreferenceEnabled,
   preferredInitialAccount,
   refusalAwareInitialKiroAccount,
+  routeAntigravityModel,
   noteGenericPoolSelection,
 } from "../../oauth/generic-account-failover";
 import { admitGenericSessionAccount, bindGenericSessionAccount, genericSessionAccount, genericSessionAccountEligible, genericSessionAffinityEnabled, preferredGenericSessionAccount } from "../../oauth/generic-session-affinity";
@@ -978,10 +980,16 @@ export async function prepareResponsesTransport(
           ?? refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
           ? preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)
           : null);
+        // #7500: an Antigravity account whose own discovery omits the model is never sent to.
+        // A usable listing (or not-yet-discovered) sibling replaces it, or the request is refused.
+        const modelRoute = routeAntigravityModel(config, route.providerName,
+          proposedAccountId ?? oauthSelection?.accountId, route.modelId);
+        if (modelRoute.kind === "refuse") return formatErrorResponse(403, "permission_error", modelRoute.message);
+        const routedAccountId = modelRoute.kind === "reroute" ? modelRoute.accountId : proposedAccountId;
         // An unchanged active choice must retain the ordinary resolver's terminal-refresh
         // recovery (not the speculative-preference fallback that resolves the same dead grant).
-        const preferredAccountId = genericAffinityMode && proposedAccountId === oauthSelection?.accountId
-          ? null : proposedAccountId;
+        const preferredAccountId = genericAffinityMode && routedAccountId === oauthSelection?.accountId
+          ? null : routedAccountId;
         let safetyAlternateId: string | null = !affinityAccountId && preferredAccountId === refusalAwareId ? refusalAwareId : null;
         // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
         // rotation site, and rotation sites must apply their credential through
@@ -1045,6 +1053,9 @@ export async function prepareResponsesTransport(
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
           return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
+        // Resolution fallbacks and concurrent selection can still land on an omitting account.
+        const unlisted = antigravityModelRefusal(config, route.providerName, admitted.accountId, route.modelId);
+        if (unlisted) return formatErrorResponse(403, "permission_error", unlisted);
         if (kiroLoadEnabled) {
           const transportSignal = options.abortSignal ?? req.signal;
           const lease = await acquireAccountLease("kiro", admitted.accountId, {
