@@ -1,3 +1,4 @@
 {
-  "responses-replay-metadata-principal.test.ts": "responses"
+  "responses-replay-metadata-principal.test.ts": "responses",
+  "responses-combo-replay-principal.test.ts": "responses"
 }

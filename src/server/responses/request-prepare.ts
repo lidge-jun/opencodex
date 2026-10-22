@@ -601,7 +601,9 @@ export async function prepareResponsesRequest(
     // would become enough to read another caller's retained search result. Without a principal
     // bridgeSearchReplayScope yields no scope, so nothing is recorded or restored for it. The
     // field is always rewritten so an absent principal also clears one a reused holder carried.
-    const clientPrincipalId = resolveContextPrincipal(req, config, options.admission);
+    const clientPrincipalId = options.replayPrincipal
+      ? options.replayPrincipal.clientPrincipalId
+      : resolveContextPrincipal(req, config, options.admission);
     parsed._reasoningReplayScope = { ...parsed._reasoningReplayScope, clientPrincipalId };
   }
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
