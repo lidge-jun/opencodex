@@ -13,9 +13,149 @@ import {
 import { routeModel } from "../../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { resolveMatchedPrice } from "../../src/usage/cost";
+import { modelCapabilityFields } from "../../src/server/models-capabilities";
+import { deriveEntry } from "../../src/codex/catalog/derive-entry";
+import { MIMO_THINKING_MODELS } from "../../src/providers/mimo-thinking";
+import { resolveReasoningCapabilities } from "../../src/providers/reasoning-capabilities";
+import { catalogHintsFromModelsApiItem } from "../../src/codex/catalog/model-hints";
 
 // Xiaomi's published V2.6 prices (USD per 1M tokens), as carried by models.dev on 2026-09-23.
 const PRO = { input: 0.435, output: 0.87, cacheRead: 0.0036, cacheWrite: 0 };
+
+describe("independent reasoning capabilities", () => {
+  const base = { adapter: "openai-chat", baseUrl: "https://synthetic.example.test/v1" };
+  const id = "synthetic-model";
+  test.each([
+    { supportsReasoning: true, supportsThinkingToggle: false, supportsReasoningEffort: false, defaultThinkingEnabled: true },
+    { supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: false },
+    { supportsReasoning: true, supportsThinkingToggle: false, supportsReasoningEffort: true },
+    { supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: true },
+    {},
+  ])("synthetic fixed/toggle/effort/both/unknown contract %j", capabilities => {
+    const provider = { ...base, modelCapabilities: { [id]: capabilities } };
+    expect(resolveReasoningCapabilities(provider, id)).toEqual(capabilities);
+    const row = applyProviderConfigHints("synthetic", provider, { provider: "synthetic", id });
+    for (const field of ["supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"] as const) {
+      expect(row[field]).toBe(capabilities[field]);
+    }
+  });
+  test("toggle and effort declarations remain independent, including empty and none-only lists", () => {
+    const toggle = { ...base, thinkingToggleModels: [id], modelReasoningEfforts: { [id]: [] }, modelCapabilities: { [id]: { supportsThinkingToggle: true } } };
+    expect(resolveReasoningCapabilities(toggle, id)).toEqual({ supportsReasoning: true, supportsThinkingToggle: true });
+    expect(resolveReasoningCapabilities({ ...base, modelReasoningEfforts: { [id]: ["none"] } }, id))
+      .toEqual({});
+    expect(resolveReasoningCapabilities({ ...base, thinkingToggleModels: [id] }, id)).toEqual({});
+    expect(resolveReasoningCapabilities({ ...base, modelCapabilities: { [id]: { supportsThinkingToggle: false } }, thinkingToggleModels: [id] }, id))
+      .toEqual({ supportsThinkingToggle: false });
+    const suppressed = resolveReasoningCapabilities({ ...toggle, noReasoningModels: [id] }, id);
+    expect(suppressed).toEqual({ supportsReasoning: false, supportsThinkingToggle: false, supportsReasoningEffort: false, defaultThinkingEnabled: false });
+  });
+  test.each(["zhipu-bigmodel", "opencode-go", "volcengine", "minimax"])("%s toggle wire aliases do not assert genuine strengths", preset => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === preset)!;
+    const id = entry.thinkingToggleModels![0]!;
+    const provider = providerConfigSeed(entry);
+    const resolved = resolveReasoningCapabilities(provider, id);
+    expect(resolved.supportsThinkingToggle).toBeUndefined();
+    expect(resolved.supportsReasoning).toBe(true);
+    expect(resolved.supportsReasoningEffort).toBeUndefined();
+    const row = applyProviderConfigHints(preset, provider, { provider: preset, id });
+    expect(row.supportsReasoningEffort).toBeUndefined();
+    expect(row.reasoningEfforts?.length).toBeGreaterThan(0);
+    const explicit = { ...provider, modelCapabilities: { [id]: { supportsThinkingToggle: true, supportsReasoningEffort: true } } };
+    expect(resolveReasoningCapabilities(explicit, id).supportsThinkingToggle).toBe(true);
+    expect(resolveReasoningCapabilities(explicit, id).supportsReasoningEffort).toBe(true);
+    expect(applyProviderConfigHints(preset, explicit, { provider: preset, id }).reasoningEfforts).toEqual(row.reasoningEfforts);
+  });
+  test("mapped strength inference follows folded overrides and preserves empty overrides", () => {
+    const provider = { ...base, thinkingToggleModels: [id], modelReasoningEfforts: { [id]: ["low", "high"] },
+      modelReasoningEffortMap: { "SYNTHETIC-MODEL": { low: "disabled", high: "enabled" } } };
+    expect(resolveReasoningCapabilities(provider, id).supportsReasoningEffort).toBeUndefined();
+    expect(resolveReasoningCapabilities({ ...provider, modelReasoningEffortMap: { [id]: {} } }, id).supportsReasoningEffort).toBe(true);
+    expect(resolveReasoningCapabilities({ ...base, modelReasoningEfforts: { [id]: ["none"] }, reasoningEffortMap: { none: "high" } }, id)).toEqual({});
+    const registered = PROVIDER_REGISTRY.find(row => row.id === "zhipu-bigmodel-responses")!;
+    expect(resolveReasoningCapabilities({ adapter: registered.adapter, baseUrl: registered.baseUrl,
+      modelReasoningEfforts: { "GLM-5.3": [] } }, "glm-5.3").supportsReasoningEffort).toBeUndefined();
+  });
+  test("toggle-only does not inherit an old provider-wide ladder or default", () => {
+    const provider = { ...base, reasoningEfforts: ["low", "medium", "high"], modelDefaultReasoningEfforts: { [id]: "high" },
+      modelCapabilities: { [id]: { supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false } } };
+    const row = applyProviderConfigHints("synthetic", provider, { provider: "synthetic", id, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" });
+    expect(row.reasoningEfforts).toEqual([]);
+    expect(row.defaultReasoningEffort).toBeUndefined();
+    expect(row.supportsThinkingToggle).toBe(true);
+    const enabled = applyProviderConfigHints("synthetic", { ...provider, modelCapabilities: { [id]: { supportsReasoningEffort: true } } }, row);
+    expect(enabled.reasoningEfforts).toEqual(["low", "medium", "high"]);
+  });
+  test("cached config projections rederive flags and retain original discovery metadata", () => {
+    const discovered = { provider: "synthetic", id, supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: false };
+    const cached = applyProviderConfigHints("synthetic", { ...base, modelCapabilities: { [id]: { supportsThinkingToggle: false } } }, discovered);
+    expect(cached.supportsThinkingToggle).toBe(false);
+    const restored = applyProviderConfigHints("synthetic", base, cached);
+    expect(restored).toMatchObject(discovered);
+    const configured = applyProviderConfigHints("synthetic", { ...base, modelCapabilities: { [id]: { supportsThinkingToggle: true } } }, { provider: "synthetic", id });
+    expect(applyProviderConfigHints("synthetic", base, configured).supportsThinkingToggle).toBeUndefined();
+  });
+  test("chained public model flags preserve false and unknown independently of efforts", () => {
+    const hints = catalogHintsFromModelsApiItem("chain", { id, capabilities: {
+      supports_reasoning: true, supports_thinking_toggle: true, supports_reasoning_effort: false,
+      default_thinking_enabled: false, reasoning_effort: ["low", "high"],
+    } });
+    expect(hints).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: false });
+    expect(hints.reasoningEfforts).toBeUndefined();
+    const chained = applyProviderConfigHints("chain", { ...base, reasoningEfforts: ["low", "medium", "high"] }, { provider: "chain", id, ...hints });
+    expect(chained.supportsReasoningEffort).toBe(false);
+    expect(chained.reasoningEfforts).toEqual([]);
+    const unknown = catalogHintsFromModelsApiItem("chain", { id, capabilities: {} });
+    expect(unknown.supportsReasoning).toBeUndefined();
+    expect(unknown.supportsThinkingToggle).toBeUndefined();
+    const explicitFalse = catalogHintsFromModelsApiItem("chain", { id, capabilities: { supports_reasoning: false, supports_thinking_toggle: false } });
+    expect(explicitFalse).toMatchObject({ supportsReasoning: false, supportsThinkingToggle: false });
+    expect(explicitFalse.supportsReasoningEffort).toBeUndefined();
+  });
+});
+
+describe("MiMo V2.6 thinking switch", () => {
+  test.each(["xiaomi", "xiaomi-mimo", "my-mimo"])("public Chat under %s exposes capabilities without synthetic strengths", name => {
+    const provider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://api.xiaomimimo.com/v1", authMode: "key" };
+    enrichProviderFromRegistry(name, provider);
+    for (const id of MIMO_THINKING_MODELS) {
+      const row = applyProviderConfigHints(name, provider, { provider: name, id });
+      expect(row).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: true, reasoningEfforts: [] });
+      expect(row.defaultReasoningEffort).toBeUndefined();
+      expect(modelCapabilityFields(row).capabilities).toMatchObject({ supports_reasoning: true, supports_thinking_toggle: true, supports_reasoning_effort: false, default_thinking_enabled: true });
+      expect(modelCapabilityFields(row).capabilities.reasoning_effort).toBeUndefined();
+      const catalog = deriveEntry(null, `${name}/${id}`, "MiMo", 1, row);
+      expect(catalog.supported_reasoning_levels?.map(level => level.effort)).toEqual(["none", "high"]);
+      expect(catalog.default_reasoning_level).toBe("high");
+    }
+    expect(provider.modelReasoningEfforts).toBeUndefined();
+    expect(provider.modelDefaultReasoningEfforts).toBeUndefined();
+  });
+  test.each([
+    { adapter: "openai-chat", baseUrl: "https://api.xiaomimimo.com/v1" },
+    { adapter: "anthropic", baseUrl: "https://api.xiaomimimo.com/anthropic" },
+  ])("destination capability overrides remain authoritative on $adapter", transport => {
+    const id = "mimo-v2.6-pro";
+    const provider: OcxProviderConfig = { ...transport, modelCapabilities: { [id]: { supportsThinkingToggle: false, defaultThinkingEnabled: false } } };
+    enrichProviderFromRegistry("my-mimo", provider);
+    expect(resolveReasoningCapabilities(provider, id)).toEqual({ supportsReasoning: true, supportsThinkingToggle: false, supportsReasoningEffort: false, defaultThinkingEnabled: false });
+    expect(resolveReasoningCapabilities({ ...transport, baseUrl: "https://foreign.example.test/v1" }, id)).toEqual({});
+    const custom = resolveReasoningCapabilities(transport, `${id}-custom`);
+    expect(custom.supportsThinkingToggle).toBeUndefined();
+    expect(custom.defaultThinkingEnabled).toBeUndefined();
+    expect(custom.supportsReasoningEffort).not.toBe(false);
+  });
+  test("explicit real effort opt-in preserves case-folded legacy ladder overrides", () => {
+    const id = "mimo-v2.6-pro";
+    const provider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://api.xiaomimimo.com/v1",
+      modelCapabilities: { [id]: { supportsReasoningEffort: true } },
+      modelReasoningEfforts: { "MIMO-V2.6-PRO": ["low", "high"] },
+      modelDefaultReasoningEfforts: { "MIMO-V2.6-PRO": "low" } };
+    enrichProviderFromRegistry("my-mimo", provider);
+    expect(applyProviderConfigHints("my-mimo", provider, { provider: "my-mimo", id }))
+      .toMatchObject({ supportsReasoningEffort: true, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" });
+  });
+});
 const FLASH = { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 };
 const entry = (id: string) => PROVIDER_REGISTRY.find(row => row.id === id)!;
 

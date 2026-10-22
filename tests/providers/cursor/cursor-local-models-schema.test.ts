@@ -18,6 +18,18 @@ import type { OcxConfig } from "../../../src/types";
 import { SERVER_BUDGET_MS } from "../../helpers/test-budget";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
+test("public discovery separates reasoning, toggle and real strength controls", () => {
+  const fixed = modelCapabilityFields({ supportsReasoning: true, supportsThinkingToggle: false, supportsReasoningEffort: false });
+  expect(fixed.capabilities).toMatchObject({ supports_reasoning: true, supports_thinking_toggle: false, supports_reasoning_effort: false });
+  expect(fixed.capabilities.reasoning_effort).toBeUndefined();
+  const toggle = modelCapabilityFields({ supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: false, reasoningEfforts: ["none", "high"] });
+  expect(toggle.capabilities).toMatchObject({ supports_reasoning: true, supports_thinking_toggle: true, supports_reasoning_effort: false, default_thinking_enabled: false });
+  expect(toggle.capabilities.reasoning_effort).toBeUndefined();
+  const both = modelCapabilityFields({ supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: true, reasoningEfforts: ["low", "high"] });
+  expect(both.capabilities.reasoning_effort).toEqual(["low", "high"]);
+  expect(modelCapabilityFields({}).capabilities.supports_thinking_toggle).toBeUndefined();
+});
+
 // Cursor's local-agent runtime ("Private Inference" build) only enables its reasoning-effort
 // control when a GET /v1/models row carries api_types (+ optional capabilities). These cases
 // start a real server and read the raw OpenAI-shape list, like the Grok discovery tests.
@@ -191,6 +203,7 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
         supports_tool_use: true,
         supports_streaming: true,
         supports_reasoning: true,
+        supports_reasoning_effort: true,
         supports_vision: true,
         reasoning_effort: ["low", "high", "max"],
       });

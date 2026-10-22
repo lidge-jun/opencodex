@@ -104,9 +104,9 @@ export type ManagementModelRow = Partial<CatalogModel> & {
    */
   supportsTools?: boolean;
   /**
-   * True when a canonical source positively asserts reasoning (a non-empty effective ladder
-   * or delivered reasoning summaries). Absent means unknown, never "cannot reason": an empty
-   * ladder only says the effort is not adjustable.
+   * A canonical source's explicit capability, or positive evidence from reasoning efforts
+   * or delivered summaries. Absent means unknown; an empty ladder alone says only that
+   * effort is not adjustable, not that the model cannot reason.
    */
   supportsReasoning?: boolean;
   /**
@@ -460,9 +460,11 @@ export async function listManagementModelRows(
     const routed = m.provider !== "combo";
     // Resolved once each: the spread below used to evaluate the same helpers again for the guard.
     const reasoningEfforts = routed
-      ? effectiveModelReasoningEfforts(config, m.provider, m.id, m.reasoningEfforts, catalogLadders)
+      ? m.supportsReasoningEffort === false || m.supportsReasoning === false ? []
+        : effectiveModelReasoningEfforts(config, m.provider, m.id, m.reasoningEfforts, catalogLadders)
       : undefined;
     const defaultReasoningEffort = routed
+      && m.supportsReasoningEffort !== false && m.supportsReasoning !== false
       ? effectiveModelDefaultReasoningEffort(config, m.provider, m.id, m.defaultReasoningEffort, reasoningEfforts)
       : undefined;
     const inputModalitiesDeclared = routed ? declaredModelInputModalities(config, m.provider, m.id) : undefined;
@@ -524,10 +526,7 @@ export async function listManagementModelRows(
       });
     const supportsReasoning = row.exportMetadata?.supportsReasoning
       ?? row.supportsReasoning
-      ?? knownReasoningSupport({
-        reasoningEfforts: row.reasoningEfforts,
-        supportsReasoningSummaries: row.supportsReasoningSummaries,
-      });
+      ?? knownReasoningSupport(row);
     return {
       ...row,
       // One shared definition with the request path: the GUI must not re-derive consumer
@@ -560,12 +559,17 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
   const maxTokens = effective?.maxTokens ?? row.maxOutputTokens;
   const maxInputTokens = effective?.maxInputTokens ?? row.maxInputTokens;
   const inputModalities = effective?.inputModalities ?? row.inputModalities;
-  const reasoningEfforts = effective?.reasoningEfforts ?? row.reasoningEfforts;
+  const supportsThinkingToggle = effective?.supportsThinkingToggle ?? row.supportsThinkingToggle;
+  const supportsReasoningEffort = effective?.supportsReasoningEffort ?? row.supportsReasoningEffort;
+  const defaultThinkingEnabled = effective?.defaultThinkingEnabled ?? row.defaultThinkingEnabled;
+  const declaredEfforts = effective?.reasoningEfforts ?? row.reasoningEfforts;
+  const effortDisabled = supportsReasoningEffort === false || (effective?.supportsReasoning ?? row.supportsReasoning) === false;
+  const reasoningEfforts = effortDisabled && declaredEfforts !== undefined ? [] : declaredEfforts;
   // The projection is the authority on the default. When it exists, an absent default means
   // NO declared default — falling back to the row would reintroduce the picker's synthetic
   // medium/low value, which is exactly what this projection exists to keep out of exports.
   // Rows without a projection (native-era shapes, hand-built rows) keep the row's own value.
-  const defaultReasoningEffort = effective !== undefined
+  const defaultReasoningEffort = effortDisabled ? undefined : effective !== undefined
     ? effective.defaultReasoningEffort
     : row.defaultReasoningEffort;
   const supportsReasoningSummaries = effective?.supportsReasoningSummaries ?? row.supportsReasoningSummaries;
@@ -580,10 +584,8 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
     });
   const supportsReasoning = effective?.supportsReasoning
     ?? row.supportsReasoning
-    ?? knownReasoningSupport({
-      reasoningEfforts: row.reasoningEfforts,
-      supportsReasoningSummaries: row.supportsReasoningSummaries,
-    });
+    ?? knownReasoningSupport({ ...row, supportsThinkingToggle, supportsReasoningEffort,
+      reasoningEfforts, supportsReasoningSummaries });
   return {
     namespaced: row.namespaced,
     provider: row.provider,
@@ -597,6 +599,9 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
     ...(inputModalities ? { inputModalities } : {}),
     // An empty array is a declaration ("no rungs"), and `[]` is truthy: it survives here.
     ...(reasoningEfforts ? { reasoningEfforts } : {}),
+    ...(typeof supportsThinkingToggle === "boolean" ? { supportsThinkingToggle } : {}),
+    ...(typeof supportsReasoningEffort === "boolean" ? { supportsReasoningEffort } : {}),
+    ...(typeof defaultThinkingEnabled === "boolean" ? { defaultThinkingEnabled } : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     // An explicit false is evidence and survives; only derivation is true-or-nothing.
     ...(typeof supportsTools === "boolean" ? { supportsTools } : {}),

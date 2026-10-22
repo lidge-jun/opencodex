@@ -1304,7 +1304,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             ...(effectiveId !== publicId ? { native_id: publicId } : {}),
             ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
             ...modelCapabilityFields({
-              reasoningEfforts: m.reasoningEfforts,
+              ...m,
               // contextWindow is already the post-cap effective value; contextCap is the raw
               // operator knob and over-reports models whose real window sits below it.
               contextWindow: m.contextWindow,

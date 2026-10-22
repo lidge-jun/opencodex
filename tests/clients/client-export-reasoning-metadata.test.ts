@@ -14,6 +14,19 @@ describe("client export reasoning metadata", () => {
     expect(exportReasoningEfforts({ ...model, reasoningEfforts: ["high", "none", "turbo", "low", "high", "minimal"] }))
       .toEqual(["none", "minimal", "low", "high"]);
   });
+  test("client effort-enum encoding represents a toggle independently of declared strengths", () => {
+    const toggle = { ...model, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: true };
+    expect(exportReasoningEfforts(toggle)).toEqual(["none", "high"]);
+    expect(exportReasoningEfforts({ ...toggle, reasoningEfforts: [] })).toEqual(["none", "high"]);
+    expect(exportReasoningEfforts({ ...toggle, reasoningEfforts: ["high", "low", "none", "medium", "max", "ultra"] }))
+      .toEqual(["none", "high"]);
+    expect(exportDefaultReasoningEffort({ ...toggle, reasoningEfforts: ["none", "high"], defaultReasoningEffort: "high" }))
+      .toBe("high");
+    expect(exportDefaultReasoningEffort({ ...toggle, reasoningEfforts: ["none", "high", "medium"], defaultReasoningEffort: "medium" }))
+      .toBe("high");
+    expect(exportDefaultReasoningEffort({ ...toggle, defaultThinkingEnabled: false })).toBe("none");
+    expect(exportDefaultReasoningEffort({ ...toggle, defaultThinkingEnabled: undefined })).toBeUndefined();
+  });
   test("does not synthesize a default or revive an explicitly cleared ladder", () => {
     expect(exportDefaultReasoningEffort({ ...model, reasoningEfforts: ["low", "high"] })).toBeUndefined();
     expect(exportDefaultReasoningEffort({ ...model, defaultReasoningEffort: "high", reasoningEfforts: [] })).toBeUndefined();

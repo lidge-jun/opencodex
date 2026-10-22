@@ -1,4 +1,5 @@
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
+import { normalizeThinkingOptions } from "../../clients/reasoning-controls";
 import { sanitizeLogMetadataString } from "../../lib/redact";
 import type { RouteResult } from "../../router";
 import type { InboundWire } from "../../providers/registry";
@@ -341,6 +342,7 @@ export async function applyFinalRouteRequestNormalization(args: {
   }
 
   {
+    normalizeThinkingOptions(route.provider, route.modelId, parsed.options);
     const { applyEffortCap, effortCapAppliesTo, supportedLadderFor } = await import("../effort-policy");
     const surface = collabSurface(parsed);
     if (effortCapAppliesTo(surface, req.headers, config, parsed._compactionRequest === true)) {

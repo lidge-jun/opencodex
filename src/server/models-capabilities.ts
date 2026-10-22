@@ -110,6 +110,10 @@ export function predictCursorEffort(
 }
 
 export interface ModelCapabilityInput {
+  supportsReasoning?: boolean;
+  supportsThinkingToggle?: boolean;
+  supportsReasoningEffort?: boolean;
+  defaultThinkingEnabled?: boolean;
   reasoningEfforts?: readonly string[];
   contextWindow?: number;
   /**
@@ -134,6 +138,9 @@ export interface ModelCapabilityFields {
     supports_tool_use: true;
     supports_streaming: true;
     supports_reasoning: boolean;
+    supports_thinking_toggle?: boolean;
+    supports_reasoning_effort?: boolean;
+    default_thinking_enabled?: boolean;
     supports_vision?: boolean;
     reasoning_effort?: string[];
   };
@@ -166,7 +173,8 @@ function positiveInt(value: unknown): number | undefined {
 }
 
 export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabilityFields {
-  const efforts = (input.reasoningEfforts ?? []).filter(effort => typeof effort === "string" && effort.length > 0);
+  const efforts = input.supportsReasoningEffort === false ? []
+    : (input.reasoningEfforts ?? []).filter(effort => typeof effort === "string" && effort.length > 0);
   const contextLength = positiveInt(input.contextWindow);
   const longContextLength = positiveInt(input.longContextWindow);
   const maxOutputTokens = positiveInt(input.maxOutputTokens);
@@ -187,7 +195,10 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
       ...(modalities !== undefined && modalities.length > 0 ? { input_modalities: [...modalities] } : {}),
       supports_tool_use: true,
       supports_streaming: true,
-      supports_reasoning: efforts.length > 0,
+      supports_reasoning: input.supportsReasoning ?? efforts.length > 0,
+      ...(input.supportsThinkingToggle !== undefined ? { supports_thinking_toggle: input.supportsThinkingToggle } : {}),
+      ...(input.supportsReasoningEffort !== undefined ? { supports_reasoning_effort: input.supportsReasoningEffort } : {}),
+      ...(input.defaultThinkingEnabled !== undefined ? { default_thinking_enabled: input.defaultThinkingEnabled } : {}),
       ...(supportsVision !== undefined ? { supports_vision: supportsVision } : {}),
       ...(efforts.length > 0 ? { reasoning_effort: [...efforts] } : {}),
     },

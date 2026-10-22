@@ -26,6 +26,89 @@ async function bodyOf(p: OcxParsedRequest, configuredProvider = provider): Promi
 }
 
 describe("anthropic extended-thinking gate", () => {
+  test.each([[false, "disabled"], [true, "enabled"]] as const)("toggle-only models serialize direct boolean %s as %s", async (thinkingEnabled, type) => {
+    const modelId = "toggle-only-model";
+    const request = parsed(undefined, { temperature: 0.3, topP: 0.9 }, modelId);
+    request.options.thinkingEnabled = thinkingEnabled;
+    const b = await bodyOf(request, {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true,
+        supportsThinkingToggle: true,
+        supportsReasoningEffort: false,
+        defaultThinkingEnabled: true,
+      } },
+    });
+    expect(b.thinking).toEqual({ type });
+    expect(b.output_config).toBeUndefined();
+    expect(b.max_tokens).toBe(8192);
+    expect(b.temperature).toBe(0.3);
+    expect(b.top_p).toBe(0.9);
+  });
+
+  test("toggle-only models apply their capability default without adding strength fields", async () => {
+    const modelId = "toggle-only-default";
+    const b = await bodyOf(parsed(undefined, {}, modelId), {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true,
+        supportsThinkingToggle: true,
+        supportsReasoningEffort: false,
+        defaultThinkingEnabled: true,
+      } },
+    });
+    expect(b.thinking).toEqual({ type: "enabled" });
+    expect(b.output_config).toBeUndefined();
+    expect(b.max_tokens).toBe(8192);
+  });
+
+  test("models with genuine effort strengths retain their effort wire", async () => {
+    const modelId = "ordinary-strength-model";
+    const b = await bodyOf(parsed("high", {}, modelId), {
+      ...provider,
+      baseUrl: "https://gateway.example.test/anthropic",
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true,
+        supportsThinkingToggle: true,
+        supportsReasoningEffort: true,
+        defaultThinkingEnabled: true,
+      } },
+    });
+    expect(b.thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
+  });
+
+  test("an explicit toggle off wins over a genuine high effort", async () => {
+    const modelId = "toggle-dual-axis";
+    const request = parsed("high", { temperature: 0.3, topP: 0.9, thinkingEnabled: false }, modelId);
+    const b = await bodyOf(request, {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true,
+        supportsThinkingToggle: true,
+        supportsReasoningEffort: true,
+        defaultThinkingEnabled: true,
+      } },
+    });
+    expect(b.thinking).toEqual({ type: "disabled" });
+    expect(b.temperature).toBe(0.3);
+    expect(b.top_p).toBe(0.9);
+  });
+
+  test("an explicitly unsupported capability suppresses direct Anthropic controls", async () => {
+    const modelId = "unsupported-reasoning";
+    const request = parsed("high", { thinkingEnabled: true }, modelId);
+    const b = await bodyOf(request, {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: { supportsReasoning: false } },
+    });
+    expect(b.thinking).toBeUndefined();
+    expect(b.output_config).toBeUndefined();
+  });
+
   // Sonnet 4.5 takes temperature or top_p alone but 400s on both (live 2026-09-29), so a request
   // carrying both keeps temperature; each field alone survives.
   test("reasoning 'none' does NOT enable thinking and preserves temperature", async () => {

@@ -863,3 +863,35 @@ describe("resolved static model policy parity", () => {
     expect(entry.modelContextWindows?.[MODEL]).toBe(100_000);
   });
 });
+
+describe("independent reasoning policy", () => {
+  const id = "synthetic-reasoner";
+  const entry: ProviderRegistryEntry = {
+    id: "synthetic-reasoner", label: "Synthetic reasoner", adapter: "openai-chat",
+    baseUrl: "https://synthetic.example.test/v1", authKind: "key",
+    reasoningEfforts: ["low", "medium", "high"],
+    modelCapabilities: { [id]: {
+      supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: true,
+    } },
+    thinkingToggleModels: [id],
+  };
+  test("registry axes fill beneath exact operator axes without synthetic strength defaults", () => {
+    const provider: OcxProviderConfig = { adapter: entry.adapter, baseUrl: entry.baseUrl,
+      modelCapabilities: { [id]: { supportsThinkingToggle: false, defaultThinkingEnabled: false } },
+      modelReasoningEfforts: { [id]: ["low", "high"] }, modelDefaultReasoningEfforts: { [id]: "high" } };
+    const policy = resolveModelPolicy({ providerName: "synthetic", modelId: id, provider, registryEntry: entry, transportMatchedRegistry: true });
+    expect(policy.model).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: false,
+      supportsReasoningEffort: false, defaultThinkingEnabled: false, reasoningEfforts: [] });
+    expect(policy.model.defaultReasoningEffort).toBeUndefined();
+    expect(policy.provider.modelReasoningEfforts?.[id]).toEqual(["low", "high"]);
+    expect(policy.provenance.model.supportsThinkingToggle).toBe("operator-capability");
+    expect(policy.provenance.model.supportsReasoningEffort).toBe("registry");
+    expect(entry.modelCapabilities?.[id]?.supportsThinkingToggle).toBe(true);
+  });
+  test("noReasoningModels remains authoritative over every independent declaration", () => {
+    const provider: OcxProviderConfig = { adapter: entry.adapter, baseUrl: entry.baseUrl, noReasoningModels: [id] };
+    const policy = resolveModelPolicy({ providerName: "synthetic", modelId: id, provider, registryEntry: entry, transportMatchedRegistry: true });
+    expect(policy.model).toMatchObject({ supportsReasoning: false, supportsThinkingToggle: false,
+      supportsReasoningEffort: false, defaultThinkingEnabled: false, reasoningEfforts: [] });
+  });
+});

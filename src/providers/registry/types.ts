@@ -308,6 +308,7 @@ export interface ProviderRegistryEntry {
    */
   modelDisplayNames?: Record<string, string>;
   modelInputModalities?: Record<string, string[]>;
+  modelCapabilities?: OcxProviderConfig["modelCapabilities"];
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
   reasoningEfforts?: string[];
@@ -378,7 +379,7 @@ export type ProviderConfigSeed = Pick<
   "anthropicOAuthInstance" |
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "chatCompletionsPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
-  | "modelDisplayNames"
+  | "modelDisplayNames" | "modelCapabilities"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noStopModels" | "noPenaltyModels"
