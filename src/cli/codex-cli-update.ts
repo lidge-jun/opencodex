@@ -224,6 +224,10 @@ function inspectionDeps(commandDeps: CodexCliUpdateCommandDeps): CodexCliInstall
       CODEX_CLI_PATH: trusted.codexCliPath ?? undefined,
       PATH: trusted.path ?? undefined,
       PATHEXT: trusted.pathExt ?? undefined,
+      // The lookup seeds the inspection models against the launch-time
+      // capture; ambient values are never consulted.
+      HOME: trusted.home ?? undefined,
+      NODE_PATH: trusted.nodePath ?? undefined,
     },
     configDir: trusted.configDir,
     // The snapshot is proof-bound to the launcher, but the report may only attest

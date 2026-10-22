@@ -9,6 +9,26 @@ Explicit Codex CLI installation observation does not discover a Codex home or re
 
 The read-only CLI update plan binds npm executable selection to the inspected launcher PATH.
 Registry integrity requires a canonical base64 SHA-512 digest of exactly 64 bytes; malformed or truncated tokens refuse the target.
+Plan identity also binds a bounded content observation (installContentDigest): a versioned file set
+fixed by the supported npm-global layout — the package manifest, its declared bin/codex.js
+entrypoint, and the platform backing manifest plus vendored binary at the layout's modeled
+locations. The actually selected launcher stays bound through the existing canonical-path and
+manifest-linkage provenance; the observation covers those files' bytes only and claims nothing about
+which file a launcher run would execute, artifact authenticity, or the rest of the install tree. The
+modeled locations follow Node's module lookup evaluated against the bound inspection environment
+— the captured PATH/NODE_PATH/HOME and the node binary that PATH resolves — never the
+inspecting process's own runtime globals. The optional HOME/NODE_PATH seeds are withheld on
+Windows, where the modeled lookup never runs, and dropped when they would push the serialized
+launch context past its cap, so the selection snapshot survives: a local optional-package lane can
+still bind, while the global and vendor-fallback lanes stay unmodelable and fail closed. Missing
+required files, an out-of-prefix resolution, an unreadable or mid-observation-changed file, a
+retargeted selection link, or an unmodelable global lookup all fail closed. The selector and lexical
+links are checked after the final file-identity pass while native descriptors remain open; this
+observes linkage at that boundary and does not prevent later symlink mutation. A managed install with
+no bound content is refused install_content_unverified before any registry query. The digest is
+observation only — it carries no execution guarantee — so a future apply phase must re-observe
+rather than rely on it. The observation is opt-in: the plan path requests it because the planId
+binds it, while a bare check leaves the digest null rather than paying the bounded read.
 Selection observation uses the runtime resolver with provenance's bounded no-follow, nonblocking state reader and local executable-path policy. Windows returns before invoking the resolver; its deferred inspection performs no candidate or configuration I/O.
 Its child environment drops npm configuration overrides, named Node startup/output controls,
 the `LD_*`/`DYLD_*` loader families and the OpenSSL startup configuration and
