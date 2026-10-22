@@ -206,12 +206,12 @@ reading prose as configuration; formatted doctor paths pass through user-path re
 
 > Decision record: [ADR-0017](decisions/ADR-0017-config-injection.md)
 
-Native Codex sub-agent defaults are a separate, explicit opt-in. When
-`syncCodexSubagentDefaults` is true and `injectionModel` is set, injection writes marker-owned
-`agents.default_subagent_model` and, when configured,
-`agents.default_subagent_reasoning_effort`. Unmarked values are user-owned and must never be
-overwritten. Disabling the option and fallback restore remove only marker-owned values; journal
-restore must preserve later user edits while stripping those managed values.
+Native Codex sub-agent defaults are a separate, explicit opt-in. When `syncCodexSubagentDefaults`
+is true and `injectionModel` is set, injection writes marker-owned `agents.default_subagent_model`
+and, when configured, `agents.default_subagent_reasoning_effort`, and journals the values it wrote.
+Unmarked values, and marked values that differ from that record (#7425), are user-owned and never
+overwritten; the stale marker is dropped. Disabling and fallback restore remove only owned values;
+journal restore keeps later user edits. Injection never writes or strips root `model_context_window`.
 
 An injection whose OpenCodex config explicitly selects the v1 multi-agent surface also
 reconciles Codex's higher-precedence global `features.multi_agent_v2` override to disabled before

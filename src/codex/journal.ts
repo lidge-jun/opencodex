@@ -9,6 +9,7 @@ import { hasInjectedCodexRouting } from "./injected-marker";
 import { configWriteLockFailureMessage, withConfigWriteLockHeld } from "./config-write-lock";
 import type { LockHandle } from "./config-write-lock";
 import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
+import type { WrittenSubagentDefaults } from "./subagent-defaults";
 
 /**
  * Exported so that anything reasoning ABOUT the journal points at the journal.
@@ -76,6 +77,15 @@ interface Journal {
    * file we actually touched.
    */
   injectedCatalogPath?: string | null;
+  /**
+   * The marker-owned `[agents]` default values this injection wrote, keyed by TOML key.
+   *
+   * #7425: the marker comment proves OpenCodex wrote a line once, not that the value is still
+   * ours. A user (or a comment-preserving Codex settings writer) can change the value and keep
+   * the comment, and the next sync used to revert it. The recorded value is what tells an
+   * untouched managed line apart from an edited one. Null when no managed default was written.
+   */
+  injectedSubagentDefaults?: WrittenSubagentDefaults | null;
   /** Injection binding survives native snapshot replacement and is released by native restore. */
   opencodexHome?: string;
   pid: number;
@@ -203,6 +213,8 @@ export interface InjectedJournalOwnership {
   injectedRootWebSearch?: string | null;
   /** Omitted by callers that removed no user `web_search` line. */
   replacedRootWebSearch?: string | null;
+  /** Omitted by callers that wrote no managed `[agents]` default, which is the value it then records. */
+  injectedSubagentDefaults?: WrittenSubagentDefaults | null;
 }
 
 export function markJournalInjectedState(
@@ -230,6 +242,7 @@ export function markJournalInjectedState(
   journal.injectedRealtimeWsBaseUrl = ownership.injectedRealtimeWsBaseUrl;
   journal.injectedRootWebSearch = ownership.injectedRootWebSearch ?? null;
   journal.replacedRootWebSearch = ownership.replacedRootWebSearch ?? null;
+  journal.injectedSubagentDefaults = ownership.injectedSubagentDefaults ?? null;
   journal.injectedCatalogPath = ownership.injectedCatalogPath;
   journal.opencodexHome = opencodexHomeForInjection(journal.opencodexHome);
   atomicWriteFile(JOURNAL_PATH, JSON.stringify(journal), undefined, hooks);
@@ -265,6 +278,21 @@ export function journaledReplacedRootWebSearch(options: { readOnly?: boolean } =
 /** The catalog path the last injection wrote to, or null when none was recorded. */
 export function journaledInjectedCatalogPath(): string | null {
   return readJournal()?.injectedCatalogPath ?? null;
+}
+
+/**
+ * The managed `[agents]` default values the last injection wrote, or null when there is no
+ * record. The journal is read from disk, so only string values for the two known keys count.
+ */
+export function journaledInjectedSubagentDefaults(options: { readOnly?: boolean } = {}): WrittenSubagentDefaults | null {
+  const recorded: unknown = readJournal(options.readOnly !== true)?.injectedSubagentDefaults;
+  if (typeof recorded !== "object" || recorded === null) return null;
+  const written: WrittenSubagentDefaults = {};
+  for (const key of ["default_subagent_model", "default_subagent_reasoning_effort"] as const) {
+    const value = (recorded as Record<string, unknown>)[key];
+    if (typeof value === "string") written[key] = value;
+  }
+  return Object.keys(written).length > 0 ? written : null;
 }
 
 export function removeJournal(hooks: AtomicWriteHooks = {}): void {
