@@ -248,7 +248,8 @@ Tool calls gain their array-order stream `index`; the stream retains one assista
 one terminal choice, and one `[DONE]`. Both native and translated JSON fallbacks share
 `jsonCompletionSse`; its temporary frame strings and final body ownership are charged to the
 existing translator budget. Known incomplete limits take precedence over tool finish reasons;
-unmapped incomplete boundaries remain errors. The existing response-body lifecycle owns translation-budget
+"known" means the shared [incomplete-reason vocabulary](../transports/responses-wire-shapes.md#adapter-incomplete-reasons),
+and unmapped incomplete boundaries remain errors. The existing response-body lifecycle owns translation-budget
 release on consumption or cancellation. Actual upstream SSE and native Chat bypass this fallback.
 
 > Decision record: [ADR-0062](../decisions/ADR-0062-chat-streaming-client-with-a-json-upstream-resul.md)
