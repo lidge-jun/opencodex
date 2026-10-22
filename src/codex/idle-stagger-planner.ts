@@ -134,7 +134,7 @@ export function planIdleStagger(input: PlannerInput): PlannerResult {
       continue;
     }
     const earliestMs = Math.max(input.stableStartMs, a.eligibleAtMs!);
-    const offset = mod(i - referenceIndex, n) * FIVE_HOURS_MS / n;
+    const offset = Math.floor(mod(i - referenceIndex, n) * FIVE_HOURS_MS / n);
     const target = atOrAfter(base + offset, earliestMs);
     const cap = a.state === "unstarted" ? input.initialHorizonMs : input.maxRepairDeferralMs;
     const scheduledMs = Math.min(target, earliestMs + cap);
@@ -164,11 +164,10 @@ export function checkOfflineSlot(input: PlannerInput, slot: OfflineSlot): boolea
 
 /** Pure ledger reducer: unknown outcomes never allow speculative retries. */
 export function transitionAttempt(ledger: readonly Attempt[], event: Attempt): readonly Attempt[] {
-  if (ledger.length >= MAX_ATTEMPTS) return ledger;
   if (!event.windowGeneration || !event.credentialGeneration || !finite(event.atMs)) return ledger;
   const key = JSON.stringify([event.accountId,event.credentialGeneration,event.windowGeneration]);
   const index = ledger.findIndex(a => JSON.stringify([a.accountId,a.credentialGeneration,a.windowGeneration]) === key);
-  if (index < 0) return event.stage === "reserved" && event.affectedWindows.length > 0
+  if (index < 0) return ledger.length < MAX_ATTEMPTS && event.stage === "reserved" && event.affectedWindows.length > 0
     ? [...ledger, {...event, affectedWindows:[...new Set(event.affectedWindows)]}] : ledger;
   const old = ledger[index];
   const allowed: Record<AttemptStage, readonly AttemptStage[]> = {

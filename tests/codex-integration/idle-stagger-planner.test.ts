@@ -34,6 +34,19 @@ for (const n of [2,3,5,16]) test("A01: "+n+" comparable accounts evenly spread a
   assert.deepEqual(r.slots.map((s,i)=>s.scheduledMs),Array.from({length:n},(_,i)=>T+i*FIVE_HOURS_MS/n));
   assert(r.slots.every(x=>x.kind==="OFFLINE_DIAGNOSTIC_ONLY"));
 });
+test("A01b: seven-account fractional phases use integer timestamps and revalidate",()=>{
+  const x=fixture(Array.from({length:7},(_,i)=>account("acct-"+i)));
+  const r=planIdleStagger(x);
+  assert.equal(r.mode,"offline-plan");
+  assert.equal(r.slots.length,7);
+  assert(r.slots.every(slot=>Number.isSafeInteger(slot.scheduledMs)));
+  for(const slot of r.slots){
+    const nowMs=slot.scheduledMs;
+    const refreshed={...x,nowMs,lastForegroundSettledAtMs:nowMs-60*MIN,
+      accounts:x.accounts.map(a=>({...a,observedAtMs:nowMs}))};
+    assert.equal(checkOfflineSlot(refreshed,slot),true,"slot should revalidate at "+nowMs);
+  }
+});
 test("A02: changing pool size and order recomputes N deterministically",()=>{
   const xs=Array.from("ABCDE",c=>account(c));
   assert.deepEqual(times(fixture([xs[4],xs[2],xs[0],xs[1],xs[3]])),[0,60,120,180,240]);
@@ -167,6 +180,11 @@ test("A21: growth is bounded, with fail-closed ledger at capacity",()=>{
     stage:"reserved",atMs:T,affectedWindows:["short"]};
   const ledger:Array<Attempt>=Array.from({length:MAX_ATTEMPTS},(_,i)=>({...a,windowGeneration:"w"+i}));
   assert.equal(transitionAttempt(ledger,{...a,windowGeneration:"new"}).length,MAX_ATTEMPTS);
+  const fullSentLedger=ledger.map(entry=>({...entry,stage:"sent" as const,atMs:T+1}));
+  const verified=transitionAttempt(fullSentLedger,{...a,windowGeneration:"w0",stage:"verified",atMs:T+2});
+  assert.equal(verified.length,MAX_ATTEMPTS);
+  assert.equal(verified[0].stage,"verified");
+  assert.strictEqual(transitionAttempt(fullSentLedger,{...a,windowGeneration:"new"}),fullSentLedger);
   assert.equal(planIdleStagger(fixture([account("A"),account("B")],{ledger})).mode,"observe-only");
   assert.equal(planIdleStagger(fixture(Array.from({length:MAX_COHORT+1},(_,i)=>account(String(i))))).mode,"observe-only");
 });
@@ -175,6 +193,7 @@ test("A22: large verified cohort is deterministic under bounded time",()=>{
   const x=fixture(accounts);const before=performance.now();const p=planIdleStagger(x);
   const elapsed=performance.now()-before;
   assert.equal(p.slots.length,MAX_COHORT);
+  assert(p.slots.every(slot=>Number.isSafeInteger(slot.scheduledMs)));
   assert.deepEqual(p.slots,planIdleStagger(x).slots);
   assert(elapsed<5000,"1024 account offline plan exceeded budget: "+elapsed.toFixed(1)+"ms");
 });

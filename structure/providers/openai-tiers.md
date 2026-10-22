@@ -248,7 +248,7 @@ cleanup uses the dependency-free quota-auto-refresh state leaf, avoiding a recon
 
 ### Offline idle staggering evidence slice (#7206 PR A)
 
-`src/codex/idle-stagger-planner.ts` is a pure `PlannerInput` → `PlannerResult` diagnostic planner for positively verified comparable five-hour accounts: active/quiet/observe-only modes, stable 300/N phase targets and epoch/credential/window-generation revalidation; outputs are never send permits.
+`src/codex/idle-stagger-planner.ts` is a pure `PlannerInput` → `PlannerResult` diagnostic planner for positively verified comparable five-hour accounts: active/quiet/observe-only modes, integer-millisecond offsets floored from stable 300/N phase targets and epoch/credential/window-generation revalidation; outputs are never send permits.
 Its pure attempt ledger models one reservation per physical short/weekly operation, fail-closed ambiguous outcomes and restart recovery; it caps eligible accounts at 1024 and ledger entries at 4096, with no persistence or live worker import.
 `src/codex/idle-stagger-replay.ts` turns bounded synthetic `ReplayTrace` inputs into `ReplayMetrics` for passive, legacy and hypothetical-policy cases; known-unusable time remains distinct from unknown coverage. Neither module performs I/O, network requests, authentication, timers, config/routing mutations or quota activation; tests are in `tests/codex-integration/idle-stagger-planner.test.ts` and `tests/codex-integration/idle-stagger-replay.test.ts`.
 
