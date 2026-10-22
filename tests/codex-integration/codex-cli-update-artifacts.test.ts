@@ -6,7 +6,7 @@ import { fixtureArtifact, fixtureArtifactSet, fixtureTar } from "../helpers/code
 import { applyCodexCliUpdate, cleanupCodexCliApply, verifyInstalledCodexVersion } from "../../src/codex/cli-update-apply";
 import { acquireCodexCliApplyLease } from "../../src/codex/cli-update-lease";
 import { parseCodexCliUpdateArgs, handleCodexCliUpdateCommand } from "../../src/cli/codex-cli-update";
-import { closeSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -250,15 +250,47 @@ describe("Codex CLI apply consumer", () => {
   });
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("confirmed apply reaches its consumer with the exact plan ID and prints its public result", async () => {
     const planId = "a".repeat(32); let calls = 0; const logs: string[] = [], log = console.log;
+    const outer = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-apply-cli-job-")));
+    const previousHome = process.env.OPENCODEX_HOME;
     const report = { outcome: "not_applied" as const, reason: "original_install_unchanged", planId,
       installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false, verificationPid: null, cleanupErrors: [] };
     try {
+      chmodSync(outer, 0o700);
+      const parent = join(outer, "private-parent");
+      mkdirSync(parent, { mode: 0o700 });
+      chmodSync(parent, 0o700);
+      const configPath = join(parent, "ocx");
+      mkdirSync(configPath, { mode: 0o700 });
+      chmodSync(configPath, 0o700);
+      const configDir = realpathSync.native(configPath);
+      chmodSync(configDir, 0o700);
+      process.env.OPENCODEX_HOME = configDir;
       console.log = value => { logs.push(String(value)); };
       expect(await handleCodexCliUpdateCommand(["apply", "--plan-id", planId, "--yes", "--json"], {
         applyUpdate: async (id, deps) => { calls++; expect(id).toBe(planId); expect(deps.inspectionDeps).toBeDefined(); return report; },
       })).toBe(0);
-      expect(calls).toBe(1); expect(logs).toHaveLength(1); expect(JSON.parse(logs[0]!)).toEqual(report);
-    } finally { console.log = log; }
+      expect(calls).toBe(1); expect(logs).toHaveLength(1);
+      expect(fs.existsSync(join(configDir, "codex-cli-update-jobs", "jobs.json"))).toBe(true);
+      const dto = JSON.parse(logs[0]!) as Record<string, unknown>;
+      expect(dto).toMatchObject({ jobId: expect.stringMatching(/^[0-9a-f-]{36}$/), status: "not_applied",
+        ownerState: "finished", lifetimeUncertain: false, childState: "terminal",
+        leaseState: "not_acquired_or_released", planId, outcome: "not_applied",
+        reason: "original_install_unchanged", cleanupErrors: [],
+        createdAt: expect.any(String), updatedAt: expect.any(String) });
+      expect(Number.isFinite(Date.parse(dto.createdAt as string))).toBe(true);
+      expect(Number.isFinite(Date.parse(dto.updatedAt as string))).toBe(true);
+      expect(Object.keys(dto).sort()).toEqual([
+        "childState", "cleanupErrors", "createdAt", "jobId", "leaseState", "lifetimeUncertain",
+        "outcome", "ownerState", "planId", "reason", "status", "updatedAt",
+      ]);
+      for (const field of ["requestKey", "payloadHash", "generation", "ownerPid", "verificationPid", "environment", "token", "leaseRetained"]) {
+        expect(Object.hasOwn(dto, field)).toBe(false);
+      }
+    } finally {
+      console.log = log;
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(outer);
+    }
   });
   test("Windows apply refuses before inspecting or installing", async () => {
     let calls = 0;

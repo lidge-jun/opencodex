@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, constants, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync,
   readFileSync, readSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { getConfigDir } from "../config";
 import type { CodexCliApplyResult } from "./cli-update-apply";
 
@@ -46,10 +46,54 @@ function paths(configDir = getConfigDir()) {
   const dir = join(config, JOB_DIR);
   return { config, dir, file: join(dir, FILE), lock: join(dir, LOCK) };
 }
-function prepare(configDir?: string, create = false) {
+function assertTrustedConfigAncestry(parent: string) {
+  const euid = process.geteuid?.();
+  if (euid === undefined) throw new Error("unsupported_store");
+  let current = resolve(parent);
+  for (;;) {
+    const stat = lstatSync(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.uid !== euid && stat.uid !== 0)
+      || realpathSync.native(current) !== current) throw new Error("unsafe_store");
+    const sharedWritable = (stat.mode & 0o022) !== 0;
+    const stickyRootDirectory = (stat.mode & 0o1000) !== 0 && stat.uid === 0;
+    if (sharedWritable && !stickyRootDirectory) throw new Error("unsafe_store");
+    const ancestor = dirname(current);
+    if (ancestor === current) return;
+    current = ancestor;
+  }
+}
+function prepare(configDir?: string, create = false, createConfigRoot = false) {
   const p = paths(configDir);
   if (process.platform === "win32" || process.geteuid?.() === undefined) throw new Error("unsupported_store");
-  const configStat = lstatSync(p.config);
+  const parent = dirname(p.config);
+  const parentStat = lstatSync(parent);
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || parentStat.uid !== process.geteuid()
+    || (parentStat.mode & 0o022) !== 0 || (parentStat.mode & 0o300) !== 0o300
+    || realpathSync.native(parent) !== parent) throw new Error("unsafe_store");
+  assertTrustedConfigAncestry(parent);
+  let configStat: ReturnType<typeof lstatSync>;
+  try { configStat = lstatSync(p.config); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !createConfigRoot) throw error;
+    const parentIdentity = { dev: parentStat.dev, ino: parentStat.ino };
+    let created = false;
+    try { mkdirSync(p.config, { mode: 0o700 }); created = true; }
+    catch (mkdirError) { if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError; }
+    const parentAfter = lstatSync(parent);
+    if (parentAfter.dev !== parentIdentity.dev || parentAfter.ino !== parentIdentity.ino
+      || !parentAfter.isDirectory() || parentAfter.isSymbolicLink() || parentAfter.uid !== process.geteuid()
+      || (parentAfter.mode & 0o022) !== 0 || (parentAfter.mode & 0o300) !== 0o300
+      || realpathSync.native(parent) !== parent) {
+      throw new Error("unsafe_store");
+    }
+    configStat = lstatSync(p.config);
+    if (!configStat.isDirectory() || configStat.isSymbolicLink() || configStat.uid !== process.geteuid()
+      || realpathSync.native(p.config) !== p.config) throw new Error("unsafe_store");
+    if (created && ((configStat.mode & 0o077) !== 0 || (configStat.mode & 0o700) !== 0o700)) {
+      throw new Error("unsafe_store");
+    }
+    configStat = lstatSync(p.config);
+  }
   if (!configStat.isDirectory() || configStat.isSymbolicLink() || realpathSync.native(p.config) !== p.config
     || (configStat.mode & 0o022) !== 0) throw new Error("unsafe_store");
   if (create) {
@@ -92,8 +136,8 @@ function readStore(configDir?: string): Store {
     return value;
   } finally { if (fd !== undefined) closeSync(fd); }
 }
-function withLock<T>(configDir: string | undefined, fn: (p: ReturnType<typeof paths>) => T): T {
-  const p = prepare(configDir, true);
+function withLock<T>(configDir: string | undefined, fn: (p: ReturnType<typeof paths>) => T, createConfigRoot = false): T {
+  const p = prepare(configDir, true, createConfigRoot);
   let lockIdentity: { dev: number; ino: number } | undefined;
   let ownerIdentity: { dev: number; ino: number } | undefined;
   const owner = join(p.lock, "owner.json");
@@ -188,9 +232,10 @@ export function readCodexCliUpdateJob(jobId: string, configDir?: string): CodexC
 }
 
 /** Persist dedupe admission before returning; a duplicate key never schedules a second installer. */
-export function admitCodexCliUpdateJob(input: { requestId: string; planId: string; configDir?: string }):
+export function admitCodexCliUpdateJob(input: { requestId: string; planId: string; confirmed: true; configDir?: string }):
   { kind: "accepted" | "duplicate"; job: CodexCliUpdateJobDto; generation: string } {
-  if (!/^[A-Za-z0-9._:-]{8,128}$/.test(input.requestId) || !/^[0-9a-f]{32}$/.test(input.planId)) throw new Error("invalid_request");
+  if (input.confirmed !== true || !/^[A-Za-z0-9._:-]{8,128}$/.test(input.requestId)
+    || !/^[0-9a-f]{32}$/.test(input.planId)) throw new Error("invalid_request");
   const requestKey = digest(input.requestId);
   const payloadHash = digest(JSON.stringify({ planId: input.planId }));
   return withLock(input.configDir, p => {
@@ -208,7 +253,7 @@ export function admitCodexCliUpdateJob(input: { requestId: string; planId: strin
     store.jobs.push(record); writeStore(p, store);
     live.set(record.id, record.generation);
     return { kind: "accepted", job: dto(record), generation: record.generation };
-  });
+  }, true);
 }
 
 /** Updates are generation/revision fenced so an old worker cannot replace a newer state. */

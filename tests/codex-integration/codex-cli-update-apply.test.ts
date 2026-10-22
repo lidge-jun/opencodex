@@ -265,11 +265,30 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
       session = await issueFixtureGuiSession(base);
       const planResponse = await fetch(`${base}/api/codex/cli-update/plan`, { headers: fixtureSessionHeaders(session) });
       if (!planResponse.ok) throw new Error(`isolated production plan refused (${planResponse.status})`);
-      const plan = await planResponse.json() as { applicable: boolean; planId: string | null; managed: boolean;
-        installedVersion: string | null; targetVersion: string | null; installContentDigest: string | null };
+      const plan = await planResponse.json() as { schemaVersion?: number; applicable: boolean; refusal?: string | null;
+        planId: string | null; provenance?: string; managed: boolean; installedVersion: string | null;
+        targetVersion: string | null; installContentDigest: string | null;
+        session?: { state?: string; matches?: number | null } };
       if (!plan.applicable || !plan.planId || !plan.managed || plan.installedVersion !== "1.0.0"
         || plan.targetVersion !== "1.1.0" || !plan.installContentDigest) {
-        throw new Error("published launcher management route did not produce the fixture-owned managed plan");
+        // Keep the diagnostic useful for separating missing launcher provenance from a
+        // fixture/target refusal, without printing paths, commands, environment or IDs.
+        const refusalCodes = ["windows_inspection_deferred", "windows_apply_disabled", "not_managed",
+          "installed_version_unverified", "install_content_unverified", "target_unresolved", "already_current",
+          "target_not_newer", "blocked_active_session", "blocked_process_state_unknown"];
+        const provenanceKinds = ["npm-global", "app-bundle", "version-manager", "standalone-unverified", "unknown"];
+        const sessionStates = ["none", "active", "unknown", "not-evaluated"];
+        const diagnostic = {
+          schemaVersion: plan.schemaVersion === 1 ? 1 : null, applicable: plan.applicable === true,
+          refusal: typeof plan.refusal === "string" && refusalCodes.includes(plan.refusal) ? plan.refusal : null,
+          provenance: typeof plan.provenance === "string" && provenanceKinds.includes(plan.provenance) ? plan.provenance : null,
+          managed: plan.managed === true, planIdPresent: typeof plan.planId === "string",
+          installedVersionMatches: plan.installedVersion === "1.0.0", targetVersionMatches: plan.targetVersion === "1.1.0",
+          installContentDigestPresent: typeof plan.installContentDigest === "string",
+          sessionState: typeof plan.session?.state === "string" && sessionStates.includes(plan.session.state) ? plan.session.state : null,
+          sessionMatches: Number.isSafeInteger(plan.session?.matches) && (plan.session?.matches ?? -1) >= 0 ? plan.session!.matches : null,
+        };
+        throw new Error(`published launcher management plan was not applicable: ${JSON.stringify(diagnostic)}`);
       }
 
       const requestId = "lost-response-management-e2e-01";
@@ -336,7 +355,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
       // original generation's late completion.
       const configDir = join(f.home, "ocx");
       const restartPlanId = "b".repeat(32);
-      const oldOwner = admitCodexCliUpdateJob({ requestId: "server-restart-owner-unknown-01", planId: restartPlanId, configDir });
+      const oldOwner = admitCodexCliUpdateJob({ requestId: "server-restart-owner-unknown-01", planId: restartPlanId, confirmed: true, configDir });
       oldOwnerWork = runCodexCliUpdateJob(oldOwner.job.jobId, oldOwner.generation, () => new Promise(resolve => {
         finishOldOwner = () => resolve({ outcome: "applied", reason: "verified_target", planId: restartPlanId,
           installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,

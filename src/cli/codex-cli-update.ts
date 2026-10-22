@@ -320,7 +320,7 @@ export async function handleCodexCliUpdateCommand(
     }
     if (parsed.action === "apply") {
       const apply = deps.applyUpdate ?? (await import("../codex/cli-update-apply")).applyCodexCliUpdate;
-      const admitted = admitCodexCliUpdateJob({ requestId: parsed.requestId, planId: parsed.planId });
+      const admitted = admitCodexCliUpdateJob({ requestId: parsed.requestId, planId: parsed.planId, confirmed: true });
       const job = admitted.kind === "accepted"
         ? await runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
           () => apply(parsed.planId, { inspectionDeps: codexCliUpdateInspectionDeps(deps) }))

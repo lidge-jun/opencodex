@@ -39,7 +39,7 @@ export async function handleCodexCliUpdateRoutes(ctx: ManagementContext): Promis
     return jsonResponse({ error: "invalid_request" }, 400, ctx.req, ctx.config);
   }
   try {
-    const admitted = admitCodexCliUpdateJob({ requestId: value.requestId, planId: value.planId });
+    const admitted = admitCodexCliUpdateJob({ requestId: value.requestId, planId: value.planId, confirmed: true });
     if (admitted.kind === "accepted") {
       const work = runCodexCliUpdateJob(admitted.job.jobId, admitted.generation,
         () => applyCodexCliUpdate(value.planId as string, { inspectionDeps: codexCliUpdateInspectionDeps() }));
