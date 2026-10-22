@@ -30,6 +30,7 @@ let originalFetch: typeof fetch;
 let sleep: ReturnType<typeof spyOn>;
 let ids: string[];
 let sends: string[];
+let onSend: ((auth: string) => Promise<Response | undefined>) | undefined;
 
 beforeEach(async () => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -48,12 +49,16 @@ beforeEach(async () => {
   ids = getAccountSet(provider)!.accounts.map(row => row.id);
   await setActiveAccount(provider, ids[0]!);
   sends = [];
+  onSend = undefined;
   globalThis.fetch = (async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.href === "https://oauth2.googleapis.com/token")
+      return Response.json({ access_token: "synthetic-refreshed", expires_in: 3600, token_type: "Bearer" });
     if (url.origin !== origin || !["/v1internal:generateContent", "/v1internal:streamGenerateContent"].includes(url.pathname))
       throw new Error("Unexpected external request in Antigravity model routing regression");
-    sends.push(new Headers(init?.headers).get("authorization")!);
-    return Response.json({ response: {
+    const auth = new Headers(init?.headers).get("authorization")!;
+    sends.push(auth);
+    return await onSend?.(auth) ?? Response.json({ response: {
       candidates: [{ content: { role: "model", parts: [{ text: "synthetic result" }] }, finishReason: "STOP" }],
       usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, totalTokenCount: 8 },
     } });
@@ -136,4 +141,17 @@ test("without failover an omitting selected account is refused, not moved", asyn
   }
   expect(sends).toEqual([]);
   expect(getAccountSet(provider)!.activeAccountId).toBe(ids[0]);
+});
+
+test("a recovery rebind onto a newly selected omitting account is abandoned, not sent", async () => {
+  rosters(true, false, false);
+  // The operator selects an omitting account while the first send is being refused with 401.
+  onSend = async auth => {
+    if (auth !== bearer(0)) return undefined;
+    await setActiveAccount(provider, ids[1]!);
+    return Response.json({ error: { code: 401, status: "UNAUTHENTICATED", message: "synthetic" } }, { status: 401 });
+  };
+  const result = await turn(config());
+  expect(result.status).not.toBe(200);
+  expect(sends).not.toContain(bearer(1));
 });
