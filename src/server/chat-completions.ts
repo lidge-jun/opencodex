@@ -512,6 +512,9 @@ async function handleChatCompletionsWithBudget(
     ...(envelope && nativeChatCombos ? {
       protocolSource: createNativeChatComboSource({
         req, config, envelope, requestedModel, requestedStream: stream, translatorBudget,
+        // Children run without logIds; the request's admission rides the source so their
+        // replay scope resolves the same caller principal as every other surface.
+        ...(logIds?.admission ? { admission: logIds.admission } : {}),
       }),
     } : {}),
     // Terminal vision-describe marker (roadmap 180): the bridge rebuilds

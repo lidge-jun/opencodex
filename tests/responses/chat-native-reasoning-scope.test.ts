@@ -69,9 +69,11 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
     expect(reasoning(owner)).toBe(" ");
     expect(reasoning(undefined)).toBe(" ");
     expect(nativeChatReplayScope(new Headers(), "fixture-principal")).toBeUndefined();
-    expect(nativeChatReplayScope(new Headers({ "thread-id": "fixture-thread" }), undefined)).toBeUndefined();
-    const keyless = scope("fixture-thread", { ...PROVIDER, apiKey: undefined });
-    expect(keyless.current).toBeUndefined();
+    const keyless = nativeChatReplayScope(new Headers({ "thread-id": "fixture-thread" }), undefined)!;
+    bindNativeChatReplayScope(keyless, PROVIDER, "fixture", MODEL);
+    // Physical identity remains available to other scope consumers even though a keyless caller
+    // cannot address the principal-scoped plaintext replay cache.
+    expect(keyless.current).toMatchObject({ providerName: "fixture", modelId: MODEL });
     expect(reasoning(keyless)).toBe(" ");
     budget.dispose();
   });

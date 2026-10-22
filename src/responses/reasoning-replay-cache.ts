@@ -518,13 +518,13 @@ export function reasoningReplayKeyCredentialIdentity(
   return reasoningReplayCredentialIdentity("key", apiKey, provider.headers);
 }
 
-/** Replace only the holder snapshot so parsed-request copies observe rotations. */
+/** Bind physical identity independently of the principal required for plaintext cache access. */
 export function bindReasoningReplayScope(
   scope: OcxReasoningReplayScopeRef | undefined,
   identity: OcxReasoningReplayIdentity | undefined,
 ): void {
   if (!scope) return;
-  if (!identity || !keyFor("binding-check", { ...scope, current: identity })) {
+  if (!identity || !nonEmpty(scope.clientThreadId) || !tupleForIdentity(identity)) {
     delete scope.current;
     return;
   }

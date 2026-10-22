@@ -129,6 +129,7 @@ import {
   ForwardAdmissionCredentialError,
   contextPrincipalIdOf,
   hasForwardableCodexBearer,
+  resolveContextPrincipal,
   validateForwardAdmissionCredential,
 } from "../auth-cors";
 import type { DataPlaneAdmission } from "../auth-cors";
@@ -1002,7 +1003,12 @@ export async function handleResponsesCompact(
         cursorConversationId: gatewayReplayParsed._cursorConversationId,
         sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
       });
-      if (clientThreadId) gatewayReplayParsed._reasoningReplayScope = { clientThreadId };
+      if (clientThreadId) {
+        gatewayReplayParsed._reasoningReplayScope = {
+          clientThreadId,
+          clientPrincipalId: resolveContextPrincipal(req, config, admission),
+        };
+      }
     }
     let compactUrl = gatewayTransport ? `${gatewayTransport.url.replace(/\/+$/, "")}/compact` : `${base}/responses/compact`;
     const compactTargetKey = `${route.providerName}|${route.modelId}|compact`;
