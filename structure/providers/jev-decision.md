@@ -132,8 +132,10 @@ truncated supposedly exhaustive pool.
 display reports cannot mint one. Loaded auth-store notifications prove a sole active, usable account
 and retire receipts on credential/project, login, selection or roster transitions. Root, config
 generation and explicit invalidation also fence outstanding probes. The pure policy in
-`src/providers/antigravity-quota-identity.ts` requires the Google cloud-code-assist mode and canonical
-destination, including explicitly configured renamed instances; evidence stays bound to its instance.
+`src/providers/antigravity-quota-identity.ts` requires the canonical `google-antigravity` OAuth store
+key, the Google cloud-code-assist mode and the canonical destination. Inference resolves its token from
+`store[route.providerName]` through the OAuth definition registered under that name, so the quota probe
+reads the same key and a renamed row neither probes nor borrows the canonical account; it reads unknown.
 Only Gem/Cla five-hour and weekly buckets contribute. A same-owner display-only refresh may retain
 previous family observations with their original clocks; without a matching observation it stays unknown.
 Per-model rows, Argon and last-good display data never create or restamp family evidence.

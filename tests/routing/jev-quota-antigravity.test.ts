@@ -85,15 +85,49 @@ test("arbitrary display reports and direct OAuth key publication never create de
   expect(signal("claude-sonnet-5").tier).toBe("unknown");
 });
 
-test("a renamed canonical Google CCA instance gets only its own receipt-bound evidence", async () => {
-  config.providers.renamed = { ...config.providers["google-antigravity"]!, googleMode: "cloud-code-assist" };
-  await collect("renamed");
-  expect(signal("gemini-3.8-flash", "renamed").usedPercent).toBe(36);
-  expect(signal("gemini-3.8-flash").tier).toBe("unknown");
-  const reports = await fetchProviderQuotaReports(config, true);
-  expect(reports.reports.map(row => row.provider).sort()).toEqual(["google-antigravity", "renamed"]);
-  expect(signal("claude-sonnet-5", "renamed").tier).toBe("nearly_exhausted");
-});
+/** A second OAuth store entry with its own account and quota; returns the bearer of every probe. */
+function renamedTwoStores(renamedStore: boolean, explicitMode: boolean): string[] {
+  const probed: string[] = [];
+  config.providers.renamed = { ...config.providers["google-antigravity"]!, ...(explicitMode ? { googleMode: "cloud-code-assist" as const } : {}) };
+  if (renamedStore) store.renamed = { activeAccountId: "fixture-b", accounts: [{ id: "fixture-b", loginId: "00000000-0000-4000-8000-000000000002", credential: { access: "renamed-access", refresh: "renamed-refresh", expires: reset + 86_400_000, projectId: "renamed-project" } }] };
+  persistStore();
+  const renamedSummary = { groups: [{ displayName: "Gemini", buckets: [{ window: "5h", remainingFraction: 0.1, resetTime: reset }] }] };
+  setAntigravityAccountQuotaTransportForTests({
+    resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+    pinnedPost: async (_url, _pinned, _body, _signal, options) => {
+      const bearer = new Headers(options?.headers as HeadersInit).get("authorization") ?? "";
+      probed.push(bearer);
+      return Response.json(bearer.endsWith("renamed-access") ? renamedSummary : summary);
+    },
+  });
+  return probed;
+}
+
+for (const renamedStore of [true, false]) for (const explicitMode of [true, false]) {
+  test(`a renamed Google CCA row never borrows the canonical account (own store: ${renamedStore}, explicit mode: ${explicitMode})`, async () => {
+    const probed = renamedTwoStores(renamedStore, explicitMode);
+    const canonical = await collect();
+    const canonicalProbes = probed.length;
+    expect(probed.every(bearer => bearer.endsWith("fixture-access"))).toBe(true);
+    // A direct probe reads only the renamed row's own store entry. Like inference, it cannot resolve a
+    // token there (no OAuth definition under that name), so it sends nothing and mints no evidence.
+    const direct = await fetchAntigravityQuota("renamed", config.providers.renamed!);
+    expect(direct).toBeNull();
+    expect(probed.length).toBe(canonicalProbes);
+    publishCollectedDecisionQuota([canonical], config);
+    expect(signal("gemini-3.8-flash", "renamed").tier).toBe("unknown");
+    expect(signal("claude-sonnet-5", "renamed").tier).toBe("unknown");
+    expect(signal("gemini-3.8-flash")).toMatchObject({ tier: "healthy", usedPercent: 36 });
+    // The collector probes the canonical credential once, never again on behalf of the renamed row.
+    probed.length = 0;
+    const reports = await fetchProviderQuotaReports(config, true);
+    expect(reports.reports.map(row => row.provider)).not.toContain("renamed");
+    expect(probed).toEqual(Array.from({ length: canonicalProbes }, () => probed[0]!));
+    expect(probed[0]!.endsWith("fixture-access")).toBe(true);
+    expect(signal("gemini-3.8-flash", "renamed").tier).toBe("unknown");
+    expect(signal("claude-sonnet-5")).toMatchObject({ tier: "nearly_exhausted", usedPercent: 100 });
+  });
+}
 
 for (const patch of [
   { adapter: "openai-chat" as const }, { googleMode: "ai-studio" as const }, { googleMode: "vertex" as const },
@@ -164,11 +198,6 @@ test("a root change withdraws evidence and old receipts cannot be rebound to the
     expect(signal("claude-sonnet-5").tier).toBe("unknown");
   } finally { other.remove(); activateJevQuotaEvidence(); }
   publishCollectedDecisionQuota([held], config); expect(signal("gemini-3.8-flash").tier).toBe("unknown");
-});
-
-test("a renamed Google row without explicit CCA mode cannot borrow canonical evidence", async () => {
-  await collect(); config.providers.renamed = { ...config.providers["google-antigravity"]! };
-  await collect("renamed"); expect(signal("gemini-3.8-flash", "renamed").tier).toBe("unknown");
 });
 
 test("mutating a held display report cannot rewrite the producer's immutable family observation", async () => {

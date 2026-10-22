@@ -252,9 +252,9 @@ display reports, credits and API/Spark/USD meters are not quota evidence for thi
 The separate Anthropic · Pool 2 (`anthropic2`) account pool is not a source of this evidence, so its targets stay unknown.
 
 Antigravity contributes Gem/Cla five-hour and weekly buckets only after a fresh authenticated probe
-for its sole active, usable OAuth account. This includes renamed Google cloud-code-assist instances
-using the canonical destination; their evidence remains separate. Quota follows the resolved native
-`gemini-*` or `claude-*` model, not its display alias. Account, credential, project or destination
+for its sole active, usable OAuth account, and only to the `google-antigravity` provider that signs in
+with that account. A renamed provider row reads unknown and never reuses that account's quota. Quota
+follows the resolved native `gemini-*` or `claude-*` model, not its display alias. Account, credential, project or destination
 changes withdraw the old observation. A display-only refresh can retain matching family counters
 only with their original timestamps; per-model and Argon rows never become decision evidence.
 

@@ -1,7 +1,7 @@
 /** Optional snapshot owner. No store reads: roster input comes only from loaded-store notifications. */
 import { getConfigDir } from "../config/paths";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
-import { antigravityQuotaCredentialGeneration, antigravityQuotaEligible, antigravityQuotaPolicy } from "./antigravity-quota-identity";
+import { ANTIGRAVITY_OAUTH_STORE_KEY, antigravityQuotaCredentialGeneration, antigravityQuotaEligible, antigravityQuotaPolicy } from "./antigravity-quota-identity";
 import type { AuthStore } from "../oauth/store";
 import type { OcxProviderConfig } from "../types";
 import type { AntigravityQuotaObservation, AntigravityQuotaReceipt } from "../lib/decision-quota-sink";
@@ -16,7 +16,7 @@ let observations = new Map<string, { receipt: Receipt; windows: readonly Decisio
 
 /** Any roster transition retires old receipts, including switching away and back. */
 export function observeAntigravityQuotaStore(store: AuthStore): void {
-  const set = store["google-antigravity"];
+  const set = store[ANTIGRAVITY_OAUTH_STORE_KEY];
   const account = set?.accounts.length === 1 ? set.accounts[0] : undefined;
   const next = account && set?.activeAccountId === account.id && !account.paused && !account.needsReauth
     && account.credential.access && account.credential.projectId

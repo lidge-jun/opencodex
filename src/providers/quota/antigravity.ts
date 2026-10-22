@@ -359,12 +359,13 @@ export async function fetchAntigravityUsageQuota(accessToken: string, projectId:
   return null;
 }
 
+/** Every store read uses `provider`, the same key inference resolves, so a row never probes another row's account. */
 export async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
-  const credential = getCredential("google-antigravity");
+  const credential = getCredential(provider);
   if (!credential?.projectId) return null;
   let accessToken: string;
-  try { accessToken = await getValidAccessToken("google-antigravity"); } catch { return null; }
-  const set = decisionQuotaSinkActive() ? getAccountSet("google-antigravity") : undefined;
+  try { accessToken = await getValidAccessToken(provider); } catch { return null; }
+  const set = decisionQuotaSinkActive() ? getAccountSet(provider) : undefined;
   const account = set?.accounts.find(row => row.id === set.activeAccountId);
   const probed = account?.credential.access === accessToken && account.credential.projectId === credential.projectId ? account : undefined;
   const receipt = probed ? captureAntigravityQuotaReceipt(provider, config, probed.id, antigravityQuotaCredentialGeneration(probed.credential)) : undefined;
