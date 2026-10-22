@@ -49,6 +49,7 @@ describe("advisorTranscript", () => {
     const long = buildAdvisorUserPrompt(input);
     expect(long.startsWith("x".repeat(2000))).toBe(true);
     expect(long).not.toContain("x".repeat(2001));
+    expect(long).toEndWith("… [truncated]");
   });
 
   test("renders user, tool calls, and tool results the worker produced", () => {

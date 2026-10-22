@@ -188,7 +188,7 @@ export const de: Record<TKey, string> = {
   "advisor.effort": "Denkintensität",
   "advisor.policy": "Richtlinie",
   "advisor.questionOnly": "Nur die Frage des Workers senden",
-  "advisor.questionOnlyNote": "Gesendet werden nur die Frage des Workers (maximal 2000 Zeichen) und eine feste Berateranweisung. Verlauf, Werkzeugergebnisse und Aufgabenkontext werden nicht angehängt. Der Worker muss nötige Hintergrundinformationen ergänzen. Automatische Beratungen pausieren; bestehende Limits gelten weiter.",
+  "advisor.questionOnlyNote": "Gesendet werden nur die Frage des Workers (bis zu 2000 Zeichen; bei Kürzung mit einem Hinweis) und eine feste Berateranweisung. Verlauf, Werkzeugergebnisse und Aufgabenkontext werden nicht angehängt. Der Worker muss nötige Hintergrundinformationen ergänzen. Automatische Beratungen pausieren; bestehende Limits gelten weiter.",
   "advisor.policy.manual": "Manuell — nur wenn der Worker fragt",
   "advisor.policy.preflight": "Preflight — automatischer Konsultationsversuch, sobald Orientierungsbelege vorliegen",
   "advisor.policy.adaptive": "Adaptiv — Orientierung und fehlgeschlagene Reparaturen",

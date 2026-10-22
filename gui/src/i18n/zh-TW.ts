@@ -180,7 +180,7 @@ export const zhTW: Record<TKey, string> = {
   "advisor.effort": "推理強度",
   "advisor.policy": "策略",
   "advisor.questionOnly": "僅傳送主模型的問題",
-  "advisor.questionOnlyNote": "僅傳送主模型填寫的問題（最多 2000 字元）和固定顧問指令，不自動附加對話歷史、工具結果或任務上下文。主模型需要自行補充必要背景。自動諮詢暫停，現有諮詢次數限制仍然生效。",
+  "advisor.questionOnlyNote": "僅傳送主模型填寫的問題（最多保留 2000 字元，超出時附加截斷提示）和固定顧問指令，不自動附加對話歷史、工具結果或任務上下文。主模型需要自行補充必要背景。自動諮詢暫停，現有諮詢次數限制仍然生效。",
   "advisor.policy.manual": "手動 — 僅在 Worker 主動請求時",
   "advisor.policy.preflight": "Preflight — 出現方向性證據後自動嘗試諮詢",
   "advisor.policy.adaptive": "自適應 — 初始探查與修復失敗時諮詢",

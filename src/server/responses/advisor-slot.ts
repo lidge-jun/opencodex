@@ -99,7 +99,9 @@ function parseArgs(argsBuf: string): { question?: string } {
     const parsed: unknown = JSON.parse(argsBuf);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const question = (parsed as { question?: unknown }).question;
-      if (typeof question === "string" && question.trim() !== "") return { question: question.slice(0, 2_000) };
+      const text = typeof question === "string" ? question.trim() : "";
+      // A non-whitespace overflow marker survives the prompt builder's trim without retaining the full question.
+      if (text) return { question: text.length > 2_000 ? `${text.slice(0, 2_000)}…` : text };
     }
   } catch { /* malformed args → no focus question */ }
   return {};

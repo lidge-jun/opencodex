@@ -187,7 +187,7 @@ export const vi: Record<TKey, string> = {
   "advisor.effort": "Mức suy luận",
   "advisor.policy": "Chính sách",
   "advisor.questionOnly": "Chỉ gửi câu hỏi của worker",
-  "advisor.questionOnlyNote": "Chỉ gửi câu hỏi của worker (tối đa 2000 ký tự) cùng chỉ dẫn cố định cho cố vấn. Không tự động đính kèm lịch sử, kết quả công cụ hay ngữ cảnh tác vụ. Worker phải bổ sung thông tin nền cần thiết. Tư vấn tự động tạm dừng; các giới hạn lượt tư vấn hiện có vẫn áp dụng.",
+  "advisor.questionOnlyNote": "Chỉ gửi câu hỏi của worker (giữ tối đa 2000 ký tự, kèm thông báo nếu bị cắt ngắn) cùng chỉ dẫn cố định cho cố vấn. Không tự động đính kèm lịch sử, kết quả công cụ hay ngữ cảnh tác vụ. Worker phải bổ sung thông tin nền cần thiết. Tư vấn tự động tạm dừng; các giới hạn lượt tư vấn hiện có vẫn áp dụng.",
   "advisor.policy.manual": "Thủ công — chỉ khi worker yêu cầu",
   "advisor.policy.preflight": "Preflight — tự động thử tư vấn khi có bằng chứng định hướng",
   "advisor.policy.adaptive": "Thích ứng — khảo sát ban đầu và sửa lỗi thất bại",
