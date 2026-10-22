@@ -162,7 +162,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `desktop/ui/cli.html` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `desktop/ui/cli.js` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `docs-site/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
-| `gui/` | [`overview.md`](overview.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`design-methodology.md`](design-methodology.md)<br>[`companion.md`](companion.md) |
+| `gui/` | [`overview.md`](overview.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`design-methodology.md`](design-methodology.md)<br>[`companion.md`](companion.md) |
 | `gui/src/account-pause-display.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `gui/src/components/ModelPriceDialog.tsx` | [`pricing.md`](pricing.md) |
 | `gui/src/hooks/useProviderAccountPools.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
@@ -213,7 +213,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/signed-in-identity.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
-| `src/combos/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md) |
+| `src/combos/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/companion/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`companion.md`](companion.md) |
 | `src/compatibility/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) |
 | `src/config.ts` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md) |
@@ -262,7 +262,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/quota/` | [`dashboard-and-usage.md`](dashboard-and-usage.md) |
 | `src/reasoning-effort.ts` | [`runtime.md`](runtime.md) |
 | `src/remote-control/` | [`remote-workspace.md`](remote-workspace.md) |
-| `src/remote/` | [`runtime.md`](runtime.md) |
+| `src/remote/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/responses/reasoning-replay-cache.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/router.ts` | [`runtime.md`](runtime.md) |

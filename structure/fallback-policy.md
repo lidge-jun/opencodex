@@ -25,7 +25,9 @@ availability check, so it never hops.
 `fallback` in config.json (`src/types/fallback.ts`, read schema `src/config/schema/fallback-policy.ts`):
 global `model`/`provider` booleans, `providers.<name>`, `routes.<selector>` and `devices.<id>` maps of
 the same switches, and `devices.<id>.localFallback`. A malformed leaf reads as absent; diagnostics and
-the load warning name the section. Map keys are validated by the resolver, so one bad key never drops its
+the load warning name the section. A whole-config write does not degrade: `validateConfigCandidate`
+(`src/config/diagnostics.ts`) rejects a malformed `fallback` section through `fallbackPolicyError`, so a
+save cannot silently drop a refusal. Map keys are validated by the resolver, so one bad key never drops its
 siblings.
 
 `resolveFallbackPolicy`: a device entry set to `false` for the kind refuses; a device `true` never
@@ -42,7 +44,7 @@ and is cached for five seconds. Loopback and unkeyed requests have no device sco
 
 | Site | Hop point | Reactive status | Proactive |
 |---|---|---|---|
-| Combos, `src/server/responses/core-combo.ts` | top of the dispatch loop, when a later dispatch follows a failure on a different target; and before the first send of a `failover` combo that starts on a later target than its first, for any reason | the failure's status and `Retry-After` | `cooldown` or `quota_exhausted`, 429; otherwise `unavailable`, 503 |
+| Combos, `src/server/responses/core-combo.ts` | top of the dispatch loop, when a later dispatch follows a failure on a different target; and before the first send of a `failover` combo that starts on a later target than its first, for any reason | the failure's status and `Retry-After` | `cooldown` or `quota_exhausted`, 429; otherwise `unavailable`, 503 (`comboTargetSkipTrigger`, `src/combos/resolve.ts`) |
 | Routing profiles, `src/server/responses/policy-fallback.ts` | before the next ranked candidate runs | the failure's status and `Retry-After` | — |
 | Subagent model fallback, `src/codex/subagent-model-fallback.ts` | `applySubagentModelFallback`, before the spawn's model is rewritten; the caller in `src/server/responses/request-prepare.ts` returns the refusal | — | `unavailable`, 503 |
 | Main-account hard-lock fallback, `src/server/responses/main-hard-lock-routing.ts` | before the body is rewritten; `FallbackRefusedError` carries the refusal to `request-prepare.ts` | — | `hard_lock`, 429 |

@@ -59,7 +59,8 @@ The settings live in `config.json` under `fallback`:
 }
 ```
 
-A malformed leaf is ignored (that scope keeps today's behavior) and `ocx config` diagnostics name it.
+A malformed leaf is ignored, so policy resolution uses the next applicable scope, and `ocx config`
+diagnostics name it. A whole-config write that contains one is refused instead.
 
 ## The error you get
 

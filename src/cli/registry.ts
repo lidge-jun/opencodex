@@ -443,7 +443,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "A refused fallback answers fallback_refused with the status of the failure that triggered it, and names the command that allows it.",
       "Precedence: a device set to off always refuses; otherwise route, then provider, then global; unset allows.",
       "Rotation among the accounts or keys of one provider pool is not a fallback and is not governed here.",
-      "Live proxy only. On a Remote Link Child, status reads the Home; writes run on the Home.",
+      "Live proxy only. On a Remote Link Child, status reads the Home; writes are refused. Run write commands on the Home.",
     ],
   },
   {

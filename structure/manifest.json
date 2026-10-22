@@ -745,7 +745,10 @@
         "src/client/",
         "src/server/",
         "src/cli/",
-        "src/codex/"
+        "src/codex/",
+        "src/combos/",
+        "src/remote/",
+        "gui/"
       ]
     },
     {

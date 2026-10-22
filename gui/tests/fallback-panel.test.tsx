@@ -115,6 +115,17 @@ describe("FallbackPanel", () => {
     ]);
   });
 
+  test("devices: turning local fallback off clears the entry, which a revoked device still accepts", async () => {
+    const requests: unknown[] = [];
+    const allowed = { ...baseState, devices: [{ ...baseState.devices[0]!, localFallback: true }] };
+    const host = await mount((async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") requests.push(JSON.parse(String(init.body)));
+      return json(allowed);
+    }) as unknown as typeof fetch, "devices");
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Local fallback for mac-studio"]')!.click(); await flush(); });
+    expect(requests).toEqual([{ writes: [{ scope: "device", key: LINK, setting: "localFallback", value: null }] }]);
+  });
+
   test("on a Child the device rows are read-only and nothing is written", async () => {
     let puts = 0;
     const host = await mount((async (_url: string, init?: RequestInit) => {

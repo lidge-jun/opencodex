@@ -110,7 +110,7 @@ export default function FallbackPanel({ apiBase, section, readOnly = false }: { 
                 <tr key={device.id}>
                   <td><strong>{name}</strong>{device.alias && <code className="fallback-device-id">{device.id}</code>}</td>
                   <td><FallbackToggle label={t("fallback.devices.localFor", { name })} on={device.localFallback} disabled={locked}
-                    onToggle={() => { void write([{ scope: "device", key: device.id, setting: "localFallback", value: !device.localFallback }]); }} /></td>
+                    onToggle={() => { void write([{ scope: "device", key: device.id, setting: "localFallback", value: device.localFallback ? null : true }]); }} /></td>
                   <td><FallbackToggle label={t("fallback.devices.chainsFor", { name })} on={chainsOn} disabled={locked}
                     onToggle={() => {
                     const value = chainsOn ? false : null;

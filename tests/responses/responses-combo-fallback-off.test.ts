@@ -139,8 +139,11 @@ describe("combo fallback off", () => {
     expect(response.status).toBe(429);
     expect(((await response.json()) as { error: { fallback: { scope: string } } }).error.fallback.scope).toBe("device");
     expect(hosts).toEqual(["primary.example"]);
-    // Another device is unaffected.
+    // Another device is unaffected, on the same reactive path: the 429 above cooled primary.
+    clearComboTargetCooldowns();
     expect((await run(cfg, { kind: "configured", keyId: "key_other", source: "header" })).status).toBe(200);
+    expect(hosts).toEqual(["primary.example", "primary.example", "backup.example"]);
+    expect(recentFallbackEvents().at(-1)).toMatchObject({ outcome: "taken", trigger: "rate_limited" });
   });
 
   test("proactive: a cooling first target refuses before any send when provider fallback is off", async () => {
