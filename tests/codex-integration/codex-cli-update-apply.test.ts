@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { createServer, connect } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { applyCodexCliUpdate, type CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
+import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, runCodexCliUpdateJob, type CodexCliUpdateJobDto } from "../../src/codex/cli-update-job";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { acquireCodexCliApplyLease } from "../../src/codex/cli-update-lease";
 import { createCodexCliApplyFixture, waitForApplyAdmission } from "../helpers/codex-cli-apply-fixture";
@@ -39,6 +42,192 @@ function cli(f: ReturnType<typeof fixture>, args: string[]) {
   expect(result.error).toBeUndefined(); expect(result.status).toBe(0);
   return JSON.parse(result.stdout);
 }
+function fixtureInWorkspaceScratch() {
+  const scratch = join(repoRoot(), ".tmp");
+  mkdirSync(scratch, { recursive: true });
+  const stat = lstatSync(scratch);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync.native(scratch) !== scratch) {
+    throw new Error("workspace .tmp is not a private local directory");
+  }
+  const root = mkdtempSync(join(scratch, "codex-cli-management-e2e-")); roots.push(root);
+  return createCodexCliApplyFixture(root, process.platform, process.arch);
+}
+
+function managementTestEnv(f: ReturnType<typeof fixture>) {
+  const node = Bun.which("node");
+  if (!node) throw new Error("fixture node executable unavailable");
+  const home = f.home;
+  const configDir = join(home, "ocx");
+  const env: NodeJS.ProcessEnv = {
+    PATH: [join(f.root, "bin"), join(f.prefix, "bin"), dirname(node), "/usr/bin", "/bin"].join(":"),
+    HOME: home, CODEX_HOME: join(home, ".codex"), TMPDIR: f.temporaryRoot, TEMP: f.temporaryRoot, TMP: f.temporaryRoot,
+    OPENCODEX_HOME: configDir, CODEX_CLI_PATH: f.launcher, OPENCODEX_BUN_PATH: process.execPath,
+    OCX_NO_DESKTOP_HANDOFF: "1", NODE_COMPILE_CACHE: join(f.root, "node-compile-cache"),
+    XDG_CONFIG_HOME: join(home, "xdg-config"), XDG_CACHE_HOME: join(home, "xdg-cache"), XDG_DATA_HOME: join(home, "xdg-data"),
+  };
+  return { node, configDir, env };
+}
+
+async function reserveLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("private listener port unavailable");
+  const port = address.port;
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  return port;
+}
+
+function startFixtureManagementServer(f: ReturnType<typeof fixture>, port: number, gate: string) {
+  const { node, env } = managementTestEnv(f);
+  env.OCX_FIXTURE_NPM_GATE = gate;
+  const child = spawn(node, [repoPath("bin", "ocx.mjs"), "start", "--port", String(port)], {
+    cwd: f.root, env, detached: true, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  const append = (chunk: Buffer) => { output = (output + chunk.toString("utf8")).slice(-64 * 1024); };
+  child.stdout?.on("data", append);
+  child.stderr?.on("data", append);
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  return { child, closed, output: () => output, env };
+}
+
+async function waitForManagementServer(base: string, child: ChildProcess, closed: Promise<unknown>, output: () => string): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`fixture server exited early (${child.exitCode}); outputBytes=${Buffer.byteLength(output())}`);
+    try {
+      const response = await fetch(`${base}/healthz`, { signal: AbortSignal.timeout(1000) });
+      if (response.ok) return;
+    } catch { /* the isolated listener is still starting */ }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  throw new Error(`fixture server readiness timed out; outputBytes=${Buffer.byteLength(output())}`);
+}
+
+function closeOrTimeout(closed: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    closed.then(() => { clearTimeout(timer); resolve(true); });
+  });
+}
+
+async function stopFixtureManagementServer(server: ReturnType<typeof startFixtureManagementServer>): Promise<void> {
+  const pid = server.child.pid;
+  if (!pid) throw new Error("fixture server pid unavailable during owned cleanup");
+  const groupAlive = () => {
+    try { process.kill(-pid, 0); return true; }
+    catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+  };
+  if (server.child.exitCode === null && server.child.signalCode === null) {
+    server.child.kill("SIGINT");
+    await closeOrTimeout(server.closed, 10_000);
+  }
+  if (groupAlive()) {
+    try { process.kill(-pid, "SIGTERM"); } catch { /* owned process group already exited */ }
+    await closeOrTimeout(server.closed, 5_000);
+  }
+  if (groupAlive()) {
+    try { process.kill(-pid, "SIGKILL"); } catch { /* owned process group already exited */ }
+    await closeOrTimeout(server.closed, 2_000);
+  }
+}
+
+async function issueFixtureGuiSession(base: string) {
+  const origin = new URL(base).origin;
+  const response = await fetch(`${base}/opencodex-session`, { headers: { origin } });
+  if (!response.ok) throw new Error(`fixture GUI session refused (${response.status})`);
+  const html = await response.text();
+  const read = (name: string) => new RegExp(`<meta name="${name}" content="([^"]+)"`).exec(html)?.[1] ?? null;
+  const token = read("opencodex-session-token"), csrf = read("opencodex-session-csrf");
+  const browserOrigin = read("opencodex-session-origin");
+  if (!token || !csrf || browserOrigin !== origin) throw new Error("fixture GUI session bootstrap invalid");
+  return { token, csrf, origin };
+}
+
+function fixtureSessionHeaders(session: { token: string; csrf: string; origin: string }, write = false) {
+  return { authorization: `Bearer ${session.token}`, origin: session.origin,
+    "x-opencodex-gui-origin": session.origin,
+    ...(write ? { "x-opencodex-csrf-token": session.csrf, "content-type": "application/json" } : {}) };
+}
+
+async function sendLostApplyResponse(base: string, session: { token: string; csrf: string; origin: string }, body: unknown) {
+  const url = new URL(`${base}/api/codex/cli-update/apply`);
+  const payload = Buffer.from(JSON.stringify(body));
+  const headers = [
+    `POST ${url.pathname} HTTP/1.1`, `Host: ${url.host}`, `Origin: ${session.origin}`,
+    `Authorization: Bearer ${session.token}`, `x-opencodex-gui-origin: ${session.origin}`,
+    `x-opencodex-csrf-token: ${session.csrf}`, "content-type: application/json",
+    `content-length: ${payload.byteLength}`, "Connection: close", "", "",
+  ].join("\r\n");
+  return new Promise<ReturnType<typeof connect>>((resolve, reject) => {
+    const socket = connect(Number(url.port), url.hostname);
+    let connected = false;
+    socket.once("error", error => { if (!connected) reject(error); });
+    socket.once("connect", () => socket.write(Buffer.concat([Buffer.from(headers), payload]), error => {
+      if (error) { socket.destroy(); reject(error); return; }
+      connected = true;
+      socket.pause();
+      resolve(socket);
+    }));
+  });
+}
+
+async function waitForJob(base: string, session: { token: string; csrf: string; origin: string }, jobId: string,
+  predicate: (value: Record<string, unknown>) => boolean, timeoutMs = 30_000): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const response = await fetch(`${base}/api/codex/cli-update/jobs/${jobId}`, { headers: fixtureSessionHeaders(session) });
+    if (response.ok) {
+      const value = await response.json() as Record<string, unknown>;
+      if (predicate(value)) return value;
+    }
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error("fixture management job state timed out");
+}
+
+async function waitForDurableAdmission(configDir: string, requestId: string, timeoutMs = 10_000): Promise<string> {
+  const file = join(configDir, "codex-cli-update-jobs", "jobs.json");
+  const requestKey = createHash("sha256").update(requestId).digest("hex");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(file)) {
+      const value = JSON.parse(readFileSync(file, "utf8")) as { jobs?: Array<{ id?: string; requestKey?: string }> };
+      const job = value.jobs?.find(entry => entry.requestKey === requestKey);
+      if (job?.id) return job.id;
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error("fixture durable job admission was not observed");
+}
+
+function gateFixtureNpmInstall(f: ReturnType<typeof fixture>) {
+  const path = join(f.root, "bin", "npm");
+  const source = readFileSync(path, "utf8");
+  const marker = "const installed = cp.spawnSync(";
+  if (source.split(marker).length !== 2) throw new Error("fixture npm wrapper shape changed");
+  const wait = [
+    'const fixtureGate = process.env.OCX_FIXTURE_NPM_GATE;',
+    'if (fixtureGate) {',
+    '  const cell = new Int32Array(new SharedArrayBuffer(4));',
+    '  const deadline = Date.now() + 45000;',
+    '  while (!fs.existsSync(fixtureGate) && Date.now() < deadline) Atomics.wait(cell, 0, 0, 20);',
+    '  if (!fs.existsSync(fixtureGate)) process.exit(85);',
+    '}',
+  ].join("\n") + "\n";
+  writeFileSync(path, source.replace(marker, wait + marker), { encoding: "utf8", mode: 0o755 });
+  chmodSync(path, 0o755);
+}
+
+async function postFixtureApply(base: string, session: { token: string; csrf: string; origin: string }, body: unknown) {
+  return fetch(`${base}/api/codex/cli-update/apply`, { method: "POST", headers: fixtureSessionHeaders(session, true), body: JSON.stringify(body) });
+}
 describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
   test("published Node launcher -> real resolver/provenance -> plan/apply -> verified new files", () => {
     const f = fixture();
@@ -57,6 +246,149 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     expect(calls[0]!.join(" ")).not.toContain("@latest");
     expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
   }, 120_000);
+
+  test("published Node launcher -> isolated management plan, lost-response apply retry, and CLI status", async () => {
+    const f = fixtureInWorkspaceScratch();
+    const gate = join(f.root, "release-npm-install");
+    gateFixtureNpmInstall(f);
+    const port = await reserveLoopbackPort();
+    const base = `http://127.0.0.1:${port}`;
+    let server = startFixtureManagementServer(f, port, gate);
+    let releaseGate = false;
+    let session: Awaited<ReturnType<typeof issueFixtureGuiSession>> | undefined;
+    let jobId: string | undefined;
+    let lostSocket: ReturnType<typeof connect> | undefined;
+    let finishOldOwner: (() => void) | undefined;
+    let oldOwnerWork: Promise<CodexCliUpdateJobDto> | undefined;
+    try {
+      await waitForManagementServer(base, server.child, server.closed, server.output);
+      session = await issueFixtureGuiSession(base);
+      const planResponse = await fetch(`${base}/api/codex/cli-update/plan`, { headers: fixtureSessionHeaders(session) });
+      if (!planResponse.ok) throw new Error(`isolated production plan refused (${planResponse.status})`);
+      const plan = await planResponse.json() as { applicable: boolean; planId: string | null; managed: boolean;
+        installedVersion: string | null; targetVersion: string | null; installContentDigest: string | null };
+      if (!plan.applicable || !plan.planId || !plan.managed || plan.installedVersion !== "1.0.0"
+        || plan.targetVersion !== "1.1.0" || !plan.installContentDigest) {
+        throw new Error("published launcher management route did not produce the fixture-owned managed plan");
+      }
+
+      const requestId = "lost-response-management-e2e-01";
+      const applyBody = { requestId, planId: plan.planId, confirmed: true };
+      lostSocket = await sendLostApplyResponse(base, session, applyBody);
+      jobId = await waitForDurableAdmission(join(f.home, "ocx"), requestId);
+      lostSocket.destroy(); lostSocket = undefined;
+      const installTrace = join(f.root, "install-trace.jsonl");
+      const installDeadline = Date.now() + 30_000;
+      while (Date.now() < installDeadline) {
+        const lines = existsSync(installTrace) ? readFileSync(installTrace, "utf8").split("\n").filter(Boolean) : [];
+        if (lines.length > 0) break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      const beforeRetry = existsSync(installTrace) ? readFileSync(installTrace, "utf8").split("\n").filter(Boolean) : [];
+      if (beforeRetry.length !== 1) throw new Error("lost HTTP response did not reach one fixture installer admission");
+
+      const retry = await postFixtureApply(base, session, applyBody);
+      if (retry.status !== 202) throw new Error(`same-key management retry returned ${retry.status}`);
+      const retryBody = await retry.json() as { job?: { jobId?: string } };
+      if (retryBody.job?.jobId !== jobId) throw new Error("same-key retry did not return the admitted job id");
+      const conflict = await postFixtureApply(base, session, { ...applyBody, planId: "f".repeat(32) });
+      if (conflict.status !== 409) throw new Error(`changed-payload key reuse returned ${conflict.status}`);
+      const running = await fetch(`${base}/api/codex/cli-update/jobs/${jobId}`, { headers: fixtureSessionHeaders(session) });
+      const runningDto = await running.json() as Record<string, unknown>;
+      if (!running.ok || runningDto.status !== "running" || runningDto.ownerState !== "active"
+        || runningDto.childState !== "active_or_not_observed" || runningDto.leaseState !== "unknown") {
+        throw new Error("active fixture job status lost its execution/lease uncertainty projection");
+      }
+      const stillOneInstall = readFileSync(installTrace, "utf8").split("\n").filter(Boolean);
+      if (stillOneInstall.length !== 1) throw new Error("idempotent response replay scheduled another installer");
+
+      writeFileSync(gate, "release\n", { flag: "wx", mode: 0o600 });
+      releaseGate = true;
+      const terminal = await waitForJob(base, session, jobId,
+        value => value.ownerState === "finished", 45_000);
+      if (terminal.outcome !== "applied" || terminal.status !== "applied" || terminal.leaseState !== "not_acquired_or_released") {
+        throw new Error("private fixture apply did not finish with verified installation and lease cleanup");
+      }
+      const args = JSON.parse(readFileSync(installTrace, "utf8").trim()) as string[];
+      if (args.length === 0 || !args.includes("--offline") || !args.includes("--ignore-scripts")
+        || args[args.indexOf("--prefix") + 1] !== f.prefix || args.filter(arg => arg.includes("@file:")).length !== 2) {
+        throw new Error("private npm invocation escaped the fixture prefix or install restrictions");
+      }
+
+      const { node, env } = managementTestEnv(f);
+      const cli = spawnSync(node, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "status", jobId, "--json"], {
+        cwd: f.root, encoding: "utf8", env, timeout: 30_000,
+      });
+      if (cli.error || cli.status !== 0) throw new Error("published CLI status consumer failed");
+      const cliDto = JSON.parse(cli.stdout.trim()) as Record<string, unknown>;
+      if (JSON.stringify(cliDto) !== JSON.stringify(terminal)) throw new Error("CLI and management job DTOs diverged");
+      const publicDto = JSON.stringify(terminal);
+      for (const privateValue of [f.root, f.home, f.prefix, session.token, session.csrf, gate]) {
+        if (publicDto.includes(privateValue)) throw new Error("job DTO exposed fixture-private state");
+      }
+      for (const field of ["requestKey", "payloadHash", "generation", "ownerPid", "verificationPid", "environment", "token"]) {
+        if (Object.hasOwn(terminal, field)) throw new Error("job DTO included a private schema field");
+      }
+      jobId = undefined;
+
+      // Keep a separate old owner alive across the management server restart. The restarted
+      // server must project its persisted running record as unknown, then accept only that
+      // original generation's late completion.
+      const configDir = join(f.home, "ocx");
+      const restartPlanId = "b".repeat(32);
+      const oldOwner = admitCodexCliUpdateJob({ requestId: "server-restart-owner-unknown-01", planId: restartPlanId, configDir });
+      oldOwnerWork = runCodexCliUpdateJob(oldOwner.job.jobId, oldOwner.generation, () => new Promise(resolve => {
+        finishOldOwner = () => resolve({ outcome: "applied", reason: "verified_target", planId: restartPlanId,
+          installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
+          verificationPid: null, cleanupErrors: [] });
+      }), configDir);
+      const oldOwnerStatus = await fetch(`${base}/api/codex/cli-update/jobs/${oldOwner.job.jobId}`, { headers: fixtureSessionHeaders(session) });
+      const oldOwnerDto = await oldOwnerStatus.json() as Record<string, unknown>;
+      if (!oldOwnerStatus.ok || oldOwnerDto.ownerState !== "unknown" || oldOwnerDto.status !== "ambiguous"
+        || oldOwnerDto.reason !== "owner_state_unknown") throw new Error("management API treated an unowned running record as stopped");
+
+      await stopFixtureManagementServer(server);
+      const restartedPort = await reserveLoopbackPort();
+      const restartedBase = `http://127.0.0.1:${restartedPort}`;
+      server = startFixtureManagementServer(f, restartedPort, gate);
+      await waitForManagementServer(restartedBase, server.child, server.closed, server.output);
+      const restartedSession = await issueFixtureGuiSession(restartedBase);
+      const afterRestart = await fetch(`${restartedBase}/api/codex/cli-update/jobs/${oldOwner.job.jobId}`,
+        { headers: fixtureSessionHeaders(restartedSession) });
+      const restartedDto = await afterRestart.json() as Record<string, unknown>;
+      if (!afterRestart.ok || restartedDto.ownerState !== "unknown" || restartedDto.reason !== "owner_state_unknown") {
+        throw new Error("restarted management process inferred an old owner's termination");
+      }
+      finishOldOwner?.();
+      const lateResult = await oldOwnerWork;
+      const staleWrite = finishCodexCliUpdateJob(oldOwner.job.jobId, oldOwner.generation, 1,
+        { outcome: "refused", reason: "late_result", planId: restartPlanId, installedVersion: null,
+          targetVersion: null, installerExitCode: null, leaseRetained: false, verificationPid: null,
+          cleanupErrors: [] }, configDir);
+      if (lateResult.outcome !== "applied" || staleWrite?.outcome !== "applied") {
+        throw new Error("late old-generation state overwrote the owner's completed result");
+      }
+      const afterLate = await fetch(`${restartedBase}/api/codex/cli-update/jobs/${oldOwner.job.jobId}`,
+        { headers: fixtureSessionHeaders(restartedSession) });
+      const finalDto = await afterLate.json() as Record<string, unknown>;
+      if (!afterLate.ok || finalDto.status !== "applied" || finalDto.ownerState !== "finished") {
+        throw new Error("restarted management process did not observe the fenced owner completion");
+      }
+    } finally {
+      finishOldOwner?.();
+      if (oldOwnerWork) await oldOwnerWork.catch(() => undefined);
+      lostSocket?.destroy();
+      if (!releaseGate) {
+        try { writeFileSync(gate, "release\n", { flag: "wx", mode: 0o600 }); } catch { /* gate was not installed */ }
+      }
+      if (session && jobId) {
+        try { await waitForJob(base, session, jobId, value => value.ownerState === "finished", 45_000); }
+        catch { /* preserve the primary assertion; the owned server is still drained below */ }
+      }
+      await stopFixtureManagementServer(server);
+    }
+  }, 120_000);
+
   test("published CLI packs and applies through a symlinked TMPDIR using canonical staging", () => {
     const f = fixture(); const alias = join(f.root, "tmp-alias");
     symlinkSync(f.temporaryRoot, alias, "dir");

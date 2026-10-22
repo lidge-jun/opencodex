@@ -179,6 +179,7 @@
         "src/codex/cli-update-apply.ts",
         "src/codex/cli-update-job.ts",
         "src/codex/cli-update-inspection-context.ts",
+        "bin/ocx.mjs",
         "src/codex/cli-update-artifacts.ts",
         "src/codex/cli-update-files.ts",
         "src/codex/cli-update-lease.ts",

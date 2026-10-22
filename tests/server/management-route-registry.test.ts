@@ -112,8 +112,7 @@ describe("management route registry reconciliation", () => {
     expect(clientEvidence?.status).toBe(400);
   });
 
-  test("HTTP apply retry returns the durable job without scheduling a second engine run", async () => {
-    if (process.platform === "win32" || process.geteuid?.() === undefined) return;
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("HTTP apply retry returns the durable job without scheduling a second engine run", async () => {
     const configDir = mkdtempSync(join(tmpdir(), "ocx-cli-update-http-test-"));
     chmodSync(configDir, 0o700);
     const oldHome = process.env.OPENCODEX_HOME;

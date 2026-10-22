@@ -151,6 +151,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `.github/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `app/` | [`overview.md`](overview.md)<br>[`companion.md`](companion.md) |
 | `bin/` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `bin/ocx.mjs` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `desktop/` | [`desktop-shell.md`](desktop-shell.md)<br>[`companion.md`](companion.md) |
 | `desktop/src-tauri/src/cli_command.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `desktop/src-tauri/src/cli_command_posix.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |

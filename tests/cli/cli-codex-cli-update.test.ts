@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { handleCodexCliUpdateCommand, parseCodexCliUpdateArgs } from "../../src/cli/codex-cli-update";
-import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../../src/codex/cli-update-job";
+import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, projectCodexCliUpdateJobLifecycle, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../../src/codex/cli-update-job";
 import {
   initializeNodeLauncherContext,
   NODE_LAUNCH_CONTEXT_ENV,
@@ -45,8 +45,29 @@ const identityReport: CodexCliInstallationIdentityReport = {
 };
 
 describe("Codex CLI update CLI", () => {
-  test("apply retry keys deduplicate durable jobs and status exposes only the shared public DTO", async () => {
-    if (process.platform === "win32" || process.geteuid?.() === undefined) return;
+  test("job lifecycle projection keeps lease and child uncertainty distinct from the outcome", () => {
+    const project = (input: Parameters<typeof projectCodexCliUpdateJobLifecycle>[0]) => projectCodexCliUpdateJobLifecycle(input);
+    const base = { active: false, status: "ambiguous" as const, outcome: "ambiguous" as const,
+      reason: "job_result_unknown", leaseRetained: true, cleanupErrors: [] as readonly string[] };
+    expect(project(base)).toMatchObject({ childState: "unknown", leaseState: "unknown", outcome: "ambiguous" });
+    expect(project({ ...base, reason: "installer_or_readback_error" })).toMatchObject({
+      childState: "unknown", leaseState: "retained", outcome: "ambiguous",
+    });
+    expect(project({ ...base, status: "applied", outcome: "applied", reason: "verified_target",
+      cleanupErrors: ["lease_release_exception"] })).toMatchObject({
+      childState: "terminal", leaseState: "unknown", status: "applied", outcome: "applied",
+    });
+    expect(project({ ...base, status: "applied", outcome: "applied", reason: "verified_target",
+      cleanupErrors: ["lease_release_unverified"] })).toMatchObject({ leaseState: "unknown", outcome: "applied" });
+    expect(project({ ...base, reason: "installation_readback_unverified" })).toMatchObject({
+      leaseState: "unknown",
+    });
+    expect(project({ ...base, reason: "version_process_state_unknown" })).toMatchObject({
+      childState: "unknown", leaseState: "retained",
+    });
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("apply retry keys deduplicate durable jobs and status exposes only the shared public DTO", async () => {
     const configDir = mkdtempSync(join(tmpdir(), "ocx-cli-update-job-test-"));
     chmodSync(configDir, 0o700);
     try {
@@ -89,12 +110,19 @@ describe("Codex CLI update CLI", () => {
     } finally { rmSync(configDir, { recursive: true }); }
   });
 
-  test("a persisted running job from a restarted owner is ambiguous, not assumed stopped", () => {
-    if (process.platform === "win32" || process.geteuid?.() === undefined) return;
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("a new owner reports a live owner's job unknown; the original generation can finish without stale overwrite", async () => {
     const configDir = mkdtempSync(join(tmpdir(), "ocx-cli-update-restart-test-"));
     chmodSync(configDir, 0o700);
+    let release: () => void = () => {};
+    let pending: Promise<unknown> | undefined;
     try {
       const accepted = admitCodexCliUpdateJob({ requestId: "restart-key-00001", planId: "c".repeat(32), configDir });
+      pending = runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, () => new Promise(resolve => {
+        release = () => resolve({ outcome: "applied", reason: "verified_target", planId: "c".repeat(32),
+          installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
+          verificationPid: null, cleanupErrors: [] });
+      }), configDir);
+      expect(readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "running", ownerState: "active" });
       const modulePath = new URL("../../src/codex/cli-update-job.ts", import.meta.url).href;
       const script = `import { readCodexCliUpdateJob } from ${JSON.stringify(modulePath)}; console.log(JSON.stringify(readCodexCliUpdateJob(${JSON.stringify(accepted.job.jobId)})));`;
       const child = spawnSync(process.execPath, ["-e", script], { encoding: "utf8", timeout: 5_000,
@@ -104,7 +132,67 @@ describe("Codex CLI update CLI", () => {
       const dto = JSON.parse(child.stdout.trim());
       expect(dto).toMatchObject({ status: "ambiguous", outcome: "ambiguous", ownerState: "unknown", lifetimeUncertain: true,
         reason: "owner_state_unknown" });
+      release();
+      const completed = await pending;
+      expect(completed).toMatchObject({ status: "applied", ownerState: "finished" });
+      expect(finishCodexCliUpdateJob(accepted.job.jobId, accepted.generation, 1,
+        { outcome: "refused", reason: "late_result", planId: "c".repeat(32), installedVersion: null,
+          targetVersion: null, installerExitCode: null, leaseRetained: false, verificationPid: null,
+          cleanupErrors: [] }, configDir)?.status).toBe("applied");
+    } finally {
+      release();
+      if (pending) await pending.catch(() => undefined);
+      rmSync(configDir, { recursive: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("an exception without close evidence preserves child and lease uncertainty", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-cli-update-unknown-child-test-"));
+    chmodSync(configDir, 0o700);
+    try {
+      const accepted = admitCodexCliUpdateJob({ requestId: "unknown-child-0001", planId: "f".repeat(32), configDir });
+      const result = await runCodexCliUpdateJob(accepted.job.jobId, accepted.generation,
+        async () => { throw new Error("unobservable child exception"); }, configDir);
+      expect(result).toMatchObject({ status: "ambiguous", outcome: "ambiguous", ownerState: "finished",
+        childState: "unknown", leaseState: "unknown", lifetimeUncertain: true, reason: "job_result_unknown" });
     } finally { rmSync(configDir, { recursive: true }); }
+  });
+
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("an engine exception while its fixture child is live reports unknown child state", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-cli-update-live-child-test-"));
+    chmodSync(configDir, 0o700);
+    let child: ChildProcess | undefined;
+    try {
+      const accepted = admitCodexCliUpdateJob({ requestId: "live-child-exception-001", planId: "9".repeat(32), configDir });
+      const result = await runCodexCliUpdateJob(accepted.job.jobId, accepted.generation, async () => {
+        child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true });
+        await new Promise<void>((resolve, reject) => {
+          child!.once("spawn", resolve);
+          child!.once("error", reject);
+          child!.once("exit", () => reject(new Error("fixture child exited before the engine exception")));
+        });
+        if (!child?.pid) throw new Error("fixture child did not expose its process id");
+        process.kill(child.pid, 0);
+        throw new Error("simulated engine error after fixture child started");
+      }, configDir);
+      if (!child?.pid) throw new Error("fixture child process identity was lost");
+      process.kill(child.pid, 0);
+      expect(result).toMatchObject({ status: "ambiguous", outcome: "ambiguous", ownerState: "finished",
+        childState: "unknown", leaseState: "unknown", lifetimeUncertain: true, reason: "job_result_unknown" });
+    } finally {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const closed = new Promise<void>(resolve => child!.once("exit", () => resolve()));
+        child.kill("SIGTERM");
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([closed, new Promise<void>(resolve => { timer = setTimeout(resolve, 2_000); })]);
+        if (timer) clearTimeout(timer);
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+          await closed;
+        }
+      }
+      rmSync(configDir, { recursive: true });
+    }
   });
 
   test("parses job status and stable apply request IDs", () => {

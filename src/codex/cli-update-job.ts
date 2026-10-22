@@ -29,7 +29,8 @@ interface Store { version: 1; jobs: StoredJob[] }
 export interface CodexCliUpdateJobDto {
   readonly jobId: string; readonly status: "queued" | "running" | "applied" | "not_applied" | "refused" | "ambiguous";
   readonly ownerState: "active" | "unknown" | "finished"; readonly lifetimeUncertain: boolean;
-  readonly childState: "not_started" | "active_or_not_observed" | "terminal" | "unknown"; readonly leaseRetained: boolean;
+  readonly childState: "not_started" | "active_or_not_observed" | "terminal" | "unknown";
+  readonly leaseState: "not_acquired_or_released" | "retained" | "unknown";
   readonly createdAt: string; readonly updatedAt: string; readonly planId: string;
   readonly outcome: CodexCliApplyResult["outcome"] | null; readonly reason: string | null;
   readonly cleanupErrors: readonly string[];
@@ -147,18 +148,36 @@ function validStore(configDir?: string): Store {
     throw error;
   }
 }
+type LifecycleInput = Pick<StoredJob, "status" | "outcome" | "reason" | "cleanupErrors" | "leaseRetained"> & { active: boolean };
+type LifecycleProjection = Pick<CodexCliUpdateJobDto, "status" | "ownerState" | "lifetimeUncertain" | "childState" | "leaseState" | "outcome" | "reason">;
+
+/** Project only states supported by persisted evidence; retention booleans alone are ambiguous. */
+export function projectCodexCliUpdateJobLifecycle(job: LifecycleInput): LifecycleProjection {
+  const ownerUnknown = job.status === "queued" || job.status === "running" ? !job.active : false;
+  const uncertain = ownerUnknown || job.outcome === "ambiguous";
+  const leaseReleaseUnconfirmed = job.cleanupErrors.some(error =>
+    error === "lease_release_unverified" || error === "lease_release_exception");
+  const retainedWithEvidence = job.leaseRetained && !leaseReleaseUnconfirmed
+    && (job.reason === "installer_state_unknown" || job.reason === "version_process_state_unknown"
+      || job.reason === "installer_or_readback_error");
+  const childUnknown = ownerUnknown || job.reason === "job_result_unknown"
+    || job.reason === "installer_state_unknown" || job.reason === "version_process_state_unknown"
+    || (job.reason === "installer_or_readback_error" && job.leaseRetained);
+  const childState = childUnknown ? "unknown" : job.status === "queued" || job.outcome === "refused" ? "not_started"
+    : job.status === "running" ? "active_or_not_observed" : "terminal";
+  const leaseState = ownerUnknown || job.status === "queued" || job.status === "running"
+    || job.reason === "job_result_unknown" || leaseReleaseUnconfirmed ? "unknown"
+    : retainedWithEvidence ? "retained" : job.leaseRetained ? "unknown" : "not_acquired_or_released";
+  return Object.freeze({ status: uncertain ? "ambiguous" : job.status,
+    ownerState: job.active ? "active" : ownerUnknown ? "unknown" : "finished", lifetimeUncertain: uncertain,
+    childState, leaseState, outcome: ownerUnknown ? "ambiguous" : job.outcome,
+    reason: ownerUnknown ? "owner_state_unknown" : job.reason });
+}
+
 function dto(job: StoredJob): CodexCliUpdateJobDto {
-  const active = live.get(job.id) === job.generation;
-  const unknown = job.status === "queued" || job.status === "running" ? !active : false;
-  const uncertain = unknown || job.outcome === "ambiguous";
-  const childState = unknown || job.reason === "installer_state_unknown" || job.reason === "version_process_state_unknown"
-    ? "unknown" : job.status === "queued" || job.outcome === "refused" ? "not_started"
-      : job.status === "running" ? "active_or_not_observed" : "terminal";
-  return Object.freeze({ jobId: job.id, status: uncertain ? "ambiguous" : job.status,
-    ownerState: active ? "active" : unknown ? "unknown" : "finished", lifetimeUncertain: uncertain,
-    childState, leaseRetained: job.leaseRetained,
+  const lifecycle = projectCodexCliUpdateJobLifecycle({ ...job, active: live.get(job.id) === job.generation });
+  return Object.freeze({ jobId: job.id, ...lifecycle,
     createdAt: job.createdAt, updatedAt: job.updatedAt, planId: job.planId,
-    outcome: unknown ? "ambiguous" : job.outcome, reason: unknown ? "owner_state_unknown" : job.reason,
     cleanupErrors: Object.freeze([...job.cleanupErrors]) });
 }
 
