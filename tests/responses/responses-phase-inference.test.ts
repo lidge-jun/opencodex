@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createResponsesPhaseInferenceBlockRewrite } from "../../src/server/responses-phase-inference";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { relaySseWithBlockRewrite } from "../../src/server/sse-payload-rewrite";
 
 function sse(type: string, body: Record<string, unknown>): string {
   return "event: " + type + "\ndata: " + JSON.stringify({ type, ...body }) + "\n\n";
@@ -34,14 +36,14 @@ function phaseOf(block: string): string | undefined {
 
 describe("Responses phase inference block rewrite", () => {
   test("message followed by a tool call becomes commentary", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const out = [messageDone(0, "checking the grid"), functionCallAdded(1)].flatMap(b => rewrite(b));
     expect(out.map(phaseOf)).toEqual(["commentary", undefined]);
     rewrite.dispose?.();
   });
 
   test("message at turn end becomes final_answer and the snapshot mirrors it", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const out = [messageDone(0, "all done"), completed([{ type: "message", id: "msg_0", role: "assistant" }])]
       .flatMap(b => rewrite(b));
     expect(out.map(phaseOf)).toEqual(["final_answer", "final_answer"]);
@@ -49,7 +51,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("two consecutive messages mark the first as commentary", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const out = [
       messageDone(0, "intermediate"),
       messageDone(1, "final"),
@@ -60,7 +62,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("message/tool/message keeps item-done and snapshot phases in agreement", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const out = [
       messageDone(0, "checking the grid"),
       functionCallAdded(1),
@@ -76,7 +78,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("multiple messages keep every snapshot phase equal to its item-done phase", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const out = [
       messageDone(0, "first"),
       messageDone(1, "second"),
@@ -92,7 +94,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("snapshot keeps explicit upstream phases over inferred ones", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const out = [
       messageDone(0, "narration"),
       functionCallAdded(1),
@@ -109,7 +111,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test.each(["commentary", "final_answer"])("snapshot mirrors explicit %s when its phase is omitted", phase => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const out = [
       messageDone(0, "explicit message", phase),
       completed([{ type: "message", id: "msg_0", role: "assistant" }]),
@@ -119,7 +121,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("explicit and inferred phases stay associated with their own snapshot items", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const out = [
       messageDone(0, "inferred narration"),
       messageDone(1, "explicit narration", "commentary"),
@@ -135,7 +137,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("snapshot messages never seen as item-done fall back to final_answer", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const out = [
       messageDone(0, "checking"),
       functionCallAdded(1),
@@ -146,7 +148,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("explicitly phased messages are forwarded without buffering", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const block = messageDone(0, "hi", "commentary");
     // Forwarded immediately: nothing is retained, so a teardown after this
     // block cannot drop the message.
@@ -155,7 +157,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("SSE keepalive comments keep the buffered message pending", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const keepalive = ": keepalive\n\n";
     const out = [messageDone(0, "checking"), keepalive, functionCallAdded(1)].flatMap(b => rewrite(b));
     // The keepalive passes through with the message still buffered; the
@@ -166,7 +168,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("the [DONE] sentinel classifies a still-buffered message as final_answer", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const done = "data: [DONE]\n\n";
     const out = [messageDone(0, "answer"), done].flatMap(b => rewrite(b));
     expect(phaseOf(out[0]!)).toBe("final_answer");
@@ -175,7 +177,7 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("explicit phases are left untouched", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const block = messageDone(0, "hi", "commentary");
     const out = [...rewrite(block), ...rewrite(functionCallAdded(1))];
     expect(out.map(phaseOf)).toEqual(["commentary", undefined]);
@@ -183,9 +185,95 @@ describe("Responses phase inference block rewrite", () => {
   });
 
   test("non-message blocks pass through unchanged", () => {
-    const rewrite = createResponsesPhaseInferenceBlockRewrite();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(createTestTranslatorBudget());
     const block = functionCallAdded(0);
     expect(rewrite(block)).toEqual([block]);
+    rewrite.dispose?.();
+  });
+
+  test("pending message and ID decisions are charged until teardown", () => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(budget);
+    rewrite(messageDone(0, "pending"));
+    const pendingBytes = budget.snapshot().currentBytes;
+    expect(pendingBytes).toBeGreaterThan(0);
+    rewrite(": keepalive");
+    expect(budget.snapshot().currentBytes).toBe(pendingBytes);
+    rewrite(functionCallAdded(1));
+    expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+    expect(budget.snapshot().currentBytes).toBeLessThan(pendingBytes);
+    rewrite.dispose?.();
+    rewrite.dispose?.();
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("relay cancellation refunds a pending message retained across keepalives", async () => {
+    const budget = createTestTranslatorBudget();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { source = controller; } });
+    const reader = relaySseWithBlockRewrite(stream,
+      createResponsesPhaseInferenceBlockRewrite(budget), budget).getReader();
+    source.enqueue(new TextEncoder().encode(messageDone(0, "pending") + ": keepalive\n\n"));
+    try {
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe(": keepalive\n\n");
+      expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+    } finally {
+      await reader.cancel();
+    }
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test.each(["response.completed", "response.incomplete", "response.failed", "[DONE]"])(
+    "%s releases the pending block and all ID decisions", type => {
+      const budget = createTestTranslatorBudget();
+      const rewrite = createResponsesPhaseInferenceBlockRewrite(budget);
+      rewrite(messageDone(0, "explicit", "commentary"));
+      rewrite(messageDone(1, "pending"));
+      expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+      const block = type === "[DONE]" ? "data: [DONE]" : sse(type, {
+        response: { id: "r", output: [{ type: "message", id: "msg_0" }, { type: "message", id: "msg_1" }] },
+      });
+      const output = rewrite(block);
+      expect(phaseOf(output[0]!)).toBe("final_answer");
+      if (type === "response.failed" || type === "[DONE]") expect(output[1]).toBe(block);
+      expect(budget.snapshot().currentBytes).toBe(0);
+      rewrite.dispose?.();
+      expect(budget.snapshot().currentBytes).toBe(0);
+    },
+  );
+
+  test("repeated explicit IDs do not accumulate duplicate charges", () => {
+    const budget = createTestTranslatorBudget();
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(budget);
+    const commentary = messageDone(0, "explicit", "commentary");
+    rewrite(commentary);
+    const bytes = budget.snapshot().currentBytes;
+    for (let i = 0; i < 100; i++) rewrite(commentary);
+    expect(budget.snapshot().currentBytes).toBe(bytes);
+    rewrite(messageDone(0, "explicit", "final_answer"));
+    expect(budget.snapshot().currentBytes).toBe(bytes + 2);
+    rewrite(commentary);
+    expect(budget.snapshot().currentBytes).toBe(bytes);
+    rewrite.dispose?.();
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("oversized pending message fails through the shared budget", () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 1024 });
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(budget);
+    rewrite(messageDone(0, "explicit", "commentary"));
+    expect(() => rewrite(messageDone(1, "x".repeat(2048)))).toThrow("buffer exceeded");
+    expect(budget.snapshot().currentBytes).toBe(0);
+    rewrite.dispose?.();
+  });
+
+  test("many explicit IDs cannot bypass the shared retention limit", () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 1024 });
+    const rewrite = createResponsesPhaseInferenceBlockRewrite(budget);
+    expect(() => {
+      for (let i = 0; i < 100; i++) rewrite(messageDone(i, "explicit", "commentary"));
+    }).toThrow("buffer exceeded");
+    expect(budget.snapshot().currentBytes).toBe(0);
     rewrite.dispose?.();
   });
 });

@@ -853,7 +853,7 @@ export async function deliverPassthroughResponse(
           ? createResponsesSnapshotBlockRewrite(nativeExchange.outboundRequestBody, translatorBudget)
           : undefined,
         route.provider.messagePhaseInference === true
-          ? createResponsesPhaseInferenceBlockRewrite()
+          ? createResponsesPhaseInferenceBlockRewrite(translatorBudget)
           : undefined,
         responseEffects.plaintextV2AgentMessageToolNames.size > 0
           ? payloadRewriteAsBlockRewrite(createPlaintextV2AgentMessageCallRestoreRewrite(
