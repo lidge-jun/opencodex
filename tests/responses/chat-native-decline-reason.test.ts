@@ -53,11 +53,30 @@ describe("native Chat decline reasons", () => {
     expect(isNativeChatRouteEligible(route(), { messages: [assistant] })).toBe(false);
   });
 
-  test("another provider's reasoning details remain native-eligible", () => {
+  test("an unmarked signed thinking entry carries the same provider state", () => {
+    // The inbound replay accepts a format-less reasoning.text whose signature has Anthropic's
+    // spelling, so it is the same opaque state the marker check catches and must decline too.
+    const assistant = { role: "assistant", reasoning_details: [
+      { type: "reasoning.text", text: "thinking", signature: "SyntheticStepOneSignature0000==", index: 0 },
+    ] };
+    expect(nativeChatDeclineReason(route(), { messages: [{ role: "user", content: "hi" }, assistant] }))
+      .toBe("opaque-state-stripped");
+    expect(isNativeChatRouteEligible(route(), { messages: [assistant] })).toBe(false);
+  });
+
+  test("unsigned or foreign-format reasoning details remain native-eligible", () => {
     const assistant = { role: "assistant", reasoning_details: [
       { type: "reasoning.text", text: "thinking", format: "minimax-response-v1" },
     ] };
     expect(nativeChatDeclineReason(route(), { messages: [assistant] })).toBeUndefined();
+    const foreignSigned = { role: "assistant", reasoning_details: [
+      { type: "reasoning.text", text: "thinking", signature: "SyntheticStepOneSignature0000==", format: "minimax-response-v1" },
+    ] };
+    expect(nativeChatDeclineReason(route(), { messages: [foreignSigned] })).toBeUndefined();
+    const unsigned = { role: "assistant", reasoning_details: [
+      { type: "reasoning.text", text: "thinking", index: 0 },
+    ] };
+    expect(nativeChatDeclineReason(route(), { messages: [unsigned] })).toBeUndefined();
   });
 
   test("the first failing rule wins", () => {

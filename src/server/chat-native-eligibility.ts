@@ -42,9 +42,10 @@ export function nativeChatDeclineReason(
   if (rawBody.store === true || rawBody.background === true) return "responses-only-feature";
   if (typeof rawBody.previous_response_id === "string" && rawBody.previous_response_id.length > 0) return "responses-only-feature";
   if (rawBody.compaction_trigger !== undefined) return "responses-only-feature";
-  // Native Chat preserves caller message objects verbatim. Anthropic-format details can contain
-  // signatures or redacted-thinking ciphertext, so use the bridge that projects them to plaintext
-  // rather than disclosing that provider-issued state to an unrelated Chat destination.
+  // Native Chat preserves caller message objects verbatim. Anthropic reasoning state — an entry
+  // with the anthropic-claude-v1 marker or an unmarked signed reasoning.text the inbound replay
+  // accepts — can contain signatures or redacted-thinking ciphertext, so use the bridge that
+  // projects it to plaintext rather than disclosing it to an unrelated Chat destination.
   if (chatBodyCarriesAnthropicReasoningState(rawBody)) return "opaque-state-stripped";
   // A standard Chat tool message accepts a string or text parts, not image_url, so
   // normalizing a Pi/Anthropic tool image into image_url is not enough on its own —

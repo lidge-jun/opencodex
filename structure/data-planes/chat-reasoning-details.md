@@ -32,7 +32,10 @@ and Anthropic refuses it. No signature is computed, cached server side, or synth
 chat-ir placeholder still never passes the adapter's signature check.
 
 An `openai-chat` destination cannot take the native passthrough when assistant history contains
-the Anthropic format marker. Native Chat preserves complete message objects, which would expose
-the signature or redacted ciphertext to the new provider; declining with `opaque-state-stripped`
-sends the turn through the bridge, where the non-Anthropic gate retains only the plaintext
-projection. Reasoning details in other providers' formats remain eligible for native passthrough.
+Anthropic reasoning state: an entry with the Anthropic format marker, or an unmarked
+`reasoning.text` whose signature passes the same spelling check the inbound replay accepts.
+Native Chat preserves complete message objects, which would expose the signature or redacted
+ciphertext to the new provider; declining with `opaque-state-stripped` sends the turn through
+the bridge, where the non-Anthropic gate retains only the plaintext projection. Reasoning details
+in other providers' formats — including signed entries explicitly marked foreign — remain
+eligible for native passthrough.
