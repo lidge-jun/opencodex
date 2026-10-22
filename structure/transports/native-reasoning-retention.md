@@ -12,6 +12,11 @@
 
 `src/types/request.ts` declares trusted parsed policy fields; `src/responses/reasoning-replay-cache.ts` reports known durable identity deltas without widening cache keys. `src/adapters/openai-responses/passthrough.ts` applies reasoning and compaction stripping independently.
 
+Process-local reasoning replay cells are keyed by the authenticated caller principal as well as the
+conversation, route, credential, model, adapter, and tool call. Native Chat and Responses both
+resolve that principal from data-plane admission before capture or replay; keyless callers fail
+closed rather than sharing a process-wide replay namespace.
+
 `src/server/responses/request-prepare.ts` snapshots the resolved policy into trusted parsed state. `src/server/responses/core-replay.ts` applies it to the selected concrete route, including each fresh Combo candidate. Retention is eligible only on the canonical ChatGPT Responses forward destination, with an unchanged provider, adapter and durable endpoint. A known model change requires `modelSwitch`; a known credential change requires `accountSwitch`; simultaneous changes require both. It does not widen the serving identity used for reasoning caches or strict plaintext Combo eligibility. Unknown or expired serving provenance retains the existing destination-only behavior rather than inventing a compatibility match.
 
 Account retention is experimental forwarding permission, not evidence that the backend accepts or reuses another caller's reasoning. `src/server/responses/account-change-state.ts` continues removing account-bound continuation references and foreign reasoning item ids; uploaded-file refusal stays independent. Opaque-blob rejection recovery and its rejection memo override retention. When retention actually kept ciphertext across a change, `src/server/responses/passthrough-dispatch.ts` also inspects the zero-output stream prelude, so a refusal ChatGPT sends inside a 200 stream (a Codex WebSocket `error` frame or `response.failed`) takes the same single sanitized rebuild as an HTTP 4xx refusal. Previously stripped ciphertext is never restored in a later recovery leg. Claude-native per-blob replay tags remain authoritative: retention never permits a blob whose durable endpoint or generation-bearing credential fails its tag check.

@@ -143,8 +143,9 @@ function tupleForServingIdentity(
 
 function keyFor(callId: string, scope: OcxReasoningReplayScopeRef | undefined): string | undefined {
   const identity = tupleForIdentity(scope?.current);
-  if (!nonEmpty(callId) || !nonEmpty(scope?.clientThreadId) || !identity) return undefined;
+  if (!nonEmpty(callId) || !nonEmpty(scope?.clientPrincipalId) || !nonEmpty(scope.clientThreadId) || !identity) return undefined;
   return JSON.stringify([
+    scope.clientPrincipalId,
     scope.clientThreadId,
     ...identity,
     callId,

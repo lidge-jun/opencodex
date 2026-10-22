@@ -7,11 +7,14 @@ import { reasoningReplayConversationIdFromResponsesRequest, sessionIdHeaderFromR
 
 type Rec = Record<string, unknown>;
 
-export function nativeChatReplayScope(headers: Headers): OcxReasoningReplayScopeRef | undefined {
+export function nativeChatReplayScope(
+  headers: Headers,
+  clientPrincipalId: string | undefined,
+): OcxReasoningReplayScopeRef | undefined {
   const clientThreadId = reasoningReplayConversationIdFromResponsesRequest({
     threadIdHeader: headers.get("thread-id"), sessionIdHeader: sessionIdHeaderFromRequest(headers),
   });
-  return clientThreadId ? { clientThreadId } : undefined;
+  return clientThreadId && clientPrincipalId ? { clientThreadId, clientPrincipalId } : undefined;
 }
 
 /** Rebind before EVERY build: a key rotation must not retrieve another credential's reasoning. */
