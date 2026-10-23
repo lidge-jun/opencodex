@@ -238,9 +238,25 @@ account's own model discovery, because Google enables models per account: some a
 Claude Sonnet 4.6 and Claude Opus 4.6 (Thinking), others only Claude Opus and Sonnet 5.5 (directly
 billed, non-trial Pro or Ultra plans), and Gemini 4 Argon only on Ultra and Enterprise. Both Claude
 generations map: 4.6 takes its effort as a thinking level, 5.5 as its `-low`, `-medium`, or
-`-high` model. With several Antigravity accounts and `oauthAccountFailover.enabled`, a request
-prefers an account whose discovery lists the requested model. Saved selections of models that left
-the list keep routing as before.
+`-high` model.
+
+Antigravity requests go only to accounts that may serve the requested model. OpenCodex remembers
+each account's model list from that account's own discovery, in memory, for six hours. An account
+whose list includes the model is preferred; an account with no current list (not yet discovered,
+expired, or forgotten by a restart) is still used, because nothing proves it lacks the model. An
+account whose current list omits the model is never sent the request, including on 429 and
+authentication failover. If the selected account omits it and `oauthAccountFailover.enabled` is on,
+the request moves to another account that is not paused or awaiting reauthentication. Otherwise
+OpenCodex refuses the request locally with HTTP 403 `permission_denied` and sends nothing upstream:
+
+- `The selected Google Antigravity account does not list the model "<model>" in its model discovery. Select an account that lists it, or enable oauthAccountFailover so OpenCodex can choose one.`
+  Another usable account may serve the model, but failover is off.
+- `The selected Google Antigravity account does not list the model "<model>" in its model discovery, and no account that may serve it could be used for this request. Retry the request.`
+  Failover is on and chose another account, but that account could not be used for this request.
+- `No usable Google Antigravity account lists the model "<model>" in its model discovery. Choose a model your accounts list, or add an account that has access to it.`
+  Every usable account's current list omits the model.
+
+A saved selection of a model that left the list follows the same rule.
 
 To check which mode a provider is actually using, open it on the Providers page: the **Connection**
 block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or
