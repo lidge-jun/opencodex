@@ -419,6 +419,18 @@ describe("JEV decision parser", () => {
     expect(() => parseJevDecision({
       answers: [{ name: "route", value: "openai/gpt-6-astra:high", probabilities: [{ probability: 0.7 }] }],
     }, candidates)).toThrow();
+    expect(() => parseJevDecision({
+      answers: [{
+        name: "route",
+        value: "openai/gpt-6-astra:high",
+        probabilities: [
+          { value: "openai/gpt-6-astra:medium", probability: 0.1 },
+          { value: "openai/gpt-6-astra:high", probability: 0.7 },
+          { value: "openai/gpt-5.6-sol:low", probability: 0.2 },
+          { value: "openai/gpt-6-astra:high", probability: 0.7 },
+        ],
+      }],
+    }, candidates)).toThrow();
   });
 });
 

@@ -603,6 +603,7 @@ export function parseJevDecision(
         if (!isRecord(item)) throw new Error("invalid JEV route probabilities");
         const k = typeof item.choice === "string" ? item.choice : (typeof item.value === "string" ? item.value : undefined);
         if (!k) throw new Error("invalid JEV route probabilities");
+        if (Object.hasOwn(probabilities, k)) throw new Error("invalid JEV route probabilities");
         probabilities[k] = item.probability;
       }
     } else if (isRecord(answer.probabilities)) {
