@@ -6,7 +6,7 @@ import {
   mapEffortToLevel,
   type RoleModelCandidate,
 } from "../../src/codex/role-auto-assign";
-import { candidateModelKey, capabilityTableFromRows } from "../../src/codex/role-capability";
+import { candidateModelKey, capabilityTableFromRows, readBoundedBytes } from "../../src/codex/role-capability";
 import type { RoleSizingOutcome } from "../../src/codex/role-sizing";
 
 const FULL = ["low", "medium", "high", "xhigh"];
@@ -201,5 +201,13 @@ describe("capabilityTableFromRows", () => {
     expect(table.domains.general!.size).toBe(1);
     expect(table.domains.writing).toBeUndefined();
     expect(table.publishedAt).toBe("2026-10-22");
+  });
+
+  test("reads a leaderboard table up to the byte bound and refuses one past it", async () => {
+    const body = () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(6)); controller.enqueue(new Uint8Array(6)); controller.close(); },
+    }));
+    expect((await readBoundedBytes(body(), 12)).byteLength).toBe(12);
+    await expect(readBoundedBytes(body(), 11)).rejects.toThrow("response exceeded byte bound");
   });
 });
