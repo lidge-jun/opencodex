@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,11 +113,14 @@ describe("management route registry reconciliation", () => {
   });
 
   test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("HTTP apply retry returns the durable job without scheduling a second engine run", async () => {
-    const configDir = mkdtempSync(join(tmpdir(), "ocx-cli-update-http-test-"));
-    chmodSync(configDir, 0o700);
+    const outer = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-cli-update-http-test-")));
+    const parent = join(outer, "private-parent"), configDir = join(parent, "ocx");
     const oldHome = process.env.OPENCODEX_HOME;
-    process.env.OPENCODEX_HOME = configDir;
     try {
+      chmodSync(outer, 0o700);
+      mkdirSync(parent, { mode: 0o700 }); chmodSync(parent, 0o700);
+      mkdirSync(configDir, { mode: 0o700 }); chmodSync(configDir, 0o700);
+      process.env.OPENCODEX_HOME = realpathSync.native(configDir);
       const makeRequest = () => new Request("http://localhost/api/codex/cli-update/apply", { method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ requestId: "lost-response-retry-01", planId: "e".repeat(32), confirmed: true }) });
@@ -131,8 +134,11 @@ describe("management route registry reconciliation", () => {
       ctx.req = makeRequest();
       const retry = await handleCodexCliUpdateRoutes(ctx);
       const retryBody = await retry!.json();
-      expect(first?.status).toBe(202);
-      expect(retry?.status).toBe(202);
+      const diagnostic = (body: { error?: unknown }) => JSON.stringify({ error:
+        typeof body.error === "string" && ["invalid_request", "idempotency_conflict", "store_full",
+          "unsupported_store", "unsafe_store", "admission_failed"].includes(body.error) ? body.error : null });
+      expect(first?.status, diagnostic(firstBody)).toBe(202);
+      expect(retry?.status, diagnostic(retryBody)).toBe(202);
       expect(retryBody.job.jobId).toBe(firstBody.job.jobId);
       let status: { jobId?: string; ownerState?: string; outcome?: string; reason?: string } = {};
       for (let i = 0; i < 100; i += 1) {
@@ -146,7 +152,7 @@ describe("management route registry reconciliation", () => {
       expect(["not_managed", "mutation_evidence_unverified"].includes(status.reason ?? "")).toBe(true);
     } finally {
       if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome;
-      rmSync(configDir, { recursive: true });
+      rmSync(outer, { recursive: true });
     }
   });
 

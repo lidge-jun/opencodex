@@ -29,6 +29,24 @@ export function privateNpm(root: string, args: string[]) {
   if (result.error || result.status !== 0) throw new Error(`private npm failed: ${result.status} ${result.error?.message ?? ""}\n${result.stderr}`);
   return result;
 }
+/** The same synthetic npm entrypoint used by the published-launcher fixture. */
+export function writeFixtureNpmWrapper(fakeBin: string, node: string, realNpm: string,
+  metadata: Record<string, unknown>, packs: Record<string, string>, trace: string): void {
+  // An extensionless Node entrypoint inherits its nearest package's module type.
+  // HTTP fixtures live under this ESM repository; keep only this synthetic bin
+  // CommonJS without changing either installed package's original manifest.
+  writeFileSync(join(fakeBin, "package.json"), JSON.stringify({ private: true, type: "commonjs" }) + "\n");
+  const wrapper = [
+    `#!${node}`, 'const fs = require("node:fs"), path = require("node:path"), cp = require("node:child_process");',
+    `const metadata = ${JSON.stringify(metadata)}, packs = ${JSON.stringify(packs)};`,
+    'const args = process.argv.slice(2);',
+    'if (args[0] === "view") { if (!metadata[args[1]]) process.exit(81); console.log(JSON.stringify(metadata[args[1]])); process.exit(0); }',
+    'if (args[0] === "pack") { const source = packs[args[1]]; if (!source) process.exit(82); const dir = args[args.indexOf("--pack-destination") + 1]; const name = path.basename(source); fs.copyFileSync(source, path.join(dir, name)); console.log(JSON.stringify([{filename:name}])); process.exit(0); }',
+    `if (args[0] !== "install") process.exit(83); fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");`,
+    `const installed = cp.spawnSync(${JSON.stringify(node)}, [${JSON.stringify(realNpm)}, ...args], {env:process.env, stdio:"inherit"}); process.exit(installed.status ?? 84);`,
+  ].join("\n") + "\n";
+  writeFileSync(join(fakeBin, "npm"), wrapper); chmodSync(join(fakeBin, "npm"), 0o755);
+}
 /** Tiny synthetic packages are packed by real npm; metadata and pack bytes are
  * substituted by an owned npm wrapper, while install delegates to real npm.
  * This exercises published Node -> Bun CLI -> resolver/provenance -> plan/apply.
@@ -81,16 +99,7 @@ export function createCodexCliApplyFixture(root: string, platform: NodeJS.Platfo
     ["@openai/codex@" + v.artifacts.main.version, v.main.path], ["@openai/codex@" + v.artifacts.backing.version, v.backing.path],
   ]));
   if (process.platform !== "win32") {
-    const wrapper = [
-      `#!${node}`, 'const fs = require("node:fs"), path = require("node:path"), cp = require("node:child_process");',
-      `const metadata = ${JSON.stringify(metadata)}, packs = ${JSON.stringify(packs)};`,
-      'const args = process.argv.slice(2);',
-      'if (args[0] === "view") { if (!metadata[args[1]]) process.exit(81); console.log(JSON.stringify(metadata[args[1]])); process.exit(0); }',
-      'if (args[0] === "pack") { const source = packs[args[1]]; if (!source) process.exit(82); const dir = args[args.indexOf("--pack-destination") + 1]; const name = path.basename(source); fs.copyFileSync(source, path.join(dir, name)); console.log(JSON.stringify([{filename:name}])); process.exit(0); }',
-      `if (args[0] !== "install") process.exit(83); fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify(args) + "\\n");`,
-      `const installed = cp.spawnSync(${JSON.stringify(node)}, [${JSON.stringify(realNpm)}, ...args], {env:process.env, stdio:"inherit"}); process.exit(installed.status ?? 84);`,
-    ].join("\n") + "\n";
-    writeFileSync(join(fakeBin, "npm"), wrapper); chmodSync(join(fakeBin, "npm"), 0o755);
+    writeFixtureNpmWrapper(fakeBin, node, realNpm, metadata, packs, trace);
   }
   const launcher = process.platform === "win32" ? join(prefix, "codex.cmd") : join(prefix, "bin", "codex");
   const env = { ...process.env, HOME: home, TMPDIR: temporaryRoot, OPENCODEX_HOME: join(home, "ocx"),

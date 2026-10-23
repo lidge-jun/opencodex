@@ -9,7 +9,8 @@ import { applyCodexCliUpdate, type CodexCliApplyDeps } from "../../src/codex/cli
 import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, runCodexCliUpdateJob, type CodexCliUpdateJobDto } from "../../src/codex/cli-update-job";
 import { createCodexCliUpdatePlan } from "../../src/codex/cli-update-plan";
 import { acquireCodexCliApplyLease } from "../../src/codex/cli-update-lease";
-import { createCodexCliApplyFixture, waitForApplyAdmission } from "../helpers/codex-cli-apply-fixture";
+import { createCodexCliApplyFixture, waitForApplyAdmission, writeFixtureNpmWrapper } from "../helpers/codex-cli-apply-fixture";
+import { fixtureArtifactSet } from "../helpers/codex-cli-apply-artifact";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { codexCliPlatformBacking } from "../../src/codex/cli-install-provenance";
@@ -207,7 +208,7 @@ async function waitForDurableAdmission(configDir: string, requestId: string, tim
   throw new Error("fixture durable job admission was not observed");
 }
 
-function gateFixtureNpmInstall(f: ReturnType<typeof fixture>) {
+function gateFixtureNpmInstall(f: Pick<ReturnType<typeof fixture>, "root">) {
   const path = join(f.root, "bin", "npm");
   const source = readFileSync(path, "utf8");
   const marker = "const installed = cp.spawnSync(";
@@ -240,6 +241,35 @@ function gateFixtureNpmInstall(f: ReturnType<typeof fixture>) {
 async function postFixtureApply(base: string, session: { token: string; csrf: string; origin: string }, body: unknown) {
   return fetch(`${base}/api/codex/cli-update/apply`, { method: "POST", headers: fixtureSessionHeaders(session, true), body: JSON.stringify(body) });
 }
+test("HTTP fixture npm wrapper returns all metadata under an ESM ancestor", () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-http-npm-module-"))); roots.push(root);
+  writeFileSync(join(root, "package.json"), JSON.stringify({ private: true, type: "module" }));
+  const fakeBin = join(root, "bin"); mkdirSync(fakeBin);
+  const node = Bun.which("node"); if (!node) throw new Error("fixture node unavailable");
+  const f = fixtureArtifactSet("linux", "x64");
+  const main = { ...f.mainManifest, dist: { integrity: f.artifacts.main.integrity, tarball: f.artifacts.main.tarball } };
+  const backing = { name: f.artifacts.backing.name, version: f.artifacts.backing.version,
+    dist: { integrity: f.artifacts.backing.integrity, tarball: f.artifacts.backing.tarball } };
+  const metadata = { "@openai/codex@latest": main, "@openai/codex@1.1.0": main,
+    ["@openai/codex@" + backing.version]: backing };
+  const installTrace = join(root, "install-trace.jsonl");
+  writeFixtureNpmWrapper(fakeBin, node, join(root, "unused-npm.cjs"), metadata, {}, installTrace);
+  gateFixtureNpmInstall({ root });
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_COMPILE_CACHE: join(root, "node-cache") };
+  for (const key of Object.keys(env)) if (["node_options", "node_path", "node_v8_coverage", "node_redirect_warnings"].includes(key.toLowerCase())) delete env[key];
+  for (const [spec, expected] of Object.entries(metadata)) {
+    const result = spawnSync(node, [join(fakeBin, "npm"), "view", spec, "--json"], {
+      cwd: root, env, encoding: "utf8", timeout: 10_000, windowsHide: true,
+    });
+    expect({ exitCode: result.status, spawnFailed: !!result.error,
+      requireUndefined: result.stderr?.includes("require is not defined") }).toEqual({ exitCode: 0, spawnFailed: false, requireUndefined: false });
+    expect(JSON.parse(result.stdout)).toEqual(expected);
+  }
+  const views = readFileSync(join(root, "metadata-view-trace.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(views.map(value => value.stage)).toEqual(["latest", "pinned", "backing"]);
+  expect(views.every(value => value.reason === "metadata_returned")).toBe(true);
+  expect(existsSync(installTrace)).toBe(false);
+});
 describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
   test("published Node launcher -> real resolver/provenance -> plan/apply -> verified new files", () => {
     const f = fixture();
