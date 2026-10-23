@@ -9,7 +9,7 @@ import { linkPeerReportHeaders } from "../link/peer-report";
 import { buildPeerFeatures } from "../remote/features";
 import {
   LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION,
-  LINK_RELAY_SESSION_HEADER, linkRelayChallenge, linkRelayProofMatches,
+  LINK_RELAY_PROBE_HEADER, LINK_RELAY_SESSION_HEADER, linkRelayChallenge, linkRelayProofMatches,
 } from "../link/relay-auth";
 
 export interface BoundLinkRelayTarget {
@@ -182,7 +182,8 @@ export type LinkRelayPreflightResult = "ok" | "unreachable" | "auth_failed" | "u
 /**
  * Run only the preflight a relayed request starts with, on its own connection, and close it. It
  * sends no link key, no data request and no body; the Child's readiness uses it to learn whether
- * the Home answers through the tunnel right now. The response body is never read.
+ * the Home answers through the tunnel right now. It is marked probe-only, so the Home reserves no
+ * session for a data request that never comes. The response body is never read.
  */
 export async function probeLinkRelayPreflight(
   target: BoundLinkRelayTarget, options: { timeoutMs?: number } = {},
@@ -196,7 +197,9 @@ export async function probeLinkRelayPreflight(
   const agent = new SingleConnectionAgent({ keepAlive: false, maxSockets: 1, maxFreeSockets: 0 });
   const deadline = clearableDeadline(timeoutMs);
   try {
-    const response = await requestOnConnection(request.probe, { method: "GET", signal: deadline.signal, headers: request.headers }, agent);
+    const response = await requestOnConnection(request.probe, {
+      method: "GET", signal: deadline.signal, headers: { ...request.headers, [LINK_RELAY_PROBE_HEADER]: "1" },
+    }, agent);
     const proof = response.headers["x-opencodex-link-proof"];
     if (response.statusCode === 204 && typeof proof === "string" && linkRelayProofMatches(proof, request.challenge.expected)) return "ok";
     return response.statusCode === 404 ? "unrecognized" : "auth_failed";

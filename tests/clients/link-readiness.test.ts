@@ -127,7 +127,8 @@ function fakeHome(answer: "proof" | "bad-proof" | "missing", seen: Request[]): S
     port: 0,
     hostname: "127.0.0.1",
     fetch(req) {
-      seen.push(req);
+      // A copy taken inside the handler: the live request's headers are not readable once it is answered.
+      seen.push(new Request(req.url, { method: req.method, headers: new Headers(req.headers) }));
       const url = new URL(req.url);
       if (answer === "missing" || url.pathname !== LINK_RELAY_AUTH_PATH) return new Response("not found", { status: 404 });
       const nonce = url.searchParams.get("nonce") ?? "";
@@ -151,6 +152,7 @@ test("the preflight probe proves the Home without sending the link key", async (
     expect(seen[0]!.method).toBe("GET");
     expect(seen[0]!.headers.get("authorization")).toBeNull();
     expect(seen[0]!.headers.get("x-opencodex-api-key")).toBeNull();
+    expect(seen[0]!.headers.get("x-opencodex-link-probe")).toBe("1");
     expect(seen[0]!.url).not.toContain(LINK_KEY);
   }
   const closed = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response(null) });

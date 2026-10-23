@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Agent, createServer, request as httpRequest, type RequestListener } from "node:http";
 import type { Server } from "bun";
 import { gzipSync } from "node:zlib";
-import { fetchBoundLinkRelay, LinkRelayAuthenticationError, LinkRelayAuthTimeoutError } from "../../src/client/link-relay-transport";
+import { fetchBoundLinkRelay, LinkRelayAuthenticationError, LinkRelayAuthTimeoutError, probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
 import { relayLinkDataRequest, HOME_INITIATED_LINK_TUNNEL } from "../../src/client/link-relay";
 import { createLinkRelaySessions } from "../../src/server/index/link-relay-sessions";
 import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
@@ -10,7 +10,7 @@ import { createOptionalListenerSet } from "../../src/server/index/optional-liste
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import type { LinkStore } from "../../src/link/store";
 import type { OcxConfig } from "../../src/types";
-import { LINK_RELAY_AUTH_PATH, LINK_RELAY_SESSION_HEADER, linkRelayChallenge, linkRelayProof } from "../../src/link/relay-auth";
+import { LINK_RELAY_AUTH_PATH, LINK_RELAY_PROBE_HEADER, LINK_RELAY_SESSION_HEADER, linkRelayChallenge, linkRelayProof } from "../../src/link/relay-auth";
 
 const key = `ocx_data_${"a".repeat(40)}`, pendingKey = `ocx_data_${"b".repeat(40)}`;
 const keyId = "test-link-key", linkId = "lnk_0123456789abcdef";
@@ -81,6 +81,8 @@ describe("connection-bound link relay", () => {
       expect(response.status).toBe(200); expect(await response.json()).toEqual({ ok: true });
       expect(peers).toHaveLength(2); expect(peers[0]).toBe(peers[1]);
       expect(seen[0]!.has("authorization")).toBe(false);
+      // A relayed request's preflight reserves its session; only readiness probes are probe-only.
+      expect(seen[0]!.has(LINK_RELAY_PROBE_HEADER)).toBe(false);
       expect(seen[1]!.get("authorization")).toBe(`Bearer ${key}`);
       expect(bodies).toEqual(['{"input":"hello"}']);
     } finally { await home.stop(true); }
@@ -252,6 +254,30 @@ describe("connection-bound link relay", () => {
       await drain; expect(done).toBe(true);
       expect((await rawGet(proofUrl(home.port!).url, agent)).status).toBe(404);
     } finally { agent.destroy(); await home.stop(true); }
+  });
+
+  test("a readiness preflight is proven without reserving a session or holding the listener's drain", async () => {
+    let dispatched = 0;
+    const book = createLinkRelaySessions({ fingerprints: () => [fp], reservationMs: 60_000 });
+    const home = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (req, server) => book.dispatch(req, server,
+      async () => { dispatched++; return new Response("data"); }) });
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    try {
+      expect(await probeLinkRelayPreflight(target(home.port!), { timeoutMs: 2_000 })).toBe("ok");
+      // A probe-marked proof is still a valid answer, but its nonce authorizes nothing afterwards.
+      const { url, proof } = proofUrl(home.port!);
+      const answered = await rawGet(url, agent, { [LINK_RELAY_PROBE_HEADER]: "1" });
+      expect(answered.status).toBe(204);
+      expect(answered.headers["x-opencodex-link-proof"]).toBe(proof.expected);
+      expect((await rawGet(new URL("/v1/models", home.url), agent, { [LINK_RELAY_SESSION_HEADER]: proof.nonce })).status).toBe(404);
+      expect(dispatched).toBe(0);
+      // With nothing reserved, a drain settles in the same turn instead of after the lease.
+      const settled = await Promise.race([
+        book.drain().then(() => "drained"),
+        new Promise<string>(resolve => setImmediate(() => resolve("pending"))),
+      ]);
+      expect(settled).toBe("drained");
+    } finally { book.abortReservations(); agent.destroy(); await home.stop(true); }
   });
 
   test("real optional-listener lookup accepts current and pending keys, but expiry, commit, abort and removal revoke old proofs", async () => {
