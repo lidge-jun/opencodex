@@ -417,6 +417,7 @@ describe("connect trailer to HTTP status", () => {
   test("quota exhaustion delivered as failed_precondition is a 429, not a 400", () => {
     expect(connectTrailerHttpStatus("failed_precondition", "Your weekly usage quota has been exhausted. Visit https://app.devin.ai/settings/usage to purchase on-demand usage or turn on auto-reload.")).toBe(429);
     expect(connectTrailerHttpStatus("failed_precondition", "quota exhausted")).toBe(429);
+    expect(connectTrailerHttpStatus("failed_precondition", "usage limit reached")).toBe(429);
     expect(connectTrailerHttpStatus("failed_precondition", "Unable to process request due to an MCP configuration issue.")).toBe(400);
   });
 

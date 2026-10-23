@@ -1170,7 +1170,7 @@ function safeConnectCode(value: unknown): string | undefined {
  * the client to retry straight into a live cap; as 429 the proxy backs off and
  * can rotate.
  */
-const TRAILER_QUOTA_RE = /\b(?:limit will reset|rate limit|quota exceeded|out of credits|(?:weekly|monthly|daily|usage\s+)?quota (?:has been )?exhausted|quota exhausted)\b/i;
+const TRAILER_QUOTA_RE = /\b(?:limit will reset|rate limit|usage limit reached|quota exceeded|out of credits|(?:weekly|monthly|daily|usage\s+)?quota (?:has been )?exhausted|quota exhausted)\b/i;
 
 /**
  * Connect error code to HTTP status.
