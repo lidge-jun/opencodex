@@ -1546,6 +1546,7 @@
     "responses-console-go-upload-retry.test.ts": "responses",
     "responses-context-overflow.test.ts": "responses",
     "responses-sidecar-context-overflow.test.ts": "responses",
+    "responses-sidecar-usage.test.ts": "responses",
     "responses-continuation-boundaries.test.ts": "responses",
     "responses-core-modules.test.ts": "responses",
     "responses-custom-tool-guidance.test.ts": "responses",
