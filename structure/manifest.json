@@ -245,6 +245,7 @@
       "documents": [
         "src/advisor/",
         "src/server/responses/advisor-slot.ts",
+        "src/server/responses/advisor-question.ts",
         "src/server/responses/advisor-plan-slot.ts",
         "src/server/inference/advisor-diagnostics.ts",
         "src/lib/advisor-activation.ts"

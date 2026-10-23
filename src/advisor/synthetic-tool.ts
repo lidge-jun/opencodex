@@ -8,6 +8,7 @@
  */
 import type { OcxTool } from "../types";
 import type { AdvisorContextMode } from "./settings";
+import { MAX_ADVISOR_QUESTION_CHARACTERS } from "../server/responses/advisor-question";
 
 export const ADVISOR_TOOL_NAME = "advisor";
 
@@ -18,7 +19,7 @@ export function buildAdvisorTool(contextMode: AdvisorContextMode = "context"): O
     description: questionOnly
       ? "Consult an independent expert advisor using only your question. No conversation history, "
         + "task, tool results, files or tool catalog is attached automatically. Write a concise, "
-        + "self-contained question with the essential background and relevant evidence (up to 2000 "
+        + `self-contained question with the essential background and relevant evidence (up to ${MAX_ADVISOR_QUESTION_CHARACTERS} `
         + "characters). The advisor cannot execute tools or edit files; you remain responsible for execution."
       : "Consult an independent expert advisor model about the current task. The advisor receives a "
       + "summary of what you have done so far (task, conversation, tool results) and returns "
@@ -32,9 +33,9 @@ export function buildAdvisorTool(contextMode: AdvisorContextMode = "context"): O
       properties: {
         question: {
           type: "string",
-          ...(questionOnly ? { minLength: 1, maxLength: 2000 } : {}),
+          // Enforce bounds in the runtime; Google's reject-lossy policy refuses schema size constraints.
           description: questionOnly
-            ? "Required self-contained question, including only the necessary background and evidence. Maximum 2000 characters."
+            ? `Required self-contained question, including only the necessary background and evidence. Maximum ${MAX_ADVISOR_QUESTION_CHARACTERS} characters.`
             : "Optional short focus question for the advisor.",
         },
       },

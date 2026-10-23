@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseRequest } from "../../src/responses/parser";
+import { compileGoogleWireBody } from "../../src/adapters/google-wire-compiler";
+import { buildAdvisorTool } from "../../src/advisor/synthetic-tool";
 import {
   ADVISOR_SYSTEM_INSTRUCTION,
   ADVISOR_TRANSPORT_INSTRUCTION,
@@ -38,6 +40,17 @@ function parsedWithHistory() {
 }
 
 describe("advisorTranscript", () => {
+  test.each(["ai-studio", "vertex", "cloud-code-assist"] as const)("question-only tool is lossless under Google's strict policy (%s)", endpointClass => {
+    const { name, description, parameters } = buildAdvisorTool("question-only");
+    const compiled = compileGoogleWireBody({
+      tools: [{ functionDeclarations: [{ name, description, parameters }] }],
+    }, { endpointClass }, "reject-lossy");
+    expect(compiled.toolSchemaLossReport.lossy).toBe(false);
+    expect(compiled.toolSchemaLossReport.uncertainComparisons).toBe(0);
+    const tools = compiled.body.tools as { functionDeclarations: { parameters: { required: string[] } }[] }[];
+    expect(tools[0]!.functionDeclarations[0]!.parameters.required).toEqual(["question"]);
+  });
+
   test("question-only never reads the parsed conversation and bounds the question", () => {
     const input = {
       get parsed(): never { throw new Error("Context must not be read"); },
@@ -50,6 +63,10 @@ describe("advisorTranscript", () => {
     expect(long.startsWith("x".repeat(2000))).toBe(true);
     expect(long).not.toContain("x".repeat(2001));
     expect(long).toEndWith("… [truncated]");
+    input.question = "😀".repeat(1_500);
+    expect(buildAdvisorUserPrompt(input)).toBe(input.question);
+    input.question = `${"x".repeat(1_999)}😀extra`;
+    expect(buildAdvisorUserPrompt(input)).toBe(`${"x".repeat(1_999)}😀… [truncated]`);
   });
 
   test("renders user, tool calls, and tool results the worker produced", () => {

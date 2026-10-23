@@ -173,6 +173,9 @@ describe("advisor responses wiring (end-to-end)", () => {
     ["short", "Where do I start?", "Where do I start?"],
     ["at limit", "q".repeat(2_000), "q".repeat(2_000)],
     ["overlong", `  ${"q".repeat(2_000)}  OMITTED_QUESTION_TAIL  `, `${"q".repeat(2_000)}… [truncated]`],
+    ["astral under limit", "😀".repeat(1_500), "😀".repeat(1_500)],
+    ["astral at limit", `${"q".repeat(1_999)}😀`, `${"q".repeat(1_999)}😀`],
+    ["astral over limit", `${"q".repeat(1_999)}😀OMITTED_QUESTION_TAIL`, `${"q".repeat(1_999)}😀… [truncated]`],
   ])("question-only sends the bounded %s question and returns advice without worker context", async (_label, question, expected) => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = []; const chatRequests: string[] = []; const expertBodies: string[] = [];

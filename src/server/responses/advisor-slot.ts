@@ -32,6 +32,7 @@ import type {
 import { jsonStringPartsUtf8Bytes, jsonUtf8Bytes } from "../../lib/json-byte-size";
 import { isTranslatorBudgetExceededError, TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { AdvisorRetention } from "./advisor-retention";
+import { clipAdvisorQuestion } from "./advisor-question";
 
 export const ADVISOR_TOOL_NAME = "advisor";
 
@@ -101,9 +102,8 @@ function parseArgs(argsBuf: string): { question?: string } {
     const parsed: unknown = JSON.parse(argsBuf);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const question = (parsed as { question?: unknown }).question;
-      const text = typeof question === "string" ? question.trim() : "";
-      // A non-whitespace overflow marker survives the prompt builder's trim without retaining the full question.
-      if (text) return { question: text.length > 2_000 ? `${text.slice(0, 2_000)}…` : text };
+      const text = typeof question === "string" ? clipAdvisorQuestion(question) : "";
+      if (text) return { question: text };
     }
   } catch { /* malformed args → no focus question */ }
   return {};
