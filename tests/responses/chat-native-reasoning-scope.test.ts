@@ -188,6 +188,20 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
     }
     budget.dispose();
   });
+  test("enforces maxSerializedBytes even when replayPlan has no changes", () => {
+    const raw = { messages: [{ role: "user", content: "hello world" }] };
+    const exactBytes = Buffer.byteLength(
+      buildOpenAIChatPassthroughRequest(PROVIDER, raw, MODEL, false).body,
+    );
+    expect(
+      JSON.parse(
+        buildOpenAIChatPassthroughRequest(PROVIDER, raw, MODEL, false, undefined, undefined, "fixture", undefined, exactBytes).body,
+      ).messages[0].content,
+    ).toBe("hello world");
+    expect(() =>
+      buildOpenAIChatPassthroughRequest(PROVIDER, raw, MODEL, false, undefined, undefined, "fixture", undefined, exactBytes - 1),
+    ).toThrow(expect.objectContaining({ code: "translation_buffer_limit" }));
+  });
   test("plain-answer placeholders require DeepSeek, tools and both policy opt-ins", () => {
     const messages = [{ role: "assistant", content: "Earlier answer" }];
     const tools = [{ type: "function", function: { name: "inspect", parameters: { type: "object", properties: {} } } }];
