@@ -14,7 +14,10 @@
  * 3. Otherwise it is unclassified and never proposed.
  *
  * A role gets the cheapest sufficient model: the lowest tier at or above what it was sized for,
- * then the lowest price, then the picker's own order.
+ * then the lowest price, then the model the role already uses, then the picker's own order.
+ * Keeping the current model on a tie means a proposal only changes a role when the change buys
+ * a cheaper or better-fitting tier; the picker lists native models first, so without it every
+ * tie between vendors priced alike went to the native one.
  *
  * Effort binds to positions on the chosen model's ladder: glance is the floor, measured is the
  * model's default or the middle rung, exhaustive is the ceiling, and thorough is the rung above
@@ -97,6 +100,7 @@ export function classifyRoleModelCandidates(
 export function cheapestSufficientCandidate(
   classified: readonly ClassifiedCandidate[],
   tier: SizingTier,
+  current: string | null = null,
 ): ClassifiedCandidate | null {
   const need = SIZING_TIERS.indexOf(tier);
   const ranked = classified
@@ -104,6 +108,7 @@ export function cheapestSufficientCandidate(
     .filter(entry => entry.rank >= need)
     .sort((a, b) => a.rank - b.rank
       || (a.candidate.unitPrice ?? Infinity) - (b.candidate.unitPrice ?? Infinity)
+      || Number(b.candidate.model === current) - Number(a.candidate.model === current)
       || a.order - b.order);
   return ranked[0]?.candidate ?? null;
 }
@@ -139,7 +144,7 @@ export function buildRoleProposals(
     const outcome = sizing.get(role.role) ?? { unsized: "the role was not sized" };
     if ("unsized" in outcome) return { ...role, status: "unsized", reason: outcome.unsized };
     const { tier, effort, rationale, moveUpIf, moveDownIf } = outcome.sizing;
-    const pick = cheapestSufficientCandidate(classified, tier);
+    const pick = cheapestSufficientCandidate(classified, tier, role.model);
     const sized = { ...role, tier, effortIntent: effort, rationale, moveUpIf, moveDownIf };
     if (!pick) {
       return {
