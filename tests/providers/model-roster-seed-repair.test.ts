@@ -17,13 +17,14 @@ describe("DeepSeek Pro saved roster refresh", () => {
     defaultModel: "deepseek-flash", modelContextWindows: { "deepseek-flash": 1_048_576 },
   } } } as unknown as OcxConfig);
 
-  test("startup restores the exact native seed without live discovery", () => {
-    const first = projectStartupConfigRepairs(configFor());
+  test.each(["https://api.deepseek.com", "https://api.deepseek.com/v1", "https://api.deepseek.com/v1/"])("startup restores the native seed without live discovery at %s", (baseUrl) => {
+    const first = projectStartupConfigRepairs(configFor(before, baseUrl));
     const row = first.config.providers!.deepseek!;
     expect(first.changed).toBe(true);
     expect(row.models).toContain("deepseek-v4-pro");
     expect(row.modelContextWindows?.["deepseek-v4-pro"]).toBe(1_048_576);
     expect(row.liveModels).toBe(false);
+    expect(row.baseUrl).toBe(baseUrl);
     expect(row.defaultModel).toBe("deepseek-flash");
     expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
     enrichProviderFromRegistry("deepseek", row);
