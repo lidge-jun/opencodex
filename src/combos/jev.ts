@@ -109,6 +109,10 @@ export interface JevDecision {
   confidence?: number;
   chosenProbability?: number;
   usage?: Record<string, number>;
+  /** Set when an opt-in session pin (#7525) supplied this decision without asking the backend. */
+  pinned?: true;
+  /** `session` with `pinned`; otherwise why an existing session pin was released first. */
+  pinReason?: import("./jev-session-pin-config").JevSessionPinReason;
 }
 
 export interface ResolveJevDecisionOptions {

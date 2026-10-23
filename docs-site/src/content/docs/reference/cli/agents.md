@@ -271,6 +271,11 @@ switching away from JEV removes both settings. This adds quota data to the selec
 backend, not probes, new account selection or hard exclusions. See
 [quota defaults, freshness and privacy](/guides/combos/#advisory-quota-signals-for-jev).
 
+`ocx combo set <id> --session-pin <duration|->` (JEV only) keeps each client session on the target
+JEV chose for it while the session stays active, so the provider prompt cache stays warm. The
+duration is the idle window: `90s`, `20m`, `1h` or milliseconds, from 1 minute to 24 hours; `-`
+turns it off. See [Session pin for JEV](/guides/combos/#session-pin-for-jev).
+
 `ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
 [--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an
 unsaved selection and reports the gate, backend, and latency; it may spend one decision call.

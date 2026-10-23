@@ -35,8 +35,7 @@ describe("alibaba-token-plan-intl registry entry", () => {
     // 260909 gateway re-probe (both regions, both tiers): deepseek-v4-pro is still
     // listed and callable on Token Plan, so the retirement drop is restored here.
     expect(entry!.models).toContain("deepseek-v4-pro");
-    // Callable snapshots the gateway omits (or lists late) from /models, which is
-    // also why liveModels must stay false for this provider.
+    // Curated chat snapshots; liveModels stays false because discovery includes media.
     expect(entry!.models).toContain("qwen3.8-flash");
     expect(entry!.models).toContain("deepseek-v4-pro-0813");
     expect(entry!.models).toContain("deepseek-v4-flash-0731");
@@ -53,7 +52,7 @@ describe("alibaba-token-plan-intl registry entry", () => {
     expect(entry!.preserveReasoningContentModels).toContain("glm-5.3");
     // GLM-5.3-flash remains a phantom: still never served by the Token Plan gateway.
     expect(entry!.models).not.toContain("glm-5.3-flash");
-    expect(entry!.models!.length).toBe(20);
+    expect(entry!.models!.length).toBe(19);
   });
 
   test("MiniMax case-insensitive normalization is set", () => {
@@ -71,7 +70,7 @@ describe("alibaba-token-plan-intl registry entry", () => {
 
   test("every international chat model has an explicit context window", () => {
     const entry = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan-intl");
-    expect(entry!.modelContextWindows?.["deepseek-v3.2"]).toBe(131_072);
+    expect(entry!.modelContextWindows?.["deepseek-v3.2"]).toBeUndefined();
     expect(entry!.modelContextWindows?.["glm-5"]).toBe(202_752);
     expect(entry!.modelContextWindows?.["MiniMax-M2.5"]).toBe(196_608);
     for (const model of entry!.models ?? []) {
@@ -153,7 +152,7 @@ describe("alibaba-token-plan-intl registry entry", () => {
     expect(entry!.noReasoningModels).toContain("kimi-k2.7-code");
     expect(entry!.noReasoningModels).toContain("kimi-k2.6");
     expect(entry!.noReasoningModels).toContain("kimi-k2.5");
-    expect(entry!.noReasoningModels).toContain("deepseek-v3.2");
+    expect(entry!.noReasoningModels).not.toContain("deepseek-v3.2");
     expect(entry!.noReasoningModels).toContain("glm-5.1");
     expect(entry!.noReasoningModels).toContain("glm-5");
     expect(entry!.noReasoningModels).toContain("MiniMax-M2.5");
@@ -181,7 +180,7 @@ describe("alibaba-token-plan-intl registry entry", () => {
     const cnModels = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan")!.models;
     expect(cnModels).toEqual([
       "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-      "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
+      "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
     ]);
     // The 260910 DeepSeek rename row is wired: vision-capable, effort ladder, and the
     // json_schema downgrade the plan gateway needs (probed 260915).
