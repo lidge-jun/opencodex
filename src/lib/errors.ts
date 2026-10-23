@@ -442,7 +442,9 @@ export function classifyError(status: number, type: string, message: string): Oc
     text.includes("account quota exceeded") ||
     text.includes("monthly quota exceeded") ||
     text.includes("weekly quota exceeded") ||
-    text.includes("weekly usage quota") ||
+    text.includes("weekly usage quota has been exhausted") ||
+    text.includes("weekly usage quota exceeded") ||
+    text.includes("weekly usage quota is exhausted") ||
     text.includes("daily quota exceeded")
   ) {
     return { message, type: "insufficient_quota", code: "insufficient_quota" };

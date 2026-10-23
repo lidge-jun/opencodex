@@ -253,7 +253,7 @@ export function coolComboTarget(
     // A spent account window or an unpaid/rejected credential does not turn over in a minute,
     // so the 60s default would re-offer a target that cannot succeed. Only the duration
     // changes; the scope and hop decisions are untouched.
-    ?? (isAccountWindowExhausted(options?.message ?? "", options?.code)
+    ?? (isAccountWindowExhausted(options?.message ?? "", options?.code, options?.status)
       || PROVIDER_SCOPED_FAILURE_CODES.has(normalizedFailureCode(options?.code))
       ? MAX_COOLDOWN_MS
       : isTransientRequestRateLimit({
@@ -352,9 +352,35 @@ const ACCOUNT_EXHAUSTION_CODES = new Set(["usage_limit_exceeded", "usage_limit_r
 // also catch per-minute limits, and this arm outranks the transient rate-limit duration.
 const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached|token-plan\s+\S+\s+quota has been exhausted|(?:weekly|monthly|daily|usage\s+)?quota (?:has been )?exhausted/i;
 
-function isAccountWindowExhausted(message: string, code?: string | null): boolean {
-  return ACCOUNT_EXHAUSTION_CODES.has(normalizedFailureCode(code))
-    || ACCOUNT_EXHAUSTION_TEXT.test(message.toLowerCase());
+/**
+ * Determines whether an error signals that an account's quota or usage window has been exhausted.
+ *
+ * Explicit error codes (`usage_limit_exceeded`, `insufficient_quota`, etc.) are always authoritative.
+ * For HTTP 400 (Bad Request), prose alone is not authoritative because client validation errors
+ * may echo prompt contents or parameter values containing quota-related words.
+ *
+ * @param message The error message text.
+ * @param code The normalized or raw error code.
+ * @param status The HTTP status code, if known.
+ * @returns True if the failure represents an account window exhaustion.
+ */
+function isAccountWindowExhausted(
+  message: string,
+  code?: string | null,
+  status?: number,
+): boolean {
+  const normalized = normalizedFailureCode(code);
+  if (ACCOUNT_EXHAUSTION_CODES.has(normalized) || normalized === "insufficient_quota") {
+    return true;
+  }
+  // On HTTP 400 (Bad Request / parameter validation), prose alone is not authoritative evidence
+  // of account quota exhaustion because validation errors may echo user prompts or parameter values
+  // quoting "quota exhausted". An authoritative account exhaustion verdict on 400 requires a
+  // structured exhaustion code.
+  if (status === 400) {
+    return false;
+  }
+  return ACCOUNT_EXHAUSTION_TEXT.test(message.toLowerCase());
 }
 
 function isProviderScopedQuotaCap(
@@ -380,10 +406,16 @@ function isProviderScopedQuotaCap(
 }
 
 /**
- * An upstream precondition refusal (e.g. Cognition Connect RPC failed_precondition)
- * where the provider account cannot accept requests.
+ * An upstream precondition refusal from Cognition Connect RPC specifically carrying
+ * quota exhaustion or usage limit signals. Request-specific preconditions (such as
+ * MCP configuration or invalid parameter issues) are excluded from provider cooldown.
+ *
+ * @param status The HTTP status code.
+ * @param message The error message text.
+ * @param code The error code.
+ * @returns True if the failure is a Devin precondition quota exhaustion refusal.
  */
-function isDevinPreconditionRefusal(
+function isDevinQuotaPreconditionRefusal(
   status: number | undefined,
   message: string,
   code?: string | null,
@@ -391,7 +423,14 @@ function isDevinPreconditionRefusal(
   if (status !== 400 && status !== 429) return false;
   const normalized = normalizedFailureCode(code);
   const text = message.toLowerCase();
-  return normalized === "failed_precondition" || text.includes("failed_precondition");
+  const hasPrecondition = normalized === "failed_precondition" || text.includes("failed_precondition");
+  if (!hasPrecondition) return false;
+  return (
+    text.includes("quota exhausted")
+    || text.includes("quota has been exhausted")
+    || text.includes("usage limit")
+    || text.includes("out of credits")
+  );
 }
 
 /**
@@ -605,8 +644,8 @@ export function comboFailureCooldownScope(
     || isResponseFormatCapabilityRefusal(status, message, options?.code)
   ) return "none";
   if (isProviderScopedQuotaCap(status, message, options?.code)) return "provider";
-  if (isAccountWindowExhausted(message, options?.code)) return "provider";
-  if (options?.failedAdapter === "devin" && isDevinPreconditionRefusal(status, message, options?.code)) return "provider";
+  if (isAccountWindowExhausted(message, options?.code, status)) return "provider";
+  if (options?.failedAdapter === "devin" && isDevinQuotaPreconditionRefusal(status, message, options?.code)) return "provider";
   // A rejected or unpaid credential is provider-wide evidence: every target that routes
   // through the same provider row carries the same key and will fail identically.
   if (status === 401 || status === 402 || status === 403) return "provider";
@@ -887,14 +926,19 @@ export function comboFailureDecision(
   if (options?.failedAdapter === "kiro" && isKiroAccountProfileRefusal(status, message)) return "hop";
   // An exhausted account quota window is provider-state evidence, not a client request defect.
   // Must precede the generic invalid_request_error stop below so the next candidate can serve the turn.
-  if (isAccountWindowExhausted(message, options?.code)) return "hop";
-  if (options?.failedAdapter === "devin" && isDevinPreconditionRefusal(status, message, options?.code)) return "hop";
-  if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
+  if (isAccountWindowExhausted(message, options?.code, status)) return "hop";
+  if (options?.failedAdapter === "devin" && isDevinQuotaPreconditionRefusal(status, message, options?.code)) return "hop";
+  const explicitCode = normalizedFailureCode(options?.code);
+  if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(explicitCode || (error.code ?? ""))) {
     return "stop";
   }
   // 402 (payment required) and 425 (too early) are provider-state signals, not verdicts about
   // the request: another combo target can still serve it.
   if ([401, 402, 403, 404, 408, 425, 429].includes(status) || status >= 500) return "hop";
+  // On HTTP 400 (Bad Request), prose-inferred insufficient_quota is not authoritative without an explicit code.
+  if (error.code === "insufficient_quota" && status === 400 && !ACCOUNT_EXHAUSTION_CODES.has(explicitCode) && explicitCode !== "insufficient_quota") {
+    return "stop";
+  }
   if ([
     "permission_denied",
     "subscription_required",
