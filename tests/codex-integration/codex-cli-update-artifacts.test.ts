@@ -235,8 +235,9 @@ describe("Codex CLI apply consumer", () => {
   });
   test("requires explicit exact plan and confirmation, and accepts shared JSON positions", () => {
     const planId = "a".repeat(32);
-    expect(parseCodexCliUpdateArgs(["--json", "apply", `--plan-id=${planId}`, "--yes"]))
-      .toEqual({ action: "apply", planId, json: true });
+    const requestId = "apply-parser-test-0001";
+    expect(parseCodexCliUpdateArgs(["--json", "apply", `--plan-id=${planId}`, "--yes", "--request-id", requestId]))
+      .toEqual({ action: "apply", planId, requestId, json: true });
     for (const args of [["apply"], ["apply", "--yes"], ["apply", "--plan-id", planId],
       ["apply", "--yes", "--yes", "--plan-id", planId], ["apply", "--yes", "--plan-id", "latest"]]) {
       expect(() => parseCodexCliUpdateArgs(args)).toThrow();
@@ -247,7 +248,7 @@ describe("Codex CLI apply consumer", () => {
     expect(await handleCodexCliUpdateCommand(["apply", "--yes"], { applyUpdate: async () => { calls++; throw new Error("not reached"); } })).toBe(2);
     expect(calls).toBe(0);
   });
-  test("confirmed apply reaches its consumer with the exact plan ID and prints its public result", async () => {
+  test.skipIf(process.platform === "win32" || process.geteuid?.() === undefined)("confirmed apply reaches its consumer with the exact plan ID and prints its public result", async () => {
     const planId = "a".repeat(32); let calls = 0; const logs: string[] = [], log = console.log;
     const report = { outcome: "not_applied" as const, reason: "original_install_unchanged", planId,
       installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false, verificationPid: null, cleanupErrors: [] };
