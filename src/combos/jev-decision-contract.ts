@@ -52,7 +52,7 @@ export function jevDecisionEndpointUrl(baseUrl: string): string {
 export function isDecisionsEndpoint(url: string): boolean {
   try {
     const parsed = new URL(url.trim());
-    return parsed.hostname === "ai-gateway.vercel.sh" || parsed.hostname.endsWith(".vercel.sh");
+    return parsed.hostname === "ai-gateway.vercel.sh";
   } catch {
     return false;
   }

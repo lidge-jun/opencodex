@@ -67,23 +67,24 @@ export function planNativeChatReasoningReplay(
   for (const message of messages) {
     if (!isChatRecord(message) || message.role !== "assistant") continue;
     if (typeof message.reasoning_content === "string" && message.reasoning_content.length > 0) continue;
+    let parts: string[];
     if (typeof message.reasoning === "string" && message.reasoning.length > 0) {
-      plans.push({ message, parts: [message.reasoning] });
-      continue;
+      parts = [message.reasoning];
+    } else {
+      const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+      // DeepSeek tools contract covers prior assistant turns when tools are present.
+      // Thinking models like reflection/beam require reasoning replay even without tools.
+      if (calls.length === 0 && !(hasTools && isDeepSeekThinkingModel(modelId)) && !isReflectionThinkingModel(modelId)) continue;
+      const cached = new Set<string>();
+      for (const tool of calls) {
+        if (!isChatRecord(tool) || typeof tool.id !== "string") continue;
+        const text = peekReasoningForCall(tool.id, scope);
+        if (text) cached.add(text);
+      }
+      parts = cached.size > 0
+        ? [...cached]
+        : policy.placeholder ? [" "] : [];
     }
-    const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    // DeepSeek tools contract covers prior assistant turns when tools are present.
-    // Thinking models like reflection/beam require reasoning replay even without tools.
-    if (calls.length === 0 && !(hasTools && isDeepSeekThinkingModel(modelId)) && !isReflectionThinkingModel(modelId)) continue;
-    const cached = new Set<string>();
-    for (const tool of calls) {
-      if (!isChatRecord(tool) || typeof tool.id !== "string") continue;
-      const text = peekReasoningForCall(tool.id, scope);
-      if (text) cached.add(text);
-    }
-    const parts = cached.size > 0
-      ? [...cached]
-      : policy.placeholder ? [" "] : [];
     if (parts.length === 0) continue;
 
     // The envelope delta around the joined value is exact for the plain JSON the Chat
