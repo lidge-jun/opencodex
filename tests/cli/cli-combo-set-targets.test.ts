@@ -68,13 +68,26 @@ describe("ocx combo set --targets keeps the stored strategy (#7579)", () => {
     const before = readFileSync(getConfigPath(), "utf8");
     expect(await handleComboCommand(["set", "auto", "--targets", "tev/tev1:4b", "--json"], deps)).toBe(1);
     expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
-    expect(errors.join("\n")).toContain("--targets keeps the stored jev strategy and its decision method, quota policy and session pin");
+    expect(errors.join("\n")).toContain("--targets keeps the stored jev strategy with its decision method, quota policy and session pin");
     // A rejected combo that was not JEV keeps the generic message.
     config.combos!.plain = { strategy: "failover", targets: [{ provider: "fixture", model: "m" }] };
     saveConfig(config);
     errors.length = 0;
     expect(await handleComboCommand(["set", "plain", "--targets", "tev/tev1:4b", "--json"], deps)).toBe(1);
     expect(errors.join("\n")).not.toContain("jev");
+  });
+
+  test("the kept-JEV message covers a refused JEV setting and leaves unrelated refusals generic", async () => {
+    config.providers!.tev!.disabled = true;
+    saveConfig(config);
+    const before = readFileSync(getConfigPath(), "utf8");
+    expect(await handleComboCommand(["set", "auto", "--targets", "fixture/n", "--json"], deps)).toBe(1);
+    expect(errors.join("\n")).toContain("the kept jev settings");
+    errors.length = 0;
+    // A rename onto an existing combo is refused for its own reason, not for the kept policy.
+    expect(await handleComboCommand(["set", "judged", "--rename-from", "auto", "--targets", "fixture/n", "--json"], deps)).toBe(1);
+    expect(errors.join("\n")).not.toContain("jev");
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
   });
 
   test("JEV-only flags with replaced targets are checked against the stored strategy", async () => {

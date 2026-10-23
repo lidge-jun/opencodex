@@ -44,11 +44,12 @@ const USAGE = `Usage:
 type ComboRow = Record<string, unknown> & { id?: string; model?: string; strategy?: string };
 const STRATEGIES = ["failover", "round-robin", "random", "least-used", "reset-window", "jev"] as const;
 const isComboStrategy = (value: string): value is typeof STRATEGIES[number] => (STRATEGIES as readonly string[]).includes(value);
-// Combo writes print fixed messages instead of server text; this one names the policy a refused
-// target list was checked against, because the user did not name the strategy (#7579).
+// Combo writes print fixed messages instead of server text. When --targets kept a stored JEV
+// strategy the user did not name, a refusal of the targets or a JEV setting says so (#7579).
 const KEPT_JEV_REJECTED = "combo_targets_rejected_by_kept_jev";
+const KEPT_JEV_FIELDS = new Set(["targets", "decisionProvider", "decisionModel", "decisionTimeoutMs", "decisionQuotaSignals", "decisionQuotaTiers", "sessionPin"]);
 const SET_ERRORS = {
-  [KEPT_JEV_REJECTED]: "The selected target rejected the new targets. Without --strategy, --targets keeps the stored jev strategy and its decision method, quota policy and session pin, and the targets are checked against them. Inspect the combo with ocx combo show <id> --json, then fix the targets, or pass --strategy to change the strategy.",
+  [KEPT_JEV_REJECTED]: "The selected target rejected the new targets or the kept jev settings. Without --strategy, --targets keeps the stored jev strategy with its decision method, quota policy and session pin, and the save checks the new targets together with them. Inspect the combo with ocx combo show <id> --json, then fix the targets or those settings, or pass --strategy to change the strategy.",
 };
 
 function parseTargets(value: string): Array<{ provider: string; model: string; weight?: number }> {
@@ -219,7 +220,10 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
       body: serializeManagementJson({ id, combo, ...(renameFrom ? { renameFrom } : {}) }),
     }, deps);
   } catch (error) {
-    if (error instanceof RuntimeApiError && error.status === 400 && replacingTargets && strategyRaw === undefined && strategy === "jev") {
+    const field = error instanceof RuntimeApiError && error.body !== null && typeof error.body === "object"
+      ? (error.body as Record<string, unknown>).field : undefined;
+    if (error instanceof RuntimeApiError && error.status === 400 && typeof field === "string" && KEPT_JEV_FIELDS.has(field)
+      && replacingTargets && strategyRaw === undefined && strategy === "jev") {
       throw new RuntimeApiError(error.message, error.status, { code: KEPT_JEV_REJECTED });
     }
     throw error;

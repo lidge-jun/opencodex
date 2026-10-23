@@ -257,7 +257,7 @@ unqualified bare OpenAI model id. Bare `gpt-5.6-*` native aliases use Codex Pool
 Account-qualified OpenAI routes remain distinct, while provider-qualified routes such as
 `openai-apikey/gpt-5.6-*` use their configured API key and never fall through to the native alias.
 Read the safety and visibility contract in the guide before enabling the compatibility pair.
-With `--strategy jev` only, the decision method is chosen by one of two mutually exclusive flags.
+Only when the effective strategy is JEV (`--strategy jev`, or a stored JEV Combo when `--strategy` is omitted), the decision method is chosen by one of two mutually exclusive flags.
 `--decision-provider <provider|->` names a configured `jev-decision` row (for example a self-hosted
 Ollama `tev1`) as a System One-compatible server. `--decision-model <route|->` names an ordinary
 opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as JSON; it cannot be

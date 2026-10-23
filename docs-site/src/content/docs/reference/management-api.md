@@ -243,7 +243,7 @@ completes.
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/combos` | List normalized combos and their public model ids | Catalog work can return `catalog_busy` |
-| `PUT /api/combos` | Create, replace, or rename one combo | 400 invalid id, target, config, rename, or ordinary collision; 409 Codex-account namespace collision |
+| `PUT /api/combos` | Create, replace, or rename one combo | 400 invalid id, target, config, rename, or ordinary collision (a combo validation 400 also names the first invalid top-level field in `field`, for example `targets` or `decisionProvider`); 409 Codex-account namespace collision |
 | `DELETE /api/combos?id=...` | Delete one combo and clear its selection/cooldown state | 400 missing id; 404 unknown combo |
 
 See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and routing failures.
