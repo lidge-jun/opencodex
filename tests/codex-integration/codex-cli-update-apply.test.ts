@@ -212,6 +212,18 @@ function gateFixtureNpmInstall(f: ReturnType<typeof fixture>) {
   const source = readFileSync(path, "utf8");
   const marker = "const installed = cp.spawnSync(";
   if (source.split(marker).length !== 2) throw new Error("fixture npm wrapper shape changed");
+  const viewMarker = 'if (args[0] === "view") { if (!metadata[args[1]]) process.exit(81); console.log(JSON.stringify(metadata[args[1]])); process.exit(0); }';
+  if (source.split(viewMarker).length !== 2) throw new Error("fixture npm metadata wrapper shape changed");
+  const metadataTrace = join(f.root, "metadata-view-trace.jsonl");
+  const tracedView = [
+    'if (args[0] === "view") {',
+    '  const spec = args[1], value = metadata[spec];',
+    '  const stage = spec === "@openai/codex@latest" ? "latest" : value?.name === "@openai/codex" && value?.version?.includes("-") ? "backing" : "pinned";',
+    `  fs.appendFileSync(${JSON.stringify(metadataTrace)}, JSON.stringify({stage,spec,exitCode:value?0:81,signal:null,spawnError:null,stdoutJsonValid:!!value,reason:value?"metadata_returned":"fixture_metadata_missing",name:value?.name??null,version:value?.version??null,optionalDependencyKeys:value?.optionalDependencies?Object.keys(value.optionalDependencies):[],hasIntegrity:typeof value?.dist?.integrity==="string",hasTarball:typeof value?.dist?.tarball==="string"})+"\\n");`,
+    '  if (!value) process.exit(81); console.log(JSON.stringify(value)); process.exit(0);',
+    '}',
+  ].join("\n");
+  const tracedSource = source.replace(viewMarker, tracedView);
   const wait = [
     'const fixtureGate = process.env.OCX_FIXTURE_NPM_GATE;',
     'if (fixtureGate) {',
@@ -221,7 +233,7 @@ function gateFixtureNpmInstall(f: ReturnType<typeof fixture>) {
     '  if (!fs.existsSync(fixtureGate)) process.exit(85);',
     '}',
   ].join("\n") + "\n";
-  writeFileSync(path, source.replace(marker, wait + marker), { encoding: "utf8", mode: 0o755 });
+  writeFileSync(path, tracedSource.replace(marker, wait + marker), { encoding: "utf8", mode: 0o755 });
   chmodSync(path, 0o755);
 }
 
@@ -235,8 +247,8 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     expect(plan.applicable).toBe(true); expect(plan.managed).toBe(true);
     expect(plan.targetArtifacts.backing.name).toBe("@openai/codex");
     const result = cli(f, ["apply", "--plan-id", plan.planId, "--yes"]);
-    expect(result.outcome).toBe("applied"); expect(result.installedVersion).toBe("1.1.0");
-    expect(result.leaseRetained).toBe(false);
+    expect(result).toMatchObject({ status: "applied", outcome: "applied", childState: "terminal",
+      leaseState: "not_acquired_or_released", lifetimeUncertain: false });
     const after = cli(f, ["check"]); expect(after.managed).toBe(true); expect(after.packageVersion).toBe("1.1.0");
     const calls = readFileSync(f.trace, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
     expect(calls).toHaveLength(1);
@@ -287,6 +299,12 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
           installContentDigestPresent: typeof plan.installContentDigest === "string",
           sessionState: typeof plan.session?.state === "string" && sessionStates.includes(plan.session.state) ? plan.session.state : null,
           sessionMatches: Number.isSafeInteger(plan.session?.matches) && (plan.session?.matches ?? -1) >= 0 ? plan.session!.matches : null,
+          metadataQueries: existsSync(join(f.root, "metadata-view-trace.jsonl"))
+            ? readFileSync(join(f.root, "metadata-view-trace.jsonl"), "utf8").split("\n").filter(Boolean)
+              .map(line => JSON.parse(line) as { stage: string; spec: string; exitCode: number; signal: null;
+                spawnError: null; stdoutJsonValid: boolean; reason: string; name: string | null; version: string | null;
+                optionalDependencyKeys: string[]; hasIntegrity: boolean; hasTarball: boolean })
+            : [],
         };
         throw new Error(`published launcher management plan was not applicable: ${JSON.stringify(diagnostic)}`);
       }
@@ -414,13 +432,16 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
     Object.assign(f.env, { TMPDIR: alias, NODE_COMPILE_CACHE: join(f.root, "node-compile-cache") });
     const plan = cli(f, ["plan"]); expect(plan.applicable).toBe(true);
     const result = cli(f, ["apply", "--plan-id", plan.planId, "--yes"]);
-    expect(result.outcome).toBe("applied"); expect(result.installedVersion).toBe("1.1.0");
-    expect(result.leaseRetained).toBe(false);
+    expect(result).toMatchObject({ status: "applied", outcome: "applied", childState: "terminal",
+      leaseState: "not_acquired_or_released", lifetimeUncertain: false });
+    const after = cli(f, ["check"]);
+    expect(after.managed).toBe(true); expect(after.packageVersion).toBe("1.1.0");
     const calls = readFileSync(f.trace, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
     expect(calls).toHaveLength(1);
     const archives = calls[0]!.filter(arg => arg.includes("@file:")).map(arg => arg.split("@file:")[1]!);
     expect(archives).toHaveLength(2);
     for (const archive of archives) { expect(archive.startsWith(f.temporaryRoot + "/")).toBe(true); expect(archive.startsWith(alias + "/")).toBe(false); }
+    expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
     expect(readdirSync(f.temporaryRoot)).toEqual([]);
   }, 120_000);
 

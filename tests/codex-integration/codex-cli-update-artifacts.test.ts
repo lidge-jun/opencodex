@@ -272,13 +272,19 @@ describe("Codex CLI apply consumer", () => {
       expect(calls).toBe(1); expect(logs).toHaveLength(1);
       expect(fs.existsSync(join(configDir, "codex-cli-update-jobs", "jobs.json"))).toBe(true);
       const dto = JSON.parse(logs[0]!) as Record<string, unknown>;
-      expect(dto).toMatchObject({ jobId: expect.stringMatching(/^[0-9a-f-]{36}$/), status: "not_applied",
+      const matcherDto = structuredClone(dto);
+      expect(typeof dto.jobId).toBe("string");
+      expect(dto.jobId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(matcherDto).toMatchObject({ jobId: expect.stringMatching(/^[0-9a-f-]{36}$/), status: "not_applied",
         ownerState: "finished", lifetimeUncertain: false, childState: "terminal",
         leaseState: "not_acquired_or_released", planId, outcome: "not_applied",
         reason: "original_install_unchanged", cleanupErrors: [],
         createdAt: expect.any(String), updatedAt: expect.any(String) });
-      expect(Number.isFinite(Date.parse(dto.createdAt as string))).toBe(true);
-      expect(Number.isFinite(Date.parse(dto.updatedAt as string))).toBe(true);
+      const isIsoUtcTimestamp = (value: unknown) => typeof value === "string"
+        && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+        && Number.isFinite(Date.parse(value));
+      expect(isIsoUtcTimestamp(dto.createdAt)).toBe(true);
+      expect(isIsoUtcTimestamp(dto.updatedAt)).toBe(true);
       expect(Object.keys(dto).sort()).toEqual([
         "childState", "cleanupErrors", "createdAt", "jobId", "leaseState", "lifetimeUncertain",
         "outcome", "ownerState", "planId", "reason", "status", "updatedAt",
