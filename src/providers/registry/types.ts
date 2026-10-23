@@ -63,6 +63,8 @@ export interface ProviderModelDiscoveryFilter {
 }
 
 interface ProviderModelDiscoverySharedSpec {
+  /** Product-config envelope used by WorkBuddy AI instead of an OpenAI model list. */
+  format?: "workbuddy";
   /** Query parameters applied to the resolved discovery URL. */
   query?: Readonly<Record<string, string>>;
   /** Top-level response key containing model rows; defaults to `data`. */
