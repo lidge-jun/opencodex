@@ -37,6 +37,8 @@ export const RESPONSES_CORE_MODULES = [
   "combo-tool-loop-pin.ts",
   // Reached from core-combo.ts: the JEV model backend's internal decision turn.
   "jev-model-invoke.ts",
+  // Reached from core-combo.ts: JEV effort choices and resolved native quota identity.
+  "jev-combo-choice.ts",
   "request-prepare.ts",
   "policy-request-scope.ts",
   "skills-snapshot.ts",

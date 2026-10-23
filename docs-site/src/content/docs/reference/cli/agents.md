@@ -334,6 +334,25 @@ There is no monetary cost or comparative savings field in this report.
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 
+## Fallback off
+
+### `ocx fallback <status|off|on|clear|local> ...`
+
+```bash
+ocx fallback status --json
+ocx fallback off --kind provider
+ocx fallback on --route combo/coding
+ocx fallback clear --provider anthropic --kind model
+ocx fallback local on --device mac-studio
+```
+
+`off`, `on` and `clear` take `--kind model|provider|all` (default `all`) and at most one scope:
+`--provider <name>`, `--route <selector>` or `--device <id|alias>`; with none they set the global switch.
+A device set to off always refuses; otherwise route beats provider beats global. `local` records whether a
+device may use its own providers while the Home is unreachable, a permission GOAT reads; OpenCodex itself
+still answers `home_unreachable` there. The commands talk to the live proxy; on a Remote Link Child,
+`status` reads the Home and writes are refused. See [Fallback off](/guides/fallback-off/).
+
 ## Routing profiles
 
 Existing profiles support inspection and evaluation through the live API:

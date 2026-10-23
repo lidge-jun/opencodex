@@ -1,4 +1,5 @@
 import { stripMachineAuthHeaders } from "./machine-auth";
+import { homeUnreachableBody } from "./home-unreachable";
 
 export interface HubRelayTarget {
   managementUrl: string;
@@ -71,6 +72,11 @@ export function validateHubRelayRequestHeaders(raw: readonly (readonly [string, 
 
 function relayError(status: number, error: string): Response {
   return Response.json({ error }, { status });
+}
+
+/** The Hub did not answer (OCX-11 `home_unreachable`); the 502 status is kept. */
+function hubUnreachable(): Response {
+  return Response.json(homeUnreachableBody("hub relay unavailable"), { status: 502 });
 }
 
 function canonicalOrigin(value: string): string | null {
@@ -275,12 +281,12 @@ export async function relayHubManagementRequest(
     });
   } catch {
     cleanup();
-    return relayError(502, "hub relay unavailable");
+    return hubUnreachable();
   }
   if (signal.aborted) {
     cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
-    return relayError(502, "hub relay unavailable");
+    return hubUnreachable();
   }
   if (upstream.status >= 300 && upstream.status < 400) {
     cleanup();

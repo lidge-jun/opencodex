@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import { npmInvocation } from "../update/npm-invocation.mjs";
+import { CODEX_CLI_TRANSPORT_ENV_KEYS } from "../update/codex-cli-update-launch-policy.mjs";
 import {
   inspectCodexCliInstall,
   type CodexCliInstallKind,
@@ -61,6 +62,7 @@ export type CodexCliUpdateRefusal =
   | "windows_inspection_deferred"
   | "not_managed"
   | "installed_version_unverified"
+  | "install_content_unverified"
   | "target_unresolved"
   | "already_current"
   | "target_not_newer"
@@ -100,6 +102,13 @@ export interface CodexCliUpdatePlan {
   readonly targetVersion: string | null;
   readonly targetIntegrity: string | null;
   readonly session: CodexCliUpdateSession;
+  /**
+   * The bounded content observation the installation report produced: digest of
+   * the manifest, declared entrypoint and resolved platform backing the plan's
+   * identity is pinned to. Not an execution guarantee — an apply phase must
+   * re-observe before it can rely on the same bytes.
+   */
+  readonly installContentDigest: string | null;
   /** Indicative install argv for the operator to read; the apply phase this plan precedes verifies a packed tarball against the bound sha512 rather than trusting a moving spec. */
   readonly command: readonly string[] | null;
 }
@@ -157,6 +166,7 @@ export function codexCliUpdatePlanId(bound: {
   readonly provenance: CodexCliInstallKind;
   readonly installedVersion: string;
   readonly installDigest: string | null;
+  readonly installContentDigest: string;
   readonly channel: CodexCliUpdateChannel;
   readonly targetVersion: string;
   readonly targetIntegrity: string;
@@ -170,6 +180,7 @@ export function codexCliUpdatePlanId(bound: {
     ["provenance", bound.provenance],
     ["installedVersion", bound.installedVersion],
     ["installDigest", bound.installDigest ?? ""],
+    ["installContentDigest", bound.installContentDigest],
     ["channel", bound.channel],
     ["targetVersion", bound.targetVersion],
     ["targetIntegrity", bound.targetIntegrity],
@@ -220,8 +231,8 @@ function npmTarget(args: readonly string[], env?: NodeJS.ProcessEnv): NpmTarget 
  * shared modules from. None of these is input the updater child needs, so
  * ambient values stay out of the spawned npm. This is a denylist for
  * process-startup/output channels, not a claim that every ambient variable is
- * allowlisted. Ordinary OS environment, proxy settings and the supported
- * NODE_EXTRA_CA_CERTS extension remain available.
+ * allowlisted. When a proof-bound launcher snapshot is available, proxy and
+ * CA settings are replaced from that snapshot below.
  */
 const NPM_ENV_DROP_KEYS: ReadonlySet<string> = new Set([
   "node_options",
@@ -255,23 +266,24 @@ function codexCliUpdateNpmEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
 }
 
 /**
- * Ambient environment with the executable-selection channels replaced by the proof-bound
- * launcher snapshot. HOME, proxy variables and NODE_EXTRA_CA_CERTS stay ambient because npm
- * itself needs them; PATH/PATHEXT are the channels a project dotenv could use to supply a
- * fake npm, so they come only from the captured snapshot. A snapshot without PATH means no
- * trusted PATH at all — an empty one fails the spawn closed rather than falling back.
+ * Ambient environment with executable-selection and transport-trust channels replaced by
+ * the proof-bound launcher snapshot. Bun may add project dotenv values after that snapshot,
+ * so PATH/PATHEXT, proxies and NODE_EXTRA_CA_CERTS must all come from the captured context.
+ * A snapshot without PATH means no trusted PATH at all — an empty one fails the spawn closed.
  */
 function codexCliUpdateBoundEnv(bound: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
   const merged = codexCliUpdateNpmEnv();
   if (bound === undefined) return merged;
+  // Derived from the launcher's allowlist so capture, parsing and the npm child cannot drift.
+  const boundKeys = new Set<string>(["path", "pathext", ...CODEX_CLI_TRANSPORT_ENV_KEYS]);
   for (const key of Object.keys(merged)) {
     const k = key.toLowerCase();
-    if (k === "path" || k === "pathext") delete merged[key];
+    if (boundKeys.has(k)) delete merged[key];
   }
   let hasTrustedPath = false;
   for (const [key, value] of Object.entries(bound)) {
     const k = key.toLowerCase();
-    if ((k === "path" || k === "pathext") && value !== undefined) {
+    if (boundKeys.has(k) && value !== undefined) {
       merged[key] = value;
       if (k === "path") hasTrustedPath = true;
     }
@@ -303,7 +315,7 @@ interface NpmConfigIsolation {
  * the operator's real ancestors. The sentinel package.json anchors the walk here,
  * where no .npmrc exists. --userconfig/--globalconfig replace the two file configs,
  * and the env filter removes the env-var channel. What remains is exactly the pinned
- * --registry flag plus deliberately supported proxy/CA env.
+ * --registry flag plus proxy/CA values captured before project dotenv loading.
  */
 function createNpmConfigIsolation(dir?: string, boundEnv?: NodeJS.ProcessEnv): NpmConfigIsolation {
   const ownsRoot = dir === undefined;
@@ -356,7 +368,7 @@ function isolatedNpmTarget(args: readonly string[], isolation: NpmConfigIsolatio
 export function resolveCodexCliUpdateTarget(
   channel: CodexCliUpdateChannel,
   spawn: typeof spawnSync = spawnSync,
-  /** Proof-bound launcher snapshot env; executable resolution reads only its PATH/PATHEXT. */
+  /** Proof-bound pre-dotenv PATH/PATHEXT and proxy/CA env; absent settings stay absent. */
   boundEnv?: NodeJS.ProcessEnv,
 ): CodexCliUpdateTarget {
   // The pinned registry and the isolation directory together are the boundary: the
@@ -453,6 +465,7 @@ function refusedPlan(
     targetVersion: target?.kind === "resolved" ? target.version : null,
     targetIntegrity: target?.kind === "resolved" ? target.integrity : null,
     session,
+    installContentDigest: report.installContentDigest,
     command: null,
   });
 }
@@ -473,7 +486,9 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   const channel: CodexCliUpdateChannel = deps.channel ?? "latest";
   const platform = deps.platform ?? process.platform;
   const inspect = deps.inspect ?? inspectCodexCliInstall;
-  const report = await inspect(deps.inspectionDeps ?? {});
+  // The planId binds the observed file set, so the plan is the one caller that
+  // pays the bounded content read; a bare ownership check leaves it unobserved.
+  const report = await inspect({ ...(deps.inspectionDeps ?? {}), observeInstallContent: true });
 
   // Phase 1 performs no candidate filesystem I/O at all on Windows, so there is no
   // ownership evidence to build a plan on. This stays dormant until the handle-bound
@@ -494,9 +509,15 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     return refusedPlan("installed_version_unverified", report, channel, null, NOT_EVALUATED);
   }
 
+  // A managed install whose observed content could not be bound produces no
+  // usable plan id — spending a registry query on it can only widen the claim.
+  if (!report.installContentDigest) {
+    return refusedPlan("install_content_unverified", report, channel, null, NOT_EVALUATED);
+  }
+
   // The npm evidence channels are bound to the same environment snapshot the
-  // ownership inspection ran against: PATH/PATHEXT from the proof-bound launcher
-  // context, never the ambient ones a project dotenv could point at a fake npm.
+  // ownership inspection ran against: PATH/PATHEXT and proxy/CA from the proof-bound
+  // pre-dotenv launcher context, never ambient executable or transport overrides.
   // When the caller had no trusted snapshot, inspectionDeps.env is the fail-closed
   // { PATH: "" } form, so this resolution cannot silently fall back to ambient.
   const resolveTarget = deps.resolveTarget
@@ -543,6 +564,7 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
       provenance: report.provenance,
       installedVersion,
       installDigest: report.installDigest,
+      installContentDigest: report.installContentDigest,
       channel,
       targetVersion: target.version,
       targetIntegrity: target.integrity,
@@ -555,6 +577,7 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     targetVersion: target.version,
     targetIntegrity: target.integrity,
     session: Object.freeze({ state: "none" as const, matches: 0 }),
+    installContentDigest: report.installContentDigest,
     command: codexCliUpdateCommand(target.version),
   });
 }

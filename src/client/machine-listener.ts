@@ -1,3 +1,4 @@
+import { recordLinkDiagnostic } from "../link/diagnostics";
 import type { Server } from "bun";
 import { loadConfig } from "../config";
 import { browserSecurityHeaders, requestPolicyView } from "../server/auth-cors";
@@ -21,6 +22,7 @@ import type { LinkTunnelGate } from "./link-relay";
 import { readClientLinkState, type ClientLinkState } from "./link-state";
 import { projectClientLinkChild, type ClientLinkSidecarRead } from "./link-status";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
+import type { LinkReadiness } from "./link-readiness";
 import { packageVersion } from "../lib/package-version";
 import { createLocalAttestationProof, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../lib/local-management-attestation";
 import {
@@ -65,6 +67,11 @@ export interface MachineListenerDeps {
   linkTunnel?: LinkTunnelGate;
   /** Link mode: relay seams (deadline clock and byte cap). */
   linkRelay?: LinkIngress["relay"];
+  /**
+   * Link mode: whether relayed requests can be served now. `GET /readyz` answers 503 `pending`
+   * with `link.reason` while it is not; `/healthz` is unaffected (`link-readiness.ts`).
+   */
+  linkReadiness?: () => LinkReadiness | Promise<LinkReadiness>;
   /**
    * The bound restart (OCX-6). With it, `/healthz` proves this process's identity to a challenge,
    * advertises `restartCapability` and `startedAt`, and `POST /api/system/restart` accepts a
@@ -152,7 +159,7 @@ export function startMachineListener(
       apiKeyId: connection.apiKeyId,
       policy: requestPolicyView(config, "127.0.0.1"),
       linkKey: deps.linkKeySource ?? createLinkKeySource(connection.tokenFingerprint, deps.linkKey),
-      relay: { fetchImpl: deps.fetchImpl, bodyLimitBytes: inboundBodyLimit, tunnel: deps.linkTunnel, ...deps.linkRelay },
+      relay: { diagnostic: recordLinkDiagnostic, fetchImpl: deps.fetchImpl, bodyLimitBytes: inboundBodyLimit, tunnel: deps.linkTunnel, ...deps.linkRelay },
     }
     : null;
   return (deps.serve ?? (options => Bun.serve(options)))({
@@ -186,7 +193,18 @@ export function startMachineListener(
         return await handleBoundRestart(req, server, deps.restart);
       }
       if (url.pathname === "/readyz" && req.method === "GET") {
-        return Response.json({ service: "opencodex", version: VERSION, role: "client", status: "ready", uptime: process.uptime(), pid: process.pid, port: server.port, protocolVersion: 1 });
+        const identity = { service: "opencodex", version: VERSION, role: "client" } as const;
+        const facts = { uptime: process.uptime(), pid: process.pid, port: server.port, protocolVersion: 1 };
+        let link: LinkReadiness | null = null;
+        if (linkMode && deps.linkReadiness) {
+          try { link = await deps.linkReadiness(); } catch { link = { ready: false, reason: "link_unverified" }; }
+        }
+        if (link && !link.ready) {
+          // The /readyz contract: not ready is 503 with Retry-After and status pending or failed.
+          return Response.json({ ...identity, status: "pending", ...facts, link: { state: "unavailable", reason: link.reason } },
+            { status: 503, headers: { "Retry-After": "1", "Cache-Control": "no-store" } });
+        }
+        return Response.json({ ...identity, status: "ready", ...facts, ...(link ? { link: { state: "available" } } : {}) });
       }
       if (url.pathname.startsWith("/api/machine/hub-relay/")) {
         if (!relayEnabled) return json404(req);

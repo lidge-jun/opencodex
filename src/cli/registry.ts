@@ -436,6 +436,17 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "fallback",
+    usage: "ocx fallback <status|off|on|clear|local> [--kind model|provider|all] [--provider <name> | --route <selector> | --device <id|alias>] [--json]",
+    summary: "Turn model and provider fallback off or on per scope, and record per-device local fallback.",
+    details: [
+      "A refused fallback answers fallback_refused with the status of the failure that triggered it, and names the command that allows it.",
+      "Precedence: a device set to off always refuses; otherwise route, then provider, then global; unset allows.",
+      "Rotation among the accounts or keys of one provider pool is not a fallback and is not governed here.",
+      "Live proxy only. On a Remote Link Child, status reads the Home; writes are refused. Run write commands on the Home.",
+    ],
+  },
+  {
     name: "agent",
     usage: "ocx agent <status|injection|effort|subagents|fallback|sidecar> ...",
     summary: "Manage headless multi-agent, roster, effort, injection, and sidecar settings.",

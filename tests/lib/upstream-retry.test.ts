@@ -297,6 +297,29 @@ describe("retryBackoffDelayMs", () => {
     expect(res.headers.get("retry-after")).toBe("3600");
   });
 
+  test("an upstream no-retry verdict stops transient retries and preserves its response", async () => {
+    silenceWarn();
+    let cancelled = false;
+    const body = JSON.stringify({ error: { details: { retryable: false } } });
+    const upstream = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body));
+        controller.close();
+      },
+      cancel() { cancelled = true; },
+    }), { status: 503, headers: { "x-should-retry": "false", "content-type": "application/json" } });
+    const mock = mockDoFetch([upstream, new Response("duplicate"), new Response("duplicate")]);
+
+    const response = await fetchWithTransientRetry(mock.doFetch);
+
+    expect(response).toBe(upstream);
+    expect(response.status).toBe(503);
+    expect(response.headers.get("x-should-retry")).toBe("false");
+    expect(await response.json()).toEqual({ error: { details: { retryable: false } } });
+    expect(cancelled).toBe(false);
+    expect(mock.calls).toHaveLength(1);
+  });
+
   test("an instruction inside the wait deadline is still honoured before retrying (#4546)", async () => {
     silenceWarn();
     const limited = new Response("overloaded", {

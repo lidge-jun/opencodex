@@ -251,6 +251,13 @@ without separately attributable bars remain unknown. Active-account summaries, m
 display reports, credits and API/Spark/USD meters are not quota evidence for this decision.
 The separate Anthropic · Pool 2 (`anthropic2`) account pool is not a source of this evidence, so its targets stay unknown.
 
+Antigravity contributes Gem/Cla five-hour and weekly buckets only after a fresh authenticated probe
+for its sole active, usable OAuth account, and only to the `google-antigravity` provider that signs in
+with that account. A renamed provider row reads unknown and never reuses that account's quota. Quota
+follows the resolved native `gemini-*` or `claude-*` model, not its display alias. Account, credential, project or destination
+changes withdraw the old observation. A display-only refresh can retain matching family counters
+only with their original timestamps; per-model and Argon rows never become decision evidence.
+
 :::caution[Additional decision data]
 Opting in sends quota tiers, and available used percentage/window/reset delay, to your selected
 decision backend, including hosted TypeSafe. No account ids, tokens or credential fingerprints
@@ -590,6 +597,8 @@ rows show decision count, applied count, and average latency for `typesafe`, `sy
 ## What happens when a target fails
 
 Combo failures are divided into **hop** failures and **terminal** failures.
+To make a combo fail with a clear `fallback_refused` error instead of hopping to another model or
+provider, see [Fallback off](/guides/fallback-off/).
 
 | Result | Behavior |
 | --- | --- |

@@ -139,7 +139,7 @@ over that request's nonce, PID, and port. A caller that decides something from t
 with `requireResponseProof`, which refuses an unsigned or mismatched response: the capability
 proves the request to the server, and only the proof tells the caller that the answer came from it
 and not from a process that took the port. `ocx status` requires the proof before it prefers the
-live proxy's `/api/startup-health` verdict over its own shell-local probe (#5977).
+live proxy's `/api/startup-health` verdict over its own shell-local probe (#5977). Local `ocx usage compare` also requires proof for each exact query and pins the runtime record across both windows with 60-second direct reads.
 
 The desktop tray uses the same read-v1 contract for its fixed GET allowlist in
 `src/lib/local-management-capability.ts`, including `/api/oauth/accounts` and
@@ -431,7 +431,7 @@ routes to its Home, serves its own read-only `GET /api/link/status` ([Remote Lin
 and relays allowlisted management reads to the Home under `/api/machine/hub-relay/api/*` for a Child dashboard session
 ([Remote Link](remote-link.md#child-management-relay-and-home-codex-settings)). Every other `/api/*` and `/v1/*` path is
 refused before dispatch with a JSON 404 naming the method and path. There is no second management port on such a machine:
-management rides the same listener a standalone or hub install runs, so a connected client has no mutating `/api/*` surface.
+management rides the same listener a standalone or hub install runs, so a connected client has no mutating `/api/*` surface. In link mode its `/readyz` also says whether the link can carry a request right now ([Remote Link](remote-link.md)); its `/healthz` does not.
 
 The discriminator is `role` on `/healthz` and `/readyz`. The machine listener reports
 `role: "client"`; the standalone and hub server omit the field. `src/server/proxy-liveness.ts` parses

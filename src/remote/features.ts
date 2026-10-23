@@ -7,6 +7,8 @@
  * - `quota-pool/1` when the management route registry declares `GET /api/quota-pool`. The registry
  *   is reconciled against dispatch source (`tests/server/management-route-registry.test.ts`), so the
  *   feature appears exactly when the route is reachable.
+ * - `fallback-policy/1` when the registry declares `GET /api/fallback` (OCX-11). GOAT reads a Home
+ *   without it as "fallback state unknown".
  * - `link-management-relay` when the Remote Link management read table is non-empty.
  * - `served-by-header` when the served-by emitter says responses carry the header.
  * - `relay-auth/<n>` with the connection-bound link relay auth version.
@@ -25,6 +27,7 @@ import { MANAGEMENT_ROUTES, type ManagementRoute } from "../server/management/ro
 import { SERVED_BY_HEADER_EMITTED } from "./served-by";
 
 export const QUOTA_POOL_PATH = "/api/quota-pool";
+export const FALLBACK_STATE_PATH = "/api/fallback";
 
 /** The owning sources the registry reads. Tests pass their own to drive presence and absence. */
 export interface PeerFeatureSources {
@@ -41,6 +44,7 @@ export type PeerFeature = (sources: PeerFeatureSources) => string | null;
 /** Ordered; `/readyz` lists the served ids in this order. */
 export const PEER_FEATURES: readonly PeerFeature[] = [
   s => s.managementRoutes.some(route => route.method === "GET" && route.path === QUOTA_POOL_PATH) ? "quota-pool/1" : null,
+  s => s.managementRoutes.some(route => route.method === "GET" && route.path === FALLBACK_STATE_PATH) ? "fallback-policy/1" : null,
   s => s.linkManagementReadPaths.length > 0 ? "link-management-relay" : null,
   s => s.servedByHeaderEmitted ? "served-by-header" : null,
   s => `relay-auth/${s.relayAuthVersion}`,
