@@ -258,7 +258,7 @@ successful main usage refresh clears the runtime mark.
 and native-main refresh. Exact structured terminal codes apply only to authentication-error
 statuses; HTTP 429/5xx and malformed responses remain transient. Description-only OAuth 400
 compatibility never overrides a structured code. Endpoint diagnostics contain fixed outcome, HTTP
-status, an allowlisted code and (pool only) the redacted `p<hex6>` label, never provider descriptions
+status, an allowlisted code and (pool only) the account's durable `p<hex6>` label, never descriptions
 or credential material. Pool refresh errors keep that status/code without changing cooldown class.
 Once a stored-pool record carries the persisted terminal verdict (`lastCodexValidationTerminal`
 with a failed status), `auth-api/pool-quota-probe.ts` answers passive quota reads with that
