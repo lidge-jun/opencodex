@@ -666,6 +666,12 @@ function formatDecisionsInput(state: Record<string, unknown>): string {
   if (typeof state.task === "string" && state.task.trim()) {
     parts.push(`Task: ${state.task.trim()}`);
   }
+  if (isRecord(state.signals)) {
+    const sigs: string[] = [];
+    if (state.signals.has_image === true) sigs.push("has_image");
+    if (state.signals.tool_history === true) sigs.push("tool_history");
+    if (sigs.length > 0) parts.push(`Signals: ${sigs.join(", ")}`);
+  }
   if (typeof state.previous_assistant === "string" && state.previous_assistant.trim()) {
     parts.push(`Recent Assistant: ${state.previous_assistant.trim()}`);
   }
@@ -717,10 +723,15 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
               name: "route",
               type: "choice",
               instructions: "Which target AND reasoning effort together best fit the next model call? Select sufficient capability and reasoning for a correct next step while avoiding unnecessary resource use.",
-              choices: [...routeOptions.entries()].map(([choice, opt]) => ({
-                value: choice,
-                description: criterionDescription(opt.criterion, rows.find(r => r.key === opt.targetKey)?.quota),
-              })),
+              choices: [...routeOptions.entries()].map(([choice, opt]) => {
+                const cand = rows.find(r => r.key === opt.targetKey);
+                const desc = criterionDescription(opt.criterion, cand?.quota);
+                const note = cand?.modelProfile?.trim();
+                return {
+                  value: choice,
+                  description: note ? `${desc} (${note})` : desc,
+                };
+              }),
             },
           ],
         });
