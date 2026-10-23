@@ -67,6 +67,13 @@ export type ReclaimListenPortOptions = WaitForPortOptions & {
   killFn?: (pid: number) => void;
   dropTcpFn?: (port: number) => number | { dropped: number; skippedIpv6: number };
   isAvailableFn?: (port: number, hostname?: string) => Promise<boolean>;
+  /**
+   * Synchronous authority gate re-checked after each availability await and
+   * immediately before every destructive action (killFn / dropTcpFn). Returning
+   * false denies the mutation and ends the reclaim: the port is reported
+   * not-freed without touching processes or TCP rows. A throwing gate denies too.
+   */
+  mayMutateFn?: () => boolean;
   sleepMs?: (ms: number) => Promise<void>;
 };
 
@@ -516,6 +523,8 @@ export async function ownsIpv4LoopbackListener(
  * revalidates immediately before each kill.
  * Never overrides a rejected ocx verifier result. Never drops TCP rows while a
  * rejected live or protected ocx listener owns the port, or when the scan failed.
+ * A denied `mayMutateFn` ends the wait: no kill or TCP-row drop may run under
+ * an authority that no longer holds.
  */
 export async function reclaimListenPort(
   port: number,
@@ -539,6 +548,9 @@ export async function reclaimListenPort(
   const dropTcpFn = opts.dropTcpFn ?? dropWindowsTcpRowsForLocalPort;
   const isAvailableFn = opts.isAvailableFn ?? isPortAvailable;
   const sleep = opts.sleepMs ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const mayMutate = (): boolean => {
+    try { return opts.mayMutateFn?.() !== false; } catch { return false; }
+  };
 
   const deadline = Date.now() + timeoutMs;
   let lastScan = 0;
@@ -546,6 +558,8 @@ export async function reclaimListenPort(
 
   for (;;) {
     if (await isAvailableFn(port, hostname)) return true;
+    // The authority may have changed while the availability probe was in flight.
+    if (!mayMutate()) return false;
     if (Date.now() >= deadline) return false;
 
     if (Date.now() - lastScan >= scanIntervalMs) {
@@ -585,6 +599,7 @@ export async function reclaimListenPort(
         }
         if (!killed.has(pid)) {
           // Revalidate immediately before termination.
+          if (!mayMutate()) return false;
           if (isAliveFn(pid) && verifyOcxFn(pid) === pid && mayKillThis) {
             try {
               killFn(pid);
@@ -619,6 +634,8 @@ export async function reclaimListenPort(
       // Reset those IPv4 TCBs (and ghost LISTEN rows) so the configured port can bind again —
       // without killing the browser process. Only safe when no live foreign/protected listener remains.
       if (dropTcpRows) {
+        // Same gate as the kill path: denied authority never runs SetTcpEntry.
+        if (!mayMutate()) return false;
         try {
           dropTcpFn(port);
         } catch {

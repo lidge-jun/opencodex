@@ -536,7 +536,7 @@ describe("update stops the running proxy before replacing files", () => {
     expect(stopAt).toBeLessThan(updateAt);
     // The four signals are now inside a runtime-ownership veto: a desktop-owned runtime is
     // not stopped at all. Every original reason to stop still reaches the gate unchanged.
-    expect(updateSource).toContain("if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
+    expect(updateSource).toContain("if (!homePolicy.packageOnly && runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
   });
 
   test("integrity pre-flight runs BEFORE the stop so anomalous metadata never unloads the proxy", () => {
@@ -793,8 +793,8 @@ esac
     // A pending-teardown receipt is a fourth reason to stop: after a parent crashed
     // mid-deferral the service, pid and runtime records can all be absent while shared
     // client config still points at a proxy that is gone (#3008).
-    expect(updateSource).toContain("if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
-    expect(launcherSource).toContain("const stopNeeded = serviceWasInstalled || hasRuntimeState || hasPendingTeardown");
+    expect(updateSource).toContain("if (!homePolicy.packageOnly && runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
+    expect(launcherSource).toContain("const stopNeeded = !homePolicy.packageOnly && (serviceWasInstalled || hasRuntimeState || hasPendingTeardown)");
     expect(launcherSource).toContain("if (stopNeeded && !runtimePlan.mayStopRuntime)");
     expect(launcherSource).toContain("if (stopNeeded) {");
     // The rule now lives in the shared post-stop decision both lanes import (#3008): a
@@ -805,7 +805,7 @@ esac
   });
 
   test("the Node updater holds one authority from stop permission through replacement", () => {
-    const leaseAt = launcherSource.indexOf("const updateLease = acquireOwnershipMutationLease(");
+    const leaseAt = launcherSource.indexOf("let updateLease = acquireOwnershipMutationLease(");
     const lockedPlanAt = launcherSource.indexOf("const lockedPlan = planUpdateRuntimeHandling(", leaseAt);
     const stopAt = launcherSource.indexOf('[launcher, "stop"]', lockedPlanAt);
     const replacementAt = launcherSource.indexOf("const replacementOwnership = readOwnership()", stopAt);

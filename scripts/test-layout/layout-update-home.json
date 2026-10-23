@@ -1,0 +1,7 @@
+{
+  "update-home-launcher.test.ts": "update",
+  "update-home-recovery.test.ts": "update",
+  "update-home-worker.test.ts": "update",
+  "update-service-home-policy.test.ts": "update",
+  "update-service-home.test.ts": "update"
+}

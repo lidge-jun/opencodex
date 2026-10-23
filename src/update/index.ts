@@ -15,6 +15,7 @@ import type { ServiceOwnership } from "../service/state";
 import { planUpdateRuntimeHandling, planStoppedRuntimeRecovery, inspectPackageRuntimeLiveness } from "./runtime-ownership.mjs";
 import { unprivilegedOwnershipMutationEnvironment } from "../service/ownership-mutation-lease.mjs";
 import { withUpdateOwnershipLease, readUpdateRuntimeTarget } from "./ownership-transaction";
+import { createUpdateServiceHomePolicy, parseUpdateWorkerHome, UPDATE_PACKAGE_ONLY_EXIT_CODE } from "./service-home-policy.mjs";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from "./pnpm-invocation.mjs";
 import { detectInstallOwnershipFromPath } from "./install-detection.mjs";
@@ -489,12 +490,17 @@ export async function runUpdate(): Promise<void> {
 
   const { serviceStatePaths } = await import("../service");
   const updateExitCode = await withUpdateOwnershipLease(serviceStatePaths(), async mutation => {
+  // Ownership inspection imports the service CLI, which reaches this update entry again.
+  // Load it only after entering the lease; the policy itself stays a dependency-free import.
+  const { inspectUpdateServiceHome } = await import("./service-home-authority");
+  const homePolicy = createUpdateServiceHomePolicy(inspectUpdateServiceHome, message => console.warn(message), process.argv.includes("--update-package-only"), parseUpdateWorkerHome(process.argv));
+  if (!homePolicy.checkPackage()) return 1;
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must repair/restart it afterwards.
   let serviceWasInstalled = false;
   try {
     const { isServiceInstalled } = await import("../service");
-    serviceWasInstalled = isServiceInstalled();
+    serviceWasInstalled = homePolicy.serviceAllowed && isServiceInstalled();
   } catch { /* best-effort */ }
   // What this update may do to the runtime. A desktop takeover vetoes both the stop and the
   // service refresh below; see `planUpdateRuntimeHandling` for why each half is wrong.
@@ -513,7 +519,7 @@ export async function runUpdate(): Promise<void> {
   }
   let trayWasInstalled = false;
   let trayWasRunning = false;
-  if (process.platform === "win32") {
+  if (!homePolicy.packageOnly && process.platform === "win32") {
     try {
       const { getWindowsTrayStatus, startWindowsTray, stopWindowsTray } = await import("../tray/windows");
       const tray = getWindowsTrayStatus();
@@ -566,10 +572,13 @@ export async function runUpdate(): Promise<void> {
   };
   /** `"vetoed"`: another owner holds the runtime, so not starting is the correct outcome. */
   const startProxyDirectly = async (): Promise<boolean | "vetoed"> => {
+    // Every caller, including error recovery, owns the lock and fresh home proof here.
+    mutation.reacquire();
+    if (!homePolicy.check()) return "vetoed";
     const ownership = await resolvedRuntimeOwnership();
     const supervision = observeSupervision();
     const plan = planUpdateRuntimeHandling({ ...ownership, serviceInstalled: false, supervision });
-    if (!plan.mayStopRuntime) {
+    if (!sameOwner(ownership) || !plan.mayStopRuntime || !homePolicy.check()) {
       console.warn(supervision
         ? "OpenCodex Desktop supervises the proxy; no CLI runtime was restored."
         : plan.notice);
@@ -600,8 +609,14 @@ export async function runUpdate(): Promise<void> {
   // and count it only when the serving proxy is that job. Runs unleased: the manager's child
   // cannot join this lease (#5760). `"unsettled"` means the manager may still finish the restart,
   // so no competing proxy may be started.
-  const restartThroughServiceManager = async (): Promise<"supervised" | "failed" | "unsettled"> => {
+  const restartThroughServiceManager = async (): Promise<"supervised" | "failed" | "unsettled" | "refused"> => {
     if (!hasRestartableServiceManager()) return "failed";
+    mutation.release();
+    const owner = await resolvedRuntimeOwnership();
+    if (!homePolicy.check()) return "refused";
+    if (!homePolicy.serviceAllowed) return "failed";
+    if (!sameOwner(owner) || !planUpdateRuntimeHandling({ ...owner, serviceInstalled: true,
+      supervision: observeSupervision() }).mayRestoreService) return "refused";
     console.log("🔁 Asking the service manager to restart the background service...");
     const before = readUpdateRuntimeTarget(getRuntimePortPath(), capturedListen.hostname);
     const staleRecordPid = before.kind === "target" ? before.target.pid : null;
@@ -652,12 +667,14 @@ export async function runUpdate(): Promise<void> {
         });
       };
       let recovery = await planRecovery();
+      if (!homePolicy.check()) return;
       if (recovery.action === "service") {
         // The service manager starts the proxy outside this process tree, so it
         // cannot join this lease, and holding it through the repair's health wait
         // keeps that proxy from starting (#5760). Release it, then decide again —
         // a claim could have landed while the repair ran unleased.
         mutation.release();
+        if (!homePolicy.check()) return;
         recovery = await planRecovery();
       }
       if (recovery.reason === "desktop-supervised") {
@@ -666,6 +683,8 @@ export async function runUpdate(): Promise<void> {
         console.warn(`⚠️  ${reason}; runtime recovery requires manual review (${recovery.reason}).`);
       } else if (recovery.action === "service") {
         const { serviceReinstallArgs, isServiceViable } = await import("../service");
+        if (!homePolicy.check()) return;
+        if (!homePolicy.serviceAllowed) { await startProxyDirectly(); return; }
         recovery = await planRecovery();
         if (recovery.action !== "service") {
           console.warn("Runtime authority changed before service recovery; no CLI runtime was restored.");
@@ -675,6 +694,8 @@ export async function runUpdate(): Promise<void> {
           stdio: updateChildStdio(), windowsHide: true,
           env: mutation.controlEnvironment({ ...process.env, OCX_BAKE_PORT: String(capturedListen.port) }),
         });
+        if (!homePolicy.check()) return;
+        if (!homePolicy.serviceAllowed) { await startProxyDirectly(); return; }
         if (service.status !== 0 || !isServiceViable()) {
           // Ownership may have moved while the refresh ran unleased; only a recovery plan that
           // still names the service may restart the manager's job.
@@ -716,7 +737,12 @@ export async function runUpdate(): Promise<void> {
   // silently skips the recovery the receipt was written to trigger (#3008).
   // Full `ocx stop` semantics (drain, service stop, restore).
 
-  if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
+  if (homePolicy.packageOnly && pendingTeardownOutstanding()) {
+    console.error("Pending teardown requires manual recovery before package replacement; run 'ocx stop' from the owning installation.");
+    return 1;
+  }
+  if (!homePolicy.packageOnly && runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())) {
+    if (!homePolicy.check()) return 1;
     const preStopPlan = planUpdateRuntimeHandling({
       ...(await resolvedRuntimeOwnership()),
       serviceInstalled: serviceWasInstalled,
@@ -805,7 +831,7 @@ export async function runUpdate(): Promise<void> {
     supervision: observeSupervision(),
   });
   const replacementLiveness = currentPackageRuntimeLiveness();
-  if (replacementOwnership.subjectToken !== initialOwnership.subjectToken
+  if (!homePolicy.checkPackage() || replacementOwnership.subjectToken !== initialOwnership.subjectToken
     || !replacementPlan.mayReplacePackage
     || replacementLiveness !== "dead") {
     replacementRefusal = replacementPlan.notice
@@ -885,13 +911,47 @@ export async function runUpdate(): Promise<void> {
   });
   if (r.status === 0) {
     console.log(`\n✅ Updated${latest ? ` to v${latest}` : ""}.`);
+    if (homePolicy.packageOnly) {
+      homePolicy.check(homePolicy.initial);
+      console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);
+      return process.argv.includes("--update-worker-result") ? UPDATE_PACKAGE_ONLY_EXIT_CODE : undefined;
+    }
+    // Authority gates every post-replacement control action (shim, tray, service), like
+    // the Node launcher; refusal may only restore the own tray stopped before replacement.
+    const restoreOwnStoppedTray = () => {
+      if (trayWasRunning && postUpdateLauncherUsable && existsSync(postUpdateLauncher)) {
+        try {
+          spawnSync(process.execPath, [postUpdateLauncher, "tray", "start"], {
+            stdio: "ignore", windowsHide: true, timeout: 15_000, env: mutation.unprivilegedEnvironment(),
+          });
+        } catch { /* preserve the authority refusal */ }
+      }
+    };
+    if (!homePolicy.check()) {
+      restoreOwnStoppedTray();
+      return 1;
+    }
     if (!postInstallPlan.mayStopRuntime) console.warn("Runtime authority does not permit CLI recovery; no service was refreshed or proxy started.");
     // Re-enter through the verified active package launcher. This keeps the Codex
     // shim, tray, service and proxy recovery paths on the same package/group that
     // pnpm selected, including when the update changed the global link target.
+    let isCodexShimInstalled: (() => boolean) | undefined;
     try {
-      const { isCodexShimInstalled } = await import("../codex/shim");
-      if (isCodexShimInstalled()) {
+      ({ isCodexShimInstalled } = await import("../codex/shim"));
+    } catch {
+      console.warn("⚠️  Shim repair skipped; run 'ocx codex-shim install'.");
+    }
+    // The module load above is the last await before the control actions below; a home
+    // change landing while it was in flight must veto the shim rewrite and the tray
+    // refresh, not only the later service checks.
+    if (!homePolicy.check()) {
+      restoreOwnStoppedTray();
+      return 1;
+    }
+    // The filesystem probe is part of the guarded recovery: a throw after package
+    // replacement degrades to the warning below instead of escaping the update.
+    try {
+      if (isCodexShimInstalled?.()) {
         const shim = spawnSync(process.execPath, [postUpdateLauncher, "codex-shim", "install"], {
           stdio: "inherit",
           windowsHide: true,
@@ -915,27 +975,45 @@ export async function runUpdate(): Promise<void> {
     // The stop above unloaded any managed service; repair it with the NEW files
     // (spawn the fresh cli.ts so updated code writes the baked paths) so a
     // launchd/schtasks/systemd user isn't left with the background proxy down.
+    if (!homePolicy.serviceAllowed && postInstallPlan.mayStopRuntime) {
+      if (stopAttempted) return await startProxyDirectly() === true ? undefined : 1;
+      console.log(`Restart the proxy:  ${launcherStartHint(postUpdateLauncher, capturedListen.port)}`);
+      return;
+    }
     if (postInstallPlan.mayRestoreService) {
+      let homeRefused = false;
       const mayRefresh = async () => {
+        if (!homePolicy.check()) { homeRefused = true; return false; }
         const ownership = await resolvedRuntimeOwnership();
         const supervision = observeSupervision();
         const plan = planUpdateRuntimeHandling({ ...ownership, serviceInstalled: true, supervision });
         if (!plan.mayRestoreService) console.warn(supervision
           ? "OpenCodex Desktop supervises the proxy; CLI recovery was skipped. Use the app's updater (tray → Check for Updates)."
           : plan.notice);
-        return plan.mayRestoreService;
+        return plan.mayRestoreService && homePolicy.serviceAllowed;
       };
-      if (!await mayRefresh()) return;
+      if (!await mayRefresh()) return homeRefused ? 1 : undefined;
       console.log("🔁 Refreshing the background service with the updated files...");
       const { serviceReinstallArgs } = await import("../service");
       const { reclaimListenPort } = await import("../server/port-reclaim");
+      if (!homePolicy.check()) return 1;
+      // Latched reclaim authority: once a mid-wait probe denies, the latch stays
+      // closed — a transient re-match must not reopen kill/drop or the busy-port path.
+      let reclaimDenied = false;
+      const reclaimGate = () => {
+        try { reclaimDenied ||= !homePolicy.check(); } catch { reclaimDenied = true; }
+        return !reclaimDenied;
+      };
       const freed = await reclaimListenPort(capturedListen.port, capturedListen.hostname, {
         timeoutMs: 30_000,
         intervalMs: 100,
         scanIntervalMs: 500,
         killOcxHolders: capturedListen.oldPid != null,
         onlyKillPids: capturedListen.oldPid != null ? [capturedListen.oldPid] : [],
+        // The wait's internal awaits can span a home change; gate each kill/drop.
+        mayMutateFn: reclaimGate,
       });
+      if (!freed && !reclaimGate()) return 1; // a latched denial already refused
       if (!freed) {
         console.warn(`⚠️  Port ${capturedListen.port} still busy after 30s; repairing service with pinned --port ${capturedListen.port} anyway (refusing to hop).`);
       }
@@ -944,10 +1022,12 @@ export async function runUpdate(): Promise<void> {
       // wait, the lease makes that child die at the acquire deadline (#5760).
       // The kill-authorizing reclaim above already ran under the lease.
       mutation.release();
+      if (!homePolicy.check()) return 1;
+      if (!homePolicy.serviceAllowed) return await startProxyDirectly() === true ? undefined : 1;
       const prevBake = process.env.OCX_BAKE_PORT;
       process.env.OCX_BAKE_PORT = String(capturedListen.port);
       try {
-        if (!await mayRefresh()) return;
+        if (!await mayRefresh()) return homeRefused ? 1 : undefined;
         const svcStdio = updateChildStdio();
         const svc = spawnSync(process.execPath, [postUpdateLauncher, ...serviceReinstallArgs()], {
           env: mutation.controlEnvironment(),
@@ -955,6 +1035,8 @@ export async function runUpdate(): Promise<void> {
           encoding: svcStdio === "pipe" ? "utf8" : undefined,
           windowsHide: true,
         });
+        if (!homePolicy.check()) return 1;
+        if (!homePolicy.serviceAllowed) return await startProxyDirectly() === true ? undefined : 1;
         if (svcStdio === "pipe") logSpawnOutput("", svc);
         const serviceRefreshed = svc.status === 0;
         let serviceViable = serviceRefreshed;
@@ -969,10 +1051,11 @@ export async function runUpdate(): Promise<void> {
         if (!serviceRefreshed || !serviceViable) {
           // #7043: the manager first. Only a proxy it owns counts as recovered; everything
           // below this line leaves an unsupervised runtime and exits non-zero.
-          if (!await mayRefresh()) return;
+          if (!await mayRefresh()) return homeRefused ? 1 : undefined;
           const managed = await restartThroughServiceManager();
           if (managed === "supervised") return;
           if (managed === "unsettled") return 1;
+          if (managed === "refused") return 1;
           // Repair normally avoids elevation for a healthy scheduler task, but a stale
           // definition may require guarded create/elevation. It can also fail — or exit 0
           // while leaving stale/missing assets that never start

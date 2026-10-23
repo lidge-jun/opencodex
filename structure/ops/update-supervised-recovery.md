@@ -7,7 +7,7 @@ that refresh fails or leaves a non-viable manager.
 
 ## Manager first
 
-Both `ocx update` lanes, the npm launcher in `bin/ocx.mjs` and the Bun updater in
+For matching service homes, both `ocx update` lanes, the npm launcher in `bin/ocx.mjs` and the Bun updater in
 `src/update/index.ts`, ask the manager to restart the job it already holds before any detached
 start, through the plain synchronous ESM in `src/update/supervised-recovery.mjs`: launchd with
 `launchctl kickstart -k gui/<uid>/com.opencodex.proxy`, the systemd user manager with
@@ -38,11 +38,105 @@ the manager the same way before its direct fallback; that path already exits non
 An ownership veto at the direct start (Desktop or another owner claimed the runtime meanwhile) is
 the correct outcome and is not reported as unsupervised.
 
+## Service home authority
+
+The Node launcher, Bun updater and dashboard worker use the same transition policy in
+`src/update/service-home-policy.mjs`. Their direct recovery helpers reacquire the ownership
+lease themselves and recheck both home authority and runtime ownership before spawning, including
+on failed-update recovery. Matching-home service refresh runs unleased; home/owner evidence is
+checked again immediately before manager recovery. A distinct refusal never permits direct fallback.
+An initially unknown service home selects a package-only transaction: no proxy/tray stop, service
+refresh, shim repair or direct start. Success prints the static refusal and manual restart guidance;
+the dashboard records success with `restarted: false`. Package replacement still requires stable
+durable ownership, no Desktop veto and a dead package runtime. Home evidence is rechecked before
+replacement; changed authority refuses the transaction. Initial uncertainty never grants recovery
+permission later, even if installing the package repairs its probe. Unresolved pending teardown
+receipts, including quarantined unreadable receipts, also block package-only replacement.
+The worker passes its restriction as `--update-package-only`; package-only-capable launchers preserve it
+in both Node and Bun update paths even when their own probe matches. A package-only Bun worker
+uses that guarded launcher instead of its ordinary raw package-manager command. Delegated launchers
+also receive `--update-worker-home` plus `--update-worker-result`: the flag pins the worker's verified
+initial home authority — all four kinds, unknown included — as the child's baseline in place of a
+fresh inspection, so a service registered or removed between the worker's check and the child's run
+cannot mint authority the worker never held, and a malformed or duplicated baseline fails closed
+rather than falling back to inspection. A stable unknown baseline still permits the package-only
+replacement. Successful package-only transactions report exit 75 instead of ordinary success. The
+worker handles this restricted-success result before any tray refresh or restart, even when its own
+probe still matches. Unmarked package-manager exit 75 is a failure. The raw package-manager lane
+cannot carry baseline argv, so the worker rechecks home authority at the replacement boundary itself,
+after the own-foreground tray handoff and before the command runs; on refusal the only side effect
+is restoring that stopped tray, and on a post-replacement refusal the same restore is the only tray
+action — the check runs before any shim, tray install or service refresh, never after.
+Both CLI lanes restore that stopped tray only through a verified, still-present package launcher;
+a tray that was not running receives no cleanup command, and refusal never installs or refreshes it.
+The dashboard also carries its original home baseline into `finishGuiUpdateRestart` and the actual
+restart policy through `RestartIo`, retaining it across lease acquisition and asynchronous health
+checks. A registration appearing after initial absence, or a changed foreign subject, cannot become
+new recovery authority. Standalone restart calls without a delegated baseline inspect their own.
+
+The dashboard worker checks the unchanged v1 `src/update/service-home-protocol.json` plus the v2
+`src/update/service-home-package-only-protocol.json`, then the delegated launcher's exact private
+`__update-package-only-probe` response. The version bump fails closed in both directions: an old
+worker refuses a v2 launcher whose flag it would ignore, and a v2 worker refuses a v1 launcher that
+cannot enforce a pinned baseline. This separate capability probe performs no Bun resolution
+or home inspection. Missing declarations, failed calls and malformed responses refuse delegation.
+Keeping the original home-probe declaration and response at v1 lets already-running v1 updaters
+inspect and recover after installing the new package. `src/update/job-update-home.ts` owns the
+capability gate. Markers claim compatibility of trusted installed files, not tamper attestation.
+
+The new Node launcher intercepts this exact private command before Desktop handoff, boot restore
+and ordinary install-capable Bun resolution. It resolves Bun and its compatibility floor from the
+actual probe target's package with installation disabled, then uses
+`--no-env-file` with `src/update/service-home-probe-entry.ts`, which imports the authoritative
+inspector rather than the CLI root/status collector. No full status fallback exists. Probes have
+an eight-second timeout and 4 KiB output ceiling; errors, unsupported versions and malformed JSON
+are unknown. Explicit home snapshots preserve the SQLite-home resolver and user/auth environment;
+only internal launcher, service, restart-child, sibling and delegation tokens are removed.
+Missing Bun in this probe returns unknown rather than exiting its caller; ordinary launcher
+resolution keeps its installation and terminal failure behavior. Nested probe deadlines can refuse
+a valid installation during slow cold starts; the bounds are not a readiness guarantee.
+Successful updates recover a foreground runtime only when this update attempted its stop. A cold
+CLI update without prior runtime state stays stopped and prints the existing manual-start guidance.
+
+An already-running old Node parent keeps its old implementation after package replacement; these
+checks cannot retrofit it. Automatic delegation requires the guarded launcher already present.
+Existing stop authorization remains unchanged: stable foreign foreground recovery applies only
+when that runtime's own stop/update is permitted and succeeds, not to every cross-home combination.
+
 ## The dashboard update worker
 
-The dashboard restart worker in `src/update/job.ts` follows the same order through
+`src/update/service-home-authority.ts` distinguishes matching service homes, a known foreign
+registration, unknown evidence and confirmed absence. It combines service-state resolution with
+the unattended native ownership inspector and the lifecycle SQLite-home comparison; physical
+directory aliases remain equivalent. A changing state read is unknown. The inspector's `owned`
+result alone does not establish a registration, because it also includes confirmed absence.
+
+The dashboard worker permits service repair, manager restart and global Windows service stops
+only for a matching home. Stable foreign registration and confirmed absence retain the captured
+foreground runtime's existing PID/port and lease checks for direct recovery, without touching
+the other registration or reporting that foreground runtime as UNSUPERVISED. Unknown evidence
+refuses automatic restart. A matching home that becomes foreign or unknown after the unleased
+refresh refuses both manager recovery and direct fallback. A foreign record must remain the same
+observed subject for foreground recovery. Refusals persist static manual-status guidance in the
+terminal error, including authority changes after installation, never recorded paths or probe output.
+Package-only command displays retain the Node launcher shape with a `<path>` placeholder before
+persistence; the executable and argument array retain the actual launcher path, including spaces.
+
+Home authority is checked before initial reclaim, after releasing the repair lease, before manager
+recovery, after direct-fallback lease reacquisition and at pinned-start preparation/send boundaries.
+The manager helper checks independently after lease release, immediately before contacting the
+manager, and returns distinct `refused` for foreign or unknown homes; callers cannot treat this as
+an ordinary failed restart. `src/update/job-windows-restart.ts` owns the unchanged scoped Windows
+wrapper cleanup. Pinned direct recovery receives global service-stop authority only for a matching
+managed home; foreground recovery does not acquire that authority.
+
+For a matching managed home, the dashboard restart worker in `src/update/job.ts` follows the same order through
 `src/update/job-supervised-restart.ts`, which sits beside it because `job.ts` is at the repository
-size cap. When a service-managed install's refresh fails, is not viable, or never serves, the
+size cap, and `src/update/job-update-tray.ts` owns the production own-foreground tray handoff for
+the same reason. The helper publishes its pre-stop plan to the worker before stopping; if post-stop
+status and immediate native restore both fail, the worker retains the original running state and
+retries only `tray start` through its verified launcher. A failed handoff never permits package
+replacement, and a failed cleanup retains the handoff error. When a service-managed install's refresh fails, is not viable, or never serves, the
 worker asks the manager to restart its job before it re-acquires the lease for a direct start,
 using the same helpers and the same manager-PID-against-serving-PID proof. A proven supervised
 restart skips the direct start. An unsettled restart starts no competing proxy and fails the job.
@@ -69,3 +163,22 @@ non-zero exit.
 `tests/update/update-job-supervised-restart.test.ts` drives the dashboard worker: the proof
 against stale and foreign records, a supervised restart skipping the direct start, an unsettled
 restart failing the job, and a healthy direct fallback failing it as UNSUPERVISED.
+`tests/update/update-service-home.test.ts` covers real two-home records, stable foreign foreground
+recovery, unknown evidence, aliases, SQLite homes, state changes, post-release refusal, pinned-start
+service-stop authority and matching-home recovery. Manager, probe and process side effects are injected.
+`tests/update/update-service-home-policy.test.ts` covers schema/capability validation and transition
+semantics; `tests/update/update-home-launcher.test.ts` and `tests/update/update-home-recovery.test.ts`
+exercise the actual Node/Bun helper bodies with injected lease, manager, owner and spawn boundaries.
+The launcher suite also runs the complete Node update function in an isolated Node child with
+replacement/control I/O intercepted; `tests/update/update-bun-ownership-lease.test.ts` runs the actual
+Bun updater child. Both enforce the delegated baseline before replacement, retain stable-unknown
+package-only success, and reject malformed baselines. The Bun child also rejects a changed
+post-replacement home before shim/tray/service commands. `tests/update/update-home-worker.test.ts`
+executes tray handoff and command injection on every platform, covering both a previously running
+and a stopped tray so refusal can restore only the former, without install or refresh.
+The worker suite changes absent/foreign authority under the restart lease, after the worker's last
+check, and reaches the real recovery policy with no service repair or direct start permitted.
+The Node child and executable Bun refusal body also cover stopped/unverified tray cleanup.
+`tests/update/update-tray-handoff.test.ts` also drives the default Windows worker path in isolated
+children with native tray I/O mocked: running, idle, absent, missing initial evidence, and post-stop
+status plus native-restore failures, including a launcher cleanup failure. No handoff override is used.
