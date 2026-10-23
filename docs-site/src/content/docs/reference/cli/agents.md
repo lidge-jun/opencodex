@@ -261,7 +261,8 @@ Only when the effective strategy is JEV (`--strategy jev`, or a stored JEV Combo
 `--decision-provider <provider|->` names a configured `jev-decision` row (for example a self-hosted
 Ollama `tev1`) as a System One-compatible server. `--decision-model <route|->` names an ordinary
 opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as JSON; it cannot be
-this combo or any JEV combo. Omitting both uses TypeSafe. `--decision-timeout <ms|->` sets the
+this combo or any JEV combo. A new JEV Combo that omits both uses TypeSafe; an existing JEV Combo keeps
+its stored decision method until one of the flags changes it. `--decision-timeout <ms|->` sets the
 decision deadline (1000–120000, default 4000); `-` clears any of the three.
 
 `ocx combo set <id> --decision-quota-signals on|off|-` controls per-Combo advisory evidence.
