@@ -120,6 +120,7 @@ export const REGISTRY_FIELD_MODEL_ID_ROLES = {
   promptCacheKey: NONE,
   chatServiceTier: NONE,
   openaiChatEofTolerance: NONE,
+  foldDeveloperRoleToSystem: NONE,
   autoToolChoiceOnlyModels: NONE,
   preserveReasoningContentModels: NONE,
   requiresReasoningPlaceholderModels: NONE,
