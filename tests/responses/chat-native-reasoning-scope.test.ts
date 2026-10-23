@@ -209,9 +209,10 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
     expect(JSON.parse(request.body).messages[0].reasoning_content).toBe(" ");
   });
   test("replays captured reasoning from delta.reasoning and message.reasoning rather than placeholder", async () => {
-    const owner = scope();
+    const replayModel = "reflection/beam";
+    const owner = scope("fixture-thread", PROVIDER, "fixture", replayModel);
     const budget = createTranslatorBudget();
-    const capture = nativeChatReasoningCapture(PROVIDER, MODEL, owner, budget);
+    const capture = nativeChatReasoningCapture(PROVIDER, replayModel, owner, budget);
 
     capture.json({ choices: [
       { message: { reasoning: "from-json-message-reasoning", tool_calls: [tool("call_json")] } },
@@ -222,7 +223,7 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
     ];
     const source = new Response(frames.map(v => `data: ${JSON.stringify(v)}\n\n`).join("") + "data: [DONE]\n\n").body!;
     const stream = nativeChatSse(source, {
-      requestedModel: MODEL,
+      requestedModel: replayModel,
       translatorBudget: budget,
       signal: new AbortController().signal,
       onUsage() {},

@@ -498,6 +498,7 @@ describe("bounded JEV service exchange", () => {
     test("rewrites ai-gateway.vercel.sh endpoint to /decisions and sends Decisions questions body", async () => {
       expect(jevDecisionEndpointUrl("https://ai-gateway.vercel.sh/v1/systemone")).toBe("https://ai-gateway.vercel.sh/v1/decisions");
       expect(jevDecisionEndpointUrl("https://ai-gateway.vercel.sh/v1")).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+      expect(jevDecisionEndpointUrl("https://my-ai-gateway.vercel.sh/v1/systemone")).toBe("https://my-ai-gateway.vercel.sh/v1/systemone");
       expect(isDecisionsEndpoint("https://ai-gateway.vercel.sh/v1/decisions")).toBeTrue();
       expect(isDecisionsEndpoint("https://custom.vercel.sh/v1/decisions")).toBeFalse();
 

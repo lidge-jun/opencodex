@@ -976,12 +976,15 @@ describe("JEV configurable decision provider", () => {
 
   test("Decisions endpoint permits more than 26 choices up to 255", async () => {
     const calls: Call[] = [];
-    const post = recordingPost(calls);
+    const post = recordingPost(calls, () => Response.json({
+      answers: { route: { choice: "p/m-0:low" } },
+    }));
     const many: JevCandidate[] = Array.from({ length: 9 }, (_, index) => ({
       key: `p/m-${index}`,
       provider: "p",
       model: `m-${index}`,
       reasoningEfforts: ["low", "medium", "high"],
+      modelProfile: `profile for m-${index}`,
     }));
     const manyFallback = { targetKey: many[0]!.key, effort: "low" as const };
     const vercelConfig: OcxConfig = {
@@ -994,18 +997,24 @@ describe("JEV configurable decision provider", () => {
         },
       },
     };
-    await resolveJevDecision({
-      body: decisionBody,
+    const decision = await resolveJevDecision({
+      body: { ...decisionBody, input: [{ role: "user", content: "hello" }, { type: "function_call_output", output: "ok" }] },
       candidates: many,
       fallback: manyFallback,
       config: vercelConfig,
       decisionProvider: "vercel-decider",
       post,
     });
+    expect(decision.gate).toBe("apply");
+    expect(decision.targetKey).toBe("p/m-0");
+    expect(decision.effort).toBe("low");
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("https://ai-gateway.vercel.sh/v1/decisions");
     const parsed = JSON.parse(String(calls[0]!.init.body));
     expect(parsed.questions[0].choices).toHaveLength(27);
+    expect(parsed.input).toContain("Task: hello");
+    expect(parsed.input).toContain("Signals: tool_history");
+    expect(parsed.questions[0].choices[0].description).toContain("profile for m-0");
   });
 
   test("a self-hosted row sends only its own key and never a TypeSafe credential", async () => {
