@@ -974,6 +974,40 @@ describe("JEV configurable decision provider", () => {
     }).questions.route.criteria)).toHaveLength(26);
   });
 
+  test("Decisions endpoint permits more than 26 choices up to 255", async () => {
+    const calls: Call[] = [];
+    const post = recordingPost(calls);
+    const many: JevCandidate[] = Array.from({ length: 9 }, (_, index) => ({
+      key: `p/m-${index}`,
+      provider: "p",
+      model: `m-${index}`,
+      reasoningEfforts: ["low", "medium", "high"],
+    }));
+    const manyFallback = { targetKey: many[0]!.key, effort: "low" as const };
+    const vercelConfig: OcxConfig = {
+      providers: {
+        "vercel-decider": {
+          adapter: "jev-decision",
+          baseUrl: "https://ai-gateway.vercel.sh/v1/systemone",
+          defaultModel: "tev1:4b",
+          apiKey: "fixture-key",
+        },
+      },
+    };
+    await resolveJevDecision({
+      body: decisionBody,
+      candidates: many,
+      fallback: manyFallback,
+      config: vercelConfig,
+      decisionProvider: "vercel-decider",
+      post,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+    const parsed = JSON.parse(String(calls[0]!.init.body));
+    expect(parsed.questions[0].choices).toHaveLength(27);
+  });
+
   test("a self-hosted row sends only its own key and never a TypeSafe credential", async () => {
     await withEnvKeys(async () => {
       const calls: Call[] = [];

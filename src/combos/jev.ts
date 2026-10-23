@@ -26,6 +26,8 @@ export const JEV_MAX_CANDIDATES = 64;
 /** Ollama's System One choice questions accept 2..26 options; other services share the floor. */
 const SELF_HOSTED_MIN_OPTIONS = 2;
 const SELF_HOSTED_MAX_OPTIONS = 26;
+const DECISIONS_MIN_OPTIONS = 2;
+const DECISIONS_MAX_OPTIONS = 255;
 
 const TASK_CHARS = 500;
 const TASK_HEAD_CHARS = 320;
@@ -659,6 +661,25 @@ export function fallbackDecision(
  * Every operational or response failure returns the supplied first-eligible fallback. A caller
  * abort is the exception: request cancellation remains cancellation and is rethrown by identity.
  */
+function formatDecisionsInput(state: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (typeof state.task === "string" && state.task.trim()) {
+    parts.push(`Task: ${state.task.trim()}`);
+  }
+  if (typeof state.previous_assistant === "string" && state.previous_assistant.trim()) {
+    parts.push(`Recent Assistant: ${state.previous_assistant.trim()}`);
+  }
+  if (isRecord(state.step) && state.step.type === "tool_step") {
+    const step = state.step;
+    const toolName = isRecord(step.tool_call) && typeof step.tool_call.name === "string" ? step.tool_call.name : "";
+    const toolOutput = typeof step.last_tool_output_tail === "string" ? step.last_tool_output_tail : "";
+    if (toolName || toolOutput) {
+      parts.push(`Recent Tool Call: ${toolName}\nTool Output: ${toolOutput}`.trim());
+    }
+  }
+  return parts.length > 0 ? parts.join("\n\n") : JSON.stringify(state);
+}
+
 export async function resolveJevDecision(options: ResolveJevDecisionOptions): Promise<JevDecision> {
   const now = options.now ?? Date.now;
   const startedAt = now();
@@ -672,21 +693,25 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
 
   let candidates = options.candidates;
   const exchanged = await exchangeJevDecision(options, (endpoint) => {
-    if (endpoint.descriptiveCriteria) {
+    const isDecisions = Boolean(endpoint.url && isDecisionsEndpoint(endpoint.url));
+    const optionCount = candidateOptions(options.candidates).size;
+    if (isDecisions) {
+      if (optionCount < DECISIONS_MIN_OPTIONS) return "no_choices";
+      if (optionCount > DECISIONS_MAX_OPTIONS) return "invalid";
+    } else if (endpoint.descriptiveCriteria) {
       // Self-hosted choice questions accept 2..26 options; decide locally instead of spending a
       // round-trip on a request the service will refuse.
-      const optionCount = candidateOptions(options.candidates).size;
       if (optionCount < SELF_HOSTED_MIN_OPTIONS) return "no_choices";
       if (optionCount > SELF_HOSTED_MAX_OPTIONS) return "invalid";
     }
     const state = buildJevState(options.body, options.candidates);
     if (!hasJevDecisionState(state)) return "no_state";
-    if (endpoint.url && isDecisionsEndpoint(endpoint.url)) {
+    if (isDecisions && endpoint.url) {
       const payload = boundedJevQuotaPayload(jevQuotaCandidates(options), rows => {
         const routeOptions = candidateOptions(rows);
         return JSON.stringify({
           model: endpoint.model,
-          input: typeof state.task === "string" && state.task.trim() ? state.task : JSON.stringify(state),
+          input: formatDecisionsInput(state),
           questions: [
             {
               name: "route",
@@ -694,7 +719,7 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
               instructions: "Which target AND reasoning effort together best fit the next model call? Select sufficient capability and reasoning for a correct next step while avoiding unnecessary resource use.",
               choices: [...routeOptions.entries()].map(([choice, opt]) => ({
                 value: choice,
-                label: criterionDescription(opt.criterion, rows.find(r => r.key === opt.targetKey)?.quota),
+                description: criterionDescription(opt.criterion, rows.find(r => r.key === opt.targetKey)?.quota),
               })),
             },
           ],

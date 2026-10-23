@@ -179,6 +179,13 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
       expect(() => planNativeChatReasoningReplay(absent, PROVIDER, MODEL, owner, false, max))
         .toThrow(expect.objectContaining({ code: "translation_buffer_limit", limitBytes: max }));
     }
+    // An assistant message carrying reasoning instead of tool_calls also pays the envelope delta.
+    const withReasoning = [{ role: "assistant", content: null, reasoning: "aa" }];
+    expect(planNativeChatReasoningReplay(withReasoning, PROVIDER, MODEL, owner, false, 25).serializedBytes).toBe(25);
+    for (const max of [1, 10, 24]) {
+      expect(() => planNativeChatReasoningReplay(withReasoning, PROVIDER, MODEL, owner, false, max))
+        .toThrow(expect.objectContaining({ code: "translation_buffer_limit", limitBytes: max }));
+    }
     budget.dispose();
   });
   test("plain-answer placeholders require DeepSeek, tools and both policy opt-ins", () => {
@@ -200,6 +207,55 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
     const messages = [{ role: "assistant", content: "Earlier plain answer" }];
     const request = buildOpenAIChatPassthroughRequest(PROVIDER, { messages, tools: [] }, "reflection/beam", false);
     expect(JSON.parse(request.body).messages[0].reasoning_content).toBe(" ");
+  });
+  test("replays captured reasoning from delta.reasoning and message.reasoning rather than placeholder", async () => {
+    const owner = scope();
+    const budget = createTranslatorBudget();
+    const capture = nativeChatReasoningCapture(PROVIDER, MODEL, owner, budget);
+
+    capture.json({ choices: [
+      { message: { reasoning: "from-json-message-reasoning", tool_calls: [tool("call_json")] } },
+    ] });
+
+    const frames = [
+      { choices: [{ index: 0, delta: { reasoning: "from-sse-delta-reasoning", tool_calls: [{ index: 0, id: "call_sse" }] } }] },
+    ];
+    const source = new Response(frames.map(v => `data: ${JSON.stringify(v)}\n\n`).join("") + "data: [DONE]\n\n").body!;
+    const stream = nativeChatSse(source, {
+      requestedModel: MODEL,
+      translatorBudget: budget,
+      signal: new AbortController().signal,
+      onUsage() {},
+      onChunk: capture.observe,
+      onTerminal: s => capture.finish(s < 400),
+      onCancel: () => capture.finish(false),
+    });
+    await new Response(stream).text();
+
+    const reqJson = buildOpenAIChatPassthroughRequest(
+      PROVIDER,
+      { messages: [{ role: "assistant", content: null, tool_calls: [tool("call_json")] }] },
+      "reflection/beam",
+      false,
+      undefined,
+      undefined,
+      "test-session",
+      owner,
+    );
+    expect(JSON.parse(reqJson.body).messages[0].reasoning_content).toBe("from-json-message-reasoning");
+
+    const reqSse = buildOpenAIChatPassthroughRequest(
+      PROVIDER,
+      { messages: [{ role: "assistant", content: null, tool_calls: [tool("call_sse")] }] },
+      "reflection/beam",
+      false,
+      undefined,
+      undefined,
+      "test-session",
+      owner,
+    );
+    expect(JSON.parse(reqSse.body).messages[0].reasoning_content).toBe("from-sse-delta-reasoning");
+    budget.dispose();
   });
 });
 
