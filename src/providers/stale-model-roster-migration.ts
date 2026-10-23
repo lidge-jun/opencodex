@@ -29,6 +29,7 @@ import {
   MINIMAX_MODEL_CONTEXT_WINDOWS,
 } from "./registry/model-seeds";
 import type { OcxConfig } from "../types";
+import { modelRecordValue } from "../reasoning-effort";
 
 export interface StaleModelRoster {
   /** Registry provider id whose saved rows may carry the old roster. */
@@ -75,6 +76,13 @@ const ALIBABA_INTL_TOKEN_PLAN_MODELS_BEFORE_1017 = [
  * preview, so live discovery cannot add it; the catalog keeps it only when it is configured.
  */
 export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
+  {
+    provider: "deepseek",
+    from: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"],
+    to: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
+    contextWindows: { "deepseek-v4-pro": 1_048_576 },
+    destinationBaseUrls: ["https://api.deepseek.com", "https://api.deepseek.com/v1"],
+  },
   ...["minimax", "minimax-cn"].map(provider => ({
     provider,
     from: MINIMAX_MODELS_BEFORE_M31,
@@ -121,7 +129,7 @@ function fillExisting<T>(container: Record<string, T> | undefined, values: Reado
   let filled = false;
   for (const id of ids) {
     const value = values[id];
-    if (value !== undefined && !Object.prototype.hasOwnProperty.call(container, id)) {
+    if (value !== undefined && modelRecordValue(container, id) === undefined) {
       container[id] = value;
       filled = true;
     }

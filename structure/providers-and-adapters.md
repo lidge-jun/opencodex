@@ -391,7 +391,7 @@ axis that outranks every source here, so it is where a deliberate text-only over
 (`ocx provider edit <provider> --model <id> --text-only` writes it) and the one declaration a
 restart cannot take back.
 
-When `/models` omits MiniMax-M3.1-Flash-Preview, `src/providers/stale-model-roster-migration.ts` replaces only a saved roster identical to the old seed and fills existing window and default-effort records during startup; `CALLABLE_CONFIGURED_COMPATIBILITY_MODELS` (`src/codex/catalog/model-hints.ts`) retains it in the live catalog.
+When `/models` omits MiniMax-M3.1-Flash-Preview, `src/providers/stale-model-roster-migration.ts` replaces only a saved roster identical to the old seed and fills existing window and default-effort records during startup; `CALLABLE_CONFIGURED_COMPATIBILITY_MODELS` (`src/codex/catalog/model-hints.ts`) retains it in the live catalog. The same startup projection restores DeepSeek V4 Pro only for the exact previous native seed on the official destination and registry adapter, filling missing Pro context in existing maps. Operator lists (including empty lists), custom destinations and explicit context overrides remain unchanged; normal registry enrichment supplies Pro's reasoning metadata.
 
 Both MiniMax Coding Plan presets declare `text` and `image` for M3 and M3.1 in `src/providers/registry/model-seeds.ts`; registry enrichment fills missing saved declarations, so id-only live rows enable the Combo image switch when every target supports images. Explicit overrides still win; video is outside Codex's catalog input enum.
 
