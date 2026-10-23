@@ -70,6 +70,7 @@ const deps = {
     calls.push(call);
     return answer;
   },
+  loadCodexRoleCapability: async () => ({ publishedAt: null, domains: {} }),
 };
 
 async function call(path: string, init?: RequestInit) {
@@ -99,6 +100,31 @@ describe("POST /api/codex-agent-roles/auto-assign", () => {
     expect(byRole.explorer).toMatchObject({ status: "proposed", model: "stub/big", effort: "high", proposedModel: "stub/small", proposedEffort: "low", tier: "fast" });
     expect(byRole.worker).toMatchObject({ status: "proposed", proposedModel: "stub/big", proposedEffort: "xhigh", tier: "frontier" });
     expect(byRole.bare.status).toBe("unsized");
+  });
+
+  test("tiers a role by its domain's measured scores, and an unreadable source leaves price rank in charge", async () => {
+    const pricedConfig = { ...config, codexRoleTiers: undefined } as unknown as OcxConfig;
+    answer = { text: JSON.stringify({ roles: { explorer: { ...sized("frontier", "glance"), domain: "coding" } } }) };
+    const post = async (loadCodexRoleCapability: typeof deps.loadCodexRoleCapability) => {
+      const response = await handleManagementAPI(
+        new Request("http://localhost/api/codex-agent-roles/auto-assign", { method: "POST", body: "{}" }),
+        new URL("http://localhost/api/codex-agent-roles/auto-assign"),
+        pricedConfig,
+        { ...deps, loadCodexRoleCapability },
+      );
+      return await response!.json() as Record<string, any>;
+    };
+    const measured = await post(async () => ({
+      publishedAt: "2026-10-22",
+      domains: { coding: new Map([["small", 1550], ["big", 1450]]) },
+    }));
+    const explorer = (measured.proposals as any[]).find(p => p.role === "explorer");
+    expect(explorer).toMatchObject({ domain: "coding", proposedModel: "stub/small", tierSource: "measured" });
+    expect(measured.capability).toMatchObject({ license: "CC BY 4.0", publishedAt: "2026-10-22", error: null });
+    const failed = await post(async () => { throw new Error("offline at /home/secret"); });
+    expect(failed.capability.error).toBe("the measured capability source could not be read");
+    expect(JSON.stringify(failed)).not.toContain("/home/secret");
+    expect((failed.proposals as any[]).find(p => p.role === "explorer").tierSource).not.toBe("measured");
   });
 
   test("a routed model that declares no levels takes the ladder and default Codex shows for it", async () => {
