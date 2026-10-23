@@ -590,7 +590,6 @@ Presence of both `detail` and `error` across the original root and its own non-a
 For complete bounded HTTP errors, the text wrapper selects root `detail`/`error` when present; otherwise it selects the own `response` record for the same exact `detail` or `error.message` match. It never searches another carrier after a nonmatch or descends further. Policy-fallback and direct callers share this wrapper; SSE message parsing disables nested HTTP selection. The same bounded HTTP parser retains allowlisted dedicated `code` fields from root and response before display truncation; diagnostic `type` is never promoted, including when code is absent or malformed. Policy/direct classification inspects full text only without authoritative carrier metadata; SSE never borrows hard codes from quoted message JSON.
 Committed output, cancellation, hard policy refusals and resend limits remain stronger than model fallback.
 
-
 Token Plan dated-model policy (2026-10-20): both curated presets include exact
 `deepseek-v4.1-flash-1017` metadata without changing live discovery or Responses pins.
 The registry may seed `noStructuredOutputModels` at route resolution, unioned with
