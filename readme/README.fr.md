@@ -115,7 +115,7 @@ correspondant à votre plateforme sur la page de la [dernière version publiée]
 | Plateforme | Fichier | Remarques |
 |---|---|---|
 | macOS 13+ (Apple Silicon et Intel) | `OpenCodex-<version>-macos.dmg` | Compilation universelle, signée avec un identifiant Developer ID et notariée |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Pas encore signée numériquement : SmartScreen demande une confirmation, choisissez **Informations complémentaires → Exécuter quand même** |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Signature du code via SignPath Foundation en cours de déploiement ([politique de signature du code](https://opencodex.me/fr/reference/code-signing/)) ; tant qu’une version n’est pas signée, SmartScreen demande une confirmation : choisissez **Informations complémentaires → Exécuter quand même** |
 | Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` ou `-linux-amd64.deb` | La barre d'état nécessite un environnement de bureau compatible AppIndicator |
 
 Chaque fichier est accompagné d'un `.sha256` sur la page de la version. Sous macOS 14+, l'application embarque
@@ -478,6 +478,16 @@ Consultez le guide **[Contribuer](../CONTRIBUTING.md)**.
 Les contributions de contributeurs intégrées par un report ou une réimplémentation d'un mainteneur,
 lorsque le commit ne nomme pas l'auteur d'origine, sont consignées dans
 **[CREDITS.md](../CREDITS.md)**.
+
+## Politique de signature du code (Code signing policy)
+
+Les binaires Windows passent à la signature Authenticode ([#7207](https://github.com/lidge-jun/opencodex/issues/7207)). Le [guide de signature du code Windows](https://opencodex.me/fr/reference/code-signing/) décrit le déploiement, la vérification d’une signature et la politique complète.
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## Avis de non-responsabilité
 

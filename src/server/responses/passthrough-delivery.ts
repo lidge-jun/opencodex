@@ -37,6 +37,7 @@ import type { ResponsesTerminalStatus } from "../../bridge";
 import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse, isCodexWsPreludeProjection } from "./ws-upstream";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import { recordCodexUpstreamOutcome } from "../../codex/routing";
+import { codexFailureWindowOutcomeMeta } from "../../codex/routing/failure-window";
 import { codexProbeLeaseId, codexProbeQuotaScope, codexTransientProbeGrant, releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { consumeComboFailure } from "./core-combo-failure";
 import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
@@ -79,6 +80,7 @@ import {
   createResponsesItemIdPayloadRewrite,
   repairResponsesJsonItemIds,
 } from "../responses-item-id-repair";
+import { createResponsesPhaseInferenceBlockRewrite } from "../responses-phase-inference";
 import {
   payloadRewriteAsBlockRewrite,
   composeSsePayloadRewrites,
@@ -535,6 +537,7 @@ export async function deliverPassthroughResponse(
         // request. The sibling recorders on this path already decline: the terminal recorder
         // needs an ok streaming body, and the quota-header snapshot finds no quota headers.
         recordCodexUpstreamOutcome(config, admissionState.authCtx.accountId, upstreamResponse.status, {
+          ...codexFailureWindowOutcomeMeta(admissionState.authCtx),
           ...quotaMeta,
           threadId: admissionState.authCtx.affinityKey,
           fixedAccount: admissionState.authCtx.fixedAccount,
@@ -848,6 +851,9 @@ export async function deliverPassthroughResponse(
           : undefined,
         snapshotRepairEnabled
           ? createResponsesSnapshotBlockRewrite(nativeExchange.outboundRequestBody, translatorBudget)
+          : undefined,
+        route.provider.messagePhaseInference === true
+          ? createResponsesPhaseInferenceBlockRewrite(translatorBudget)
           : undefined,
         responseEffects.plaintextV2AgentMessageToolNames.size > 0
           ? payloadRewriteAsBlockRewrite(createPlaintextV2AgentMessageCallRestoreRewrite(

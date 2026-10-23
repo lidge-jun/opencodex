@@ -15,9 +15,10 @@ import { repoPath } from "../helpers/repo-root";
 
 const REASONING = "I need to inspect files before answering.";
 const SCOPE: OcxReasoningReplayScopeRef = {
+  clientPrincipalId: "principal-empty-delta",
   clientThreadId: "thread-empty-delta",
   current: {
-    providerName: "opencode-free",
+    providerName: "opencode-zen",
     providerDestinationIdentity: "destination:provider",
     adapterName: "openai-chat",
     modelId: "deepseek-v4-flash-free",
@@ -42,7 +43,7 @@ async function consumeStreaming(events: AdapterEvent[]): Promise<void> {
   }
   const reader = bridgeToResponsesSSE(
     replay(),
-    "opencode-free/deepseek-v4-flash-free",
+    "opencode-zen/deepseek-v4-flash-free",
     undefined,
     undefined,
     undefined,
@@ -74,7 +75,7 @@ describe("reasoning replay empty-delta robustness", () => {
   test("batch: an empty thinking delta preserves reasoning for the following tool call", () => {
     buildResponseJSON(
       reasoningToolRound({ type: "thinking_delta", thinking: "" }),
-      "opencode-free/deepseek-v4-flash-free",
+      "opencode-zen/deepseek-v4-flash-free",
       { replayCacheScope: SCOPE },
     );
 
@@ -90,7 +91,7 @@ describe("reasoning replay empty-delta robustness", () => {
   test("non-empty thinking still consumes the pending raw-reasoning candidate", () => {
     buildResponseJSON(
       reasoningToolRound({ type: "thinking_delta", thinking: "A visible summary." }),
-      "opencode-free/deepseek-v4-flash-free",
+      "opencode-zen/deepseek-v4-flash-free",
       { replayCacheScope: SCOPE },
     );
 
@@ -103,8 +104,9 @@ describe("reasoning replay empty-delta robustness", () => {
     const moduleUrl = pathToFileURL(repoPath("src/responses/reasoning-replay-cache.ts")).href;
     const script = [
       `const cache = await import(${JSON.stringify(moduleUrl)});`,
-      `const scope = {clientThreadId:"disk-guard",current:{providerName:"test",providerDestinationIdentity:"destination:test",adapterName:"openai-chat",modelId:"model",credentialIdentity:"key:test"}};`,
+      `const scope = {clientPrincipalId:"principal-disk-guard",clientThreadId:"disk-guard",current:{providerName:"test",providerDestinationIdentity:"destination:test",adapterName:"openai-chat",modelId:"model",credentialIdentity:"key:test"}};`,
       `cache.rememberReasoningForCall("call_disk_guard", ${JSON.stringify(REASONING)}, scope);`,
+      `if (cache.peekReasoningForCall("call_disk_guard", scope) !== ${JSON.stringify(REASONING)}) throw new Error("cache fixture was not admitted");`,
     ].join("\n");
 
     try {

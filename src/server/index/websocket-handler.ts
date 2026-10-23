@@ -2,6 +2,7 @@ import { nativeSteeringUnavailableReason, nativeResponseControlMode, type Native
 import { NativeInjectionChannel } from "../responses/native-injection";
 import { NativeSteeringChannel, NativeSteeringError } from "../responses/native-steering";
 import { createNativeSteeringLogObserver } from "../responses/native-steering-log";
+import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
 import type { Server, ServerWebSocket } from "bun";
 import {
   LIVE_SIDEBAND_UPSTREAM_OPEN_TIMEOUT_MS,
@@ -394,6 +395,15 @@ export function createWebsocketHandler(
                   type: "rate_limit_error",
                   message: cooldownErrorMessage(err, accountSelector),
                 }));
+                return;
+              }
+              // A local archive refusal happens before any send. Carry the same sanitized 503
+              // body and stable code as HTTP so no filesystem path reaches the client frame.
+              const archiveError = reasoningArchiveErrorResponse(err);
+              if (archiveError) {
+                finalizeLog(archiveError.status);
+                const body = await archiveError.json() as { error: Record<string, unknown> };
+                sendJsonFrame(ws, buildWsErrorFrame(archiveError.status, body.error));
                 return;
               }
               finalizeLog(502);

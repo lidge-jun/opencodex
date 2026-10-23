@@ -100,6 +100,7 @@ import {
   isApiAuthRequired,
   isDataPlaneAdmissionSecret,
   isProxyAdmissionSecret,
+  resolveContextPrincipal,
   type RequestPolicyView,
   type DataPlaneAdmission,
 } from "./auth-cors";
@@ -1110,12 +1111,15 @@ async function handleClaudeMessagesWithBudget(
   const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, {
     ...buildClaudeReplayConfig(config),
-    // Operator config wins; otherwise the caller's own 1h breakpoints keep 1h here.
+    // Operator config wins; otherwise the caller's explicit TTLs (all 1h, or a pinned 5m) carry
+    // over, and TTL-less breakpoints take the destination default.
     cacheRetention: config.cacheRetention ?? callerCacheRetention(anthropicBody),
   }, logCtx, {
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
     ...(logIds?.admission ? { admission: logIds.admission } : {}),
+    // The translated request never forwards the caller credential; resolve the principal first.
+    replayPrincipal: { clientPrincipalId: resolveContextPrincipal(req, config, logIds?.admission) },
     ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),
     abortSignal: req.signal,
     promptCacheKeyIsSharedCohort: cacheKeySource === "system",

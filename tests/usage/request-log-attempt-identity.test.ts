@@ -56,4 +56,40 @@ describe("request log attempt identity", () => {
       },
     });
   });
+
+  test("a combo leg refused before any send does not make the served row unreported", () => {
+    // core-combo seals an input-admission refusal like this: no send, no usage.
+    const refused = beginRequestAttempt(1, "first", "model-a", "openai-chat");
+    finishRequestAttempt(refused, 400, 1);
+    const served = beginRequestAttempt(2, "second", "model-b", "openai-chat");
+    noteAttemptSend(served, undefined);
+    finishRequestAttempt(served, 200, 8, { inputTokens: 10, outputTokens: 2 });
+
+    expect(refused.usageStatus).toBe("unreported");
+    expect(aggregateAttemptUsage([refused, served])).toEqual({
+      status: "reported",
+      totalTokens: 12,
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+    });
+    // A leg that was sent and reported nothing still leaves the total unknown.
+    const sentSilent = beginRequestAttempt(1, "first", "model-a", "openai-chat");
+    noteAttemptSend(sentSilent, undefined);
+    finishRequestAttempt(sentSilent, 502, 1);
+    expect(aggregateAttemptUsage([sentSilent, served]).status).toBe("unreported");
+  });
+
+  test("cache reads sum across attempts that report them under different fields", () => {
+    // An Anthropic leg reports both fields; an OpenAI-shaped leg only cachedInputTokens.
+    const anthropic = beginRequestAttempt(1, "anthropic", "model-a", "anthropic");
+    noteAttemptSend(anthropic, undefined);
+    finishRequestAttempt(anthropic, 502, 1, { inputTokens: 100, outputTokens: 0, cachedInputTokens: 60, cacheReadInputTokens: 60 });
+    const openai = beginRequestAttempt(2, "openai", "model-b", "openai-chat");
+    noteAttemptSend(openai, undefined);
+    finishRequestAttempt(openai, 200, 1, { inputTokens: 100, outputTokens: 5, cachedInputTokens: 40 });
+
+    expect(aggregateAttemptUsage([anthropic, openai]).usage).toMatchObject({
+      cachedInputTokens: 100,
+      cacheReadInputTokens: 100,
+    });
+  });
 });

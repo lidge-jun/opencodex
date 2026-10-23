@@ -94,12 +94,13 @@ test.each([
   }
 });
 
-test("model changes still project explicitly selected ordinary Codex Lite history; native triggers and portable compact keep their existing builder contracts", () => {
+test("model changes and native Lite triggers project opted-in hosted history while portable compact keeps its builder contract", () => {
   const mismatchParsed = build(fixture(), canonical, parsed => { parsed.modelId = "gpt-6-luna"; }).body;
   const mismatchWire = build(fixture("gpt-6-luna"), canonical, parsed => { parsed.modelId = "gpt-6.1-sol"; }).body;
   const native = build(fixture(), canonical, parsed => { parsed._compactionRequest = true; }).body;
   for (const body of [mismatchParsed, mismatchWire])expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(0);
-  expect(native.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(4);
+  expect(native.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(0);
+  expect(notes(native)).toHaveLength(4);
   const portable = build(fixture(), canonical, parsed => { parsed._compactionRequest = true; parsed._portableCompaction = true; }).body;
   expect(portable.tools).toBeUndefined(); expect(portable.tool_choice).toBeUndefined(); expect(notes(portable)).toHaveLength(4);
 });
@@ -223,13 +224,59 @@ test.each([
   }
 });
 
-test("unknown/non-Lite stays structural even without hosted declarations or with additional_tools", () => {
+test("non-Lite history without a hosted declaration is projected; a function named web_search is not a declaration (#7250)", () => {
   const raw = fixture(); delete raw.tools;
   raw.input.push({ type: "additional_tools", tools: [{ type: "function", name: "web_search", parameters: { type: "object" } }] });
+  for (const provider of [canonical, { ...canonical, projectResponsesLiteHostedSearchHistory: false }]) {
+    for (const headers of [new Headers(), new Headers({ [CODEX_RESPONSES_LITE_HEADER]: "false" })]) {
+      const { body } = build(raw, provider, undefined, headers);
+      expect(notes(body)).toHaveLength(4); expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(0);
+      expect(body.tools).toBeUndefined(); expect(body.input.at(-1)).toEqual(raw.input.at(-1));
+    }
+  }
+});
+
+test("non-Lite history stays structural when the hosted declaration rides in additional_tools", () => {
+  const raw = fixture(); delete raw.tools;
+  raw.input.push({ type: "additional_tools", tools: [{ type: "web_search" }] });
   for (const headers of [new Headers(), new Headers({ [CODEX_RESPONSES_LITE_HEADER]: "false" })]) {
     const { body } = build(raw, canonical, undefined, headers);
     expect(notes(body)).toHaveLength(0); expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(4);
   }
+});
+
+// The exact synthetic request from #7250: Sol answered it with server_error until the declaration
+// was added. Every Responses destination gets the same treatment, with or without the opt-in.
+test.each([
+  { name: "canonical ChatGPT Codex", provider: { ...canonical, projectResponsesLiteHostedSearchHistory: undefined } },
+  { name: "public OpenAI API", provider: { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1" } as OcxProviderConfig },
+  { name: "third-party Responses gateway", provider: { adapter: "openai-responses", baseUrl: "https://gateway.example.test/v1" } as OcxProviderConfig },
+])("replayed web_search_call without a search declaration becomes a reference note on $name (#7250)", ({ provider }) => {
+  const raw: Record<string, any> = { model: "gpt-6.1-sol", stream: true, store: false, reasoning: { effort: "low" },
+    instructions: "Reply exactly OK.",
+    input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "Earlier I asked for documentation." }] },
+      { type: "web_search_call", status: "completed", action: { type: "search", query: "OpenAI documentation", queries: ["OpenAI documentation"] } },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "Reply exactly OK. Do not use tools." }] },
+    ] };
+  const { body } = build(raw, provider, undefined, new Headers());
+  expect(body.input.some((item: any) => item.type === "web_search_call")).toBe(false);
+  expect(body.tools).toBeUndefined();
+  expect(body.input).toHaveLength(3);
+  expect(body.input[0]).toEqual(raw.input[0]); expect(body.input[2]).toEqual(raw.input[2]);
+  const [note] = notes(body);
+  expect(JSON.parse(note.content[0].text.split("\n").slice(1).join("\n")).action).toEqual(raw.input[1].action);
+
+  const declared = build({ ...raw, tools: [{ type: "web_search" }] }, provider, undefined, new Headers()).body;
+  expect(declared.input[1]).toMatchObject({ type: "web_search_call", action: raw.input[1].action });
+  expect(notes(declared)).toHaveLength(0);
+});
+
+test("a destination that strips the hosted search tool also projects the matching history", () => {
+  const raw = fixture(); raw.store = false;
+  const { body } = build(raw, { adapter: "openai-responses", baseUrl: "https://gateway.example.test/v1", unsupportedHostedTools: ["web_search"] } as OcxProviderConfig, undefined, new Headers());
+  expect(body.tools.some((tool: any) => tool.type === "web_search")).toBe(false);
+  expect(notes(body)).toHaveLength(4); expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(0);
 });
 
 test("genuine mixed-case caller Lite overrides configured intent before projection", () => {
@@ -245,11 +292,35 @@ test("configured final Lite signal is honored without inventing a caller header"
   expect(notes(body)).toHaveLength(4); expect(new Headers(request.headers).get(CODEX_RESPONSES_LITE_HEADER)).toBe("true");
 });
 
-test.each(["true", "false"])("native compaction flags preserve hosted history for explicit Lite=%s", lite => {
+test.each(["true", "false"])("native compaction flags follow the hosted-history opt-in for explicit Lite=%s", lite => {
   for (const metadata of [undefined, { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true" }]) {
     const raw=fixture(); if (metadata) raw.client_metadata=metadata;
     const {body}=build(raw,canonical,parsed=>{parsed._compactionRequest=true;},new Headers({[CODEX_RESPONSES_LITE_HEADER]:lite}));
-    expect(notes(body)).toHaveLength(0); expect(body.input.filter((x:any)=>x.type==="web_search_call")).toHaveLength(4);
+    expect(notes(body)).toHaveLength(lite === "true" ? 4 : 0);
+    expect(body.input.filter((x:any)=>x.type==="web_search_call")).toHaveLength(lite === "true" ? 0 : 4);
+  }
+});
+
+// Native v2 compaction shares the ordinary projection, keeping the native trigger and ciphertext
+// rather than degrading to a prose summary. An empty tool list declares no search, so the history
+// is projected whether or not the Lite opt-in is set; with search declared only the opt-in projects.
+test.each([true, false])("native Lite compaction trigger preserves the native wire contract with projection=%s", enabled => {
+  for (const signal of ["http", "ws"] as const) {
+    for (const tools of [[], [{ type: "web_search" }]]) {
+      const raw = fixture();
+      raw.tools = tools;
+      raw.input.push({ type: "compaction_trigger" });
+      if (signal === "ws") raw.client_metadata = { [CODEX_RESPONSES_LITE_METADATA_KEY]: "true" };
+      const { body } = build(raw, { ...canonical, projectResponsesLiteHostedSearchHistory: enabled }, undefined,
+        signal === "http" ? new Headers({ [CODEX_RESPONSES_LITE_HEADER]: "true" }) : new Headers());
+      const projected = enabled || tools.length === 0;
+      expect(body.input.at(-1)).toEqual({ type: "compaction_trigger" });
+      expect(body.input[1]).toEqual(raw.input[1]);
+      expect(body.tools).toEqual(tools);
+      expect(notes(body)).toHaveLength(projected ? 4 : 0);
+      expect(body.input.filter((item: any) => item.type === "web_search_call")).toHaveLength(projected ? 0 : 4);
+      expect(body.input.filter((item: any) => item.call_id !== undefined)).toEqual(raw.input.filter((item: any) => item.call_id !== undefined));
+    }
   }
 });
 

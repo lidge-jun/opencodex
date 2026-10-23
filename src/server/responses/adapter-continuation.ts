@@ -28,7 +28,7 @@ import {
   fetchWithTransientRetry,
   fetchWithResetRetry,
   applyUpstreamRecoveryInit,
-  isNonReplayableResponse,
+  isNonReplayableResponse, isSameTargetRetryHold,
   prepareSameTarget429Wait,
   SendBudgetExhaustedError,
 } from "../../lib/upstream-retry";
@@ -349,7 +349,7 @@ export function createAdapterContinuations(
         && !kiroReplaySetupFailed
         // A synthesized replay refusal is not a rate limit; replaying the continuation on
         // it would re-send a turn whose first send may already have been processed.
-        && !isNonReplayableResponse(response)
+        && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
        && rateLimitPolicy !== null
         && adapterExchange.rateLimitRetries < rateLimitPolicy.attempts
         // The main recovery loop and the passthrough ladder both consult the shared remainder

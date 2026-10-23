@@ -114,3 +114,30 @@ export function renderCompactionSearchHistoryItems(items: readonly unknown[], re
   if (omissionIndex >= 0) out[omissionIndex] = omissionNote(omitted);
   return out;
 }
+
+function isHostedSearchTool(tool: unknown): boolean {
+  return isPlainObject(tool) && typeof tool.type === "string" && tool.type.startsWith("web_search");
+}
+
+/**
+ * True when the outbound body declares a hosted search tool, either top-level or inside a Lite
+ * `additional_tools` input wrapper. Read on the final body, after unsupported hosted tools were
+ * stripped, so a declaration the destination never sees does not count.
+ */
+export function declaresHostedWebSearch(body: Record<string, unknown>): boolean {
+  if (Array.isArray(body.tools) && body.tools.some(isHostedSearchTool)) return true;
+  return Array.isArray(body.input) && body.input.some(item => isPlainObject(item)
+    && item.type === "additional_tools" && Array.isArray(item.tools) && item.tools.some(isHostedSearchTool));
+}
+
+/**
+ * Project unreferenced hosted `web_search_call` history into reference notes. A same-input
+ * `item_reference` to a hosted cell keeps that cell structural. Returns the original body when
+ * there is nothing to project.
+ */
+export function projectHostedSearchHistory(body: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(body.input) || !body.input.some(item => isPlainObject(item) && item.type === "web_search_call")) return body;
+  const referencedIds = new Set(body.input.flatMap(item => isPlainObject(item)
+    && item.type === "item_reference" && typeof item.id === "string" ? [item.id] : []));
+  return { ...body, input: renderCompactionSearchHistoryItems(body.input, referencedIds) };
+}

@@ -202,7 +202,7 @@ export async function runtimeRequest<T = unknown>(
     if (!linkChildReadable(method, path)) {
       throw new RuntimeApiError(linkChildRefusal(link, `${method} ${pathname}`), 503, null, "link_child_management_unavailable");
     }
-    const { status, body } = await readLinkHomeJson(link, path, deps.linkHome);
+    const { status, body } = await readLinkHomeJson(link, path, deps.linkHome, init.signal ? { signal: init.signal } : {});
     if (status < 200 || status >= 300) throw new RuntimeApiError(responseMessage(body, status), status, body);
     return body as T;
   }

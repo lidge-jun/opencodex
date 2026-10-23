@@ -96,6 +96,8 @@ export function createSseBlockBuffer(
   let buffer = "";
   let offset = 0;
   let scanOffset = 0;
+  let needsScan = false;
+  let lastCodeUnit = Number.NaN;
   let bufferBytes = 0;
   const delimiterPattern = /(?:\r\n|\r(?!\n)|\n){2}/g;
 
@@ -111,7 +113,7 @@ export function createSseBlockBuffer(
       if (!fragment) return;
       let fragmentBytes = Buffer.byteLength(fragment, "utf8");
       // Decoder output never splits a surrogate pair, but keep the helper exact for string callers.
-      const last = buffer.charCodeAt(buffer.length - 1);
+      const last = lastCodeUnit;
       const first = fragment.charCodeAt(0);
       if (offset < buffer.length && last >= 0xd800 && last <= 0xdbff && first >= 0xdc00 && first <= 0xdfff) {
         fragmentBytes -= 2;
@@ -122,6 +124,8 @@ export function createSseBlockBuffer(
       try {
         compact();
         buffer += fragment;
+        lastCodeUnit = fragment.charCodeAt(fragment.length - 1);
+        needsScan ||= fragment.includes("\r") || fragment.includes("\n");
         reservation.commitRetained();
         budget.releaseRetained(bufferBytes, scope);
         bufferBytes = nextBytes;
@@ -131,11 +135,16 @@ export function createSseBlockBuffer(
       }
     },
     next() {
+      if (!needsScan) {
+        scanOffset = Math.max(offset, buffer.length - 3);
+        return null;
+      }
       delimiterPattern.lastIndex = scanOffset;
       const match = delimiterPattern.exec(buffer);
       if (!match) {
         // A delimiter is at most four code units. Revisit only its possible split prefix.
         scanOffset = Math.max(offset, buffer.length - 3);
+        needsScan = false;
         return null;
       }
       const start = match.index;
@@ -153,6 +162,8 @@ export function createSseBlockBuffer(
         buffer = "";
         offset = 0;
         scanOffset = 0;
+        needsScan = false;
+        lastCodeUnit = Number.NaN;
       }
       return { block, delimiter };
     },
@@ -164,6 +175,8 @@ export function createSseBlockBuffer(
       buffer = "";
       offset = 0;
       scanOffset = 0;
+      needsScan = false;
+      lastCodeUnit = Number.NaN;
       bufferBytes = 0;
     },
   };

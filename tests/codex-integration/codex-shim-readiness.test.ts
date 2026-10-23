@@ -13,6 +13,7 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { codexShimReadinessWarnings } from "../../src/cli/codex-shim-readiness";
 import { diagnoseCodexShim } from "../../src/codex/shim-diagnostics";
+import { WINDOWS_SHIM_REVISION_MARKER } from "../../src/codex/shim-templates";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
@@ -302,10 +303,13 @@ describe("in-place Windows shim status verdict", () => {
       // Legacy in-place record, as Windows installs write it; readable on every host.
       writeFileSync(join(home, "codex-shim.json"), JSON.stringify({ platform: "win32", wrapperPath, originalPath: wrapperPath, backupPath }));
       process.env.OPENCODEX_HOME = home;
-      const body = `@echo off\r\nrem opencodex codex autostart shim${"\r\nrem padding".repeat(20)}\r\n`;
+      const body = `@echo off\r\nrem opencodex codex autostart shim\r\nrem ${WINDOWS_SHIM_REVISION_MARKER}${"\r\nrem padding".repeat(20)}\r\n`;
       writeFileSync(wrapperPath, `${body}ocx codex-shim ensure\r\n`);
       expect(diagnoseCodexShim()).toMatchObject({ installed: true, healthy: true });
       expect(diagnoseCodexShim().summary).not.toContain("unhealthy");
+      // A marked wrapper from before the current Windows revision needs a reinstall.
+      writeFileSync(wrapperPath, `${body.replace(`\r\nrem ${WINDOWS_SHIM_REVISION_MARKER}`, "")}ocx codex-shim ensure\r\n`);
+      expect(diagnoseCodexShim()).toMatchObject({ installed: true, healthy: false });
       writeFileSync(wrapperPath, `${body}ocx codex-shim broken\r\n`);
       const damaged = diagnoseCodexShim();
       expect(damaged).toMatchObject({ installed: true, healthy: false });

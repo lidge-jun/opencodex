@@ -98,11 +98,52 @@ describe("typed input media inspection", () => {
       tools: [{ type: "function", name: "f", parameters: { type: "object", properties: { audio: AUDIO } } }],
     })).toBeUndefined();
   });
+
+  test("supported inline audio is admitted only in Chat user or tool-result content", () => {
+    expect(untranslatedResponsesInputMedia(request([AUDIO])._rawBody, { allowAudio: true })).toBeUndefined();
+    for (const type of ["function_call_output", "custom_tool_call_output"]) {
+      expect(untranslatedResponsesInputMedia(
+        { input: [{ type, call_id: "call1", output: [AUDIO] }] },
+        { allowAudio: true },
+      )).toBeUndefined();
+    }
+
+    // A top-level Responses audio item has no translated Chat converter.
+    expect(untranslatedResponsesInputMedia({ input: [AUDIO] }, { allowAudio: true })).toBe("audio");
+    expect(untranslatedResponsesInputMedia(
+      { input: [{ role: "user", content: [{ type: "input_audio", audio_url: "https://example.test/a.wav" }] }] },
+      { allowAudio: true },
+    )).toBe("audio");
+    expect(untranslatedResponsesInputMedia(
+      { input: [{ role: "user", content: [{ type: "input_audio", audio_url: "data:audio/opus;base64,AAAA" }] }] },
+      { allowAudio: true },
+    )).toBe("audio");
+
+    // The Chat-shaped `audio` spelling has no parser path, and developer audio cannot keep
+    // its role on the Chat wire. Both must stay refused rather than pass and disappear.
+    expect(untranslatedResponsesInputMedia(
+      { input: [{ role: "user", content: [{ type: "audio", audio_url: "data:audio/wav;base64,YWJj" }] }] },
+      { allowAudio: true },
+    )).toBe("audio");
+    expect(untranslatedResponsesInputMedia(
+      { input: [{ type: "function_call_output", call_id: "call1", output: [{ type: "audio", audio_url: "data:audio/wav;base64,YWJj" }] }] },
+      { allowAudio: true },
+    )).toBe("audio");
+    expect(untranslatedResponsesInputMedia(
+      { input: [{ type: "message", role: "developer", content: [AUDIO] }] },
+      { allowAudio: true },
+    )).toBe("audio");
+    // Developer documents keep their existing lossless carrier.
+    expect(untranslatedResponsesInputMedia(
+      { input: [{ type: "message", role: "developer", content: [INLINE_FILE] }] },
+      { allowAudio: true },
+    )).toBeUndefined();
+  });
 });
 
 describe("final translated-adapter boundary", () => {
   test("build refuses before the adapter can serialize or send; errors contain no payload", () => {
-    const { adapter, seen } = fakeAdapter();
+    const { adapter, seen } = fakeAdapter("cursor");
     const incoming = { headers: new Headers(), translatorBudget: createTestTranslatorBudget() };
     for (const part of [AUDIO, FILE]) {
       let failure: unknown;
@@ -118,7 +159,7 @@ describe("final translated-adapter boundary", () => {
   });
 
   test("runTurn emits one terminal nonretryable 400 without invoking the transport", async () => {
-    const { adapter, seen } = fakeAdapter();
+    const { adapter, seen } = fakeAdapter("cursor");
     const events: AdapterEvent[] = [];
     await adapter.runTurn!(request([AUDIO]), {
       headers: new Headers(), translatorBudget: createTestTranslatorBudget(),
@@ -149,29 +190,36 @@ describe("final translated-adapter boundary", () => {
 });
 
 describe("runtime registry and native passthrough exceptions", () => {
-  test("registry construction cannot bypass the guard for translated adapters", async () => {
-    for (const adapter of ["openai-chat", "anthropic", "google", "kiro", "cursor", "devin", "codebuddy", "qoder"]) {
+  test("registry construction carries supported audio on Chat and refuses it elsewhere", async () => {
+    for (const adapter of ["anthropic", "google", "kiro", "cursor", "devin", "codebuddy", "qoder"]) {
       const provider: OcxProviderConfig = {
         adapter, baseUrl: "https://example.invalid/v1", authMode: "key", apiKey: "test-placeholder",
       };
       const runtime = withTestTranslatorBudget(createRegisteredAdapter(provider));
       await expect(Promise.resolve().then(() => runtime.buildRequest(request([AUDIO])))).rejects.toThrow("OpenCodex cannot translate audio");
     }
+
+    const chat = withTestTranslatorBudget(createRegisteredAdapter({
+      adapter: "openai-chat", baseUrl: "https://example.invalid/v1", authMode: "key", apiKey: "test-placeholder",
+    }));
+    const built = await chat.buildRequest(request([AUDIO]));
+    expect(built.body).toContain("input_audio");
+    expect(built.body).toContain("YWJj");
   });
 
   test("Responses and both Azure aliases preserve raw media after a rejected translated attempt", async () => {
     for (const adapter of ["openai-responses", "azure", "azure-openai"]) {
-      const parsed = request([AUDIO, FILE]);
+      const parsed = request([FILE]);
       const original = structuredClone(parsed._rawBody);
       const rejected = withTestTranslatorBudget(createRegisteredAdapter({
         adapter: "openai-chat", baseUrl: "https://example.invalid/v1", apiKey: "test-placeholder", authMode: "key",
       }));
-      await expect(Promise.resolve().then(() => rejected.buildRequest(parsed))).rejects.toThrow("cannot translate audio");
+      await expect(Promise.resolve().then(() => rejected.buildRequest(parsed))).rejects.toThrow("cannot translate file");
       const runtime = withTestTranslatorBudget(createRegisteredAdapter({
         adapter, baseUrl: "https://example.invalid/v1", apiKey: "test-placeholder", authMode: "key",
       }));
       const wire = JSON.parse((await runtime.buildRequest(parsed)).body);
-      expect(wire.input[0].content).toEqual([AUDIO, FILE]);
+      expect(wire.input[0].content).toEqual([FILE]);
       expect(parsed._rawBody).toEqual(original);
     }
   });

@@ -41,12 +41,14 @@ import {
 import {
   GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST,
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  antigravityModelRefusal,
   eligibleFailoverAccounts,
   forgetGenericFailoverRoster,
   isGenericFailoverProvider,
   isProactivePreferenceEnabled,
   preferredInitialAccount,
   refusalAwareInitialKiroAccount,
+  routeAntigravityModel,
   noteGenericPoolSelection,
 } from "../../oauth/generic-account-failover";
 import { admitGenericSessionAccount, bindGenericSessionAccount, genericSessionAccount, genericSessionAccountEligible, genericSessionAffinityEnabled, preferredGenericSessionAccount } from "../../oauth/generic-session-affinity";
@@ -71,14 +73,15 @@ import {
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
-import { physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { codexWsExecutorBinding, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
+import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
 import type { ProviderFetchOptions } from "./fetch-helpers";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
-import { sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
+import { assignNativeLogConversationId, sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
@@ -182,6 +185,7 @@ export async function prepareResponsesTransport(
     || route.providerName === "orcarouter-oauth"
     // runTurn transport: the replay runs on the first-event preflight in run-turn-execution.
     || route.providerName === "devin"
+    || route.providerName === "workbuddy-ai"
     || route.providerName === "dsh-account"
   ) && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
@@ -243,6 +247,9 @@ export async function prepareResponsesTransport(
       if (candidate.provider !== route.providerName) return null;
       if (anthropicInstance) anthropicRouteDecision = currentAnthropicRouteDecision();
       if (anthropicRouteDecision && !routeCandidates(anthropicRouting!.getEligibleAnthropicAccounts(Date.now(), route.modelId), anthropicRouteDecision).includes(candidate.accountId)) return null;
+      // #7500: no admission, initial or a recovery/failover rebind, may land on an Antigravity
+      // account whose own roster omits the model. Callers abandon the send on null.
+      if (antigravityModelRefusal(config, route.providerName, candidate.accountId, route.modelId)) return null;
       const committed = genericAffinityMode
         ? admitGenericSessionAccount(config, route.providerName, oauthSelection, candidate, route.modelId, genericAffinityMode)
         : await commitOAuthAccountSelection(route.providerName, candidate.accountId, {
@@ -484,6 +491,10 @@ export async function prepareResponsesTransport(
       parsed._kiroAuthContext = kiroContext;
       if (retryParsed !== parsed) retryParsed._kiroAuthContext = { ...kiroContext };
     }
+    if (route.providerName === "workbuddy-ai") {
+      parsed._workbuddyAuthContext = snapshot.workbuddy;
+      if (retryParsed !== parsed) retryParsed._workbuddyAuthContext = snapshot.workbuddy;
+    }
     if (route.providerName === "zed") {
       // Zed signs with its own user id; `snapshot.accountId` is the local slot hash.
       const zedContext = { userId: snapshot.providerUserId ?? "" };
@@ -590,10 +601,62 @@ export async function prepareResponsesTransport(
       };
     }
     const build = resolved.buildRequest.bind(resolved);
+    const fileProvider = route.provider;
+    const fileProviderName = route.providerName;
+    // Persistence consent is configuration: capture its generation with the provider snapshot.
+    const fileConsentGeneration = captureConfigGeneration();
     resolved.buildRequest = async (requestParsed, incoming) => {
       const request = await build(requestParsed, incoming);
       // Capture at adapter creation, never from mutable serving state after an await.
       if (binding) requestBindings.set(request, binding);
+      const allowedImageFileModels = fileProvider.modelCapabilities
+        ? Object.entries(fileProvider.modelCapabilities)
+          .filter(([, cap]) => cap?.deepseekImageFiles === true)
+          .map(([model]) => model)
+        : [];
+      if (allowedImageFileModels.includes(request.outboundModelId ?? requestParsed.modelId) && needsDeepSeekImageFiles(request)) {
+        const consentModel = request.outboundModelId ?? requestParsed.modelId;
+        try {
+          // Ordinary uploads use provider pacing. A queued rebuild retains its enclosing
+          // fetch lease; reacquiring that same concurrency slot would deadlock at a limit of one.
+          const uploadFetch = providerFetch(fileProvider, options.codexWsRuntimeIdentity, {
+            httpOnly: true, providerName: fileProviderName, modelId: requestParsed.modelId,
+            beforeDispatch: () => {
+              if (!selectionIsCurrent(binding)) throw new Error("Credential selection changed before image upload");
+              // A queued upload must not outlive a revoked opt-in or a configuration reload.
+              if (captureConfigGeneration() !== fileConsentGeneration
+                || fileProvider.modelCapabilities?.[consentModel]?.deepseekImageFiles !== true) {
+                throw new Error("DeepSeek image file consent changed before image upload");
+              }
+            },
+          });
+          const uploadSignal = incoming.abortSignal ?? options.abortSignal ?? req.signal;
+          const pacedUpload: typeof fetch = incoming.dispatchPacingHeld
+            ? (async (input, init) => {
+              // The inference lease owns concurrency, but each physical upload still
+              // consumes an interval slot, including after a credential rebuild.
+              const slot = await waitForProviderRequestSlot(fileProviderName, fileProvider, requestParsed.modelId,
+                init?.signal ?? uploadSignal, { concurrency: false });
+              try { return await uploadFetch.unpacedFetch!(input, init); }
+              finally { releaseProviderRequestSlot(slot); }
+            }) as typeof fetch
+            : uploadFetch;
+          const body = await deepSeekImageFileBody(request, pacedUpload,
+            uploadSignal, {
+              allowedModels: allowedImageFileModels, budget: incoming.translatorBudget,
+            });
+          if (body !== undefined) {
+            request.releaseBodyObservation?.();
+            request.body = body;
+            const headers = new Headers(request.headers);
+            headers.delete("content-length");
+            request.headers = Object.fromEntries(headers);
+            request.releaseBodyObservation = incoming.translatorBudget.observeExternallyCapped(
+              "passthrough_serialization", Buffer.byteLength(body, "utf8"),
+            );
+          }
+        } catch (error) { request.releaseBodyObservation?.(); throw error; }
+      }
       return request;
     };
     if (resolved.runTurn) {
@@ -758,7 +821,8 @@ export async function prepareResponsesTransport(
           pacingChanged = false;
         }
         if (selectionIsCurrent(requestBindings.get(wireRequest)) && copilotSessionExpiresAt > Date.now() + 1000) {
-          const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? execute;
+          const ws = codexWsExecutorBinding(execute);
+          const fetchImpl = (route.provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? ws?.http ?? execute;
           const binding = requestBindings.get(wireRequest);
           const snapshot = anthropicInstance !== undefined && binding?.kind === "oauth"
             ? binding.snapshot : undefined;
@@ -798,7 +862,10 @@ export async function prepareResponsesTransport(
               passiveQuotaWriterGeneration = writerGeneration;
             }
             commitKeyAttemptSend();
-            response = await sendWithConnectionPolicy(
+            // The WS executor dials its own socket: HTTP connection policy and body coding do not apply.
+            // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
+            // provider reselected above was not, so it takes the HTTP fallback under its own route.
+            response = ws?.provider === route.provider ? await execute(destination, dispatchInit) : await sendWithConnectionPolicy(
               distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
               destination,
               { ...dispatchInit, redirect: "manual",
@@ -843,6 +910,7 @@ export async function prepareResponsesTransport(
           adapterName: nextAdapter.name, oauthCredentialSnapshot: replayOAuthCredentialSnapshot });
         const rebuilt = await nextAdapter.buildRequest(requestParsed, {
           headers: requestState.selectedForwardHeaders, providerName: route.providerName, translatorBudget,
+          dispatchPacingHeld: true,
           ...(imageTierBias > 0 ? { imageTierBias } : {}),
         });
         const bodySize = checkOutboundBodySize(rebuilt.body, config.maxUpstreamBodyBytes);
@@ -920,10 +988,16 @@ export async function prepareResponsesTransport(
           ?? refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
           ? preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)
           : null);
+        // #7500: an Antigravity account whose own discovery omits the model is never sent to.
+        // A usable listing (or not-yet-discovered) sibling replaces it, or the request is refused.
+        const modelRoute = routeAntigravityModel(config, route.providerName,
+          proposedAccountId ?? oauthSelection?.accountId, route.modelId);
+        if (modelRoute.kind === "refuse") return formatErrorResponse(403, "permission_error", modelRoute.message);
+        const routedAccountId = modelRoute.kind === "reroute" ? modelRoute.accountId : proposedAccountId;
         // An unchanged active choice must retain the ordinary resolver's terminal-refresh
         // recovery (not the speculative-preference fallback that resolves the same dead grant).
-        const preferredAccountId = genericAffinityMode && proposedAccountId === oauthSelection?.accountId
-          ? null : proposedAccountId;
+        const preferredAccountId = genericAffinityMode && routedAccountId === oauthSelection?.accountId
+          ? null : routedAccountId;
         let safetyAlternateId: string | null = !affinityAccountId && preferredAccountId === refusalAwareId ? refusalAwareId : null;
         // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
         // rotation site, and rotation sites must apply their credential through
@@ -983,6 +1057,10 @@ export async function prepareResponsesTransport(
           resolved = await getValidAccessTokenSnapshot(route.providerName);
           usedPreferredAccount = false;
         }
+        // Resolution fallbacks can still land on an omitting account; answer with the refusal
+        // here, since the commit below would only report it as a changed selection.
+        const unlisted = antigravityModelRefusal(config, route.providerName, resolved.accountId, route.modelId);
+        if (unlisted) return formatErrorResponse(403, "permission_error", unlisted);
         const admitted = await commitResolvedOAuthSelection(resolved, safetyAlternateId === null);
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
@@ -1046,6 +1124,7 @@ export async function prepareResponsesTransport(
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
         }
+        if (route.providerName === "workbuddy-ai") parsed._workbuddyAuthContext = resolved.workbuddy;
         if (route.providerName === "zed") {
           parsed._zedAuthContext = { userId: resolved.providerUserId ?? "" };
         }
@@ -1140,9 +1219,7 @@ export async function prepareResponsesTransport(
     codexAuthContext: admissionState.authCtx,
     forwardHeaders: requestState.selectedForwardHeaders,
   });
-  if (!logCtx.conversationId && parsed._cursorConversationId) {
-    logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
-  }
+  assignNativeLogConversationId(logCtx, normalizeLogConversationId(parsed._cursorConversationId));
   logCtx.providerAdapter = adapter.name;
   // Ordinary requests receive one durable attempt only after their final initial
   // adapter is resolved. Combo children own their attempt and retries keep it.

@@ -19,7 +19,7 @@ import { releaseProviderRequestSlot, waitForProviderRequestSlot, RequestPacingQu
 import type { AdapterEventQueue } from "../../adapters/run-turn-queue";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { providerFetch } from "./fetch-helpers";
-import { normalizeLogConversationId } from "../request-log-conversation";
+import { assignNativeLogConversationId, normalizeLogConversationId } from "../request-log-conversation";
 import { normalizeDeclaredToolName, type AdapterEvent, type OcxProviderContinuationState } from "../../types";
 import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE, SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE, type OcxErrorPayload } from "../../lib/errors";
 import { SendBudgetExhaustedError, markResponseNonReplayable } from "../../lib/upstream-retry";
@@ -53,6 +53,7 @@ import { emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCat
 // LOCAL PATCH (runturn-websearch)
 import { planWebSearch } from "../../web-search";
 import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
+import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
 import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
 import { orderDevinMessagesOutput } from "../../claude/devin-output-order";
 import { unboundPoolSpendRefusalMessage } from "../workflow-refusal";
@@ -217,6 +218,7 @@ export async function executeResponsesRunTurn(
     releaseSearchProbeLease();
     throw error;
   }
+  if (!wsPlan) stripReplayedSearchPairs(parsed);
 
     const runTurnAbort = new AbortController();
     const cleanupRequestAbort = linkAbortSignal(runTurnAbort, req.signal);
@@ -404,9 +406,7 @@ export async function executeResponsesRunTurn(
         releaseProviderRequestSlot(pacingSlot);
         // Cursor assigns a stable conversation id inside runTurn on the first headerless
         // turn; backfill so Logs can filter/total that opening request (#330 / #522).
-        if (!logCtx.conversationId && parsed._cursorConversationId) {
-          logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
-        }
+        assignNativeLogConversationId(logCtx, normalizeLogConversationId(parsed._cursorConversationId));
         targetQueue.close();
       }
     };

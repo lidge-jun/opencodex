@@ -150,7 +150,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke|reconnect>",
+    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
@@ -158,6 +158,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Status: ocx link status [--json]",
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
       "Reconnect: ocx link reconnect --link-id <id> [--json]",
+      "Cleanup: ocx link cleanup [--link-id <id>] [--json]",
       "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
     ],
   },
@@ -432,6 +433,17 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "`ocx effort clear` (or `set --main - --subagent -`) removes main and subagent caps but preserves injection effort; use `ocx effort set --injection -` to clear it.",
       "`ocx effort model <provider/model|model>` inspects a model's configured ladder, disabled status, and wire mappings.",
       "Works both online (via live proxy API) and offline (modifies persisted config safely with atomic writes).",
+    ],
+  },
+  {
+    name: "fallback",
+    usage: "ocx fallback <status|off|on|clear|local> [--kind model|provider|all] [--provider <name> | --route <selector> | --device <id|alias>] [--json]",
+    summary: "Turn model and provider fallback off or on per scope, and record per-device local fallback.",
+    details: [
+      "A refused fallback answers fallback_refused with the status of the failure that triggered it, and names the command that allows it.",
+      "Precedence: a device set to off always refuses; otherwise route, then provider, then global; unset allows.",
+      "Rotation among the accounts or keys of one provider pool is not a fallback and is not governed here.",
+      "Live proxy only. On a Remote Link Child, status reads the Home; writes are refused. Run write commands on the Home.",
     ],
   },
   {

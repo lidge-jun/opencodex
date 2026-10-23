@@ -17,6 +17,7 @@ const report: CodexCliInstallReport = {
   versionEvidence: { kind: "unavailable" },
   provenance: "unknown", managed: false, reason: "candidate_unavailable", location: null,
   installDigest: null,
+  installContentDigest: null,
   packageVersion: null,
   shim: { status: "not-tracked", backingKind: null }, evidence: [],
 };
@@ -238,10 +239,14 @@ describe("Codex CLI update CLI", () => {
 
   test("check inspects exactly once", async () => {
     let inspectedCalls = 0;
+    let received: CodexCliInstallProvenanceDeps | null = null;
     expect(await handleCodexCliUpdateCommand(["check", "--json"], {
-      inspectInstall: async () => { inspectedCalls += 1; return report; },
+      inspectInstall: async deps => { inspectedCalls += 1; received = deps; return report; },
     })).toBe(0);
     expect(inspectedCalls).toBe(1);
+    // A bare check answers ownership only; the bounded content read is reserved
+    // for the plan path whose planId binds the digest.
+    expect(received?.observeInstallContent).not.toBe(true);
   });
 
   test("passes only proof-bound manager roots into production provenance inspection", async () => {
@@ -256,6 +261,8 @@ describe("Codex CLI update CLI", () => {
           codexCliPath: "C:\\managed\\codex.cmd",
           path: "C:\\managed",
           pathExt: ".CMD",
+          home: "C:\\managed-home",
+          nodePath: "C:\\managed-modules",
           managerRoots: { FNM_DIR: "C:\\custom-manager" },
           configDir,
         },
@@ -281,6 +288,8 @@ describe("Codex CLI update CLI", () => {
         CODEX_CLI_PATH: "C:\\managed\\codex.cmd",
         PATH: "C:\\managed",
         PATHEXT: ".CMD",
+        HOME: "C:\\managed-home",
+        NODE_PATH: "C:\\managed-modules",
       });
       expect(received?.configDir).toBe(configDir);
       expect(received?.selectedCommand).toBe(process.platform === "win32" ? null : "C:\\managed\\codex.cmd");

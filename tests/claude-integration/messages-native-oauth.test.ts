@@ -475,7 +475,7 @@ describe("native pooled Messages dispatch", () => {
       expect(entry.headers.has("x-api-key")).toBe(false);
       expect(JSON.parse((entry.body.metadata as typeof metadata).user_id).account_uuid).toBe(uuids[index]);
       expect(entry.body.messages).toEqual(body.messages.map(message => message.role !== "assistant" ? message : { ...message, content: (message.content as Record<string, unknown>[]).map(block => block.type === "tool_use" ? { ...block, name: "custom_lookup" } : block) }));
-      expect((entry.body.system as Record<string, unknown>[])[1]).toEqual(body.system[0]);
+      expect((entry.body.system as Record<string, unknown>[])[1]).toEqual({ ...body.system[0], cache_control: { type: "ephemeral", ttl: "1h" } });
     }
     expect(getAnthropicAccountHealthSnapshot(ids[0]!)).not.toBeNull();
     expect(JSON.parse(metadata.user_id).account_uuid).toBe(uuids[0]);
@@ -817,6 +817,33 @@ test("shared quota exhaustion is bounded and never resends an already-tried alte
   expect(response.status).toBe(429);
   expect(sent.length).toBeLessThanOrEqual(4);
   expect(new Set(sent.map(entry => entry.headers.get("authorization"))).size).toBe(sent.length);
+});
+
+test("a pool whose every account refuses on spent quota answers the usage limit and its reset (#6991 parity)", async () => {
+  await seed(2);
+  const config = fixtureConfig();
+  config.anthropicAccountPool = { enabled: true };
+  const resetSeconds = Math.floor(Date.now() / 1000) + 7_200;
+  config.providers.anthropic!.fetch = (async (input, init) => {
+    sent.push({ url: String(input), headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) });
+    return Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture window spent" } }, {
+      status: 429,
+      headers: {
+        "anthropic-ratelimit-unified-7d-status": "rejected", "anthropic-ratelimit-unified-7d-reset": String(resetSeconds),
+        "retry-after": "7200", "request-id": "req_fixture_spent",
+      },
+    });
+  }) as typeof fetch;
+  const { response, text, row } = await send(config, { ...BODY, stream: false });
+  expect(response.status).toBe(429);
+  expect(sent).toHaveLength(2);
+  expect(JSON.parse(text).error).toMatchObject({
+    type: "rate_limit_error",
+    message: `All Anthropic OAuth accounts have reached their usage limit; the first one resets at ${new Date(resetSeconds * 1000).toISOString()}`,
+  });
+  expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(7_000);
+  expect(response.headers.get("request-id")).toBe("req_fixture_spent");
+  expect(row.protocolTrace?.mode).toBe("native");
 });
 
 test("family lease releases when spend admission refuses without a physical send", async () => {

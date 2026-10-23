@@ -558,7 +558,9 @@ test("Retry on a failed Home link restarts its tunnel instead of only re-reading
   await act(async () => { retry.click(); });
   await settleUntil(() => host.querySelector(".remote-link-status[data-state='connecting']") !== null);
   expect(calls.filter(call => call.method === "POST").map(call => call.path)).toEqual(["/api/link/link-1/reconnect"]);
-  expect(calls.at(-1)).toEqual({ method: "GET", path: "/api/link/status" });
+  // The page also hosts the per-device fallback panel, whose own GET /api/fallback may land
+  // after the refresh; the link flow's last request is still the status re-read.
+  expect(calls.filter(call => call.path.startsWith("/api/link")).at(-1)).toEqual({ method: "GET", path: "/api/link/status" });
   expect(host.querySelector(".remote-link-status[data-state='connecting']")).not.toBeNull();
 });
 
@@ -568,11 +570,13 @@ test.each([false, true])("Retry stays disabled through the deferred refresh (POS
   const refreshed = new Promise<Response>(resolve => { release = resolve; });
   let posts = 0;
   let gets = 0;
-  globalThis.fetch = (async (_input, init) => {
+  globalThis.fetch = (async (input, init) => {
     if (init?.method === "POST") {
       posts += 1;
       return postFails ? response({ error: { code: "link_unavailable" } }, 503) : response({ linkId: "link-1" });
     }
+    // Count only the link status reads; the fallback panel's GET is a separate resource.
+    if (new URL(String(input)).pathname !== "/api/link/status") return response({ error: "not_found" }, 404);
     gets += 1;
     return gets === 1 ? response(failed) : refreshed;
   }) as typeof fetch;

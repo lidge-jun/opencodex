@@ -251,6 +251,13 @@ without separately attributable bars remain unknown. Active-account summaries, m
 display reports, credits and API/Spark/USD meters are not quota evidence for this decision.
 The separate Anthropic · Pool 2 (`anthropic2`) account pool is not a source of this evidence, so its targets stay unknown.
 
+Antigravity contributes Gem/Cla five-hour and weekly buckets only after a fresh authenticated probe
+for its sole active, usable OAuth account, and only to the `google-antigravity` provider that signs in
+with that account. A renamed provider row reads unknown and never reuses that account's quota. Quota
+follows the resolved native `gemini-*` or `claude-*` model, not its display alias. Account, credential, project or destination
+changes withdraw the old observation. A display-only refresh can retain matching family counters
+only with their original timestamps; per-model and Argon rows never become decision evidence.
+
 :::caution[Additional decision data]
 Opting in sends quota tiers, and available used percentage/window/reset delay, to your selected
 decision backend, including hosted TypeSafe. No account ids, tokens or credential fingerprints
@@ -264,6 +271,55 @@ the switch. `--decision-quota-tiers -` clears overrides, restoring defaults. API
 API `false` disables the switch. Omitted fields survive JEV updates, target replacement and
 rename, including saves through the existing editor. Switching away from JEV removes both
 quota settings. No new editor controls or background quota work are enabled.
+
+### Session pin for JEV
+
+A JEV Combo decides a target for every request, so consecutive turns of one conversation can move
+between providers, and each move starts with a cold provider prompt cache. `sessionPin` is an
+opt-in setting per JEV Combo, off by default, that keeps a client session on the target JEV chose
+for it while the session stays active:
+
+```bash
+ocx combo set jev-auto --session-pin 20m --json
+```
+
+```json
+{ "strategy": "jev", "sessionPin": { "ttlMs": 1200000 } }
+```
+
+The first request of a session is decided normally. Once the target JEV applied for it completes a
+response, later requests of the same session reuse that target and effort without another decision
+call. `ttlMs` (1 minute to 24 hours) is an idle window: every completed turn on the pinned target,
+tool-call continuations included, starts it again, and a session that stays quiet longer is decided
+afresh.
+
+A session is identified by the client's own session headers (`thread-id`, `session_id` or
+`session-id`, `x-codex-parent-thread-id`, or a promoted `x-session-id`) together with the API key
+that admitted the request and the Combo. Requests without a session header are never pinned,
+`prompt_cache_key` is never used as a session identity, and two API keys never share a pin.
+
+JEV decides again, and the new decision replaces the pin, when:
+
+- the pinned target is not offered for this request: disabled, removed from the Combo, cooling
+  down after a 429 or another failure, out of cached quota, metered, or otherwise ineligible;
+- the pinned effort is no longer offered for that target;
+- `decisionQuotaSignals` is on and the target's quota evidence reads nearly exhausted;
+- any send of a pinned session fails (that request still fails over as usual);
+- the configuration has changed since the pin was written.
+
+A cancelled request keeps the pin. A fail-open decision (timeout, missing key, invalid answer)
+never creates one. Pins live in the proxy's memory, at most 512 sessions, and do not survive a
+restart.
+
+Usage records mark a reused turn with `jevDecision.pinned: true` and `pinReason: "session"`. A
+decision that replaced a released pin records why in `pinReason` (`expired`, `config_changed`,
+`target_unavailable`, `effort_unavailable` or `quota_nearly_exhausted`). `ocx combo stats`
+counts pinned requests apart from decisions; they still count toward successful requests, model
+fallbacks and per-model tokens.
+
+A pin makes provider cache reuse possible; whether the provider actually serves cached tokens still
+depends on the provider, the account and a stable prompt prefix. `--session-pin -` (API `null`)
+turns it off, switching away from JEV removes it, and saves from the dashboard editor keep it.
 
 ### Decision method
 
@@ -539,8 +595,9 @@ are ignored. Operator notes are evidence for the decision, not commands, and can
 target allowlist or reasoning-effort limits. Only put information there that may be disclosed to
 the selected decision backend.
 
-Each logical model call is decided on its own; there is no per-conversation pin. Consecutive turns of
-one session can therefore land on different targets, and every switch starts a cold provider prompt
+By default, each logical model call is decided on its own. Unless you enable the opt-in
+[session pin](#session-pin-for-jev), consecutive turns of one session can therefore land on
+different targets, and every switch starts a cold provider prompt
 cache, so a mix of very different targets can cost more input tokens than it saves. Keep the
 allowlist to targets you are content to alternate between. Targets marked `lastResort` are withheld
 from JEV under `cooldownWaitPolicy: "before-last-resort"` while any normal target is offered, and
@@ -590,6 +647,8 @@ rows show decision count, applied count, and average latency for `typesafe`, `sy
 ## What happens when a target fails
 
 Combo failures are divided into **hop** failures and **terminal** failures.
+To make a combo fail with a clear `fallback_refused` error instead of hopping to another model or
+provider, see [Fallback off](/guides/fallback-off/).
 
 | Result | Behavior |
 | --- | --- |
@@ -698,7 +757,11 @@ classify the original HTTP 403 as a hop.
 For streaming requests, the upstream HTTP status is not the final decision. OpenCodex buffers a
 bounded pre-output prefix of the selected child's Responses SSE. If the stream reports a retryable
 `response.failed` terminal before any text, reasoning, tool call, or other output event, the child
-is recorded as failed and the combo may try its next eligible target. Once any output event begins,
+is recorded as failed and the combo may try its next eligible target. A zero-output
+`response.incomplete` follows the same path when its reason is missing or is `adapter_eof`,
+`missing_terminal_event`, or `upstream_stall_timeout`. Explicit semantic reasons such as
+`max_output_tokens` and `content_filter` remain terminal, as does an explicit null reason.
+A reasonless final snapshot that already contains output items is also kept. Once any output event begins,
 the target is committed: a later stream failure is returned to the client and is never replayed on
 another provider, which prevents duplicate text and tool execution. If the pre-output buffer reaches
 its safety cap without a terminal or output boundary, OpenCodex also commits the current target
@@ -709,6 +772,22 @@ instead of growing memory without a bound.
 When routing Claude Code to the canonical ChatGPT Codex backend, OpenCodex removes the unsupported top-level `user` metadata field without changing the session/cache key, input messages, tool schemas, or safety identifiers. Public Responses API and noncanonical forward gateways keep that field.
 
 A combo can also advance after an intact HTTP 400 `invalid_request_error` that specifically rejects `user`, reports `unsupported_value` for `reasoning.effort`/`reasoning_effort`, or reports `param: input` with an exact model-scoped `does not support image inputs` rejection. A route that refuses the request's media with code `unsupported_input_modality`, such as image input sent to a CLI provider route without a verified multimodal contract, advances the same way. This is a mismatch for that request, not evidence that the target is unhealthy, so it records no cooldown. This compatibility recovery does not silently change `none` into a different effort or broaden this exception to arbitrary invalid requests. Policy refusals, cancellation and already-committed output remain non-replayable. A single-target request still returns an unresolved upstream rejection.
+
+## Tool calls stay on one target
+
+When a model asks your client to run a tool, the request that returns the tool result finishes the
+same assistant turn. OpenCodex sends that request to the target that issued the tool call, as long
+as the target is still enabled, still in the combo, and out of cooldown. This holds for every
+strategy, including JEV, which skips its decision for that request. The next user message chooses a
+target normally.
+
+Tracking uses the client's thread or session id, so a client that sends neither gets a normal pick.
+If the original target is unavailable or fails, the combo fails over as usual, and the new target
+receives the earlier tool calls in a form it accepts. DeepSeek thinking models get a one-space
+reasoning placeholder for a tool call that another model issued without reasoning. Gemini gets
+Google's documented signature placeholder. Anthropic gets a plain tool call and result. Earlier
+versions could send DeepSeek a bare tool call here and fail with `The reasoning_text in the
+thinking mode must be passed back to the API`.
 
 ## Default reasoning effort
 
@@ -841,7 +920,8 @@ ocx combo remove <id> --yes
 `set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
 `--allow-metered-targets on|off`, `--display-name`, `--description`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
 value of `--effort`, `--alias`, `--display-name`, `--description`, `--decision-provider`, or `--decision-timeout` to
-clear that field. The two decision flags apply only to `--strategy jev`. `--native-alias` requires a currently supported bare native
+clear that field. The two decision flags apply only when the effective strategy is JEV: `--strategy jev`, or a stored JEV combo when `--strategy` is omitted. On an existing combo, `--targets` replaces only
+the target list: without `--strategy` the stored strategy and its JEV settings stay as they are. `--native-alias` requires a currently supported bare native
 model alias and a non-empty display name. `create` and `update` are aliases for `set`; `delete` is an alias for
 `remove`; and the same subcommands are available under `ocx route combo`.
 

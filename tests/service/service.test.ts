@@ -410,6 +410,18 @@ describe("systemd service unit", () => {
     expect(unit).not.toContain("http_proxy=");
   });
 
+  test("Claude first-party's own intercept URL is never baked; a plain loopback proxy is", () => {
+    // A shell started by Claude Code inherits HTTPS_PROXY from ~/.claude/settings.json.
+    const own = "http://opencodex:tok@127.0.0.1:10200";
+    expect(resolvedProxyEnv({ HTTPS_PROXY: own }, own)).toEqual([]);
+    expect(resolvedProxyEnv({ HTTPS_PROXY: own, https_proxy: "http://127.0.0.1:7897" }, own))
+      .toEqual([{ name: "HTTPS_PROXY", value: "http://127.0.0.1:7897" }]);
+    expect(resolvedProxyEnv({ HTTPS_PROXY: "http://127.0.0.1:7897", HTTP_PROXY: "http://user:pw@127.0.0.1:7897" }))
+      .toEqual([{ name: "HTTP_PROXY", value: "http://user:pw@127.0.0.1:7897" }, { name: "HTTPS_PROXY", value: "http://127.0.0.1:7897" }]);
+    expect(resolvedProxyEnv({ HTTPS_PROXY: "http://opencodex:corporate-password@127.0.0.1:8080" }, own))
+      .toEqual([{ name: "HTTPS_PROXY", value: "http://opencodex:corporate-password@127.0.0.1:8080" }]);
+  });
+
   test("the Windows wrapper bakes proxy env the same way the unit and plist do (#2107)", () => {
     // This builder was the only one of the three with no proxy assertion, because the only way
     // to reach it was to assign process.env — the pattern that leaked HTTP_PROXY across files.
@@ -2283,12 +2295,13 @@ describe("service lifecycle cleanup ordering", () => {
       platform: "win32",
       diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }),
       managerOps,
+      killServiceWrappers: () => { calls.push("kill:wrappers"); },
       stopTrackedProxy: async () => { calls.push("stop:standalone"); },
     });
     expect(calls).toEqual([
       "status:scheduler", "stop:scheduler",
       "status:native", "stop:native",
-      "stop:standalone", "install:native",
+      "kill:wrappers", "stop:standalone", "install:native",
     ]);
   });
 
@@ -2396,6 +2409,7 @@ describe("service lifecycle cleanup ordering", () => {
             if (failure === "stop") throw new Error("stop failed");
           },
         }),
+        killServiceWrappers: () => {},
         stopTrackedProxy: async () => {
           if (failure === "standalone") throw new Error("standalone failed");
         },
@@ -2411,9 +2425,10 @@ describe("service lifecycle cleanup ordering", () => {
       platform: "win32",
       diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: false, startable: false, stale: false, conflict: true, backend: "scheduler", summary: "test" }),
       managerOps: backend => ({ status: () => "present", stop: () => { stopped.push(backend); } }),
+      killServiceWrappers: () => { stopped.push("wrappers"); },
       stopTrackedProxy: async () => {},
     });
-    expect(stopped).toEqual(["scheduler", "native"]);
+    expect(stopped).toEqual(["scheduler", "native", "wrappers"]);
   });
 
   test("direct service stop kills the tracked proxy before restoring native Codex", async () => {

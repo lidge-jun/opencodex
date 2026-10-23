@@ -46,6 +46,14 @@ export interface OcxReasoningReplayScopeRef {
   current?: Readonly<OcxReasoningReplayIdentity>;
 }
 
+/** One replayed hosted search cell, rebuilt as the `web_search` call/result pair `callId`. */
+export interface OcxReplayedWebSearchCell {
+  /** The client-visible cell id; absent when the cell carried no usable id (no recorded result). */
+  cellId?: string;
+  callId: string;
+  failed: boolean;
+}
+
 export interface OcxParsedRequest {
   modelId: string;
   /** Client-facing model selector retained for Anthropic routes after wire-model normalization. */
@@ -140,6 +148,7 @@ export interface OcxParsedRequest {
   _kiroAuthContext?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion" | "authType">;
   /** Account-scoped Zed user identity paired with the long-lived access token. */
   _zedAuthContext?: { userId: string };
+  _workbuddyAuthContext?: import("../oauth/types").WorkBuddyOAuthMetadata;
   /** Provider-private continuation metadata resolved from the Responses previous_response_id chain. */
   _providerContinuation?: OcxProviderContinuationState;
   /** Persisted continuation considered only after the final physical route is known. */
@@ -152,6 +161,12 @@ export interface OcxParsedRequest {
    * executes searches via the gpt-5.6-luna sidecar (see src/web-search). Absent when not requested.
    */
   _webSearch?: Record<string, unknown>;
+  /**
+   * Replayed hosted `web_search_call` cells the parser rebuilt as `web_search` call/result pairs
+   * (src/responses/web-search-replay.ts). The web-search sidecar swaps in the result it recorded for
+   * a cell, or removes the pairs when it does not run (src/web-search/sidecar-search-replay.ts).
+   */
+  _replayedWebSearchCells?: OcxReplayedWebSearchCell[];
   /** Hosted image_generation tool config stashed for the image bridge sidecar (see src/images). */
   _imageGeneration?: { toolNames: Set<string>; originalTool?: Record<string, unknown> };
   /**
@@ -308,8 +323,23 @@ export interface OcxDocumentContent {
   filename?: string;
 }
 
+/**
+ * Inline audio carried by Codex's Responses input. Chat Completions accepts this as an
+ * `input_audio` content part only for WAV and MP3 payloads, so the normalized form keeps the
+ * base64 bytes and a wire-safe format label rather than the original data URL.
+ */
+export interface OcxAudioContent {
+  type: "audio";
+  /** Base64 payload with no `data:` prefix. */
+  data: string;
+  /** Chat Completions input_audio supports WAV and MP3. */
+  format: "mp3" | "wav";
+  /** Text marker for wires that cannot carry the bytes. */
+  text: string;
+}
+
 /** A user/developer message content part: text, native media, or an attached document. */
-export type OcxContentPart = OcxTextContent | OcxImageContent | OcxVideoContent | OcxDocumentContent;
+export type OcxContentPart = OcxTextContent | OcxImageContent | OcxVideoContent | OcxDocumentContent | OcxAudioContent;
 
 export interface OcxThinkingContent {
   type: "thinking";
@@ -448,9 +478,10 @@ export type AdapterEvent =
   // "Searching the web" spinner, then `end` once it resolves. The bridge maps begin → an
   // output_item.added(in_progress) and end → the matching output_item.done(completed|failed) under
   // the SAME output index, so the activity animates instead of flashing completed instantly.
-  | { type: "web_search_call_begin"; id: string }
+  // `itemId` lets the loop name the client-visible cell so it can record the result for replay.
+  | { type: "web_search_call_begin"; id: string; itemId?: string }
   | {
-      type: "web_search_call_end"; id: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[];
+      type: "web_search_call_end"; id: string; itemId?: string; queries: string[]; status?: "completed" | "failed"; sources?: OcxUrlCitation[];
       /** Anthropic's server-side call (adapters/anthropic.ts): its `server_tool_use` and result block, verbatim. */
       anthropic?: AnthropicServerBlocks;
     }
@@ -510,6 +541,8 @@ export interface OcxUrlCitation {
  * - `cachedInputTokens` is cache READ tokens only (a subset of `inputTokens`).
  * - `cacheReadInputTokens`/`cacheCreationInputTokens` carry the read/write split when
  *   the provider reports both; reads mirror `cachedInputTokens`.
+ * - `cacheCreation1hInputTokens` is the 1-hour-TTL subset of `cacheCreationInputTokens`
+ *   (Anthropic `cache_creation.ephemeral_1h_input_tokens`), priced at the 1h write tier.
  * - `totalTokens` = inputTokens + outputTokens. Never re-add cache detail on top.
  */
 export interface OcxUsage {
@@ -527,6 +560,7 @@ export interface OcxUsage {
   cachedInputTokens?: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  cacheCreation1hInputTokens?: number;
   reasoningOutputTokens?: number;
   estimated?: boolean;
   /**

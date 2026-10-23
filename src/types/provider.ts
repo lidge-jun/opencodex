@@ -288,6 +288,8 @@ export interface ModelCapabilities {
   /** Requested tier only; does not imply an upstream window or activate an unverified wire. */
   contextTier?: "default" | "long_context";
   video?: { processing?: "static" | "agentic" };
+  /** Opt in exact first-party DeepSeek models to one-hour image file persistence. */
+  deepseekImageFiles?: boolean;
 }
 
 export interface OcxProviderConfig {
@@ -449,8 +451,9 @@ export interface OcxProviderConfig {
    */
   preserveResponsesMessageMetadata?: boolean;
   /**
-   * Opt in to lossy hosted-search history notes on ordinary canonical Codex Lite requests.
-   * Default off; only literal true enables it, and non-Lite/native compact stay unchanged.
+   * Opt in to lossy hosted-search history notes on canonical Codex Lite ordinary turns and
+   * native v2 compaction triggers, even when search is declared. Default off; only literal true
+   * enables it. History without a search declaration is always projected, independent of this.
    */
   projectResponsesLiteHostedSearchHistory?: boolean;
   /**
@@ -869,6 +872,14 @@ export interface OcxProviderConfig {
    */
   responsesSnapshotRepair?: boolean;
   /**
+   * Infer the commentary/final_answer phase on assistant messages for Responses passthrough
+   * providers whose upstream omits it (e.g. third-party gateways). Codex desktop collapses
+   * commentary into progress rows; without this every narration renders fully expanded.
+   * Disabled by default. Applies in the client-facing SSE rewrite chain, including
+   * buffered JSON reconstructed from upstream SSE; ordinary upstream JSON is unchanged.
+   */
+  messagePhaseInference?: boolean;
+  /**
    * Opt-in hosted-web-search bridge for this KEY-auth Responses passthrough provider (#3761).
    * Absent or disabled leaves the passthrough byte-identical to today.
    */
@@ -1113,7 +1124,7 @@ export interface OcxProviderConfig {
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   /** Google tool-schema compatibility policy. Omitted preserves compatible report-only behavior. */
   googleToolSchemaPolicy?: "compatible" | "reject-lossy";
-  /** Vertex AI GCP project id. API keys use it to select the project endpoint; ADC falls back to GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env. */
+  /** Vertex AI GCP project id. API keys use it to select the project endpoint; "auto" resolves each API key's own project. ADC falls back to GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env. */
   project?: string;
   /** Vertex AI location, e.g. "us-central1" or "global". API-key project endpoints default to "global"; ADC falls back to GOOGLE_CLOUD_LOCATION env. */
   location?: string;

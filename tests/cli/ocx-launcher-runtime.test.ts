@@ -3,7 +3,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { bundledBunPath } from "../../src/lib/bun-runtime";
 import { findDesktopCli, findPathBun, type PathBunIo } from "../../src/lib/bun-path-runtime.mjs";
@@ -11,6 +11,7 @@ import { REAL_BUN_MIN_BYTES } from "../../src/lib/bun-binary-validator.mjs";
 import { killProxy } from "../../src/lib/process-control";
 import { repoPath } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { trustedFixtureRoot } from "../helpers/trusted-fixture-root";
 
 const BIN_OCX = repoPath("bin", "ocx.mjs");
 const nodeAvailable = spawnSync("node", ["--version"], {
@@ -396,13 +397,9 @@ describe.skipIf(!runnable)("ocx package launcher effective Bun runtime", () => {
 });
 
 function pathFixtureRoot(prefix: string): string {
-  if (process.platform === "win32") return mkdtempSync(join(tmpdir(), prefix));
-  // A trusted-executable fixture cannot live beneath a shared temp ancestor whose
-  // owner is neither root nor this user (common in user-namespace sandboxes).
-  // Keep the launcher package isolated from this checkout's installed Bun.
-  const base = join(dirname(repoPath()), ".tmp", "path-bun-fixtures");
-  mkdirSync(base, { recursive: true, mode: 0o700 });
-  return mkdtempSync(join(base, prefix));
+  // A trusted-executable fixture needs an ancestry the product check accepts and no
+  // ancestor node_modules/bun; the helper picks such a base per host (#7402).
+  return trustedFixtureRoot(prefix);
 }
 
 function pathProbeFixture(platform: NodeJS.Platform = "linux", stdout = "1.4.0\n") {

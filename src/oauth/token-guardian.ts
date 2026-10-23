@@ -215,6 +215,13 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
       if (!record || record.deletedAt != null) continue;
       const cred = record.credential;
       if (!cred) continue;
+      // A grant the token endpoint already called revoked or expired cannot be refreshed; posting
+      // it again only buys another 401 per backoff window (#7592). The OAuth branch above skips
+      // needsReauth for the same reason. A re-login or a completed validation rewrites the record
+      // without the marker, which is what readmits the account. A source-linked credential spends
+      // no grant of its own, so it keeps the sweep, matching the quota probe's hold.
+      if (record.lastCodexValidationTerminal === true && record.lastCodexValidationStatus === "failed"
+        && !cred.sourceAuthPath) continue;
       const needsRefresh = cred.expiresAt <= nowMs + horizonMs;
       const needsWarmup = opts.codexWarmupEnabled
         && !record.codexValidationPending

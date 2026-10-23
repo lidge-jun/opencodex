@@ -458,6 +458,9 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         return;
       }
       if (terminal || settledPreOpen || signal?.aborted) return;
+      // New sockets have just validated their upgrade; retained sockets carry the
+      // same connection signal into a fresh exchange, never its predecessor's frames.
+      metadata?.seed(session.upgradeHeaders());
       sent = true;
       try {
         if (nativeControl) {

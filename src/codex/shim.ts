@@ -26,6 +26,7 @@ import {
 } from "./shim-templates";
 import {
   hasUsableBackingPath,
+  isCurrentShimProbe,
   isCurrentUnixShimProbe,
   isHealthyShimProbe,
   isVersionManagerOwnedCodexPath,
@@ -55,6 +56,7 @@ import {
   type UnixShimProbeResult,
 } from "./shim-probe";
 import { tryAcquireShimRestoreLock } from "./shim-restore-lock";
+import { refreshAdmittedWindowsShims, refreshObsoleteWindowsShim } from "./shim-windows-refresh";
 import {
   isWindowsInteropDir,
   isExecutableCodexCandidate,
@@ -348,24 +350,22 @@ function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry
  * updater's wrapper can carry them, and a replacement landing between the write
  * and the observation is otherwise indistinguishable from our own file.
  */
+/** The Windows wrapper for `wrapperPath`'s flavor (.ps1, .cmd/.bat, or extensionless Git-Bash sh). */
+function windowsShimContent(wrapperPath: string, realCodexPath: string, runtime?: DurableBunRuntime): string {
+  const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
+  const lower = wrapperPath.toLowerCase();
+  // UTF-8 BOM: Windows PowerShell 5.1 decodes BOM-less .ps1 files in the ANSI
+  // codepage, which mangles non-ASCII paths embedded in the shim.
+  if (lower.endsWith(".ps1")) return `\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli, bunRuntimeSource)}`;
+  if (lower.endsWith(".cmd") || lower.endsWith(".bat")) return buildWindowsCodexShim(realCodexPath, bun, cli, bunRuntimeSource);
+  // Extensionless Git-Bash sh launcher: sh shim with forward-slash paths.
+  return buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), bunRuntimeSource, gitBashPath(serviceApiTokenFilePath()));
+}
+
 function writeShim(wrapperPath: string, realCodexPath: string, runtime?: DurableBunRuntime): { dev: number; ino: number } | undefined {
   const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
   if (process.platform === "win32") {
-    const lower = wrapperPath.toLowerCase();
-    if (lower.endsWith(".ps1")) {
-      // UTF-8 BOM: Windows PowerShell 5.1 decodes BOM-less .ps1 files in the ANSI
-      // codepage, which mangles non-ASCII paths embedded in the shim.
-      writeFileSync(wrapperPath, `\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli, bunRuntimeSource)}`, "utf8");
-    } else if (lower.endsWith(".cmd") || lower.endsWith(".bat")) {
-      writeFileSync(wrapperPath, buildWindowsCodexShim(realCodexPath, bun, cli, bunRuntimeSource), "utf8");
-    } else {
-      // Extensionless Git-Bash sh launcher: sh shim with forward-slash paths.
-      writeFileSync(
-        wrapperPath,
-        buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), bunRuntimeSource, gitBashPath(serviceApiTokenFilePath())),
-        "utf8",
-      );
-    }
+    writeFileSync(wrapperPath, windowsShimContent(wrapperPath, realCodexPath, runtime), "utf8");
     return undefined;
   } else {
     // Stage the wrapper as its own inode and rename it into place, so ownership
@@ -508,6 +508,15 @@ function refreshShimFile(file: ShimFileState, runtime: DurableBunRuntime): boole
     replaceOwnedBackup(file.originalPath, file.backupPath);
     writeShim(file.wrapperPath, file.realPath ?? file.backupPath, runtime);
     return true;
+  }
+  // An owned Windows wrapper from an older template revision (e.g. one that loads the service
+  // token before honoring OCX_SHIM_BYPASS) is replaced over the same backing launcher through an
+  // ownership-checked stage-and-link transaction that never clobbers a concurrent replacement.
+  if (process.platform === "win32" && existsSync(file.wrapperPath) && isShim(file.wrapperPath) && hasUsableBackingPath(file)) {
+    const probe = stableShimPathProbe(file.wrapperPath);
+    if (probe && probe.prefix.includes(SHIM_MARKER) && !isCurrentShimProbe(probe, "win32")) {
+      return refreshObsoleteWindowsShim(file.wrapperPath, probe, () => windowsShimContent(file.wrapperPath, file.realPath ?? file.backupPath, runtime));
+    }
   }
   return false;
 }
@@ -884,7 +893,8 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
   if (filesBefore.length > 0 && filesBefore.every(file => {
     if (file.preserveOnly) return existsSync(file.backupPath) && !existsSync(file.originalPath);
     const probe = stableShimPathProbe(file.wrapperPath);
-    return hasUsableBackingPath(file) && probe !== null && isHealthyShimProbe(probe, process.platform);
+    return hasUsableBackingPath(file) && probe !== null && isHealthyShimProbe(probe, process.platform)
+      && (process.platform !== "win32" || isCurrentShimProbe(probe, "win32"));
   })) {
     return { installed: false, message: "Codex autostart shim is already installed." };
   }
@@ -934,6 +944,12 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
     }
     let refreshed = false;
     for (const file of files) refreshed = refreshShimFile(file, runtime) || refreshed;
+    // A Windows refresh that refused to publish over a concurrent replacement is not a success.
+    if (process.platform === "win32" && files.some(file => {
+      if (file.preserveOnly) return false;
+      const probe = stableShimPathProbe(file.wrapperPath);
+      return !probe || !probe.prefix.includes(SHIM_MARKER) || !isCurrentShimProbe(probe, "win32");
+    })) return { installed: false, message: "Codex shim refresh deferred because a tracked launcher changed during the refresh." };
     const allInstalled = files.every(file => file.preserveOnly
       ? existsSync(file.backupPath) && !existsSync(file.originalPath)
       : existsSync(file.wrapperPath)
@@ -1106,7 +1122,7 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
   const replacementProbes = new Map<string, StableShimPathProbe>();
   const obsoleteShimProbes = new Map<string, StableShimPathProbe>();
   const seen = new Set<string>();
-  let healthyCount = 0;
+  const currentShimProbes = new Map<string, StableShimPathProbe>();
   for (const file of files) {
     if (seen.has(file.wrapperPath)) return { status: "ineligible" };
     seen.add(file.wrapperPath);
@@ -1125,11 +1141,11 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
       if (!isHealthyShimProbe(probe, state.platform)) {
         return { status: "ineligible", message: destroyedShimMessage(file) };
       }
-      if (state.platform !== "win32" && !isCurrentUnixShimProbe(probe)) {
+      if (!isCurrentShimProbe(probe, state.platform)) {
         obsoleteShimProbes.set(file.wrapperPath, probe);
         continue;
       }
-      healthyCount += 1;
+      currentShimProbes.set(file.wrapperPath, probe);
       continue;
     }
     // A surviving backup would otherwise let the replacement path below wrap the
@@ -1143,7 +1159,10 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
 
   if (replacementProbes.size === 0 && obsoleteShimProbes.size === 0) return { status: "healthy" };
   if (!options.enabled()) return { status: "disabled" };
-  if (files.length > 1 && (healthyCount > 0 || (replacementProbes.size > 0 && obsoleteShimProbes.size > 0))) {
+  // Windows current + obsolete siblings (a partial revision upgrade) resume: only the obsolete
+  // wrappers are refreshed, so a transient publish failure cannot block recovery forever.
+  const revisionOnlyMix = state.platform === "win32" && replacementProbes.size === 0;
+  if (files.length > 1 && ((currentShimProbes.size > 0 && !revisionOnlyMix) || (replacementProbes.size > 0 && obsoleteShimProbes.size > 0))) {
     return {
       status: "deferred",
       message: "Codex shim auto-restore deferred because tracked launcher siblings are in a mixed shim/replacement state.",
@@ -1166,8 +1185,13 @@ export function autoRestoreCodexShim(options: RuntimePreflightDeps & {
     if (obsoleteShimProbes.size > 0) {
       for (const [path, firstProbe] of obsoleteShimProbes) {
         const secondProbe = stableShimPathProbe(path);
-        if (!secondProbe || isCurrentUnixShimProbe(secondProbe)
+        if (!secondProbe || isCurrentShimProbe(secondProbe, state.platform)
           || !sameStableShimPathProbe(firstProbe, secondProbe)) return { status: "deferred" };
+      }
+      if (state.platform === "win32") {
+        const realFor = (path: string) => { const file = files.find(entry => entry.wrapperPath === path)!; return file.realPath ?? file.backupPath; };
+        return refreshAdmittedWindowsShims(obsoleteShimProbes, currentShimProbes, path => windowsShimContent(path, realFor(path), runtime))
+          ? { status: "restored", message: `Upgraded Codex autostart shim at ${[...obsoleteShimProbes.keys()].join(", ")}.` } : { status: "deferred" };
       }
       const result = refreshObsoleteUnixShims(files);
       return result.installed

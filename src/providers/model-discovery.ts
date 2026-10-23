@@ -1,3 +1,4 @@
+import { extractWorkBuddyModels } from "./workbuddy-models";
 import type { OcxProviderConfig } from "../types";
 import {
   isValidModelDiscoveryModelId,
@@ -513,6 +514,7 @@ export function extractProviderModelItems(
   discovery: ResolvedProviderModelDiscovery,
 ): ProviderModelItemsResult {
   const limit = positiveIntegerAtMost(discovery.maxModels, MODEL_DISCOVERY_MAX_MODELS);
+  if (discovery.spec?.format === "workbuddy") return extractWorkBuddyModels(value, limit);
   let data: unknown[];
   let siblings: SiblingIndex | null = null;
   if (Array.isArray(value)) {

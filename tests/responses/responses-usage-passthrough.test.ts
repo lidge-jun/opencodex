@@ -148,6 +148,20 @@ describe("raw usage passthrough (openai/codex#41980 parity)", () => {
     expect(usage.input_tokens_details).toEqual({ audio_tokens: 7, cached_tokens: 1 });
   });
 
+  test("a 1-hour cache-write share from a Responses upstream survives the round trip", async () => {
+    const adapter = createAdapter(provider as never);
+    const events = await collect(adapter.parseStream!(completedSse({
+      input_tokens: 50, output_tokens: 2, total_tokens: 52,
+      input_tokens_details: { cached_tokens: 0, cache_write_tokens: 40, cache_write_1h_tokens: 40 },
+    })));
+    const done = events.find(event => event.type === "done");
+    expect(done?.usage).toMatchObject({ cacheCreationInputTokens: 40, cacheCreation1hInputTokens: 40 });
+    expect(done?.usage?.rawUsage).toBeUndefined();
+    const json = buildResponseJSON([{ type: "text_delta", text: "hi" }, done!], "gpt-live");
+    expect((json.usage as { input_tokens_details: unknown }).input_tokens_details)
+      .toMatchObject({ cache_write_tokens: 40, cache_write_1h_tokens: 40 });
+  });
+
   test("empty-completion retry merge keeps the content attempt's raw usage", async () => {
     const { mergeUsage } = await import("../../src/server/responses/empty-completion-guard");
     const first = { inputTokens: 0, outputTokens: 0, rawUsage: { marker: "first" } };

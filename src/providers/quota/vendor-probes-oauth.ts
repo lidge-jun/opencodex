@@ -8,7 +8,7 @@ import { captureOAuthAccountSelection, credentialGeneration, getAccountCredentia
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
-import { readAnthropicUsageQuota } from "../claude-cli-usage";
+import { probeAnthropicUsageQuota, type AnthropicUsageProbe } from "../claude-cli-usage";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
   commitKiroAccountUsageState,
@@ -227,7 +227,7 @@ export async function fetchXaiQuota(provider: string, context: { accessToken: st
   }
 }
 
-const anthropicUsageInflight = new Map<string, Promise<ProviderQuota | null>>();
+const anthropicUsageInflight = new Map<string, Promise<AnthropicUsageProbe>>();
 
 /**
  * Anthropic per-credential usage.
@@ -256,6 +256,15 @@ export async function fetchAnthropicUsageQuotaForInstance(
   accessToken: string,
   requireFreshDispatch = false,
 ): Promise<ProviderQuota | null> {
+  return (await fetchAnthropicUsageProbeForInstance(instance, accessToken, requireFreshDispatch)).quota;
+}
+
+/** The same shared flight as `fetchAnthropicUsageQuotaForInstance`, keeping the closed failure reason. */
+export async function fetchAnthropicUsageProbeForInstance(
+  instance: AnthropicInstanceId,
+  accessToken: string,
+  requireFreshDispatch = false,
+): Promise<AnthropicUsageProbe> {
   // Recovery evidence must be requested after the claimed cooldown. Joining an older request
   // can return after the 429 while still describing provider state from before that refusal.
   const credentialIdentity = getAccountSet(instance)?.accounts.filter(row => row.credential.access === accessToken)
@@ -264,7 +273,7 @@ export async function fetchAnthropicUsageQuotaForInstance(
   const joinable = requireFreshDispatch ? undefined : anthropicUsageInflight.get(key);
   if (joinable) return joinable;
 
-  const probe = readAnthropicUsageQuota(accessToken).finally(() => {
+  const probe = probeAnthropicUsageQuota(accessToken).finally(() => {
     if (anthropicUsageInflight.get(key) === probe) anthropicUsageInflight.delete(key);
   });
   anthropicUsageInflight.set(key, probe);

@@ -1,5 +1,5 @@
 import { openCodeZenGeminiEndpoint } from "../types/opencode-zen";
-import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
+import type { AdapterFetchContext, AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
 import { openCodeGoGeminiEndpoint } from "../types/opencode-go";
@@ -37,6 +37,7 @@ import {
 } from "./google-antigravity-replay";
 import { canonicalAntigravityUsageModel, resolveAntigravityEffortWireModel } from "../providers/antigravity-models";
 import { selectVertexEndpoint, vertexInferenceUrl, vertexReplayModelKey } from "./google-vertex-endpoint";
+import { resolveVertexApiKeyProject, VERTEX_PROJECT_AUTO } from "./google-vertex-key-project";
 import { forgetThoughtSignatureForReplay, lookupReplayThoughtSignature } from "../responses/thought-signature-replay";
 import {
   isTranslatorBudgetExceededError,
@@ -378,6 +379,7 @@ function messagesToGeminiFormat(
   stripRejectedClaudeSdkParagraph = false,
   isCloudCodeAssist = false,
   nestToolResultImages = false,
+  toolResponseImagesLast = false,
 ): { systemInstruction?: unknown; contents: unknown[]; replayedCallIds: string[] } {
   // Neutralize Codex's GPT-5 identity line (Gemini/Antigravity share this path) so a routed model
   // never misreports as GPT-5/OpenAI, and never leaks the proxy identity upstream.
@@ -557,11 +559,17 @@ function messagesToGeminiFormat(
           }
 
           const responseParts: unknown[] = [];
+          const trailingImages: unknown[] = [];
           for (const call of toolCalls) {
             const result = resultsById.get(call.wireCallId);
-            if (result) responseParts.push(...geminiToolResultParts(result, call.wireName, call.wireCallId, nestToolResultImages));
-            else responseParts.push(geminiMissingToolResultPart(call.wireName, call.wireCallId));
+            if (result) {
+              const [response, ...images] = geminiToolResultParts(result, call.wireName, call.wireCallId, nestToolResultImages);
+              responseParts.push(response);
+              (toolResponseImagesLast ? trailingImages : responseParts).push(...images);
+            } else responseParts.push(geminiMissingToolResultPart(call.wireName, call.wireCallId));
           }
+          // CCA Claude misses later responses when image siblings interrupt the response batch.
+          responseParts.push(...trailingImages);
           const orphanParts = orphanResults.flatMap(geminiOrphanToolResultParts);
           contents.push({ role: "user", parts: responseParts });
           // Orphan images cannot share Argon's response batch or claim another call's ownership.
@@ -985,7 +993,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       : {}),
 
     /** Compile an admitted request into the selected Gemini endpoint, body and authentication. */
-    async buildRequest(parsed: OcxParsedRequest) {
+    async buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       // Structured-output admission runs FIRST, before messagesToGeminiFormat writes
       // lastInjectedCallIds/lastReasoningReplayScope: a refused request must not leave
       // adapter-scoped replay state pointing at call ids that never went out. These
@@ -1026,7 +1034,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         : provider.googleMode === "vertex" || openCodeZenGeminiEndpoint(provider, parsed.modelId) !== undefined
           ? parsed.modelId
           : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
-      returnsThoughtSummaries = provider.googleMode === "cloud-code-assist"
+      const configuredEfforts = configuredReasoningEfforts(provider, parsed.modelId);
+      const thinkingEligible = provider.googleMode !== "cloud-code-assist"
+        && !isImageCapableModel(parsed.modelId)
+        && (configuredEfforts !== undefined
+          ? configuredEfforts.length > 0
+          : (provider.googleMode !== "vertex"
+            && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")));
+      returnsThoughtSummaries = (provider.googleMode === "cloud-code-assist" || (thinkingEligible && provider.showThinkingSummary === true))
         && /^gemini-/.test(routedModelId) && !isImageCapableModel(parsed.modelId);
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
       const identityModelId = provider.googleMode === "cloud-code-assist" ? routedModelId : parsed.modelId;
@@ -1039,6 +1054,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
         provider.googleMode === "vertex" && parsed.modelId === "gemini-4-argon",
+        isCloudCodeAssist && /^claude-/i.test(routedModelId),
       );
       lastInjectedCallIds = [...replayedCallIds];
       lastReasoningReplayScope = parsed._reasoningReplayScope;
@@ -1065,15 +1081,19 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // current behavior; Vertex participates only through an explicitly configured ladder (the
       // seed google-vertex entry ships none). Image models are excluded — thinkingConfig would
       // suppress the responseModalities fallback below. CCA maps effort on its envelope path.
-      const thinkingEligible = provider.googleMode !== "cloud-code-assist"
-        && !isImageCapableModel(parsed.modelId)
-        && (configuredReasoningEfforts(provider, parsed.modelId) !== undefined
-          || (provider.googleMode !== "vertex"
-            && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")));
       const thinkingLevel = thinkingEligible
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
-      if (thinkingLevel) generationConfig.thinkingConfig = { thinkingLevel };
+      const includeThoughts = thinkingEligible
+        && provider.showThinkingSummary === true
+        && parsed.options.hideThinkingSummary !== true
+        && /^gemini-/.test(routedModelId);
+      if (thinkingLevel || includeThoughts) {
+        generationConfig.thinkingConfig = {
+          ...(thinkingLevel ? { thinkingLevel } : {}),
+          ...(includeThoughts ? { includeThoughts: true } : {}),
+        };
+      }
       if (!generationConfig.thinkingConfig && isImageCapableModel(parsed.modelId)) {
         generationConfig.responseModalities = ["TEXT", "IMAGE"];
       }
@@ -1206,7 +1226,16 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;
         const apiKey = resolveVertexApiKey(provider.apiKey);
-        const vertexEndpoint = selectVertexEndpoint(provider, Boolean(apiKey));
+        let vertexEndpoint = selectVertexEndpoint(provider, Boolean(apiKey));
+        if (apiKey && vertexEndpoint.kind === "project" && vertexEndpoint.project === VERTEX_PROJECT_AUTO) {
+          // Unresolved keys use express for this request so Google's status drives key failover.
+          const project = await resolveVertexApiKeyProject(apiKey, {
+            signal: incoming?.abortSignal,
+            provider,
+            providerName: incoming?.providerName,
+          });
+          vertexEndpoint = project ? { ...vertexEndpoint, project } : { kind: "express" };
+        }
         const url = vertexInferenceUrl(vertexEndpoint, parsed.modelId, method, streamParam);
         vertexReplayModel = vertexReplayModelKey(vertexEndpoint, parsed.modelId);
         vertexReplaySession = vertexReplaySessionId(parsed);
@@ -1254,6 +1283,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
       reportToolSchemaLoss(compiled.toolSchemaLossReport);
       restoreGoogleToolName = compiled.restoreToolName;
+      // A functionCall issued by another model (a combo hop, #7298) has no Gemini signature, and
+      // Gemini 3 refuses the turn without one. The same Gemini-only sentinel CCA and Vertex
+      // apply; a real signature carried by history always wins.
+      if (Array.isArray((compiled.body as { contents?: unknown[] }).contents)) {
+        applyAntigravityThoughtSignatureFallback(routedModelId, (compiled.body as { contents: unknown[] }).contents);
+      }
       return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
     },
 

@@ -836,7 +836,23 @@ Failed compaction returns no replacement history.
 The percentage/token limits bound reasoning returned in context, **not cumulative archive storage**.
 Each archive contains only readable reasoning admitted in that request; request admission is bounded
 by `maxInboundBodyBytes` (256 MiB by default, configurable up to 512 MiB), plus small block separators.
-There is **no aggregate archive byte/file limit, automatic expiry, or background archive cleanup**.
+The archive directory has a separate compiled-in ceiling of **512 MiB and 256 files**, counting
+committed archives, provisional remnants, and other regular files in that directory. A bounded
+streaming scan stops once refusal is certain; nonregular or uninspectable entries refuse closed.
+A sibling SQLite transaction serializes the scan, exclusive creation, write, and close across
+cooperating writers. The capacity check runs **before a new archive payload is written**;
+acquiring the lock and recording local ownership can still write lock or metadata files.
+This ceiling is not a physical free-space guarantee and does not enforce writes by older builds
+or external tools. There is **no automatic expiry or background archive cleanup**.
+
+If the archive is full, routed compaction refuses the new payload with HTTP 503
+`reasoning_archive_quota_exceeded`: review and manually remove older archives before retrying
+the unchanged request. HTTP 503 `reasoning_archive_busy` means another writer holds the lock;
+wait for it to finish and retry. HTTP 503 `reasoning_archive_unavailable` requires checking
+directory permissions and storage health. These responses do not expose filesystem paths or
+raw causes and do not invent a Retry-After delay. A refused archive does not truncate reasoning
+or delete earlier files, and failed compaction returns no replacement history.
+
 Successful archives remain until you manually delete their files, including after disabling retention
 or resetting the setting. They are plaintext, contain potentially sensitive conversation reasoning,
 and share the resolved OpenCodex home of that proxy instance. Deleting an archive makes any existing

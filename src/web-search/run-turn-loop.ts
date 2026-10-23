@@ -43,6 +43,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { jsonUtf8Bytes } from "../lib/json-byte-size";
+import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResults } from "./sidecar-search-replay";
 
 export interface RunTurnWebSearchDeps {
   parsed: OcxParsedRequest;
@@ -77,6 +78,8 @@ export interface RunTurnWebSearchDeps {
  * active: same request plus the synthetic tool so the model can ask to search.
  */
 export function runTurnWebSearchInitialParsed(parsed: OcxParsedRequest): OcxParsedRequest {
+  // Runs before the first dispatch: put recorded results back into replayed search pairs (#7269).
+  restoreSidecarSearchResults(parsed);
   return {
     ...parsed,
     context: {
@@ -296,6 +299,7 @@ export async function* runTurnWebSearchLoop(
   ): AsyncGenerator<AdapterEvent> {
     const results: { query: string; outcome: SidecarOutcome }[] = [];
     let beganCell = false;
+    const cellItemId = newSidecarSearchCellId();
     if (call.queries.length === 0) {
       searchesExecuted++;
       results.push({ query: "", outcome: { text: "", sources: [], error: "the model called web_search with an empty query" } });
@@ -318,7 +322,7 @@ export async function* runTurnWebSearchLoop(
       } else {
         if (!beganCell) {
           beganCell = true;
-          yield { type: "web_search_call_begin", id: call.id };
+          yield { type: "web_search_call_begin", id: call.id, itemId: cellItemId };
         }
         if (abortSignal?.aborted) {
           yield { type: "web_search_call_end", id: call.id, queries: call.queries, status: "failed" };
@@ -358,12 +362,14 @@ export async function* runTurnWebSearchLoop(
       timestamp: now,
     });
     const allFailed = results.every(r => !!r.outcome.error);
+    const resultText = formatWebSearchResults(results, !!parsed._structuredOutput);
     appendMessage({
       role: "toolResult", toolCallId: call.id, toolName: WEB_SEARCH_TOOL_NAME,
-      content: formatWebSearchResults(results, !!parsed._structuredOutput),
+      content: resultText,
       isError: allFailed, timestamp: now,
     });
     if (beganCell) {
+      rememberSidecarSearch(parsed, cellItemId, { id: call.id, arguments: callArgs }, resultText);
       const anySuccess = results.some(r => !r.outcome.error);
       const sources: { url: string; title?: string }[] = [];
       const seenSrc = new Set<string>();
@@ -375,7 +381,7 @@ export async function* runTurnWebSearchLoop(
         }
       }
       yield {
-        type: "web_search_call_end", id: call.id,
+        type: "web_search_call_end", id: call.id, itemId: cellItemId,
         queries: call.queries,
         status: anySuccess ? "completed" : "failed",
         ...(sources.length > 0 ? { sources } : {}),

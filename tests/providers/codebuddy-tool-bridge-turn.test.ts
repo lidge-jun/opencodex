@@ -9,6 +9,7 @@ import type { ChildProcess } from "node:child_process";
 import { createCodeBuddyAdapter, type SpawnFn } from "../../src/adapters/codebuddy/adapter";
 import { buildCodeBuddyToolBridge } from "../../src/adapters/codebuddy/tool-bridge";
 import { CODEBUDDY_GLOBAL_PROFILE, clearCodeBuddyBinaryCache } from "../../src/adapters/codebuddy/profiles";
+import { runCodingAgentTurn } from "../../src/adapters/coding-agent/turn";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -970,5 +971,36 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(controller.signal.aborted).toBe(true);
     expect(charges).toBe(2);
     expect(translatorBudget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
+  });
+
+  test("a cli-output-error observer that throws cannot drop the client's terminal error", async () => {
+    const stderrText = "stderr refusal text on process exit";
+    const child = new EventEmitter() as FakeChild;
+    child.stdout = Readable.from([]);
+    child.stderr = Readable.from([enc.encode(stderrText)]);
+    child.stdin = new Writable({ write(_chunk, _enc, cb) { cb(); } });
+    child.killed = false;
+    child.exitCode = null;
+    child.kill = () => { child.killed = true; return true; };
+    setTimeout(() => { child.exitCode = 1; child.emit("close", 1); }, 3);
+
+    const events: AdapterEvent[] = [];
+    const observed: string[] = [];
+    await runCodingAgentTurn({
+      profiles: [CODEBUDDY_GLOBAL_PROFILE],
+      provider: provider(),
+      parsed: parsed(),
+      incoming: incoming(),
+      emit: e => events.push(e),
+      onCliOutputError: message => { observed.push(message); throw new Error("observer failure"); },
+      buildArgs: () => [],
+      buildEnv: () => ({}),
+      deps: { spawn: () => child as unknown as ChildProcess, which: () => "/usr/bin/codebuddy", killGraceMs: 10, reapTimeoutMs: 50 },
+    });
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toContain(stderrText);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "error", code: "process_exit_error", retryable: false });
+    expect(events[0].type === "error" ? events[0].message : "").toContain(stderrText);
   });
 });

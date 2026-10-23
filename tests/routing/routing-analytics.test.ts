@@ -245,7 +245,7 @@ describe("routing analytics (RI-03)", () => {
     expect(result.cooldownTriggeringFailures).toBe(1);
   });
 
-  test("ignores malformed attempts while preserving explicit 429 classification", async () => {
+  test("ignores malformed attempts for failure classification and successful-row pricing", async () => {
     appendUsageEntry(entry("baseline", { timestamp: 1, status: 200, durationMs: 10 }));
     const historicalRows = [
       {
@@ -264,11 +264,12 @@ describe("routing analytics (RI-03)", () => {
         ...entry("malformed-429", { timestamp: 5, status: 429, durationMs: 50 }),
         attempts: { recoveryKinds: ["unknown"] },
       },
+      { ...entry("malformed-success", { timestamp: 6, status: 200, durationMs: 60 }), attempts: { length: 1 } },
     ];
     appendFileSync(usageLogPath(), `${historicalRows.map(row => JSON.stringify(row)).join("\n")}\n`);
 
     const result = await computeRoutingAnalytics({});
-    expect(result.totalRequests).toBe(5);
+    expect(result.totalRequests).toBe(6);
     expect(result.cooldownTriggeringFailures).toBe(1);
   });
 

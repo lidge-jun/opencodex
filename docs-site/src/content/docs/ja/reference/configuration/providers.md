@@ -53,7 +53,7 @@ GUI で登録または OAuth ログインが完了すると、Models ページ�
 | `codexWsReuseAcrossTurns?` | `boolean` | `false` | 同一アカウントとスレッドで Codex WebSocket をターンをまたいで再利用します。既定はオフ。オンにすると忙しいソケットを最大750ms待ち、モデルやティアの変更では最大2本を残します。 |
 | `upstreamHostCircuitThreshold?` | `number` | `0` | ネイティブOpenAI forwardのResponses送信とcompact送信で、実証済みの接続前DNS/TCP障害に適用するオプトインのサーキットしきい値です。`0`で無効、`1`〜`20`ではその回数の終端論理リクエストが失敗するとprovider-originを30秒間遮断します。遮断中はアカウント選択やupstream送信の前に`Retry-After`付き`503`を返し、時間経過後はhalf-openリクエストを1件だけ許可します。タイムアウトとHTTP応答は数えず、HTTP応答が1件でもあれば回路を閉じます。 Codex Pool ルーティングでアカウントが固定されていない場合にのみ適用され、`codexAccountMode: "direct"` とアカウント修飾セレクターでは動作しません。 |
 | `modelCacheTtlMs?` | `number` | `300000` |プロバイダーごとの `/models` キャッシュの鮮度ウィンドウ。 |
-| `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。 |
+| `cacheRetention?` | `"none" \| "short" \| "long"` | Anthropic ファーストパーティ: `"long"`、その他の Anthropic 互換エンドポイント: `"short"` | Anthropic プロンプト キャッシュ ポリシー: 無効、5 分間の一時的、または 1 時間の延長。未設定の場合、`api.anthropic.com`（API キーまたは OAuth アカウント プール）へのリクエストは 1 時間の TTL を使い、互換ゲートウェイやベンダーのエンドポイントは 5 分の TTL のままです。明示した値が常に優先されます。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` |オフ |オプションのプロアクティブな OAuth 更新および Codex アカウントのウォームアップ ポリシー。 |
 
 各戦略で使う実効しきい値は、アカウントの `codexAccountAutoSwitchThresholds` があればその値、なければグローバルの `autoSwitchThreshold` です。0 は使用量による先行切り替えだけを無効にし、起動時のバインド、ハードロック、クールダウン、モデル利用資格の確認、障害復旧は引き続き適用されます。
@@ -140,7 +140,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `noStopModels?` | `string[]` |発信者指定の`stop`を拒否するモデル。`openai-chat`アダプター、Chatパススルー、Responsesパススルーはこれらのモデルに対してこのフィールドを送りません。組み込みの`xai`プリセットは、xAIがこれを拒否すると文書化している推論モデル(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)をここに登録します。`grok-4.20-0309-non-reasoning`, `grok-composer-2.5-fast`は呼び出し元の`stop`をそのまま受け取ります。 |
 | `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 組み込みの`xai`プリセットは、xAIがこれらを拒否すると文書化している推論モデル(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)をここに登録します。非推論モデルは呼び出し元のペナルティをそのまま受け取ります。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` エンドポイントが `response_format` を拒否する正確なモデル ID。要求モデルが項目と完全一致する場合だけフィールドを省略し、その他の `openai-chat` モデルでは structured-output 変換を維持します。 |
-| `noJsonSchemaModels?` | `string[]` | `openai-chat` エンドポイントが `json_schema` 形式は拒否しつつ `json_object` は受け入れる正確なモデル ID。この要求はフィールドを削除せず `json_object` に降格して送るため、JSON を求めた呼び出し側は散文ではなく JSON を受け取れます。両方の一覧に載るモデルでは `noStructuredOutputModels` が優先します。`opencode go` / `opencode zen` / `opencode free` プリセットが DeepSeek 経路に既定で載せます。 |
+| `noJsonSchemaModels?` | `string[]` | `openai-chat` エンドポイントが `json_schema` 形式は拒否しつつ `json_object` は受け入れる正確なモデル ID。この要求はフィールドを削除せず `json_object` に降格して送るため、JSON を求めた呼び出し側は散文ではなく JSON を受け取れます。両方の一覧に載るモデルでは `noStructuredOutputModels` が優先します。`opencode go` / `opencode zen` プリセットが DeepSeek 経路に既定で載せます。 |
 | `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` の宛先が `developer` ロールを受け付けるかを記録します。`foldDeveloperRoleToSystem` が未設定なら `system`、`true` なら `system`、`false` なら `developer` として送ります。未設定はこの宛先について何も記録されていないことを意味し、`true` は上流がロールを拒否する記録、`false` は受け付ける記録です。いずれの場合もメッセージは会話内の位置を保ち、変わるのはロールだけです。ロールを拒否する宛先は `400 role 'developer' is not allowed` を返してターンが始まらないため、未記録の既定は畳む側にしてあります。 |
 | `parallelToolCalls?` | `boolean` |並列ツール呼び出しを切り替えます。 OpenAI Chat はデフォルトでオンになっています。非チャット アダプターは明示的な `true` でのみアドバタイズします。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` |正確なプレースホルダー ID、欠落している端末 ID、および（`repairInvalidIds` で）正規の `msg_`/`rs_` 接頭辞を欠く message/reasoning ID に対するダウンストリーム SSE 修復はデフォルトで無効になっています。関数呼び出し ID は決して書き換えられません。組み込み DeepSeek は最後の 2 つをデフォルトで有効にします。 |
@@ -159,7 +159,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `anthropicEofTolerance?` | `boolean` | `message_stop` 前にストリームが終了しても、可視テキストまたは完全な JSON オブジェクトのツール入力が受信済みの場合に限り完了を許可します（Anthropic 互換ゲートウェイ向け）。デフォルトはオフ。 |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google トランスポート/認証モード。デフォルトは`ai-studio`です。 |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google 専用です。省略時または `compatible` は互換スキーマと既存の非直接 400 修復を維持します。`reject-lossy` は初期損失または判定不能な上限付き比較を送信前に拒否し、制約を開く Vertex／Cloud Code Assist 修復を保留します。直接 AI Studio はこの修復を行いません。 |
-| `project?` | `string` | Vertex または Antigravity Cloud Code Assist プロジェクト ID。Vertex の API キーは、これが設定されているとプロジェクトエンドポイントを使い、未設定なら `GOOGLE_CLOUD_PROJECT` があっても express モードを使います。ADC は `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` にフォールバックします。 |
+| `project?` | `string` | Vertex または Antigravity Cloud Code Assist プロジェクト ID。Vertex の API キーは、これが設定されているとプロジェクトエンドポイントを使い、未設定なら `GOOGLE_CLOUD_PROJECT` があっても express モードを使います。ADC は `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` にフォールバックします。`"auto"` を指定すると、Vertex の各 API キーが自身のプロジェクトを解決します（解決に成功した結果はキーごとにキャッシュし、解決に失敗したキーは後続のリクエストで再度プローブします）。1 つのキープールで複数プロジェクトを扱えます。ADC は `"auto"` を拒否します。 |
 | `location?` | `string` | Vertex のロケーション。API キーのプロジェクトエンドポイントは既定で `global` を使い、`GOOGLE_CLOUD_LOCATION` を無視します。ADC にはこの値か `GOOGLE_CLOUD_LOCATION` フォールバックが必要です。 |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` |カーソルのみ: 標準入出力またはストリーミング可能な HTTP MCP サーバー。 |
 | `desktopExecutor?` | `DesktopExecutorConfig` |カーソルのみ: 外部コンピュータ使用および画面録画コマンド。 |

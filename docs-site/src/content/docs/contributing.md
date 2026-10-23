@@ -45,7 +45,7 @@ bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
 ```
 
-The suite uses Bun 1.4.3 (`package.json`'s `testRunnerBun`) while the shipped runtime is 1.4.2.
+The suite uses Bun 1.4.3 (`package.json`'s `testRunnerBun`) while the shipped runtime is 1.4.4.
 `scripts/test.ts` finds a 1.4.3 binary on PATH or in `~/.bun/bin`, or uses `OCX_TEST_RUNNER_BUN`.
 Install that version locally if it is missing; the resolver never downloads it.
 

@@ -13,6 +13,7 @@ import type { AdapterEvent } from "../../types";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { responsesUsage } from "../../bridge/internal";
 import {
+  appendedUtf8Bytes,
   chatCompletionsErrorResponse,
   chatCompletionsFailedResponse,
   chatCompletionsIncompleteOutcome,
@@ -32,6 +33,7 @@ import {
   type ClientWireWriter,
 } from "./adapter-events";
 import type { RelayedEventObservation } from "../../usage/attempt-delivery";
+import { reasoningDetailEntries } from "../../chat/reasoning-details";
 
 type Rec = Record<string, unknown>;
 
@@ -54,6 +56,41 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string): Clien
   const emittedToolIndexes = new Set<number>();
   let nextToolIndex = 0;
   let staged: { text: string; observation?: RelayedEventObservation }[] | undefined;
+  // #7429: the shown thinking text of the open reasoning item, which its signature pairs with.
+  const budget = sink.budget;
+  let reasoningItemId: string | undefined;
+  let reasoningText = "";
+  let reasoningTextBytes = 0;
+  let nextReasoningDetailIndex = 0;
+  const releaseReasoningText = () => {
+    budget.releaseRetained(reasoningTextBytes, { kind: "reasoning" });
+    reasoningItemId = undefined;
+    reasoningText = "";
+    reasoningTextBytes = 0;
+  };
+  const retainReasoningText = (itemId: string, delta: string) => {
+    if (reasoningItemId !== itemId) releaseReasoningText();
+    reasoningItemId = itemId;
+    const nextBytes = appendedUtf8Bytes(reasoningText, reasoningTextBytes, delta);
+    const reservation = budget.reserveTransient(nextBytes, { kind: "reasoning" });
+    try {
+      reasoningText += delta;
+      reservation.commitRetained();
+      budget.releaseRetained(reasoningTextBytes, { kind: "reasoning" });
+      reasoningTextBytes = nextBytes;
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
+  };
+  const emitReasoningDetails = (entries: Rec[]) => {
+    if (entries.length === 0) return;
+    nextReasoningDetailIndex += entries.length;
+    ensureRole();
+    const frame = chunkBase(id, model, created);
+    frame.choices = [{ index: 0, delta: { reasoning_details: entries }, finish_reason: null }];
+    emit(frame);
+  };
 
   const emit = (payload: Rec | "[DONE]", observation?: RelayedEventObservation) => {
     if (failed) return;
@@ -138,15 +175,30 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string): Clien
       emit(frame, { semanticBytes: Buffer.byteLength(delta) });
     },
     messageDone() { /* the converter reads nothing from a finished message */ },
-    reasoning(delta) {
+    reasoning(delta, itemId, channel) {
       if (!delta) return;
       ensureRole();
       // Many OpenAI-compatible clients accept reasoning_content; harmless if ignored.
       const frame = chunkBase(id, model, created);
       frame.choices = [{ index: 0, delta: { reasoning_content: delta }, finish_reason: null }];
       emit(frame, { semanticBytes: Buffer.byteLength(delta) });
+      // Only summary-channel thinking can carry a signature; raw reasoning never does.
+      if (channel === "summary") retainReasoningText(itemId, delta);
     },
-    reasoningDone() { /* reasoning items carry nothing a Chat client reads */ },
+    reasoningDone({ itemId, signature, redacted, hidden }) {
+      // The bridge converter's output_item.done for a reasoning item (#7429), entry for entry.
+      const entries = reasoningDetailEntries({
+        text: reasoningItemId === itemId ? reasoningText : "",
+        ...(signature ? { signature } : {}),
+        ...(redacted ? { redacted } : {}),
+        ...(hidden ? { hidden } : {}),
+      }, nextReasoningDetailIndex);
+      releaseReasoningText();
+      emitReasoningDetails(entries);
+    },
+    progressThinking(text, signature) {
+      emitReasoningDetails(reasoningDetailEntries({ text, signature }, nextReasoningDetailIndex));
+    },
     toolStart(call) {
       // Custom and tool-search calls have no Chat representation; the converter skips them.
       if (call.kind !== "function") return;
@@ -198,7 +250,7 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string): Clien
         type: "upstream_error",
       });
     },
-    dispose() { /* nothing retained beyond the driver's frames */ },
+    dispose() { releaseReasoningText(); },
   };
 }
 

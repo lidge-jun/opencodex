@@ -65,7 +65,9 @@ describe("live service-manager guard", () => {
   });
 
   test("is inert in production, where the guard is not armed", () => {
-    delete process.env[GUARD_ENV];
+    // "0", not an unset flag: a process whose entry is a test file arms itself when the flag is
+    // absent (#7407), so the explicit opt-out is what stands in for a production process here.
+    process.env[GUARD_ENV] = "0";
     expect(() =>
       assertLiveServiceManagerAllowed("systemctl --user stop opencodex-proxy.service"),
     ).not.toThrow();

@@ -156,14 +156,13 @@ import {
   mergeConfigDefaults,
   validateConfigCandidate,
 } from "./config/diagnostics";
-
 // replace path — never publishInitialConfigNoReplace
 import { persistConfigUnlocked, readRawConfigJson } from "./config/persist-unlocked";
-
 import { withConfigMutationLockSync, bumpGenerationForCooperatingConfigWrite } from "./config/mutation-lock";
 import { getDefaultConfig } from "./config/proxy-env";
 import { configSchema } from "./config/schema/config-schema";
 import { sanitizeOpenCodeOverridesForLoad } from "./config/opencode-wire-upgrade";
+import { sanitizeRemovedOpenCodeFreeForLoad } from "./config/removed-opencode-free";
 import {
   hardenExistingSecret,
   normalizeApiKeyIds,
@@ -224,6 +223,7 @@ function loadConfigUnobserved(): OcxConfig {
   try {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
+    sanitizeRemovedOpenCodeFreeForLoad(parsed);
     sanitizeOpenCodeOverridesForLoad(parsed);
     sanitizeAliasesForLoad(parsed);
     sanitizeReasoningPinsForLoad(parsed);

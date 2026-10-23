@@ -7,7 +7,7 @@ With a valid delay, `src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_err
 ## Adapter incomplete reasons
 
 `src/bridge/sse.ts`, `src/bridge/response-json.ts`, and `src/protocols/encoders/adapter-events.ts` normalize explicit incomplete reasons with `truncationReasonFor(reason) ?? reason`: known output-limit aliases become `max_output_tokens`, and refusal/filter aliases become `content_filter`. `src/responses/incomplete-reason.ts` applies the same classifier to native Responses JSON and SSE delivery in `src/server/responses/passthrough-delivery.ts` and to WebSocket frames in `src/server/responses/codex-ws-wire.ts`, including native control chains. It copies only changed `incomplete_details.reason` metadata, leaving output content and all other response fields intact. The compaction parser in `src/adapters/openai-responses/passthrough.ts` also normalizes its internal incomplete event. `tests/responses/incomplete-reason-normalization.test.ts` covers native HTTP delivery, WS terminal normalization and both adapter parser formats.
-Unknown reasons remain verbatim, including `adapter_eof`, `max_messages`, and `steered`; message, retryability, usage, and incomplete status are preserved. `tests/adapters/bridge-nonstreaming-terminal.test.ts` covers both Responses projections and real passthrough parsing; the direct Chat and Messages parity suites cover the client-wire outcomes.
+Unknown reasons remain verbatim, including `adapter_eof`, `max_messages`, and `steered`; message, retryability, usage, and incomplete status are preserved. `tests/adapters/bridge-nonstreaming-terminal.test.ts` covers both Responses projections and real passthrough parsing; the direct Chat and Messages parity suites cover the client-wire outcomes. The Chat writer does not depend on that upstream pass alone: `chatCompletionsIncompleteOutcome` in `src/chat/outbound.ts` classifies through the same `truncationReasonFor` table for the SSE converter (and the collector that folds it), the direct encoder in `src/protocols/encoders/chat.ts` and `responsesJsonToChatCompletion`, so a raw alias such as Volcengine Ark's `length` still ends with `finish_reason: "length"` (or `content_filter`). Reasons outside the table, including `adapter_eof`, `upstream_stall_timeout`, `missing_terminal_event`, `max_messages` and `steered`, remain Chat errors. `tests/responses/chat-incomplete-length-reason.test.ts` covers the converter outcomes and the handler's streamed and buffered wire.
 
 ## Compaction image input
 
@@ -464,12 +464,12 @@ Lite identity still retires the previous socket, and subsequent eligible request
 identity can reuse the new socket. Malformed native metadata retains HTTP fallback eligibility
 without rewriting its body.
 
-Canonical WS quota and response metadata preceding the first Responses event
-are projected into bounded, allowlisted HTTP headers before the response is
-committed. Later quota observations update only the captured serving account;
-they cannot retroactively change HTTP headers already sent to the client.
-Control frames remain bounded, and provider credential/cookie headers are not
-forwarded. Once a WS create may have been sent, a missing prelude, overflow or
+Canonical WS quota and response metadata preceding the first Responses event are projected into bounded, allowlisted HTTP headers before commitment.
+`src/server/responses/codex-ws-session.ts` also retains the actual `x-reasoning-included` upgrade header when Bun exposes its handshake event, promoting the bounded candidate only after `open` validates the connection. No other upgrade header is retained: request ids, model, turn state, quota and credits are response-scoped.
+`src/server/responses/codex-ws-metadata.ts` rejects malformed or oversized raw headers and connection-nominated inclusion headers without changing transport failure or replay policy. Each canonical exchange starts from that connection signal; its own prelude metadata wins, including an explicit `false` value, and no prior exchange's metadata carries over. No signal is inferred from a model, configuration or encrypted input, and usage numbers are unchanged.
+Later metadata remains in the SSE body, while quota observations update only the captured serving account; neither changes committed HTTP headers. The pre-output hold freezes the same snapshot at its first Responses event. A client-facing WebSocket upgrade is already complete before upstream dispatch and cannot acquire this HTTP/SSE response header retroactively.
+`tests/responses/codex-ws-handshake.test.ts` and `tests/responses/codex-ws-handshake-validation.test.ts` cover the native loopback, reuse, bounds and failed-upgrade boundaries. Control frames remain bounded, and provider credential/cookie headers are not forwarded.
+Once a WS create may have been sent, a missing prelude, overflow or
 disconnect settles as a non-replayable gateway status before the first Responses
 event, or as an errored SSE body after it, rather than as a retryable fetch
 failure, so HTTP fallback cannot duplicate that inference. The one exception is a
@@ -529,6 +529,7 @@ request-log accounting without promoting a truncated repair candidate. Terminal 
 
 ## Inbound history and code-mode shell wire repairs
 
+OpenGateway result-array and image-detail projection follows the [OpenGateway transport contract](../providers/opengateway.md).
 Inbound function-call history with a missing JSON object prefix is repaired for every provider when restoring it produces an object. A terminal MiMo `</function></tool_call>` suffix is removed only when the remaining text parses as an object unchanged or after restoring a closing brace or quote and brace. Valid JSON containing these tags stays opaque; unrelated malformed arguments replay as `{}` without logging their content (`src/responses/parser.ts`). Regression coverage lives in `tests/responses/responses-mimo-envelope.test.ts`.
 Function-wrapper restoration supports `default.`-prefixed `exec` and `apply_patch` aliases while
 retaining the existing ambiguity and foreign-grammar boundaries.

@@ -67,7 +67,7 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     // Path and source come from one resolution, so the marker cannot describe another binary.
     expect(source).toContain("const bunRuntime = resolveBun({ allowInstall: !codexCliUpdateInspection });");
     expect(source).toContain("const bun = bunRuntime.path;");
-    expect(source).toContain('return { path: bin, source: "bundled" };');
+    expect(source).toContain('return { path: bin, source: "bundled", version: bundledBunVersion(bunDir) };');
 
     // The launcher's literal name must match the TypeScript constant it mirrors.
     expect(runtimeSource).toContain('export const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";');
@@ -138,11 +138,16 @@ describe("ocx.mjs package launcher (source invariants)", () => {
    */
   test("the inspection child does not inherit a duplicate copy of the snapshotted values", () => {
     expect(source).toContain("const inheritedEnv = { ...process.env };");
-    expect(source).toContain("...inheritedEnv,");
+    // The de-duplicated environment reaches the child; only its transpiler cache is scoped (#7362).
+    expect(source).toContain("...scopeTranspilerCacheToRuntime(inheritedEnv, bunRuntime.version, join),");
     // Windows spells the variable `Path` in practice, so an upper-case-only delete would
     // leave the duplicate behind. The match must be on the lowercase form of every key.
     expect(source).toContain("if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];");
-    expect(source).toContain('["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase())');
+    expect(source).toContain('...CODEX_CLI_TRANSPORT_ENV_KEYS].map(name => name.toLowerCase())');
+    expect(source).toContain("const preBunTransportEnv = captureCodexCliTransportEnv(process.env);");
+    expect(source).toContain("transportEnv: preBunTransportEnv,");
+    // The backing arch is the Node launcher's, bound before Bun (possibly another arch) starts.
+    expect(source).toContain("arch: process.arch,");
 
     // The de-duplication is scoped to the one-shot inspection launch; every other launch
     // must still inherit PATH, or the long-running proxy child loses its tooling lookup.
@@ -153,6 +158,8 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     const spawnStart = source.indexOf("const child = spawn(bun, [cliPath,");
     expect(spawnStart).toBeGreaterThan(-1);
     expect(source.slice(spawnStart)).not.toContain("...process.env,");
+    expect(source.slice(spawnStart, source.indexOf("});", spawnStart)))
+      .toContain("...scopeTranspilerCacheToRuntime(inheritedEnv, bunRuntime.version, join),");
   });
 
   /**

@@ -23,9 +23,10 @@ still blocks it, use **System Settings → Privacy & Security → Open Anyway**.
 
 ### Windows
 
-Download `OpenCodex-<version>-windows-x64.msi` and run the installer. Windows SmartScreen may
-warn because the installer is not yet code-signed; choose **More info → Run anyway** after
-confirming that you downloaded it from the release page.
+Download `OpenCodex-<version>-windows-x64.msi` and run the installer. Code signing through
+SignPath Foundation is rolling out ([Windows Code Signing](/reference/code-signing/)). Until a
+release carries the signature, Windows SmartScreen may warn about an unsigned installer; choose
+**More info → Run anyway** after confirming that you downloaded it from the release page.
 
 ### Linux
 

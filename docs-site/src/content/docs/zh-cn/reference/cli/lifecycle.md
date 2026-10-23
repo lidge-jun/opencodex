@@ -136,7 +136,7 @@ ocx status --json
 
 通过无需认证的 `GET /readyz` 端点检查同步后的就绪状态。就绪时返回 `200`；状态为 `pending` 或
 终态 `failed` 时返回 `503`，并带有 `Retry-After: 1`。HTTP 仅返回经脱敏的身份字段
-`{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}`。`protocol` 是 Hub 当前的远程协议版本，`minimumClientProtocol` 是兼容的最低客户端协议版本，`managementUrl` 是浏览器可见的规范管理 origin。不支持 `/readyz` 的旧代理会按 `unreachable` 失败关闭；
+`{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}`。`protocol` 是 Hub 当前的远程协议版本，`minimumClientProtocol` 是兼容的最低客户端协议版本，`managementUrl` 是浏览器可见的规范管理 origin。不支持 `/readyz` 的旧代理会按 `unreachable` 失败关闭；
 `/healthz` 是独立的存活检查，不是就绪检查。默认只探测一次；`--wait` 会轮询到就绪或超时，但遇到终态
 `failed` 会立即退出。默认超时为 45 秒；`--timeout <seconds>` 必须与 `--wait` 一起使用，取值范围为 1–300 秒的正整数。CLI JSON
 输出 `{ready, status, pid, port}`，其中 `status` 为 `ready`、`pending`、`failed` 或
@@ -151,6 +151,8 @@ ocx status --json
 ## 目录同步
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
+
+> **Remote Link Child：** `ocx sync` 还会应用 Home 的 Codex 设置；如果客户端运行时在该次应用之前启动，即使没有重启参数也会重启运行时。重启失败时，原有运行时继续提供服务，命令以非零状态退出。`ocx status --json` 和 `ocx link status --json` 中的相关字段见 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)（英文）。
 
 显式指定重启标志后，即使目录和缓存的字节未变，成功提交 `config.toml` 更改也会触发重启。仅处理配置的操作若没有更改、被拒绝、仅作预检或写入已回滚，则不会触发重启。未指定重启标志时，sync 不会自动重启 Codex。
 

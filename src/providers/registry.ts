@@ -49,8 +49,7 @@ export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | un
  * was only ever true for a freshly seeded config: `providerConfigSeed` copies the block once
  * (`derive.ts`), `enrichProviderFromCatalog` fills it only when the whole block is absent, and
  * nothing merged it at request time. So an install that predates a header — or that saved any
- * header of its own — never received the new one, which is exactly what #2067 would have
- * shipped for every existing opencode-free user.
+ * header of its own — never received the new one.
  *
  * The comparison is case-insensitive on purpose. HTTP header names are case-insensitive, but a
  * plain object spread is not: merging a registry `User-Agent` over a user's `user-agent`

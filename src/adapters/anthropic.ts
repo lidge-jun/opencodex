@@ -32,9 +32,11 @@ import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
+import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
+import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
@@ -76,8 +78,12 @@ const COMPAT_TOOL_PREFIX = "cx_";
 type CacheControl = { type: "ephemeral"; ttl?: "1h" | "5m" };
 const MAX_CACHE_BREAKPOINTS = 4;
 
-function resolveCacheControl(retention: "none" | "short" | "long" | undefined): CacheControl | undefined {
-  const r = retention ?? "short";
+/** Omitted retention follows the destination default (1h on first-party Anthropic, else 5m). */
+function resolveCacheControl(
+  retention: AnthropicCacheRetention | undefined,
+  provider: OcxProviderConfig,
+): CacheControl | undefined {
+  const r = resolveAnthropicCacheRetention(retention, provider);
   if (r === "none") return undefined;
   return r === "long" ? { type: "ephemeral", ttl: "1h" } : { type: "ephemeral" };
 }
@@ -286,11 +292,7 @@ function normalizeTtlOrdering(body: Record<string, unknown>): void {
   }
 }
 
-export function isLikelyRealAnthropicThinkingSignature(signature: string | undefined): signature is string {
-  if (typeof signature !== "string" || signature.length < 16) return false;
-  if (/^(fc|call|msg|rs|resp|reasoning|item|ws|tool|func|function)[-_]/i.test(signature)) return false;
-  return /^[A-Za-z0-9+/_=-]+$/.test(signature);
-}
+export { isLikelyRealAnthropicThinkingSignature };
 
 /**
  * Bridge error fidelity (web-search/images loops): extract a display-safe summary from an
@@ -643,6 +645,7 @@ function usageFromAnthropic(usage: unknown): OcxUsage | undefined {
   // estimate from visible summaries. Invalid optional detail leaves totals intact.
   const thinking = isAnthropicRecord(usage.output_tokens_details) ? usage.output_tokens_details.thinking_tokens : undefined;
   const reasoningOutputTokens = typeof thinking === "number" && Number.isFinite(thinking) && thinking >= 0 && thinking <= output ? thinking : undefined;
+  const write1h = anthropicCacheWrite1hTokens(usage, write);
   return {
     inputTokens,
     outputTokens: output,
@@ -651,6 +654,7 @@ function usageFromAnthropic(usage: unknown): OcxUsage | undefined {
       cachedInputTokens: read,
       cacheReadInputTokens: read,
       cacheCreationInputTokens: write,
+      ...(write1h !== undefined ? { cacheCreation1hInputTokens: write1h } : {}),
     } : {}),
   };
 }
@@ -1223,7 +1227,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
 
       // Prompt caching: native Anthropic supports top-level automatic caching, which
       // follows the moving final block across turns. Keep one breakpoint slot free for it.
-      const cc = resolveCacheControl(cacheRetention);
+      const cc = resolveCacheControl(cacheRetention, provider);
       const automaticPromptCaching = cc && usesNativeAnthropicEndpoint(provider);
       if (automaticPromptCaching) body.cache_control = cc;
       const explicitLimit = automaticPromptCaching ? MAX_CACHE_BREAKPOINTS - 1 : MAX_CACHE_BREAKPOINTS;

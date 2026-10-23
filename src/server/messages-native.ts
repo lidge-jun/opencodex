@@ -849,6 +849,17 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   }
   releaseRetainedRequest();
 
+  // The last pool account refused on spent quota and rotation found no replacement: answer the
+  // usage limit with its reset (#6991), as the bridge lane does, not the upstream "try again later".
+  const poolUsageLimit = response.status === 429 && oauthBinding
+    ? anthropicRoutingFor(nativeInstance!).anthropicPoolUsageLimitAfterRefusal(Date.now(), oauthBinding.routeDecision, route.modelId)
+    : null;
+  if (poolUsageLimit) {
+    discard(response);
+    cleanupAbort();
+    logCtx.errorCode = "usage_limit_reached";
+    return retainUpstreamMessagesRequestId(localOAuthFailure(poolUsageLimit)!, response.headers);
+  }
   if (!response.ok) {
     let bodyText = "";
     try {

@@ -477,14 +477,18 @@ describe("ocx agent sidecar --list (#2188)", () => {
   });
 });
 
-afterEach(() => {
-  for (const server of servers.splice(0)) server.stop(true);
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map(server => server.stop(true)));
   process.exitCode = 0;
 });
 
 function fakeRuntime(responder?: (req: Request, body: unknown) => unknown) {
   const requests: Recorded[] = [];
   const server = Bun.serve({
+    // Bind the exact address the CLI dials (#7416). A wildcard bind lets another process on a
+    // loaded host bind 127.0.0.1 on the same port; it then receives this fake's requests, and a
+    // real proxy there answers the management call with 404.
+    hostname: "127.0.0.1",
     port: 0,
     async fetch(req) {
       const url = new URL(req.url);
@@ -608,6 +612,7 @@ describe("headless GUI parity CLI", () => {
       // `ocx route policy`. Analytics is GUI-first for now; the same request
       // history remains available through observe/index tooling.
       ["/api/routing-profiles", "ocx route policy"],
+      ["/api/fallback", "ocx fallback"],
       ["/api/routing-analytics", "(none — GUI analytics surface; history via ocx observe/logs)"],
       // Remote Workspace is one product family in both surfaces. The current CLI owns
       // executor pairing, presence, and local status; Hub/device/session inspection is
@@ -880,14 +885,15 @@ describe("headless GUI parity CLI", () => {
 
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
-      for (const args of [
-        ["--decision-provider", "ollama-tev1"],
-        ["--strategy", "jev", "--decision-timeout", "999"],
-        ["--decision-timeout", "5000"],
-      ]) {
+      // Without --strategy the stored strategy decides (#7579), so only the read may precede the refusal.
+      for (const [args, methods] of [
+        [["--decision-provider", "ollama-tev1"], ["GET"]],
+        [["--strategy", "jev", "--decision-timeout", "999"], []],
+        [["--decision-timeout", "5000"], ["GET"]],
+      ] as const) {
         const rejected = fakeRuntime();
         expect(await handleComboCommand(["set", "demo", "--targets", "a/m1", ...args], rejected.deps)).toBe(2);
-        expect(rejected.requests).toEqual([]);
+        expect(rejected.requests.map(request => request.method)).toEqual([...methods]);
       }
     } finally {
       errorSpy.mockRestore();
@@ -909,6 +915,8 @@ describe("headless GUI parity CLI", () => {
     const runtime = fakeRuntime(req => req.method === "GET" ? {
       combos: [{
         id: "deep",
+        strategy: "failover",
+        stickyLimit: 1,
         defaultEffort: "max",
         defaultEffortMode: "force",
         targets: [{ provider: "ark", model: "old-model" }],
@@ -1805,6 +1813,19 @@ describe("ownership recovery advice does not assume injection is enabled", () =>
       } finally { log.mockRestore(); }
     });
   }
+});
+
+test("the fake runtime owns the loopback address the CLI dials", async () => {
+  const { deps } = fakeRuntime();
+  const port = Number(new URL(deps.baseUrl).port);
+  let intruder: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    intruder = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response(null, { status: 404 }) });
+  } catch (error) {
+    expect((error as { code?: string }).code).toBe("EADDRINUSE");
+  }
+  await intruder?.stop(true);
+  expect(intruder).toBeUndefined();
 });
 
 test("Claude intercept start uses the management POST and preserves refusal exit status", async () => {

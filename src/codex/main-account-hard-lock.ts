@@ -121,3 +121,17 @@ export function getMainAccountHardLockStatus(
 export function isMainAccountHardLocked(config: PolicyConfig, now = Date.now()): boolean {
   return getMainAccountHardLockStatus(config, now).state === "blocked";
 }
+
+/**
+ * Scheduling evidence only: the latest blocking reset even after it has passed, so recovery can
+ * notice a revised reset that expired between sweeps. Never an admission or unlock signal.
+ */
+export function latestMainBlockingResetAt(config: PolicyConfig): number | undefined {
+  if (!isMainAccountHardLockEnabled(config)) return undefined;
+  const quota = getMainPolicyQuota();
+  if (!quota) return undefined;
+  const thresholds = resolveMainAccountHardLockThresholds(config);
+  const resets = governingWindows(quota)
+    .filter(w => validPercent(w.percent) && w.percent >= thresholds[w.kind]).map(w => resetTimestamp(w.resetAt));
+  return resets.length > 0 && resets.every(r => r !== undefined) ? Math.max(...(resets as number[])) : undefined;
+}

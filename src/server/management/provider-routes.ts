@@ -764,7 +764,7 @@ function applyProviderPatchFields(
   if (Object.hasOwn(rawBody, "headers")) {
     const headersValue = rawBody.headers;
     if (headersValue === null || (isPlainRecord(headersValue) && Object.keys(headersValue).length === 0)) {
-      // Registry-owned static metadata (e.g. opencode-free's x-opencode-client marker)
+      // Registry-owned static metadata (e.g. meta-muse's x-api-version marker)
       // is not user-managed: restoring it keeps the upstream transport intact after a
       // clear instead of deleting the whole block.
       const entry = getProviderRegistryEntry(name);
@@ -1726,7 +1726,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
     }
     const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name, {
-      oauthApiBaseUrl: snapshot?.apiBaseUrl,
+      oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy,
     });
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();

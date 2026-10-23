@@ -45,7 +45,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper", "opengateway", "tokenlab", "modelflare",
-  "opencode-free", "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
+  "xiaomi", "xiaomi-mimo", "kilo", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
   "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun", "claude-cli",
 ];
 
@@ -62,6 +62,22 @@ describe("provider registry parity", () => {
   test("registry ids are unique", () => {
     const ids = PROVIDER_REGISTRY.map(entry => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("deprecated entries stay resolvable but are hidden from every new-provider surface", () => {
+    const deprecated = PROVIDER_REGISTRY.filter(entry => entry.deprecated);
+    expect(deprecated.length).toBeGreaterThan(0);
+    const presets = deriveProviderPresets();
+    const featured = deriveFeaturedProviderIds();
+    const keyLogins = Object.keys(deriveKeyLoginMap());
+    const initProviders = buildInitProviders();
+    for (const entry of deprecated) {
+      expect(providerConfigSeed(entry).adapter).toBe(entry.adapter);
+      expect(presets.find(preset => preset.id === entry.id)).toBeUndefined();
+      expect(featured).not.toContain(entry.id);
+      expect(keyLogins).not.toContain(entry.id);
+      expect(initProviders.find(provider => provider.id === entry.id)).toBeUndefined();
+    }
   });
 
   test("every field carried by the shipped registry has a model-id role classification", () => {
@@ -214,7 +230,6 @@ describe("provider registry parity", () => {
     const zenDeepseekJsonSchema: Record<string, string[]> = {
       "opencode-go": ["deepseek-v4.1-flash", "deepseek-v4-flash"],
       "opencode-zen": ["deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-flash-free"],
-      "opencode-free": ["deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-flash-free"],
     };
     for (const [id, expected] of Object.entries(zenDeepseekJsonSchema)) {
       expect(PROVIDER_REGISTRY.find(entry => entry.id === id)?.noJsonSchemaModels).toEqual(expected);
@@ -256,7 +271,7 @@ describe("provider registry parity", () => {
 
     // Negatives: neither spelling crosses into the other side.
     expect(JSON.stringify(nativeDeepseek)).not.toContain("deepseek-v4.1-flash");
-    for (const id of ["opencode-go", "opencode-zen", "opencode-free"]) {
+    for (const id of ["opencode-go", "opencode-zen"]) {
       expect(JSON.stringify(PROVIDER_REGISTRY.find(entry => entry.id === id)))
         .not.toContain("\"deepseek-flash\"");
     }
@@ -268,7 +283,7 @@ describe("provider registry parity", () => {
     // wire field for a model whose picker is empty. opencode-go carried the shared budget list
     // while seeding only its own four ladders, so a live roster serving qwen3.5-397b armed the
     // budget path with nothing to advertise.
-    for (const id of ["opencode-go", "opencode-zen", "opencode-free"]) {
+    for (const id of ["opencode-go", "opencode-zen"]) {
       const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === id);
       const ladders = Object.keys(entry?.modelReasoningEfforts ?? {});
       const gated = [...entry?.thinkingBudgetModels ?? [], ...entry?.thinkingToggleModels ?? []];
@@ -279,7 +294,7 @@ describe("provider registry parity", () => {
     // reasoning_content on tool-call continuations, or the gateway answers 400 on the second
     // turn. The three Zen presets seed those two tables by hand, so this pins the pairing
     // instead of trusting that whoever adds the next route remembers both.
-    for (const id of ["opencode-go", "opencode-zen", "opencode-free"]) {
+    for (const id of ["opencode-go", "opencode-zen"]) {
       const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === id);
       const replayed = entry?.preserveReasoningContentModels ?? [];
       const thinkingDeepseek = Object.keys(entry?.modelReasoningEfforts ?? {})
@@ -307,6 +322,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noPenaltyModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].preserveReasoningContentModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].openaiChatEofTolerance).toBe(true);
+    expect(KEY_LOGIN_PROVIDERS.moonshot.foldDeveloperRoleToSystem).toBe(true);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-coder"]).toBe(262_144);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);
@@ -541,7 +557,7 @@ describe("provider registry parity", () => {
       liveModels: false,
       models: [
         "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-        "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
+        "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
       ],
       modelInputModalities: {
         "qwen3.8-max": ["text", "image"],
@@ -561,8 +577,8 @@ describe("provider registry parity", () => {
         "deepseek-v4-pro": 393_216,
       },
       noVisionModels: expect.arrayContaining(["qwen3.7-max", "deepseek-v4-pro", "glm-5.2"]),
-      // Beijing is the Personal Edition roster: the Team-only 0813 snapshot and the
-      // still-phantom glm-5.3-flash must stay out of this preset's models list.
+      // Beijing retains Personal curation; 0813 is now listed on Personal too.
+      // The still-phantom glm-5.3-flash stays out of this preset.
       // glm-5.3 itself joined the plan on 260917 and is Personal-entitled (probed 260918).
 
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
@@ -625,8 +641,6 @@ describe("provider registry parity", () => {
     const zenGateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-zen")!);
     expect(isModelVisionSidecarConsumer(zenGateway, "deepseek-v4.1-flash")).toBe(true);
     expect(isModelVisionSidecarConsumer(zenGateway, "deepseek-v4-flash")).toBe(true);
-    const free = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-free")!);
-    expect(isModelVisionSidecarConsumer(free, "deepseek-v4-flash-free")).toBe(true);
     // Saved providers without explicit modality overrides inherit the fix during routing.
     const config: OcxConfig = {
       port: 0, defaultProvider: "deepseek",
@@ -1118,7 +1132,7 @@ describe("provider registry parity", () => {
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
     // claude-cli joins them as the first CLI-backed member: its row is `key` because the turn
     // leaves this machine, and keyless because the Claude Code CLI reads the operator's sign-in.
-    expect(optionalKeyProviders).toEqual(["litellm", "opencode-free", "mimo-free", "claude-cli"]);
+    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "claude-cli"]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {
@@ -1404,8 +1418,7 @@ describe("provider registry parity", () => {
     const featured = deriveFeaturedProviderIds();
     expect(featured).toEqual([
       "openai", "xai", "command-code", "orcarouter-oauth", "anthropic", "anthropic2", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
-      "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio", "opencode-free",
-      "mimo-free",
+      "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio",
     ]);
 
     const presets = deriveProviderPresets();
@@ -1688,7 +1701,7 @@ describe("provider registry parity", () => {
     // Measured as ACCEPTING images. Never add these to a noVisionModels list.
     const measuredVisionCapable = ["mimo-v2.5-free", "longcat-2.0-free"];
 
-    for (const providerId of ["opencode-zen", "opencode-free"]) {
+    for (const providerId of ["opencode-zen"]) {
       const entry = PROVIDER_REGISTRY.find(p => p.id === providerId);
       expect(entry, `registry entry ${providerId} is missing`).toBeTruthy();
       expect(entry?.baseUrl, `${providerId} should serve the Zen roster`)
@@ -1825,8 +1838,7 @@ describe("free-provider directory isolation", () => {
       { provider: "opencode-go", model: "deepseek-v4.1-flash", flash: true },
       { provider: "opencode-go", model: "deepseek-v4-flash", flash: true },
       { provider: "volcengine-coding-plan", model: "deepseek-v4-flash", flash: true },
-      { provider: "alibaba-token-plan-intl", model: "deepseek-v4-flash", flash: true },
-      { provider: "opencode-free", model: "deepseek-v4-flash-free", flash: true },
+      { provider: "alibaba-token-plan-intl", model: "deepseek-v4.1-flash-1017", flash: true },
     ];
 
     for (const { provider, model, flash } of cases) {

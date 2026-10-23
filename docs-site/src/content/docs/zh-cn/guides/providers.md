@@ -186,6 +186,23 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 由于回滚依赖快照，当会话存储已存在但无法捕获时（文件不可读、架构不匹配、令牌选择有歧义），当 `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` 将导入路径指向与活动 CLI 存储不同的位置时，或当主 CLI 数据库没有可识别的令牌行时，**添加账户**会拒绝将 `kiro-cli` 登出。请修复或删除常规 `kiro-cli` 数据路径下的损坏数据库，并取消仅用于导入的选择器后重试。对于完全没有现有 `kiro-cli` 会话的机器，不受影响。
 
+### WorkBuddy AI 订阅
+
+`workbuddy-ai` 将国际版 WorkBuddy AI 订阅作为 OpenCodex 的模型来源。在 Providers 中选择
+**WorkBuddy AI** 并登录，或运行 `ocx login workbuddy-ai`，然后完成浏览器授权。
+授权最多等待五分钟；令牌保存在 OpenCodex 中并按需刷新。无需安装 WorkBuddy 客户端，
+也不会读取或修改客户端凭据。多个账户及其团队身份由现有 OAuth 账户管理流程隔离。
+
+登录后从账号实时模型目录选择 `workbuddy-ai/<model-id>`。模型发现不可用时可使用
+`workbuddy-ai/default-model`。支持流式输出、工具调用和非流式客户端；概览和账户页显示剩余积分、已用/总量、基础及赠送积分，
+并在可查询时显示下一批非每日积分的到期时间。刷新读取当前账户的账单汇总；查询失败不会
+显示为零。积分仅用于展示，不会因付费积分耗尽而禁用仍可用的免费模型。
+
+这是参考 [Magpie WorkBuddy 插件](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy)
+实现的非官方订阅协议。上游的客户端通道或账号限制会原样拒绝请求，不会改写代理身份提示词
+绕过限制。实际可用性取决于账号、地区、模型权限和上游 API。本功能独立于 CodeBuddy CLI
+API Key 提供商，也不负责让 WorkBuddy 桌面客户端使用 OpenCodex 模型。
+
 ### DeepSeek Account (DSH)
 
 `dsh-account` 是一个实验性的、优先导入已有凭据的账户提供商，用于复用已安装并登录的 DeepSeek Harness (DSH) Desktop 应用程序的认证凭据。
@@ -199,7 +216,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 105 个预设：85 个密钥预设、16 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 105 个预设：84 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -254,7 +271,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | 智谱 AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
 | [BigModel Coding Plan — Responses (静态模型列表)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
-| Qwen Cloud | Token plan（默认）: `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · 按量付费: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 或自定义 |
+| Qwen Cloud | Token plan（默认）: `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · 按量付费: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 或自定义 |
 | 腾讯云 Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | 火山方舟 · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
@@ -278,14 +295,13 @@ Bearer 密钥；公开模型列表不能验证密钥有效性。
 MiniMax 和 MiniMax (CN) 的提供商卡片也会在配置的密钥有有效 Coding Plan 时显示用量。
 仪表盘读取 5 小时窗口，以及套餐提供时的每周窗口；这些仅用于展示，不会改变模型路由。
 
-**OpenCode Zen**（`opencode-zen`）与免密钥的 **OpenCode Free** 预设共用
-`https://opencode.ai/zen/v1`。该网关上的免费模型常会触发约每分钟 15–20 次请求的短窗口限流（社区观测；OpenCode 未公布 RPM）。Zen 可能返回不带 `Retry-After` / `X-RateLimit-*` 的通用 429。这与免密钥桌面配额（`opencode-free` 上约每 5 小时 200 次 Big Pickle/免费模型请求）是分开的。当这类 429 省略 `Retry-After` 时，opencodex 会在客户端错误中补充说明并附带合成的 `Retry-After`；若上游已提供 `Retry-After`，则仍以它为准。同密钥等待重试仍可通过 [`retryOn429`](/zh-cn/reference/configuration/) 选择开启。
+**OpenCode Zen**（`opencode-zen`）使用 [opencode.ai/auth](https://opencode.ai/auth) 签发的 API 密钥访问 `https://opencode.ai/zen/v1`。免费模型可能触发每分钟约 15–20 次请求的短窗口限流（社区观测；OpenCode 未公布 RPM）。限流 429 缺少 `Retry-After` 时，opencodex 会添加说明和合成的 `Retry-After`；有效的上游头优先。同密钥重试仍须通过 [`retryOn429`](/zh-cn/reference/configuration/) 启用。
 
 在规范 `opencode-zen` 提供商中，使用 API 密钥认证和官方路由 `https://opencode.ai/zen/v1` 或 `https://opencode.ai/inference/v1` 时，Gemini 会在默认 `googleMode: ai-studio` 下自动使用 Google 原生 API。Zen 模型 ID 保持不变，包括没有 `-tiered` 后缀的 Flash ID。Claude 使用 Anthropic Messages，不受 `googleMode` 影响。加载已保存的配置时，仅忽略这些原生模型符合条件的旧 Chat/Responses 覆盖设置，以及符合条件的 Responses 专用 `image_generation` 托管工具偏好。自定义提供商、非密钥认证路由及其他偏好保持不变。
 
-**免密钥的 `opencode-free` 层级目前对第三方客户端关闭。** Zen 会拒绝任何不带 `x-opencode-session` 头的请求，返回错误类型 `MissingSessionID` 和消息 "OpenCode's free tier can only be used in OpenCode"。这道关卡只检查该头是否存在，因此代理完全可以编一个值蒙混过去，但 opencodex 不这么做。伪造会话标识并附上带版本号的 `opencode/<version>` User-Agent，等于声称自己就是 OpenCode 客户端，而 OpenCode 并未公布这一免密钥层级的第三方集成约定；用这种方式换来的 HTTP 200 是绕过了准入检查，而不是获得了许可。因此 opencodex 选择如实报告限制：发往 `opencode-free` 的请求会返回一条解释上游关卡的错误。
+**已移除 `opencode-free` 支持。** OpenCode 的上游免费层级门槛导致所有模型均返回 `403 permission_denied`（[#7255](https://github.com/lidge-jun/opencodex/issues/7255)）。加载现有配置时，会在内存中禁用相关条目和依赖的模型引用，每个进程仅警告一次，不修改文件。如果它原来是默认提供商，将改用标准 OpenAI OAuth 路径作为默认值。请使用 `opencode-go`、需要密钥的 `opencode-zen` 或其他提供商。[OpenCode Zen 条款](https://opencode.ai/docs/zen/)。
 
-通往同一批模型的受支持路径，是使用 [opencode.ai/auth](https://opencode.ai/auth) 获取的 OpenCode Zen API 密钥、走带密钥的 **`opencode-zen`** 预设。若 OpenCode 之后公布了免密钥层级的第三方接入方式，opencodex 可以跟进；在此之前，这个预设的作用是记录该限制。上游条款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
+保留正常的 Claude Desktop 分配和默认值。源模型允许列表变空的规则会被禁用；注入模型被移除时，原生子代理同步也会被禁用。后续保存配置时不会恢复已移除的引用，并会保留正常的并发编辑。
 
 大多数使用带 bearer 密钥的 `openai-chat` adapter；**Xiaomi MiMo**（`xiaomi`）等 Anthropic 兼容预设
 使用 `anthropic` adapter（`x-api-key`）。小米还提供 OpenAI Chat 预设 `xiaomi-mimo` 和 token plan 预设

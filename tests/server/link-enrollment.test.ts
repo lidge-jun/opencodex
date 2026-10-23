@@ -7,7 +7,7 @@ import type { ManagementContext } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import type { LinkStore } from "../../src/link/store";
 import { SshRunnerError, type SshRunner, type SshRunResult } from "../../src/link/ssh-runner";
-import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
+import { quoteRemote, remoteOcxArgv, WINDOWS_OS_PROBE } from "../../src/link/ssh-argv";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let root: string;
@@ -30,7 +30,7 @@ const http = (body: unknown, status = 200) => result(`${JSON.stringify(body)}\n$
 const health = (role: string, restartCapability: string | null = "v1") => http({ service: "opencodex", pid: 4321, port: 10100, role, ...(restartCapability === null ? {} : { restartCapability }) });
 const ocx = (args: string[]) => quoteRemote(remoteOcxArgv(args));
 type RunOptions = Parameters<SshRunner["run"]>[1];
-type Step = "probe" | "fingerprint" | "version" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog";
+type Step = "probe" | "windows" | "fingerprint" | "version" | "port" | "config" | "curl" | "before" | "connect" | "restart" | "health" | "catalog";
 interface Call { step: Step; argv: readonly string[]; options: RunOptions; }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -81,6 +81,7 @@ function harness() {
       const command = argv.at(-1) ?? "";
       const step: Step = argv[0] === "ssh-keygen" ? "fingerprint"
         : command === "true" ? "probe"
+        : command === WINDOWS_OS_PROBE ? "windows"
         : command === ocx(["--version"]) ? "version"
         : command === ocx(["link", "port"]) ? "port"
         : command === ocx(["config", "show", "--json"]) ? "config"
@@ -109,6 +110,7 @@ function harness() {
           writeFileSync(path, `${aliasOf(argv)} ssh-ed25519 AAAA\n`);
           return result();
         }
+        case "windows": return { code: 127, stdout: "", stderr: "sh: cmd: not found" };
         case "fingerprint": return result(`256 ${fingerprint} child (ED25519)`);
         case "version": return result("opencodex 2.83.0\n");
         case "port": return result('{"port":2200}');
@@ -365,6 +367,59 @@ describe("server-owned confirmation and authority", () => {
     await denied(await h.call("confirm-host", { alias: "child", fingerprint }), "remote_platform_unsupported", 409);
     expect(readFileSync(h.knownHosts, "utf8")).toBe("existing ssh-ed25519 EXISTING\n");
     expect(h.state.confirmedHosts?.size).toBe(0); noEnrollmentEffects(h);
+  });
+
+  test.each([
+    ["cmd.exe", "'true' is not recognized as an internal or external command,\r\noperable program or batch file.\r\n"],
+    ["PowerShell", "true : The term 'true' is not recognized as the name of a cmdlet, function, script file, or operable program.\r\n"],
+    ["PowerShell 7", "true: The term 'true' is not recognized as a name of a cmdlet, function, script file, or executable program.\r\n"],
+  ])("a Windows %s shell is refused at the probe, naming Hub mode, before trust or a key", async (_shell, stderr) => {
+    const h = harness(); h.overrides.probe = () => ({ code: 1, stdout: "", stderr });
+    const response = await h.call("probe", { alias: "child", includeVersion: true });
+    expect(response.status).toBe(409);
+    const body = await response.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("remote_platform_unsupported");
+    expect(body.error.message).toContain("ocx hub invite");
+    expect(body.error.message).toContain("ocx connect");
+    expect(h.calls.map(call => call.step)).toEqual(["probe"]);
+    expect(h.state.pendingHosts.size).toBe(0); expect(existsSync(h.knownHosts)).toBe(false); noEnrollmentEffects(h);
+  });
+
+  test.each([[true, "remote_platform_unsupported", 409], [false, "probe_failed", 502]] as const)("a localized shell refusal asks the fixed %%OS%% probe (Windows_NT=%s)", async (windows, code, status) => {
+    const h = harness();
+    h.overrides.probe = call => { writeFileSync(candidateFile(call.argv), "child ssh-ed25519 AAAA\n"); return { code: 1, stdout: "", stderr: "Die Benennung \"true\" wurde nicht als Name eines Cmdlet erkannt." }; };
+    h.overrides.windows = call => {
+      expect(call.argv).toContain("StrictHostKeyChecking=yes");
+      return windows ? result("Windows_NT\r\n") : { code: 1, stdout: "", stderr: "" };
+    };
+    await denied(await h.call("probe", { alias: "child", includeVersion: true }), code, status);
+    expect(h.calls.map(call => call.step)).toEqual(["probe", "windows"]);
+    expect(h.state.pendingHosts.size).toBe(0); expect(existsSync(h.knownHosts)).toBe(false); noEnrollmentEffects(h);
+  });
+
+  test("ssh transport failures and the prelude's own statuses never cost the %OS% probe", async () => {
+    for (const code of [255, 127]) {
+      const h = harness(); h.overrides.version = () => ({ code, stdout: "", stderr: "" });
+      const response = await h.call("probe", { alias: "child", includeVersion: true });
+      expect(response.status).toBe(502);
+      expect(h.calls.map(call => call.step)).toEqual(["probe", "fingerprint", "version"]);
+    }
+  });
+
+  test("a localized refusal of sh at host confirmation is confirmed Windows before trust", async () => {
+    const h = harness(); h.seed();
+    h.overrides.version = () => ({ code: 1, stdout: "", stderr: "Le terme \u00absh\u00bb n'est pas reconnu comme nom d'applet de commande." });
+    h.overrides.windows = () => result("Windows_NT\r\n");
+    await denied(await h.call("confirm-host", { alias: "child", fingerprint }), "remote_platform_unsupported", 409);
+    expect(h.calls.map(call => call.step)).toEqual(["version", "windows"]);
+    expect(existsSync(h.knownHosts)).toBe(false); expect(h.state.confirmedHosts?.size).toBe(0); noEnrollmentEffects(h);
+  });
+
+  test("a PowerShell refusal of sh at host confirmation is Windows, not a version failure", async () => {
+    const h = harness(); h.seed();
+    h.overrides.version = () => ({ code: 1, stdout: "", stderr: "sh : The term 'sh' is not recognized as the name of a cmdlet, function, script file, or operable program." });
+    await denied(await h.call("confirm-host", { alias: "child", fingerprint }), "remote_platform_unsupported", 409);
+    expect(existsSync(h.knownHosts)).toBe(false); expect(h.state.confirmedHosts?.size).toBe(0); noEnrollmentEffects(h);
   });
 
   test("fingerprint mismatch refuses both confirmation and apply without SSH", async () => {

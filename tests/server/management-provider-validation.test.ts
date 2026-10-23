@@ -2309,7 +2309,7 @@ describe("provider management validation", () => {
     }
   });
 
-  test("provider management does not persist registry-only static auth headers for opencode-free", async () => {
+  test("provider management does not persist registry-only static auth headers for meta-muse", async () => {
     if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
@@ -2321,10 +2321,10 @@ describe("provider management validation", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          name: "opencode-free",
+          name: "meta-muse",
           provider: {
-            adapter: "openai-chat",
-            baseUrl: "https://opencode.ai/zen/v1",
+            adapter: "openai-responses",
+            baseUrl: "https://api.meta.ai/v1",
             authMode: "key",
           },
         }),
@@ -2332,9 +2332,9 @@ describe("provider management validation", () => {
       expect(response.status).toBe(200);
 
       const saved = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as OcxConfig;
-      expect(saved.providers["opencode-free"]).toBeDefined();
-      expect(saved.providers["opencode-free"]?.headers).toBeUndefined();
-      expect(saved.providers["opencode-free"]?.keyOptional).toBe(true);
+      expect(saved.providers["meta-muse"]).toBeDefined();
+      expect(saved.providers["meta-muse"]?.headers).toBeUndefined();
+      expect(saved.providers["meta-muse"]?.keyOptional).toBeUndefined();
     } finally {
       await server.stop(true);
     }
@@ -4477,12 +4477,12 @@ describe("provider management validation", () => {
       openaiProviderTierVersion: 2,
       providers: {
         openai: { ...canonicalDirect },
-        "opencode-free": {
-          adapter: "openai-chat",
-          baseUrl: "https://opencode.ai/zen/v1",
+        "meta-muse": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.meta.ai/v1",
           authMode: "key",
           allowPrivateNetwork: true,
-          headers: { "x-opencode-client": "desktop", "X-User": "v1" },
+          headers: { "x-api-version": "1.0.0", "X-User": "v1" },
         },
       },
     };
@@ -4499,17 +4499,17 @@ describe("provider management validation", () => {
     };
 
     // Clearing user-managed headers must not delete the registry-owned static
-    // metadata (opencode-free's User-Agent and x-opencode-client markers) the transport
+    // metadata (meta-muse's User-Agent and x-api-version markers) the transport
     // relies on.
-    expect((await patch("opencode-free", { headers: null }))?.status).toBe(200);
-    expect(liveConfig.providers["opencode-free"].headers).toEqual({
-      "User-Agent": "opencode",
-      "x-opencode-client": "desktop",
+    expect((await patch("meta-muse", { headers: null }))?.status).toBe(200);
+    expect(liveConfig.providers["meta-muse"].headers).toEqual({
+      "User-Agent": "muse-build/1.3.0 (opencodex compatibility)",
+      "x-api-version": "1.0.0",
     });
     const saved = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as OcxConfig;
-    expect(saved.providers["opencode-free"]?.headers).toEqual({
-      "User-Agent": "opencode",
-      "x-opencode-client": "desktop",
+    expect(saved.providers["meta-muse"]?.headers).toEqual({
+      "User-Agent": "muse-build/1.3.0 (opencodex compatibility)",
+      "x-api-version": "1.0.0",
     });
   });
   test("concurrent provider PATCHes serialize mixed fields and per-model soft budgets", async () => {

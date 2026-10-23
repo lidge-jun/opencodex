@@ -24,6 +24,7 @@ import {
 } from "../lib/errors";
 import { reportDispatchSends, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../lib/request-execution-budget";
 import type { AdmissionLease } from "../lib/admission";
+import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
@@ -31,7 +32,7 @@ import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
   fetchWithTransientRetry,
-  isNonReplayableResponse,
+  isNonReplayableResponse, isSameTargetRetryHold,
   isReplayRefusalCode,
   isReplayRefusalResponse,
   prepareSameTarget429Wait,
@@ -45,10 +46,7 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
   wrapWithZeroOutputRefetch,
 } from "../lib/upstream-retry";
-import {
-  isTranslatorBudgetExceededError,
-  type TranslatorBudget,
-} from "../lib/translator-budget";
+import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
 import { authorizeResendForRecovery } from "../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedChatBody } from "./responses/reset-replay";
 import {
@@ -65,7 +63,6 @@ import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
-import { enrichOpenCodeZenFreeTierMessage } from "../providers/opencode-zen-rate-limit";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -89,6 +86,7 @@ import { workflowRefusalResponse } from "./workflow-refusal";
 import type { ComboProtocolSource } from "./responses/core-combo-native";
 import type { ProtocolEnvelope } from "../protocols/envelope";
 import { nativeChatReplayScope, bindNativeChatReplayScope, nativeChatReasoningCapture } from "./chat-native-reasoning";
+import { resolveMistralTransport } from "../providers/mistral-transport";
 
 export { isNativeChatRouteEligible, nativeChatDeclineReason } from "./chat-native-eligibility";
 
@@ -182,7 +180,7 @@ export interface HandleNativeChatOptions {
   req: Request;
   config: OcxConfig;
   logCtx: RequestLogContext;
-  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease };
+  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission };
   route: RouteResult;
   chatBody: Rec;
   requestedModel: string;
@@ -212,6 +210,12 @@ export interface NativeChatExecution extends HandleNativeChatOptions {
   onFirstOutput?: () => void;
   /** The lease a streamed body holds; defaults to `logIds.turnAdmissionLease`. */
   turnAdmissionLease?: AdmissionLease;
+  /**
+   * The request's resolved data-plane admission, when the caller carries it without `logIds`.
+   * A combo child runs on the parent's log row, so it receives the admitted identity here or
+   * its reasoning replay scope can never establish a caller principal (PF-07).
+   */
+  admission?: DataPlaneAdmission;
 }
 
 /**
@@ -249,6 +253,8 @@ export function createNativeChatComboSource(input: {
   requestedModel: string;
   requestedStream: boolean;
   translatorBudget: TranslatorBudget;
+  /** The request's data-plane admission; native children inherit it for replay scope. */
+  admission?: DataPlaneAdmission;
 }): ComboProtocolSource {
   return {
     inbound: "chat",
@@ -267,6 +273,7 @@ export function createNativeChatComboSource(input: {
       comboDispatchPermit: child.comboDispatchPermit,
       onFirstOutput: child.onFirstOutput,
       ...(child.turnAdmissionLease ? { turnAdmissionLease: child.turnAdmissionLease } : {}),
+      ...(input.admission ? { admission: input.admission } : {}),
     }, child.attemptHandle),
   };
 }
@@ -336,13 +343,15 @@ export async function runNativeChatAttempt(
     refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
     return refusal;
   }
-  let activeProvider: OcxProviderConfig = route.provider;
+  // Key selection re-resolves the transport; a single-key route still needs canonical Mistral pacing.
+  let activeProvider: OcxProviderConfig = resolveMistralTransport(route.provider);
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
   const spendTracker = sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
   const physicalBudget = sendBudget ?? createInferenceSendBudget(req, logCtx);
   let activeAdapter: ProviderAdapter = createOpenAIChatAdapter(activeProvider);
   let activeRequest: AdapterRequest;
-  const replayScope = nativeChatReplayScope(req.headers);
+  const replayScope = nativeChatReplayScope(req.headers,
+    resolveContextPrincipal(req, config, execution.admission ?? logIds?.admission));
   let retainedRequestBytes = 0;
   const releaseRetainedRequest = () => {
     if (retainedRequestBytes === 0) return;
@@ -366,6 +375,8 @@ export async function runNativeChatAttempt(
       config.fastMode,
       route.providerName,
       replayScope,
+      undefined,
+      translatorBudget,
     );
     observeAdvisorNativeReasoning(req.headers, logCtx, request.body);
     return request;
@@ -611,7 +622,7 @@ export async function runNativeChatAttempt(
       // limit: waiting and re-sending here is exactly the duplicate inference the refusal
       // exists to stop. It kept the same shape under the old 502 only because 502 never
       // matched this branch.
-      && !isNonReplayableResponse(response)
+      && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
       && retryPolicy
       && retries < retryPolicy.attempts
       && transientSendAvailable()
@@ -718,20 +729,12 @@ export async function runNativeChatAttempt(
       && (isCyberPolicyCode(upstreamCode) || isCyberPolicyMessage(upstreamMessage))
       ? upstreamMessage
       : detail ? `Provider error ${response.status}: ${detail}` : `Provider error ${response.status}`;
-    // Zen's keyless free tier refuses the request outright rather than rate-limiting it, and
-    // the raw `MissingSessionID` tells a user nothing about why or what to do (#4121).
-    const clientMessage = enrichOpenCodeZenFreeTierMessage(message, {
-      providerName: route.providerName,
-      baseUrl: route.provider.baseUrl,
-      adapter: route.provider.adapter,
-      upstreamErrorType: upstreamType,
-    });
     const classified = classifyError(
       response.status,
       upstreamType ?? (response.status === 401 ? "authentication_error"
         : response.status === 429 ? "rate_limit_error"
           : response.status >= 500 ? "server_error" : "invalid_request_error"),
-      clientMessage,
+      message,
     );
     // The verdict is read once, from the response that carries it and from the code a
     // re-wrapped body kept -- never from the status, which a real rate limit shares.

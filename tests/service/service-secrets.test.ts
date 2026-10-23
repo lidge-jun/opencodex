@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   hardenReusedServiceApiToken,
+  loadServiceTokenFromFile,
   readServiceApiTokenState,
   readTokenBackupState,
   removeOrphanTokenBackup,
@@ -347,5 +348,41 @@ describe("service API token ownership", () => {
     expect(() => restoreTokenBackup(join(home, "not-the-backup"))).toThrow("path mismatch");
     expect(readServiceApiTokenState()).toMatchObject({ kind: "present", token: "ocx_data_original" });
     expect(readTokenBackupState()).toMatchObject({ kind: "present", token: "ocx_data_original" });
+  });
+});
+
+describe("inherited OCX_API_TOKEN_FILE reads are bounded", () => {
+  const load = (file: string) => loadServiceTokenFromFile({ OCX_API_TOKEN_FILE: file });
+
+  test("loads one trimmed single-line token and nothing else", () => {
+    const file = join(home, "token");
+    writeFileSync(file, "  ocx_data_token  \n");
+    expect(load(file)).toBe("ocx_data_token");
+    writeFileSync(file, "x".repeat(4096));
+    expect(load(file)).toBe("x".repeat(4096));
+    for (const content of ["", "   \n", "first\nsecond\n", "has space", "{\n  \"key\": 1\n}", "tok\u0000en", "t\u00f6ken"]) {
+      writeFileSync(file, content);
+      expect(load(file)).toBeNull();
+    }
+  });
+
+  test("refuses an oversized file without returning a prefix", () => {
+    const file = join(home, "big");
+    writeFileSync(file, "x".repeat(4097));
+    expect(load(file)).toBeNull();
+  });
+
+  test("refuses directories, symlinks and FIFOs", () => {
+    expect(load(home)).toBeNull();
+    if (process.platform === "win32") return;
+    const target = join(home, "real");
+    writeFileSync(target, "ocx_data_token");
+    const link = join(home, "link");
+    symlinkSync(target, link);
+    expect(load(link)).toBeNull();
+    const fifo = join(home, "fifo");
+    execFileSync("mkfifo", [fifo]);
+    // A FIFO with no writer would block a plain read forever; the nonblocking open must refuse it.
+    expect(load(fifo)).toBeNull();
   });
 });

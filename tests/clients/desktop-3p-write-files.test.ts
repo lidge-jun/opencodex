@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { atomicReplaceDesktopConfig, writeDesktop3pConfig } from "../../src/claude/desktop-3p";
-import { parseMetadata, readDesktopProfileForeignKeys, readDesktopProfileSnapshot } from "../../src/claude/desktop-3p-library";
+import { MAX_DESKTOP_PROFILE_FILE_BYTES, parseMetadata, readDesktopProfileForeignKeys, readDesktopProfileSnapshot } from "../../src/claude/desktop-3p-library";
 import * as desktopLibrary from "../../src/claude/desktop-3p-library";
 import { isTestHomeGuardArmed } from "../../src/lib/test-home-guard";
 import type { OcxConfig } from "../../src/types";
@@ -274,19 +274,19 @@ for (const scenario of ["backup", "rollback"] as const) {
       if (!isTestHomeGuardArmed()) throw new Error("guard not armed");
       const profile = ${JSON.stringify(profile)}, meta = ${JSON.stringify(meta)}, fifo = ${JSON.stringify(fifo)};
       const scenario = ${JSON.stringify(scenario)};
-      const open = fs.openSync, read = fs.readFileSync, rename = fs.renameSync;
+      const open = fs.openSync, read = fs.readSync, rename = fs.renameSync;
       let profileFd, swapped = false;
       spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
         const fd = open(path, flags, mode);
         if (path === profile) profileFd = fd;
         return fd;
       });
-      spyOn(fs, "readFileSync").mockImplementation((path, options) => {
-        const bytes = read(path, options);
-        if (scenario === "backup" && path === profileFd && !swapped) {
+      spyOn(fs, "readSync").mockImplementation((fd, buffer, offset, length, position) => {
+        const count = read(fd, buffer, offset, length, position);
+        if (scenario === "backup" && fd === profileFd && !swapped) {
           rename(fifo, profile); swapped = true;
         }
-        return bytes;
+        return count;
       });
       spyOn(fs, "renameSync").mockImplementation((source, destination) => {
         if (scenario === "rollback" && destination === meta) throw new Error("fixture metadata failure");
@@ -321,4 +321,40 @@ for (const scenario of ["backup", "rollback"] as const) {
       expect(fs.readFileSync(meta)).toEqual(metadata);
     }
   }, 20000);
+}
+
+test("oversized backup source refuses before backup or replacement writes", () => {
+  const path = join(library, "oversized.json");
+  const original = Buffer.alloc(MAX_DESKTOP_PROFILE_FILE_BYTES + 1, 32);
+  fs.writeFileSync(path, original);
+  let writes = 0;
+  expect(() => atomicReplaceDesktopConfig(path, "{}\n", original, () => { writes++; }))
+    .toThrow("desktop_config_too_large");
+  expect(writes).toBe(0);
+  expect(fs.readFileSync(path).equals(original)).toBe(true);
+  expect(fs.existsSync(path + ".bak")).toBe(false);
+});
+
+for (const kind of ["profile", "metadata"] as const) for (const extra of [0, 1]) {
+  test(`normal writer preflights exact ${kind} output limit+${extra}`, () => {
+    const first = writeProfile(); expect(first.written).toBe(true);
+    const meta = join(library, "_meta.json"), target = kind === "profile" ? first.path : meta;
+    const value = { ...JSON.parse(fs.readFileSync(target, "utf8")), foreignPad: "" };
+    value.foreignPad = "x".repeat(MAX_DESKTOP_PROFILE_FILE_BYTES + extra - Buffer.byteLength(JSON.stringify(value, null, 2) + "\n"));
+    expect(Buffer.byteLength(JSON.stringify(value, null, 2) + "\n")).toBe(MAX_DESKTOP_PROFILE_FILE_BYTES + extra);
+    const input = JSON.stringify(value); expect(Buffer.byteLength(input)).toBeLessThan(MAX_DESKTOP_PROFILE_FILE_BYTES);
+    fs.writeFileSync(target, input);
+    const beforeProfile = fs.readFileSync(first.path), beforeMeta = fs.readFileSync(meta);
+    expect(fs.existsSync(first.path + ".bak")).toBe(false);
+    const result = writeProfile();
+    if (extra) {
+      expect(result).toMatchObject({ written: false, reason: "desktop_config_too_large" });
+      expect(fs.readFileSync(first.path)).toEqual(beforeProfile); expect(fs.readFileSync(meta)).toEqual(beforeMeta);
+      expect(fs.existsSync(first.path + ".bak")).toBe(false);
+    } else {
+      expect(result.written).toBe(true); expect(fs.statSync(target).size).toBe(MAX_DESKTOP_PROFILE_FILE_BYTES);
+      expect(JSON.parse(fs.readFileSync(target, "utf8")).foreignPad).toBe(value.foreignPad);
+      expect(fs.readFileSync(first.path + ".bak")).toEqual(beforeProfile);
+    }
+  }, 20_000);
 }

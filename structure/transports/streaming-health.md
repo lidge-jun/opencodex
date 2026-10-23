@@ -57,7 +57,7 @@ cancellation decisions.
 
 > Decision record: [ADR-5805](../decisions/ADR-5805-chat-completions-heartbeat-relay.md)
 
-Top-level `emptyCompletionRetry: true` opts Responses turns into one identical replay when an
+Top-level `emptyCompletionRetry: true` opts translated Responses turns into one identical replay when an
 upstream turn produces neither output text nor a tool call, including a stream that ends before a
 terminal event. A terminal-less stream is replayed only before actionable output; post-output EOF
 remains incomplete so text or tool calls cannot be duplicated. The default is off because the replay
@@ -66,7 +66,7 @@ buffered HTTP adapters plus `runTurn` transports share the same guard, while com
 routed compaction stay excluded. Pre-content reasoning is retained under named event-count and byte
 caps and emits liveness heartbeats while held. A second empty result or retry failure becomes typed
 502 `empty_completion_retry_failed`; usage is merged across sends, and the Logs attempt records
-recovery kind `empty-completion`.
+recovery kind `empty-completion`. Native OpenGateway passthrough follows its [separate completion contract](../providers/opengateway.md), with destination-specific default recovery and terminal-only replay.
 
 The fetch and runTurn web-search loops honor `streamRoutedModelOutput`: leading text and reasoning
 stream live until the first tool boundary, and final replay omits already delivered events.
@@ -246,7 +246,7 @@ returns the same downstream SSE contract. The canonical `openai` provider uses
 upstream WebSocket by default; `providers.openai.upstreamWebsocket: false` sends
 its streaming turns over HTTP/SSE instead. This explicit choice also makes
 native mid-turn steering and injection unavailable on that provider. It does
-not change the endpoint, credential, or downstream event format.
+not change the endpoint, credential, or downstream event format. The [upstream connection-signal contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314) preserves an actual reasoning-inclusion header for HTTP/SSE clients; it cannot modify a client-facing WebSocket upgrade that already completed.
 Its WSS route checks NO_PROXY first, then selects the
 first non-empty HTTPS_PROXY, https_proxy, ALL_PROXY, or all_proxy value. HTTP_PROXY alone does not
 route WSS. Unsupported or malformed selected proxy values skip the WebSocket attempt and use the

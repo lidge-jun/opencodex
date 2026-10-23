@@ -55,7 +55,7 @@ function successfulDeps() {
       // Matches the /healthz fixture version below so the skew guard stays out of the way;
       // the dedicated skew tests override it explicitly.
       cliVersion: "test",
-      readUpdateHome: () => ({ config: { path: "/test/ocx", dev: 1, ino: 2 }, codex: { path: "/test/codex", dev: 1, ino: 3 }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) } }),
+      readUpdateHome: () => ({ config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) } }),
     },
   };
 }

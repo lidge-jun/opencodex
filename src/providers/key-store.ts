@@ -32,14 +32,19 @@ export type {
   ProviderKeyStoreKind,
 } from "./api-key-resolve";
 
-/** Shared with routing: a key-mode override is effective only while its key resolves. */
+/**
+ * Shared with routing: a key-mode override is operator intent, not a credential probe.
+ * The configured authMode alone decides the lane; a key that cannot be resolved right now
+ * (paused last key, missing env var, disabled pool) fails closed at the transport and must
+ * never implicitly reclassify the provider to the registry's OAuth lane, where a stored
+ * OAuth account would be billed instead of the operator's key.
+ */
 export function providerUsesKeyAuthOverride(
   entry: Pick<ProviderRegistryEntry, "authKind" | "allowKeyAuthOverride">,
   provider: Pick<OcxProviderConfig, "authMode">,
-  resolvedKey: string | undefined,
 ): boolean {
   return entry.authKind === "oauth" && entry.allowKeyAuthOverride === true
-    && provider.authMode === "key" && typeof resolvedKey === "string" && resolvedKey.trim().length > 0;
+    && provider.authMode === "key";
 }
 
 /**

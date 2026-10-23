@@ -191,6 +191,25 @@ export function buildProbeArgv(options: ProbeArgvOptions): string[] {
   ];
 }
 
+/**
+ * Locale-independent Windows check for a host whose SSH shell is cmd.exe or PowerShell. Both run
+ * `cmd /c echo %OS%`, and cmd expands it to `Windows_NT` regardless of display language. The
+ * command is a fixed literal; a POSIX shell answers "command not found" and nothing else.
+ */
+export const WINDOWS_OS_PROBE = "cmd /c echo %OS%";
+
+/** Run WINDOWS_OS_PROBE against an already trusted (pinned or just-probed) host key only. */
+export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string }): string[] {
+  const alias = assertSshAlias(options.alias);
+  return [
+    "ssh", "-T",
+    ...commonOptions(alias, options.knownHostsFile, "yes"),
+    "-o", "ClearAllForwardings=yes",
+    "--", alias,
+    WINDOWS_OS_PROBE,
+  ];
+}
+
 /** Read the fingerprint of the host key recorded by a probe. */
 export function buildFingerprintArgv(tempKnownHostsFile: string): string[] {
   return ["ssh-keygen", "-l", "-f", assertKnownHostsPath(tempKnownHostsFile)];

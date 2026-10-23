@@ -121,8 +121,27 @@ labels local presets separately; those normally omit both `authMode` and `apiKey
 The [`retryOn429`](/reference/configuration/) same-key 429 replay applies only to API-key
 providers (`authMode: "key"`). OAuth, forward, and local presets are excluded — their
 credentials must never be replayed on the same token, and local runtimes have no remote key to
-preserve. It is opt-in: when the option is absent the feature is off; object presence enables
-it unless `enabled: false`.
+preserve. It is opt-in except for documented destination-specific defaults. Canonical Mistral
+Chat uses a patient retry policy (6 replays, 10-second fallback interval), within the
+existing request-wide send allowance. Explicit `retryOn429` settings, including
+`enabled: false`, take precedence. The Mistral preset also forwards supplied prompt-cache
+keys by default; `promptCacheKey: false` disables forwarding. Cache affinity improves the
+chance of reuse, but does not guarantee a cache hit or remove token-throughput limits.
+
+Mistral uses one API-key provider for both Studio and Vibe keys. Key types and plan allowances
+are described in [Mistral's API-key documentation](https://docs.mistral.ai/admin/identity-access/api-keys);
+the proxy does not infer a subscription tier from the key. For every model, explicit upstream
+`Retry-After` deadlines are shared between calls on the same credential and model. A 429
+without a retry time can activate a conservative 60-second recovery wait when valid minute
+counters show exhausted capacity, or the refused query's measured cost exceeds the remaining
+tokens while fitting the full advertised allowance. This is a local recovery policy, not an
+exact server-reset prediction. Healthy traffic never predicts the next query's cache or cost.
+After the wait, one recovery probe runs; success restores ordinary traffic. Missing, malformed,
+zero-entitlement, exhausted-monthly, or above-full-allowance evidence does not invent a reset or compact history.
+`requestPacing: { "enabled": false }` or `retryOn429: { "respectRetryAfter": false }`
+disables shared pacing. If Mistral's
+retry time exceeds `retryOn429.maxIntervalMs`, the proxy returns the 429 and retry hint rather
+than replaying early. Context windows and per-model compaction preferences remain independent.
 
 When round-robin key selection is enabled, queued requests recheck key cooldowns before sending and acquire pacing capacity for any replacement key. This applies to native Chat, Messages, Responses and compact. Waiting for replacement-key capacity does not consume the upstream response-header timeout. Per-key pacing and round-robin use guarded HTTP/SSE even when upstream WebSockets are enabled; WebSocket-only steering and injection require a route without those key policies. This does not change the saved active key. An established upstream turn keeps its credential; later sends are refused if that key cools. Pre-output key rejection can recover to a healthy key within the existing request limit. Direct Images and compact requests record genuine 401/429 cooldowns without replaying that paid POST.
 
@@ -219,9 +238,25 @@ account's own model discovery, because Google enables models per account: some a
 Claude Sonnet 4.6 and Claude Opus 4.6 (Thinking), others only Claude Opus and Sonnet 5.5 (directly
 billed, non-trial Pro or Ultra plans), and Gemini 4 Argon only on Ultra and Enterprise. Both Claude
 generations map: 4.6 takes its effort as a thinking level, 5.5 as its `-low`, `-medium`, or
-`-high` model. With several Antigravity accounts and `oauthAccountFailover.enabled`, a request
-prefers an account whose discovery lists the requested model. Saved selections of models that left
-the list keep routing as before.
+`-high` model.
+
+Antigravity requests go only to accounts that may serve the requested model. OpenCodex remembers
+each account's model list from that account's own discovery, in memory, for six hours. An account
+whose list includes the model is preferred; an account with no current list (not yet discovered,
+expired, or forgotten by a restart) is still used, because nothing proves it lacks the model. An
+account whose current list omits the model is never sent the request, including on 429 and
+authentication failover. If the selected account omits it and `oauthAccountFailover.enabled` is on,
+the request moves to another account that is not paused or awaiting reauthentication. Otherwise
+OpenCodex refuses the request locally with HTTP 403 `permission_denied` and sends nothing upstream:
+
+- `The selected Google Antigravity account does not list the model "<model>" in its model discovery. Select an account that lists it, or enable oauthAccountFailover so OpenCodex can choose one.`
+  Another usable account may serve the model, but failover is off.
+- `The selected Google Antigravity account does not list the model "<model>" in its model discovery, and no account that may serve it could be used for this request. Retry the request.`
+  Failover is on and chose another account, but that account could not be used for this request.
+- `No usable Google Antigravity account lists the model "<model>" in its model discovery. Choose a model your accounts list, or add an account that has access to it.`
+  Every usable account's current list omits the model.
+
+A saved selection of a model that left the list follows the same rule.
 
 To check which mode a provider is actually using, open it on the Providers page: the **Connection**
 block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or
@@ -478,6 +513,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 
 Inline JSON and extra positional arguments are rejected. Keep exported files private and delete or store them securely after import.
 
+Each record may carry an optional `project_id` for an account whose Cloud Code Assist project is not discovered automatically. It must be a Google Cloud project id (6–30 lowercase letters, digits or hyphens). OpenCodex uses it only when discovery finds no project, and only after a quota check with that account's own token succeeds for it; otherwise the record fails with `missing_project` and nothing is saved. A discovered project always takes precedence.
+
 ### OAuth reliability
 
 opencodex coordinates token refresh and Codex pool routing so concurrent requests do not race the
@@ -636,7 +673,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 105 built-in presets: 85 key-based, 16 OAuth, three local, and one default
+opencodex ships 105 built-in presets: 84 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -718,7 +755,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Z.AI (GLM Coding) | `https://api.z.ai` — Responses at `/api/v1/responses` by default; Chat Completions at `/api/coding/paas/v4/chat/completions` per model through `modelAdapters` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
 | BigModel Coding Plan (Responses, static roster) | `https://open.bigmodel.cn/api/v1` |
-| Qwen Cloud | Token plan (default): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · or Custom |
+| Qwen Cloud | Token plan (default): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · or Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
@@ -733,6 +770,27 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
+**Alibaba Token Plan** provides Beijing Personal Edition and International Team Edition
+presets. Both regions offer both subscription tiers. The presets keep static chat-model
+lists because upstream discovery also includes non-chat models. Existing selections and
+explicit International endpoint overrides are preserved.
+
+Both presets include `deepseek-v4.1-flash-1017` with text/image input, text output,
+1,000,000 context and `low`/`high`/`max` reasoning (default `high`). Its 393,216 output
+budget follows the existing published-budget normalization, not a measured boundary;
+the lab lists 384,000. Strict schemas reject and `json_object` is unverified for this
+exact ID, so Chat requests omit `response_format`. This is best-effort text, not
+guaranteed JSON. The bare model's verified JSON downgrade and existing Responses
+pins are unchanged. Beijing also includes now-listed `deepseek-v4-pro-0813`;
+International omits retired `deepseek-v3.2` and bare `deepseek-v4-flash` but retains
+`deepseek-v4-flash-0731`. Both presets keep the hosts their official quick starts
+document: Beijing `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` and
+International `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`.
+The Qwen Cloud preset uses the separate Token Plan host that Qwen Cloud documents above.
+See the [1017 model card](https://www.qianwenai.com/models/deepseek-v4.1-flash-1017),
+[Chat reference](https://docs.qwencloud.com/api-reference/chat/openai-chat) and
+[Personal overview](https://help.aliyun.com/en/model-studio/token-plan-personal-overview).
+
 **OpenGateway** is an OpenAI-compatible gateway operated by Sionic AI at
 `https://apis.opengateway.ai/v1`. Its public catalog contains about 80 active models
 (as verified on 2026-10-02); the preset automatically refreshes the live model list from
@@ -743,6 +801,16 @@ Create a key in the [OpenGateway dashboard](https://opengateway.ai/api-keys), th
 use the configured Bearer key; the public model list does not validate that key.
 On the Responses wire OpenGateway rejects replayed native custom tool calls, so the preset
 lowers Codex custom tools such as code-mode `exec` to function tools before sending them.
+Tool-result content arrays are sent as text, with images preserved after the paired tool-result group. Unsupported result parts, including refusals and opaque content, are rejected explicitly with a client input error before sending.
+Image detail `original` maps to `high`, which the gateway accepts; image bytes remain unchanged.
+The native Responses route also checks text-only empty completions before exposing them as success.
+Exhausted output budgets produce `incomplete` with `max_output_tokens`; the proxy does not increase
+the requested budget. A replay-safe empty completion with budget remaining may retry once, within
+the existing send limit. Explicit `emptyCompletionRetry: false` or `OCX_EMPTY_COMPLETION_RETRY=0`
+disables that retry. Text, refusals, tool activity, and unknown stream events prevent replay and
+retain the original stream. The protection does not change other providers or their retry defaults.
+Replay requires explicit `store: false`, complete input, and client-executed tools only; a hosted
+tool such as `web_search` prevents automatic replay even if no tool event was observed.
 
 **TokenLab** ([sponsor](https://github.com/lidge-jun/opencodex/blob/main/SPONSORS.md)) is an
 OpenAI-compatible API gateway at [tokenlab.sh](https://tokenlab.sh/r/OPENCODEX),
@@ -857,42 +925,24 @@ when a stable upstream session is required.
 
 **MiMo tool-call echoes.** On OpenCode Go and other Chat Completions routes, a bare
 `<tool_call>` block is hidden when it duplicates one structured call to the same tool
-with the same effective input. If the input differs or several calls could explain
+with the same effective input. This includes MiMo wrappers such as
+`<tool_call_deadbeef>` with matching closing IDs, including echoes appended to ordinary prose.
+Code examples remain visible. If the input differs or several calls could explain
 the block, the markup remains visible. For `mimo-v2` and dotted MiMo V2 model IDs such as
 `mimo-v2.6-pro`, if the gateway instead sends exactly one empty `{}` call for a declared
-freeform tool and puts its input in a standalone bare block, opencodex restores that
+freeform tool and puts its input in a standalone bare or identified block, opencodex restores that
 input to the call and hides the block. Hyphenated IDs such as `mimo-v2-pro` and
 `mimo-v2-omni` are outside this recovery rule. Prose, quoted
 examples, ordinary functions, and ambiguous responses remain unchanged. This also handles
 MiMo's malformed `<parameter=` opener at the start of that standalone block.
 
-**OpenCode Zen** (`opencode-zen`) and the keyless **OpenCode Free** preset share
-`https://opencode.ai/zen/v1`. Free models on that gateway often hit a short-window burst
-limit around 15–20 requests/minute (community-measured; OpenCode does not publish RPM).
-Zen may return generic rate-limit 429 responses without `Retry-After` / `X-RateLimit-*`
-headers. That is separate from the keyless desktop quota OpenCode advertises
-(~200 Big Pickle/free-model requests per 5 hours on `opencode-free`). When Zen omits
-`Retry-After` on such a 429, opencodex adds provider guidance to the client error and a
-synthetic `Retry-After`; an upstream `Retry-After` still takes precedence. Same-key
-wait-and-retry remains opt-in via [`retryOn429`](/reference/configuration/).
+**OpenCode Zen** (`opencode-zen`) uses `https://opencode.ai/zen/v1` with an API key from [opencode.ai/auth](https://opencode.ai/auth). Free-model traffic can hit short-window rate limits around 15–20 requests/minute (community-measured; OpenCode does not publish RPM). When a rate-limit 429 omits `Retry-After`, opencodex adds guidance and a synthetic `Retry-After`; valid upstream headers take precedence. Same-key retries remain opt-in via [`retryOn429`](/reference/configuration/).
 
 Gemini models on `opencode-zen` use Google's native API automatically when the provider uses an API key, the default `googleMode` (`ai-studio`), and either `https://opencode.ai/zen/v1` or `https://opencode.ai/inference/v1`. Use the model IDs listed by Zen; OpenCodex preserves them, including Flash IDs without a `-tiered` suffix. Claude models on these API-key routes use Anthropic Messages automatically, regardless of `googleMode`. When loading saved configurations, OpenCodex ignores eligible older Gemini and Claude Chat/Responses overrides only for native models in the canonical keyed `opencode-zen` provider on these official Zen routes. It also ignores eligible Responses-only `image_generation` hosted-tool preferences; custom providers, non-key routes, and other preferences remain unchanged.
 
-**The keyless `opencode-free` tier is currently closed to third-party clients.** Zen refuses
-any request that arrives without an `x-opencode-session` header, answering with error type
-`MissingSessionID` and the message "OpenCode's free tier can only be used in OpenCode". Presence
-of the header is the entire gate, so a proxy could pass it by inventing a value — opencodex does
-not. Minting a session identifier and a versioned `opencode/<version>` User-Agent is a claim to
-*be* the OpenCode client, and OpenCode publishes no third-party integration contract for this
-keyless tier; an HTTP 200 obtained that way is a bypassed admission check rather than
-permission. opencodex therefore reports the restriction instead of working around it: a request
-to `opencode-free` returns an error explaining the upstream gate and pointing here.
+**`opencode-free` has been removed** because every model now returns `403 permission_denied` under OpenCode's upstream free-tier gate ([#7255](https://github.com/lidge-jun/opencodex/issues/7255)). Loading an existing configuration disables its entries and dependent model references in memory, warns once per process, and leaves the file unchanged. If it was the default provider, the standard OpenAI OAuth route becomes the default. Use `opencode-go`, keyed `opencode-zen`, or another provider. [OpenCode Zen terms](https://opencode.ai/docs/zen/).
 
-The supported route to the same models is the keyed **`opencode-zen`** provider with an OpenCode
-Zen API key from [opencode.ai/auth](https://opencode.ai/auth). If OpenCode later publishes a
-supported third-party path for the keyless tier, opencodex can follow it; until then the preset
-stays as documentation of the restriction. Upstream terms:
-[opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
+Healthy Claude Desktop assignments and defaults are preserved. Rules whose source-model allowlist becomes empty are disabled, along with native subagent sync when its injection model is removed. Later config saves keep removed references out of the file while preserving healthy concurrent edits.
 
 Most use the `openai-chat` adapter with a bearer key; Anthropic-compatible presets such as
 **Xiaomi MiMo** (`xiaomi`) use the `anthropic` adapter (`x-api-key`). Xiaomi also has an OpenAI Chat
@@ -1180,6 +1230,35 @@ Create a key in [Novita's key manager](https://novita.ai/settings/key-management
 > hosts and schemas and are not routed by this preset.
 > Live discovery for this preset is capped at a 1 MiB response and 256 raw model rows.
 
+### WorkBuddy AI subscription
+
+`workbuddy-ai` connects your international WorkBuddy AI subscription as a model provider.
+Choose **WorkBuddy AI** in Providers and log in, or run:
+
+```bash
+ocx login workbuddy-ai
+```
+
+Complete the browser sign-in; OpenCodex polls for authorization for up to five minutes.
+Tokens are stored in OpenCodex and refreshed on demand. Adding accounts uses the existing
+OAuth account list; team identity stays attached to its own token. No WorkBuddy desktop
+installation or credential-file import is required.
+
+Models and capabilities come from your account's live product catalog. Select a
+`workbuddy-ai/<model-id>` model after login; `workbuddy-ai/default-model` is the fallback
+selector when discovery is unavailable. Streaming, tool calls and buffered responses use
+WorkBuddy's Chat endpoint. The Overview and Accounts tabs show remaining credits, used/total credits, base and gift
+balances, and the next expiring non-daily credits when available. Refresh reads the signed-in
+account's billing summary; an unavailable read is not a zero balance. These credits are
+informational and do not disable free models when paid credits run out.
+
+This uses an unofficial subscription protocol based on
+[Magpie's WorkBuddy plugin](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy).
+Upstream client-channel or account restrictions are returned to the caller. OpenCodex does
+not rewrite agent identity prompts to bypass them. Availability depends on your account,
+region, model entitlement and WorkBuddy's current API. This is separate from the CodeBuddy
+CLI API-key providers and does not connect the WorkBuddy desktop client to OpenCodex.
+
 ### Official CodeBuddy Code CLI (Global & CN)
 
 OpenCodex provides official adapter support for Tencent Cloud's CodeBuddy Code CLI via the `codebuddy` (Global) and `codebuddy-cn` (China) presets.
@@ -1245,6 +1324,7 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Authentication:** Create a PAT in the account integrations page
   ([Global](https://qoder.com/account/integrations), [CN](https://qoder.cn/account/integrations)) and paste it as the provider's API key. The stored key reaches the CLI only as `QODER_PERSONAL_ACCESS_TOKEN` (Global) or `QODERCN_PERSONAL_ACCESS_TOKEN` (CN) in a scoped child environment.
 - **Region Isolation:** Each preset accepts only its canonical destination (`https://qoder.com` or `https://qoder.cn`) and resolves its own executable. Credentials, model cache, usage, and health are independent; neither region falls back to the other. An older custom provider named `qoder` with a different destination keeps its existing adapter and URL.
+- **Windows executables:** Each preset launches its CLI's native executable (`qoder.exe` or `qodercli.exe` for Global, `qodercn.exe` or `qoderclicn.exe` for CN) when one is on PATH. Within one PATH folder the `.exe` wins over a same-name `.cmd`, and a later candidate name such as `qoderclicn.exe` anywhere on PATH wins over `qodercn.cmd`; an earlier PATH folder that holds only `qodercn.cmd` still shadows a later folder's `qodercn.exe`. Qoder turns pass empty `--tools` and `--setting-sources` values to keep the CLI's built-in tools and local settings out, and a dispatcher that forwards through PowerShell drops those empty values. When only such a dispatcher is found, the turn fails before the CLI starts with `cli_dispatcher_drops_empty_args`; add the folder holding the native executable to PATH (the official CN installer places it in `%USERPROFILE%\.qoder-cn\bin\qoderclicn`) and retry. A dispatcher that passes arguments straight through, such as an npm shim, keeps working.
 - **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
 - **Token usage:** Qoder CLI reports zero token counts unless its usage switch is on, so each preset turns it on in its scoped CLI child environment: `QODER_EXPOSE_TOKEN_USAGE=true` for Global and `QODERCN_EXPOSE_TOKEN_USAGE=true` for CN, which reads only its own prefix.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
@@ -1627,7 +1707,14 @@ provider-specific) is already consumed.
 Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
-custom provider.
+or Abliteration custom provider.
+
+**Abliteration credits.** A provider of any name whose `baseUrl` is
+`https://api.abliteration.ai` or `https://api.abliteration.ai/v1` reads
+`GET https://api.abliteration.ai/v1/credits` with its active key as a Bearer token and does not
+follow redirects. `total_credits` minus `total_usage` is the remaining USD balance, shown as a
+credits bar of consumed spend. An account with no credits shows no bar. A rejected key clears the
+row; `503 credit_balance_unavailable`, 408, and 429 keep the last reading.
 
 **OpenCode Go quota.** The canonical `opencode-go` preset reads
 `GET https://opencode.ai/zen/go/v1/usage` with the configured key as a Bearer token and

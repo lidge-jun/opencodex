@@ -1185,6 +1185,18 @@ describe("claude outbound non-stream + helpers", () => {
     expect(anthropicUsage(undefined)).toEqual({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
     expect(anthropicUsage({ input_tokens: 7, output_tokens: 2 })).toEqual({ input_tokens: 7, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 });
   });
+
+  test("a 1-hour cache write survives the Responses round trip as the cache_creation split", async () => {
+    const { responsesUsage } = await import("../../src/bridge/internal");
+    const wire = responsesUsage({
+      inputTokens: 160, outputTokens: 10, cachedInputTokens: 40, cacheReadInputTokens: 40,
+      cacheCreationInputTokens: 20, cacheCreation1hInputTokens: 15,
+    });
+    expect(anthropicUsage(wire)).toEqual({
+      input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 40, cache_creation_input_tokens: 20,
+      cache_creation: { ephemeral_5m_input_tokens: 5, ephemeral_1h_input_tokens: 15 },
+    });
+  });
 });
 
 describe("claude outbound web_search translation", () => {

@@ -26,6 +26,14 @@ selected="${PATH_SELECTED:-}"
 emit() {
   printf 'windows=%s\n' "$1" >> "$GITHUB_OUTPUT"
   printf 'windows-sensitive: %s (%s)\n' "$1" "$2"
+  # Pull requests never run the Windows shards (AGENTS.md CI policy), so a sensitive one only
+  # gets a non-blocking notice: a maintainer dispatches lane=all on its branch before merging.
+  if [ "$event" = "pull_request" ] && [ "$1" = "true" ]; then
+    printf '::notice title=Windows-sensitive::Windows-sensitive (%s): dispatch Cross-platform CI lane=all on this branch before merge\n' "$2"
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+      printf '**Windows-sensitive** (%s): pull requests do not run the Windows shards; dispatch Cross-platform CI `lane=all` on this branch before merge.\n' "$2" >> "$GITHUB_STEP_SUMMARY"
+    fi
+  fi
 }
 
 case "$selected" in
@@ -79,6 +87,10 @@ get-ciminstance
 process.platform
 localappdata
 userprofile
+spawnsync
+sigterm
+sigkill
+process.kill
 MARKERS
 
 status=0

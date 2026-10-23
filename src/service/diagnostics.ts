@@ -282,14 +282,28 @@ export function diagnoseService(): ServiceDiagnostic {
     const enabled = installed && (() => { try { return sh(`systemctl --user is-enabled ${TASK}`) === "enabled"; } catch { return false; } })();
     const running = installed && (() => { try { return sh(`systemctl --user is-active ${TASK}`) === "active"; } catch { return false; } })();
     const stale = installed && bakedServicePathsDiagnostic() !== null;
-    const viable = installed && enabled && running && !stale;
-    const summary = !installed ? `not installed (${diagnostics})`
-      : stale ? `installed, but stale (systemd user; ${diagnostics})`
-        : viable ? `installed, enabled and running (systemd user; ${diagnostics})`
-          : `installed, but ${!enabled ? "disabled" : "not running"} (systemd user; ${diagnostics})`;
-    return { supported: true, installed, enabled, running, viable, startable: installed && !stale, stale, conflict: false, backend: "systemd", summary };
+    return deriveSystemdServiceDiagnostic({ installed, enabled, running, stale, diagnostics });
   }
   return { supported: false, installed: false, enabled: false, running: false, viable: false, startable: false, stale: false, conflict: false, backend: null, summary: `unsupported on ${process.platform}` };
+}
+
+export interface SystemdServiceDiagnosticInputs {
+  installed: boolean;
+  enabled: boolean;
+  running: boolean;
+  stale: boolean;
+  diagnostics: string;
+}
+
+/** The systemd user-unit verdict, pure so its states are testable without a user bus. */
+export function deriveSystemdServiceDiagnostic(inputs: SystemdServiceDiagnosticInputs): ServiceDiagnostic {
+  const { installed, enabled, running, stale, diagnostics } = inputs;
+  const viable = installed && enabled && running && !stale;
+  const summary = !installed ? `not installed (${diagnostics})`
+    : stale ? `installed, but stale (systemd user; ${diagnostics})`
+      : viable ? `installed, enabled and running (systemd user; ${diagnostics})`
+        : `installed, but ${!enabled ? "disabled" : "not running"} (systemd user; ${diagnostics})`;
+  return { supported: true, installed, enabled, running, viable, startable: installed && !stale, stale, conflict: false, backend: "systemd", summary };
 }
 
 export function serviceStatusSummary(): string {

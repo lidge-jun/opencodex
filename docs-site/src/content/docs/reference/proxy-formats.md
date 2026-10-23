@@ -20,6 +20,15 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## MiMo bare tool-call recovery
+
+On translated OpenAI Chat routes, `mimo-v2` and dotted `mimo-v2.*` model IDs can recover a
+complete bare `<tool_call>` block as a call to an exact declared freeform tool when the response
+contains no structured tool calls. Prose around the block is preserved; fenced and inline-code
+examples, nested headers, undeclared tools and identified wrappers remain literal. Recovery is
+bounded to 128 calls, 4 MiB total and 2 MiB per candidate. Long streamed prose may release the
+original markup before terminal recovery; errors never dispatch recovered calls.
+
 ## Upstream redirects
 
 Credential-bearing model, image, video, and search requests do not automatically follow HTTP redirects, including same-origin redirects. Configure the final upstream API URL instead of a redirecting alias. A redirect does not cause the server to resend credentials or the request body to its destination. The response owner retains its existing error or relay behavior; native Responses and compact routes can return the original 3xx and `Location` to the client. Client redirect behavior is separate from this server transport policy.
@@ -34,11 +43,13 @@ This does not retry filtered model responses or interrupted streams.
 
 ## Codex-native ordinary Lite hosted-search history
 
-Ordinary requests retain structural hosted-search history by default, including Responses Lite requests. To opt in to lossy reference notes, set `providers.openai.projectResponsesLiteHostedSearchHistory: true` in `config.json` (an actual boolean, not the string `"true"`). The per-provider setting defaults to off; omission or `false` keeps structural history. Even when enabled, projection applies only to ordinary requests whose final destination is exact canonical ChatGPT Codex `/responses` and whose effective request intent explicitly selects Responses Lite. It converts unreferenced remaining `web_search_call` history into labeled assistant reference notes. The final `x-openai-internal-codex-responses-lite` header selects Lite only when its value is exactly `true`; an explicit `false` overrides frame metadata. Without a recognized header value, a valid string-map `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite` value of `true` is used, matching the existing WS metadata handling. Non-Lite or unrecognized effective intent retains structural history; malformed metadata does not override an explicit HTTP `true`. Model names, subscription authentication, missing hosted declarations and `additional_tools` alone do not select this policy; no header or metadata is rewritten to make it apply. Once enabled, it applies to new threads/forks, cross-model continuations and cache misses/restarts, without diagnostic settings. Only a valid same-scope bridge memo proves an original function call/result that can be restored first; an ID prefix, model name or missing memo cannot determine the issuer. A hosted cell exactly referenced by a same-input `item_reference.id` is retained. `store:false` removes references earlier, and its remaining hosted history can be projected. Tool declarations/Lite `additional_tools`, choices, client call/result pairs, reasoning/native ciphertext, non-hosted order and caller raw history retain their existing contracts.
+When the final outbound request declares no hosted search tool (no `web_search` or `web_search_preview` entry in `tools` or in a Lite `additional_tools` wrapper, including after the provider's unsupported hosted tools were removed), every Responses destination receives unreferenced replayed `web_search_call` history as the same labeled assistant reference notes described below, with or without the opt-in. Native Sol answered such history with a generic `server_error` (#7250), so a conversation that searched on another model can continue on a route whose current request has no search tool. A function tool named `web_search` is not a hosted declaration. No search tool is added, no search is rerun, and no result is invented; same-input `item_reference` cells stay structural. A request that does declare hosted search keeps structural history unless the opt-in below applies.
+
+Ordinary requests that declare hosted search retain structural hosted-search history by default, including Responses Lite requests. To opt in to lossy reference notes, set `providers.openai.projectResponsesLiteHostedSearchHistory: true` in `config.json` (an actual boolean, not the string `"true"`). The per-provider setting defaults to off; omission or `false` keeps structural history. Even when enabled, projection applies to ordinary turns and native v2 `compaction_trigger` requests whose final destination is exact canonical ChatGPT Codex `/responses` and whose effective request intent explicitly selects Responses Lite. It converts unreferenced remaining `web_search_call` history into labeled assistant reference notes. The final `x-openai-internal-codex-responses-lite` header selects Lite only when its value is exactly `true`; an explicit `false` overrides frame metadata. Without a recognized header value, a valid string-map `client_metadata.ws_request_header_x_openai_internal_codex_responses_lite` value of `true` is used, matching the existing WS metadata handling. Non-Lite or unrecognized effective intent retains structural history; malformed metadata does not override an explicit HTTP `true`. Model names, subscription authentication, missing hosted declarations and `additional_tools` alone do not select this policy; no header or metadata is rewritten to make it apply. Once enabled, it applies to new threads/forks, cross-model continuations and cache misses/restarts, without diagnostic settings. Only a valid same-scope bridge memo proves an original function call/result that can be restored first; an ID prefix, model name or missing memo cannot determine the issuer. A hosted cell exactly referenced by a same-input `item_reference.id` is retained. `store:false` removes references earlier, and its remaining hosted history can be projected. Tool declarations/Lite `additional_tools`, choices, client call/result pairs, reasoning/native ciphertext, non-hosted order and caller raw history retain their existing contracts.
 
 Within that opted-in Lite boundary, this is an explicit **lossy history policy**, not a claim that hosted calls are invalid schema or that all upstream errors are fixed. Notes carry untrusted status/action metadata and allowlisted URL/title/type from both action and top-level sources, never instructions or fetched page bodies: 2,048 UTF-16 units per string, 20 entries per list, 65,536 serialized bytes for all projected notes, then an omission note. IDs and unknown fields are dropped from converted cells. HTTP/SSE and WS share the final ordinary builder.
 
-Public OpenAI API and other destinations do not gain ordinary or native-compact projection. Native `/responses/compact` remains its existing endpoint/account-scrub/official opaque-output path and retains structural hosted history. Portable/routed summaries reuse their existing projection trigger and default reference behavior; the shared renderer additionally retains allowlisted top-level sources there. No new retry, source classification or compaction summarizer is introduced.
+Apart from the missing-declaration rule above, public OpenAI API and other destinations do not gain ordinary or native-compact projection. Native `/responses/compact` remains its existing endpoint/account-scrub/official opaque-output path and retains structural hosted history. Portable/routed summaries reuse their existing projection trigger and default reference behavior; the shared renderer additionally retains allowlisted top-level sources there. No new retry, source classification or compaction summarizer is introduced.
 
 ## Empty search answers
 
@@ -535,6 +546,18 @@ effort default to `reasoning.summary: "auto"` so thinking streams back as
 `reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
 `detailed`, or `none` wins over `include_reasoning`.
 
+When the model is Claude, the response also carries `reasoning_details` in the same shape
+OpenRouter uses: `{"type": "reasoning.text", "text", "signature", "format": "anthropic-claude-v1"}`
+for each signed thinking block and `{"type": "reasoning.encrypted", "data", ...}` for each redacted
+one, on `message` or as `delta.reasoning_details` (each entry arrives complete in one chunk). Send
+the array back unchanged on the assistant message, next to its `tool_calls`, and Claude keeps its
+reasoning across tool steps. The signature is opaque and is the same value `/v1/messages`
+clients receive. OpenCodex replays it only when the model routes to Anthropic's own API
+(`api.anthropic.com`) as a single route; on any other destination, or when an entry is
+malformed (an unknown type or format, or a missing signature), the turn falls back to the plain
+`reasoning_content` text. An entry whose text or signature was edited is forwarded as is, and
+Anthropic rejects it, so return the array exactly as received.
+
 Structured output is part of that translation: `response_format` with `json_object` or
 `json_schema` is forwarded to routed `openai-chat` models. On `POST /v1/responses` the
 equivalent request field is `text.format`: native Responses routes preserve it in the raw
@@ -730,7 +753,8 @@ upstream (`404`). Both legs carry Codex's `session-id` and `thread-id` headers; 
 account choice is bound to that pair (process-local), so a join that reaches the proxy reuses the
 account that created the call, while Direct mode forwards the caller's current bearer on both legs.
 The relayed client headers are exactly `openai-alpha`, `x-session-id`, `session-id`, `thread-id`,
-`originator`, `x-oai-attestation`, and `x-codex-turn-metadata`
+`originator`, `x-oai-attestation`, `x-codex-turn-metadata`, and `voice-session-id` (the client voice
+session id, separate from the realtime `x-session-id`)
 (`LIVE_CLIENT_PROTOCOL_HEADERS` in `src/server/live.ts`); each is relayed only when the caller
 sent it, and none is invented.
 `Authorization` and the ChatGPT account id are proxy-owned on ChatGPT-backed routes (Pool replaces

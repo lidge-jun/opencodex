@@ -14,8 +14,11 @@ import { modelRecordValue } from "../../reasoning-effort";
 import { modelInList, type OcxProviderConfig } from "../../types";
 import { chatParallelToolCallsWireValue } from "./parallel-tool-calls";
 import { applyExplicitChatReasoningWirePolicy } from "./reasoning-wire";
-import { replayNativeChatReasoning } from "./reasoning-replay";
+import { planNativeChatReasoningReplay } from "./reasoning-replay";
 import type { OcxReasoningReplayScopeRef } from "../../types";
+import { jsonUtf8Bytes } from "../../lib/json-byte-size";
+import { isTranslatorBudgetExceededError, TRANSLATOR_MAX_TURN_BYTES, TranslatorBudgetExceededError,
+  type TranslatorBudget } from "../../lib/translator-budget";
 
 const CHAT_PASSTHROUGH_FIELDS = [
   "audio",
@@ -58,6 +61,8 @@ export function buildOpenAIChatPassthroughRequest(
   fastMode?: boolean,
   providerName?: string,
   replayScope?: OcxReasoningReplayScopeRef,
+  maxSerializedBytes = TRANSLATOR_MAX_TURN_BYTES,
+  translatorBudget?: TranslatorBudget,
 ): AdapterRequest {
   const { url, headers, hasCredential } = openAIChatTransport(provider);
 
@@ -79,8 +84,8 @@ export function buildOpenAIChatPassthroughRequest(
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
     if (rawBody[field] !== undefined) body[field] = rawBody[field];
   }
-  body.messages = replayNativeChatReasoning(body.messages, provider, modelId, replayScope,
-    Array.isArray(rawBody.tools) && rawBody.tools.length > 0);
+  const replayPlan = planNativeChatReasoningReplay(body.messages, provider, modelId, replayScope,
+    Array.isArray(rawBody.tools) && rawBody.tools.length > 0, maxSerializedBytes);
   if (protectGlmSummaryBudget(body, provider.baseUrl, body.reasoning_effort)) body.reasoning_effort = "low";
   const rawEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
   const reasoningDisabled = modelInList(provider.noReasoningModels, modelId) || rawEfforts?.length === 0;
@@ -161,7 +166,35 @@ export function buildOpenAIChatPassthroughRequest(
     body.stream_options = rawBody.stream_options;
   }
 
-  const bodyJson = JSON.stringify(applyGithubCopilotContextTier(body, provider, modelId, providerName));
+  const transformedBody = () => applyGithubCopilotContextTier(body, provider, modelId, providerName);
+  // The binding constraint is the final size base + net, so a shrinking replay may legitimately
+  // measure a base above the cap; only a base above max - net makes the result unserializable.
+  let baseBytes = 0;
+  if (replayPlan.hasChanges) {
+    try {
+      baseBytes = jsonUtf8Bytes(transformedBody(), maxSerializedBytes - replayPlan.serializedBytes);
+    } catch (error) {
+      if (isTranslatorBudgetExceededError(error)) {
+        throw new TranslatorBudgetExceededError("request_copies", maxSerializedBytes);
+      }
+      throw error;
+    }
+  }
+  if (replayPlan.serializedBytes > maxSerializedBytes - baseBytes) {
+    throw new TranslatorBudgetExceededError("request_copies", maxSerializedBytes);
+  }
+  const preSerialization = translatorBudget?.reserveTransient(baseBytes + replayPlan.serializedBytes, {
+    kind: "request_copies",
+  });
+  let bodyJson: string;
+  try {
+    if (replayPlan.hasChanges) {
+      body.messages = replayPlan.apply();
+    }
+    bodyJson = JSON.stringify(transformedBody());
+  } finally {
+    preSerialization?.release();
+  }
 
   if (isDebugEnabled()) {
     let host = "upstream";

@@ -84,9 +84,14 @@ protects:
 
 - `getEligiblePoolAccounts` is consulted under the request model's quota scope whenever canonical
   `openai` is in Pool mode, so "the Pool can serve it" shares the dispatch's own eligibility and
-  scoped-cooldown rules. An empty eligible list (or Direct mode, which never consults stored Pool
-  accounts) is what makes the fallback the request's only way through; the lock excludes the main
-  account there itself.
+  scoped-cooldown rules. An empty eligible list permits fallback; the lock excludes the main
+  account from that list itself.
+- Direct does not consult stored Pool accounts. Fallback applies only when the original source
+  route's credential ownership selects stored-main substitution, or the caller's bearer and
+  effective workspace match the currently observed main credential. Caller-owned checks wait
+  boundedly for pending startup policy binding, then recheck identity and the blocked state before
+  rewriting. Other callers retain their native route; a missing caller bearer keeps its normal
+  authentication refusal.
 - Only bare Codex-native selectors qualify. Provider-qualified rows, combos, account namespaces
   (including `nativeAlias` combos), compaction triggers, shadow-intercepted helper calls and policy
   routes name their own destination on purpose, and Luna Reserve keeps its own admission. A
@@ -98,6 +103,11 @@ protects:
 - A malformed section (blank or padded model, undeclared effort) disables the reroute entirely —
   the same disable-don't-widen reading as the compaction override — while the load and write
   boundaries report the malformation. The lock's own refusal behavior is untouched either way.
+- Before rewriting, concrete targets resolve against the current configuration through the
+  shared chosen-target check. Unavailable targets and qualified selectors that only reach the
+  terminal default provider retain the source lock's refusal. Bare default targets, declared
+  slash-containing model ids, configured combos and policy profiles keep their ordinary routing
+  semantics; policies retain request-evidence evaluation at dispatch preparation.
 
 The dashboard row mirrors the shadow-call row: the model pick, the effort and the switch each
 save immediately, and the switch writes `enabled: false` — a remembered pause that keeps the
@@ -105,7 +115,8 @@ model — rather than clearing it. Settings projection and writes live beside th
 `src/server/management/config-routes.ts`; `null` clears the section. Coverage:
 `tests/codex-integration/main-account-hard-lock-fallback-routing.test.ts` and the fallback cases in
 `tests/config/settings-main-account-hard-lock.test.ts` plus
-`gui/tests/main-account-hard-lock-setting.test.tsx`.
+`gui/tests/main-account-hard-lock-setting.test.tsx`. Startup-binding rechecks are covered by
+`tests/codex-integration/main-account-policy-binding-wait.test.ts`.
 
 ## Stored-account authentication policy
 

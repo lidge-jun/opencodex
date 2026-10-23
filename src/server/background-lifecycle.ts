@@ -32,6 +32,7 @@ import {
   startMemoryWatchdog,
   type MemoryWatchdog,
 } from "./memory-watchdog";
+import { ensureQuotaPoolIdentity } from "../quota-pool/identity";
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
@@ -204,6 +205,9 @@ export function acquireServerBackgroundLifecycle(
   if (cleanupInProgress) {
     throw new Error("server background lifecycle cleanup is still in progress");
   }
+  // The quota-pool identity (homeId and the accountRef key) is minted here, per server and off
+  // the request path, so GET /api/quota-pool only ever reads it.
+  try { ensureQuotaPoolIdentity(); } catch { /* the read reports quota_pool_identity_unavailable */ }
 
   const owner: LeaseOwner = {
     token: Symbol("server-background-lifecycle"),

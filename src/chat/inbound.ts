@@ -6,6 +6,7 @@
  * responsesRequestSchema so routing/OAuth/pool/sidecars are inherited unchanged.
  */
 import { chatImageUrlFromPart } from "./image-parts";
+import { signedReasoningInputItems } from "./reasoning-details";
 import { untranslatedChatInputMedia, untranslatedInputMediaMessage } from "../responses/input-media";
 
 export class ChatCompletionsRequestError extends Error {}
@@ -439,7 +440,16 @@ function resolveReasoningSummary(raw: Rec): string | undefined {
  * Translate an OpenAI Chat Completions request body into a /v1/responses request body.
  * Throws ChatCompletionsRequestError (-> 400) on malformed input.
  */
-export function chatCompletionsToResponsesBody(raw: unknown): Rec {
+export interface ChatResponsesProjectionOptions {
+  /**
+   * The route is one first-party Anthropic destination that cannot change credential domain, so
+   * signed thinking a client returns in `reasoning_details` may be replayed to it (#7429).
+   * Every other route keeps the plaintext projection.
+   */
+  acceptAnthropicReasoningSignatures?: boolean;
+}
+
+export function chatCompletionsToResponsesBody(raw: unknown, options: ChatResponsesProjectionOptions = {}): Rec {
   assertChatCompletionsRoutingBody(raw);
   // Only the translated path reaches this function. Native Chat can retain its
   // provider-specific file/audio blocks; projecting them here would discard them.
@@ -510,7 +520,13 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
         // is no attachment point on the message itself, and the parser buffers a
         // reasoning item and prepends it to the NEXT assistant message. Emitting it
         // here keeps that adjacency intact.
-        const reasoningText = assistantReasoningText(msg);
+        const signedReasoning = options.acceptAnthropicReasoningSignatures === true
+          ? signedReasoningInputItems(msg.reasoning_details)
+          : undefined;
+        const reasoningText = signedReasoning ? undefined : assistantReasoningText(msg);
+        // Signed entries carry their own text, so `reasoning_content` (the same text) is not
+        // projected a second time beside them.
+        if (signedReasoning) input.push(...signedReasoning);
         if (reasoningText !== undefined) {
           // `summary` is required on a reasoning input item by the OpenAI Responses API, and our
           // own responsesRequestSchema marks it optional, so a summary-less item validated locally
@@ -525,6 +541,8 @@ export function chatCompletionsToResponsesBody(raw: unknown): Rec {
             content: [{ type: "reasoning_text", text: reasoningText }],
           });
         }
+        // An Opus progress update also sits in `content`. The wire has no marker that tells it
+        // from answer text, so the content is replayed as sent, as it was before #7429.
         const blocks = assistantContentToBlocks(msg.content);
         if (blocks.length > 0) input.push({ type: "message", role: "assistant", content: blocks });
         if (msg.tool_calls !== undefined) {

@@ -13,6 +13,30 @@ export const MEMORY_DRAIN_RESTART_MS = 60_000;
 export const REPLACEMENT_READY_TIMEOUT_MS = 70_000;
 
 /**
+ * A connected client runtime's whole restart, from accepting the request to serving again on the
+ * old process after a failed replacement (OCX-6). The CLI sends the request only while this budget
+ * still fits before its own replacement observation ends, so a rollback is never raced by the
+ * CLI's recovery start. The phases are measured from acceptance.
+ */
+export const CLIENT_RESTART_BUDGET_MS = 90_000;
+/** In-flight requests on the client listener get this long before the listener closes them. */
+export const CLIENT_RESTART_DRAIN_MS = 20_000;
+/** The replacement must answer by this point; a later one is stopped and the old runtime resumes. */
+export const CLIENT_RESTART_READY_BY_MS = 70_000;
+/** How long a rollback waits for the port the stopped replacement released. */
+export const CLIENT_RESTART_REBIND_WAIT_MS = 10_000;
+/** The 409 code a supervised client runtime answers a bound restart with. */
+export const RESTART_SUPERVISED_ERROR = "restart_supervised";
+/** `ocx restart` stops waiting for a replacement this long before its overall deadline. */
+export const RESTART_REOBSERVE_RESERVE_MS = 10_000;
+/**
+ * Room `ocx restart` must still have before it may ask a client runtime to restart: the client's
+ * whole budget, the reobserve reserve and a margin for the request itself. A later request is
+ * refused before it is sent, so a rollback always finishes while the CLI is still observing.
+ */
+export const CLIENT_RESTART_REQUEST_MIN_REMAINING_MS = CLIENT_RESTART_BUDGET_MS + RESTART_REOBSERVE_RESERVE_MS + 5_000;
+
+/**
  * The env var a restarting process hands its replacement `ocx start`: the restarting (parent) pid.
  *
  * The replacement can probe while its parent still answers on the port it is about to take over

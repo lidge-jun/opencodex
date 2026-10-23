@@ -1,10 +1,9 @@
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { AdapterEvent } from "../../types";
 import { repairFreeformToolInput } from "../../responses/apply-patch-envelope";
+import { contextAfter, deferredContinuationBreak, splitAtPossibleSerializedToolCall, MAX_TAG_LENGTH, TAG_SUFFIX, type TextContext } from "./serialized-tool-call-markup";
+export { splitAtPossibleSerializedToolCall } from "./serialized-tool-call-markup";
 
-const OPEN_TAG = "<tool_call>";
-const CLOSE_TAG = "</tool_call>";
-const FUNCTION_TAG = "<function=";
 /**
  * Streaming bounds (ingestStreaming only; buffered reconciliation already knows its structured calls).
  * MAX_HELD_BYTES is a runaway guard on held text plus queued events, far below the translator budget,
@@ -14,12 +13,7 @@ const FUNCTION_TAG = "<function=";
  */
 const MAX_HELD_BYTES = 4 * 1024 * 1024;
 const MAX_TRAILING_CHARS = 8 * 1024;
-
-interface TextContext {
-  fence: string | null;
-  lineStart: boolean;
-  inlineTicks?: number;
-}
+export const MAX_STANDALONE_CANDIDATES = 128;
 
 export interface SerializedToolCall {
   name: string;
@@ -49,9 +43,9 @@ export interface StructuredToolCallReference {
   recoveredParameterWrapper?: boolean;
 }
 
-const BLOCK_HEADER = /<tool_call>\s*<function=([^>\r\n]+)>/y;
+const BLOCK_HEADER = new RegExp(`<tool_call(${TAG_SUFFIX})>\\s*<function=([^>\\r\\n]+)>`, "y");
 /** A separate bare block starts a line (see `splitAtPossibleSerializedToolCall`); a header mid-line is body text. */
-const NEXT_BLOCK_HEADER = /\n<tool_call>\s*<function=[^>\r\n]+>/g;
+const NEXT_BLOCK_HEADER = new RegExp(`\\n<tool_call${TAG_SUFFIX}>\\s*<function=[^>\\r\\n]+>`, "g");
 const FUNCTION_CLOSE = "</function>";
 const PARAMETER_CLOSE = "</parameter>";
 
@@ -73,26 +67,25 @@ function endsWithAt(text: string, from: number, to: number, suffix: string): boo
  * bounds an unclosed candidate: with no close at all before it, it is body text, and a closed
  * `</function></tool_call>` after it still ends the block.
  */
-function blockAt(text: string, offset: number): SerializedToolCall | undefined {
+function blockAt(text: string, offset: number, nextHeaderAt: (from: number) => number): SerializedToolCall | undefined {
   BLOCK_HEADER.lastIndex = offset;
   const header = BLOCK_HEADER.exec(text);
   if (!header) return undefined;
+  const closeTag = `</tool_call${header[1]}>`;
   const bodyStart = offset + header[0].length;
-  NEXT_BLOCK_HEADER.lastIndex = bodyStart;
-  const next = NEXT_BLOCK_HEADER.exec(text);
-  const limit = next ? next.index + 1 : text.length;
+  const limit = nextHeaderAt(bodyStart);
   let unclosed: SerializedToolCall | undefined;
-  for (let close = text.indexOf(CLOSE_TAG, bodyStart); close >= 0 && (close < limit || !unclosed);
-    close = text.indexOf(CLOSE_TAG, close + CLOSE_TAG.length)) {
+  for (let close = text.indexOf(closeTag, bodyStart); close >= 0 && (close < limit || !unclosed);
+    close = text.indexOf(closeTag, close + closeTag.length)) {
     let bodyEnd = trimmedEnd(text, bodyStart, close);
     const closed = endsWithAt(text, bodyStart, bodyEnd, FUNCTION_CLOSE);
     if (closed) bodyEnd = trimmedEnd(text, bodyStart, bodyEnd - FUNCTION_CLOSE.length);
     if (endsWithAt(text, bodyStart, bodyEnd, PARAMETER_CLOSE)) bodyEnd -= PARAMETER_CLOSE.length;
     const call = {
-      name: header[1]!.trim(),
+      name: header[2]!.trim(),
       body: text.slice(bodyStart, bodyEnd),
       start: offset,
-      end: close + CLOSE_TAG.length,
+      end: close + closeTag.length,
     };
     if (closed) return call;
     if (close < limit) unclosed ??= call;
@@ -100,21 +93,64 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
   return unclosed;
 }
 
-/** Finds complete bare blocks outside literal Markdown; ambiguous outer blocks stop the scan. */
-function callsIn(text: string, context: TextContext = { fence: null, lineStart: true }): SerializedToolCall[] {
+/** Finds outer blocks outside literal Markdown, reporting an unresolved enclosing header. */
+export function scanSerializedToolCalls(
+  text: string, context: TextContext = { fence: null, lineStart: true }, allowMidLineBare = false,
+  maxCandidates = allowMidLineBare ? MAX_STANDALONE_CANDIDATES : Infinity,
+): { calls: SerializedToolCall[]; incomplete: boolean; overflow: boolean } {
   const calls: SerializedToolCall[] = [];
+  // Adjacent same-line blocks share one forward-only newline-header search, including EOF.
+  const headers = new RegExp(NEXT_BLOCK_HEADER.source, "g");
+  let next = headers.exec(text);
+  const nextHeaderAt = (from: number): number => {
+    while (next && next.index + 1 < from) next = headers.exec(text);
+    return next ? next.index + 1 : text.length;
+  };
   let offset = 0;
   while (offset < text.length) {
-    const split = splitAtPossibleSerializedToolCall(text.slice(offset), context, true);
+    const split = splitAtPossibleSerializedToolCall(text.slice(offset), context, true, allowMidLineBare);
     offset += split.emit.length;
     if (!split.hasOpenTag) break;
-    const match = blockAt(text, offset);
-    if (!match) break; // An incomplete/ambiguous outer block cannot authorize an inner call.
+    if (calls.length >= maxCandidates) return { calls, incomplete: false, overflow: true };
+    const match = blockAt(text, offset, nextHeaderAt);
+    if (!match) return { calls, incomplete: true, overflow: false }; // An unresolved outer block cannot authorize an inner call.
     calls.push(match);
     offset = match.end;
     context = { fence: null, lineStart: false };
   }
-  return calls;
+  return { calls, incomplete: false, overflow: false };
+}
+
+function callsIn(text: string, context?: TextContext, allowMidLineBare = false): SerializedToolCall[] {
+  return scanSerializedToolCalls(text, context, allowMidLineBare).calls;
+}
+
+/** Standalone recovery is separate from identified-wrapper/empty-structured-input reconciliation. */
+export function hasNestedSerializedToolCallHeader(body: string): boolean {
+  return /<(?:tool_call(?:_[a-fA-F0-9]{1,64})?|function=[^>\r\n]+)>/.test(body);
+}
+
+export function recoverStandaloneBareBlocks(
+  text: string,
+  freeformTools: ReadonlyMap<string, FreeformToolIdentity>,
+  context?: TextContext,
+): { name: string; input: string; start: number; end: number }[] {
+  if (freeformTools.size === 0) return [];
+  const scan = scanSerializedToolCalls(text, context, true);
+  if (scan.overflow) return [];
+  const blocks = scan.calls;
+  // A nested header makes delimiter ownership ambiguous; no later apparent sibling is safe.
+  if (blocks.some(call => hasNestedSerializedToolCallHeader(call.body))) return [];
+  return blocks.flatMap(call => {
+    if (!text.startsWith("<tool_call>", call.start) || !freeformTools.has(call.name)) return [];
+    const wrapped = freeformBody(call.body);
+    const recoveredParameterWrapper = wrapped.startsWith("<parameter=");
+    const input = recoveredParameterWrapper ? freeformBody(wrapped.slice("<parameter=".length)) : wrapped;
+    if (!input.trim()
+        || (recoveredParameterWrapper && /^<parameter=[A-Za-z_$][\w$.-]*>/.test(wrapped))
+        || input.includes("<parameter=") || input.includes("</parameter>")) return [];
+    return [{ name: call.name, input, start: call.start, end: call.end }];
+  });
 }
 
 /**
@@ -126,94 +162,6 @@ function repeatedCallIn(text: string, context?: TextContext): SerializedToolCall
   if (!first) return undefined;
   if (text.slice(first.end).trimEnd() !== text.slice(first.start, first.end).trimEnd()) return undefined;
   return { ...first, end: text.length };
-}
-
-/** Splits safe visible text from a possible control block while carrying Markdown context across chunks. */
-export function splitAtPossibleSerializedToolCall(
-  text: string,
-  initialContext: TextContext = { fence: null, lineStart: true },
-  final = false,
-): {
-  emit: string;
-  defer: string;
-  hasOpenTag: boolean;
-  context: TextContext;
-} {
-  const context = { ...initialContext };
-  const split = (at: number, hasOpenTag = false) => ({
-    emit: text.slice(0, at), defer: text.slice(at), hasOpenTag, context,
-  });
-  for (let index = 0; index < text.length; index++) {
-    if (context.lineStart) {
-      const rest = text.slice(index);
-      const fence = /^ {0,3}(`{3,}|~{3,})([^\n]*)/.exec(rest);
-      if (!context.inlineTicks && fence && (!context.fence || (fence[1]![0] === context.fence[0]
-          && fence[1]!.length >= context.fence.length && /^[ \t\r]*$/.test(fence[2]!)))) {
-        if (!final && !rest.includes("\n")) return split(index);
-        context.fence = context.fence ? null : fence[1]!;
-        index += fence[0].length - 1;
-        context.lineStart = false;
-        continue;
-      }
-      if (!final && /^ {0,3}(`*|~*)$/.test(rest)) return split(index);
-      // Only bare control markup qualifies. Prose, quotes, indented examples and
-      // fenced code stay user-visible even when their body matches a real call.
-      if (!context.fence && !context.inlineTicks) {
-        if (rest.startsWith(OPEN_TAG)) {
-          const header = rest.slice(OPEN_TAG.length).trimStart();
-          if (/^<function=[^>\r\n]+>/.test(header)) return split(index, true);
-          if (!final && (FUNCTION_TAG.startsWith(header)
-              || (header.startsWith(FUNCTION_TAG) && !/[>\r\n]/.test(header.slice(FUNCTION_TAG.length))))) {
-            return split(index);
-          }
-        } else if (!final && OPEN_TAG.startsWith(rest)) return split(index);
-      }
-    }
-    if (!context.fence && text[index] === "`") {
-      let end = index + 1;
-      while (text[end] === "`") end++;
-      if (!final && end === text.length) return split(index);
-      const ticks = end - index;
-      if (!context.inlineTicks) context.inlineTicks = ticks;
-      else if (context.inlineTicks === ticks) context.inlineTicks = undefined;
-      index = end - 1;
-    }
-    context.lineStart = text[index] === "\n";
-  }
-  return split(text.length);
-}
-
-/**
- * The line, fence and inline-code state after `text`. Serialized blocks are neutralised first so
- * the scan runs through the whole text instead of stopping at the first opening tag; a block ends
- * mid-line, which is exactly what the neutral spelling reports too.
- */
-function contextAfter(text: string, context: TextContext): TextContext {
-  if (text.length === 0) return context;
-  return splitAtPossibleSerializedToolCall(text.replaceAll(OPEN_TAG, "<tool-call>"), context, true).context;
-}
-
-/**
- * A deferred header/fence can itself be long. While its unresolved portion only grows, a
- * chunk-local check suffices; the first resolving character goes back through the full splitter.
- * Each unbounded phase is scanned once on entry and once on exit, preserving its Markdown rules.
- */
-function deferredContinuationBreak(text: string, context: TextContext): RegExp | undefined {
-  if (text.startsWith(OPEN_TAG)) {
-    if (/^<tool_call>\s*$/.test(text)) return /\S/;
-    if (/^<tool_call>\s*<function=[^>\r\n]*$/.test(text)) return /[>\r\n]/;
-  }
-  if (!context.inlineTicks && context.lineStart) {
-    const fence = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/.exec(text);
-    if (fence) {
-      if (!context.fence) return /\n/;
-      // Closing-fence ticks may grow only before its optional whitespace suffix.
-      if (!fence[2]) return fence[1]![0] === "`" ? /[^`]/ : /[^~]/;
-      return /[^ \t\r]/;
-    }
-  }
-  if (/^`+$/.test(text)) return /[^`]/;
-  return undefined;
 }
 
 /**
@@ -232,10 +180,13 @@ export class SerializedToolCallContentBuffer {
   private sawCloser = false;
   private openAfterCloser = false;
   private trailingProseChars = 0;
-  private context: TextContext = { fence: null, lineStart: true };
+  protected context: TextContext = { fence: null, lineStart: true };
   private queued: { offset: number; event: AdapterEvent }[] = [];
 
-  constructor(private readonly budget: TranslatorBudget) {}
+  constructor(private readonly budget: TranslatorBudget, private readonly allowMidLineBare = false) {}
+
+  /** Optional recovery retains bounded candidates before prose is released, never the prose itself. */
+  protected releaseBounded(): AdapterEvent[] { return this.drain([]); }
 
   /** Remembers visible text released before a later structured call can be reconciled. */
   private observeText(events: AdapterEvent[]): AdapterEvent[] {
@@ -291,19 +242,22 @@ export class SerializedToolCallContentBuffer {
   /** Scan new text plus a fixed overlap, never the retained body (which may be a large rope). */
   private observeDelimiters(delta: string): void {
     const scan = this.delimiterSuffix + delta;
-    const closer = scan.lastIndexOf(CLOSE_TAG);
-    const afterCloser = closer + CLOSE_TAG.length;
-    if (closer >= 0) {
-      this.sawCloser = true;
-      this.openAfterCloser = false;
-      this.trailingProseChars = 0;
+    const tags = scan.matchAll(new RegExp(`<(/?)tool_call${TAG_SUFFIX}>`, "g"));
+    let afterCloser = -1;
+    for (const tag of tags) {
+      if (tag.index! + tag[0].length <= this.delimiterSuffix.length) continue;
+      if (tag[1]) {
+        this.sawCloser = true;
+        this.openAfterCloser = false;
+        this.trailingProseChars = 0;
+        afterCloser = tag.index! + tag[0].length;
+      } else {
+        this.openAfterCloser = true;
+      }
     }
-    if (scan.lastIndexOf(OPEN_TAG) >= (closer >= 0 ? afterCloser : 0)) {
-      this.openAfterCloser = true;
-    }
-    const tail = closer >= 0 ? scan.slice(afterCloser) : delta;
+    const tail = afterCloser >= 0 ? scan.slice(afterCloser) : delta;
     if (this.sawCloser) this.trailingProseChars += tail.replace(/\s+/g, "").length;
-    this.delimiterSuffix = scan.slice(-(Math.max(OPEN_TAG.length, CLOSE_TAG.length) - 1));
+    this.delimiterSuffix = scan.slice(-(MAX_TAG_LENGTH - 1));
   }
 
   /** Returns immediately safe text and retains only the suffix that still needs reconciliation. */
@@ -312,7 +266,7 @@ export class SerializedToolCallContentBuffer {
       this.append(delta);
       return "";
     }
-    const split = splitAtPossibleSerializedToolCall(this.text + delta, this.context);
+    const split = splitAtPossibleSerializedToolCall(this.text + delta, this.context, false, this.allowMidLineBare);
     this.replace(split.defer, split.hasOpenTag);
     this.context = split.context;
     if (!split.hasOpenTag) this.continuationBreak = deferredContinuationBreak(split.defer, split.context);
@@ -328,7 +282,7 @@ export class SerializedToolCallContentBuffer {
   ingestStreaming(delta: string): AdapterEvent[] {
     const deltaBytes = this.appendedByteLength(delta);
     if (this.hasOpenTag && this.bytes + deltaBytes > MAX_HELD_BYTES) {
-      const released = this.drain([]);
+      const released = this.releaseBounded();
       // A delta that alone passes the bound is delivered as text rather than retained.
       if (Buffer.byteLength(delta) > MAX_HELD_BYTES) {
         this.context = contextAfter(delta, this.context);
@@ -339,7 +293,7 @@ export class SerializedToolCallContentBuffer {
     const text = this.ingest(delta);
     // Checked after ingest too: one delta can open a block and already carry more than a bound.
     if (this.hasOpenTag && (this.bytes > MAX_HELD_BYTES || (this.sawCloser && !this.openAfterCloser && this.trailingProseChars > MAX_TRAILING_CHARS))) {
-      return this.observeText([...textEvents(text), ...this.drain([])]);
+      return this.observeText([...textEvents(text), ...this.releaseBounded()]);
     }
     return this.observeText(textEvents(text));
   }
@@ -358,7 +312,7 @@ export class SerializedToolCallContentBuffer {
     if (!this.hasOpenTag) return [...this.drain([]), event];
     const eventBytes = Buffer.byteLength(JSON.stringify(event));
     // Queued events count toward the same runaway bound as held text.
-    if (this.bytes + eventBytes > MAX_HELD_BYTES) return [...this.drain([]), event];
+    if (this.bytes + eventBytes > MAX_HELD_BYTES) return [...this.releaseBounded(), event];
     this.budget.reserveTransient(eventBytes, { kind: "live_transient" }).commitRetained();
     this.bytes += eventBytes;
     this.queued.push({ offset: this.text.length, event });
@@ -371,7 +325,11 @@ export class SerializedToolCallContentBuffer {
    * duplicate a dispatched call; pass an empty list on failure to preserve everything.
    */
   drain(structuredCalls: readonly StructuredToolCallReference[]): AdapterEvent[] {
-    const removed = duplicatedSerializedToolCallRanges(this.text, structuredCalls, this.context);
+    return this.drainRanges(duplicatedSerializedToolCallRanges(this.text, structuredCalls, this.context));
+  }
+
+  /** Standalone recovery supplies only its own accepted bare ranges, never identified wrappers. */
+  protected drainRanges(removed: readonly { start: number; end: number }[]): AdapterEvent[] {
     const kept = (from: number, to: number): string => {
       let piece = "";
       let cursor = from;
@@ -390,8 +348,11 @@ export class SerializedToolCallContentBuffer {
       if (boundary.event) out.push(boundary.event);
       cursor = boundary.offset;
     }
-    // Later text continues after what was drained, so its line and fence state carry forward.
-    this.context = contextAfter(this.text, this.context);
+    // Control bodies are opaque on every provider, regardless of standalone recovery eligibility.
+    // Context still traverses the whole released text when recovery hit its candidate limit.
+    const last = scanSerializedToolCalls(this.text, this.context, this.allowMidLineBare, Infinity).calls.at(-1);
+    this.context = last ? contextAfter(this.text.slice(last.end), { fence: null, lineStart: false })
+      : contextAfter(this.text, this.context);
     this.queued = [];
     this.replace("", false);
     return this.observeText(out);
@@ -609,7 +570,7 @@ export function reconcileStructuredToolCalls(
       const body = hasParameterOpener
         ? freeformBody(wrappedBody.slice("<parameter=".length)) : wrappedBody;
       if (block.name === calls[0]!.wireName && body.trim() !== ""
-          && !/(?:^|\n)<tool_call>\s*<function=[^>\r\n]+>/.test(block.body)
+          && !new RegExp(`(?:^|\\n)<tool_call${TAG_SUFFIX}>\\s*<function=[^>\\r\\n]+>`).test(block.body)
           && !(hasParameterOpener && /^<parameter=[A-Za-z_$][\w$.-]*>/.test(wrappedBody))
           && !body.includes("<parameter=") && !body.includes("</parameter>")) {
         references[0] = { ...references[0]!, argumentsText: JSON.stringify({ input: body }),

@@ -214,6 +214,7 @@ describe("live Desktop service command guards", () => {
         inspectSupervision: () => evidence,
         diagnose: () => { touched.push("diagnose"); return INSTALLED; },
         managerOps: () => { touched.push("manager"); return { status: () => "running", stop: () => { touched.push("stop"); } }; },
+        killServiceWrappers: () => { touched.push("wrappers"); },
         stopTrackedProxy: async () => { touched.push("tracked"); },
       };
       await expect(prepareServiceInstall("scheduler", deps)).rejects.toThrow(desktopServiceRefusal(evidence, true)!);

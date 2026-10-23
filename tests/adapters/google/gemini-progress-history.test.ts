@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../../../src/adapters/google";
 import { geminiProgressLead } from "../../../src/adapters/google-progress-history";
 import { ANTIGRAVITY_MODEL_EFFORTS } from "../../../src/providers/antigravity-models";
+import { parseRequest } from "../../../src/responses/parser";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
 
@@ -45,6 +46,77 @@ async function modelTexts(provider: OcxProviderConfig, modelId: string, phase?: 
 }
 
 describe("Gemini progress-text history", () => {
+  test("repeated abbreviation boundaries inspect only a linear amount of text", () => {
+    const text = "e.g. E.G. i.e. I.E. etc. ETC. vs. VS.\u2003\n \n".repeat(1024) + "Ready. Tail.";
+    const slice = String.prototype.slice;
+    const trim = String.prototype.trim;
+    const testRegex = RegExp.prototype.test;
+    let inspected = 0;
+    let lead: string | undefined;
+    try {
+      String.prototype.slice = function (start = 0, end = this.length) {
+        const result = slice.call(this, start, end);
+        inspected += result.length;
+        return result;
+      };
+      String.prototype.trim = function () {
+        inspected += this.length;
+        return trim.call(this);
+      };
+      RegExp.prototype.test = function (value) {
+        inspected += String(value).length;
+        return testRegex.call(this, value);
+      };
+      lead = geminiProgressLead(text);
+    } finally {
+      String.prototype.slice = slice;
+      String.prototype.trim = trim;
+      RegExp.prototype.test = testRegex;
+    }
+    expect(lead).toBe(text.slice(0, -" Tail.".length));
+    expect(inspected).toBeLessThan(text.length * 16);
+  });
+
+  test("keeps abbreviation, marker, whitespace and closing-character semantics", () => {
+    for (const marker of ["1.", "999.", "a.", "Z."]) {
+      expect(geminiProgressLead(`${marker}\u2003\n\tRead now. Tail.`)).toBe(`${marker}\u2003\n\tRead now.`);
+    }
+    for (const abbreviation of ["e.g.", "E.G.", "i.e.", "I.E.", "etc.", "ETC.", "vs.", "VS."]) {
+      expect(geminiProgressLead(`\uFEFF ${abbreviation}\u00A0\n \nRead now. Tail. \u3000`))
+        .toBe(`${abbreviation}\u00A0\n \nRead now.`);
+      expect(geminiProgressLead(`See ${abbreviation}\" Tail.`)).toBe(`See ${abbreviation}\"`);
+    }
+    for (const lead of ["1000.", "worda.", "Xe.g.", "Ready!\"", "Ready?)**", "確認。\u300D", "完了！\u300F"]) {
+      expect(geminiProgressLead(`${lead} Tail.`)).toBe(lead);
+    }
+    expect(geminiProgressLead("e.g.\n\n")).toBe("e.g.");
+    expect(geminiProgressLead("\u200B e.g.\nRead now. Tail.")).toBe("\u200B e.g.\nRead now.");
+    expect(geminiProgressLead("```ts\nReady. Tail.\n```")).toBeUndefined();
+    expect(geminiProgressLead("e.g.\n" + " \n".repeat(2048) + " ".repeat(8192) + "Ready. Tail."))
+      .toBe("e.g.\n" + " \n".repeat(2048) + " ".repeat(8192) + "Ready.");
+  });
+
+  test("Responses parser keeps history intact until the Gemini adapter projects progress", async () => {
+    const progress = "e.g. E.G.\u2003\n \n".repeat(256) + "Ready. Tail.";
+    for (const phase of ["commentary", "final_answer"] as const) {
+      const parsed = parseRequest({ model: "gemini-4-argon", input: [
+        { role: "user", content: "Continue" },
+        { role: "assistant", phase, content: [{ type: "output_text", text: progress }] },
+        { type: "function_call", call_id: "call_1", name: "exec", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_1", output: "ok" },
+        { role: "assistant", phase: "final_answer", content: "Final answer. Kept whole." },
+      ] });
+      const original = JSON.stringify(parsed.context.messages);
+      expect(original).toContain(JSON.stringify(progress).slice(1, -1));
+      const request = await withTestTranslatorBudget(createGoogleAdapterProduction(aiStudio)).buildRequest(parsed);
+      const contents = JSON.parse(request.body).contents;
+      expect(contents.filter((turn: { role: string }) => turn.role === "model")
+        .map((turn: { parts: Array<{ text?: string }> }) => turn.parts.flatMap(part => part.text ?? [])))
+        .toEqual([[phase === "commentary" ? progress.slice(0, -" Tail.".length) : progress], ["Final answer. Kept whole."]]);
+      expect(JSON.stringify(parsed.context.messages)).toBe(original);
+    }
+  });
+
   test("Argon tool turns replay only the lead sentence before the call; final answers stay whole", async () => {
     expect(await modelTexts(antigravity, "gemini-4-argon")).toEqual([
       [LEAD, "After the call. Kept whole."], ["Final answer. It keeps every sentence."],

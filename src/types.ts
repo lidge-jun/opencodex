@@ -41,6 +41,7 @@ export {
 export type {
   OcxReasoningReplayIdentity,
   OcxReasoningReplayScopeRef,
+  OcxReplayedWebSearchCell,
   OcxParsedRequest,
   OcxContext,
   OcxMessage,
@@ -50,6 +51,7 @@ export type {
   OcxToolResultMessage,
   OcxTextContent,
   OcxImageContent,
+  OcxAudioContent,
   OcxDocumentContent,
   OcxContentPart,
   OcxThinkingContent,

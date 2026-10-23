@@ -11,6 +11,7 @@ import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 type Rec = Record<string, any>;
 const REASONING = "Inspect the fixture before answering.";
+const ADMISSION_KEY = "fixture-data-key";
 const USER = { role: "user", content: "Inspect the fixture." };
 const tool = (id: string) => ({ id, type: "function", function: { name: "inspect", arguments: "{}" } });
 const TOOLS = [{ type: "function", function: { name: "inspect", parameters: { type: "object", properties: {} } } }];
@@ -84,14 +85,17 @@ function start(providerName: string, model: string, options: {
     return Response.json({ choices: [{ index: 0,
       message: { ...ASSISTANT, reasoning_content: REASONING }, finish_reason: "tool_calls" }] });
   } });
-  saveConfig({ port: 0, defaultProvider: providerName, providers: { [providerName]: {
+  saveConfig({ port: 0,
+    apiKeys: [{ id: "fixture-key-id", name: "fixture", key: ADMISSION_KEY, createdAt: "2026-01-01T00:00:00Z" }],
+    defaultProvider: providerName, providers: { [providerName]: {
     adapter: "openai-chat", baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
     apiKey: "fixture-key", allowPrivateNetwork: true, models: [model], ...options.provider,
   } } } as OcxConfig);
   proxy = startServer(0);
   return async (messages: Rec[], stream = false, thread: string | null = "fixture-thread", extra: Rec = {}) => {
     const response = await fetch(new URL("/v1/chat/completions", proxy!.url), {
-      method: "POST", headers: { "content-type": "application/json", ...(thread ? { "thread-id": thread } : {}) },
+      method: "POST", headers: { "content-type": "application/json", "x-opencodex-api-key": ADMISSION_KEY,
+        ...(thread ? { "thread-id": thread } : {}) },
       body: JSON.stringify({ model: `${providerName}/${model}`, stream, messages, tools: TOOLS, ...extra }),
     });
     const text = await response.text();

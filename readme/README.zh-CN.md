@@ -112,7 +112,7 @@ ocx start                         # 代理 + 仪表板：localhost:10100
 | 平台 | 文件 | 说明 |
 |---|---|---|
 | macOS 13+（Apple Silicon 和 Intel） | `OpenCodex-<version>-macos.dmg` | 通用构建，使用 Developer ID 签名并完成公证 |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | 尚未进行代码签名：SmartScreen 会询问一次，选择 **更多信息 → 仍要运行** |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | 正在通过 SignPath Foundation 推出代码签名（[代码签名政策](https://opencodex.me/zh-cn/reference/code-signing/)）；在版本签名之前，SmartScreen 会询问一次，选择 **更多信息 → 仍要运行** |
 | Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` 或 `-linux-amd64.deb` | 托盘需要支持 AppIndicator 的桌面环境 |
 
 每个文件在发布页面上都带有对应的 `.sha256`。在 macOS 14+ 上，应用还附带一个
@@ -451,6 +451,16 @@ bun run test
 
 经由维护者转写或重实现落地、且提交未点名原作者的贡献者工作，记录在
 **[CREDITS.md](../CREDITS.md)**。
+
+## 代码签名政策 (Code signing policy)
+
+Windows 二进制文件正在改用 Authenticode 签名（[#7207](https://github.com/lidge-jun/opencodex/issues/7207)）。推出进度、签名验证方法和完整政策见 [Windows 代码签名指南](https://opencodex.me/zh-cn/reference/code-signing/)。
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+
+- Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
+- Approvers: [lidge-jun](https://github.com/lidge-jun)
+- Privacy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 ## 免责声明
 

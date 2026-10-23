@@ -22,3 +22,8 @@ before releasing runtime state. Explicit application releases affected affinity 
 preference/pin only for subsequent requests; already-materialized requests retain their account.
 The CLI (`src/cli/account-preservation.ts`) drives this API; linked pause remains the absolute
 exclusion alternative.
+
+Native-main duplicate exclusion is a separate eligibility guard, documented in
+[OpenAI accounts](openai-accounts.md). It runs before this optional priority preference and also
+blocks exact stored-account selectors. Its conservative missing-email and plan-bucket rules do
+not change the stricter member identity semantics of signed-in preservation.

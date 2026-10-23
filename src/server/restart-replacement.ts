@@ -214,6 +214,9 @@ export interface ReplacementStartIo extends ReplacementReadinessIo {
   logPath?: string | null;
   parentPid?: number;
   retryDelayMs?: number;
+  /** Exit waits for a terminated not-ready replacement; tests shorten them. */
+  termWaitMs?: number;
+  killWaitMs?: number;
 }
 
 export interface ReplacementStartRequest {
@@ -227,10 +230,19 @@ export interface ReplacementStartRequest {
   waitForHealth: boolean;
   /** The replacement's environment, already prepared by the caller; the parent marker is added here. */
   env: NodeJS.ProcessEnv;
+  /**
+   * What a replacement still unready at the deadline means. `handoff` (the default, every
+   * standalone restart) hands off to it anyway, because the parent is about to exit and release
+   * what it may be waiting for. `terminate` is for a parent that keeps serving when the
+   * replacement fails (the client runtime): the replacement is stopped, its exit is observed, and
+   * the call rejects with `not_ready`, so nothing that may still bind the port survives.
+   */
+  notReady?: "handoff" | "terminate";
 }
 
 type AttemptOutcome =
-  | { kind: "spawned" | "ready" | "not-ready"; pid: number | undefined }
+  | { kind: "spawned" | "ready"; pid: number | undefined }
+  | { kind: "not-ready"; pid: number | undefined; terminate: () => Promise<boolean> }
   | { kind: "early-exit"; pid: number | undefined; code: number | null; signal: NodeJS.Signals | null };
 
 function pinnedPort(port: number | undefined): number | undefined {
@@ -314,7 +326,11 @@ function runReplacementAttempt(
       void waitForReplacementReady(child.pid, parentPid, expectedPort, { ...io, cancelled: () => settled }).then(
         // Never kill a live ordinary start at its valid reclaim boundary. Parent exit is the
         // final resource release the child may still be waiting for.
-        ready => { settle({ kind: ready ? "ready" : "not-ready", pid: child.pid }); },
+        ready => {
+          settle(ready
+            ? { kind: "ready", pid: child.pid }
+            : { kind: "not-ready", pid: child.pid, terminate: () => terminateReplacement(child, io) });
+        },
         err => { settle({ error: err }); },
       );
     };
@@ -369,6 +385,11 @@ export async function spawnReplacementStart(
         continue;
       }
       if (outcome.kind === "not-ready") {
+        if (request.notReady === "terminate") {
+          const exited = await outcome.terminate();
+          log?.note(`replacement pid ${pid} did not answer within the readiness window; ${exited ? "stopped it" : "it did not exit after SIGKILL"}`);
+          throw handoffError(exited ? "not_ready" : "not_ready_unstopped");
+        }
         console.warn("Restart replacement is still starting after the readiness window; handing off to it anyway");
         log?.note(`replacement pid ${pid} is still starting after the readiness window; handing off anyway`);
       } else {
@@ -379,4 +400,31 @@ export async function spawnReplacementStart(
   } finally {
     log?.close();
   }
+}
+
+/** Exit-observation budgets for {@link terminateReplacement}. */
+export const REPLACEMENT_TERM_WAIT_MS = 3_000;
+export const REPLACEMENT_KILL_WAIT_MS = 2_000;
+
+function waitForChildExit(child: ChildProcess, ms: number, sleep: (ms: number) => Promise<void>): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise<boolean>(resolve => {
+    let done = false;
+    const finish = (exited: boolean) => { if (!done) { done = true; child.off("exit", onExit); resolve(exited); } };
+    const onExit = () => finish(true);
+    child.once("exit", onExit);
+    void sleep(ms).then(() => finish(child.exitCode !== null || child.signalCode !== null));
+  });
+}
+
+/**
+ * Stop a replacement that never answered: SIGTERM, wait for its exit, then SIGKILL and wait again.
+ * True only once the exit was observed; a kill call alone is not proof the port is free.
+ */
+async function terminateReplacement(child: ChildProcess, io: ReplacementStartIo): Promise<boolean> {
+  const sleep = io.sleep ?? Bun.sleep;
+  try { child.kill("SIGTERM"); } catch { /* exited between the check and the signal */ }
+  if (await waitForChildExit(child, io.termWaitMs ?? REPLACEMENT_TERM_WAIT_MS, sleep)) return true;
+  try { child.kill("SIGKILL"); } catch { /* exited between the check and the signal */ }
+  return waitForChildExit(child, io.killWaitMs ?? REPLACEMENT_KILL_WAIT_MS, sleep);
 }

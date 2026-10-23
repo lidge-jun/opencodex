@@ -102,4 +102,41 @@ describe("buildAnthropicMessagesPassthroughRequest", () => {
     expect(() => buildAnthropicMessagesPassthroughRequest(provider({ authMode: "oauth" }), "m", SOURCE)).toThrow();
     expect(() => buildAnthropicMessagesPassthroughRequest(provider({ authMode: "forward" }), "m", SOURCE)).toThrow();
   });
+
+  test("first-party Anthropic gives TTL-less caller breakpoints 1h unless the caller pinned 5m", () => {
+    const firstParty = provider({ baseUrl: "https://api.anthropic.com" });
+    const ttls = (body: Record<string, unknown>): unknown[] => {
+      const out: unknown[] = [];
+      JSON.parse(JSON.stringify(body), (key, value) => {
+        if (key === "cache_control") out.push(value.ttl);
+        return value;
+      });
+      return out;
+    };
+    const source = {
+      ...SOURCE,
+      tools: [{
+        name: "T",
+        input_schema: { type: "object", properties: { cache_control: { type: "ephemeral" } } },
+        input_examples: [{ cache_control: { type: "ephemeral" } }],
+        cache_control: { type: "ephemeral" },
+      }],
+    };
+    const upgraded = buildAnthropicMessagesPassthroughRequest(firstParty, "m", source).wireBody;
+    expect((upgraded.system as Array<Record<string, unknown>>)[0]!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect((upgraded.tools as Array<Record<string, unknown>>)[0]!.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    // A cache_control key inside a tool schema is caller data, not a breakpoint.
+    expect((upgraded.tools as Array<{ input_schema: unknown }>)[0]!.input_schema).toEqual(source.tools[0]!.input_schema);
+    expect((upgraded.tools as Array<{ input_examples: unknown }>)[0]!.input_examples).toEqual(source.tools[0]!.input_examples);
+    // The caller's object graph is copied on write, never mutated.
+    expect(source.tools[0]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(SOURCE.system[0]!.cache_control).toEqual({ type: "ephemeral" });
+
+    const pinned = { ...source, messages: [{ role: "user", content: [{ type: "text", text: "x", cache_control: { type: "ephemeral", ttl: "5m" } }] }] };
+    expect(ttls(buildAnthropicMessagesPassthroughRequest(firstParty, "m", pinned).wireBody)).toEqual(ttls(pinned));
+    const short = { cacheRetention: "short" } as Parameters<typeof buildAnthropicMessagesPassthroughRequest>[3];
+    expect(ttls(buildAnthropicMessagesPassthroughRequest(firstParty, "m", source, short).wireBody)).toEqual(ttls(source));
+    // Compatible endpoints keep the caller's TTLs as sent.
+    expect(ttls(buildAnthropicMessagesPassthroughRequest(provider(), "m", source).wireBody)).toEqual(ttls(source));
+  });
 });

@@ -268,6 +268,10 @@ describe("Zed Hosted AI provider", () => {
       role: "user",
       content: [{ type: "text", text: "hello zed" }],
     });
+    // Zed's gateway does not document the 1h TTL: the borrowed api.anthropic.com builder
+    // must not apply the first-party 1h default to it.
+    expect(request.body).toContain("cache_control");
+    expect(request.body).not.toContain("\"ttl\"");
   });
   test("normalizes OpenAI input and removes Codex-only fields for Zed backend", async () => {
     const responses = [

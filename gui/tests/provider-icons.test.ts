@@ -50,6 +50,7 @@ test("a provider whose brand asset is already committed is actually wired to it"
  * is a visual defect. The map is plain strings, so nothing else checks this.
  */
 test("every wired provider icon names a file that exists", () => {
+  expect(providerIconSrc("workbuddy-ai")).toBe("/provider-icons/workbuddy-color.svg");
   const broken = PROVIDER_REGISTRY
     .map(entry => [entry.id, providerIconSrc(entry.id)] as const)
     .filter((pair): pair is readonly [string, string] => pair[1] !== undefined)

@@ -72,6 +72,28 @@ describe("CLI Remote Link enrollment", () => {
       expect(h.calls).toHaveLength(stage === "probe" ? 1 : stage === "confirm" ? 2 : 3);
     } finally { h.restore(); }
   });
+  test("a Windows Child is refused at the probe with a Hub-mode pointer and no further request", async () => {
+    const h = harness([{ error: { code: "remote_platform_unsupported", message: "ignored server text" } }], 409); try {
+      expect(await runLinkCommand(["add", "mini", "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
+      expect(h.calls.map(x => new URL(x.url).pathname)).toEqual(["/api/link/probe"]);
+      const message = h.err.join("\n");
+      expect(message).toContain("mini is a Windows computer.");
+      expect(message).toContain("no link key was issued and no tunnel was started");
+      expect(message).toContain("'ocx hub invite'");
+      expect(message).toContain("'ocx connect'");
+      expect(h.out).toEqual([]);
+    } finally { h.restore(); }
+  });
+  test("a residual Windows refusal after key issuance keeps the Child recovery", async () => {
+    const h = harness(); try {
+      let i = 0;
+      h.deps.fetchImpl = async () => ++i < 3 ? Response.json(i === 1 ? probe : confirm) : Response.json({ error: { code: "remote_platform_unsupported" }, residual: true }, { status: 409 });
+      expect(await runLinkCommand(["add", "child-a", "--expect-fingerprint", fingerprint], h.deps)).toBe(1);
+      const message = h.err.join("\n");
+      expect(message).toContain("Run ocx disconnect and ocx restart on the Child before retrying.");
+      expect(message).not.toContain("no link key was issued");
+    } finally { h.restore(); }
+  });
   test("residual failures retain fixed Child recovery without remote error text", async () => {
     const h = harness(); try {
       let i = 0;

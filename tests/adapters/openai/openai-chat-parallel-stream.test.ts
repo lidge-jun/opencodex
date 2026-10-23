@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../../../src/adapters/openai-chat";
 import type { TranslatorBudget } from "../../../src/lib/translator-budget";
 import type { AdapterEvent } from "../../../src/types";
@@ -459,4 +459,78 @@ data: [DONE]
     }
     expect(budget.snapshot()).toMatchObject({ activeCalls: 0, currentBytes: 0, overflows: limit === 9 ? 1 : 0 });
   });
+});
+
+
+test("fragmented large SSE lines bound UTF-8 counting work without changing tool arguments", async () => {
+  const args = JSON.stringify({ code: "x".repeat(256 * 1024) });
+  const wire = new TextEncoder().encode(sse([
+    chunkOf([{ index: 0, id: "call_fragmented", function: { name: "review", arguments: args } }]),
+    chunkOf([], "tool_calls"),
+  ]));
+  let cursor = 0;
+  const source = new ReadableStream<Uint8Array>({ pull(controller) {
+    if (cursor === wire.length) { controller.close(); return; }
+    const next = Math.min(cursor + 512, wire.length);
+    controller.enqueue(wire.subarray(cursor, next)); cursor = next;
+  } });
+  let encodedCharacters = 0;
+  const original = TextEncoder.prototype.encode;
+  const counting = spyOn(TextEncoder.prototype, "encode").mockImplementation(function (this: TextEncoder, input?: string) {
+    encodedCharacters += input?.length ?? 0;
+    return original.call(this, input);
+  });
+  try {
+    const events: AdapterEvent[] = [];
+    for await (const event of createOpenAIChatAdapter(provider).parseStream(new Response(source))) events.push(event);
+    expect(assembled(events)).toEqual([{ id: "call_fragmented", name: "review", args }]);
+    expect(events.at(-1)?.type).toBe("done");
+    // A deterministic work bound, not a wall-clock test. Re-encoding the growing
+    // unfinished line for every 512-byte fragment exceeds this by orders of magnitude.
+    expect(encodedCharacters).toBeLessThan(wire.length * 8);
+  } finally { counting.mockRestore(); }
+});
+
+
+test("fragmented SSE carry preserves Unicode, CRLF and unterminated EOF frames", async () => {
+  for (const size of [1, 2, 3, 7, 512]) {
+    const args = JSON.stringify({ code: "é🐢汉字\r\n" });
+    const wire = new TextEncoder().encode(sse([
+      chunkOf([{ index: 0, id: "unicode", function: { name: "review", arguments: args } }]),
+      chunkOf([], "tool_calls"),
+    ]).replaceAll("\n", "\r\n").trimEnd());
+    let cursor = 0;
+    const stream = new ReadableStream<Uint8Array>({ pull(controller) {
+      if (cursor >= wire.length) { controller.close(); return; }
+      controller.enqueue(wire.subarray(cursor, cursor + size)); cursor += size;
+    } });
+    const events: AdapterEvent[] = [];
+    const budget = createTestTranslatorBudget();
+    for await (const event of createOpenAIChatAdapter(provider).parseStream(new Response(stream), budget)) events.push(event);
+    expect(assembled(events)).toEqual([{ id: "unicode", name: "review", args }]);
+    expect(events.at(-1)?.type).toBe("done");
+    expect(budget.snapshot().currentBytes).toBe(0);
+  }
+});
+
+
+test("fragmented invalid UTF-8 keeps decoder replacement and carry accounting", async () => {
+  const wire = new TextEncoder().encode(sse([
+    chunkOf([{ index: 0, id: "replacement", function: { name: "review", arguments: JSON.stringify({ code: "MARK" }) } }]),
+    chunkOf([], "tool_calls"),
+  ]));
+  const at = new TextDecoder().decode(wire).indexOf("MARK");
+  wire.set([0xed, 0xa0, 0x80], at); // Invalid UTF-8 surrogate, not three ASCII bytes.
+  const expected = JSON.stringify({ code: "���K" });
+  for (const size of [1, 2, 7]) {
+    let cursor = 0;
+    const stream = new ReadableStream<Uint8Array>({ pull(controller) {
+      if (cursor >= wire.length) { controller.close(); return; }
+      controller.enqueue(wire.subarray(cursor, cursor + size)); cursor += size;
+    } });
+    const events: AdapterEvent[] = [];const budget = createTestTranslatorBudget();
+    for await (const event of createOpenAIChatAdapter(provider).parseStream(new Response(stream), budget)) events.push(event);
+    expect(assembled(events)).toEqual([{ id: "replacement", name: "review", args: expected }]);
+    expect(events.at(-1)?.type).toBe("done");expect(budget.snapshot().currentBytes).toBe(0);
+  }
 });

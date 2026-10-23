@@ -209,7 +209,7 @@ ocx status --json
 
 인증이 필요 없는 `GET /readyz` 엔드포인트로 동기화 후 준비 상태를 확인합니다. 준비되면 `200`,
 `pending` 또는 종단 상태인 `failed`이면 `Retry-After: 1`과 함께 `503`을 반환합니다. HTTP의 정제된
-식별 필드는 `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}`입니다. `protocol`은 허브의 현재 원격 프로토콜, `minimumClientProtocol`은 호환되는 최소 클라이언트 프로토콜, `managementUrl`은 브라우저에서 보이는 표준 관리 origin입니다. `/readyz`가 없는 이전 프록시는
+식별 필드는 `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}`입니다. `protocol`은 허브의 현재 원격 프로토콜, `minimumClientProtocol`은 호환되는 최소 클라이언트 프로토콜, `managementUrl`은 브라우저에서 보이는 표준 관리 origin입니다. `/readyz`가 없는 이전 프록시는
 `unreachable`로 fail-closed하며, `/healthz`는 준비 상태가 아닌 별도의 liveness 확인입니다. 기본값은 한 번의
 probe이며, `--wait`는 준비 또는 timeout까지 polling하지만 종단 `failed`를 확인하면 즉시 종료합니다.
 기본 timeout은 45초이며, `--timeout <seconds>`는 `--wait`와 함께 써야 하고 양의 정수인 1~300초 범위를 받습니다. CLI JSON은
@@ -237,6 +237,8 @@ single-flight/lock 파일을 만들 수 있는지, 건강하지 않은 OAuth 또
 ## 카탈로그 동기화
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
+
+> **Remote Link Child:** `ocx sync`는 Home의 Codex 설정도 적용하며, 클라이언트 런타임이 그 적용보다 먼저 시작되었으면 재시작 플래그 없이도 런타임을 재시작합니다. 재시작이 실패하면 이전 런타임이 계속 서비스하고 명령은 0이 아닌 코드로 끝납니다. `ocx status --json`과 `ocx link status --json`의 관련 필드는 [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity)(영문)를 참고하세요.
 
 재시작 플래그를 명시하면 카탈로그와 캐시 바이트가 같아도 `config.toml` 변경이 성공적으로 커밋된 뒤 재시작합니다. 설정만 다루는 작업이 변경 없음, 거부, 사전 검증 또는 롤백으로 끝나면 재시작하지 않습니다. 재시작 플래그가 없으면 sync는 Codex를 자동으로 재시작하지 않습니다.
 

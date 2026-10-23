@@ -520,6 +520,8 @@ function projectedComboUsage(
   let cachedInputTokens = 0;
   let cacheReadInputTokens = 0;
   let cacheCreationInputTokens = 0;
+  let cacheCreation1hInputTokens = 0;
+  let hasCacheWrite1h = false;
   let reasoningOutputTokens = 0;
   let hasUsage = false;
   let hasCacheTelemetry = false;
@@ -540,6 +542,10 @@ function projectedComboUsage(
         cacheReadInputTokens += cache.read;
       }
       if (typeof cache.creation === "number") cacheCreationInputTokens += cache.creation;
+      if (typeof attempt.usage.cacheCreation1hInputTokens === "number") {
+        hasCacheWrite1h = true;
+        cacheCreation1hInputTokens += attempt.usage.cacheCreation1hInputTokens;
+      }
       if (typeof attempt.usage.reasoningOutputTokens === "number") {
         hasReasoningTelemetry = true;
         reasoningOutputTokens += attempt.usage.reasoningOutputTokens;
@@ -559,6 +565,7 @@ function projectedComboUsage(
       inputTokens,
       outputTokens,
       ...(hasCacheTelemetry ? { cachedInputTokens, cacheReadInputTokens, cacheCreationInputTokens } : {}),
+      ...(hasCacheWrite1h ? { cacheCreation1hInputTokens } : {}),
       ...(hasReasoningTelemetry ? { reasoningOutputTokens } : {}),
       ...(estimated ? { estimated: true } : {}),
     }

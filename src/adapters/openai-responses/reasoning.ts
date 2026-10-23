@@ -163,7 +163,74 @@ export function sanitizeReasoningInputContent(
   });
 
   if (blankedPlaintext) opts?.onPlaintextReasoningBlanked?.();
-  return changed ? { ...raw, input } : body;
+  // Runs after the per-item pass so an item it emptied has already been backfilled, and a
+  // placeholder is only invented for a turn that carries no reasoning item at all.
+  const withTurnReasoning = opts?.requirePlaintextReasoning === true
+    ? backfillBareToolCallTurnReasoning(input)
+    : input;
+  if (withTurnReasoning !== input) changed = true;
+  return changed ? { ...raw, input: withTurnReasoning } : body;
+}
+
+/** Assistant-authored history items: what DeepSeek merges into one assistant message. */
+function isAssistantTurnItem(item: unknown): boolean {
+  if (!isPlainObject(item) || typeof item.type !== "string") return false;
+  if (item.type === "reasoning") return true;
+  if (item.type === "message") return item.role === "assistant";
+  return item.type.endsWith("_call");
+}
+
+function isClientToolCallItem(item: unknown): boolean {
+  return isPlainObject(item)
+    && (item.type === "function_call" || item.type === "custom_tool_call" || item.type === "local_shell_call");
+}
+
+/**
+ * Give every assistant tool-call turn that has NO reasoning item a minimal plaintext one (#7298).
+ *
+ * A Combo can serve the turn that issued a tool call on one model and the continuation on
+ * another. When the issuing model was a GPT turn that produced no reasoning item (or the item
+ * was dropped upstream), the strict destination sees a bare `function_call` and DeepSeek's
+ * thinking mode refuses the whole request with `The reasoning_text in the thinking mode must be
+ * passed back to the API`. The per-item backfill above cannot help, because there is no item to
+ * backfill. This is the Responses-wire twin of the Chat adapter's `reasoning_content: " "`
+ * placeholder (#5421): the same single-space text, never fabricated reasoning, inserted at the
+ * head of the turn so it precedes the call exactly where a native turn's reasoning would be.
+ *
+ * A turn is a maximal run of assistant-authored items; any user message or tool output ends it.
+ * Turns that already carry a reasoning item, and turns with no client tool call, are untouched.
+ */
+export function backfillBareToolCallTurnReasoning(input: unknown[]): unknown[] {
+  const bareTurnStarts = new Set<number>();
+  let turnStart = -1;
+  let turnHasReasoning = false;
+  let turnHasToolCall = false;
+  const closeTurn = (): void => {
+    if (turnStart >= 0 && turnHasToolCall && !turnHasReasoning) bareTurnStarts.add(turnStart);
+    turnStart = -1;
+    turnHasReasoning = false;
+    turnHasToolCall = false;
+  };
+  for (let index = 0; index < input.length; index++) {
+    const item = input[index];
+    if (!isAssistantTurnItem(item)) {
+      closeTurn();
+      continue;
+    }
+    if (turnStart < 0) turnStart = index;
+    if ((item as Record<string, unknown>).type === "reasoning") turnHasReasoning = true;
+    if (isClientToolCallItem(item)) turnHasToolCall = true;
+  }
+  closeTurn();
+  if (bareTurnStarts.size === 0) return input;
+  const result: unknown[] = [];
+  for (let index = 0; index < input.length; index++) {
+    if (bareTurnStarts.has(index)) {
+      result.push({ type: "reasoning", summary: [], content: [{ type: "reasoning_text", text: " " }] });
+    }
+    result.push(input[index]);
+  }
+  return result;
 }
 
 /**

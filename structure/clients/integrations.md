@@ -291,6 +291,8 @@ Hermes exports include `session_affinity_header: session-id` on the entire OpenC
 independent of the model roster. This is a header name: Hermes generates the conversation-scoped
 value. No static session identifier or protocol switch is emitted, and upstream header-forwarding
 rules remain unchanged. Hermes must support the documented per-provider affinity option to use it.
+Changing `session_affinity_header` to `x-hermes-conversation-id` configures a log-only correlation
+fallback, removing native session affinity and lane scoping; `session-id` remains the generated default.
 
 `src/integrations/ownership-policy.ts` recognizes exactly one predecessor: an owned Hermes block
 without this setting. The block may remain unchanged or have gained only the supported value; after

@@ -2,6 +2,7 @@ import { parseResetCooldownMs } from "../codex/routing";
 import { classifyError, isCyberPolicyCode } from "../lib/errors";
 import { isNonReplayableUpstreamCode } from "../lib/upstream-retry";
 import { isAnthropicBillingFailure } from "../providers/anthropic-billing-refusal";
+import { isKiroAccountProfileRefusal } from "../adapters/kiro-refusal";
 import type { OcxComboTarget } from "../types";
 import { targetKey } from "./types";
 import {
@@ -666,8 +667,9 @@ function isDefiniteContextOverflowMessage(text: string): boolean {
  * arbitrary field that happens to sit in the first 500 bytes authorize a hop, so it fails closed.
  *
  * Only the exact proxy wrapper is unwrapped, within a fixed envelope budget and 16,384 characters.
+ * Exported for the sidecar loops, which classify their own provider failures with the same rule.
  */
-function isDefiniteContextOverflow(status: number, message: string): boolean {
+export function isDefiniteContextOverflow(status: number, message: string): boolean {
   if (!CONTEXT_VERDICT_STATUSES.has(status) && status < 500) return false;
   if (message.length > 16_384) return false;
   let text = message.trim();
@@ -771,7 +773,7 @@ export function codexAccountModelRefusal(
 export function comboFailureDecision(
   status: number,
   message: string,
-  options?: { code?: string | null; codexModelRefusal?: CodexAccountModelRefusal },
+  options?: { code?: string | null; codexModelRefusal?: CodexAccountModelRefusal; failedAdapter?: string },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
   if (message.toLowerCase().includes("origin_rejected")) return "stop";
@@ -855,6 +857,12 @@ export function comboFailureDecision(
   // could have served the request (#4903).
   if (isResponseFormatCapabilityRefusal(status, message, options?.code)) return "hop";
   if (isAnthropicBillingFailure(status, message, options?.code)) return "hop";
+  // Kiro's body validator rejects the request for the identity it was routed under. The account
+  // layer rotates logins first; this is the no-alternate case, so the next combo target is the
+  // only remaining chance to serve the turn. Only a caller that knows the failed target is a Kiro
+  // adapter grants it (the words alone prove nothing for another provider); it must precede the
+  // generic invalid_request_error stop.
+  if (options?.failedAdapter === "kiro" && isKiroAccountProfileRefusal(status, message)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

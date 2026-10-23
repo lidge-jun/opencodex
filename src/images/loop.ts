@@ -1,4 +1,5 @@
 import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
+import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
 /**
  * Media bridge agentic loop — supports both image and video generation sidecars.
@@ -25,9 +26,9 @@ import { bridgeToResponsesSSE } from "../bridge";
 import { isTerminalRefusalIncomplete } from "../bridge/terminal-refusal";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
-import { releaseProviderRequestSlot, sendTrackingRequestSlot, type ProviderRequestSlot } from "../providers/request-pacing";
+import { releaseProviderRequestSlot, RequestPacingQueueOverloadError, sendTrackingRequestSlot, type ProviderRequestSlot } from "../providers/request-pacing";
 import {
   createTranslatorBudget,
   isTranslatorBudgetExceededError,
@@ -283,10 +284,19 @@ function jsonError(status: number, message: string, event?: Extract<AdapterEvent
 /** Hard provider/parse failure inside an iteration. The eager first iteration converts it to a
  *  non-2xx jsonError; later (already-streaming) iterations surface it as an in-stream error event. */
 class LoopError extends Error {
-  constructor(readonly status: number, message: string, readonly event?: Extract<AdapterEvent, { type: "error" }>) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly event?: Extract<AdapterEvent, { type: "error" }>,
+    readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable">,
+  ) {
     super(message);
     this.name = "LoopError";
   }
+}
+
+function loopFailure(e: LoopError): SidecarLoopFailure {
+  return { status: e.status, message: e.message, ...(e.event ? { event: e.event } : {}), ...e.detail };
 }
 
 /**
@@ -419,6 +429,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         : {}),
       ...(a.cacheCreationInputTokens !== undefined || b.cacheCreationInputTokens !== undefined
         ? { cacheCreationInputTokens: (a.cacheCreationInputTokens ?? 0) + (b.cacheCreationInputTokens ?? 0) }
+        : {}),
+      ...(a.cacheCreation1hInputTokens !== undefined || b.cacheCreation1hInputTokens !== undefined
+        ? { cacheCreation1hInputTokens: (a.cacheCreation1hInputTokens ?? 0) + (b.cacheCreation1hInputTokens ?? 0) }
         : {}),
       ...(a.reasoningOutputTokens !== undefined || b.reasoningOutputTokens !== undefined
         ? { reasoningOutputTokens: (a.reasoningOutputTokens ?? 0) + (b.reasoningOutputTokens ?? 0) }
@@ -598,7 +611,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         if (errorEvent.code === "translation_buffer_limit") {
           throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
         }
-        throw new LoopError(502, errorEvent.message);
+        // Keep a runTurn adapter's own overflow verdict; every other error stays a generic 502.
+        throw new LoopError(502, errorEvent.message, errorEvent.code === "context_length_exceeded" ? errorEvent : undefined);
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
 
@@ -699,7 +713,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       // Same-target 429 wait-and-retry (opt-in `retryOn429`) BEFORE key rotation: a primary-key
       // rate-limit blip replays on the SAME key; rotation only runs after attempts exhaust.
       while (
-        prepared.response.status === 429
+        prepared.response.status === 429 && !isSameTargetRetryHold(prepared.response)
         && rateLimitRetryPolicy !== null
         && rateLimitRetries < rateLimitRetryPolicy.attempts
       ) {
@@ -763,9 +777,11 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           body = await readBoundedResponseBody(prepared.response, { signal });
         } catch {
           if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
-          throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`);
+          throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`, undefined,
+            { nonReplayable: isNonReplayableResponse(prepared.response) });
         }
         let formatted = "";
+        let upstreamCode: string | undefined;
         if (body.displaySafe && !body.truncated && body.text.trim() && prepared.responseAdapter.formatErrorBody) {
           try {
             formatted = prepared.responseAdapter.formatErrorBody(
@@ -775,8 +791,10 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             ).trim();
           } catch { /* formatter hooks are best-effort */ }
         }
+        if (body.displaySafe && !body.truncated) upstreamCode = upstreamErrorCode(body.text);
         const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
-        throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`);
+        throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`, undefined,
+          { upstreamCode, nonReplayable: isNonReplayableResponse(prepared.response) });
       }
       return { ...prepared, retryThinking: async () => {
         cachedRequest = undefined;
@@ -797,7 +815,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         throw new LoopError(504, `Provider response-header timeout after ${connectTimeoutMs}ms during image-bridge`);
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
-      if (error instanceof LoopError) throw error;
+      if (error instanceof LoopError || error instanceof RequestPacingQueueOverloadError) throw error;
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       headerDeadline.clear();
@@ -894,7 +912,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       firstPrepared = await prepareIterationDrained(maxRounds <= 0);
     } catch (e) {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-      if (e instanceof LoopError) return jsonError(e.status, e.message, e.event);
+      if (e instanceof LoopError) return markSidecarContextOverflow(jsonError(e.status, e.message, e.event), loopFailure(e));
       if (e instanceof SendBudgetExhaustedError) return jsonError(429, e.message,
         { type: "error", status: 429, errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false });
       throw e;
@@ -1149,10 +1167,15 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               ...(usage ? { usage } : {}),
             };
           } else {
+            // A later iteration's overflow ends the turn as the main path's terminal
+            // context_length_exceeded, so Codex compacts instead of resending (#7316).
+            const terminal = e instanceof LoopError ? sidecarLoopTerminalEvent(loopFailure(e)) : undefined;
             yield {
               type: "error",
-              message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
-              ...(e instanceof LoopError ? { status: e.status, ...(e.event ?? {}) } : {}),
+              ...(terminal ?? {
+                message: e instanceof LoopError ? e.message : (e instanceof Error ? e.message : String(e)),
+                ...(e instanceof LoopError ? { status: e.status, ...(e.event ?? {}) } : {}),
+              }),
               ...(usage ? { usage } : {}),
             };
           }

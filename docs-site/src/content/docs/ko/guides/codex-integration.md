@@ -13,6 +13,18 @@ Pool 모드에서는 선택된 저장 계정이 쿨다운 중이고 사용 가�
 권한과 main 계정 정책 검사는 유지됩니다. 이 fallback은 저장 계정의 쿨다운을 해제하거나 호출자
 인증을 Pool 선택으로 저장하지 않습니다. 특정 계정에 정확히 고정된 요청은 그 계정에 계속 묶입니다.
 
+수동 Pool pin은 우선순위 선호이므로 위 fallback을 허용합니다. 특정 계정만 사용해야 하면
+계정이 지정된 모델을 선택하세요. 관측된 native main을 일시 정지하면 일치하는 호출자 자격 증명의
+Pool fallback도 거부하지만, 별도 호출자 로그인을 main으로 간주하지는 않습니다.
+
+계정 ID·개인/워크스페이스 구독 구분·이메일이 native main과 중복되는 Pool 등록 및 재인증은
+거부됩니다. 이메일이 없으면 다른 구성원이라는 근거로 취급하지 않습니다. 서로 다른 워크스페이스,
+이메일로 구분되는 구성원, 개인/워크스페이스 구독은 계속 사용할 수 있습니다. 사용량 조회 실패 시에도
+로그인 토큰의 구독 정보는 유지합니다. 기존 중복 계정은 삭제하지 않고 Pool 선택에서 제외하며 계정
+목록의 `selectionExcludedReason: "duplicate_main"`과 `selectionExcludedAction`으로 이유를 알립니다. native main을 사용하거나
+native Codex를 다른 계정으로 로그인하면 됩니다. 재로그인 감지는 권한을 확보한 다음 native 로그인
+관측에서 반영하며, 수동 목록 조회나 호출자 소유 요청은 이를 위해 native 자격 증명을 읽지 않습니다.
+
 ## 설정 주입
 
 `ocx init`, `ocx start`, `ocx sync`는 모두 인젝터를 호출합니다. 기본 loopback 바인드에서는 Codex의 빌트인 `openai` 프로바이더 id를 그대로 유지한 채, 그 프로바이더가 opencodex를 바라보게 합니다.
@@ -206,6 +218,17 @@ WSL에서는 `CODEX_HOME`이 비어 있고 Linux `~/.codex` 디렉터리가 없�
 Windows에서 Orca shell은 `CODEX_HOME`과 `ORCA_CODEX_HOME`을 Orca의 번들 런타임 home으로 설정할 수 있지만, ChatGPT/Codex app은 여전히 `%USERPROFILE%\\.codex`를 읽습니다. `ocx status`와 `ocx doctor`는 이 정확한 불일치를 경고하고, 경로는 가린 채 대상 home을 출력합니다. 해당 Orca shell에서 background service를 설치했다면 먼저 원래 shell에서 uninstall하고, `CODEX_HOME`을 app home으로 설정한 뒤 `ORCA_CODEX_HOME`을 해제하고, sync/restore를 다시 실행한 다음 service를 다시 설치하세요.
 
 전용 provider 모드의 `requires_openai_auth = true`는 Codex App/TUI의 계정 게이트 화면을 네이티브 Codex와 같은 조건으로 맞춥니다. opencodex는 `/v1/responses`도 WebSocket으로 제공합니다. 전용 provider는 `"websockets": true`일 때만 `supports_websockets = true`를 광고합니다. loopback에서는 Codex의 빌트인 provider가 먼저 WebSocket을 시도할 수 있으며, 비활성화된 proxy는 `426`을 반환해서 Codex가 HTTP/SSE로 fallback합니다.
+
+**추론 사용량 표시 보존(2.90.0 이상).** 정식 ChatGPT 경로를 HTTP/SSE로 받는
+클라이언트에는, Bun 런타임이 제공하는 상류 WebSocket 연결 응답의 실제
+`x-reasoning-included` 헤더를 전달합니다. 같은 연결을 재사용하는 요청에서도 유지합니다.
+이 표시는 서버가 보고한 사용량에 이전 추론량이 이미 포함됐음을 Codex에 알립니다.
+첫 Responses 이벤트 전에 받은 메타데이터가 우선하며, 이후 메타데이터는 본문에 남지만
+이미 확정한 응답 헤더를 바꾸지는 못합니다. 없는 표시를 만들어 붙이거나 사용량 숫자를
+수정하지 않습니다. 상류가 표시를 보내지 않는 경우와 Codex 자체의 사용량 상태 관리는
+별도 문제이므로, 이 변경만으로 조기 압축 해결을 보장하지 않습니다. 클라이언트도
+WebSocket으로 연결하면 상류 응답 전에 연결 승인이 끝나므로, 그 승인 헤더에 표시를
+나중에 추가할 수는 없습니다.
 
 네이티브 ChatGPT forward 요청의 로컬 재생 상태가 만료되었거나 없으면 opencodex는
 upstream 요청 전에 `previous_response_not_found`를 반환합니다. Codex WebSocket 클라이언트는

@@ -191,12 +191,14 @@ describe("the recovery gate follows the adapter's declared Responses contract", 
     expect(adapterSpeaksResponsesWire("not-a-registered-adapter")).toBe(false);
   });
 
-  test("azure-openai does not recover an ordinary 400, a 429, or a 5xx", () => {
+  test("azure-openai recovers an identified 502 but not unrelated failures", () => {
     const azure = { ...base, adapterName: "azure-openai" };
     expect(shouldAttemptOpaqueBlobRecovery(azure)).toBe(true);
     expect(shouldAttemptOpaqueBlobRecovery({ ...azure, errorBody: UNRELATED_400 })).toBe(false);
     expect(shouldAttemptOpaqueBlobRecovery({ ...azure, status: 429, errorBody: RATE_LIMITED })).toBe(false);
-    for (const status of [500, 502, 503]) {
+    expect(shouldAttemptOpaqueBlobRecovery({ ...azure, status: 502 })).toBe(true);
+    expect(shouldAttemptOpaqueBlobRecovery({ ...azure, status: 502, errorBody: UNRELATED_400 })).toBe(false);
+    for (const status of [500, 503]) {
       expect({ status, recovers: shouldAttemptOpaqueBlobRecovery({ ...azure, status }) })
         .toEqual({ status, recovers: false });
     }

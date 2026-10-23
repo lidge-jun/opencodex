@@ -54,6 +54,13 @@ ocx models live --provider ark --json
 Use it for scripts that process one configured provider object per line.
 `--json` and `--jsonl` cannot be combined.
 
+Each configured row also has `active`. It is `false` when this device is linked to a Home
+(a Remote Link Child or a Hub-mode client): the row is local configuration that the Home's
+providers shadow, so it does not serve requests while the link is connected. It is `true` when the
+row actually serves, including when the link state cannot be read. Rows never carry credential
+values: `baseUrl` drops embedded userinfo and masks credential-shaped query values such as `key`
+or `token`, while keeping ordinary parameters such as `api-version`.
+
 :::caution[Custom headers are not a credential channel]
 `--headers` is for non-secret request metadata — routing hints, tenant or
 project selectors, tracing ids. It is **not** a place to put authentication
@@ -470,9 +477,10 @@ reset changes and expires after six hours or at the observed reset, whichever co
 
 An unreadable 5h reading cannot hide a weekly block. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
-While blocked, the minute sweep waits for the latest known blocking reset, then checks owned usage.
-If no future reset is known or a check remains blocked, recovery uses a capped 5/10/20/40/60-minute
-schedule; a longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
+While blocked, recovery checks owned usage metadata on a capped 5/10/20/40/60-minute schedule, so a reset
+redeemed outside opencodex is noticed before the predicted reset; the first check waits five minutes, checks
+stay at least five minutes apart, and the next check is pulled in to the latest known blocking reset. A paused
+or reauthentication-required main receives no checks before its predicted reset. A longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
 can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
 a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
 

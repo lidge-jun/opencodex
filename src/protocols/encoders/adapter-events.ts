@@ -109,7 +109,13 @@ export interface ClientWireWriter {
   text(delta: string): void;
   messageDone(): void;
   reasoning(delta: string, itemId: string, channel: "summary" | "raw"): void;
-  reasoningDone(item: { itemId: string; signature?: string; redacted?: string[] }): void;
+  /** `hidden`: the signature covers thinking text the client was not shown (the bridge's `txt`). */
+  reasoningDone(item: { itemId: string; signature?: string; redacted?: string[]; hidden?: true }): void;
+  /**
+   * An Anthropic progress update: `text` is shown as content and is also the signed thinking
+   * block's text. Optional — a writer without it renders the update as ordinary text.
+   */
+  progressThinking?(text: string, signature: string): void;
   toolStart(call: ClientToolCall): void;
   toolArgsDelta(itemId: string, delta: string): void;
   toolArgsDone(itemId: string, args: string): void;
@@ -331,6 +337,8 @@ export function encodeAdapterEventStream(
   let currentRawReasoning: { itemId: string } | null = null;
   let pendingSignature: string | undefined;
   let pendingRedacted: string[] = [];
+  // The bridge's hiddenThinking: non-empty thinking text suppressed by hideThinkingSummary.
+  let hiddenThinkingSeen = false;
   let hiddenRawBytes = 0;
   let pendingKiroRedacted: string | undefined;
   let currentToolCall: OpenToolCall | null = null;
@@ -367,9 +375,11 @@ export function encodeAdapterEventStream(
   };
   // hideThinkingSummary: a signed or redacted block still round-trips as an envelope-only item.
   const flushHiddenReasoningEnvelope = () => {
+    const hidden = hiddenThinkingSeen;
+    hiddenThinkingSeen = false;
     const envelope = takeReasoningEnvelope();
     if (!envelope) return;
-    writer.reasoningDone({ itemId: `rs_${uuid()}`, ...envelope });
+    writer.reasoningDone({ itemId: `rs_${uuid()}`, ...envelope, ...(hidden ? { hidden: true as const } : {}) });
   };
   const flushHiddenRawReasoning = () => {
     if (hiddenRawBytes === 0) return;
@@ -570,6 +580,19 @@ export function encodeAdapterEventStream(
             break;
           }
           case "text_delta": {
+            if (event.anthropicThinkingSignature && writer.progressThinking) {
+              // The bridge's progress items: close everything, the carrier, then the visible copy.
+              if (currentMsg) closeCurrentMessage();
+              if (currentReasoning) closeCurrentReasoning();
+              if (currentRawReasoning) closeCurrentRawReasoning();
+              flushHiddenRawReasoning();
+              flushHiddenReasoningEnvelope();
+              if (currentToolCall) closeCurrentToolCall();
+              writer.progressThinking(event.text, event.anthropicThinkingSignature);
+              writer.text(event.text);
+              writer.messageDone();
+              break;
+            }
             if (currentReasoning) closeCurrentReasoning();
             if (currentRawReasoning) closeCurrentRawReasoning();
             flushHiddenRawReasoning();
@@ -585,6 +608,7 @@ export function encodeAdapterEventStream(
           }
           case "thinking_delta": {
             if (options.hideThinkingSummary) {
+              if (event.thinking.length > 0) hiddenThinkingSeen = true;
               flushHiddenRawReasoning();
               break;
             }

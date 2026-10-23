@@ -34,6 +34,7 @@ async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?:
 }
 
 const REPLAY_SCOPE: OcxReasoningReplayScopeRef = {
+  clientPrincipalId: "principal-hidden-replay",
   clientThreadId: "hidden-replay-thread",
   current: {
     providerName: "routed",

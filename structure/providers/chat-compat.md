@@ -325,10 +325,9 @@ the request body is byte-for-byte unchanged in this area and OpenRouter retains 
 
 Some Chat gateways expose one model-produced call twice: as a complete
 `<tool_call><function=…>…</function></tool_call>` content block and as a structured `tool_calls`
-entry. `src/adapters/openai-chat/serialized-tool-call-content.ts` recognizes bare blocks at the
-start of a line outside Markdown fences; inline, quoted and indented examples remain unchanged.
-It holds a possible serialized block, resumes ordinary text delivery when the header cannot match,
-and removes the block only when its function name and
+entry. `src/adapters/openai-chat/serialized-tool-call-content.ts` recognizes bare line-start blocks outside Markdown.
+Its scanner `src/adapters/openai-chat/serialized-tool-call-markup.ts` also recognizes `<tool_call_deadbeef>` after ordinary prose, requiring identical closing IDs (1–64 hex characters); code, quotes and indentation stay literal. Identified-wrapper recognition alone never dispatches a call.
+Structured-call reconciliation holds a possible serialized block, resumes ordinary text delivery when the header cannot match, and removes the block only when its function name and
 freeform body match a structured call's parsed `input` or exact raw arguments from a declared
 freeform/custom tool in the same response. Valid JSON primitives, arrays, and objects can be raw
 freeform input too; the declared tool name and namespace determine whether the bridge would
@@ -336,16 +335,15 @@ unwrap an alternate field, and JSON text that changes on dispatch is not treated
 Malformed JSON on an ordinary function is not raw input.
 A block may close a freeform body with a stray `</parameter>` and may omit `</function>`, and one
 newline after the function header is template layout, so MiMo's echoes of those shapes match too
-(#5724). Blocks are read by delimiter scan in linear time: the first `</tool_call>` preceded by
-`</function>` closes the block, and only when none appears before the next block header at the start
-of a line does the first `</tool_call>` close it, so a body can still carry literal tool-call tags.
-If the gateway also prefixes the structured call's JSON
-arguments with the same freeform body, the adapter keeps the JSON suffix only when the block body,
+(#5724). A forward-only next-line-header cursor keeps adjacent-block scanning linear; closing tags must match the opener’s exact ID (`</tool_call>` for bare blocks).
+Before the next line-start header, the first matching close preceded by `</function>` wins; otherwise the first matching close before that header is the unclosed fallback.
+If no matching close precedes that header, scanning continues beyond it but accepts only a matching close preceded by `</function>`. Bodies can still carry literal tags.
+If the gateway also prefixes the structured call's JSON arguments with the same freeform body, the adapter keeps the JSON suffix only when the block body,
 prefix, and wrapper's `input` value all agree. Mismatched markup and arguments remain byte-exact.
 MiMo V2 Chat IDs of `mimo-v2` or `mimo-v2.*` can send `{}` for a freeform call and put
-its input in one bare block; hyphenated IDs (`mimo-v2-pro`, `mimo-v2-omni`) are excluded. With no other text, one call and an exact wire-tool match, the adapter restores `input` and removes the block.
+its input in one bare or identified block; hyphenated IDs (`mimo-v2-pro`, `mimo-v2-omni`) are excluded. With no other text, one call and an exact wire-tool match, the adapter restores `input` and removes the block.
 Prose, fences, ordinary functions, multiple calls/blocks, and nonempty arguments remain inert. A malformed `<parameter=` opener is stripped only at that block's start; streaming recovery stops after earlier answer text is released.
-Two immediately adjacent identical bare blocks, with optional trailing whitespace after the pair,
+Two immediately adjacent identical blocks (bare or identified), with optional trailing whitespace,
 are suppressed only when exactly one structured call matches their function name and carries their
 body as `input` or exact raw arguments, or when one doubled `input` can be reduced to that body.
 Reducing a doubled `input` requires an arguments object with no keys besides `input`; extra keys
@@ -358,10 +356,12 @@ drain all held text, including matching serialized blocks, because pending tools
 The held bytes use the shared translator budget. The streaming hold is bounded (`ingestStreaming`): once a closed block is followed by more than 8 KiB of prose with no block open after it, or held text plus queued events would pass 4 MiB, everything held is released in order with nothing suppressed, so an unmatched block no longer delays the rest of the answer to the end of the turn. A duplicate is the tail of the content, so its reconciliation is unaffected; past either bound the stream prefers delivery (the pre-#5548 raw markup) over suppression. Buffered responses keep the unbounded `ingest` because their structured calls are already known (`tests/adapters/openai/openai-chat-serialized-tool-call-hold-bound.test.ts`). For a model opted into inline `<think>` splitting,
 reconciliation sees only the answer text the splitter emits. A reasoning event that arrives while
 a block candidate is held waits behind it and is released in its original position, so event order
-never changes and a duplicate is not exposed early; line and fence context carry across the
-answer text on both sides of a think section. Streaming and buffered responses use the same
+never changes and a duplicate is not exposed early. Complete control bodies stay Markdown-opaque on every provider, including bounded release;
+line, fence and inline-code state carry across answer text and think sections. Streaming and buffered responses use the same
 matching and repair rules; regression coverage enters through `/v1/responses` in
 `tests/responses/responses-chat-tool-call-content.test.ts`.
+
+Standalone bare-call recovery follows [the separate MiMo policy](mimo-bare-calls.md); traversal stops at the 129th candidate header and disables the entire recovery batch.
 
 > Decision record: [ADR-5548](../decisions/ADR-5548-serialized-tool-call-content.md)
 > Decision record: [ADR-5724](../decisions/ADR-5724-serialized-tool-call-content.md)
@@ -569,20 +569,20 @@ anything about the provider's or model's capability, which the proxy has not
 established. Native Chat passthrough and Google inline video are separate routes and
 are unaffected.
 
-`input_audio` parts are recognized in the shared Responses parser and recorded as a
-presence marker in the translated IR. This is **presence only and not audio support**:
-the IR has no audio carrier and no adapter consumes one. The parser stays non-throwing
-because the native Responses passthrough also runs through `parseRequest` before the
-adapter forwards `_rawBody`, so refusing there would regress raw passthrough.
-
-The final registered adapter also checks the original input under the
-[untranslated-media contract](../adapters/registry.md#untranslated-input-media). Audio/file
-attachments cannot succeed merely because the normalized representation retained a text
-marker: translated adapters refuse them, while native Responses retains the original body.
-Chat conversion rejects recognized audio/file parts before projection, except a user-content
-file part whose inline base64 bytes now have a lossless carrier; the native Chat wire is
-unchanged. No audio transport and no automatic URL fetch is added, and no client filename,
-payload, URL or metadata is included in the new error messages.
+`input_audio` parts with an inline WAV/MP3 data URL, or raw base64 with an explicit
+`wav`/`mp3` format, are supported on the translated Chat wire.
+The shared parser preserves the bytes as an `OcxAudioContent` part; the Chat serializer emits
+`input_audio` for user content and promotes tool-result audio into a follow-up user message
+because `role:"tool"` content is text-only. The parser stays non-throwing for native Responses
+passthrough; native Responses and native Chat retain their existing wire behavior. Remote audio,
+unsupported formats, the top-level `audio` spelling, developer audio, and system or assistant
+audio are refused. The final adapter checks the original input under the
+[untranslated-media contract](../adapters/registry.md#untranslated-input-media); translated
+adapters refuse unsupported inputs while native Responses retains the original body. The
+opposite Chat-to-Responses projection still rejects audio/file parts, except user-content inline
+documents. No audio transport or URL fetch is added, and no client filename, payload, URL or
+metadata enters errors. Admission charges supported audio by decoded size at the conservative
+256-bytes-per-token proxy, not an upstream token formula.
 
 The shared coding-agent projection in `src/adapters/coding-agent/` (CodeBuddy, Qoder) carries supported tool-result image references as
 real image blocks. Current tool-result prose marks supported images as `[image attached below]` and unsupported references as `[image omitted: unsupported reference]`; historical tool-result prose retains `[image]` while supported references are also emitted as image blocks. In multi-turn projection, image blocks follow conversation order — history before current. Vendor tool execution stays disabled on both

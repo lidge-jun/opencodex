@@ -1,4 +1,5 @@
 import type { OcxContentPart, OcxTextContent } from "../types";
+import { audioContentFromRaw } from "./audio";
 import { inlineDocumentFromDataUrl } from "./inline-document";
 
 export function isObj(v: unknown): v is Record<string, unknown> {
@@ -65,23 +66,15 @@ export function inputContentParts(blocks: unknown): string | OcxContentPart[] {
       const processing = nonEmptyString((block as { processing?: string }).processing);
       if (videoUrl) parts.push({ type: "video", videoUrl, ...(processing ? { processing } : {}) });
     } else if (block.type === "input_audio") {
-      // Upstream Codex sends input_audio with an audio_url (codex-rs
-      // protocol/src/models.rs). The IR has no audio carrier and no adapter consumes
-      // one, so this part used to vanish with no trace at all.
-      //
-      // This records PRESENCE only and is NOT audio support: never the payload, which
-      // is large base64 and would explode the token count, and never the URL, which
-      // can carry a signed token. This parser must stay non-throwing — the native
-      // Responses passthrough also runs through parseRequest before the adapter
-      // forwards _rawBody, so refusing here would regress legitimate raw passthrough.
-      //
-      // No adapter refuses audio at its wire today: by this point the part is already a
-      // text marker, so downstream adapters see text and continue. A typed unsupported-
-      // modality carrier that survives to final adapter dispatch is a separate, recorded
-      // residual — do not describe this branch as a refusal.
       const b = block as { audio_url?: string; format?: string };
-      const format = safeAudioFormat(b.format);
-      if (nonEmptyString(b.audio_url)) {
+      // Keep bytes only when they have a Chat-compatible inline form. Unsupported or
+      // remote references retain a marker for text-only wires; the final adapter guard
+      // refuses them rather than allowing a silent drop.
+      const audio = audioContentFromRaw(b.audio_url, b.format);
+      if (audio) {
+        parts.push(audio);
+      } else if (nonEmptyString(b.audio_url)) {
+        const format = safeAudioFormat(b.format);
         parts.push({ type: "text", text: format ? `[audio: ${format}]` : "[audio]" });
       }
     } else if (block.type === "input_file") {
@@ -104,7 +97,7 @@ export function inputContentParts(blocks: unknown): string | OcxContentPart[] {
       // fabricating a "[file: ...]" marker for an attachment that was never sent.
     }
   }
-  // Collapse to a plain string only for a single TEXT part; images must stay structured.
+  // Collapse to a plain string only for a single TEXT part; media must stay structured.
   if (parts.length === 1 && parts[0].type === "text") return parts[0].text;
   return parts;
 }
@@ -129,15 +122,15 @@ export function outputTextOf(blocks: unknown): OcxTextContent[] {
 }
 
 /**
- * Tool-call output content. Preserves images (e.g. Codex `view_image` returns
- * `input_image` items): returns content parts when any image is present, else a plain joined string.
- * Never inlines an image_url as text (that would explode the token count).
+ * Tool-call output content. Preserves images (e.g. Codex `view_image` returns)
+ * and inline audio: returns content parts when either is present, else a plain joined string.
+ * Never inlines an image_url or audio payload as text (that would explode the token count).
  */
 export function outputToToolResultContent(output: string | unknown[] | undefined): string | OcxContentPart[] {
   if (typeof output === "string") return output;
   if (!Array.isArray(output)) return "";
   const parts: OcxContentPart[] = [];
-  let hasImage = false;
+  let hasMedia = false;
   for (const raw of output) {
     if (!isObj(raw)) continue;
     if (raw.type === "output_text" || raw.type === "text" || raw.type === "input_text") {
@@ -149,15 +142,17 @@ export function outputToToolResultContent(output: string | unknown[] | undefined
       const fileId = nonEmptyString(raw.file_id);
       if (imageUrl) {
         parts.push({ type: "image", imageUrl, ...(typeof raw.detail === "string" ? { detail: normalizeImageDetail(raw.detail) } : {}) });
-        hasImage = true;
+        hasMedia = true;
       } else if (fileId) {
         parts.push({ type: "text", text: `[image: ${fileId}]` });
       }
     } else if (raw.type === "input_audio") {
-      // Same presence-only contract as the user-content branch above: Codex returns
-      // audio in tool output too, and it previously disappeared without trace.
-      const format = safeAudioFormat(raw.format);
-      if (nonEmptyString(raw.audio_url)) {
+      const audio = audioContentFromRaw(raw.audio_url, raw.format);
+      if (audio) {
+        parts.push(audio);
+        hasMedia = true;
+      } else if (nonEmptyString(raw.audio_url)) {
+        const format = safeAudioFormat(raw.format);
         parts.push({ type: "text", text: format ? `[audio: ${format}]` : "[audio]" });
       }
     } else if (raw.type === "encrypted_content") {
@@ -165,7 +160,7 @@ export function outputToToolResultContent(output: string | unknown[] | undefined
       parts.push({ type: "text", text: "[encrypted content omitted]" });
     }
   }
-  if (!hasImage) return parts.map(p => (p.type === "text" ? p.text : "")).join("");
+  if (!hasMedia) return parts.map(p => (p.type === "text" ? p.text : "")).join("");
   return parts;
 }
 

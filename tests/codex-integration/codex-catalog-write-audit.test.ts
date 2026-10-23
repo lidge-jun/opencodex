@@ -29,6 +29,7 @@ import { initializeConfigOwnership, CONFIG_UNINSTALL_MANIFEST } from "../../src/
 import type { CatalogWriteAuditEvent } from "../../src/codex/catalog/write-audit-contract";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { redactUserPath } from "../../src/lib/redact";
+import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
 
 let root = "";
 let codexHome = "";
@@ -38,6 +39,7 @@ let previousOpencodexHome: string | undefined;
 const native = { slug: "gpt-5.5", description: "native" };
 const routed = { slug: "ark/glm-5.3", description: "Routed via opencodex → ark/glm-5.3 (ark)." };
 const catalogBytes = (...models: object[]) => `${JSON.stringify({ models }, null, 2)}\n`;
+const aclSuccess = () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" });
 
 function auditPath(): string { return join(codexHome, CODEX_CATALOG_AUDIT_FILE); }
 const auditEvent = (): CatalogWriteAuditEvent => ({
@@ -78,6 +80,13 @@ function replaceAs(intent: CatalogWriteIntent, content: string) {
 }
 
 beforeEach(() => {
+  // A fresh audit file is hardened inside a 1s product deadline. On Windows that window held a
+  // cold PowerShell SID lookup plus real icacls, so a slow runner reported "skipped" where the
+  // audit contract says "created". These cases test the audit's publication rules; the ACL
+  // sequence has its own suite (tests/windows/windows-secret-acl.test.ts).
+  setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
+  secretAcl.setIcaclsRunnerForTests(aclSuccess);
+  secretAcl.setAsyncIcaclsRunnerForTests(async () => aclSuccess());
   previousOpencodexHome = process.env.OPENCODEX_HOME;
   root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-catalog-audit-")));
   codexHome = join(root, "codex");
@@ -88,6 +97,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  secretAcl.setIcaclsRunnerForTests(null);
+  secretAcl.setAsyncIcaclsRunnerForTests(null);
+  setSyntheticWindowsPrincipalForTests(null);
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   const path = resolveCodexCatalogSerializationDatabasePath(resolveEffectiveUserIdentity(), codexHome);

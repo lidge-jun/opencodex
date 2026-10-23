@@ -238,6 +238,22 @@ outbound contract is covered by `tests/responses/chat-conversation-affinity.test
 caller `x-session-id` arrives at this bridge already as `session_id` (see above).
 This transport contract does not prove a client's emission, Pool selection stability or cache hits.
 
+The optional `x-hermes-conversation-id` header is accepted on `/v1/chat/completions` and `/v1/responses`
+strictly as a log-only correlation fallback (`logCtx.conversationId`), normalized to a 32-hex-character
+digest and stripped before upstream forwarding. It never modifies native session lane allocation
+(`sessionLaneIdFromRequest`), turn termination (`bindTurnTerminationScope`), or upstream prompt caching.
+Native header candidates (`x-codex-parent-thread-id`, `session_id`, `session-id`, `thread-id`) are each
+normalized independently in priority order before considering Hermes, ensuring that an empty or whitespace
+candidate does not mask a valid native identity. Configuring `session_affinity_header: x-hermes-conversation-id`
+on Hermes replaces the client's `session-id` header, trading away native session identity and lane scoping
+for log-only correlation; `session-id` remains the generated default.
+A Hermes-derived log id is marked `conversationIdIsHermesFallback` (in memory, never persisted). Chat sets
+it before routing so pre-dispatch refusals stay correlated; `assignNativeLogConversationId` lets any later
+native id replace it — `prepareResponsesRequest` resolution and the Cursor conversation backfills in
+`run-turn-execution.ts`, `sidecar-execution.ts` and `request-transport.ts` — while a caller-owned
+pre-populated id (routed Claude) is kept. Covered by `tests/usage/request-log-conversation.test.ts` and
+`tests/responses/chat-conversation-affinity.test.ts`.
+
 ## Chat streaming client with a JSON upstream result
 
 The translated inbound path in `src/server/chat-completions.ts` may receive a complete JSON
@@ -248,7 +264,8 @@ Tool calls gain their array-order stream `index`; the stream retains one assista
 one terminal choice, and one `[DONE]`. Both native and translated JSON fallbacks share
 `jsonCompletionSse`; its temporary frame strings and final body ownership are charged to the
 existing translator budget. Known incomplete limits take precedence over tool finish reasons;
-unmapped incomplete boundaries remain errors. The existing response-body lifecycle owns translation-budget
+"known" means the shared [incomplete-reason vocabulary](../transports/responses-wire-shapes.md#adapter-incomplete-reasons),
+and unmapped incomplete boundaries remain errors. The existing response-body lifecycle owns translation-budget
 release on consumption or cancellation. Actual upstream SSE and native Chat bypass this fallback.
 
 > Decision record: [ADR-0062](../decisions/ADR-0062-chat-streaming-client-with-a-json-upstream-resul.md)
@@ -482,7 +499,9 @@ projection as a `reasoning` input item emitted immediately before its assistant
 message, matching the parser's buffer-and-prepend adjacency. Only representable
 plaintext crosses: no signature, encrypted payload or provider item id is
 reconstructed, because those attest to content this proxy never received. Opaque
-reasoning replay across a Chat boundary remains unimplemented by design.
+reasoning replay across a Chat boundary has exactly one exception: Anthropic thinking
+signatures carried in `reasoning_details` (#7429), documented in
+[chat-reasoning-details.md](chat-reasoning-details.md).
 `presence_penalty` and `frequency_penalty` are carried too; per-model
 `noPenaltyModels` opt-outs still apply at the adapter.
 
@@ -512,6 +531,8 @@ also return an explicit error; their call/result pairing is not implemented by t
 Modern `tool` images continue through the existing following-user carrier. These errors state
 an OpenCodex conversion limit, not a provider capability claim. Final Responses-to-adapter
 admission follows the [registry contract](../adapters/registry.md#untranslated-input-media).
+The opposite Responses-to-Chat direction supports inline WAV/MP3 audio under the same
+contract; this Chat-to-Responses projection still has no lossless audio carrier.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
@@ -542,6 +563,14 @@ Explicit preserve lists (including `[]`) remain authoritative, and an explicit p
 can disable fabricated placeholders while allowing original cached reasoning.
 For tool-enabled DeepSeek requests the configured placeholder also repairs earlier assistant
 answers without tool calls. Those turns have no call-id replay entry; supplied reasoning wins.
+Before copying replay into the request, native passthrough measures the exact escaped-JSON net
+change and checks the final request size (`baseBytes + serializedBytes`) against the fixed
+`maxSerializedBytes` cap. For a changed replay, it then reserves that full size as transient
+`request_copies` against the translator budget remaining after other retained copies, before
+applying replay and serializing the body. The transient reservation is released in `finally`.
+Exceeding either limit returns the standard 413 `translation_buffer_limit` response; history is
+never silently truncated. Key rotation and retry rebuild and charge the request after releasing
+the previous body, preserving the same scope and normal replay behavior within budget.
 
 `src/server/chat-native-reasoning.ts` records upstream JSON and fragmented SSE reasoning under
 all parallel call ids, separately for each choice. Replay requires a sanitized `thread-id`,
@@ -551,3 +580,16 @@ Missing identity, a restarted/expired/evicted cache, and another route receive o
 placeholder; they never recover another conversation's raw text. SSE capture retains at most
 256 KiB and 64 calls within the translator budget and releases on terminal/error/cancellation.
 Unfinished tool streams cannot seed replay. This leaves the native wire and response fields intact.
+
+## Codex runtime agent assertions
+
+Authorization scheme parsing lives in `src/lib/authorization-scheme.ts`, and every former
+`replace(/^Bearer\s+/i, "")` read uses it. Codex 0.164 runtime agent assertions add a value that is
+neither an admission secret nor a caller credential. `Authorization: AgentAssertion` (assertion_only)
+is never a bearer, never admitted, and never forwarded: the request fetch handler refuses it with
+`agent_assertion_unsupported` before admission or routing, and Responses auth plus
+`materializeCodexUpstreamAuth` refuse it again so no pool or substituted credential can stand in for
+it. The dual_header `x-openai-agent-assertion` is outside `FORWARD_HEADERS` and blocked from
+`forwardClientHeaders`. It is carried only for canonical-forward Direct when the outbound Bearer is
+the caller's original one, and is dropped under a pool override. Coverage:
+`tests/server/agent-assertion-auth.test.ts` and `tests/responses/agent-assertion-routes.test.ts`.
