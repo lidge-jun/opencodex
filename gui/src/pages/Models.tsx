@@ -80,6 +80,7 @@ import {
   REASONING_EFFORT_LEVELS,
   routedModelOptions,
   parseContextWindowDraft,
+  normalizeV2Status,
   type ModelPresetView,
   type ModelRow,
   type ProviderContextCapsResponse,
@@ -87,8 +88,9 @@ import {
   type V2Status,
 } from "./models-shared";
 import { DiscoveryDependencyHint, EmptyProviderHint } from "./models-provider-hints";
+import PlaintextV2ConsentModal from "../components/PlaintextV2ConsentModal";
 import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
-import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory } from "../subagent-surface";
+import { SUBAGENT_SURFACE_GUIDE_URL, confirmsPlaintextV2Mode, readSubagentSurfaceAdvisory, subagentSurfaceModes, type SubagentSurfaceMode } from "../subagent-surface";
 import { shadowCallModelOptions } from "./dashboard-shared";
 import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
 import { ModelCatalogDelivery } from "./models-catalog-state";
@@ -363,6 +365,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const [v2HelpOpen, setV2HelpOpen] = useState(false);
   /** A base/v2 selection waiting on the approval dialog. Null while nothing is pending. */
   const [pendingSurface, setPendingSurface] = useState<"default" | "v2" | null>(null);
+  const [plaintextConsent, setPlaintextConsent] = useState<string | null>(null);
   const [customModalOpen, setCustomModalOpen] = useState(false);
   const [displayNameModel, setDisplayNameModel] = useState<ModelRow | null>(null);
   const [priceModel, setPriceModel] = useState<ModelRow | null>(null);
@@ -498,13 +501,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       const data = await readJsonIfOk<V2Status>(r);
       if (!fresh()) return;
       if (!data || typeof data.enabled !== "boolean") { setV2(null); return; }
-      setV2({
-        enabled: data.enabled,
-        agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
-        maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
-        multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
-        keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
-      });
+      setV2(normalizeV2Status(data));
     } catch {
       if (fresh()) setV2(null); // old server / network: hide the section instead of guessing
     } finally {
@@ -1117,13 +1114,13 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           setStatus(t("models.saveFailed"));
           return;
         }
-        setV2({
-          enabled: data.enabled,
-          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
-          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
-          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
-          keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
-        });
+        // Fail closed like the CLI: the write is unconfirmed unless the full contract returns.
+        if (body.multiAgentMode === "v2-plaintext" && !confirmsPlaintextV2Mode(data)) {
+          setOk(false);
+          setStatus(t("models.saveFailed"));
+          return;
+        }
+        setV2(normalizeV2Status(data));
         setOk(true);
         setStatus(t("models.v2Applied"));
         setV2Note((data.warnings ?? []).join(" "));
@@ -1139,12 +1136,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     }
   };
 
-  const setMultiAgentMode = async (mode: "v1" | "default" | "v2") => {
+  const setMultiAgentMode = async (mode: SubagentSurfaceMode) => {
     if (!v2 || v2.multiAgentMode === mode) return;
     // v1 applies immediately: confirming a move toward the safe default would be noise.
     // base and v2 both put ChatGPT-native parents on the v2 surface, where a task handed
     // to a routed child is undeliverable ciphertext, so those wait for an answer.
     if (mode === "v1") { await putV2Setting({ multiAgentMode: "v1" }); return; }
+    // v2-plaintext uses its own consent dialog; its PUT carries the plaintext acknowledgement.
+    if (mode === "v2-plaintext") { setPlaintextConsent(apiBase); return; }
     setPendingSurface(mode);
   };
 
@@ -1261,13 +1260,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           setStatus(t("models.saveFailed"));
           return;
         }
-        setV2({
-          enabled: data.enabled,
-          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
-          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
-          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
-          keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
-        });
+        setV2(normalizeV2Status(data));
         setOk(true);
         setStatus(t("models.v2ThreadsApplied"));
         setShowThreadsCustom(false);
@@ -1989,7 +1982,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         {(v2Loading || v2) && (
           <SettingsRow label={t("models.v2Label")}>
             <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
-              {(["v1", "default", "v2"] as const).map(mode => (
+              {subagentSurfaceModes(v2?.supportsPlaintextV2Mode === true).map(mode => (
                 <button
                   key={mode}
                   type="button"
@@ -2046,6 +2039,14 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             onDismiss={() => setPendingSurface(null)}
           />
         )}
+        {plaintextConsent === apiBase && (
+          <PlaintextV2ConsentModal
+            busy={v2Busy}
+            onConfirm={() => void putV2Setting({ multiAgentMode: "v2-plaintext", plaintextAgentMessagesAcknowledged: true })
+              .finally(() => setPlaintextConsent(null))}
+            onDismiss={() => setPlaintextConsent(null)}
+          />
+        )}
       </div>
 
       {v2 && (
@@ -2091,6 +2092,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             <span className="mono text-label" style={{ color: "var(--err, #e5484d)" }}>{t("models.v2Conflict")}</span>
           )}
           {v2Note && <span className="muted text-label">{v2Note}</span>}
+          {v2.plaintextAgentMessagesEnabled === true && <span className="muted text-label">{t("models.v2PlaintextOn")}</span>}
         </div>
       )}
 

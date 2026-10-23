@@ -109,6 +109,7 @@ export function v2StatusLine(enabled: boolean): string {
 export function multiAgentModeLine(mode: string, keepNativeChatGptOnV1 = false): string {
   switch (mode) {
     case "v1": return "multi_agent_mode: v1 — ALL models forced to v1 surface (upstream pins overridden)";
+    case "v2-plaintext": return "multi_agent_mode: v2-plaintext — new sessions select V2; subsequent eligible canonical ChatGPT requests, including existing V2 sessions, use experimental plaintext over HTTPS; global override stays OFF";
     case "v2": return keepNativeChatGptOnV1
       ? "multi_agent_mode: v2 hybrid — ChatGPT-native models use v1; routed models use v2"
       : "multi_agent_mode: v2 — ALL models forced to v2 surface (upstream pins overridden)";
@@ -117,7 +118,7 @@ export function multiAgentModeLine(mode: string, keepNativeChatGptOnV1 = false):
 }
 
 function requiresGlobalV2Disabled(multiAgentMode: string | undefined, keepNativeChatGptOnV1: boolean): boolean {
-  return multiAgentMode === "v2" && keepNativeChatGptOnV1;
+  return multiAgentMode === "v2-plaintext" || (multiAgentMode === "v2" && keepNativeChatGptOnV1);
 }
 
 function printLocalStatus(deps: V2CliDeps): number {
@@ -129,14 +130,16 @@ function printLocalStatus(deps: V2CliDeps): number {
     const mode = cfg.multiAgentMode ?? "default";
     const keepNativeV1 = cfg.keepNativeChatGptOnV1 === true;
     log.log(multiAgentModeLine(mode, keepNativeV1));
-    log.log(cfg.keepNativeChatGptOnV1 === true
+    log.log(mode === "v2-plaintext"
+      ? "keep_native_chatgpt_on_v1: inactive in v2-plaintext mode; stored preference is preserved"
+      : cfg.keepNativeChatGptOnV1 === true
       ? requiresGlobalV2Disabled(mode, keepNativeV1) && isEnabled()
         ? "keep_native_chatgpt_on_v1: CONFLICT — global multi_agent_v2 overrides the native v1 catalog pin; run 'ocx v2 keep-native-v1 on' to reconcile"
         : "keep_native_chatgpt_on_v1: ON — global V2 override is off; ChatGPT-native rows use v1 and routed rows use v2 when mode is v2"
       : "keep_native_chatgpt_on_v1: OFF");
     const threads = getLogicalMaxThreads();
     log.log(`max_threads: ${threads ?? "(unset — codex default)"}`);
-    const v2Active = isEnabled();
+    const v2Active = isEnabled() || mode === "v2-plaintext";
     const agentsEnabled = getAgentsEnabled();
     log.log(`agents.enabled: ${agentsEnabled === null ? "(unset — upstream default true)" : agentsEnabled}`);
     const maxDepth = getAgentsMaxDepth();
@@ -198,6 +201,9 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     let successLines: string[];
     let unchangedKeep: boolean | undefined;
     if (parsed.verb === "mode") {
+      if (parsed.value === "v2-plaintext" && config.multiAgentMode !== "v2-plaintext" && !parsed.plaintextAcknowledged) {
+        return emit(false, ["Entering v2-plaintext requires --acknowledge-plaintext-agent-messages. Enabled compilation also affects subsequent eligible canonical ChatGPT requests from existing V2 sessions. Task text can remain in Codex history, provider requests and local response/debug state; TLS and authentication stay enabled. Existing ciphertext is not decrypted, and disabling does not delete retained copies."]);
+      }
       changed = (config.multiAgentMode ?? "default") !== parsed.value;
       if (parsed.value !== "default") {
         const target = parsed.value === "v2" && config.keepNativeChatGptOnV1 !== true;
@@ -209,7 +215,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
       else config.multiAgentMode = parsed.value;
       saveConfig(config);
       successLines = [multiAgentModeLine(parsed.value, config.keepNativeChatGptOnV1 === true),
-        "Applies to NEW sessions; running sessions keep their pinned multi-agent version."];
+        "Catalog pins apply to NEW sessions; running sessions keep their pinned multi-agent version. Plaintext compilation follows the current setting for subsequent eligible canonical ChatGPT requests, including existing V2 sessions. Existing ciphertext is not decrypted, stored history is not rewritten, and disabling does not delete retained copies."];
     } else if (parsed.verb === "keep-native-v1") {
       unchangedKeep = (config.keepNativeChatGptOnV1 === true) === parsed.value;
       changed = !unchangedKeep;
@@ -227,6 +233,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     } else {
       const want = parsed.verb === "on";
       if (want && requiresGlobalV2Disabled(config.multiAgentMode, config.keepNativeChatGptOnV1 === true)) {
+        if (config.multiAgentMode === "v2-plaintext") return emit(false, ["v2 on: incompatible with v2-plaintext. Its catalog selects V2 for new sessions while the global override stays OFF. Select another mode explicitly first."]);
         return emit(false, ["v2 on: incompatible with keep-native-v1 while mode is v2 — Codex's global multi_agent_v2 overrides the native v1 catalog pin. Run 'ocx v2 keep-native-v1 off' first."]);
       }
       const transition = transitionMultiAgentV2(want, (next, env, validate) => runCodexFeatures(next ? "enable" : "disable", deps, env, validate));

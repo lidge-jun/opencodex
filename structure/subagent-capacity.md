@@ -2,7 +2,7 @@
 
 Surface and limit settings are independent of [subagent roster ordering](subagents.md).
 
-## Multi-agent surface mode (3-state)
+## Multi-agent surface selection
 
 `OcxConfig.multiAgentMode` controls the `multi_agent_version` field stamped on catalog entries:
 
@@ -11,11 +11,16 @@ Surface and limit settings are independent of [subagent roster ordering](subagen
 | `"v1"` | Force ALL entries to `multi_agent_version = "v1"` ??overrides upstream pins (sol/terra included). |
 | `"default"` | Respect upstream model pins (sol/terra=v2, luna=v1, others=null ??codex feature flag decides). On sync, stale forced values are cleared and upstream pins restored. |
 | `"v2"` | Force ALL entries to `multi_agent_version = "v2"` ??overrides upstream pins (luna included). |
+| `"v2-plaintext"` | Select V2 catalog pins for every model, enable the experimental plaintext task compiler, and disable the global override. Explicit opt-in; existing history is not rewritten. |
 
 The override is applied as a final pass in both `buildCatalogEntries` (live `/v1/models` path) and
 `mergeCatalogEntriesForSync` (on-disk sync), AFTER all normalization and visibility processing. This
 ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from routed entries) does
 not clobber the forced value.
+
+`"v2-plaintext"` is a separate explicit opt-in: all catalog rows receive `multi_agent_version = "v2"`, the global feature is disabled, and the existing [plaintext V2 compiler](subagents.md#plaintext-v2-agent-messages) is enabled. The OpenCodex mode literal is never sent as a Codex model pin. Stored `keepNativeChatGptOnV1` and `plaintextV2AgentMessages` preferences are preserved; the former is inactive in this mode. Existing configurations never migrate into it automatically. Existing chats retain native history/session selection: catalog pins affect new chats, but the compiler follows the current setting on subsequent eligible canonical ChatGPT requests, including existing V2 sessions. No stored-history rewrite, ciphertext decryption or deletion of retained copies occurs when the setting changes.
+
+Entering this mode through `PUT /api/v2` requires `plaintextAgentMessagesAcknowledged: true`; re-saving the same mode is idempotent. The CLI requires `--acknowledge-plaintext-agent-messages` for the same transition. The dashboard advertises it only when `supportsPlaintextV2Mode` is true and asks for explicit confirmation of task-text retention before one mode write. GET/PUT expose the derived `plaintextAgentMessagesEnabled` state. Enabling the global V2 override while the mode is selected is rejected before writes. Selecting another mode restores its ordinary policy, without clearing an independently enabled legacy plaintext field. No automatic fallback or provider retry is added.
 
 A forced pass records each row's pre-override value once, in `opencodex_multi_agent_version_origin`
 (a string pin, or null for none); repeated forced passes never replace it. Returning to `"default"`
@@ -32,18 +37,18 @@ document, because spreading the defaults underneath would repair an unrelated mi
 into a surface change its operator never made.
 An absent key still means `"default"`, because selecting base deletes the key ??absence cannot be
 read as "never configured". An install that predates that change is therefore not rewritten; it is
-asked once. `multiAgentSurfaceAdvisoryRequired()` is true while the resolved mode is not v1 and
+asked once. `multiAgentSurfaceAdvisoryRequired()` is true while the resolved mode is base or v2 and
 the stored `multiAgentSurfaceAdvisoryVersion` is below `MULTI_AGENT_SURFACE_ADVISORY_VERSION`, and
 only the operator answering the dashboard notice writes that version.
 
-CLI: `ocx v2 mode v1|default|v2`. GUI: segmented control on the Models page. API: `GET/PUT /api/v2`
+CLI: `ocx v2 mode v1|default|v2|v2-plaintext` (plaintext entry requires the acknowledgement above). GUI: segmented control on the Models page. API: `GET/PUT /api/v2`
 with `multiAgentMode` field.
 
 The `multi_agent_v2` feature flag and the logical maximum thread count are separate from
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
 the flag and thread count decide what the native runtime allows.
 Because the global feature has precedence over catalog pins, Codex config injection reconciles it
-to disabled whenever persisted OpenCodex mode explicitly selects v1. This includes a fresh install
+to disabled whenever persisted OpenCodex mode explicitly selects v1 or v2-plaintext. This includes a fresh install
 on a Codex home that had previously enabled v2; external-provider ownership and read-only injection
 preflight still prohibit that write. The transition runs inside the same write lock and preimage as
 the rest of injection, so a later refusal rolls the flag back with the files.
@@ -55,7 +60,7 @@ v2. An explicit attempt to enable the global flag while the hybrid pin is active
 
 ### Concurrent child limit
 
-The Models page's Model settings panel exposes one subagent limit control in v1, base and v2,
+The Models page's Model settings panel exposes one subagent limit control in v1, base, v2 and v2-plaintext,
 including hybrid mode with the global `multi_agent_v2` flag disabled. Its displayed value counts
 children only. Surface selection and capacity are independent; raising the cap neither spawns
 children automatically nor guarantees faster execution.

@@ -1,5 +1,6 @@
 import { IconAlert, IconInfo } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
+import { subagentSurfaceModes } from "../subagent-surface";
 import { formatTokens } from "../format-tokens";
 import { formatUptime } from "../formatUptime";
 import { navigateHash } from "../hash-routing";
@@ -18,13 +19,14 @@ export function DashboardOverviewHead({
   startupHealth,
   projectConfigWarnings,
   maMode,
+  maSupportsPlaintextV2,
   maBusy,
   maHelpTriggerRef,
  maHelpOpen,
  setMaHelpOpen,
  switchMaMode,
   maError,
-}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "usageLoading" | "healthLoading" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode" | "maError">) {
+}: Pick<Dash, "locale" | "health" | "providers" | "usage30d" | "usageLoading" | "healthLoading" | "startupHealth" | "projectConfigWarnings" | "maMode" | "maSupportsPlaintextV2" | "maBusy" | "maHelpTriggerRef" | "maHelpOpen" | "setMaHelpOpen" | "switchMaMode" | "maError">) {
  const t = useT();
   const online = health?.status === "ok";
 
@@ -51,7 +53,7 @@ export function DashboardOverviewHead({
             </div>
             <div className="value" style={{ display: "flex", alignItems: "center" }}>
               <div className="dash-ma-switch" role="radiogroup" aria-label={t("dash.multiAgent")} style={{ display: "inline-flex", borderRadius: "var(--radius-pill)", background: "var(--surface-soft, var(--raised))", padding: 3, gap: 2 }}>
-                {(["v1", "default", "v2"] as const).map(mode => (
+                {subagentSurfaceModes(maSupportsPlaintextV2).map(mode => (
                   <button
                     key={mode}
                     type="button"

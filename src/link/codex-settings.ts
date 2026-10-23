@@ -28,7 +28,7 @@ import { hostname } from "node:os";
 import type { OcxConfig } from "../types";
 
 export const HOME_CODEX_SETTINGS_VERSION = 1;
-const MULTI_AGENT_MODES = ["v1", "default", "v2"] as const;
+const MULTI_AGENT_MODES = ["v1", "default", "v2", "v2-plaintext"] as const;
 type MultiAgentMode = (typeof MULTI_AGENT_MODES)[number];
 
 export interface HomeCodexSettings {

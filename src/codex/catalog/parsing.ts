@@ -618,7 +618,13 @@ export function ensureStrictCatalogFields(
   return ensureAutoCompactTokenLimit(entry);
 }
 
-export type MultiAgentMode = "v1" | "default" | "v2";
+/**
+ * "v2-plaintext" is a forced-v2 pass like "v2", but the mode itself records the
+ * operator's opt-in to plaintext delivery of native v2 collaboration messages and
+ * keeps the global `multi_agent_v2` feature disabled. The literal must never be
+ * written into `multi_agent_version`, whose values Codex validates.
+ */
+export type MultiAgentMode = "v1" | "default" | "v2" | "v2-plaintext";
 
 export interface MultiAgentModeOptions {
   /** Caller-owned source metadata already defines the default for these projected rows. */
@@ -689,6 +695,9 @@ export function applyRoutedCodexToolMode(
  * `keepNativeChatGptOnV1` only applies when `mode === "v2"`. It leaves Sol/Terra
  * (and other ChatGPT-native rows) on v1 so a native parent can still spawn a
  * routed child. See issue #92.
+ *
+ * `"v2-plaintext"` stamps every row v2, ChatGPT-native rows included -- the mode is
+ * the plaintext-delivery opt-in, so no native/routed split applies.
  */
 export function applyMultiAgentMode(
   entries: RawEntry[],
@@ -767,9 +776,10 @@ export function applyMultiAgentMode(
     }
     return entries;
   }
+  const forcedVersion = mode === "v2-plaintext" ? "v2" : mode;
   for (const entry of entries) {
     recordMultiAgentOrigin(entry);
-    entry.multi_agent_version = mode;
+    entry.multi_agent_version = forcedVersion;
   }
   return entries;
 }

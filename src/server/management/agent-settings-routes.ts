@@ -11,6 +11,7 @@ import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../config/provider-validation";
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../../config/multi-agent-surface";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
 import { isAnthropicInstanceId, type AnthropicInstanceId } from "../../providers/anthropic-instance-id";
@@ -338,6 +339,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       multiAgentMode: resolveMultiAgentMode(config),
       multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config),
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      plaintextAgentMessagesEnabled: isPlaintextV2AgentMessagesEnabled(config),
+      supportsPlaintextV2Mode: true,
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
@@ -345,7 +348,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION,
       // max_depth is V1-only upstream; this is the global-flag statement, derived
       // server-side so no client can present it as an effective V2 limit.
-      agentsMaxDepthAppliesWhenV2Disabled: !enabled,
+      // 'v2-plaintext' keeps the flag off but still runs the V2 surface through
+      // catalog pins, so the V1 limit does not apply there either.
+      agentsMaxDepthAppliesWhenV2Disabled: !enabled && resolveMultiAgentMode(config) !== "v2-plaintext",
     });
   }
   if (url.pathname === "/api/v2" && req.method === "PUT") {
@@ -359,6 +364,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       subagentDeveloperInstructions?: unknown;
       multiAgentModeHintText?: unknown;
       multiAgentSurfaceAdvisoryAcknowledged?: unknown;
+      plaintextAgentMessagesAcknowledged?: unknown;
     };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     const wantsFlag = body.enabled !== undefined;
@@ -370,12 +376,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const wantsSubagentInstructions = body.subagentDeveloperInstructions !== undefined;
     const wantsModeHintText = body.multiAgentModeHintText !== undefined;
     const wantsAdvisoryAck = body.multiAgentSurfaceAdvisoryAcknowledged !== undefined;
+    const wantsPlaintextAck = body.plaintextAgentMessagesAcknowledged !== undefined;
     if (!wantsFlag && !wantsThreads && !wantsMode && !wantsKeepNative && !wantsAgentsEnabled && !wantsMaxDepth && !wantsSubagentInstructions && !wantsModeHintText && !wantsAdvisoryAck) {
       return jsonResponse({ error: "body must set enabled, multiAgentMode, keepNativeChatGptOnV1, maxConcurrentThreadsPerSession, agentsEnabled, agentsMaxDepth, subagentDeveloperInstructions, multiAgentModeHintText, and/or multiAgentSurfaceAdvisoryAcknowledged" }, 400);
     }
     if (wantsFlag && typeof body.enabled !== "boolean") return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
-    if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2") {
-      return jsonResponse({ error: "body.multiAgentMode must be 'v1', 'default', or 'v2'" }, 400);
+    if (wantsMode && body.multiAgentMode !== "v1" && body.multiAgentMode !== "default" && body.multiAgentMode !== "v2" && body.multiAgentMode !== "v2-plaintext") {
+      return jsonResponse({ error: "body.multiAgentMode must be 'v1', 'default', 'v2', or 'v2-plaintext'" }, 400);
     }
     if (wantsKeepNative && typeof body.keepNativeChatGptOnV1 !== "boolean") {
       return jsonResponse({ error: "body.keepNativeChatGptOnV1 must be a boolean" }, 400);
@@ -411,18 +418,38 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (wantsAdvisoryAck && typeof body.multiAgentSurfaceAdvisoryAcknowledged !== "boolean") {
       return jsonResponse({ error: "body.multiAgentSurfaceAdvisoryAcknowledged must be a boolean" }, 400);
     }
-    const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" : undefined;
+    // Companion ack for 'v2-plaintext': a boolean, and only `true` acknowledges. Nothing is
+    // persisted for it; the stored mode is itself the operator's opt-in record.
+    if (wantsPlaintextAck && typeof body.plaintextAgentMessagesAcknowledged !== "boolean") {
+      return jsonResponse({ error: "body.plaintextAgentMessagesAcknowledged must be a boolean" }, 400);
+    }
+    const mode = wantsMode ? body.multiAgentMode as "v1" | "default" | "v2" | "v2-plaintext" : undefined;
     const effectiveMode = mode ?? config.multiAgentMode ?? "default";
     const effectiveKeepNative = wantsKeepNative
       ? body.keepNativeChatGptOnV1 === true
       : config.keepNativeChatGptOnV1 === true;
     const hybridPinActive = effectiveMode === "v2" && effectiveKeepNative;
-    const modeFlag = mode === "v2" ? !hybridPinActive : mode === "v1" ? false : undefined;
+    // 'v2-plaintext' is pin-driven like the v2+keepNative hybrid: the global feature must
+    // stay disabled so catalog multi_agent_version pins decide each row's surface.
+    const pinDrivenV2 = hybridPinActive || effectiveMode === "v2-plaintext";
+    const modeFlag = mode === "v2" ? !hybridPinActive : mode === "v1" || mode === "v2-plaintext" ? false : undefined;
     if (wantsFlag && modeFlag !== undefined && body.enabled !== modeFlag) {
       return jsonResponse({
-        error: hybridPinActive
-          ? "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins"
+        error: pinDrivenV2
+          ? effectiveMode === "v2-plaintext"
+            ? "body.enabled=true conflicts with multiAgentMode 'v2-plaintext': Codex's global multi_agent_v2 override outranks catalog pins"
+            : "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins"
           : `body.enabled conflicts with multiAgentMode '${mode}'`,
+      }, 400);
+    }
+    // Entering 'v2-plaintext' requires the explicit per-request acknowledgement: the mode
+    // itself is the opt-in to plaintext delivery of native v2 collaboration messages.
+    // Re-saving the same mode is idempotent and needs no repeated consent.
+    if (mode === "v2-plaintext"
+      && resolveMultiAgentMode(config) !== "v2-plaintext"
+      && body.plaintextAgentMessagesAcknowledged !== true) {
+      return jsonResponse({
+        error: "body.multiAgentMode 'v2-plaintext' requires plaintextAgentMessagesAcknowledged === true: native v2 collaboration messages are delivered as plaintext on the canonical ChatGPT route",
       }, 400);
     }
     const {
@@ -442,9 +469,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }, 502);
     }
     const warnings: string[] = [];
-    if (wantsFlag && body.enabled === true && hybridPinActive) {
+    if (wantsFlag && body.enabled === true && pinDrivenV2) {
       return jsonResponse({
-        error: "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins",
+        error: effectiveMode === "v2-plaintext"
+          ? "body.enabled=true conflicts with multiAgentMode 'v2-plaintext': Codex's global multi_agent_v2 override outranks catalog pins"
+          : "body.enabled=true conflicts with keepNativeChatGptOnV1: Codex's global multi_agent_v2 override outranks catalog pins",
       }, 400);
     }
     const requestedFlag = wantsFlag
@@ -488,6 +517,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       else config.multiAgentMode = mode;
       saveConfigPreservingClaudeCode(config);
       warnings.push(`Multi-agent mode set to '${mode}'. Applies to new sessions.`);
+      if (mode === "v2-plaintext" && config.keepNativeChatGptOnV1 === true) {
+        warnings.push("keepNativeChatGptOnV1 is stored but inactive under 'v2-plaintext': ChatGPT-native rows are pinned on v2.");
+      }
     }
     if (wantsKeepNative) {
       if (body.keepNativeChatGptOnV1 === true) config.keepNativeChatGptOnV1 = true;
@@ -496,6 +528,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       warnings.push(body.keepNativeChatGptOnV1 === true
         ? (effectiveMode === "v2"
           ? "ChatGPT-native models stay on v1 while other models use v2. Applies to new sessions."
+          : effectiveMode === "v2-plaintext"
+          ? "keepNativeChatGptOnV1 is stored but inactive under 'v2-plaintext': ChatGPT-native rows are pinned on v2. Applies to new sessions."
           : "keepNativeChatGptOnV1 is stored but inactive until multi-agent mode is v2. Applies to new sessions.")
         : "ChatGPT-native models follow the selected v1/v2/base surface. Applies to new sessions.");
     }
@@ -553,12 +587,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       multiAgentMode: resolveMultiAgentMode(config),
       multiAgentSurfaceAdvisory: multiAgentSurfaceAdvisory(config),
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
+      plaintextAgentMessagesEnabled: isPlaintextV2AgentMessagesEnabled(config),
+      supportsPlaintextV2Mode: true,
       agentsEnabled: getAgentsEnabled(),
       agentsMaxDepth: getAgentsMaxDepth(),
       subagentDeveloperInstructions: getSubagentDeveloperInstructions(),
       multiAgentModeHintText: getMultiAgentModeHintText(),
       multiAgentModeHintRecommendation: MULTI_AGENT_MODE_HINT_RECOMMENDATION,
-      agentsMaxDepthAppliesWhenV2Disabled: !enabled,
+      agentsMaxDepthAppliesWhenV2Disabled: !enabled && resolveMultiAgentMode(config) !== "v2-plaintext",
       warnings,
       catalogRefresh,
     });

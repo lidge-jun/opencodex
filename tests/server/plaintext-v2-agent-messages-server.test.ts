@@ -161,6 +161,49 @@ function overLimitResponsePayload(id = "resp-plaintext-v2-overflow") {
 }
 
 describe("plaintext v2 agent messages at the Responses server boundary", () => {
+  test("the same existing V2 request follows the current compiler setting without deleting retained messages", async () => {
+    takeInheritedSpendHome();
+    const existingMessage = { type: "agent_message", author: "prior-child", recipient: "existing-parent",
+      content: [{ type: "input_text", text: "Earlier retained task message" }] };
+    const request = collaborationRequest({ input: [existingMessage] });
+    request.headers.set("session_id", "existing-v2-compiler-scope");
+    const originalBody = await request.clone().text();
+    const cfg = { ...config(false), multiAgentMode: "v2" as OcxConfig["multiAgentMode"] };
+    const sentBodies: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin !== "https://chatgpt.com" || !url.pathname.endsWith("/responses")) {
+        throw new Error("Unexpected destination in compiler-scope fixture");
+      }
+      const sent = JSON.parse(String(init?.body));
+      sentBodies.push(sent);
+      const aliased = sent.tools[0].name === PLAINTEXT_V2_COLLABORATION_NAMESPACE;
+      const response = completedResponsePayload(`resp-existing-v2-${sentBodies.length}`);
+      if (!aliased) Object.assign(response.output[0]!, { namespace: "collaboration", name: "spawn_agent" });
+      return new Response(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    for (const mode of ["v2", "v2-plaintext", "v2"] as const) {
+      cfg.multiAgentMode = mode;
+      const response = await handleResponses(request.clone(), cfg, { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('"name":"spawn_agent"');
+    }
+    expect(sentBodies).toHaveLength(3);
+    expect(sentBodies.map(body => body.tools[0].name)).toEqual([
+      "collaboration", PLAINTEXT_V2_COLLABORATION_NAMESPACE, "collaboration",
+    ]);
+    expect(sentBodies.map(body => body.tools[0].tools[0].parameters.properties.message.encrypted))
+      .toEqual([true, undefined, true]);
+    for (const body of sentBodies) expect(body.input).toContainEqual(existingMessage);
+    expect(cfg.plaintextV2AgentMessages).toBe(false);
+    expect(await request.text()).toBe(originalBody);
+    const replay = expandPreviousResponseInput({ previous_response_id: "resp-existing-v2-2", input: [] }) as { input: unknown[] };
+    expect(replay.input).toContainEqual(existingMessage);
+    expect(JSON.stringify(replay.input)).toContain("plain assignment");
+  });
+
   test.each(["json", "legacy-tee", "eager-relay"] as const)("null namespace restores before %s delivery and continuation storage", async mode => {
     takeInheritedSpendHome();
     const id = `resp-null-namespace-${mode}`;
@@ -181,7 +224,7 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
     expect(JSON.stringify(replay)).not.toContain("start_delegated_task");
   });
 
-  test("rewrites the canonical request and restores every SSE response snapshot", async () => {
+  test.each(["legacy-flag", "v2-plaintext"] as const)("rewrites the canonical request and restores every SSE response snapshot (%s)", async selection => {
     takeInheritedSpendHome();
     const sentBodies: string[] = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -209,7 +252,7 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
 
     const response = await handleResponses(
       collaborationRequest(),
-      config(true),
+      selection === "v2-plaintext" ? { ...config(false), multiAgentMode: selection } : config(true),
       { model: "", provider: "" },
     );
     const clientBody = await response.text();

@@ -1,6 +1,6 @@
 import { readJsonIfOk } from "../fetch-json";
 import { readUsageResponseJson } from "../usage-summary-resource";
-import { readSubagentSurfaceAdvisory, type SubagentSurfaceAdvisory } from "../subagent-surface";
+import { readSubagentSurfaceAdvisory, type SubagentSurfaceAdvisory, type SubagentSurfaceMode } from "../subagent-surface";
 import {
   beginPollEpoch,
   settingsPollMayCommit,
@@ -80,9 +80,11 @@ export type DashboardSettingsPoll = {
 };
 
 export type DashboardMaModePoll = {
-  maMode: "v1" | "default" | "v2";
+  maMode: SubagentSurfaceMode;
   /** Null when the runtime predates the advisory or the call failed. */
   advisory?: SubagentSurfaceAdvisory | null;
+  /** True when the runtime offers 'v2-plaintext'; absent on older runtimes -> false. */
+  supportsPlaintextV2: boolean;
 };
 
 export type DashboardEpochRefs = {
@@ -241,16 +243,17 @@ export async function fetchDashboardMaMode(
 ): Promise<DashboardMaModePoll> {
   try {
     const v2Res = await fetch(`${apiBase}/api/v2`, { signal });
-    if (!v2Res.ok) return { maMode: "default" };
-    const v2Data = await v2Res.json() as { multiAgentMode?: unknown; multiAgentSurfaceAdvisory?: unknown };
+    if (!v2Res.ok) return { maMode: "default", supportsPlaintextV2: false };
+    const v2Data = await v2Res.json() as { multiAgentMode?: unknown; multiAgentSurfaceAdvisory?: unknown; supportsPlaintextV2Mode?: unknown };
     const advisory = readSubagentSurfaceAdvisory(v2Data.multiAgentSurfaceAdvisory);
-    if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2") {
-      return { maMode: v2Data.multiAgentMode, advisory };
+    const supportsPlaintextV2 = v2Data.supportsPlaintextV2Mode === true;
+    if (v2Data.multiAgentMode === "v1" || v2Data.multiAgentMode === "v2" || v2Data.multiAgentMode === "v2-plaintext") {
+      return { maMode: v2Data.multiAgentMode, advisory, supportsPlaintextV2 };
     }
-    return { maMode: "default", advisory };
+    return { maMode: "default", advisory, supportsPlaintextV2 };
   } catch (error) {
     if (isAbortError(error, signal)) throw error;
-    return { maMode: "default" };
+    return { maMode: "default", supportsPlaintextV2: false };
   }
 }
 

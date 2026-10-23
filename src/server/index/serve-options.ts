@@ -42,6 +42,7 @@ import {
 } from "../ws-bridge";
 import { websocketsEnabled } from "../../config";
 import { metricsExportEnabled } from "../../config/feature-flags";
+import { resolveMultiAgentMode } from "../../config/multi-agent-surface";
 import { grokDefaultReasoningEffort } from "../../grok/effort";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -1107,7 +1108,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           // Pass the subagent picks so featured models lead by priority (matches the on-disk file).
           // Disabled natives stay in the catalog shape with visibility "hide" (mirrors the
           // on-disk sync; codex-rs keeps them out of the picker itself).
-          const maMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
+          const maMode = resolveMultiAgentMode(config);
           // Account rows use the same hidden-inclusive supported set as on-disk sync. This lets a
           // newly re-enabled native reappear under each selector before the next sync, while the
           // no-selector path keeps nativeOpenAiSlugs()'s existing visibility-sensitive behavior.
@@ -1123,7 +1124,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             goOrdered,
             config.subagentModels,
             websocketsEnabled(config),
-            maMode as "v1" | "default" | "v2",
+            maMode,
             exactComboSlugs,
             accountSelectors,
             suppressedBareNativeSlugs,

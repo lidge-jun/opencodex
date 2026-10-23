@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { sameCatalogHealPath } from "./catalog/heal-observation";
 
 import { getConfigDir, saveConfigPreservingClaudeCode, ultraFastTierEnabled, websocketsEnabled, withExpectedConfigGenerationSync } from "../config";
+import { resolveMultiAgentMode } from "../config/multi-agent-surface";
 import { reconcileSuccessfulModelDiscoveries } from "../providers/new-model-policy";
 import { pendingModelSelectionProviders } from "../providers/initial-model-selection";
 import { COMBO_NAMESPACE } from "../combos";
@@ -274,8 +275,7 @@ function prepareCatalog(
   const featured = config.subagentModels ?? [];
   const ordered = orderForSubagents(enabled, featured);
   const modelPickerOrder = config.modelPickerOrder ?? [];
-  const multiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2"
-    ? config.multiAgentMode : "default";
+  const multiAgentMode = resolveMultiAgentMode(config);
   const exactComboSlugs = exactComboCatalogSlugs(config);
   const bareEligibleAccountIds = providerCodexAccountMode(
     OPENAI_CODEX_PROVIDER_ID,

@@ -2,6 +2,8 @@
 
 `src/cli/` contains the terminal management interface. Process ownership, startup, stop and service contracts remain in [Runtime](runtime.md); this document owns command discovery, help, management-client presentation and the generated operating reference.
 
+`ocx v2 mode v2-plaintext` requires `--acknowledge-plaintext-agent-messages` when entering the mode, locally or with `--live`. The live client sends a scoped acknowledgment and validates the returned mode, capability and plaintext state. Its global feature remains disabled; the [surface contract](subagent-capacity.md#multi-agent-surface-selection) defines task-text retention and unchanged transport authentication. Existing independent plaintext preferences are preserved when leaving the mode.
+
 ## CLI readiness diagnostics
 
 `src/cli/status.ts` retains connection transport in the status JSON. Link clients identify Remote Link Home in the banner and connection line. They read supported Hub state through the identity-checked local Child without a CLI credential, retain owner-bound cache fallback on transport errors, and report standalone Home role absence without obsolete Hub cache. Hub clients retain their existing remote provider and login report.
