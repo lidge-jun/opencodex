@@ -1581,7 +1581,7 @@
     "responses-pool-401-refresh.test.ts": "responses",
     "responses-pool-refresh-attribution.test.ts": "responses",
     "responses-preview-main-read-fence.test.ts": "responses",
-    "responses-reasoning-effort-downgrade.test.ts": "responses",
+    "responses-reasoning-effort-downgrade.test.ts": "responses", "responses-native-ultra-effort-wire.test.ts": "responses",
     "responses-reasoning-summary-passthrough.test.ts": "responses",
     "responses-reset-replay.test.ts": "responses",
     "responses-translated-reset.test.ts": "responses",
