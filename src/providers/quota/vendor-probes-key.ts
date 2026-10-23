@@ -47,6 +47,8 @@ const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
 const SYNTHETIC_BASE_URL = "https://api.synthetic.new/v2";
 const DEEPINFRA_BASE_URL = "https://api.deepinfra.com";
 const NEURALWATT_BASE_URL = "https://api.neuralwatt.com/v1";
+const ABLITERATION_BASE_URL = "https://api.abliteration.ai";
+const ABLITERATION_CREDITS_URL = `${ABLITERATION_BASE_URL}/v1/credits`;
 
 
 function isCanonicalA6apiBaseUrl(baseUrl: string): boolean {
@@ -130,6 +132,11 @@ function isCanonicalDeepInfraBaseUrl(baseUrl: string): boolean {
 
 function isCanonicalNeuralwattBaseUrl(baseUrl: string): boolean {
   return normalizedBaseUrl(baseUrl) === NEURALWATT_BASE_URL;
+}
+
+function isCanonicalAbliterationBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === ABLITERATION_BASE_URL || normalized === `${ABLITERATION_BASE_URL}/v1`;
 }
 
 function a6apiPayload(value: unknown): Record<string, unknown> | null {
@@ -1043,6 +1050,56 @@ async function fetchNeuralwattQuota(provider: string, config: OcxProviderConfig)
   return windows > 0 ? report(provider, "neuralwatt:quota", quota) : null;
 }
 
+/**
+ * Abliteration `GET /v1/credits` body: `{ data: { total_credits, total_usage } }`, both in USD.
+ * `total_credits` is everything granted or purchased and `total_usage` is finalized spend, so the
+ * balance is their difference. A well-formed reply with zero total credits is authoritative: it has
+ * no ceiling to meter against, so it clears any previous row instead of fabricating a bar. A
+ * malformed reply returns null and leaves the last-good row in place.
+ */
+export function parseAbliterationCredits(
+  body: Record<string, unknown> | null,
+): ProviderQuota | typeof AUTHORITATIVE_EMPTY_QUOTA | null {
+  const data = asRecord(body?.data);
+  const total = toFiniteNumber(data?.total_credits);
+  const used = toFiniteNumber(data?.total_usage);
+  if (total === undefined || used === undefined || total < 0 || used < 0) return null;
+  if (total === 0) return AUTHORITATIVE_EMPTY_QUOTA;
+  const percent = normalizePercent((used / total) * 100);
+  if (percent === undefined) return null;
+  return {
+    creditsUsd: { used, limit: total, remaining: Math.max(0, total - used), percent },
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * Abliteration `GET /v1/credits` — the organization credit balance for the active project key.
+ * The balance funds every inference request on this key, so display and routing scope agree.
+ * `503 credit_balance_unavailable`, 408 and 429 are transient and keep the last-good row.
+ */
+async function fetchAbliterationQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  // Never send a configured API key to a lookalike host or through a redirect.
+  if (!isCanonicalAbliterationBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveProviderApiKey(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await quotaFetch(provider, config, ABLITERATION_CREDITS_URL, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const raw = await readQuotaJson(response);
+  if (raw === QUOTA_JSON_READ_FAILURE) return null;
+  const quota = parseAbliterationCredits(asRecord(raw));
+  if (quota === null || quota === AUTHORITATIVE_EMPTY_QUOTA) return quota;
+  return keyReport(provider, "abliteration:credits", quota, config, apiKey, quota);
+}
+
 
 export function normalizedBaseUrl(value: string): string | null {
   try {
@@ -1371,6 +1428,9 @@ export function keyQuotaReaderForProvider(name: string, provider: OcxProviderCon
   if (name === "synthetic" && isCanonicalSyntheticBaseUrl(provider.baseUrl)) return fetchSyntheticQuota;
   if (name === "deepinfra" && isCanonicalDeepInfraBaseUrl(provider.baseUrl)) return fetchDeepInfraQuota;
   if (name === "neuralwatt" && isCanonicalNeuralwattBaseUrl(provider.baseUrl)) return fetchNeuralwattQuota;
+  // Abliteration has no registry preset, so it is usually a custom provider under any name; the
+  // canonical-URL guard alone decides eligibility and keeps the key off lookalike hosts.
+  if (isCanonicalAbliterationBaseUrl(provider.baseUrl)) return fetchAbliterationQuota;
   return null;
 }
 

@@ -716,4 +716,4 @@ au fournisseur.
 
 Les fournisseurs qui disposent d'une sonde en direct sont OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax, Moonshot, Venice, Synthetic, DeepInfra,
-Neuralwatt, Command Code, ainsi que tout fournisseur personnalisé reposant sur a6api.
+Neuralwatt, Command Code, ainsi que tout fournisseur personnalisé reposant sur a6api ou Abliteration.

@@ -1707,7 +1707,14 @@ provider-specific) is already consumed.
 Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
-custom provider.
+or Abliteration custom provider.
+
+**Abliteration credits.** A provider of any name whose `baseUrl` is
+`https://api.abliteration.ai` or `https://api.abliteration.ai/v1` reads
+`GET https://api.abliteration.ai/v1/credits` with its active key as a Bearer token and does not
+follow redirects. `total_credits` minus `total_usage` is the remaining USD balance, shown as a
+credits bar of consumed spend. An account with no credits shows no bar. A rejected key clears the
+row; `503 credit_balance_unavailable`, 408, and 429 keep the last reading.
 
 **OpenCode Go quota.** The canonical `opencode-go` preset reads
 `GET https://opencode.ai/zen/go/v1/usage` with the configured key as a Bearer token and

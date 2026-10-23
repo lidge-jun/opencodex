@@ -770,5 +770,5 @@ gösterir.
 
 Canlı araştırmaya sahip sağlayıcılar: OpenAI/Codex, Anthropic, xAI, Cursor,
 Kimi, Google Antigravity, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
-Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt ve a6api destekli herhangi
-bir özel sağlayıcı.
+Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt ve a6api ya da Abliteration
+destekli herhangi bir özel sağlayıcı.

@@ -68,7 +68,7 @@ import {
 import { codexAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
 import { isGenericFailoverProvider, rotateGenericOAuthAccountOn429 } from "../../oauth/generic-account-failover";
 import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import type { AgentTaskRecoveryFailureReason } from "./agent-task-recovery";
 import {
   agentTaskRecoveryConfig,
@@ -855,6 +855,22 @@ export async function executeComboResponses(
     // The physical destination after provider aliases and blockedModelRedirects: hops are
     // classified by where the request really goes, not by the selector the combo names.
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+    // The hard-lock rewrite may have previewed a different random pick. Enforce this actual
+    // first destination against the locked source, after aliases and redirects resolve.
+    if (firstComboTarget && options.mainHardLockFallbackOverride) {
+      const hop = guardFallbackHop(config, {
+        site: "combo",
+        route: `combo/${comboId}`,
+        aliases: [requestedModel],
+        from: { provider: OPENAI_CODEX_PROVIDER_ID, model: options.mainHardLockFallbackOverride.sourceModel },
+        to: { provider: targetRoute.providerName, model: targetRoute.modelId },
+        trigger: "hard_lock",
+        admission: options.admission,
+      });
+      if (!hop.ok) return hop.response;
+      const declaredCommit = pendingHopCommit;
+      pendingHopCommit = declaredCommit ? () => { declaredCommit(); hop.commit(); } : hop.commit;
+    }
     // OCX-11: every later dispatch after a failure is a hop when the target changed. One check
     // here covers the ordinary failover pick and the recovery picks alike.
     if (!firstComboTarget && lastFailure && lastFailedTarget) {

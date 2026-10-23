@@ -609,4 +609,4 @@ refresh 的即時 utilization bar。bar 代表特定 window（5 小時、weekly�
 
 具有 live probe 的 provider：OpenAI/Codex、Anthropic、xAI、Cursor、Kimi、Google Antigravity、
 OpenRouter、DeepSeek、ClinePass、Z.AI、MiniMax、Moonshot、Venice、Synthetic、DeepInfra、Neuralwatt，
-以及任何由 a6api 支援的 custom provider。
+以及任何由 a6api 或 Abliteration 支援的 custom provider。

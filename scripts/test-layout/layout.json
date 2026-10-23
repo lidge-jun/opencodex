@@ -1439,6 +1439,7 @@
     "provider-tls-profile.test.ts": "providers",
     "provider-payload.test.ts": "gui",
     "provider-quota-label-sanitize.test.ts": "providers",
+    "provider-quota-abliteration.test.ts": "providers",
     "provider-quota-observed-marker.test.ts": "providers",
     "provider-quota-ollama-cloud.test.ts": "providers",
     "provider-quota.test.ts": "providers",
