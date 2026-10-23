@@ -137,6 +137,35 @@ describe("anthropic extended-thinking gate", () => {
     expect(explicitOn.thinking).toEqual(on.thinking);
   });
 
+  test.each([
+    ["claude-haiku-4-5", true, undefined],
+    ["claude-sonnet-4-6", true, undefined],
+    ["claude-opus-4-6", true, undefined],
+    ["claude-haiku-4-5", false, "high"],
+    ["claude-sonnet-4-6", false, "high"],
+    ["claude-opus-4-6", false, "high"],
+  ] as const)("%s preserves native budget thinking (effort support=%s, effort=%s)", async (modelId, supportsReasoningEffort, reasoning) => {
+    const target = {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort,
+      } },
+    };
+    const options = { temperature: 0.3, topP: 0.9, ...(supportsReasoningEffort ? { thinkingEnabled: true } : {}) };
+    const on = await bodyOf(parsed(reasoning, options, modelId), target);
+    expect(on.thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
+    expect(on.max_tokens).toBe(24576);
+    expect(on.output_config).toBeUndefined();
+    expect(on.temperature).toBeUndefined();
+    expect(on.top_p).toBeUndefined();
+    // Explicit off must still win without allocating a thinking budget or increasing the limit.
+    const off = await bodyOf(parsed("high", { thinkingEnabled: false, maxOutputTokens: 64 }, modelId), target);
+    expect(off.thinking).toBeUndefined();
+    expect(off.output_config).toBeUndefined();
+    expect(off.max_tokens).toBe(64);
+  });
+
   test("both unsupported axes suppress native thinking and token headroom", async () => {
     const modelId = "claude-sonnet-5-5";
     const b = await bodyOf(parsed("high", { thinkingEnabled: true, maxOutputTokens: 64 }, modelId), {

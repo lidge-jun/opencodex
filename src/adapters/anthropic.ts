@@ -1091,11 +1091,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const thinkingEnabled = thinkingToggleWire
         ? resolveThinkingEnabled(provider, parsed.modelId, parsed.options)
         : undefined;
-      const nativeThinkingContract = usesAdaptiveThinking(parsed.modelId);
+      const nativeThinkingContract = usesAdaptiveThinking(parsed.modelId)
+        || family?.family === "haiku" || family?.family === "sonnet" || family?.family === "opus";
       const supportsReasoningEffort = capabilities.supportsReasoningEffort === true;
       const requestedReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
       // Native Claude wire constraints outrank a generic toggle declaration. Decode the boolean
-      // into native effort intent, then let the family contract choose adaptive/disabled/between_tools.
+      // into native effort intent, then let the family contract choose budget/adaptive/off shapes.
       const effectiveReasoning = nativeThinkingContract && thinkingEnabled !== undefined
         ? thinkingEnabled ? (requestedReasoning && requestedReasoning !== "none" ? requestedReasoning : "high") : "none"
         : requestedReasoning;

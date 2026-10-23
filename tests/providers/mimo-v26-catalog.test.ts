@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyProviderConfigHints } from "../../src/codex/catalog";
+import { applyProviderConfigHints, gatherRoutedModels } from "../../src/codex/catalog";
 import { generatedModelMetadata } from "../../src/codex/catalog/parsing";
 import { getModelMetadata, resolveMetadataProvider } from "../../src/generated/model-metadata";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
@@ -17,7 +17,8 @@ import { modelCapabilityFields } from "../../src/server/models-capabilities";
 import { deriveEntry } from "../../src/codex/catalog/derive-entry";
 import { MIMO_THINKING_MODELS } from "../../src/providers/mimo-thinking";
 import { resolveReasoningCapabilities } from "../../src/providers/reasoning-capabilities";
-import { catalogHintsFromModelsApiItem } from "../../src/codex/catalog/model-hints";
+import { catalogHintsFromModelsApiItem, copyReasoningHintSource, withVisionSidecarInput } from "../../src/codex/catalog/model-hints";
+import { augmentRoutedModelsWithMetadata } from "../../src/codex/catalog/routed-gather";
 import { mergeConfiguredModelsIntoLiveCatalog } from "../../src/codex/catalog/model-visibility";
 import { clearModelCache, getFreshCached, setCached } from "../../src/codex/model-cache";
 
@@ -111,30 +112,29 @@ describe("independent reasoning capabilities", () => {
     const alias = merged.models.find(row => row.id === id)!;
     expect(alias).toMatchObject({ ...discovered, id });
     expect(alias).toEqual(applyProviderConfigHints("synthetic", provider, { ...discovered, id }));
-    expect(applyProviderConfigHints("synthetic", provider, { ...alias })).toEqual(alias);
+    expect(applyProviderConfigHints("synthetic", provider, copyReasoningHintSource(alias, { ...alias }))).toEqual(alias);
     expect(dated.supportsReasoning).toBe(false);
   });
   test("routed spread clones restore discovery and withdraw removed config-only hints", () => {
     const discovered = { provider: "synthetic", id, supportsReasoning: true, supportsThinkingToggle: true,
       supportsReasoningEffort: true, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" };
     const disabled = applyProviderConfigHints("synthetic", { ...base, noReasoningModels: [id] }, discovered);
-    const routed = { ...disabled, providerAlias: "routed", contextWindow: 100_000 };
+    const routed = copyReasoningHintSource(disabled, { ...disabled, providerAlias: "routed", contextWindow: 100_000 });
     const restoredDiscovery = applyProviderConfigHints("synthetic", base, routed);
     expect(restoredDiscovery).toMatchObject(discovered);
-    expect(applyProviderConfigHints("synthetic", base, { ...restoredDiscovery })).toEqual(restoredDiscovery);
+    expect(applyProviderConfigHints("synthetic", base, copyReasoningHintSource(restoredDiscovery, { ...restoredDiscovery }))).toEqual(restoredDiscovery);
     const configured = applyProviderConfigHints("synthetic", { ...base,
       modelCapabilities: { [id]: { supportsThinkingToggle: true } },
       modelReasoningEfforts: { [id]: ["high"] }, modelDefaultReasoningEfforts: { [id]: "high" },
     }, { provider: "synthetic", id });
-    const restored = applyProviderConfigHints("synthetic", base, { ...configured, providerAlias: "routed" });
+    const restored = applyProviderConfigHints("synthetic", base, copyReasoningHintSource(configured, { ...configured, providerAlias: "routed" }));
     for (const field of ["supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "reasoningEfforts", "defaultReasoningEffort"] as const) {
       expect(restored[field]).toBeUndefined();
     }
     expect(JSON.parse(JSON.stringify(routed))).toEqual({ ...JSON.parse(JSON.stringify(disabled)),
       providerAlias: "routed", contextWindow: 100_000 });
-    const [source] = Object.getOwnPropertySymbols(routed);
-    expect(source).toBeDefined();
-    expect(Object.getOwnPropertyDescriptor(routed, source!)?.enumerable).toBe(true);
+    expect(Object.getOwnPropertySymbols(routed)).toEqual([]);
+    expect(routed).toEqual(JSON.parse(JSON.stringify(routed)));
     expect(Object.getOwnPropertySymbols(JSON.parse(JSON.stringify(routed)))).toEqual([]);
     expect(JSON.stringify(routed)).not.toContain("reasoningHintSource");
   });
@@ -144,10 +144,10 @@ describe("independent reasoning capabilities", () => {
       supportsReasoningEffort: true, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" };
     try {
       const disabled = applyProviderConfigHints(provider, { ...base, noReasoningModels: [id] }, discovered);
-      setCached(provider, [{ ...disabled }]);
+      setCached(provider, [disabled]);
       const [cached] = getFreshCached(provider, 60_000)!;
       expect(cached).toEqual(disabled);
-      const restored = applyProviderConfigHints(provider, base, { ...cached! });
+      const restored = applyProviderConfigHints(provider, base, copyReasoningHintSource(cached!, { ...cached! }));
       expect(restored).toEqual(applyProviderConfigHints(provider, base, discovered));
       expect(applyProviderConfigHints(provider, base, restored)).toEqual(restored);
       expect(cached!.supportsReasoning).toBe(false);
@@ -156,12 +156,69 @@ describe("independent reasoning capabilities", () => {
       clearModelCache(provider);
     }
   });
+  test("metadata window fills retain discovery through repeated config changes", () => {
+    const provider = "opencode-go";
+    const modelId = "glm-5.2";
+    const discovered = { provider, id: modelId, supportsThinkingToggle: true, reasoningEfforts: ["low", "high"] };
+    const config = { ...base, modelCapabilities: { [modelId]: { supportsThinkingToggle: false } } };
+    const projected = applyProviderConfigHints(provider, config, discovered);
+    expect(projected.contextWindow).toBeUndefined();
+    const augmented = augmentRoutedModelsWithMetadata([projected], [provider], { [provider]: config });
+    const seeded = augmented.find(row => row.provider === provider && row.id === modelId)!;
+    expect(seeded.contextWindow).toBeGreaterThan(0);
+    expect(seeded.supportsThinkingToggle).toBe(false);
+    expect(applyProviderConfigHints(provider, base, seeded)).toMatchObject(discovered);
+    expect(applyProviderConfigHints(provider, config, seeded)).toEqual(seeded);
+  });
+  test("sidecar attachment clones preserve discovery without adding object metadata", () => {
+    const discovered = { provider: "synthetic", id, supportsThinkingToggle: true };
+    const projected = applyProviderConfigHints("synthetic", { ...base,
+      modelCapabilities: { [id]: { supportsThinkingToggle: false } } }, discovered);
+    const attached = withVisionSidecarInput(projected, { ...base, noVisionModels: [id] });
+    expect(attached.inputModalities).toEqual(["text", "image"]);
+    expect(Object.getOwnPropertySymbols(attached)).toEqual([]);
+    expect(attached).toEqual(JSON.parse(JSON.stringify(attached)));
+    expect(applyProviderConfigHints("synthetic", base, attached).supportsThinkingToggle).toBe(true);
+  });
   test("unknown reasoning stays absent through a public discovery roundtrip", () => {
     const fields = modelCapabilityFields({});
     expect(fields.capabilities).not.toHaveProperty("supports_reasoning");
     const hints = catalogHintsFromModelsApiItem("chain", { id, ...JSON.parse(JSON.stringify(fields)) });
     for (const field of ["supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled", "reasoningEfforts"] as const) {
       expect(hints).not.toHaveProperty(field);
+    }
+  });
+  test.each([
+    { efforts: [], cap: undefined, sidecar: false },
+    { efforts: ["high"], cap: undefined, sidecar: false },
+    { efforts: [], cap: 350_000, sidecar: true },
+    { efforts: ["high"], cap: 350_000, sidecar: true },
+  ])("custom reasoning overrides remain authoritative for combo members: %j", async ({ efforts, cap, sidecar }) => {
+    const provider = "custom-reasoning-provenance";
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: provider,
+      providers: { [provider]: { ...base, authMode: "key", apiKey: "test-key", liveModels: true, models: [id],
+        modelCapabilities: { [id]: { supportsThinkingToggle: true } }, ...(sidecar ? { noVisionModels: [id] } : {}),
+        fetch: (() => { throw new Error("cached discovery must not fetch"); }) as typeof fetch,
+      } },
+      ...(cap !== undefined ? { providerContextCaps: { [provider]: cap } } : {}),
+      customModels: [{ id: "custom", provider, modelId: id, reasoningEfforts: efforts,
+        addedAt: "2026-10-23T00:00:00.000Z" }],
+      combos: { solo: { targets: [{ provider, model: id }] } },
+    };
+    try {
+      setCached(provider, [{ provider, id, reasoningEfforts: ["low", "high"] }]);
+      const discovered = await gatherRoutedModels({ ...config, customModels: [], combos: undefined });
+      expect(discovered.find(row => row.provider === provider && row.id === id)?.reasoningEfforts).toEqual(["low", "high"]);
+      const models = await gatherRoutedModels(config);
+      const custom = models.find(row => row.provider === provider && row.id === id);
+      const combo = models.find(row => row.provider === "combo" && row.id === "solo");
+      expect(custom).toBeDefined();
+      expect(combo).toBeDefined();
+      expect(custom!.reasoningEfforts).toEqual(efforts);
+      expect(combo!.reasoningEfforts).toEqual(efforts);
+    } finally {
+      clearModelCache(provider);
     }
   });
   test("chained public model flags preserve false and unknown independently of efforts", () => {

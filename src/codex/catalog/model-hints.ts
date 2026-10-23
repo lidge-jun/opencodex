@@ -261,14 +261,20 @@ export function withVisionSidecarInput(
 ): CatalogModel {
   if (!enabled || !provider || !isModelVisionSidecarConsumer(provider, model.id)) return model;
   const modalities = model.inputModalities ?? ["text"];
-  return modalities.includes("image") ? model : { ...model, inputModalities: [...modalities, "image"] };
+  return modalities.includes("image") ? model
+    : copyReasoningHintSource(model, { ...model, inputModalities: [...modalities, "image"] });
+}
+
+const reasoningHintSources = new WeakMap<CatalogModel, Partial<CatalogModel>>();
+
+/** Forward discovery provenance only across transparent clones, never custom reasoning overrides. */
+export function copyReasoningHintSource(source: CatalogModel, clone: CatalogModel): CatalogModel {
+  const reasoningSource = reasoningHintSources.get(source);
+  if (reasoningSource) reasoningHintSources.set(clone, reasoningSource);
+  return clone;
 }
 
 /** Reapply configured limits and captured wire capabilities without trusting stale discovery hints. */
-// Enumerable symbol provenance survives dated/routed spread clones without entering wire JSON.
-const reasoningHintSource = Symbol("reasoningHintSource");
-type ReasoningHintModel = CatalogModel & { [reasoningHintSource]?: Partial<CatalogModel> };
-
 export function applyProviderConfigHints(
   name: string,
   prov: OcxProviderConfig,
@@ -307,7 +313,7 @@ export function applyProviderConfigHints(
   const resolvedModalities = staticPolicy.model.inputModalities ?? model.inputModalities
     ?? (azureMetadata?.input ? modelInputModalities({ id: model.id, input_modalities: azureMetadata.input }, undefined) : undefined);
   const inputModalities = resolvedModalities ? [...resolvedModalities] : undefined;
-  const reasoningSource = (model as ReasoningHintModel)[reasoningHintSource] ?? model;
+  const reasoningSource = reasoningHintSources.get(model) ?? model;
   const reasoningCapabilities: Partial<CatalogModel> = {};
   for (const field of REASONING_CAPABILITY_FIELDS) {
     const value = modelInList(prov.noReasoningModels, model.id) ? staticPolicy.model[field]
@@ -413,7 +419,7 @@ export function applyProviderConfigHints(
     : withCap;
   const softCandidates = [model.autoCompactTokenLimit, configuredAutoCompact]
     .filter((value): value is number => typeof value === "number" && value > 0);
-  const result: ReasoningHintModel = contextWindow === undefined || softCandidates.length === 0 ? withHardBounds : {
+  const result = contextWindow === undefined || softCandidates.length === 0 ? withHardBounds : {
     ...withHardBounds,
     autoCompactTokenLimit: clampAutoCompactTokenLimit(
       contextWindow,
@@ -421,14 +427,9 @@ export function applyProviderConfigHints(
       Math.min(...softCandidates),
     ),
   };
-  const reasoningFields = [
+  reasoningHintSources.set(result, Object.fromEntries([
     ...REASONING_CAPABILITY_FIELDS, "reasoningEfforts", "defaultReasoningEffort",
-  ] as const;
-  if (reasoningFields.some(field => result[field] !== reasoningSource[field])) {
-    result[reasoningHintSource] = Object.fromEntries(reasoningFields.map(field => [field, reasoningSource[field]]));
-  } else {
-    delete result[reasoningHintSource];
-  }
+  ].map(field => [field, reasoningSource[field as keyof CatalogModel]])));
   return result;
 }
 
