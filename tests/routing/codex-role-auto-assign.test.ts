@@ -6,6 +6,7 @@ import {
   mapEffortToLevel,
   type RoleModelCandidate,
 } from "../../src/codex/role-auto-assign";
+import { candidateModelKey, capabilityTableFromRows, readBoundedBytes } from "../../src/codex/role-capability";
 import type { RoleSizingOutcome } from "../../src/codex/role-sizing";
 
 const FULL = ["low", "medium", "high", "xhigh"];
@@ -73,6 +74,23 @@ describe("classifyRoleModelCandidates", () => {
     expect(cheapestSufficientCandidate(classified, "standard")!.model).toBe("cheap");
     expect(cheapestSufficientCandidate(classified, "frontier")!.model).toBe("dear");
   });
+
+  test("measured scores tier the candidates and leave unmeasured ones out", () => {
+    const classified = classifyRoleModelCandidates(
+      [candidate("cheap-strong", 1), candidate("dear-weak", 9), candidate("mid", 5), candidate("unmeasured", 2)],
+      {},
+      new Map([["cheap-strong", 1500], ["dear-weak", 1400], ["mid", 1450]]),
+    );
+    expect(classified.map(c => [c.model, c.tier, c.tierSource])).toEqual([
+      ["cheap-strong", "frontier", "measured"], ["dear-weak", "fast", "measured"], ["mid", "standard", "measured"], ["unmeasured", null, null],
+    ]);
+    expect(cheapestSufficientCandidate(classified, "frontier")!.model).toBe("cheap-strong");
+  });
+
+  test("one measured candidate is not a ranking, so price decides", () => {
+    const classified = classifyRoleModelCandidates([candidate("a", 1), candidate("b", 9)], {}, new Map([["a", 1500]]));
+    expect(classified.map(c => [c.model, c.tier, c.tierSource])).toEqual([["a", "standard", "price"], ["b", "frontier", "price"]]);
+  });
 });
 
 describe("cheapestSufficientCandidate", () => {
@@ -99,8 +117,8 @@ describe("cheapestSufficientCandidate", () => {
 });
 
 describe("buildRoleProposals", () => {
-  const sized = (tier: "fast" | "frontier", effort: "glance" | "exhaustive"): RoleSizingOutcome => ({
-    sizing: { tier, effort, rationale: "r", moveUpIf: "u", moveDownIf: "d" },
+  const sized = (tier: "fast" | "standard" | "frontier", effort: "glance" | "exhaustive"): RoleSizingOutcome => ({
+    sizing: { tier, effort, domain: "general", rationale: "r", moveUpIf: "u", moveDownIf: "d" },
   });
 
   test("proposes an effort for every sized role, set or not, and keeps unsized reasons", () => {
@@ -119,6 +137,43 @@ describe("buildRoleProposals", () => {
     expect(proposals[2]).toEqual({ role: "vague", model: null, effort: null, status: "unsized", reason: "no JSON" });
   });
 
+  test("keeps the role's current model when another one ties it on tier and price", () => {
+    const classified = classifyRoleModelCandidates([
+      candidate("native-low", 0.6), candidate("native-mid", 12), candidate("native-top", 60),
+      candidate("routed-low", 0.6), candidate("routed-mid", 12), candidate("routed-top", 60),
+    ]);
+    expect(classified.map(c => c.tier)).toEqual(["fast", "standard", "frontier", "fast", "standard", "frontier"]);
+    const proposals = buildRoleProposals(
+      [
+        { role: "worker", model: "routed-mid", effort: null },
+        { role: "fresh", model: null, effort: null },
+        { role: "reviewer", model: "routed-top", effort: null },
+      ],
+      new Map([["worker", sized("standard", "glance")], ["fresh", sized("standard", "glance")], ["reviewer", sized("frontier", "exhaustive")]]),
+      classified,
+    );
+    expect(proposals.map(p => "proposedModel" in p ? p.proposedModel : null)).toEqual(["routed-mid", "native-mid", "routed-top"]);
+  });
+
+  test("ranks a role by its domain's scores and breaks an equal price by the higher score", () => {
+    const pool = [candidate("native-low", 0.6), candidate("routed-low", 0.6), candidate("native-mid", 12), candidate("routed-mid", 12), candidate("routed-top", 24), candidate("native-top", 60)];
+    const coding = classifyRoleModelCandidates(pool, {}, new Map([
+      ["native-low", 1400], ["routed-low", 1410], ["native-mid", 1480], ["routed-mid", 1490], ["native-top", 1500], ["routed-top", 1545],
+    ]));
+    const outcome = (tier: "fast" | "standard" | "frontier", domain: "coding" | "writing"): RoleSizingOutcome => ({
+      sizing: { tier, effort: "glance", domain, rationale: "r", moveUpIf: "u", moveDownIf: "d" },
+    });
+    const proposals = buildRoleProposals(
+      [{ role: "low", model: null, effort: null }, { role: "mid", model: "native-mid", effort: null }, { role: "top", model: null, effort: null }, { role: "prose", model: null, effort: null }],
+      new Map([["low", outcome("fast", "coding")], ["mid", outcome("standard", "coding")], ["top", outcome("frontier", "coding")], ["prose", outcome("frontier", "writing")]]),
+      classifyRoleModelCandidates(pool),
+      new Map([["coding", coding]]),
+    );
+    expect(proposals.map(p => "proposedModel" in p ? [p.proposedModel, p.tierSource] : null)).toEqual([
+      ["routed-low", "measured"], ["routed-mid", "measured"], ["routed-top", "measured"], ["routed-top", "price"],
+    ]);
+  });
+
   test("reports a role no candidate can serve as unassigned", () => {
     const [proposal] = buildRoleProposals(
       [{ role: "architect", model: null, effort: null }],
@@ -126,5 +181,33 @@ describe("buildRoleProposals", () => {
       classifyRoleModelCandidates([candidate("local", null)], { fast: ["local"] }),
     );
     expect(proposal).toMatchObject({ status: "unassigned", proposedModel: null, reason: "no available model is classified frontier or above" });
+  });
+});
+
+describe("capabilityTableFromRows", () => {
+  test("keys display names by model, keeps each model's best setting, and matches catalog slugs", () => {
+    const table = capabilityTableFromRows(new Map([
+      ["text", [
+        { model_name: "Claude Opus 5.5 (High)", category: "coding", rating: 1544.9, leaderboard_publish_date: "2026-10-22" },
+        { model_name: "GPT-6.1 Sol (Max)", category: "coding", rating: 1482.4, leaderboard_publish_date: "2026-10-22" },
+        { model_name: "GPT-6.1 Sol (Low)", category: "coding", rating: 1401, leaderboard_publish_date: "2026-10-22" },
+        { model_name: "GPT-6.1 Sol (Max)", category: "overall", rating: 1444, leaderboard_publish_date: "2026-10-21" },
+      ]],
+      ["agent", [{ model_name: "GPT-6 Astra (Max)", category: "overall", score: 0.147, leaderboard_publish_date: "2026-10-20" }]],
+    ]));
+    const coding = table.domains.coding!;
+    expect([candidateModelKey("cpa/claude-opus-5-5"), candidateModelKey("gpt-6.1-sol")].map(key => coding.get(key))).toEqual([1544.9, 1482.4]);
+    expect(table.domains.agentic!.get(candidateModelKey("gpt-6-astra"))).toBe(0.147);
+    expect(table.domains.general!.size).toBe(1);
+    expect(table.domains.writing).toBeUndefined();
+    expect(table.publishedAt).toBe("2026-10-22");
+  });
+
+  test("reads a leaderboard table up to the byte bound and refuses one past it", async () => {
+    const body = () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(6)); controller.enqueue(new Uint8Array(6)); controller.close(); },
+    }));
+    expect((await readBoundedBytes(body(), 12)).byteLength).toBe(12);
+    await expect(readBoundedBytes(body(), 11)).rejects.toThrow("response exceeded byte bound");
   });
 });
