@@ -59,7 +59,9 @@ export function systemOneEndpoint(baseUrl: string | undefined): string | null {
       if (trimmed.endsWith("/decisions")) return trimmed;
       return `${trimmed.replace(/\/systemone$/, "").replace(/\/+$/, "")}/decisions`;
     }
-  } catch {}
+  } catch {
+    return null;
+  }
   if (trimmed.endsWith("/systemone") || trimmed.endsWith("/decisions")) return trimmed;
   return `${trimmed}/systemone`;
 }

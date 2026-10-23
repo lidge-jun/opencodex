@@ -47,7 +47,9 @@ export function jevDecisionEndpointUrl(baseUrl: string): string {
       }
       return stripped;
     }
-  } catch {}
+  } catch {
+    return stripped.endsWith("/systemone") ? stripped : raw;
+  }
   return stripped.endsWith("/systemone") ? stripped : raw;
 }
 
