@@ -65,9 +65,23 @@ describe("url_citation annotation repair on outbound history", () => {
   });
 
   test("metadata stripping and citation repair remain independent projections", () => {
-    const body = { input: [{ role: "user", content: "hi" }, assistantWith([{ type: "url_citation", url: "https://a.example", start_index: 0, end_index: 0 }])] };
-    expect(annotationsOf(stripProviderInputItemMetadata(body))[0]).not.toHaveProperty("title");
-    expect(annotationsOf(repairUrlCitationAnnotations(body))[0]!.title).toBe("https://a.example");
+    const citation = { type: "url_citation", url: "https://a.example", start_index: "3", end_index: -1, extra: "keep" };
+    const message = { ...assistantWith([citation]), extra_content: { google: { thought_signature: "fixture-signature" } } };
+    const body = { input: [{ role: "user", content: "hi" }, message] };
+    const before = structuredClone(body);
+
+    const stripped = stripProviderInputItemMetadata(body) as { input: Record<string, unknown>[] };
+    expect(stripped.input[1]).not.toHaveProperty("extra_content");
+    expect(stripped.input[1]!.content).toBe(message.content);
+    expect(annotationsOf(stripped)).toBe(message.content[0]!.annotations);
+    expect(annotationsOf(stripped)).toEqual([citation]);
+
+    const repaired = repairUrlCitationAnnotations(body) as { input: Record<string, unknown>[] };
+    expect(repaired.input[1]!.extra_content).toBe(message.extra_content);
+    expect(annotationsOf(repaired)).toEqual([
+      { ...citation, title: citation.url, start_index: 3, end_index: 0 },
+    ]);
+    expect(body).toEqual(before);
   });
 
   const native: OcxProviderConfig[] = [

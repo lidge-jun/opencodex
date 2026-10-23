@@ -949,8 +949,8 @@ export async function handleResponsesCompact(
     // #5095: the compact endpoint forwards `raw` directly, so it needs the same legacy dotted
     // call-name repair the adapter applies. A damaged item here refuses the compaction itself,
     // which is the request a long task depends on to keep going.
-    // This branch is OpenAI-only and bypasses the adapter's Google replay projection (#7111).
-    let compactBody = repairLegacyDottedToolCallNames(
+    // Direct compact bypasses the adapter's Google replay projection (#7111).
+    const compactBody = repairLegacyDottedToolCallNames(
       stripProviderInputItemMetadata(sanitizeReasoningInputContent(compactBodyRaw, {
         preserveRawReasoningContent: !isOpenAiOperatedResponsesDestination(compactProvider)
           && compactProvider.preserveResponsesReasoningContent === true,
@@ -959,9 +959,6 @@ export async function handleResponsesCompact(
         requirePlaintextReasoning: requireCompactPlaintextReasoning,
       })),
     ) as typeof compactBodyRaw;
-    if (isOpenAiOperatedResponsesDestination(compactProvider)) {
-      compactBody = repairUrlCitationAnnotations(compactBody) as typeof compactBodyRaw;
-    }
     {
       const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
       if (binding) {
@@ -1163,8 +1160,9 @@ export async function handleResponsesCompact(
         if (!isOpenAiOperatedResponsesDestination(sendProvider) && sendProvider.preserveResponsesMessageMetadata !== true) {
           replayBody = stripInternalChatMessageMetadataPassthrough(replayBody) as typeof replayBody;
         }
+        // A queued key selection can refresh the destination; project only for this send.
         return isOpenAiOperatedResponsesDestination(sendProvider)
-          ? replayBody : stripCanonicalOnlyInputItems(stripCanonicalOnlyTopLevelFields(replayBody));
+          ? repairUrlCitationAnnotations(replayBody) : stripCanonicalOnlyInputItems(stripCanonicalOnlyTopLevelFields(replayBody));
       };
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,
