@@ -21,11 +21,38 @@ import { catalogHintsFromModelsApiItem, copyReasoningHintSource, withVisionSidec
 import { augmentRoutedModelsWithMetadata } from "../../src/codex/catalog/routed-gather";
 import { mergeConfiguredModelsIntoLiveCatalog } from "../../src/codex/catalog/model-visibility";
 import { clearModelCache, getFreshCached, setCached } from "../../src/codex/model-cache";
+import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
 
 // Xiaomi's published V2.6 prices (USD per 1M tokens), as carried by models.dev on 2026-09-23.
 const PRO = { input: 0.435, output: 0.87, cacheRead: 0.0036, cacheWrite: 0 };
 
 describe("independent reasoning capabilities", () => {
+  test("retained warm-cache rows withdraw removed configuration-only reasoning axes", async () => {
+    const name = "retained-reasoning-provenance";
+    const modelId = "retained-model";
+    let requests = 0;
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat", baseUrl: "https://synthetic.example.test/v1", authMode: "key",
+      apiKey: "test-key", models: [modelId], retainModels: [modelId],
+      fetch: (async () => { requests++; return Response.json({ data: [] }); }) as typeof fetch,
+    };
+    try {
+      const first = await fetchProviderModels(name, { ...provider, modelCapabilities: {
+        [modelId]: { supportsThinkingToggle: true, supportsReasoningEffort: false },
+      } }, 60_000);
+      expect(first.find(row => row.id === modelId)).toMatchObject({
+        supportsThinkingToggle: true, supportsReasoningEffort: false,
+      });
+      const warm = await fetchProviderModels(name, provider, 60_000);
+      const row = warm.find(row => row.id === modelId)!;
+      expect(row).toBeDefined();
+      expect(row.supportsThinkingToggle).toBeUndefined();
+      expect(row.supportsReasoningEffort).toBeUndefined();
+      expect(requests).toBe(1);
+    } finally {
+      clearModelCache(name);
+    }
+  });
   const base = { adapter: "openai-chat", baseUrl: "https://synthetic.example.test/v1" };
   const id = "synthetic-model";
   test.each([
