@@ -350,7 +350,7 @@ const ACCOUNT_EXHAUSTION_CODES = new Set(["usage_limit_exceeded", "usage_limit_r
 // Token-plan windows (Alibaba's DeepSeek/Qwen plans) report "Your token-plan 1-week quota has been
 // exhausted" (#5494). The match is anchored to that phrasing: a looser "quota ... exhausted" would
 // also catch per-minute limits, and this arm outranks the transient rate-limit duration.
-const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached|token-plan\s+\S+\s+quota has been exhausted/;
+const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached|token-plan\s+\S+\s+quota has been exhausted|(?:weekly|monthly|daily|usage\s+)?quota (?:has been )?exhausted/i;
 
 function isAccountWindowExhausted(message: string, code?: string | null): boolean {
   return ACCOUNT_EXHAUSTION_CODES.has(normalizedFailureCode(code))
@@ -366,12 +366,32 @@ function isProviderScopedQuotaCap(
   const text = message.toLowerCase();
   if (
     status === 429
-    && (normalizedCode === "gousagelimiterror" || text.includes("monthly usage limit reached"))
+    && (
+      normalizedCode === "gousagelimiterror"
+      || text.includes("monthly usage limit reached")
+      || text.includes("quota exhausted")
+      || text.includes("quota has been exhausted")
+    )
   ) {
     return true;
   }
   return text.includes("err_free_prompt_cap")
     || (text.includes("free tier") && text.includes("single request"));
+}
+
+/**
+ * An upstream precondition refusal (e.g. Cognition Connect RPC failed_precondition)
+ * where the provider account cannot accept requests.
+ */
+function isDevinPreconditionRefusal(
+  status: number | undefined,
+  message: string,
+  code?: string | null,
+): boolean {
+  if (status !== 400 && status !== 429) return false;
+  const normalized = normalizedFailureCode(code);
+  const text = message.toLowerCase();
+  return normalized === "failed_precondition" || text.includes("failed_precondition");
 }
 
 /**
@@ -565,7 +585,7 @@ function isResponseFormatCapabilityRefusal(
 export function comboFailureCooldownScope(
   status: number,
   message: string,
-  options?: { code?: string | null },
+  options?: { code?: string | null; failedAdapter?: string },
 ): ComboFailureCooldownScope {
   const code = normalizedFailureCode(options?.code);
   if (isAnthropicBillingFailure(status, message, options?.code)) return "provider";
@@ -585,6 +605,8 @@ export function comboFailureCooldownScope(
     || isResponseFormatCapabilityRefusal(status, message, options?.code)
   ) return "none";
   if (isProviderScopedQuotaCap(status, message, options?.code)) return "provider";
+  if (isAccountWindowExhausted(message, options?.code)) return "provider";
+  if (options?.failedAdapter === "devin" && isDevinPreconditionRefusal(status, message, options?.code)) return "provider";
   // A rejected or unpaid credential is provider-wide evidence: every target that routes
   // through the same provider row carries the same key and will fail identically.
   if (status === 401 || status === 402 || status === 403) return "provider";
@@ -863,6 +885,10 @@ export function comboFailureDecision(
   // adapter grants it (the words alone prove nothing for another provider); it must precede the
   // generic invalid_request_error stop.
   if (options?.failedAdapter === "kiro" && isKiroAccountProfileRefusal(status, message)) return "hop";
+  // An exhausted account quota window is provider-state evidence, not a client request defect.
+  // Must precede the generic invalid_request_error stop below so the next candidate can serve the turn.
+  if (isAccountWindowExhausted(message, options?.code)) return "hop";
+  if (options?.failedAdapter === "devin" && isDevinPreconditionRefusal(status, message, options?.code)) return "hop";
   if (["origin_rejected", "context_length_exceeded", "invalid_request_error"].includes(error.code ?? "")) {
     return "stop";
   }

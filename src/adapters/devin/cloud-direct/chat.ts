@@ -1170,7 +1170,7 @@ function safeConnectCode(value: unknown): string | undefined {
  * the client to retry straight into a live cap; as 429 the proxy backs off and
  * can rotate.
  */
-const TRAILER_QUOTA_RE = /\b(?:limit will reset|rate limit|quota exceeded|out of credits)\b/i;
+const TRAILER_QUOTA_RE = /\b(?:limit will reset|rate limit|quota exceeded|out of credits|(?:weekly|monthly|daily|usage\s+)?quota (?:has been )?exhausted|quota exhausted)\b/i;
 
 /**
  * Connect error code to HTTP status.
@@ -1182,7 +1182,7 @@ const TRAILER_QUOTA_RE = /\b(?:limit will reset|rate limit|quota exceeded|out of
  * acts on.
  */
 export function connectTrailerHttpStatus(code: string | undefined, message: string): number | undefined {
-  if (code === 'permission_denied' && TRAILER_QUOTA_RE.test(message)) return 429;
+  if ((code === 'permission_denied' || code === 'failed_precondition') && TRAILER_QUOTA_RE.test(message)) return 429;
   switch (code) {
     case 'unauthenticated': return 401;
     case 'permission_denied': return 403;
@@ -1635,8 +1635,10 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // is disabled. The `~` marks the delay as approximate; the shared
     // parser accepts it once after Retry-After, so the outer client cooldown
     // reads this same delay back from the message.
+    const isQuotaExhausted = TRAILER_QUOTA_RE.test(trailerError.message);
+    const quotaSuffix = isQuotaExhausted ? ': quota exhausted' : '';
     throw new CloudChatError(
-      `Cognition chat failed${trailerError.code ? ` (${trailerError.code})` : ''} ` +
+      `Cognition chat failed${trailerError.code ? ` (${trailerError.code}${quotaSuffix})` : isQuotaExhausted ? ' (quota exhausted)' : ''} ` +
       `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})` +
       (trailerError.retryAfterSeconds === undefined
         ? ''

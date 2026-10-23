@@ -102,6 +102,12 @@ describe("combo failure cooldown scope", () => {
     }
     // The pre-existing account-window quota cap keeps its provider scope.
     expect(comboFailureCooldownScope(429, "monthly usage limit reached")).toBe("provider");
+    expect(comboFailureCooldownScope(429, "quota exhausted")).toBe("provider");
+    expect(comboFailureCooldownScope(429, "Cognition chat failed (failed_precondition: quota exhausted)")).toBe("provider");
+    expect(comboFailureCooldownScope(400, "Cognition chat failed (failed_precondition)", {
+      code: "failed_precondition",
+      failedAdapter: "devin",
+    })).toBe("provider");
   });
 
   test("an ordinary target failure still cools only that target", () => {
@@ -115,6 +121,17 @@ describe("combo failure hop/stop verdicts", () => {
     for (const code of ["model_not_found", "model_unavailable", "unsupported_model", "unsupported_input_modality"]) {
       expect(comboFailureDecision(400, "upstream rejected the model", { code })).toBe("hop");
     }
+  });
+
+  test("devin quota exhaustion or precondition refusal hops instead of aborting the combo", () => {
+    expect(comboFailureDecision(429, "Cognition chat failed (failed_precondition: quota exhausted)", {
+      code: "failed_precondition",
+      failedAdapter: "devin",
+    })).toBe("hop");
+    expect(comboFailureDecision(400, "Devin cloud error failed_precondition: Cognition chat failed (failed_precondition)", {
+      code: "failed_precondition",
+      failedAdapter: "devin",
+    })).toBe("hop");
   });
 
   test("a Codex model the ChatGPT plan cannot use hops instead of ending the chain", () => {
