@@ -600,10 +600,10 @@ export function parseJevDecision(
     if (Array.isArray(answer.probabilities)) {
       probabilities = {};
       for (const item of answer.probabilities) {
-        if (isRecord(item)) {
-          const k = typeof item.choice === "string" ? item.choice : (typeof item.value === "string" ? item.value : undefined);
-          if (k) probabilities[k] = item.probability;
-        }
+        if (!isRecord(item)) throw new Error("invalid JEV route probabilities");
+        const k = typeof item.choice === "string" ? item.choice : (typeof item.value === "string" ? item.value : undefined);
+        if (!k) throw new Error("invalid JEV route probabilities");
+        probabilities[k] = item.probability;
       }
     } else if (isRecord(answer.probabilities)) {
       probabilities = answer.probabilities as Record<string, unknown>;
