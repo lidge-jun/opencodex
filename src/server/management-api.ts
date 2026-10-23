@@ -168,6 +168,13 @@ async function handleQuotaPoolRoutesOnDemand(ctx: ManagementContext): Promise<Re
   return handleQuotaPoolRoutes(ctx);
 }
 
+/** Lazy: the OCX-11 fallback state view and its write live off the dashboard's common path. */
+async function handleFallbackRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/fallback", false)) return null;
+  const { handleFallbackRoutes } = await import("./management/fallback-routes");
+  return handleFallbackRoutes(ctx);
+}
+
 /**
  * Lazy like the Lab and routing-profile handlers, and for the same recorded reason: this file is
  * mounted for every dashboard request, so a static import would put the workflow-budget ledger
@@ -359,6 +366,7 @@ export async function handleManagementAPI(
     ??     (await handleQuotaResetRoutesOnDemand(ctx))
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
     ??     (await handleQuotaPoolRoutesOnDemand(ctx))
+    ??     (await handleFallbackRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))
     ??     (await handleProtocolRoutesOnDemand(ctx))

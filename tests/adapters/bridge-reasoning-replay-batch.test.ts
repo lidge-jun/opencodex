@@ -19,6 +19,7 @@ import type { AdapterEvent, OcxReasoningReplayScopeRef } from "../../src/types";
 
 const REASONING = "I need to inspect files before answering.";
 const SCOPE: OcxReasoningReplayScopeRef = {
+  clientPrincipalId: "principal-batch",
   clientThreadId: "thread-batch",
   current: {
     providerName: "opencode-zen",

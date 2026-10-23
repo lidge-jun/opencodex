@@ -30,6 +30,9 @@ import { recallComboForLane } from "./combo-session-recall";
 import {
   sessionLaneIdFromRequest,
   conversationIdFromResponsesRequest,
+  assignNativeLogConversationId,
+  fillHermesLogConversationFallback,
+  nativeLogConversationIdFromHeaders,
   sessionIdHeaderFromRequest,
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
@@ -160,6 +163,7 @@ import {
 import { acquireUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { applyCompactionRoutingOverride, compactionRoutingKeepsProviderIdentity } from "./compaction-routing";
 import { applyMainHardLockFallbackOverride } from "./main-hard-lock-routing";
+import { FallbackRefusedError } from "../../routing/fallback-policy";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   conversationStateBindingFromAuth,
@@ -367,10 +371,11 @@ export async function prepareResponsesRequest(
     && !shadowCallIntercepted && !shadowCallMatches && !memoryModelApplies && !threadSpawn && inboundWire === "responses") {
     try {
       options.mainHardLockFallbackOverride = await applyMainHardLockFallbackOverride(
-        body, config, undefined, mainHardLockFallbackCallerCheck(req, config, options),
+        body, config, undefined, mainHardLockFallbackCallerCheck(req, config, options), options.admission,
       );
     } catch (error) {
       if (options.abortSignal?.aborted || req.signal.aborted) return clientCancelledResponse();
+      if (error instanceof FallbackRefusedError) return error.response;
       const mapped = mapCodexAuthContextErrorToResponse(error, { now: Date.now() });
       if (mapped) return mapped;
       throw error;
@@ -601,14 +606,16 @@ export async function prepareResponsesRequest(
     // would become enough to read another caller's retained search result. Without a principal
     // bridgeSearchReplayScope yields no scope, so nothing is recorded or restored for it. The
     // field is always rewritten so an absent principal also clears one a reused holder carried.
-    const clientPrincipalId = resolveContextPrincipal(req, config, options.admission);
+    const clientPrincipalId = options.replayPrincipal
+      ? options.replayPrincipal.clientPrincipalId
+      : resolveContextPrincipal(req, config, options.admission);
     parsed._reasoningReplayScope = { ...parsed._reasoningReplayScope, clientPrincipalId };
   }
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
-  // absent or synthetically injected (session_id from prompt_cache_key).
-  if (!logCtx.conversationId) {
-    logCtx.conversationId = resolvedConversationId;
-  }
+  // absent or synthetically injected (session_id from prompt_cache_key). A Hermes-only id
+  // is a log fallback: native resolution replaces it, and it only fills an empty slot.
+  assignNativeLogConversationId(logCtx, resolvedConversationId ?? nativeLogConversationIdFromHeaders(req.headers));
+  fillHermesLogConversationFallback(logCtx, req.headers);
   // A rewritten turn logs the selector the client asked for, so the usage log never
   // claims the operator typed the fallback model themselves.
   logCtx.requestedModel = options.mainHardLockFallbackOverride?.sourceModel
@@ -1005,7 +1012,9 @@ export async function prepareResponsesRequest(
       subagentFallbackModelEligibleAccountIdsForModel,
       fallbackChain,
       candidateRoute => canPassThroughEncryptedV2AgentTask(candidateRoute, inboundWire),
+      options.admission,
     );
+    if (fallback?.refusal) return fallback.refusal;
     if (fallback) {
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
@@ -1219,11 +1228,15 @@ export async function prepareResponsesRequest(
                 recoverySelectionOptions,
                 subagentFallbackAccountPreview,
                 subagentFallbackModelEligibleAccountIdsForModel,
+                undefined,
+                undefined,
+                options.admission,
               );
             } finally {
               recoverySelectionAdmission?.release();
             }
           })();
+          if (fallback?.refusal) return fallback.refusal;
           if (fallback) {
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;

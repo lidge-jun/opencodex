@@ -15,6 +15,7 @@ import { ensureQuotaPoolIdentity } from "../../src/quota-pool/identity";
 import {
   buildPeerFeatures,
   currentPeerFeatureSources,
+  FALLBACK_STATE_PATH,
   PEER_FEATURES,
   QUOTA_POOL_PATH,
   servedPeerFeatures,
@@ -36,7 +37,7 @@ const none: PeerFeatureSources = {
   linkPeerReportVersion: "1",
 };
 const all: PeerFeatureSources = {
-  managementRoutes: [{ method: "GET", path: QUOTA_POOL_PATH }],
+  managementRoutes: [{ method: "GET", path: QUOTA_POOL_PATH }, { method: "GET", path: FALLBACK_STATE_PATH }],
   linkManagementReadPaths: ["/api/settings"],
   servedByHeaderEmitted: true,
   relayAuthVersion: "2",
@@ -46,7 +47,8 @@ const all: PeerFeatureSources = {
 describe("peer feature registry", () => {
   test("presence and absence follow each owning source", () => {
     expect(servedPeerFeatures(none)).toEqual(["relay-auth/2", "link-peer-report/1"]);
-    expect(servedPeerFeatures(all)).toEqual(["quota-pool/1", "link-management-relay", "served-by-header", "relay-auth/2", "link-peer-report/1"]);
+    expect(servedPeerFeatures(all)).toEqual(["quota-pool/1", "fallback-policy/1", "link-management-relay", "served-by-header", "relay-auth/2", "link-peer-report/1"]);
+    expect(servedPeerFeatures({ ...none, managementRoutes: [{ method: "PUT", path: FALLBACK_STATE_PATH }] })).toEqual(["relay-auth/2", "link-peer-report/1"]);
     expect(servedPeerFeatures({ ...none, managementRoutes: [{ method: "POST", path: QUOTA_POOL_PATH }] })).toEqual(["relay-auth/2", "link-peer-report/1"]);
     expect(servedPeerFeatures({ ...none, managementRoutes: [{ method: "GET", path: "/api/quota-pool/extra" }] })).toEqual(["relay-auth/2", "link-peer-report/1"]);
     expect(servedPeerFeatures({ ...none, relayAuthVersion: "3", linkPeerReportVersion: "2" })).toEqual(["relay-auth/3", "link-peer-report/2"]);
@@ -57,6 +59,8 @@ describe("peer feature registry", () => {
     expect(features).toEqual(servedPeerFeatures(currentPeerFeatureSources()));
     expect(features.includes("quota-pool/1"))
       .toBe(MANAGEMENT_ROUTES.some(route => route.method === "GET" && route.path === QUOTA_POOL_PATH));
+    expect(features.includes("fallback-policy/1"))
+      .toBe(MANAGEMENT_ROUTES.some(route => route.method === "GET" && route.path === FALLBACK_STATE_PATH));
     expect(features.includes("link-management-relay")).toBe(LINK_MANAGEMENT_READ_PATHS.length > 0);
     expect(features.includes("served-by-header")).toBe(SERVED_BY_HEADER_EMITTED);
     expect(features).toContain(`relay-auth/${LINK_RELAY_AUTH_VERSION}`);

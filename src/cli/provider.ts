@@ -191,7 +191,7 @@ function handleList(args: string[], active: boolean = localProvidersActive()): v
     console.log(`  ${name}${isDefault}${source}  adapter=${prov.adapter}${model}`);
   }
 
-  const available = PROVIDER_REGISTRY.filter(e => !configured.includes(e.id));
+  const available = PROVIDER_REGISTRY.filter(e => !e.deprecated && !configured.includes(e.id));
   if (available.length > 0) {
     console.log(`\nAvailable from registry (${available.length}):\n`);
     for (const entry of available) {
@@ -265,6 +265,7 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
   const registryEntry = getProviderRegistryEntry(name);
 
   if (registryEntry) {
+    if (registryEntry.deprecated) console.warn(`Warning: provider "${name}" is deprecated: ${registryEntry.deprecated}`);
     provConfig = providerConfigSeed(registryEntry);
     if (apiKey) {
       const candidateError = providerCredentialInputError({ apiKey });

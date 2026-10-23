@@ -88,6 +88,9 @@ process.platform
 localappdata
 userprofile
 spawnsync
+sigterm
+sigkill
+process.kill
 MARKERS
 
 status=0

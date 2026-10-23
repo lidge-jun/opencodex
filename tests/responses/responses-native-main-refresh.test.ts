@@ -24,6 +24,8 @@ import { captureCallerDirectAuth } from "../../src/providers/caller-authorizatio
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
 
 /** Smallest complete Anthropic stream: the combo's second target has to actually answer. */
 const ANTHROPIC_SSE = [
@@ -41,6 +43,7 @@ let previousOcxHome: string | undefined;
 let previousCodexHome: string | undefined;
 let releaseSpendHome: (() => void) | undefined;
 const OTHER_ACCOUNT_ID = "other";
+const aclSuccess = () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" });
 
 function config(options: { secondAccount?: boolean } = {}): OcxConfig {
   return {
@@ -72,6 +75,12 @@ function request(path: "/v1/responses" | "/v1/responses/compact", signal?: Abort
 }
 
 beforeEach(() => {
+  // Every case starts a fresh home, so on Windows each one hardened a new spend journal and a
+  // rewritten auth.json through a PowerShell SID lookup and real icacls. That is ACL cost, not
+  // refresh/replay behavior, and it pushed these cases past their budget on cold runners.
+  setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
+  setIcaclsRunnerForTests(aclSuccess);
+  setAsyncIcaclsRunnerForTests(async () => aclSuccess());
   home = mkdtempSync(join(tmpdir(), "ocx-responses-main-refresh-"));
   previousOcxHome = process.env.OPENCODEX_HOME;
   previousCodexHome = process.env.CODEX_HOME;
@@ -112,6 +121,9 @@ afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
   removeTreeWithRetry(home);
+  setIcaclsRunnerForTests(null);
+  setAsyncIcaclsRunnerForTests(null);
+  setSyntheticWindowsPrincipalForTests(null);
 });
 
 function install401ThenRefreshHarness(): { sends: string[]; refreshes: string[] } {

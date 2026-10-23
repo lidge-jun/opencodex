@@ -340,7 +340,10 @@ every 5xx, which the Codex client retries whatever the headers say), a client fo
 307/308 with the same body, a 413 answered as a context overflow the client compacts and resends,
 and this proxy's credential and quota recovery (401 refresh or rotation, 402/429 account
 rotation). The gateway statuses in `isTransientUpstreamStatus` are only
-a subset; 429 and 529 escaped them before. A kept status stays the upstream's evidence for the
+a subset; 429 and 529 escaped them before. An upstream gateway status carrying the exact
+`x-should-retry: false` verdict stops the transient retry ladder before its body is released and
+returns the original response unchanged; the retry layer does not inspect or rewrite its body.
+A kept status stays the upstream's evidence for the
 caller, and the marker stops every recovery loop that checks it, such as the opaque-blob rebuild
 of a 400 or the Codex pool's gated-model retry. A combo rebuilds a failed attempt as a new
 response, so `consumeComboFailure` records `nonReplayable` and the combo stops rather than hopping

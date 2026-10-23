@@ -186,6 +186,23 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 由于回滚依赖快照，当会话存储已存在但无法捕获时（文件不可读、架构不匹配、令牌选择有歧义），当 `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` 将导入路径指向与活动 CLI 存储不同的位置时，或当主 CLI 数据库没有可识别的令牌行时，**添加账户**会拒绝将 `kiro-cli` 登出。请修复或删除常规 `kiro-cli` 数据路径下的损坏数据库，并取消仅用于导入的选择器后重试。对于完全没有现有 `kiro-cli` 会话的机器，不受影响。
 
+### WorkBuddy AI 订阅
+
+`workbuddy-ai` 将国际版 WorkBuddy AI 订阅作为 OpenCodex 的模型来源。在 Providers 中选择
+**WorkBuddy AI** 并登录，或运行 `ocx login workbuddy-ai`，然后完成浏览器授权。
+授权最多等待五分钟；令牌保存在 OpenCodex 中并按需刷新。无需安装 WorkBuddy 客户端，
+也不会读取或修改客户端凭据。多个账户及其团队身份由现有 OAuth 账户管理流程隔离。
+
+登录后从账号实时模型目录选择 `workbuddy-ai/<model-id>`。模型发现不可用时可使用
+`workbuddy-ai/default-model`。支持流式输出、工具调用和非流式客户端；概览和账户页显示剩余积分、已用/总量、基础及赠送积分，
+并在可查询时显示下一批非每日积分的到期时间。刷新读取当前账户的账单汇总；查询失败不会
+显示为零。积分仅用于展示，不会因付费积分耗尽而禁用仍可用的免费模型。
+
+这是参考 [Magpie WorkBuddy 插件](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy)
+实现的非官方订阅协议。上游的客户端通道或账号限制会原样拒绝请求，不会改写代理身份提示词
+绕过限制。实际可用性取决于账号、地区、模型权限和上游 API。本功能独立于 CodeBuddy CLI
+API Key 提供商，也不负责让 WorkBuddy 桌面客户端使用 OpenCodex 模型。
+
 ### DeepSeek Account (DSH)
 
 `dsh-account` 是一个实验性的、优先导入已有凭据的账户提供商，用于复用已安装并登录的 DeepSeek Harness (DSH) Desktop 应用程序的认证凭据。
@@ -199,7 +216,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 104 个预设：84 个密钥预设、16 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 105 个预设：84 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -254,7 +271,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | 智谱 AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
 | [BigModel Coding Plan — Responses (静态模型列表)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
-| Qwen Cloud | Token plan（默认）: `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · 按量付费: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 或自定义 |
+| Qwen Cloud | Token plan（默认）: `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · 按量付费: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 或自定义 |
 | 腾讯云 Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | 火山方舟 · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |

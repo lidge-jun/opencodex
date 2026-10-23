@@ -708,10 +708,11 @@ describe("server 429 key failover (end-to-end)", () => {
     expect(loadConfig().providers.cancelled?.apiKey).toBe("key-canc-000111222333");
   });
 
-  test("reasoning replay misses after a 429 rotates to a different physical key", async () => {
+  test.each(["authenticated", "keyless"] as const)("reasoning replay misses after a 429 rotates to a different physical key (%s)", async (caller) => {
     const model = "reasoning-model";
     const callId = "call_key_rotation";
     const privateReasoning = "reasoning from physical key A";
+    const callerKey = "synthetic-reasoning-replay-caller";
     const seen: Array<{ auth: string; messages: Array<Record<string, unknown>> }> = [];
     upstream = Bun.serve({
       hostname: "127.0.0.1", port: 0,
@@ -760,6 +761,9 @@ describe("server 429 key failover (end-to-end)", () => {
     });
     const config: OcxConfig = {
       port: 0, hostname: "127.0.0.1", defaultProvider: "reasoning-pool",
+      ...(caller === "authenticated" ? { apiKeys: [{
+        id: "reasoning-caller", name: "reasoning-caller", key: callerKey, createdAt: "2026-01-01",
+      }] } : {}),
       providers: {
         "reasoning-pool": {
           adapter: "openai-chat",
@@ -780,6 +784,7 @@ describe("server 429 key failover (end-to-end)", () => {
     const headers = {
       "content-type": "application/json",
       "x-codex-parent-thread-id": "thread-key-rotation",
+      ...(caller === "authenticated" ? { "x-opencodex-api-key": callerKey } : {}),
     };
     try {
       const first = await fetch(new URL("/v1/responses", server.url), {
@@ -818,7 +823,7 @@ describe("server 429 key failover (end-to-end)", () => {
       ]);
       const replayed = seen[1]!.messages.find(message => Array.isArray(message.tool_calls));
       const rotated = seen[2]!.messages.find(message => Array.isArray(message.tool_calls));
-      expect(replayed?.reasoning_content).toBe(privateReasoning);
+      expect(replayed?.reasoning_content).toBe(caller === "authenticated" ? privateReasoning : " ");
       expect(rotated?.reasoning_content).toBe(" ");
       expect(rotated?.reasoning_content).not.toBe(privateReasoning);
     } finally {

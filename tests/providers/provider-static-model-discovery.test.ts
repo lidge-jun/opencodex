@@ -147,3 +147,31 @@ describe("static provider model discovery policy", () => {
     }))).toThrow("only supports the canonical Xiaomi MiMo Free endpoint");
   });
 });
+
+
+test("Token Plan curation stays static while exact-ID metadata enriches saved discovery", () => {
+  for (const id of ["alibaba-token-plan", "alibaba-token-plan-intl"]) {
+    const entry = getProviderRegistryEntry(id)!;
+    expect(providerConfigSeed(entry).liveModels).toBeFalse();
+    expect(entry.models).toContain("deepseek-v4.1-flash-1017");
+    expect(entry.models).toContain("deepseek-v4-pro-0813");
+    for (const retired of ["deepseek-v3.2", "deepseek-v4-flash"]) {
+      expect(entry.models).not.toContain(retired);
+      expect(entry.modelContextWindows?.[retired]).toBeUndefined();
+      expect(entry.modelMaxOutputTokens?.[retired]).toBeUndefined();
+      expect(entry.modelInputModalities?.[retired]).toBeUndefined();
+      expect(entry.preserveReasoningContentModels).not.toContain(retired);
+    }
+    const saved = provider({ ...providerConfigSeed(entry), liveModels: true,
+      models: ["deepseek-v4.1-flash-1017", "custom-selector"],
+      selectedModels: ["custom-selector"], defaultModel: "custom-selector",
+    });
+    enrichProviderFromRegistry(id, saved);
+    expect(saved.liveModels).toBeTrue();
+    expect(saved.models).toEqual(["deepseek-v4.1-flash-1017", "custom-selector"]);
+    expect(saved.selectedModels).toEqual(["custom-selector"]);
+    expect(saved.defaultModel).toBe("custom-selector");
+    expect(saved.modelContextWindows?.["deepseek-v4.1-flash-1017"]).toBe(1_000_000);
+    expect(saved.modelDefaultReasoningEfforts?.["deepseek-v4.1-flash-1017"]).toBe("high");
+  }
+});

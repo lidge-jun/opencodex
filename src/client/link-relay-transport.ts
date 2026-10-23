@@ -9,7 +9,7 @@ import { linkPeerReportHeaders } from "../link/peer-report";
 import { buildPeerFeatures } from "../remote/features";
 import {
   LINK_RELAY_AUTH_PATH, LINK_RELAY_AUTH_TIMEOUT_MS, LINK_RELAY_AUTH_VERSION,
-  LINK_RELAY_SESSION_HEADER, linkRelayChallenge, linkRelayProofMatches,
+  LINK_RELAY_PROBE_HEADER, LINK_RELAY_SESSION_HEADER, linkRelayChallenge, linkRelayProofMatches,
 } from "../link/relay-auth";
 
 export interface BoundLinkRelayTarget {
@@ -24,6 +24,14 @@ export class LinkRelayAuthenticationError extends Error {
     super(unrecognized ? "link relay authentication unavailable; upgrade the Home and Child or re-link"
       : "link relay authentication failed");
     this.name = "LinkRelayAuthenticationError";
+  }
+}
+
+/** Only the credential-free preflight deadline expired; no data request has begun. */
+export class LinkRelayAuthTimeoutError extends Error {
+  constructor() {
+    super("link relay authentication timed out");
+    this.name = "LinkRelayAuthTimeoutError";
   }
 }
 
@@ -153,21 +161,76 @@ async function responseOnConnection(incoming: IncomingMessage, agent: SingleConn
 
 let peerReport: Record<string, string> | undefined;
 
-/** Authenticate and stream one request on the SAME socket; never fall back to an ordinary fetch. */
-export async function fetchBoundLinkRelay(target: BoundLinkRelayTarget, destination: string, init: RequestInit): Promise<Response> {
+/** The credential-free challenge for one connection; the proof binds this nonce to the link key. */
+function relayChallenge(target: BoundLinkRelayTarget, origin: URL) {
+  const challenge = linkRelayChallenge(serviceApiTokenFingerprint(target.admissionKey), target.apiKeyId!, target.linkId!);
+  const probe = new URL(LINK_RELAY_AUTH_PATH, origin);
+  probe.search = new URLSearchParams({ version: LINK_RELAY_AUTH_VERSION, key: target.apiKeyId!,
+    link: target.linkId!, nonce: challenge.nonce, proof: challenge.caller }).toString();
+  // The challenge also carries this Child's version and features for the Home's link status.
+  peerReport ??= linkPeerReportHeaders(packageVersion("0.0.0"), buildPeerFeatures());
+  return { challenge, probe, headers: peerReport };
+}
+
+/**
+ * The outcome of the credential-free preflight alone: `ok` when the Home answered with a proof
+ * only the holder of the link key can make, `unrecognized` for a peer without the route (404),
+ * `auth_failed` for any other answer, and `unreachable` when nothing answered in time.
+ */
+export type LinkRelayPreflightResult = "ok" | "unreachable" | "auth_failed" | "unrecognized";
+
+/**
+ * Run only the preflight a relayed request starts with, on its own connection, and close it. It
+ * sends no link key, no data request and no body; the Child's readiness uses it to learn whether
+ * the Home answers through the tunnel right now. It is marked probe-only, so the Home reserves no
+ * session for a data request that never comes. The response body is never read.
+ */
+export async function probeLinkRelayPreflight(
+  target: BoundLinkRelayTarget, options: { timeoutMs?: number } = {},
+): Promise<LinkRelayPreflightResult> {
+  const timeoutMs = options.timeoutMs ?? LINK_RELAY_AUTH_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new RangeError("invalid link relay preflight timeout");
+  if (!target.linkId || !target.apiKeyId) return "auth_failed";
+  const origin = new URL(`http://127.0.0.1:${target.tunnelPort}`);
+  let request: ReturnType<typeof relayChallenge>;
+  try { request = relayChallenge(target, origin); } catch { return "auth_failed"; }
+  const agent = new SingleConnectionAgent({ keepAlive: false, maxSockets: 1, maxFreeSockets: 0 });
+  const deadline = clearableDeadline(timeoutMs);
+  try {
+    const response = await requestOnConnection(request.probe, {
+      method: "GET", signal: deadline.signal, headers: { ...request.headers, [LINK_RELAY_PROBE_HEADER]: "1" },
+    }, agent);
+    const proof = response.headers["x-opencodex-link-proof"];
+    if (response.statusCode === 204 && typeof proof === "string" && linkRelayProofMatches(proof, request.challenge.expected)) return "ok";
+    return response.statusCode === 404 ? "unrecognized" : "auth_failed";
+  } catch {
+    return "unreachable";
+  } finally {
+    deadline.clear();
+    await agent.close();
+  }
+}
+
+/**
+ * Authenticate and stream one request on the SAME socket; never fall back to an ordinary fetch.
+ * LinkRelayAuthTimeoutError certifies that only the credential-free preflight expired before
+ * data-request construction. Caller aborts and failures after that boundary keep their own errors.
+ */
+export async function fetchBoundLinkRelay(
+  target: BoundLinkRelayTarget, destination: string, init: RequestInit,
+  options: { authTimeoutMs?: number } = {},
+): Promise<Response> {
+  const authTimeoutMs = options.authTimeoutMs ?? LINK_RELAY_AUTH_TIMEOUT_MS;
+  if (!Number.isFinite(authTimeoutMs) || authTimeoutMs <= 0) throw new RangeError("invalid link relay auth timeout");
   if (!target.linkId || !target.apiKeyId) throw new LinkRelayAuthenticationError();
   const url = new URL(destination);
   if (url.origin !== `http://127.0.0.1:${target.tunnelPort}`) throw new LinkRelayAuthenticationError();
-  const challenge = linkRelayChallenge(serviceApiTokenFingerprint(target.admissionKey), target.apiKeyId, target.linkId);
-  const probe = new URL(LINK_RELAY_AUTH_PATH, url);
-  probe.search = new URLSearchParams({ version: LINK_RELAY_AUTH_VERSION, key: target.apiKeyId,
-    link: target.linkId, nonce: challenge.nonce, proof: challenge.caller }).toString();
+  const { challenge, probe, headers: preflightHeaders } = relayChallenge(target, url);
   const agent = new SingleConnectionAgent({ keepAlive: true, maxSockets: 1, maxFreeSockets: 1 });
-  const deadline = clearableDeadline(LINK_RELAY_AUTH_TIMEOUT_MS, init.signal ?? undefined);
+  const deadline = clearableDeadline(authTimeoutMs, init.signal ?? undefined);
+  let dataRequestStarted = false;
   try {
-    // The challenge also carries this Child's version and features for the Home's link status.
-    peerReport ??= linkPeerReportHeaders(packageVersion("0.0.0"), buildPeerFeatures());
-    const response = await requestOnConnection(probe, { method: "GET", signal: deadline.signal, headers: peerReport }, agent);
+    const response = await requestOnConnection(probe, { method: "GET", signal: deadline.signal, headers: preflightHeaders }, agent);
     const socket = agent.socket;
     const proof = response.headers["x-opencodex-link-proof"];
     if (response.statusCode !== 204 || typeof proof !== "string" || !linkRelayProofMatches(proof, challenge.expected)) {
@@ -177,15 +240,20 @@ export async function fetchBoundLinkRelay(target: BoundLinkRelayTarget, destinat
     for await (const chunk of response) {
       if (chunk.length) throw new LinkRelayAuthenticationError();
     }
+    deadline.signal.throwIfAborted();
     deadline.clear();
     init.signal?.throwIfAborted();
     if (!socket || socket.destroyed || socket !== agent.socket) throw new LinkRelayAuthenticationError();
     const headers = new Headers(init.headers);
     headers.set(LINK_RELAY_SESSION_HEADER, challenge.nonce);
+    dataRequestStarted = true;
     const incoming = await requestOnConnection(url, { ...init, headers }, agent, socket);
     return await responseOnConnection(incoming, agent, init.method ?? "GET");
   } catch (error) {
+    const authDeadlineExpired = !dataRequestStarted && deadline.didExpire()
+      && !(error instanceof LinkRelayAuthenticationError);
     await agent.close();
+    if (authDeadlineExpired && !init.signal?.aborted) throw new LinkRelayAuthTimeoutError();
     throw error;
   } finally { deadline.clear(); }
 }

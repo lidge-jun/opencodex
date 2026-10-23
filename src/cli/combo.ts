@@ -1,9 +1,11 @@
 import { normalizeJevQuotaTiers } from "../combos/jev-quota-config";
+import { parseJevSessionPinDuration } from "../combos/jev-session-pin-config";
 import { JEV_DECISION_TIMEOUT_MAX_MS, JEV_DECISION_TIMEOUT_MIN_MS } from "../combos/types";
 import {
   CliUsageError,
   printData,
   rejectArgs,
+  RuntimeApiError,
   runCliAction,
   runtimeRequest,
   runtimeBaseUrl,
@@ -29,6 +31,7 @@ const USAGE = `Usage:
       [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>]
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
       [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->]
+      [--session-pin <duration|->] (e.g. 20m; keeps a session on JEV's target while active)
       (jev only; the provider must be a configured jev-decision row)
       [--rename-from <id>] [--json]
   ocx combo stats <id> [--range <7d|30d|all>] [--json]
@@ -39,6 +42,15 @@ const USAGE = `Usage:
   ocx combo discover [--query <text>] [--json]`;
 
 type ComboRow = Record<string, unknown> & { id?: string; model?: string; strategy?: string };
+const STRATEGIES = ["failover", "round-robin", "random", "least-used", "reset-window", "jev"] as const;
+const isComboStrategy = (value: string): value is typeof STRATEGIES[number] => (STRATEGIES as readonly string[]).includes(value);
+// Combo writes print fixed messages instead of server text. When --targets kept a stored JEV
+// strategy the user did not name, a refusal of the targets or a JEV setting says so (#7579).
+const KEPT_JEV_REJECTED = "combo_targets_rejected_by_kept_jev";
+const KEPT_JEV_FIELDS = new Set(["targets", "decisionProvider", "decisionModel", "decisionTimeoutMs", "decisionQuotaSignals", "decisionQuotaTiers", "sessionPin"]);
+const SET_ERRORS = {
+  [KEPT_JEV_REJECTED]: "The selected target rejected the new targets or the kept jev settings. Without --strategy, --targets keeps the stored jev strategy with its decision method, quota policy and session pin, and the save checks the new targets together with them. Inspect the combo with ocx combo show <id> --json, then fix the targets or those settings, or pass --strategy to change the strategy.",
+};
 
 function parseTargets(value: string): Array<{ provider: string; model: string; weight?: number }> {
   const targets = value.split(",").map(part => part.trim()).filter(Boolean).map(part => {
@@ -91,29 +103,17 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (!id) throw new CliUsageError("combo id is required", USAGE);
   const additional = await prepareComboInput(args, deps);
   const targetsRaw = takeOption(args, "--targets");
+  const parsedTargets = targetsRaw === undefined ? undefined : parseTargets(targetsRaw);
   const renameFrom = takeOption(args, "--rename-from");
-  const replacingTargets = targetsRaw !== undefined || additional.targets !== undefined;
-  deps = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
-  // A structured target file replaces the target list, not unrelated combo settings.
-  const partialCurrent = targetsRaw === undefined
-    ? await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", { redirect: "error" }, deps)
-    : undefined;
-  const partialExisting = partialCurrent?.combos?.find(row => row.id === (renameFrom ?? id));
-  if (!replacingTargets && !partialExisting) {
-    throw new CliUsageError("--targets is required when creating a combo", USAGE);
-  }
+  const replacingTargets = parsedTargets !== undefined || additional.targets !== undefined;
   const strategyRaw = takeOption(args, "--strategy");
-  const strategy = strategyRaw ?? partialExisting?.strategy ?? "failover";
-  if (strategy !== "failover" && strategy !== "round-robin" && strategy !== "random" && strategy !== "least-used" && strategy !== "reset-window" && strategy !== "jev") throw new CliUsageError("--strategy must be failover, round-robin, random, least-used, reset-window, or jev", USAGE);
+  if (strategyRaw !== undefined && !isComboStrategy(strategyRaw)) throw new CliUsageError("--strategy must be failover, round-robin, random, least-used, reset-window, or jev", USAGE);
   const stickyRaw = takeOption(args, "--sticky");
   const stickyLimit = stickyRaw === undefined ? undefined : stickyRaw === "-" ? 1 : Number(stickyRaw);
   if (stickyLimit !== undefined && (!Number.isInteger(stickyLimit) || stickyLimit < 1)) {
     throw new CliUsageError("--sticky must be an integer from 1 to 100, or -", USAGE);
   }
-  if (stickyLimit !== undefined) {
-    if (stickyLimit > 100) throw new CliUsageError("--sticky must be <= 100", USAGE);
-    if (strategy !== "round-robin") throw new CliUsageError("--sticky applies only to round-robin", USAGE);
-  }
+  if (stickyLimit !== undefined && stickyLimit > 100) throw new CliUsageError("--sticky must be <= 100", USAGE);
   const effort = takeOption(args, "--effort");
   const effortMode = takeOption(args, "--effort-mode");
   if (effortMode !== undefined && effortMode !== "fallback" && effortMode !== "force" && effortMode !== "-") {
@@ -128,19 +128,17 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (decisionModel !== undefined && decisionModel !== "-" && decisionProvider !== undefined && decisionProvider !== "-") {
     throw new CliUsageError("--decision-model cannot be combined with --decision-provider", USAGE);
   }
-  if (decisionModel !== undefined && decisionModel !== "-" && strategy !== "jev") {
-    throw new CliUsageError("--decision-model applies only to the jev strategy", USAGE);
-  }
-  if (decisionProvider !== undefined && decisionProvider !== "-" && strategy !== "jev") {
-    throw new CliUsageError("--decision-provider applies only to the jev strategy", USAGE);
-  }
   const quotaSignals = takeOption(args, "--decision-quota-signals");
   const quotaTiers = takeOption(args, "--decision-quota-tiers");
   if (quotaSignals !== undefined && !["on", "off", "-"].includes(quotaSignals)) throw new CliUsageError("--decision-quota-signals must be on, off or -", USAGE);
   let parsedQuotaTiers: ReturnType<typeof normalizeJevQuotaTiers> | null;
   try { parsedQuotaTiers = quotaTiers === undefined || quotaTiers === "-" ? null : normalizeJevQuotaTiers(JSON.parse(quotaTiers)); } catch { throw new CliUsageError("invalid --decision-quota-tiers JSON", USAGE); }
   if (quotaTiers !== undefined && quotaTiers !== "-" && !parsedQuotaTiers) throw new CliUsageError("quota tiers must be finite 0..100 and strictly ascending", USAGE);
-  if (strategy !== "jev" && (quotaSignals !== undefined && quotaSignals !== "-" || quotaTiers !== undefined && quotaTiers !== "-")) throw new CliUsageError("quota settings apply only to jev", USAGE);
+  const sessionPinRaw = takeOption(args, "--session-pin");
+  const sessionPinMs = sessionPinRaw === undefined || sessionPinRaw === "-" ? undefined : parseJevSessionPinDuration(sessionPinRaw);
+  if (sessionPinRaw !== undefined && sessionPinRaw !== "-" && sessionPinMs === undefined) {
+    throw new CliUsageError("--session-pin must be a duration from 1m to 24h (for example 90s, 20m, 1h, or milliseconds), or -", USAGE);
+  }
   const decisionTimeout = takeOption(args, "--decision-timeout");
   let decisionTimeoutMs: number | null | undefined;
   if (decisionTimeout !== undefined) {
@@ -154,19 +152,38 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
         USAGE,
       );
     }
-    if (decisionTimeoutMs !== null && strategy !== "jev") {
-      throw new CliUsageError("--decision-timeout applies only to the jev strategy", USAGE);
-    }
   }
   rejectArgs(args, USAGE);
+  // Flags that belong to one strategy. An explicit --strategy is checked before any request; an
+  // omitted one is the stored strategy, so it is checked once the row has been read.
+  const requireStrategyFlags = (strategy: string): void => {
+    if (stickyLimit !== undefined && strategy !== "round-robin") throw new CliUsageError("--sticky applies only to round-robin", USAGE);
+    if (strategy === "jev") return;
+    if (decisionModel !== undefined && decisionModel !== "-") throw new CliUsageError("--decision-model applies only to the jev strategy", USAGE);
+    if (decisionProvider !== undefined && decisionProvider !== "-") throw new CliUsageError("--decision-provider applies only to the jev strategy", USAGE);
+    if (quotaSignals !== undefined && quotaSignals !== "-" || quotaTiers !== undefined && quotaTiers !== "-") throw new CliUsageError("quota settings apply only to jev", USAGE);
+    if (sessionPinMs !== undefined) throw new CliUsageError("--session-pin applies only to the jev strategy", USAGE);
+    if (decisionTimeoutMs != null) throw new CliUsageError("--decision-timeout applies only to the jev strategy", USAGE);
+  };
+  if (strategyRaw !== undefined) requireStrategyFlags(strategyRaw);
+  deps = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
+  // Replacing targets keeps every other stored setting, including the strategy and its policy (#7579).
+  const current = await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", { redirect: "error" }, deps);
+  const existing = current.combos?.find(row => row.id === (renameFrom ?? id));
+  if (!replacingTargets && !existing) {
+    throw new CliUsageError("--targets is required when creating a combo", USAGE);
+  }
+  const strategy = strategyRaw ?? existing?.strategy ?? "failover";
+  if (!isComboStrategy(strategy)) throw new CliUsageError(`combo ${renameFrom ?? id} has an unsupported stored strategy; pass --strategy`, USAGE);
+  if (strategyRaw === undefined) requireStrategyFlags(strategy);
   // Listing-only nulls must not be resent as explicit clears (alias rejects null).
-  const combo: Record<string, unknown> = partialExisting
-    ? Object.fromEntries(Object.entries(partialExisting).filter(([, value]) => value !== null))
-    : { strategy, stickyLimit: stickyLimit ?? 1, targets: additional.targets ?? parseTargets(targetsRaw!) };
+  const combo: Record<string, unknown> = existing
+    ? Object.fromEntries(Object.entries(existing).filter(([, value]) => value !== null))
+    : { strategy, stickyLimit: stickyLimit ?? 1 };
   delete combo.id;
   delete combo.model;
-  if (additional.targets !== undefined) combo.targets = additional.targets;
-  if (strategyRaw !== undefined) combo.strategy = strategy;
+  if (replacingTargets) combo.targets = additional.targets ?? parsedTargets;
+  combo.strategy = strategy;
   if (stickyLimit !== undefined) combo.stickyLimit = stickyLimit;
   if (effort !== undefined) combo.defaultEffort = effort === "-" ? null : effort;
   if (effortMode !== undefined) combo.defaultEffortMode = effortMode === "-" ? "fallback" : effortMode;
@@ -184,26 +201,33 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (decisionTimeoutMs !== undefined) combo.decisionTimeoutMs = decisionTimeoutMs;
   if (quotaSignals !== undefined) combo.decisionQuotaSignals = quotaSignals === "-" ? null : quotaSignals === "on";
   if (quotaTiers !== undefined) combo.decisionQuotaTiers = parsedQuotaTiers;
+  if (sessionPinRaw !== undefined) combo.sessionPin = sessionPinMs === undefined ? null : { ttlMs: sessionPinMs };
   if (strategy !== "jev") {
     delete combo.decisionProvider;
     delete combo.decisionModel;
     delete combo.decisionTimeoutMs;
     delete combo.decisionQuotaSignals;
     delete combo.decisionQuotaTiers;
-  }
-  const current = partialCurrent ?? await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", { redirect: "error" }, deps);
-  const existing = (current.combos ?? []).find(row => row.id === (renameFrom ?? id));
-  if (additional.imageInput === undefined && existing?.imageInput === "disabled") combo.imageInput = "disabled";
-  if (effort === undefined && existing?.defaultEffort != null && combo.defaultEffort === undefined) {
-    combo.defaultEffort = existing.defaultEffort;
+    delete combo.sessionPin;
   }
   if (effortMode === undefined && existing?.defaultEffortMode === "force") {
     combo.defaultEffortMode = effort === "-" ? "fallback" : "force";
   }
-  const result = await runtimeRequest("/api/combos", {
-    method: "PUT", redirect: "error",
-    body: serializeManagementJson({ id, combo, ...(renameFrom ? { renameFrom } : {}) }),
-  }, deps);
+  let result: unknown;
+  try {
+    result = await runtimeRequest("/api/combos", {
+      method: "PUT", redirect: "error",
+      body: serializeManagementJson({ id, combo, ...(renameFrom ? { renameFrom } : {}) }),
+    }, deps);
+  } catch (error) {
+    const field = error instanceof RuntimeApiError && error.body !== null && typeof error.body === "object"
+      ? (error.body as Record<string, unknown>).field : undefined;
+    if (error instanceof RuntimeApiError && error.status === 400 && typeof field === "string" && KEPT_JEV_FIELDS.has(field)
+      && replacingTargets && strategyRaw === undefined && strategy === "jev") {
+      throw new RuntimeApiError(error.message, error.status, { code: KEPT_JEV_REJECTED });
+    }
+    throw error;
+  }
   return printComboWriteResult(result, id, wantsJson);
 }
 
@@ -286,7 +310,7 @@ async function discover(argv: string[], deps: RuntimeApiDeps): Promise<void> {
 
 export async function handleComboCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {
   const [subcommand, ...writeArgs] = argv;
-  if (subcommand === "set" || subcommand === "create" || subcommand === "update") return runCatalogAction(() => set(writeArgs, deps));
+  if (subcommand === "set" || subcommand === "create" || subcommand === "update") return runCatalogAction(() => set(writeArgs, deps), SET_ERRORS);
   if (subcommand === "stats") {
     const { handleComboStatsCommand } = await import("./combo-stats");
     return handleComboStatsCommand(writeArgs, deps);

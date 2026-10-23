@@ -609,7 +609,7 @@ export default function App() {
                     setSharedSessionEpoch(epoch => epoch + 1);
                   }} />
                 )}
-                {page === "dashboard" && <Dashboard apiBase={sharedBase} connected={targets.connected}
+                {page === "dashboard" && <Dashboard apiBase={sharedBase} readOnly={targets.link !== undefined} connected={targets.connected}
                   authenticationPending={targets.connected && !sharedSessionReady} refreshEpoch={sharedSessionEpoch} />}
                 {page === "startup" && <Startup apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
                 {page === "providers" && <Providers apiBase={sharedBase} />}

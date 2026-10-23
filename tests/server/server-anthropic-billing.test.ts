@@ -12,6 +12,8 @@ import { createRequestExecutionBudget, CODEX_TEXT_GUARDED_BUDGET_POLICY } from "
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
 
 const creditMessage = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
 const refusal = (status = 400, message = creditMessage, type = "invalid_request_error") => Response.json({ type: "error", error: { type, message } }, { status });
@@ -34,8 +36,15 @@ let home = "";
 let releaseSpend: (() => void) | undefined;
 let upstream: ReturnType<typeof Bun.serve> | undefined;
 let seen: { key: string | null; authorization: string | null; apiKey: string | null; body: unknown }[];
+const aclSuccess = () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" });
 
 beforeEach(() => {
+  // Each case's fresh home hardens its spend journal on first write, which lands inside the
+  // request's 2s signal. On Windows that was a PowerShell SID lookup plus real icacls, and a cold
+  // runner spent the signal on it: the handler then saw the caller abort and answered 499.
+  setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
+  setIcaclsRunnerForTests(aclSuccess);
+  setAsyncIcaclsRunnerForTests(async () => aclSuccess());
   previousHome = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-billing-fixture-"));
   process.env.OPENCODEX_HOME = home;
@@ -54,6 +63,9 @@ afterEach(async () => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   removeTreeWithRetry(home);
+  setIcaclsRunnerForTests(null);
+  setAsyncIcaclsRunnerForTests(null);
+  setSyntheticWindowsPrincipalForTests(null);
 });
 
 function fixture(reply: (index: number, stream: boolean) => Response, keys = 2): OcxConfig {

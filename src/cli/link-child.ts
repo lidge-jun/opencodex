@@ -74,6 +74,7 @@ export async function readLinkHomeJson(
   context: LinkChildContext,
   path: string,
   deps: LinkHomeDeps = {},
+  init: { signal?: AbortSignal } = {},
 ): Promise<{ status: number; body: unknown }> {
   const token = readServiceApiTokenState();
   if (token.kind !== "present" || token.fingerprint !== context.connection.tokenFingerprint) {
@@ -81,12 +82,15 @@ export async function readLinkHomeJson(
   }
   let response: Response;
   try {
-    response = await fetchLinkHomeManagement(context.connection, token.token, path.startsWith("/") ? path : `/${path}`, {}, deps);
+    response = await fetchLinkHomeManagement(context.connection, token.token, path.startsWith("/") ? path : `/${path}`,
+      init.signal ? { signal: init.signal } : {}, deps);
   } catch (error) {
     const detail = error instanceof Error && error.name === "LinkRelayAuthenticationError" ? error.message : "the link tunnel did not answer";
     throw new Error(`Could not read ${context.homePhrase} over Remote Link (${context.linkId}): ${detail}.`);
   }
-  const result = await readBoundedResponseBytes(response, { maxBytes: RESPONSE_MAX_BYTES, signal: AbortSignal.timeout(30_000) });
+  // A caller's deadline (the status report's 2 s) bounds the body read as well as the request.
+  const readSignal = init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);
+  const result = await readBoundedResponseBytes(response, { maxBytes: RESPONSE_MAX_BYTES, signal: readSignal });
   if (result.oversized) throw new Error(`${context.homePhrase} returned a response larger than the CLI accepts.`);
   const text = new TextDecoder().decode(result.bytes);
   let body: unknown = null;

@@ -676,6 +676,17 @@ describe("ocx provider mutating --json", () => {
     }
   });
 
+  test("provider add warns when the registry entry is deprecated", () => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(["provider", "add", "mimo-free"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain('provider "mimo-free" is deprecated');
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("provider remove --json returns structured output", () => {
     const { dir } = freshConfig({
       providers: {

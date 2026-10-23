@@ -426,6 +426,12 @@ The CLI's own `--json` output is deliberately narrower than the HTTP body: it em
 `unreachable`. Exit codes are 0 for ready; 1 for not-ready, pending, failed, timeout, or
 unreachable; and 64 for invalid arguments.
 
+On a Remote Link Child, readiness also covers the link. While the link cannot carry a request,
+`/readyz` answers `503` with `status: "pending"` and `link: {state: "unavailable", reason}`, so
+`ocx ready --wait` keeps waiting until the link is back; a working link adds
+`link: {state: "available"}` to the `200` answer. `/healthz` on a Child keeps meaning only that the
+process runs. The reasons are listed in [Remote Link](/guides/remote-link/#link-status).
+
 ### `ocx resolve [--json]`
 
 Resolve the runtime facts a shell needs without re-implementing them: the config home, the
@@ -702,13 +708,15 @@ If the proxy is newer instead, check the CLI installation and `PATH` as describe
 | `restart` | The same refresh and a guaranteed restart on every platform. On macOS an unchanged, already-loaded job is kickstarted in place. Not an alias of `repair`. |
 | `start` | Start an installed service. |
 | `stop` | Stop the service and restore native Codex. |
-| `status` | Report service and proxy diagnostics plus log paths. |
+| `status` | Report service and proxy diagnostics plus log paths. `--json` prints the passive document described below. |
 | `uninstall` | Remove the service and restore native Codex. |
 | `remove` | Alias of `uninstall`. |
 
 On Windows, a bare `ocx service` runs the install path only after both Task Scheduler and WinSW are
 proven absent. If either status query is inconclusive, it refuses to register anything and asks you
 to run `ocx service status`; use explicit `ocx service install` only after confirming absence.
+
+`ocx service status --json` prints one passive document for scripts and peers such as GOAT's device inventory. It runs the same reads as the text report and never installs, starts, stops or repairs anything; `--json` on any other `service` verb is rejected. Fields: `schemaVersion` (1), `platform`, `supported`, `backend` (`launchd`, `systemd`, `schtasks`, `winsw`, or `none` when nothing is registered), `label` (the job, unit, task or WinSW service name), `installed`, `enabled`, `running` (the service manager's verdict), `viable`, `stale`, `conflict`, `serving` (`probed`, `ok`, `port`; probed only when a registration exists), `summary`, `logPath`, `ownershipLease` and `desktopLogin`. An unsupported platform or a Docker container still gets a document, with `supported: false`.
 
 ### Runtime ownership
 
@@ -1150,6 +1158,14 @@ On the Home, every row of `ocx link status --json` carries what that Child last 
 starts and then once a minute; the Home keeps reports in memory only, so after a Home restart the
 fields read `null` until the next report. A Child whose runtime started before `lastApplyAt` is
 running an older runtime than its last apply.
+
+For a link the Home added, each row also carries `tunnel`: `attempt` (ssh attempts since the link
+was last connected), `nextRetryAt` (ISO time of the next scheduled retry, `null` while one runs or
+none is due), `lastTransition` (`{from, to, at, cause}`) and `lastFailure` (`{cause, at}`). A cause
+is one of `auth`, `hostkey`, `forward`, `remote_forward_conflict`, `timeout`, `network`,
+`unknown`, `spawn_failed` and `listener_unavailable`. The Home keeps it in memory, so it starts
+empty after a Home restart. `GET /api/link/status` includes the field only when asked with
+`?diagnostics=1`, because an older `ocx link status` rejects fields it does not know.
 
 After `ocx sync` applies the Home's settings on a Child, it restarts the Child's client runtime when
 that runtime started before `lastApplyAt`, using the same restart as `ocx restart`. A runtime that

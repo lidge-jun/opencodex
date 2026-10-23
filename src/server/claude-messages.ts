@@ -100,6 +100,7 @@ import {
   isApiAuthRequired,
   isDataPlaneAdmissionSecret,
   isProxyAdmissionSecret,
+  resolveContextPrincipal,
   type RequestPolicyView,
   type DataPlaneAdmission,
 } from "./auth-cors";
@@ -1117,6 +1118,8 @@ async function handleClaudeMessagesWithBudget(
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
     ...(logIds?.admission ? { admission: logIds.admission } : {}),
+    // The translated request never forwards the caller credential; resolve the principal first.
+    replayPrincipal: { clientPrincipalId: resolveContextPrincipal(req, config, logIds?.admission) },
     ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),
     abortSignal: req.signal,
     promptCacheKeyIsSharedCohort: cacheKeySource === "system",

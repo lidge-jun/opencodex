@@ -1,4 +1,5 @@
 import { normalizeJevQuotaSummary, type JevQuotaDecisionSummary } from "../combos/jev-quota-config";
+import { JEV_SESSION_PIN_REASONS, type JevSessionPinReason } from "../combos/jev-session-pin-config";
 import type { OcxComboDefaultEffort } from "../types";
 import type { PersistedUsageEntry } from "./log";
 import { usageDisplayTotalTokens } from "./totals";
@@ -48,6 +49,10 @@ export interface PersistedJevDecisionV1 {
     outputTokens: number;
     totalTokens: number;
   };
+  /** The turn reused its session pin (#7525); no decision request was sent for it. */
+  pinned?: true;
+  /** `session` with `pinned`; otherwise why an existing session pin was released. */
+  pinReason?: JevSessionPinReason;
 }
 
 export interface JevStatsModelRow {
@@ -88,6 +93,8 @@ export interface JevStatsResponse {
     decisions: number;
     appliedDecisions: number;
     failOpenDecisions: number;
+    /** Requests that reused a session pin; they are not decisions and add only physical attempts. */
+    pinnedRequests: number;
     successfulRequests: number;
     requestsWithModelFallback: number;
     modelAttempts: number;
@@ -188,6 +195,13 @@ export function normalizePersistedJevDecision(value: unknown): PersistedJevDecis
   const backend = value.backend === "typesafe" || value.backend === "systemone" || value.backend === "model"
     ? value.backend
     : undefined;
+  const pinReason = typeof value.pinReason === "string"
+    && (JEV_SESSION_PIN_REASONS as readonly string[]).includes(value.pinReason)
+    ? value.pinReason as JevSessionPinReason
+    : undefined;
+  // A pinned turn always says so with `session`; any other pairing is not a record this writes.
+  const pinned = value.pinned === true && pinReason === "session";
+  if ((value.pinned === true || pinReason === "session") && !pinned) return undefined;
   return {
     version: 1,
     comboId,
@@ -203,11 +217,31 @@ export function normalizePersistedJevDecision(value: unknown): PersistedJevDecis
     ...(confidence !== undefined ? { confidence } : {}),
     ...(chosenProbability !== undefined ? { chosenProbability } : {}),
     ...(usage ? { usage } : {}),
+    ...(pinned ? { pinned: true as const } : {}),
+    ...(pinReason ? { pinReason } : {}),
   };
 }
 
 interface MutableModelRow extends Omit<JevStatsModelRow, "efforts"> {
   effortCounts: Map<OcxComboDefaultEffort | null, number>;
+}
+
+interface SentAttempt {
+  attempt: NonNullable<PersistedUsageEntry["attempts"]>[number];
+  provider: string;
+  model: string;
+  sendCount: number;
+}
+
+/** Attempts that physically sent, with bounded identities; zero-send rows never count. */
+function sentAttempts(entry: PersistedUsageEntry): SentAttempt[] {
+  return (entry.attempts ?? []).flatMap(attempt => {
+    const sendCount = boundedCount(attempt.sendCount) ?? 0;
+    if (sendCount === 0) return [];
+    const provider = boundedIdentity(attempt.provider, MAX_TARGET_IDENTITY_CHARS);
+    const model = boundedIdentity(attempt.model, MAX_TARGET_IDENTITY_CHARS);
+    return provider && model ? [{ attempt, provider, model, sendCount }] : [];
+  });
 }
 
 interface JevStatsAccumulatorOptions {
@@ -291,6 +325,7 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
   private snapshotWindowStart: number | null = null;
   private snapshotWindowEnd: number | null = null;
   private decisions = 0;
+  private pinnedRequests = 0;
   private appliedDecisions = 0;
   private successfulRequests = 0;
   private requestsWithModelFallback = 0;
@@ -358,6 +393,21 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
       || (this.until !== undefined && entry.timestamp > this.until)) return;
     const decision = normalizePersistedJevDecision(entry.jevDecision);
     if (!decision || (this.comboId !== null && decision.comboId !== this.comboId)) return;
+    const attempts = sentAttempts(entry);
+    // Request-level outcomes count every JEV-routed request, pinned or decided.
+    if (entry.status >= 200 && entry.status < 400) {
+      this.successfulRequests = saturatingAdd(this.successfulRequests, 1);
+    }
+    if (attempts.some(({ provider, model }) => provider !== decision.selected.provider
+      || model !== decision.selected.model)) {
+      this.requestsWithModelFallback = saturatingAdd(this.requestsWithModelFallback, 1);
+    }
+    this.addAttempts(attempts);
+    if (decision.pinned) {
+      // A session-pinned turn sent no decision request, so it stays out of every decision total.
+      this.pinnedRequests = saturatingAdd(this.pinnedRequests, 1);
+      return;
+    }
 
     const backend = decision.backend ?? "unknown";
     const backendRow = this.backends.get(backend)
@@ -369,9 +419,6 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
     this.averageLatencyMs = nextMean(this.averageLatencyMs, this.decisions, decision.latencyMs);
     this.decisions = saturatingAdd(this.decisions, 1);
     if (decision.gate === "apply") this.appliedDecisions = saturatingAdd(this.appliedDecisions, 1);
-    if (entry.status >= 200 && entry.status < 400) {
-      this.successfulRequests = saturatingAdd(this.successfulRequests, 1);
-    }
     this.gates.set(decision.gate, saturatingAdd(this.gates.get(decision.gate) ?? 0, 1));
     if (decision.confidence !== undefined) {
       this.confidenceTotal = saturatingAdd(this.confidenceTotal, decision.confidence);
@@ -396,18 +443,9 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
       decision.selected.effort,
       saturatingAdd(selected.effortCounts.get(decision.selected.effort) ?? 0, 1),
     );
+  }
 
-    const attempts = (entry.attempts ?? []).flatMap(attempt => {
-      const sendCount = boundedCount(attempt.sendCount) ?? 0;
-      if (sendCount === 0) return [];
-      const provider = boundedIdentity(attempt.provider, MAX_TARGET_IDENTITY_CHARS);
-      const model = boundedIdentity(attempt.model, MAX_TARGET_IDENTITY_CHARS);
-      return provider && model ? [{ attempt, provider, model, sendCount }] : [];
-    });
-    if (attempts.some(({ provider, model }) => provider !== decision.selected.provider
-      || model !== decision.selected.model)) {
-      this.requestsWithModelFallback = saturatingAdd(this.requestsWithModelFallback, 1);
-    }
+  private addAttempts(attempts: readonly SentAttempt[]): void {
     for (const { attempt, provider, model: modelId, sendCount } of attempts) {
       const model = this.rowFor(provider, modelId);
       model.attempts = saturatingAdd(model.attempts, sendCount);
@@ -449,6 +487,7 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
     cloned.snapshotWindowStart = this.snapshotWindowStart;
     cloned.snapshotWindowEnd = this.snapshotWindowEnd;
     cloned.decisions = this.decisions;
+    cloned.pinnedRequests = this.pinnedRequests;
     cloned.appliedDecisions = this.appliedDecisions;
     cloned.successfulRequests = this.successfulRequests;
     cloned.requestsWithModelFallback = this.requestsWithModelFallback;
@@ -492,6 +531,7 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
         decisions: this.decisions,
         appliedDecisions: this.appliedDecisions,
         failOpenDecisions: this.decisions - this.appliedDecisions,
+        pinnedRequests: this.pinnedRequests,
         successfulRequests: this.successfulRequests,
         requestsWithModelFallback: this.requestsWithModelFallback,
         modelAttempts: this.modelAttempts,

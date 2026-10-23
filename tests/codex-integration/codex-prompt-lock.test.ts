@@ -249,7 +249,10 @@ describe("interleavings", () => {
         const fs = await import('node:fs');
         const {tryAcquire, stillHeld} = await import(${JSON.stringify(modulePath)});
         const result = tryAcquire(${JSON.stringify(path)});
-        fs.writeFileSync(${JSON.stringify(path + ".b")}, JSON.stringify(result));
+        // Publish by rename: the parent polls for this name and parses it at once, so the
+        // name must never be visible before the content is complete.
+        fs.writeFileSync(${JSON.stringify(path + ".b.tmp")}, JSON.stringify(result));
+        fs.renameSync(${JSON.stringify(path + ".b.tmp")}, ${JSON.stringify(path + ".b")});
         const until = Date.now() + 3000;
         while (!fs.existsSync(${JSON.stringify(stop)})) {
           if (Date.now() > until) throw Error('barrier timeout');

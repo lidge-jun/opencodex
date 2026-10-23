@@ -488,7 +488,7 @@ export function bridgeToResponsesSSE(
       const takeWebAnnotations = (): { type: string; url: string; title?: string; start_index: number; end_index: number }[] => {
         if (pendingWebSources.length === 0) return [];
         const anns = pendingWebSources.map(s => ({
-          type: "url_citation", url: s.url, ...(s.title ? { title: s.title } : {}), start_index: 0, end_index: 0,
+          type: "url_citation", url: s.url, title: s.title || s.url, start_index: 0, end_index: 0,
         }));
         const annotationBytes = bytesOf(JSON.stringify(anns));
         const reservation = budget?.reserveTransient(annotationBytes, { kind: "retained_collectors" });
