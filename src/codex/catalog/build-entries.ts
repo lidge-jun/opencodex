@@ -47,7 +47,7 @@ import {
 import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { NATIVE_RESERVE_MODEL } from "./native-models";
 import { isReserveCatalogProjection, type ReserveCatalogProjection } from "./reserve";
-import { deriveEntry, finishUpstreamNativeEntry, isExactComboCatalogEntry } from "./derive-entry";
+import { deriveEntry, finishUpstreamNativeEntry, isExactComboCatalogEntry, type RoutedToldContextPolicy } from "./derive-entry";
 import { PICKER_ORDER_PRIORITY_BASE, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
 import { applyConfiguredUltraFast, configuredUltraFastSlugs } from "./configured-tiers";
 import { applyNativeUltraFastTier } from "./native-ultrafast";
@@ -74,6 +74,8 @@ export interface ObservedCatalogEntryBuildInput {
   readonly accountNativeSlugsBySelector?: ReadonlyMap<string, readonly string[]>;
   /** Codex-only manual selector metadata; deliberately independent of live permission. */
   readonly reserve?: ReserveCatalogProjection;
+  /** Routed rows without a configured window are told a percent of it; absent = no cut. */
+  readonly routedToldContext?: RoutedToldContextPolicy;
 }
 
 /** Build entries with the process-observed Codex feature state. */
@@ -93,6 +95,7 @@ export function buildCatalogEntries(
   accountNativeSlugsBySelector?: ReadonlyMap<string, readonly string[]>,
   keepNativeChatGptOnV1 = false,
   modelPickerOrder: readonly string[] = [],
+  routedToldContext?: RoutedToldContextPolicy,
 ): RawEntry[] {
   const entries = buildCatalogEntriesFromObservedState({
     template,
@@ -111,6 +114,7 @@ export function buildCatalogEntries(
     openaiContextCap: contextCap,
     accountNativeSlugs,
     accountNativeSlugsBySelector,
+    routedToldContext,
   });
   // Live discovery does not run the disk merge; use the same captured declarations and row fences.
   const configured = configuredUltraFastSlugs(goModels);
@@ -143,6 +147,7 @@ export function buildCatalogEntriesFromObservedState({
   accountNativeSlugs,
   accountNativeSlugsBySelector,
   reserve,
+  routedToldContext,
 }: ObservedCatalogEntryBuildInput): RawEntry[] {
   // Codex's models-manager sorts by `priority` ASC and advertises the first 5 picker-visible
   // models to spawn_agent (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
@@ -223,6 +228,8 @@ export function buildCatalogEntriesFromObservedState({
       5,
       nativeAlias,
       exactComboSlugs,
+      undefined,
+      routedToldContext,
     );
     routed.opencodex_catalog_kind = CODEX_NATIVE_ALIAS_CATALOG_KIND;
     const rankHit = rank.get(slug) ?? rank.get(`${nativeAlias.provider}/${nativeAlias.id}`);
@@ -281,6 +288,8 @@ export function buildCatalogEntriesFromObservedState({
       5,
       m,
       exactComboSlugs,
+      undefined,
+      routedToldContext,
     );
     if (m.provider === COMBO_NAMESPACE && m.nativeAlias === true && !slug.includes("/")) {
       e.opencodex_catalog_kind = CODEX_NATIVE_ALIAS_CATALOG_KIND;

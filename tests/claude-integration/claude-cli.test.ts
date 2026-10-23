@@ -368,6 +368,24 @@ describe("ocx claude native fallback", () => {
     }
   });
 
+  test("connected Claude windows read the provenance window", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-claude-connected-provenance-"));
+    try {
+      const path = join(dir, "catalog.json");
+      writeFileSync(path, JSON.stringify({ models: [
+        { slug: "relay/m1", context_window: 420_000, opencodex_capability_provenance: { context_window: 1_050_000 } },
+        { slug: "relay/m2", context_window: 200_000 },
+        { slug: "relay/m3", context_window: 400_000, opencodex_full_context_window: 1_000_000 },
+      ] }));
+      const windows = readConnectedClaudeContextWindows(path);
+      expect(windows["ocx-claude-relay--m1"]).toBe(1_050_000);
+      expect(windows["ocx-claude-relay--m2"]).toBe(200_000);
+      expect(windows["ocx-claude-relay--m3"]).toBe(1_000_000);
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("a saved current ocx-claude selector also falls back to the configured native model", () => {
     expect(nativeModelOverride("ocx-claude-mock--model", "opus", [], ["mock"]))
       .toMatchObject({ flag: ["--model", "opus"] });

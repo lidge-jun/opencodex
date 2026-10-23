@@ -961,6 +961,8 @@ export interface OcxConfig {
   providerContextCapValues?: Record<string, number>;
   /** Global Codex-visible context cap value (tokens). Falls back to DEFAULT_PROVIDER_CONTEXT_CAP. */
   contextCapValue?: number;
+  /** Percent (0 < value <= 100) of a routed model's window told to Codex when the config sets none for it. Default 40. */
+  unlistedModelsToldContextWindow?: number;
   /** Bind hostname. Default "127.0.0.1" (loopback only). Set "0.0.0.0" to expose on all interfaces. */
   hostname?: string;
   /**

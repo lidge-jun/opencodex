@@ -955,6 +955,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         }
         const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeContextLimits, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiMaxOutputTokens, nativeOpenAiContextTier, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../../codex/catalog");
         const { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } = await import("../../codex/catalog/native-models");
+        const { routedToldContextPolicy } = await import("../../codex/catalog/model-hints");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
         const bareEligibleAccountIds = providerCodexAccountMode(
@@ -1133,6 +1134,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             accountNativeSlugsBySelector,
             config.keepNativeChatGptOnV1 === true,
             config.modelPickerOrder,
+            routedToldContextPolicy(config),
           );
           return jsonResponse({
             models: applyNativeVisibility(

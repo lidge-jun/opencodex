@@ -58,7 +58,7 @@ import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { bundledCatalogCacheState, bundledCodexCatalogSnapshot, loadBundledCodexCatalogAsync } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
 import { clampCatalogModelsToCodexSupport } from "./effort";
-import { suppressedSyntheticMaxCatalogSlugs } from "./model-hints";
+import { routedToldContextPolicy, suppressedSyntheticMaxCatalogSlugs } from "./model-hints";
 import { filterCatalogVisibleModels, gatherRoutedModels, type CatalogGatherProviderModelOutcome } from "./provider-fetch";
 import { comboCatalogDescriptions, dedupeCatalogEntriesBySlug, enforceCatalogSlugUniqueness, exactComboCatalogSlugs, type ComboCatalogOmission } from "./aggregation";
 import {
@@ -456,6 +456,7 @@ function writeRetainedCatalogSync({
     disabledNativeAccountSlugs: new Set(),
     multiAgentV2Enabled,
     openaiContextCap,
+    routedToldContext: routedToldContextPolicy(config),
   });
   // Keep genuine native entries (gpt-*, codex-*) with their real per-model fields and append
   // routed providers as namespaced slugs. Cursor and other adopted providers can expose model ids

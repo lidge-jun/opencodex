@@ -4,6 +4,7 @@ import * as z from "zod/v4";
 import { accountPauseStateSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
+import { unlistedModelsToldContextWindowSchema } from "./unlisted-models-told-context-window";
 import { nativeReasoningRetentionSchema } from "./native-reasoning-retention";
 import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
@@ -271,6 +272,8 @@ export const configSchema = z.object({
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   providerContextCapValues: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
+  // A bad percent drops only itself; the default (40) then applies.
+  unlistedModelsToldContextWindow: unlistedModelsToldContextWindowSchema.optional().catch(undefined),
   multiAgentGuidanceEnabled: z.boolean().optional(),
   // Invalid optional recovery config must not discard unrelated provider/account state.
   plaintextV2AgentMessages: z.boolean().optional().catch(undefined),

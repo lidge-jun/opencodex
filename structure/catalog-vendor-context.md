@@ -29,7 +29,7 @@ estimate under `inferred_context_window` / `context_window_inference` in capabil
 not `context_window`, so routing requirements still see unknown capacity. Existing asserted
 modality/tool evidence remains usable. Shared client catalogs, Claude context markers and exports
 consume the estimated window; operators must configure a lower window or Context cap when a relay
-serves less. Tests: `tests/codex-integration/vendor-context.test.ts`.
+serves less. The Codex catalog tells Codex `unlistedModelsToldContextWindow` percent (default 40) of that window for a routed model whose window is not configured; capability provenance and Claude Code keep the full window. Tests: `tests/codex-integration/vendor-context.test.ts`.
 
 ## Native maximum windows
 

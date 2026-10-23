@@ -171,6 +171,33 @@ describe("Codex catalog refresh", () => {
     }
   });
 
+  test("syncCatalogModels writes the cut told window for an unset routed model", async () => {
+    const home = installTempHomes();
+    try {
+      const catalogPath = join(home.codexHome, "nested", "catalog.json");
+      mkdirSync(join(home.codexHome, "nested"), { recursive: true });
+      writeFileSync(join(home.codexHome, "config.toml"), 'model_catalog_json = "nested/catalog.json"\n', "utf8");
+      writeFileSync(catalogPath, nativeCatalogFixture("gpt-5.6-sol"), "utf8");
+      const relayConfig = {
+        port: 10100,
+        defaultProvider: "relay",
+        providers: {
+          relay: { adapter: "openai-chat", baseUrl: "https://relay.invalid/v1", apiKey: "test-key", liveModels: false, models: ["m1"] },
+        },
+      } as OcxConfig;
+
+      await syncCatalogModels(relayConfig);
+      const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
+      const relay = rows.find(row => row.slug === "relay/m1");
+
+      // No window is configured for relay/m1, so the default 40% of the 128,000 fallback is told.
+      expect(relay?.context_window).toBe(51_200);
+      expect(relay?.max_context_window).toBe(51_200);
+    } finally {
+      home.restore();
+    }
+  });
+
   test("invalidateCodexModelsCache reports real cache write success and failure cases", () => {
     const success = installTempHomes();
     try {

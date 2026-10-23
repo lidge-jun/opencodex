@@ -119,6 +119,8 @@ export interface CatalogModel {
   autoCompactTokenLimit?: number;
   contextCap?: number;
   contextCapped?: boolean;
+  /** Combo rows only: the minimum of the members' told windows, read by applyRoutedToldContextWindow. */
+  toldContextWindow?: number;
   inputModalities?: string[];
   /** Provider opted into parallel tool calls (OcxProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;

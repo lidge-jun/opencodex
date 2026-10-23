@@ -11,6 +11,7 @@ import {
   saveConfig,
   validateConfigCandidate,
 } from "../../src/config";
+import { routedToldContextPolicy } from "../../src/codex/catalog/model-hints";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let home = "";
@@ -549,4 +550,41 @@ test("a malformed Aside profile sync policy warns once without echoing it and ke
       expect(warn.mock.calls.flat().join("\n")).not.toContain("asideProfileSync");
     }
   } finally { warn.mockRestore(); }
+});
+
+test("load ignores an invalid unlistedModelsToldContextWindow, warns, and keeps the rest", () => {
+  for (const value of [0, -1, 100.5, "40"]) {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      writeFileSync(getConfigPath(), JSON.stringify({
+        ...getDefaultConfig(),
+        defaultProvider: "xai",
+        providers: {
+          xai: { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1", note: "keep me" },
+        },
+        unlistedModelsToldContextWindow: value,
+      }), "utf8");
+
+      const loaded = loadConfig();
+
+      expect(loaded.providers.xai).toBeDefined();
+      expect(loaded.unlistedModelsToldContextWindow).toBeUndefined();
+      const output = warn.mock.calls.map(call => call.join(" ")).join("\n");
+      expect(output).toContain("unlistedModelsToldContextWindow");
+      expect(routedToldContextPolicy(loaded).percent).toBe(40);
+    } finally {
+      warn.mockRestore();
+    }
+  }
+});
+
+test("config validation rejects unlistedModelsToldContextWindow outside 0 < value <= 100", () => {
+  for (const value of [40, 100]) {
+    expect(validateConfigCandidate({ ...getDefaultConfig(), unlistedModelsToldContextWindow: value }).ok).toBe(true);
+  }
+  for (const value of [0, -1, 100.5, "40", NaN]) {
+    const result = validateConfigCandidate({ ...getDefaultConfig(), unlistedModelsToldContextWindow: value });
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error).toContain("schema_invalid: unlistedModelsToldContextWindow");
+  }
 });

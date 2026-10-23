@@ -27,6 +27,57 @@ import {
 } from "./effort";
 import { CATALOG_INACTIVE_REASON_FIELD, SPAWN_PRIORITY_FIELD } from "./subagent-roster";
 import { applyRoutedDescription } from "./ownership";
+import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
+import { resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
+
+/** Tells Codex a fixed percent of a routed model's window when the config sets none. */
+export interface RoutedToldContextPolicy {
+  /** Finite, 0 < percent <= 100. */
+  readonly percent: number;
+  /** True when the user's config sets this routed model's window; such rows are never cut. */
+  readonly hasExplicitWindow: (provider: string, modelId: string) => boolean;
+}
+
+/** The one owner of the cut formula: native and explicitly configured windows stay whole. */
+export function routedToldWindow(
+  policy: RoutedToldContextPolicy,
+  provider: string,
+  modelId: string,
+  window: number,
+  isNative: boolean,
+): number {
+  if (isNative || policy.hasExplicitWindow(provider, modelId)) return window;
+  return Math.max(1, Math.floor((policy.percent * window) / 100));
+}
+
+/**
+ * Cut a fresh routed row's told window. Runs after every other window writer, so it sees the
+ * final window. A combo is never cut here: its told window was computed from its members at
+ * gather time. Native rows, native-alias combos (their bare slug never changes) and builder calls
+ * without a policy are never cut.
+ */
+export function applyRoutedToldContextWindow(
+  entry: RawEntry,
+  model: CatalogModel | undefined,
+  policy: RoutedToldContextPolicy | undefined,
+): void {
+  if (!policy || !model || model.codexForwardNativeCapabilityAlias === true) return;
+  if (model.provider === COMBO_NAMESPACE && model.nativeAlias === true) return;
+  const window = typeof entry.context_window === "number" && entry.context_window > 0
+    ? entry.context_window
+    : resolveUnknownRoutedContextWindow(model.contextCap);
+  const told = model.provider === COMBO_NAMESPACE
+    ? model.toldContextWindow ?? window
+    : routedToldWindow(policy, model.provider, model.id, window, false);
+  if (told >= window) return;
+  // Keeps the uncut window for Claude Code, which reads the catalog and must not see the told one.
+  entry.opencodex_full_context_window = window;
+  entry.context_window = told;
+  entry.max_context_window = told;
+  if (typeof entry.auto_compact_token_limit === "number") {
+    entry.auto_compact_token_limit = clampAutoCompactTokenLimit(told, model.maxInputTokens, model.autoCompactTokenLimit);
+  }
+}
 
 export function finishUpstreamNativeEntry(clone: RawEntry, priority: number, contextCap?: NativeContextLimitsInput): RawEntry {
   if (priority !== 9) clone.priority = priority;
@@ -107,6 +158,7 @@ export function deriveEntry(
   model?: CatalogModel,
   exactComboSlugs: ReadonlySet<string> = new Set(),
   contextCap?: NativeContextLimitsInput,
+  routedToldContext?: RoutedToldContextPolicy,
 ): RawEntry {
   const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
   // Go exposes model-specific upstream enums; synthetic tiers mislead subagent overrides.
@@ -176,6 +228,7 @@ export function deriveEntry(
       }
       if (model) applyCatalogMetadata(e, model.provider, model.id, model.contextCap);
       applyCatalogModelMetadata(e, model);
+      applyRoutedToldContextWindow(e, model, routedToldContext);
       if (model?.catalogKind) e.opencodex_catalog_kind = model.catalogKind;
       // Additive only. `visibility` is untouched: an inactive row must still be OFFERED, which is
       // the whole point of #1711 — operator disable is what removes rows, and it stays a separate
@@ -230,6 +283,7 @@ export function deriveEntry(
   }
   if (model && isRouted) applyCatalogMetadata(entry, model.provider, model.id, model.contextCap);
   applyCatalogModelMetadata(entry, model);
+  if (isRouted) applyRoutedToldContextWindow(entry, model, routedToldContext);
   if (model?.catalogKind) entry.opencodex_catalog_kind = model.catalogKind;
   // Same additive stamp as the templated path above. A routed row that reaches the no-template
   // fallback is still a served row, so omitting it here would make the field depend on whether a

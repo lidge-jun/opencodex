@@ -3,6 +3,7 @@ import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { chmodSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { unlistedModelsToldContextWindowConfigError } from "./schema/unlisted-models-told-context-window";
 import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-retention";
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
@@ -140,6 +141,7 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, validated);
   if (retentionWarning) console.warn(retentionWarning);
   if (compactionRecoveryConfigError(rawParsed)) console.warn("⚠️  invalid compactionRecovery disabled; the original compaction failure is preserved");
+  if (unlistedModelsToldContextWindowConfigError(rawParsed)) console.warn("⚠️  invalid unlistedModelsToldContextWindow ignored; routed models without a configured window are told 40% of their context window");
   if (desktopCompatibilityConfigError(rawParsed)) console.warn("Invalid desktopCompatibility startup preference ignored; no desktop compatibility service will start automatically.");
   if (blockedModelRedirectsError(rawParsed)) console.warn("⚠️  invalid blockedModelRedirects ignored; provider routing remains available");
   if (mainAccountHardLockFallbackError(rawParsed)) console.warn("⚠️  invalid codexMainAccountHardLockFallback ignored; the main-account hard lock still refuses while blocked");

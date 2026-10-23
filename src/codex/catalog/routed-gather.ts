@@ -45,7 +45,7 @@ import {
 import type { FastPolicyAuthority } from "../../providers/fastwire";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../../providers/registry";
 import { parseAntigravityAvailableModels, registerAntigravityDiscoveredWireModels } from "../../providers/antigravity-models";
-import { applyProviderContextCap, providerContextCap, resolveUnknownRoutedContextWindow } from "../../providers/context-cap";
+import { providerContextCap } from "../../providers/context-cap";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { effectiveModelAliases } from "../../providers/default-aliases";
 import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
@@ -102,8 +102,9 @@ import type {
   CatalogTrustedOpenAiApiPolicySnapshot,
 } from "../convergence-types";
 import type { CatalogGatherProviderAuthOutcome, CatalogGatherProviderModelOutcome, GatherFlightCapture, ModelsAuthResolverFactory } from "./gather-capture";
-import { applyProviderConfigHints, configuredAutoCompactTokenLimit, configuredMaxInputTokens, configuredModelDisplayName, configuredReasoningSummarySupport, modelInputModalities, routedMaxOutputTokens, withVisionSidecarInput } from "./model-hints";
+import { applyProviderConfigHints, configuredAutoCompactTokenLimit, configuredMaxInputTokens, configuredModelDisplayName, configuredReasoningSummarySupport, modelInputModalities, routedMaxOutputTokens, routedToldContextPolicy, withVisionSidecarInput } from "./model-hints";
 import { resolveComboCatalogMember } from "./combo-member";
+import { routedToldWindow } from "./derive-entry";
 import { captureGatherFlight, captureTrustedOpenAiApiPolicy, gatherFlightKey, keyedGatherBytesIdentity, withCanonicalOpenAiForwardAuthDefault } from "./gather-capture";
 import { fetchProviderModelsWithAuth, observedModelsAuthResolver, refreshingModelsAuthResolver } from "./provider-models";
 
@@ -388,6 +389,8 @@ async function gatherRoutedModelsUncached(
     // exposure decision goes through shouldExposeRoutedModel (single choke point).
     .filter(shouldExposeRoutedModel);
   const memberByKey = new Map(all.map(model => [`${model.provider}/${model.id}`, model]));
+  // Keys of the native members injected below: their windows are the native told window.
+  const syntheticNativeKeys = new Set<string>();
   // [Decision Log]
   // - 목적과 의도: 콤보 타겟에 native OpenAI(Codex login) 모델이 포함될 때 카탈로그에서
   //   누락되는 버그(issue #268)를 수정. "openai" provider는 forward-auth(Codex login
@@ -447,7 +450,10 @@ async function gatherRoutedModelsUncached(
       const key = `openai/${slug}`;
       // Only inject when not already present from a routed provider (an API-key
       // "openai" provider could shadow the native one).
-      if (!memberByKey.has(key)) memberByKey.set(key, synthetic);
+      if (!memberByKey.has(key)) {
+        memberByKey.set(key, synthetic);
+        syntheticNativeKeys.add(key);
+      }
     }
   }
   // [Decision Log]
@@ -486,6 +492,7 @@ async function gatherRoutedModelsUncached(
       ...(custom.codexToolMode !== undefined ? { codexToolMode: custom.codexToolMode } : {}),
     });
   }
+  const toldPolicy = routedToldContextPolicy(config);
   for (const id of listComboIds(config)) {
     const combo = getCombo(config, id);
     if (!combo) continue;
@@ -527,6 +534,11 @@ async function gatherRoutedModelsUncached(
       .filter((member): member is CatalogModel => member !== undefined);
     const derived = deriveComboCatalogModel(id, combo, members);
     if (derived) {
+      // The combo's told window is the lowest told window among its members (never cut above its own window).
+      derived.toldContextWindow = Math.min(...members.map(member => {
+        const isNative = syntheticNativeKeys.has(`${member.provider}/${member.id}`);
+        return routedToldWindow(toldPolicy, member.provider, member.id, member.contextWindow!, isNative);
+      }));
       const nativeDefault = combo.nativeAlias && combo.alias
         ? nativeDefaultReasoningEffort(combo.alias)
         : undefined;

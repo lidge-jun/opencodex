@@ -478,9 +478,13 @@ export function readConnectedClaudeContextWindows(path = DEFAULT_CATALOG_PATH): 
       if (!row || typeof row !== "object" || Array.isArray(row)) continue;
       const entry = row as Record<string, unknown>;
       const slug = typeof entry.slug === "string" ? entry.slug : "";
-      const contextWindow = typeof entry.context_window === "number" && entry.context_window > 0
-        ? entry.context_window
+      // The full window (kept when a row is cut) or the provenance window is the real one; `context_window` may be the Codex-told (cut) window.
+      const provenance = entry.opencodex_capability_provenance;
+      const realWindow = provenance && typeof provenance === "object" && !Array.isArray(provenance)
+        ? (provenance as Record<string, unknown>).context_window
         : undefined;
+      const contextWindow = [entry.opencodex_full_context_window, realWindow, entry.context_window]
+        .find((value): value is number => typeof value === "number" && value > 0);
       if (!slug || contextWindow === undefined) continue;
       put(slug, contextWindow);
       const slash = slug.indexOf("/");

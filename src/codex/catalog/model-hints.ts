@@ -1,4 +1,5 @@
 import { canInferVendorContext, vendorContextInference } from "./vendor-context";
+import type { RoutedToldContextPolicy } from "./derive-entry";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { supportsConfiguredUltraFast } from "./configured-tiers";
@@ -170,6 +171,49 @@ export function configuredContextWindow(prov: OcxProviderConfig, id: string): nu
     ?? (prov.adapter === "anthropic" ? anthropicFamilyContextWindow(prov.modelContextWindows, id) : undefined)
     ?? prov.contextWindow;
   return typeof configured === "number" && configured > 0 ? configured : undefined;
+}
+
+/**
+ * Default percent of a routed model's context window told to Codex when the config sets no
+ * window for that model (`unlistedModelsToldContextWindow`). Codex compacts at
+ * min(model_auto_compact_token_limit, context_window * 9 / 10) (openai/codex
+ * codex-rs/protocol/src/openai_models.rs, `auto_compact_token_limit()`), so 40 compacts
+ * at 36% of the real window. OpenAI's Codex model catalog (2026-10) tells Codex 272,000 for
+ * models with a 1,050,000-token context (about 26%), and 500,000 for gpt-6.1-sol (about 48%).
+ */
+export const DEFAULT_UNLISTED_MODELS_TOLD_CONTEXT_WINDOW = 40;
+
+/** Whether the user's config sets this routed model's window (never a registry seed copied into config). */
+function hasExplicitConfiguredWindow(
+  config: Pick<OcxConfig, "providers" | "customModels">,
+  provider: string,
+  modelId: string,
+): boolean {
+  if (config.customModels?.some(model => model.provider === provider && model.modelId === modelId
+    && typeof model.contextWindow === "number" && model.contextWindow > 0)) return true;
+  const prov = config.providers?.[provider];
+  if (!prov) return false;
+  const user = configuredContextWindow(prov, modelId);
+  if (user === undefined) return false;
+  const seed = getProviderRegistryEntry(provider);
+  const seeded = seed
+    ? configuredContextWindow({ ...prov, contextWindow: seed.contextWindow, modelContextWindows: seed.modelContextWindows }, modelId)
+    : undefined;
+  return user !== seeded;
+}
+
+/** Build the told-window policy from the loaded config; a percent outside 0 < v <= 100 means the default. */
+export function routedToldContextPolicy(
+  config: Pick<OcxConfig, "providers" | "customModels" | "unlistedModelsToldContextWindow">,
+): RoutedToldContextPolicy {
+  const configured = config.unlistedModelsToldContextWindow;
+  const percent = typeof configured === "number" && Number.isFinite(configured) && configured > 0 && configured <= 100
+    ? configured
+    : DEFAULT_UNLISTED_MODELS_TOLD_CONTEXT_WINDOW;
+  return {
+    percent,
+    hasExplicitWindow: (provider, modelId) => hasExplicitConfiguredWindow(config, provider, modelId),
+  };
 }
 
 export function configuredInputModalities(prov: OcxProviderConfig, id: string): string[] | undefined {

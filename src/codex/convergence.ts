@@ -73,7 +73,7 @@ import {
   clampCatalogModelsToObservedCodexSupport,
   supportedCodexReasoningEffortsFromObservedCatalog,
 } from "./catalog/effort";
-import { suppressedSyntheticMaxCatalogSlugs } from "./catalog/model-hints";
+import { routedToldContextPolicy, suppressedSyntheticMaxCatalogSlugs } from "./catalog/model-hints";
 import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "./account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
@@ -342,6 +342,7 @@ function prepareCatalog(
     disabledNativeAccountSlugs: new Set(),
     multiAgentV2Enabled,
     openaiContextCap,
+    routedToldContext: routedToldContextPolicy(config),
   });
   const accountBoundEntries = accountSelectors.length === 0
     ? []

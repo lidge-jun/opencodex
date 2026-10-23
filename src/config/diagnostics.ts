@@ -7,6 +7,7 @@ import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
+import { unlistedModelsToldContextWindowConfigError } from "./schema/unlisted-models-told-context-window";
 import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-retention";
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
@@ -770,6 +771,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? managementIngressConfigError(value)
     ?? metricsExportConfigError(value)
     ?? serviceHealthRecoveryConfigError(value)
+    ?? unlistedModelsToldContextWindowConfigError(value)
     ?? skillsConfigError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);

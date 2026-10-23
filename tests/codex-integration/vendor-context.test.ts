@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import { createVendorContextLookup, vendorContextWindow, canInferVendorContext } from "../../src/codex/catalog/vendor-context";
-import { applyProviderConfigHints } from "../../src/codex/catalog/model-hints";
+import { applyProviderConfigHints, DEFAULT_UNLISTED_MODELS_TOLD_CONTEXT_WINDOW, routedToldContextPolicy } from "../../src/codex/catalog/model-hints";
 import { buildCatalogEntries, gatherRoutedModels } from "../../src/codex/catalog";
-import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { buildClaudeContextWindows } from "../../src/claude/context-windows";
-import type { CatalogModel } from "../../src/codex/catalog/parsing";
+import type { CatalogModel, RawEntry } from "../../src/codex/catalog/parsing";
+import type { RoutedToldContextPolicy } from "../../src/codex/catalog/derive-entry";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const provider: OcxProviderConfig = { adapter: "anthropic", baseUrl: "https://relay.invalid/v1", inferContextWindow: true };
@@ -192,5 +193,103 @@ describe("vendor context fallback", () => {
       expect(explicit.contextWindow).toBe(200_000);
       expect(explicit.contextWindowInference).toBeUndefined();
     }
+  });
+});
+
+describe("unlisted models told context window", () => {
+  const toldRows = (models: CatalogModel[], policy?: RoutedToldContextPolicy, gptSlugs: string[] = []) =>
+    buildCatalogEntries(null, gptSlugs, models, undefined, false, "default", new Set(), [], new Set(), new Set(), undefined, undefined, undefined, false, [], policy);
+  const relayRow = (rows: RawEntry[], slug: string) => rows.find(entry => entry.slug === slug)!;
+  const gatheredRows = async (config: OcxConfig) => toldRows(await gatherRoutedModels(config), routedToldContextPolicy(config));
+  const sized = { provider: "relay", id: "m1", contextWindow: 1_050_000 } as CatalogModel;
+  const relayProvider = { adapter: "openai-chat", baseUrl: "https://relay.invalid/v1", liveModels: false, models: ["m1"] } as OcxProviderConfig;
+
+  test("an unset routed model is told floor(percent / 100 x window), with max and compaction following", async () => {
+    const policy = routedToldContextPolicy({ providers: {} });
+    const rows = toldRows([sized, { provider: "relay", id: "no-window-x" }], policy);
+    const told = relayRow(rows, "relay/m1");
+    expect(told.context_window).toBe(420_000);
+    expect(told.max_context_window).toBe(420_000);
+    expect(told.auto_compact_token_limit).toBe(378_000);
+    const unknown = relayRow(rows, "relay/no-window-x");
+    expect(unknown.context_window).toBe(51_200);
+    expect(unknown.max_context_window).toBe(51_200);
+    // A combo is told the lowest told window of its members (gathered through the real path).
+    const twoUnset = { providers: { relay: relayProvider, relay2: relayProvider }, providerContextCaps: { relay: 1_050_000, relay2: 262_144 },
+      combos: { c1: { targets: [{ provider: "relay", model: "m1" }, { provider: "relay2", model: "m1" }] } } } as OcxConfig;
+    expect(relayRow(await gatheredRows(twoUnset), "combo/c1").context_window).toBe(104_857);
+    // A native member keeps its native window; the unset routed member is cut below it, so the combo keeps 272,000.
+    const mixed = { providers: { relay: relayProvider }, providerContextCaps: { relay: 1_050_000 },
+      combos: { c1: { targets: [{ provider: "openai", model: "gpt-6-luna" }, { provider: "relay", model: "m1" }] } } } as OcxConfig;
+    expect(relayRow(await gatheredRows(mixed), "combo/c1").context_window).toBe(272_000);
+    // An explicit 200,000 member stays 200,000; the unset 1,048,576 member would be told 419,430.
+    const explicit = { providers: { relay: relayProvider, relay2: relayProvider }, providerContextCaps: { relay2: 1_048_576 },
+      customModels: [{ provider: "relay", modelId: "m2", contextWindow: 200_000 }],
+      combos: { c1: { targets: [{ provider: "relay", model: "m2" }, { provider: "relay2", model: "m1" }] } } } as OcxConfig;
+    expect(relayRow(await gatheredRows(explicit), "combo/c1").context_window).toBe(200_000);
+  });
+
+  test("a window the user config sets is never cut", () => {
+    const configured = { adapter: "openai-chat", baseUrl: "https://relay.invalid/v1", modelContextWindows: { m1: 200_000 } } as OcxProviderConfig;
+    const policy = routedToldContextPolicy({ providers: { relay: configured } });
+    const row = relayRow(toldRows([{ provider: "relay", id: "m1", contextWindow: 200_000 }], policy), "relay/m1");
+    expect(row.context_window).toBe(200_000);
+    const provider = { adapter: "openai-chat", baseUrl: "https://relay.invalid/v1", contextWindow: 300_000 } as OcxProviderConfig;
+    expect(routedToldContextPolicy({ providers: { relay: provider } }).hasExplicitWindow("relay", "any")).toBe(true);
+    const custom = { id: "c1", provider: "relay", modelId: "m2", contextWindow: 300_000 };
+    expect(routedToldContextPolicy({ providers: {}, customModels: [custom] }).hasExplicitWindow("relay", "m2")).toBe(true);
+  });
+
+  test("a registry seed copied into the user config is not an explicit window", () => {
+    const [seedId, seedValue] = Object.entries(getProviderRegistryEntry("anthropic")!.modelContextWindows!)[0]!;
+    const withWindow = (window: number) => ({
+      adapter: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      modelContextWindows: { [seedId]: window },
+    }) as OcxProviderConfig;
+    expect(routedToldContextPolicy({ providers: { anthropic: withWindow(seedValue) } }).hasExplicitWindow("anthropic", seedId)).toBe(false);
+    expect(routedToldContextPolicy({ providers: { anthropic: withWindow(seedValue - 1) } }).hasExplicitWindow("anthropic", seedId)).toBe(true);
+  });
+
+  test("native OpenAI rows and Codex-forward aliases keep their windows", async () => {
+    const alias = { provider: "openai", id: "gpt-5.5", codexForwardNativeCapabilityAlias: true } as CatalogModel;
+    const shape = (rows: RawEntry[]) => rows.map(entry => [entry.slug, entry.context_window, entry.max_context_window, entry.auto_compact_token_limit]);
+    const withPolicy = toldRows([alias], routedToldContextPolicy({ providers: {} }), ["gpt-5.5"]);
+    const withoutPolicy = toldRows([alias], undefined, ["gpt-5.5"]);
+    expect(shape(withPolicy)).toEqual(shape(withoutPolicy));
+    // A bare native-alias combo is told its native window, not cut a second time.
+    const nativeAlias = { providers: { relay: relayProvider }, combos: { "gpt-6-luna": { nativeAlias: true, alias: "gpt-6-luna",
+      targets: [{ provider: "openai", model: "gpt-6-luna" }] } } } as OcxConfig;
+    const models = await gatherRoutedModels(nativeAlias);
+    const bare = (policy?: RoutedToldContextPolicy) => toldRows(models, policy).find(entry => entry.slug === "gpt-6-luna")!;
+    expect(bare(routedToldContextPolicy(nativeAlias)).context_window).toBe(272_000);
+    expect(bare(routedToldContextPolicy(nativeAlias)).context_window).toBe(bare(undefined).context_window);
+    // A native-alias fallback capped by the relay's context cap (200,000 < 272,000) is still the native window.
+    const cappedFallback = { providers: { relay: relayProvider }, providerContextCaps: { relay: 200_000 },
+      combos: { "gpt-6-luna": { nativeAlias: true, alias: "gpt-6-luna", targets: [{ provider: "relay", model: "m1" }] } } } as OcxConfig;
+    const capped = await gatherRoutedModels(cappedFallback);
+    const cappedBare = (policy?: RoutedToldContextPolicy) => toldRows(capped, policy).find(entry => entry.slug === "gpt-6-luna")!;
+    expect(cappedBare(routedToldContextPolicy(cappedFallback)).context_window).toBe(200_000);
+    expect(cappedBare(routedToldContextPolicy(cappedFallback)).context_window).toBe(cappedBare(undefined).context_window);
+  });
+
+  test("the percent defaults to 40 and follows a valid config value", () => {
+    expect(routedToldContextPolicy({ providers: {} }).percent).toBe(40);
+    expect(DEFAULT_UNLISTED_MODELS_TOLD_CONTEXT_WINDOW).toBe(40);
+    expect(routedToldContextPolicy({ providers: {}, unlistedModelsToldContextWindow: 25 }).percent).toBe(25);
+    const full = routedToldContextPolicy({ providers: {}, unlistedModelsToldContextWindow: 100 });
+    expect(relayRow(toldRows([sized], full), "relay/m1").context_window).toBe(1_050_000);
+  });
+
+  test("the capability provenance keeps the real window", () => {
+    const row = relayRow(toldRows([sized], routedToldContextPolicy({ providers: {} })), "relay/m1");
+    expect((row.opencodex_capability_provenance as Record<string, unknown>).context_window).toBe(1_050_000);
+    expect(row.opencodex_full_context_window).toBe(1_050_000);
+  });
+
+  test("no policy means no cut", () => {
+    const row = relayRow(toldRows([sized]), "relay/m1");
+    expect(row.context_window).toBe(1_050_000);
+    expect(row.auto_compact_token_limit).toBe(945_000);
   });
 });
