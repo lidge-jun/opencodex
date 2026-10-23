@@ -1726,7 +1726,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
     }
     const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name, {
-      oauthApiBaseUrl: snapshot?.apiBaseUrl,
+      oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy,
     });
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
