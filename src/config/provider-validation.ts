@@ -1,4 +1,5 @@
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { assertWorkBuddyDestination } from "../providers/workbuddy";
 import { resolveDshAccountMessagesUrl } from "../providers/dsh-account-destination";
 import { redactSecretString } from "../lib/redact";
 import {
@@ -421,6 +422,12 @@ export function credentialPinnedProviderConfigError(
   providerName: string,
   provider: { adapter?: unknown; baseUrl?: unknown },
 ): string | null {
+  if (providerName === "workbuddy-ai" || provider.adapter === "workbuddy-ai") {
+    if (provider.adapter !== undefined && provider.adapter !== "workbuddy-ai") return 'adapter must stay "workbuddy-ai"';
+    try { if (typeof provider.baseUrl === "string") assertWorkBuddyDestination(provider.baseUrl); }
+    catch { return "WorkBuddy AI credentials require https://www.workbuddy.ai/v2"; }
+    return null;
+  }
   if (providerName !== "dsh-account") return null;
   if (provider.adapter !== undefined && provider.adapter !== "dsh-account") {
     return 'adapter must stay "dsh-account": its account token is pinned to that adapter';

@@ -86,7 +86,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 104 total: 84 key-based, 16 OAuth, three local, and one default
+documented split is 105 total: 84 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
 quickstarts carry the same counts.
 
@@ -338,7 +338,7 @@ so the management route stays the single domain schema.
 
 The source runs on Bun, but the published package does **not** require a user-installed Bun.
 `package.json` `bin` points at `bin/ocx.mjs` (a Node shim), and the Bun runtime ships as the `bun`
-npm dependency pinned to `1.4.2` (esbuild-style: a tiny main package plus platform-specific `@oven/bun-*`
+npm dependency pinned to `1.4.4` (esbuild-style: a tiny main package plus platform-specific `@oven/bun-*`
 `optionalDependencies`, finalized by the dependency's own `postinstall: node install.js`).
 
 Invariants:

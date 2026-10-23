@@ -614,9 +614,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           }
           bufferBytes = nextBufferBytes;
 
-          const lines = buffer.split("\n");
+          const lines = decoded.includes("\n") ? buffer.split("\n") : [buffer];
           buffer = lines.pop() ?? "";
-          const residualBytes = budgetEncoder.encode(buffer).byteLength;
+          const residualBytes = lines.length ? budgetEncoder.encode(buffer).byteLength : bufferBytes;
           const residualReservation = budget.reserveTransient(residualBytes, { kind: "live_transient" });
           residualReservation.commitRetained();
           budget.releaseRetained(bufferBytes, { kind: "live_transient" });

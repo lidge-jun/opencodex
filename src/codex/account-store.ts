@@ -12,13 +12,15 @@ import {
   backupInvalidConfig,
   hardenConfigDir,
   hardenExistingSecret,
+  loadConfig,
   withConfigMutationLockSync,
 } from "../config";
 import { notifyCodexStoreLoaded } from "../lib/decision-quota-sink";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
-import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
+import type { CodexAccount, CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import { isValidCodexAccountId } from "./account-id";
+import { codexAccountLogLabel, fallbackCodexAccountLogLabel } from "./account-label";
 import type { PoolQuotaWriter } from "./quota-types";
 import { CODEX_REFRESH_FLIGHT_CEILING_MS } from "./quota-recovery-timing";
 
@@ -181,6 +183,18 @@ function persist(store: CodexAccountStore): void {
 function persistCredentialMutation(store: CodexAccountStore): void {
   persist(store);
   advanceCodexCredentialMutationEpoch();
+}
+
+/**
+ * The durable `p<hex6>` label the dashboard and usage log show for this pool account, so a refresh
+ * failure line can be matched to the account row (#7592). The id hash is only the label of a
+ * legacy row that never received one. A config read failure must not replace the refresh error
+ * being reported, so it degrades to that same hash.
+ */
+function poolAccountLogLabel(id: string): string {
+  let account: CodexAccount | undefined;
+  try { account = loadConfig().codexAccounts?.find(row => row.id === id); } catch { account = undefined; }
+  return account ? codexAccountLogLabel(account) : fallbackCodexAccountLogLabel(id);
 }
 
 /**
@@ -1055,7 +1069,7 @@ export async function forceRefreshCodexPoolToken(
       if (isTerminalCodexPoolRefreshFailure(error) || isOperationalCodexPoolRefreshFailure(error)) {
         if (isTerminalCodexPoolRefreshFailure(error)) clearCodexPoolRefreshFailure(id);
       } else {
-        noteCodexPoolRefreshFailure(id, classifyCodexPoolRefreshFailureReason(error), undefined, refreshFence);
+        noteCodexPoolRefreshFailure(id, classifyCodexPoolRefreshFailureReason(error), undefined, refreshFence, poolAccountLogLabel);
       }
       settle({ kind: "failed", error });
     },
@@ -1376,7 +1390,7 @@ async function resolveCodexToken(
         .catch(() => undefined);
       const failure = classifyChatgptRefreshFailure(res.status, body?.displaySafe ? body.text : "");
       const { reason } = failure;
-      noteChatgptRefreshFailure("pool", res.status, failure);
+      noteChatgptRefreshFailure("pool", res.status, failure, poolAccountLogLabel(id));
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`, res.status, failure.code);
     }
     const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };

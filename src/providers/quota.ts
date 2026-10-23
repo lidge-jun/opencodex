@@ -369,6 +369,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
     case "kimi": result = await fetchKimiQuota(provider, config, accessToken); break;
     case "command-code": result = await fetchCommandCodeQuota(provider, config, accessToken); break;
     case "devin": result = await (await import("./quota/devin")).fetchDevinQuota(provider, accessToken, credential.apiBaseUrl, config.baseUrl); break;
+    case "workbuddy-ai": result = await (await import("./quota/workbuddy")).fetchWorkBuddyQuota(provider, credential); break;
     case "dsh-account": result = await (await import("./quota/dsh-account")).fetchDshAccountQuota(provider, accessToken, { accountId, credential }); break;
     default: return null;
   }
