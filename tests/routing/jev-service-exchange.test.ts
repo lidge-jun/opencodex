@@ -1,3 +1,4 @@
+import { isDecisionsEndpoint, jevDecisionEndpointUrl } from "../../src/combos/jev-decision-contract";
 import { describe, expect, test } from "bun:test";
 import { parseJevDecision, resolveJevDecision, type JevCandidate } from "../../src/combos/jev";
 import {
@@ -492,6 +493,12 @@ describe("bounded JEV service exchange", () => {
       expect(sent.map(request => request.url)).toEqual([expected, expected]);
       expect(direct).toEqual({ value: answer });
       expect(route.gate).toBe("apply");
+    });
+
+    test("rewrites ai-gateway.vercel.sh endpoint to /decisions", () => {
+      expect(jevDecisionEndpointUrl("https://ai-gateway.vercel.sh/v1/systemone")).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+      expect(jevDecisionEndpointUrl("https://ai-gateway.vercel.sh/v1")).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+      expect(isDecisionsEndpoint("https://ai-gateway.vercel.sh/v1/decisions")).toBeTrue();
     });
 
     test("the request body does not depend on the endpoint path", async () => {

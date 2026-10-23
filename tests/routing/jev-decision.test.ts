@@ -359,6 +359,29 @@ describe("JEV decision parser", () => {
     });
   });
 
+  test("accepts Vercel decisions array-format answers and array probabilities", () => {
+    const payload = {
+      answers: [
+        {
+          name: "route",
+          type: "choice",
+          value: "openai/gpt-6-astra:high",
+          probabilities: [
+            { value: "openai/gpt-6-astra:medium", probability: 0.1 },
+            { value: "openai/gpt-6-astra:high", probability: 0.7 },
+            { value: "openai/gpt-5.6-sol:low", probability: 0.2 },
+          ],
+        },
+      ],
+    };
+
+    expect(parseJevDecision(payload, candidates)).toEqual({
+      targetKey: "openai/gpt-6-astra",
+      effort: "high",
+      chosenProbability: 0.7,
+    });
+  });
+
   test("treats malformed confidence as absent without weakening the route choice", () => {
     expect(parseJevDecision({
       answers: { route: { choice: "openai/gpt-5.6-sol:low", confidence: 2 } },
