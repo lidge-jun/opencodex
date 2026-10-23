@@ -49,6 +49,7 @@ The wire surfaces a client actually talks to.
 | [`local-messaging.md`](local-messaging.md) | Command-local metadata discovery, Unix RPC queued submission, peer envelopes, receipts and owned lifecycle bounds. |
 | [`transports/byte-accounting.md`](transports/byte-accounting.md) | Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget, plus durable spill admission. |
 | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) | One-shot exact signature-binding recovery before output, and successful-retry memo boundaries. |
+| [`transports/response-citations.md`](transports/response-citations.md) | OpenAI-operated outbound citation repair and generated JSON/SSE annotation titles. |
 | [`transports/responses.md`](transports/responses.md) | The Responses HTTP/SSE endpoint, dispatch, credential and upload boundaries, and core module ownership. |
 | [`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md) | Optional native reasoning ciphertext forwarding on model/account switches, configuration and management controls. |
 | [`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md) | Mixed-wire model defaults, xAI agent-message continuation, declared-tool membership, and passthrough SSE stream shapes. |
@@ -177,13 +178,14 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/adapters/openai-chat.ts` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
 | `src/adapters/openai-chat/` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
+| `src/adapters/openai-responses/` | [`transports/response-citations.md`](transports/response-citations.md) |
 | `src/adapters/openai-responses/opengateway-input.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/adapters/openai-responses/passthrough.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/adapters/workbuddy-schema.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/adapters/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/advisor/` | [`advisor.md`](advisor.md) |
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
-| `src/bridge/` | [`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
+| `src/bridge/` | [`transports/response-citations.md`](transports/response-citations.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
 | `src/chat/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/chat/reasoning-details.ts` | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) |
 | `src/chatgpt/` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |

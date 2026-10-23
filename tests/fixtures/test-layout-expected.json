@@ -1120,7 +1120,7 @@
   "responses-parser.test.ts": "responses", "responses-passthrough-transient-policy.test.ts": "responses",
   "responses-pool-401-refresh.test.ts": "responses", "responses-pool-refresh-attribution.test.ts": "responses",
   "responses-preview-main-read-fence.test.ts": "responses", "responses-reasoning-effort-downgrade.test.ts": "responses", "responses-native-ultra-effort-wire.test.ts": "responses",
-  "responses-reasoning-summary-passthrough.test.ts": "responses", "responses-reset-replay.test.ts": "responses",
+  "responses-url-citation-title-repair.test.ts": "responses", "responses-reasoning-summary-passthrough.test.ts": "responses", "responses-reset-replay.test.ts": "responses",
   "responses-translated-reset.test.ts": "responses", "responses-routed-web-search-fields.test.ts": "responses",
   "responses-self-named-namespace-scrub.test.ts": "responses", "responses-send-budget-counts.test.ts": "responses",
   "responses-send-budget-errors.test.ts": "responses", "responses-memory-models.test.ts": "responses",
