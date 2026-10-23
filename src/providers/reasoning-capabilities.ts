@@ -7,15 +7,27 @@ export const REASONING_CAPABILITY_FIELDS = [
   "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled",
 ] as const;
 
-/** Exact model declarations merge per axis; unrelated operator axes retain registry defaults. */
+/** Case-equal model declarations merge per axis; unrelated axes retain registry defaults. */
 export function mergeReasoningModelCapabilities(
   registry: Record<string, ModelCapabilities> | undefined,
   explicit: Record<string, ModelCapabilities> | undefined,
 ): Record<string, ModelCapabilities> | undefined {
   if (!registry && !explicit) return undefined;
-  const merged: Record<string, ModelCapabilities> = structuredClone(registry ?? {});
-  for (const [id, row] of Object.entries(explicit ?? {})) merged[id] = { ...merged[id], ...structuredClone(row) };
+  const merged: Record<string, ModelCapabilities> = {};
+  const keys = new Map<string, string>();
+  for (const rows of [registry, explicit]) {
+    for (const [id, row] of Object.entries(rows ?? {})) {
+      const key = keys.get(id.toLowerCase()) ?? id;
+      keys.set(id.toLowerCase(), key);
+      merged[key] = { ...merged[key], ...structuredClone(row) };
+    }
+  }
   return merged;
+}
+
+/** Match a declared model case-insensitively, without inheriting suffix or family aliases. */
+export function declaredModelCapabilities(rows: Readonly<Record<string, ModelCapabilities>> | undefined, modelId: string): ModelCapabilities | undefined {
+  return rows?.[modelId] ?? Object.entries(rows ?? {}).find(([id]) => id.toLowerCase() === modelId.toLowerCase())?.[1];
 }
 
 /** Captured-policy variant: never reads the live registry after admission. */
@@ -23,7 +35,7 @@ export function reasoningCapabilitiesFromConfig(provider: Readonly<OcxProviderCo
   if (modelInList(provider.noReasoningModels, modelId)) {
     return { supportsReasoning: false, supportsThinkingToggle: false, supportsReasoningEffort: false, defaultThinkingEnabled: false };
   }
-  const declared = provider.modelCapabilities?.[modelId];
+  const declared = declaredModelCapabilities(provider.modelCapabilities, modelId);
   const result: ReasoningCapabilities = {};
   for (const field of REASONING_CAPABILITY_FIELDS) {
     if (typeof declared?.[field] === "boolean") result[field] = declared[field];

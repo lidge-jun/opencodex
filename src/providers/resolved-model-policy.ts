@@ -1,5 +1,5 @@
 import type { ModelCapabilities, OcxProviderConfig, ReasoningCapabilities } from "../types";
-import { mergeReasoningModelCapabilities, reasoningCapabilitiesFromConfig, REASONING_CAPABILITY_FIELDS } from "./reasoning-capabilities";
+import { declaredModelCapabilities, mergeReasoningModelCapabilities, reasoningCapabilitiesFromConfig, REASONING_CAPABILITY_FIELDS } from "./reasoning-capabilities";
 import { MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "./openai-tiers";
 import { resolveProviderAuthTransport } from "./fastwire";
@@ -332,10 +332,9 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     ...providerPolicy,
     adapter: providerPolicy.adapter ?? provider.adapter,
     baseUrl: providerPolicy.baseUrl ?? provider.baseUrl,
-    ...(input.modelCapabilities ? { modelCapabilities: {
-      ...providerPolicy.modelCapabilities,
-      [input.modelId]: { ...providerPolicy.modelCapabilities?.[input.modelId], ...input.modelCapabilities },
-    } } : {}),
+    ...(input.modelCapabilities ? { modelCapabilities: mergeReasoningModelCapabilities(
+      providerPolicy.modelCapabilities, { [input.modelId]: input.modelCapabilities },
+    ) } : {}),
   }, input.modelId);
   const modelReasoningEfforts = reasoningCapabilities.supportsReasoningEffort === false ? []
     : modelValue(providerPolicy.modelReasoningEfforts) ?? providerPolicy.reasoningEfforts;
@@ -375,8 +374,8 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   };
   for (const field of REASONING_CAPABILITY_FIELDS) {
     modelProvenance[field] = reasoningCapabilities[field] === undefined ? "unknown"
-      : input.modelCapabilities?.[field] !== undefined || provider.modelCapabilities?.[input.modelId]?.[field] !== undefined
-        ? "operator-capability" : entry?.modelCapabilities?.[input.modelId]?.[field] !== undefined ? "registry" : "operator";
+      : input.modelCapabilities?.[field] !== undefined || declaredModelCapabilities(provider.modelCapabilities, input.modelId)?.[field] !== undefined
+        ? "operator-capability" : declaredModelCapabilities(entry?.modelCapabilities, input.modelId)?.[field] !== undefined ? "registry" : "operator";
   }
   modelProvenance.contextWindow = modelOrProviderSource(provider.modelContextWindows, entry?.modelContextWindows, provider.contextWindow, entry?.contextWindow);
   if (modelProvenance.contextWindow === "unknown" && familyContextWindow !== undefined) {

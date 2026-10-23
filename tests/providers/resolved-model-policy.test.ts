@@ -888,6 +888,22 @@ describe("independent reasoning policy", () => {
     expect(policy.provenance.model.supportsReasoningEffort).toBe("registry");
     expect(entry.modelCapabilities?.[id]?.supportsThinkingToggle).toBe(true);
   });
+  test.each(["synthetic-reasoner", "SYNTHETIC-REASONER"])("case-varied capability overrides remain authoritative for %s", modelId => {
+    const provider: OcxProviderConfig = { adapter: entry.adapter, baseUrl: entry.baseUrl,
+      modelCapabilities: { [id.toUpperCase()]: { supportsThinkingToggle: false, defaultThinkingEnabled: false } } };
+    const policy = resolveModelPolicy({ providerName: "synthetic", modelId, provider, registryEntry: entry, transportMatchedRegistry: true });
+    expect(policy.model).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: false,
+      supportsReasoningEffort: false, defaultThinkingEnabled: false });
+    expect(policy.provenance.model.supportsThinkingToggle).toBe("operator-capability");
+    expect(policy.provenance.model.supportsReasoningEffort).toBe("registry");
+    expect(Object.keys(policy.provider.modelCapabilities ?? {})).toHaveLength(1);
+    const overlay = resolveModelPolicy({ providerName: "synthetic", modelId, provider, registryEntry: entry,
+      transportMatchedRegistry: true, modelCapabilities: { defaultThinkingEnabled: true } });
+    expect(overlay.model).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: false,
+      supportsReasoningEffort: false, defaultThinkingEnabled: true });
+    expect(entry.modelCapabilities?.[id]?.supportsThinkingToggle).toBe(true);
+    expect(provider.modelCapabilities?.[id.toUpperCase()]).toEqual({ supportsThinkingToggle: false, defaultThinkingEnabled: false });
+  });
   test("noReasoningModels remains authoritative over every independent declaration", () => {
     const provider: OcxProviderConfig = { adapter: entry.adapter, baseUrl: entry.baseUrl, noReasoningModels: [id] };
     const policy = resolveModelPolicy({ providerName: "synthetic", modelId: id, provider, registryEntry: entry, transportMatchedRegistry: true });
