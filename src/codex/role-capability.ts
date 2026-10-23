@@ -35,6 +35,8 @@ const DOMAIN_TABLES: Record<SizingDomain, DomainTable> = {
 };
 
 const FETCH_TIMEOUT_MS = 30_000;
+/** Each published table is under 1 MB today; 16 MB leaves room to grow and still bounds memory. */
+export const MAX_TABLE_BYTES = 16 * 1024 * 1024;
 
 export interface CapabilityTable {
   readonly publishedAt: string | null;
@@ -72,11 +74,36 @@ export function capabilityTableFromRows(rowsByConfig: ReadonlyMap<string, readon
   return { publishedAt, domains };
 }
 
+/** The body's bytes, refused once they pass maxBytes, whatever the transport declared. */
+export async function readBoundedBytes(response: Response, maxBytes: number): Promise<ArrayBuffer> {
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  const reader = response.body?.getReader();
+  if (!reader) return new ArrayBuffer(0);
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (length + value.byteLength > maxBytes) {
+      await reader.cancel();
+      throw new Error("response exceeded byte bound");
+    }
+    chunks.push(value);
+    length += value.byteLength;
+  }
+  const out = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out.buffer;
+}
+
 async function readLatest(config: string, fetchImpl: typeof fetch): Promise<LeaderboardRow[]> {
   const url = `${CAPABILITY_SOURCE.url}/resolve/main/${config}/latest-00000-of-00001.parquet`;
   const response = await fetchImpl(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return await parquetReadObjects({ file: await response.arrayBuffer() }) as LeaderboardRow[];
+  return await parquetReadObjects({ file: await readBoundedBytes(response, MAX_TABLE_BYTES) }) as LeaderboardRow[];
 }
 
 export async function fetchCapabilityTable(fetchImpl: typeof fetch = fetch): Promise<CapabilityTable> {
