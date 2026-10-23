@@ -91,6 +91,7 @@ export interface ManagementApiDeps {
   fetchAllModels?: (config: OcxConfig) => Promise<CatalogModel[]>;
   /** Codex role auto-assign's one sizing model call; route tests answer it without a provider. */
   completeCodexRoleSizing?: import("./codex-role-auto-assign").CompleteRoleSizing;
+  loadCodexRoleCapability?: import("../../codex/role-capability").LoadCapability;
   /**
    * Writer seam for the Grok toggle: lets a test place the file in any state
    * between the pre-write recheck and the write itself (the r8 post-inspection

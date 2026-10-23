@@ -70,6 +70,7 @@ export async function handleCodexAgentRoleRoutes(ctx: ManagementContext): Promis
         ...(typeof body?.model === "string" ? { sizingModel: body.model } : {}),
         fetchAllModels: deps.fetchAllModels ?? fetchAllModels,
         ...(deps.completeCodexRoleSizing ? { completeRoleSizing: deps.completeCodexRoleSizing } : {}),
+        ...(deps.loadCodexRoleCapability ? { loadCapability: deps.loadCodexRoleCapability } : {}),
       }), 200, req, config);
     } catch (error) {
       if (error instanceof NoSizingModelError) {
