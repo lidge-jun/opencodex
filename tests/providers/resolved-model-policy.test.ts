@@ -904,10 +904,15 @@ describe("independent reasoning policy", () => {
     expect(entry.modelCapabilities?.[id]?.supportsThinkingToggle).toBe(true);
     expect(provider.modelCapabilities?.[id.toUpperCase()]).toEqual({ supportsThinkingToggle: false, defaultThinkingEnabled: false });
   });
-  test("noReasoningModels remains authoritative over every independent declaration", () => {
-    const provider: OcxProviderConfig = { adapter: entry.adapter, baseUrl: entry.baseUrl, noReasoningModels: [id] };
-    const policy = resolveModelPolicy({ providerName: "synthetic", modelId: id, provider, registryEntry: entry, transportMatchedRegistry: true });
+  test.each(["operator", "registry"])("%s noReasoningModels remains authoritative over every independent declaration", source => {
+    const provider: OcxProviderConfig = { adapter: entry.adapter, baseUrl: entry.baseUrl,
+      modelCapabilities: { [id]: { supportsThinkingToggle: true } },
+      ...(source === "operator" ? { noReasoningModels: [id] } : {}) };
+    const registryEntry = source === "registry" ? { ...entry, noReasoningModels: [id] } : entry;
+    const policy = resolveModelPolicy({ providerName: "synthetic", modelId: id, provider, registryEntry, transportMatchedRegistry: true });
     expect(policy.model).toMatchObject({ supportsReasoning: false, supportsThinkingToggle: false,
       supportsReasoningEffort: false, defaultThinkingEnabled: false, reasoningEfforts: [] });
+    expect(policy.provenance.model).toMatchObject({ supportsReasoning: source, supportsThinkingToggle: source,
+      supportsReasoningEffort: source, defaultThinkingEnabled: source });
   });
 });

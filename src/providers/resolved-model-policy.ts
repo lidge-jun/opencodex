@@ -1,6 +1,6 @@
 import type { ModelCapabilities, OcxProviderConfig, ReasoningCapabilities } from "../types";
 import { declaredModelCapabilities, mergeReasoningModelCapabilities, reasoningCapabilitiesFromConfig, REASONING_CAPABILITY_FIELDS } from "./reasoning-capabilities";
-import { MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
+import { MODEL_ADAPTER_OVERRIDE_ALLOWED, modelInList, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "./openai-tiers";
 import { resolveProviderAuthTransport } from "./fastwire";
 import { fastSwitchOff } from "./fast-opt-in";
@@ -374,6 +374,8 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   };
   for (const field of REASONING_CAPABILITY_FIELDS) {
     modelProvenance[field] = reasoningCapabilities[field] === undefined ? "unknown"
+      : modelInList(provider.noReasoningModels, input.modelId) ? "operator"
+      : modelInList(entry?.noReasoningModels, input.modelId) ? "registry"
       : input.modelCapabilities?.[field] !== undefined || declaredModelCapabilities(provider.modelCapabilities, input.modelId)?.[field] !== undefined
         ? "operator-capability" : declaredModelCapabilities(entry?.modelCapabilities, input.modelId)?.[field] !== undefined ? "registry" : "operator";
   }
