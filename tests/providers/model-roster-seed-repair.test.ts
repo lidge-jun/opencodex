@@ -44,10 +44,11 @@ describe("DeepSeek Pro saved roster refresh", () => {
     expect(projectStaleModelRosters(config).changed).toBe(false);
   });
 
-  test("preserves explicit Pro context and absent metadata containers", () => {
+  test.each(["deepseek-v4-pro", "DeepSeek-V4-Pro"])("preserves explicit Pro context under %s and absent metadata containers", (key) => {
     const config = configFor();
-    config.providers!.deepseek!.modelContextWindows!["deepseek-v4-pro"] = 123;
-    expect(projectStaleModelRosters(config).config.providers!.deepseek!.modelContextWindows!["deepseek-v4-pro"]).toBe(123);
+    config.providers!.deepseek!.modelContextWindows![key] = 123;
+    const windows = { ...config.providers!.deepseek!.modelContextWindows };
+    expect(projectStaleModelRosters(config).config.providers!.deepseek!.modelContextWindows).toEqual(windows);
     const absent = configFor();
     delete absent.providers!.deepseek!.modelContextWindows;
     expect(projectStaleModelRosters(absent).config.providers!.deepseek!.modelContextWindows).toBeUndefined();

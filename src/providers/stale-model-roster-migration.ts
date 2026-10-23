@@ -29,6 +29,7 @@ import {
   MINIMAX_MODEL_CONTEXT_WINDOWS,
 } from "./registry/model-seeds";
 import type { OcxConfig } from "../types";
+import { modelRecordValue } from "../reasoning-effort";
 
 export interface StaleModelRoster {
   /** Registry provider id whose saved rows may carry the old roster. */
@@ -128,7 +129,7 @@ function fillExisting<T>(container: Record<string, T> | undefined, values: Reado
   let filled = false;
   for (const id of ids) {
     const value = values[id];
-    if (value !== undefined && !Object.prototype.hasOwnProperty.call(container, id)) {
+    if (value !== undefined && modelRecordValue(container, id) === undefined) {
       container[id] = value;
       filled = true;
     }
