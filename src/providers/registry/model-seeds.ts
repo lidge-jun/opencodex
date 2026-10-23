@@ -377,8 +377,8 @@ export const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus
 /*
  * DeepSeek moved the whole V4 name set on 2026-09-10. V4.1-Flash ships as deepseek-flash
  * on the first-party API; deepseek-v4-flash and the vision preview retire as models but
- * keep routing there as compatibility aliases, and deepseek-v4-pro follows from
- * 2026-09-14 04:00 UTC. Evidence: https://api-docs.deepseek.com/news/news260910/.
+ * keep routing there as compatibility aliases. V4 Pro remains available: the planned
+ * retirement was withdrawn. Evidence: https://api-docs.deepseek.com/updates/ (2026-10-23).
  *
  * The spelling differs by who serves it, so one shared list cannot express it: the
  * first-party API answers to deepseek-flash, while the Zen gateway exposes the route as
@@ -388,15 +388,10 @@ export const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus
  */
 export const DEEPSEEK_V4_LEGACY_MODELS = ["deepseek-v4-flash"];
 /*
- * `deepseek-v4-pro` is deliberately absent from both live sets. DeepSeek retires it from
- * 2026-09-14 04:00 UTC and routes its requests to V4.1-Flash until a V4.1 Pro exists, so a
- * row here would advertise a Pro context window and Pro pricing for a route that serves
- * Flash. The retirement is followed through every roster in this file, including the
- * vendor-hosted ones; providers that discover their models live are handled by
- * `ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS` because deleting a row there removes the
- * model's capabilities rather than the model.
+ * The official API continues serving V4 Pro after September 14 with unchanged billing.
+ * Gateway availability is independent; restoring the native set does not change gateway rosters.
  */
-export const DEEPSEEK_NATIVE_THINKING_MODELS = ["deepseek-flash", "deepseek-v4-flash"];
+export const DEEPSEEK_NATIVE_THINKING_MODELS = ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"];
 export const DEEPSEEK_GATEWAY_THINKING_MODELS = ["deepseek-v4.1-flash", "deepseek-v4-flash"];
 /*
  * DeepSeek's legacy vision preview id (released 2026-08-21). First-party probes

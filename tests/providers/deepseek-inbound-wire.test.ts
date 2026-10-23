@@ -112,6 +112,12 @@ function deepseekReasoningProvider(): OcxProviderConfig {
 }
 
 describe("DeepSeek wire selection is scoped to the inbound protocol", () => {
+  test("restored Pro preserves native Responses and translated Chat dispatch", () => {
+    for (const inbound of ["responses", "chat", "anthropic"] as const) {
+      expect(resolveWireProtocolOverride("deepseek", "deepseek-v4-pro", deepseekProvider(), inbound).adapter)
+        .toBe(inbound === "responses" ? "openai-responses" : "openai-chat");
+    }
+  });
   test("a Responses inbound rides the native Responses wire", () => {
     const resolved = resolveWireProtocolOverride("deepseek", MODEL, deepseekProvider(), "responses");
     expect(resolved.adapter).toBe("openai-responses");
