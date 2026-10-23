@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CODE_SIGNING_FOOTER,
   buildReleaseNotes,
   categoryForTitle,
   hasRenderedPullReference,
@@ -491,6 +492,21 @@ describe("buildReleaseNotes", () => {
 
     expect(result.errors).toEqual([]);
     expect(result.releasableCommitCount).toBe(0);
+  });
+  test("ends every release body with the SignPath code signing attribution", () => {
+    // SignPath Foundation requires the policy link and attribution on the download page,
+    // which for OpenCodex is the GitHub release page.
+    const result = buildReleaseNotes({
+      version: "1.1.0", tags: ["v1.0.0"], npmMetadata: "", repository: "lidge-jun/opencodex",
+      generatedNotes: "",
+      commits: [commit("a", "fix(api): preserve release coverage (#10)", [
+        { number: 10, title: "fix(api): preserve release coverage", author: "alice", labels: ["bug"], merged: true },
+      ])],
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.body.trimEnd().endsWith(CODE_SIGNING_FOOTER)).toBe(true);
+    expect(result.body).toContain("https://opencodex.me/reference/code-signing/");
+    expect(result.body).toContain("certificate by [SignPath Foundation](https://signpath.org/)");
   });
   test("sanitizes direct-commit subjects so they cannot inject mentions or media", () => {
     // Commit subjects are author-controlled text rendered as release Markdown.

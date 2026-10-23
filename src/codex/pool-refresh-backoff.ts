@@ -125,6 +125,8 @@ export function noteCodexPoolRefreshFailure(
   reason: string,
   now = currentNow(),
   fence?: string,
+  // Resolved only when a line is actually written; the caller knows the account's durable label.
+  logLabel: (accountId: string) => string = fallbackCodexAccountLogLabel,
 ): { consecutiveFailures: number; cooldownUntil: number; openedWindow: boolean } {
   const existing = backoffByAccount.get(accountId);
   // A flight that started before the account's failures were cleared is speaking for a grant
@@ -153,7 +155,7 @@ export function noteCodexPoolRefreshFailure(
   const consecutiveFailures = (existing?.consecutiveFailures ?? 0) + 1;
   const cooldownUntil = now + delayFor(consecutiveFailures);
   backoffByAccount.set(accountId, { consecutiveFailures, cooldownUntil, reason });
-  const label = fallbackCodexAccountLogLabel(accountId);
+  const label = logLabel(accountId);
   console.warn(
     `[codex-auth] Codex pool account ${label} credential refresh failed (${reason})`,
   );

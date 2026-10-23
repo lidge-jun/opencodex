@@ -243,8 +243,19 @@ function renderReleaseNotes(input: {
   }
 
   parts.push(changelog.join("\n").replace(/\n+$/, ""));
+  parts.push(CODE_SIGNING_FOOTER);
   return parts.join("\n\n").replace(/\n+$/, "") + "\n";
 }
+
+// SignPath Foundation's terms require the code signing policy and the SignPath attribution on the
+// download page. The GitHub release page is where every Windows download is published, so every
+// release body carries both, whether or not that release's Windows files ended up signed.
+export const CODE_SIGNING_FOOTER = [
+  "## Code signing",
+  "",
+  "Windows binaries follow the [code signing policy](https://opencodex.me/reference/code-signing/).",
+  "Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).",
+].join("\n");
 
 export function buildReleaseNotes(input: {
   version: string;

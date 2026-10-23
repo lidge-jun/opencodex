@@ -1,4 +1,5 @@
-import { fetchBoundLinkRelay, LinkRelayAuthenticationError } from "./link-relay-transport";
+import { randomUUID } from "node:crypto";
+import { fetchBoundLinkRelay, LinkRelayAuthenticationError, LinkRelayAuthTimeoutError } from "./link-relay-transport";
 import { homeUnreachableBody } from "./home-unreachable";
 import {
   boundedRelayResponseStream,
@@ -6,6 +7,7 @@ import {
   headersWithinLimit,
   validateHubRelayRequestHeaders,
 } from "./hub-relay";
+import type { LinkDiagnosticRecord, LinkDiagnosticSink } from "../link/diagnostics";
 import { linkRouteAllowed } from "../link/routes";
 import { isLinkPort } from "../link/ports";
 import { resolveInboundBodyLimitBytes } from "../server/request-decompress";
@@ -26,14 +28,23 @@ export interface LinkRelayClock {
   clearTimeout: typeof clearTimeout;
 }
 
+/** A fresh admission verdict plus optional diagnostic evidence; metadata never grants admission. */
+export interface LinkAdmissionResult {
+  kind: "match" | "mismatch" | "lookup_error" | "deadline" | "stale" | "identity_unknown" | "identity_mismatch" | "unavailable";
+  elapsedMs?: number;
+  generation?: number;
+  state?: string;
+  checkId?: string;
+}
+
 /**
  * The Child's tunnel as the relay sees it (the client link supervisor implements it). A request
  * waits on it only while the tunnel is being (re)established. Every relayed fetch waits for a
  * fresh bounded asynchronous ownership proof, including after a reconnect or refused retry.
  */
 export interface LinkTunnelGate {
-  /** True only while a keyed probe has established this live tunnel. */
-  connected(): boolean | Promise<boolean>;
+  /** Admission and its evidence are returned together; only match permits a fetch. */
+  connected(context?: { requestId?: string }): LinkAdmissionResult | Promise<LinkAdmissionResult>;
   /** True while the tunnel is connecting or reconnecting. */
   pending(): boolean;
   /**
@@ -51,12 +62,13 @@ export interface LinkTunnelGate {
  * supervisor, and a relay with no gate at all still refuses every request.
  */
 export const HOME_INITIATED_LINK_TUNNEL: LinkTunnelGate = {
-  connected: () => true,
+  connected: () => ({ kind: "match" }),
   pending: () => false,
   waitForConnected: async () => false,
 };
 
 export interface LinkRelayDeps {
+  diagnostic?: LinkDiagnosticSink;
   /** Trusted complete-send test seam. Production always uses the connection-bound transport. */
   fetchImpl?: typeof fetch;
   clock?: LinkRelayClock;
@@ -136,6 +148,7 @@ function relayAuthenticationFailed(error: string): Response {
   });
 }
 
+/** Preserve path/query on a fixed IPv4 loopback origin; throw when the tunnel port is invalid. */
 export function linkRelayDestination(url: URL, target: Pick<LinkRelayTarget, "tunnelPort">): string {
   if (!isLinkPort(target.tunnelPort)) {
     throw new RangeError("invalid link tunnel port");
@@ -180,6 +193,7 @@ function linkRequestHeaders(
   return headers;
 }
 
+/** Drop hop-by-hop and stale length/encoding headers before exposing the decoded response. */
 export function sanitizeLinkResponseHeaders(source: Headers): Headers {
   const connectionNamed = new Set((source.get("connection") ?? "")
     .split(",").map(value => value.trim().toLowerCase()).filter(Boolean));
@@ -328,6 +342,11 @@ function idleBoundedStream(
   });
 }
 
+/**
+ * Admit an allowlisted route and stream it through the authenticated tunnel with bounded bodies.
+ * Owner/auth preflight deadlines share one recovery attempt before data dispatch; an ambiguous
+ * post-dispatch failure never earns that recovery. Diagnostic failures cannot change admission.
+ */
 export async function relayLinkDataRequest(
   req: Request,
   target: LinkRelayTarget,
@@ -352,6 +371,16 @@ export async function relayLinkDataRequest(
     return jsonError(431, "link relay request headers too large");
   }
 
+  const requestId = randomUUID();
+  let admission: LinkAdmissionResult = { kind: "unavailable" };
+  let recoveryAttempts = 0;
+  const diagnostic = (event: LinkDiagnosticRecord["event"], outcome: LinkDiagnosticRecord["outcome"], elapsedMs?: number) => {
+    try { deps.diagnostic?.({ event, outcome, requestId,
+      checkId: admission.checkId, generation: admission.generation,
+      state: admission.state, elapsedMs: admission.elapsedMs,
+      ...(elapsedMs !== undefined ? { elapsedMs } : {}), attempt: recoveryAttempts }); }
+    catch { /* diagnostics never alter admission */ }
+  };
   const relayAbort = new AbortController();
   const clock = deps.clock ?? defaultClock;
   let headerTimer: ReturnType<typeof setTimeout> | undefined = clock.setTimeout(() => {
@@ -390,20 +419,45 @@ export async function relayLinkDataRequest(
     const remaining = holdUntil - now;
     return remaining > 0 && await gate.waitForConnected(remaining, relayAbort.signal);
   };
-  const tunnelUnavailable = async (): Promise<Response> => {
+  const tunnelUnavailable = async (
+    reason: LinkDiagnosticRecord["outcome"] = admission.kind === "match" ? "unavailable" : admission.kind,
+    message = "link tunnel unavailable",
+    elapsedMs?: number,
+  ): Promise<Response> => {
+    diagnostic("relay_failure", relayAbort.signal.aborted
+      ? req.signal.aborted ? "client_abort" : "header_timeout" : reason, elapsedMs);
     cleanup();
     try { await body?.cancel(); } catch { /* best effort */ }
-    return homeUnreachable("link tunnel unavailable");
+    const response = reason === "auth_failed" ? relayAuthenticationFailed(message) : homeUnreachable(message);
+    response.headers.set("x-opencodex-link-request-id", requestId);
+    return response;
+  };
+  const retryPreflight = (reason: "deadline" | "auth_timeout", elapsedMs?: number): boolean => {
+    if (recoveryAttempts >= 1 || relayAbort.signal.aborted || bodyOverflow || bodyCancelled || body?.locked) return false;
+    recoveryAttempts += 1;
+    diagnostic("relay_retry", reason, elapsedMs);
+    return true;
+  };
+  const checkConnected = async (): Promise<boolean> => {
+    admission = tunnel ? await tunnel.connected({ requestId }) : { kind: "unavailable" };
+    return admission.kind === "match";
   };
   const readyForFetch = async (): Promise<boolean> => {
-    if (!tunnel) return false;
-    if (await tunnel.connected()) return true;
-    return tunnel.pending() && await holdForTunnel(tunnel) && await tunnel.connected();
+    if (!tunnel || relayAbort.signal.aborted) return false;
+    if (await checkConnected()) return !relayAbort.signal.aborted;
+    // No fetch or body read has occurred. A deadline proves neither a foreign owner nor a
+    // broken SSH process: give this request one fresh proof, without caching or restarting it.
+    if (admission.kind === "deadline" && retryPreflight("deadline")) {
+      if (await checkConnected()) return !relayAbort.signal.aborted;
+    }
+    return !relayAbort.signal.aborted && tunnel.pending() && await holdForTunnel(tunnel)
+      && await checkConnected() && !relayAbort.signal.aborted;
   };
 
   let upstream: Response | undefined;
   while (!upstream) {
     if (!await readyForFetch()) return await tunnelUnavailable();
+    const fetchStartedAt = performance.now();
     try {
       const init: RequestInit & { duplex?: "half" } = {
         method: req.method,
@@ -415,24 +469,28 @@ export async function relayLinkDataRequest(
       upstream = await (deps.fetchImpl ? deps.fetchImpl(destination, init) : fetchBoundLinkRelay(target, destination, init));
     } catch (error) {
       if (error instanceof LinkRelayAuthenticationError) {
-        cleanup();
-        try { await body?.cancel(); } catch { /* an upload might already be drained */ }
-        return relayAuthenticationFailed(error.message);
+        return await tunnelUnavailable("auth_failed", error.message);
       }
       if (bodyOverflow) {
         cleanup();
         return jsonError(413, "link relay request body too large");
       }
+      if (error instanceof LinkRelayAuthTimeoutError) {
+        // The transport certifies that only its credential-free challenge was sent. A new
+        // iteration obtains a fresh ownership proof and a new authenticated physical socket.
+        const elapsedMs = performance.now() - fetchStartedAt;
+        if (retryPreflight("auth_timeout", elapsedMs)) continue;
+        return await tunnelUnavailable("auth_timeout", "link tunnel unavailable", elapsedMs);
+      }
       // A refused connection sent nothing, and an untouched body can go again once the tunnel
       // is back inside the same hold window. Anything else is never replayed.
       const resendable = connectionRefused(error) && (body === null || (!body.locked && !bodyCancelled));
-      if (!tunnel || !resendable || !tunnel.pending() || !await holdForTunnel(tunnel)) return await tunnelUnavailable();
+      if (!tunnel || !resendable || !tunnel.pending() || !await holdForTunnel(tunnel)) return await tunnelUnavailable("transport_error");
     }
   }
   if (relayAbort.signal.aborted) {
-    cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
-    return homeUnreachable("link tunnel unavailable");
+    return await tunnelUnavailable();
   }
 
   const sse = isSse(upstream.headers);
@@ -449,6 +507,7 @@ export async function relayLinkDataRequest(
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return jsonError(502, "link relay response body too large");
   }
+  if (recoveryAttempts > 0 && upstream.ok) diagnostic("relay_recovered", "recovered");
   if (req.method === "HEAD" || !upstream.body) {
     cleanup();
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
