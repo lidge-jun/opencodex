@@ -10,9 +10,9 @@
  * This rewrites one thing: a saved `models` list that is still byte-for-byte the roster
  * this file names as `from`, on a provider that still carries the registry adapter, and
  * only while the registry currently seeds `to`. A list the user changed does not match and
- * is left alone. For each added id it also fills a per-model context window and default
- * effort, but only inside a container the row already has: enrichment fills those records
- * all-or-nothing, so creating one here would hide the rest of the registry seed.
+ * is left alone. For each added id it also fills a per-model context window, output limit
+ * and default effort, but only inside a container the row already has: enrichment fills
+ * those records all-or-nothing, so creating one here would hide the rest of the registry seed.
  * Same shape and restraint as `stale-context-window-migration`.
  */
 import { ALIBABA_INTL_TOKEN_PLAN_BASE_URL } from "./base-url-choices";
@@ -21,6 +21,7 @@ import {
   ALIBABA_TOKEN_PLAN_MODELS,
   ALIBABA_INTL_TOKEN_PLAN_MODELS,
   ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
+  ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
   MINIMAX_M31_DEFAULT_REASONING_EFFORT,
   MINIMAX_M31_FLASH_PREVIEW,
   MINIMAX_MODELS,
@@ -37,6 +38,11 @@ export interface StaleModelRoster {
   to: readonly string[];
   /** Per-model seed values for the added ids, written only into containers that exist. */
   contextWindows?: Readonly<Record<string, number>>;
+  /**
+   * Custom catalog rows read the saved map directly, so an added id missing from a
+   * partial map would publish without the registry output limit.
+   */
+  maxOutputTokens?: Readonly<Record<string, number>>;
   defaultReasoningEfforts?: Readonly<Record<string, string>>;
   /**
    * For a provider whose saved URL may point elsewhere (pay-as-you-go or Custom), the
@@ -87,6 +93,7 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
   ].map(entry => ({
     ...entry,
     contextWindows: ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
+    maxOutputTokens: ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
     defaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "high" },
   })),
 ];
@@ -134,6 +141,7 @@ export function projectStaleModelRosters(
     const added = entry.to.filter(id => !entry.from.includes(id));
     prov.models = [...entry.to];
     fillExisting(prov.modelContextWindows, entry.contextWindows, added);
+    fillExisting(prov.modelMaxOutputTokens, entry.maxOutputTokens, added);
     fillExisting(prov.modelDefaultReasoningEfforts, entry.defaultReasoningEfforts, added);
     changed = true;
     warnings.push(
