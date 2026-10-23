@@ -253,8 +253,12 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/providers/anthropic-billing-ownership.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/anthropic-billing-recovery.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/anthropic-billing-refusal.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
+| `src/providers/antigravity-quota-identity.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/api-key-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/providers/dsh-account-destination.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
+| `src/providers/quota-decision-antigravity.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
+| `src/providers/quota-decision-publication.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
+| `src/providers/quota-decision-snapshot.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/quota/anthropic-account-quota.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/providers/quota/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/providers/request-pacing.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |

@@ -182,11 +182,12 @@ async function runCodexRestart(io: CodexRestartServiceIo): Promise<CodexRestartR
   // Decided here, before the early returns, because the model picker lives in the DESKTOP
   // app: "no app-server is running" is not a reason to leave a stale roster on screen.
   //
-  // The shell restarts only when its picker predates the catalog (#4761). Quitting it
-  // discards composer drafts, unsent picker selections and pending approvals, and when
-  // the picker is already current the app-server restart below is all the operator
-  // needs: the desktop respawns its app-server child, which rereads config and catalog.
-  // An unreadable picker state takes the full restart, the behaviour before #4761.
+  // The shell gets a restart attempt whenever its picker cannot be proven current: at
+  // or before the catalog mtime it is stale, and newer is unknown because an earlier
+  // sync may have rebound an already-existing catalog file (#4761). Quitting it
+  // discards composer drafts, unsent picker selections and pending approvals. The
+  // attempt is explicit, not a guarantee: the restart helper can refuse or partially
+  // fail, and desktopApp reports that outcome.
   //
   // allowHandoff is false and that is deliberate. The handoff waits for the CALLING
   // process to exit, and this runs inside a long-lived proxy that does not, so every

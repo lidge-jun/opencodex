@@ -127,6 +127,19 @@ native-main writer objects bind the observed bearer generation. Display-only and
 rows cannot republish advisory evidence. Producer/store bounds overflow to unknown, not a
 truncated supposedly exhaustive pool.
 
+`src/providers/quota-decision-antigravity.ts` owns Antigravity's separate loaded OAuth evidence.
+`src/providers/quota/antigravity.ts` captures an opaque receipt from the actual authenticated probe;
+display reports cannot mint one. Loaded auth-store notifications prove a sole active, usable account
+and retire receipts on credential/project, login, selection or roster transitions. Root, config
+generation and explicit invalidation also fence outstanding probes. The pure policy in
+`src/providers/antigravity-quota-identity.ts` requires the canonical `google-antigravity` OAuth store
+key, the Google cloud-code-assist mode and the canonical destination. Inference resolves its token from
+`store[route.providerName]` through the OAuth definition registered under that name, so the quota probe
+reads the same key and a renamed row neither probes nor borrows the canonical account; it reads unknown.
+Only Gem/Cla five-hour and weekly buckets contribute. A same-owner display-only refresh may retain
+previous family observations with their original clocks; without a matching observation it stays unknown.
+Per-model rows, Argon and last-good display data never create or restamp family evidence.
+
 `src/combos/jev-quota.ts` uses the worst valid relevant 5h/weekly/monthly/requested-family
 window per account, then the best usable pool tier in stable order. Observations older than
 30 minutes, future/invalid clocks or percentages and expired resets are ignored. Unknown ties
@@ -142,6 +155,9 @@ An Anthropic reset grant that drops one account's cached quota row also drops th
 `src/combos/jev-quota-route.ts` enriches only opted-in candidates. Authorization precedes
 service evidence reads. TypeSafe criteria carry scalar quota fields, System One/model descriptions
 carry advisory clauses, and all retain target/effort ordering and parser/deadline/abort contracts.
+Quota family lookup uses the native provider/model identity already resolved for the candidate;
+configured choice keys and effort allowlists remain unchanged. Native `gemini-*` and `claude-*`
+prefixes select Gem and Cla respectively; conflicting words elsewhere and unclassified ids do not.
 If additions exceed 64 KiB, serialization retries without quota before ordinary size refusal.
 `src/combos/jev-model-request.ts` owns the exact detached Responses JSON envelope, including escaping. The model backend uses it for quota sizing; the invoker adds its existing reasoning effort and checks that same serialized budget before admission/dispatch, selecting the supplied quota-free prompt only on overflow. This never retries a sent request or malformed output.
 Off payload bytes remain unchanged. Outbound quota omits ids/fingerprints; the optional v1

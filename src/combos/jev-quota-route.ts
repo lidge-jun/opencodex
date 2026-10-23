@@ -7,7 +7,7 @@ export function jevQuotaCandidates(options: ResolveJevDecisionOptions): readonly
   const tiers = normalizeJevQuotaTiers(options.decisionQuotaTiers) ?? JEV_QUOTA_DEFAULT_TIERS;
   const now = (options.now ?? Date.now)();
   return options.candidates.map(candidate => ({ ...candidate,
-    quota: jevQuotaSignalForTarget(options.config, candidate.provider, candidate.model, now, tiers) }));
+    quota: candidate.quotaIdentity === null ? { tier: "unknown" as const } : jevQuotaSignalForTarget(options.config, candidate.quotaIdentity?.provider ?? candidate.provider, candidate.quotaIdentity?.model ?? candidate.model, now, tiers) }));
 }
 /** Attach the per-tier quota summary to a decision when any candidate carried quota evidence. */
 export function withJevQuotaSummary(decision: JevDecision, candidates: readonly JevCandidate[]): JevDecision {

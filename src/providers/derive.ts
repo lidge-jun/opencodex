@@ -3,6 +3,7 @@ import { COST_VENDOR_PRIORITY, getModelMetadata, getModelMetadataCaseInsensitive
 import { cloneFastWire } from "./fastwire";
 import { isAzureModelMetadataDestination, publishedAzureModelMetadata, type AzureModelMetadata } from "./azure-model-metadata";
 import { resolveModelPolicy } from "./resolved-model-policy";
+import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-merge";
 import {
   PROVIDER_REGISTRY,
   registryEntryForProviderDestination,
@@ -474,13 +475,22 @@ function applyVerbosityDefaults(prov: OcxProviderConfig, entry: ProviderRegistry
  * was skipped and the reasoning ladder was advertised without summary support — exactly the
  * inconsistency that makes Codex drop the inbound reasoning object.
  *
- * Deliberately narrow: reasoning-summary, effort, and replay-compatibility metadata only, via
+ * Deliberately narrow: reasoning-summary, effort, structured-output, and replay-compatibility metadata only, via
  * `registryEntryForProviderDestination`, which matches fixed key destinations and refuses
  * templated or overridable base URLs. A custom row keeps its own identity for everything else.
  */
 function enrichReasoningMetadataByDestination(prov: OcxProviderConfig): void {
   const destination = registryEntryForProviderDestination(prov);
   applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
+  if (destination?.modelDefaultReasoningEfforts) {
+    prov.modelDefaultReasoningEfforts = mapFill(destination.modelDefaultReasoningEfforts, prov.modelDefaultReasoningEfforts)[0];
+  }
+  if (destination?.modelReasoningEffortMap) {
+    prov.modelReasoningEffortMap = nestedMapFill(destination.modelReasoningEffortMap, prov.modelReasoningEffortMap)[0];
+  }
+  if (destination?.noStructuredOutputModels?.length) {
+    prov.noStructuredOutputModels = stableUnion(destination.noStructuredOutputModels, prov.noStructuredOutputModels)[0];
+  }
   if (prov.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined) {
     prov.dropResponsesReasoningItems = destination.dropResponsesReasoningItems;
   }

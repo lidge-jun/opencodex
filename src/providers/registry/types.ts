@@ -342,6 +342,8 @@ export interface ProviderRegistryEntry {
    * `directReasoningEffortModels` above is registry-owned.
    */
   noJsonSchemaModels?: string[];
+  /** Exact models with no established structured-output wire format. Registry-owned at routing. */
+  noStructuredOutputModels?: string[];
   /** Opt this provider into parallel tool calls (see OcxProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;
   /** Opt this provider into forwarding prompt_cache_key (OpenAI-specific; strict backends reject it). */

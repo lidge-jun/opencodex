@@ -30,6 +30,9 @@ import { recallComboForLane } from "./combo-session-recall";
 import {
   sessionLaneIdFromRequest,
   conversationIdFromResponsesRequest,
+  assignNativeLogConversationId,
+  fillHermesLogConversationFallback,
+  nativeLogConversationIdFromHeaders,
   sessionIdHeaderFromRequest,
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
@@ -607,10 +610,10 @@ export async function prepareResponsesRequest(
     parsed._reasoningReplayScope = { ...parsed._reasoningReplayScope, clientPrincipalId };
   }
   // Prefer a pre-populated id (routed Claude) over Responses headers that may be
-  // absent or synthetically injected (session_id from prompt_cache_key).
-  if (!logCtx.conversationId) {
-    logCtx.conversationId = resolvedConversationId;
-  }
+  // absent or synthetically injected (session_id from prompt_cache_key). A Hermes-only id
+  // is a log fallback: native resolution replaces it, and it only fills an empty slot.
+  assignNativeLogConversationId(logCtx, resolvedConversationId ?? nativeLogConversationIdFromHeaders(req.headers));
+  fillHermesLogConversationFallback(logCtx, req.headers);
   // A rewritten turn logs the selector the client asked for, so the usage log never
   // claims the operator typed the fallback model themselves.
   logCtx.requestedModel = options.mainHardLockFallbackOverride?.sourceModel

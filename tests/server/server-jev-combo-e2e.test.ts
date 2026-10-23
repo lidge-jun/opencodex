@@ -13,6 +13,10 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { ManagementRequest } from "../helpers/management-auth";
+import { activateJevQuotaEvidence, deactivateJevQuotaEvidence } from "../helpers/jev-quota-activation";
+import { publishDecisionKeyQuota } from "../../src/providers/quota-decision-snapshot";
+import { createTempHome } from "../helpers/temp-home";
+import { resolveProviderApiKey } from "../../src/providers/api-key-resolve";
 
 const JEV_URL = "https://api.typesafe.ai/v1/systemone";
 const targetRows = [
@@ -673,4 +677,34 @@ describe("JEV Combo runtime", () => {
     expect(response.status).toBe(499);
     expect(modelDispatches).toBe(0);
   });
+});
+
+test("JEV quota uses ordinary native alias resolution but preserves the configured target allowlist", async () => {
+  const home = createTempHome("ocx-jev-native-quota-");
+  try {
+    activateJevQuotaEvidence();
+    const seen: Array<Record<string, unknown>> = [];
+    const config = makeConfig({ jevFetch: choiceFetch("astra/gemini-misleading:low", seen) });
+    const provider = config.providers.astra!;
+    provider.models = ["claude-gemini-preview", "gemini-3.8-flash"];
+    provider.modelAliases = { "claude-gemini-preview": "gemini-misleading", "gemini-3.8-flash": "neutral" };
+    provider.modelReasoningEfforts = { "claude-gemini-preview": ["low"], "gemini-3.8-flash": ["low"] };
+    config.combos!.auto!.targets = [
+      { provider: "astra", model: "gemini-misleading" }, { provider: "astra", model: "neutral" },
+    ];
+    config.combos!.auto!.decisionQuotaSignals = true;
+    const observedAt = Date.now();
+    // A real key producer observes its credential before capturing the policy fingerprint.
+    resolveProviderApiKey(provider.apiKey);
+    publishDecisionKeyQuota("astra", provider, [
+      { window: "weekly", percent: 100, observedAt, family: "cla" },
+      { window: "weekly", percent: 20, observedAt, family: "gem" },
+    ]);
+    const response = await execute(config, body => success(String(body.model)));
+    expect(response.status).toBe(200);
+    const questions = seen[0]!.questions as { route: { criteria: Record<string, { quota: { tier: string; used_percent: number } }> } };
+    expect(Object.keys(questions.route.criteria)).toEqual(["astra/gemini-misleading:low", "astra/neutral:low"]);
+    expect(questions.route.criteria["astra/gemini-misleading:low"]!.quota).toMatchObject({ tier: "nearly_exhausted", used_percent: 100 });
+    expect(questions.route.criteria["astra/neutral:low"]!.quota).toMatchObject({ tier: "healthy", used_percent: 20 });
+  } finally { deactivateJevQuotaEvidence(); home.remove(); }
 });

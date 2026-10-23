@@ -15,9 +15,10 @@
  */
 import {
   clearDecisionAccountQuotas, invalidateDecisionKeyQuotas, observeDecisionKeyCredential, publishDecisionAccountQuota,
-  publishDecisionKeyQuota, publishDecisionQuotaRoster, readLoadedDecisionKeyQuota, readLoadedDecisionQuotaPool,
+  publishDecisionKeyQuota, publishDecisionQuotaRoster, readLoadedDecisionKeyQuota, readLoadedDecisionQuotaPool, replaceDecisionKeyQuotas,
   setDecisionAccountUsable, withdrawDecisionQuotaRoster,
 } from "../providers/quota-decision-snapshot";
+import { captureAntigravityReceipt, observeAntigravityQuotaStore, replaceAntigravityQuotas } from "../providers/quota-decision-antigravity";
 import { registerDecisionQuotaSink, type DecisionQuotaSink, type MainDecisionRow } from "../lib/decision-quota-sink";
 import { registerLiveConfigObserver } from "../lib/state-store-registrations";
 import { getConfigDir } from "../config/paths";
@@ -32,6 +33,7 @@ const POOL_PROVIDERS = ["anthropic", "codex", "codex-main"] as const;
 
 /** Project an auth store the owner already read into the secret-free Anthropic roster (primary pool only); a failure withdraws so the pool reads as unknown. The generation is a one-way digest of the credential, never the credential itself. */
 function publishAuthDecisionQuotaRoster(store: AuthStore): void {
+  observeAntigravityQuotaStore(store);
   try {
     publishDecisionQuotaRoster("anthropic", (store.anthropic?.accounts ?? []).map(row => ({
       id: row.id,
@@ -82,6 +84,8 @@ const snapshotSink: DecisionQuotaSink = {
   mainRosterChanged: row => publishMainRow(row),
   readKeyQuota: readLoadedDecisionKeyQuota,
   readPool: readLoadedDecisionQuotaPool,
+  captureAntigravityReceipt,
+  replaceCollectedQuotas: (keys, oauth) => { replaceDecisionKeyQuotas(keys); replaceAntigravityQuotas(oauth); },
 };
 
 let active: { detach: () => void; root: string } | undefined;

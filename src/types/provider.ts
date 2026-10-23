@@ -1124,7 +1124,7 @@ export interface OcxProviderConfig {
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   /** Google tool-schema compatibility policy. Omitted preserves compatible report-only behavior. */
   googleToolSchemaPolicy?: "compatible" | "reject-lossy";
-  /** Vertex AI GCP project id. API keys use it to select the project endpoint; ADC falls back to GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env. */
+  /** Vertex AI GCP project id. API keys use it to select the project endpoint; "auto" resolves each API key's own project. ADC falls back to GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env. */
   project?: string;
   /** Vertex AI location, e.g. "us-central1" or "global". API-key project endpoints default to "global"; ADC falls back to GOOGLE_CLOUD_LOCATION env. */
   location?: string;

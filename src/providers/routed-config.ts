@@ -21,6 +21,7 @@ import {
   providerSupportsLiveModelDiscovery,
 } from "./static-model-discovery";
 import { resolveModelPolicy } from "./resolved-model-policy";
+import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-merge";
 
 /** Same endpoint modulo surrounding space and trailing slashes — matches `matchBaseUrlChoice`. */
 function isSameEndpoint(a: string, b: string): boolean {
@@ -124,6 +125,15 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     return {
       ...provider,
       apiKey: usableResolvedApiKey(provider.apiKey),
+      ...(destination?.modelDefaultReasoningEfforts ? {
+        modelDefaultReasoningEfforts: mapFill(destination.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts)[0],
+      } : {}),
+      ...(destination?.modelReasoningEffortMap ? {
+        modelReasoningEffortMap: nestedMapFill(destination.modelReasoningEffortMap, provider.modelReasoningEffortMap)[0],
+      } : {}),
+      ...(destination?.noStructuredOutputModels?.length ? {
+        noStructuredOutputModels: stableUnion(destination.noStructuredOutputModels, provider.noStructuredOutputModels)[0],
+      } : {}),
       ...(provider.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined
         ? { dropResponsesReasoningItems: destination.dropResponsesReasoningItems }
         : {}),
@@ -172,6 +182,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const noStopModels = staticPolicy.noStopModels;
   const noPenaltyModels = staticPolicy.noPenaltyModels;
   const noJsonSchemaModels = staticPolicy.noJsonSchemaModels;
+  const noStructuredOutputModels = staticPolicy.noStructuredOutputModels;
   const autoToolChoiceOnlyModels = staticPolicy.autoToolChoiceOnlyModels;
   const preserveReasoningContentModels = staticPolicy.preserveReasoningContentModels;
   const requiresReasoningPlaceholderModels = staticPolicy.requiresReasoningPlaceholderModels;
@@ -325,6 +336,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(noStopModels ? { noStopModels } : {}),
     ...(noPenaltyModels ? { noPenaltyModels } : {}),
     ...(noJsonSchemaModels ? { noJsonSchemaModels } : {}),
+    ...(noStructuredOutputModels ? { noStructuredOutputModels } : {}),
     ...(autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels } : {}),
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
     ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),

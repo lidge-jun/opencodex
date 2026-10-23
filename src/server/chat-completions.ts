@@ -40,6 +40,9 @@ import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import { resolveOpenCodeGoTransport } from "../providers/opencode-go-transport";
 import {
+  assignNativeLogConversationId,
+  fillHermesLogConversationFallback,
+  nativeLogConversationIdFromHeaders,
   getOrAllocateRequestSessionLane,
   linkRequestSessionLane,
 } from "./request-log-conversation";
@@ -114,6 +117,10 @@ export async function handleChatCompletions(
   logCtx: RequestLogContext,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
 ): Promise<Response> {
+  // Set before routing so pre-dispatch refusals stay correlated. A Hermes-only id is marked as a
+  // fallback, so a native id resolved later on the Responses bridge still replaces it.
+  assignNativeLogConversationId(logCtx, nativeLogConversationIdFromHeaders(req.headers));
+  fillHermesLogConversationFallback(logCtx, req.headers);
   const translatorBudget = createTranslatorBudget();
   try {
     let response = await handleChatCompletionsWithBudget(req, config, logCtx, translatorBudget, logIds);

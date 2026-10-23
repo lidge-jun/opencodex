@@ -17,7 +17,10 @@
  * a Responses wire default must carry the Responses-side preservation beside it.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { providerConfigSeed } from "../../src/providers/derive";
+import { routeModel } from "../../src/router";
+import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat/passthrough";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import { handleResponses } from "../../src/server/responses/core";
@@ -151,5 +154,131 @@ describe("a Responses default flip must carry Responses-side reasoning preservat
       return;
     }
     expect(entry.preserveResponsesReasoningContent).toBe(true);
+  });
+});
+
+
+describe("1017 exact-ID Token Plan adapter policy", () => {
+  const model = "deepseek-v4.1-flash-1017";
+  const schema = { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true };
+  for (const id of ["alibaba-token-plan", "alibaba-token-plan-intl"]) {
+    const entry = getProviderRegistryEntry(id)!;
+    const route = (overrides: Partial<OcxProviderConfig> = {}, requestedModel = model) => routeModel({
+      port: 10100, defaultProvider: id,
+      providers: { [id]: { ...providerConfigSeed(entry), apiKey: "sk-test", ...overrides } },
+    } as OcxConfig, `${id}/${requestedModel}`);
+
+    test(`${id} routes the documented ladder and high default without a Responses pin`, () => {
+      const resolved = route();
+      expect(resolved.provider.modelReasoningEfforts?.[model]).toEqual(["low", "high", "max"]);
+      expect(resolved.provider.modelDefaultReasoningEfforts?.[model]).toBe("high");
+      expect(resolved.provider.modelInputModalities?.[model]).toEqual(["text", "image"]);
+      expect(resolved.provider.modelContextWindows?.[model]).toBe(1_000_000);
+      expect(resolved.provider.modelMaxOutputTokens?.[model]).toBe(393_216);
+      for (const inbound of INBOUNDS) {
+        expect(resolveWireProtocolOverride(id, model, resolved.provider, inbound).adapter).toBe("openai-chat");
+      }
+      for (const [effort, expected] of [["low", "low"], ["medium", "high"], ["xhigh", "high"], ["max", "max"]]) {
+        const request = createOpenAIChatAdapter(resolved.provider).buildRequest({
+          modelId: model, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+          options: { reasoning: effort }, stream: false,
+        });
+        const body = JSON.parse(request.body as string);
+        expect(body.reasoning_effort).toBe(expected);
+        expect(body.thinking_budget).toBeUndefined();
+      }
+    });
+
+    test(`${id} omits unknown structured-output formats on both Chat paths`, () => {
+      const resolved = route({ noStructuredOutputModels: ["operator-model", model] });
+      expect(resolved.provider.noStructuredOutputModels).toEqual([model, "operator-model"]);
+      expect(resolved.provider.noJsonSchemaModels).not.toContain(model);
+      for (const format of [schema, { type: "json_object" }]) {
+        const request = createOpenAIChatAdapter(resolved.provider).buildRequest({
+          modelId: model, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+          options: { textFormat: format }, stream: false,
+        });
+        expect(JSON.parse(request.body as string).response_format).toBeUndefined();
+        const native = buildOpenAIChatPassthroughRequest(resolved.provider, {
+          messages: [{ role: "user", content: "hi" }], response_format: format,
+        }, model, false);
+        expect(JSON.parse(native.body as string).response_format).toBeUndefined();
+      }
+      // Existing bare-ID evidence stays separate: its verified JSON fallback still applies.
+      const bare = route({}, "deepseek-v4.1-flash");
+      const request = createOpenAIChatAdapter(bare.provider).buildRequest({
+        modelId: bare.modelId, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+        options: { textFormat: schema }, stream: false,
+      });
+      expect(JSON.parse(request.body as string).response_format).toEqual({ type: "json_object" });
+    });
+  }
+});
+
+
+describe("custom Beijing destination structured-output policy", () => {
+  const model = "deepseek-v4.1-flash-1017";
+  for (const baseUrl of ["https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"]) {
+    for (const enriched of [false, true]) {
+      test(`${baseUrl} enriched=${enriched} preserves destination opt-outs`, () => {
+        const provider: OcxProviderConfig = {
+          adapter: "openai-chat", authMode: "key", apiKey: "test-key", baseUrl,
+          noStructuredOutputModels: ["operator-model"],
+        };
+        if (enriched) enrichProviderFromRegistry("custom-beijing", provider);
+        const resolved = routeModel({ port: 10100, defaultProvider: "custom-beijing",
+          providers: { "custom-beijing": provider } } as OcxConfig, `custom-beijing/${model}`);
+        expect(resolved.provider.modelDefaultReasoningEfforts?.[model]).toBe("high");
+        expect(resolved.provider.modelReasoningEffortMap?.[model]?.medium).toBe("high");
+        if (enriched) {
+          expect(provider.modelDefaultReasoningEfforts?.[model]).toBe("high");
+          expect(provider.modelReasoningEffortMap?.[model]?.medium).toBe("high");
+        }
+        const effort = createOpenAIChatAdapter(resolved.provider).buildRequest({
+          modelId: model, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+          options: { reasoning: "medium" }, stream: false,
+        });
+        expect(JSON.parse(effort.body as string).reasoning_effort).toBe("high");
+        expect(resolved.provider.noStructuredOutputModels).toContain("operator-model");
+        expect(resolved.provider.noStructuredOutputModels).toContain(model);
+        for (const format of [{ type: "json_object" }, { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true }]) {
+          const native = buildOpenAIChatPassthroughRequest(resolved.provider, {
+            messages: [{ role: "user", content: "hi" }], response_format: format,
+          }, model, false);
+          expect(JSON.parse(native.body as string).response_format).toBeUndefined();
+          const translated = createOpenAIChatAdapter(resolved.provider).buildRequest({
+            modelId: model, context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+            options: { textFormat: format }, stream: false,
+          });
+          expect(JSON.parse(translated.body as string).response_format).toBeUndefined();
+        }
+        expect(resolved.provider.noStructuredOutputModels).toEqual([model, "operator-model"]);
+        const overridden: OcxProviderConfig = {
+          ...provider,
+          modelDefaultReasoningEfforts: { [model]: "max" },
+          modelReasoningEffortMap: { [model]: { medium: "low" } },
+        };
+        if (enriched) enrichProviderFromRegistry("custom-beijing", overridden);
+        const explicit = routeModel({ port: 10100, providers: { "custom-beijing": overridden } } as OcxConfig, `custom-beijing/${model}`);
+        expect(explicit.provider.modelDefaultReasoningEfforts?.[model]).toBe("max");
+        expect(explicit.provider.modelReasoningEffortMap?.[model]?.medium).toBe("low");
+
+      });
+    }
+  }
+  test.each([
+    { adapter: "openai-chat", baseUrl: "https://example.test/v1" },
+    { adapter: "anthropic", baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" },
+    // Undocumented for Token Plan; must not be treated as the Beijing destination.
+    { adapter: "openai-chat", baseUrl: "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1" },
+    { adapter: "openai-chat", baseUrl: "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1" },
+    { adapter: "openai-chat", baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1" },
+  ])("nonmatching custom destination keeps operator policy: $adapter $baseUrl", ({ adapter, baseUrl }) => {
+    const provider: OcxProviderConfig = { adapter, baseUrl, noStructuredOutputModels: ["operator-model"] };
+    enrichProviderFromRegistry("custom", provider);
+    const resolved = routeModel({ port: 10100, providers: { custom: provider } } as OcxConfig, `custom/${model}`);
+    expect(resolved.provider.noStructuredOutputModels).toEqual(["operator-model"]);
+    expect(resolved.provider.baseUrl).toBe(baseUrl);
+    expect(resolved.provider.adapter).toBe(adapter);
   });
 });

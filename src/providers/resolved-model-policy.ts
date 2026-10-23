@@ -31,7 +31,7 @@ export type StaticProviderPolicyField =
   | "modelMaxOutputTokens" | "reasoningEfforts" | "modelReasoningEfforts" | "modelReasoningEffortsAuthoritative"
   | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "reasoningWireFormat" | "noVisionModels" | "noReasoningModels" | "noTemperatureModels"
-  | "noTopPModels" | "noStopModels" | "noPenaltyModels" | "noJsonSchemaModels" | "parallelToolCalls"
+  | "noTopPModels" | "noStopModels" | "noPenaltyModels" | "noJsonSchemaModels" | "noStructuredOutputModels" | "parallelToolCalls"
   | "promptCacheKey" | "chatServiceTier" | "openaiChatEofTolerance" | "statelessResponses"
   | "requiresAdjacentResponsesToolResults" | "requiresPairedResponsesToolResults" | "annotateEmptyToolOutputs"
   | "fastWire" | "supportsServiceTier" | "modelSupportsServiceTier" | "supportsOpenAiWebSearchToolFields"
@@ -231,7 +231,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   for (const key of [
     "noVisionModels", "noReasoningModels", "noTemperatureModels", "noTopPModels",
     "noStopModels",
-    "noPenaltyModels", "noJsonSchemaModels", "autoToolChoiceOnlyModels",
+    "noPenaltyModels", "noJsonSchemaModels", "noStructuredOutputModels", "autoToolChoiceOnlyModels",
     "preserveReasoningContentModels", "requiresReasoningPlaceholderModels",
     "reasoningSplitModels", "reasoningDetailsModels", "thinkingToggleModels", "thinkingBudgetModels",
   ] as const) putUnion(key, entry?.[key]);

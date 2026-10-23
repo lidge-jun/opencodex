@@ -115,6 +115,7 @@ export const REGISTRY_FIELD_MODEL_ID_ROLES = {
   noStopModels: NONE,
   noPenaltyModels: NONE,
   noJsonSchemaModels: NONE,
+  noStructuredOutputModels: NONE,
   parallelToolCalls: NONE,
   promptCacheKey: NONE,
   chatServiceTier: NONE,
