@@ -405,6 +405,11 @@ Instruction notice extraction scans fence ranges once and walks original lines b
 a decreasing cursor. It accepts exactly one ASCII space inside the token notice, preserves
 unmatched prefix bytes, and does not repeatedly scan or copy shrinking prompt prefixes.
 
+## Opt-in append-only Claude tool discovery
+
+See [Append-only Claude Tool Loading](claude-tool-loading.md) for the physical-adapter
+projection, original-catalog preservation, fallback exclusions and configuration contract.
+
 ## Claude skill marker path bound
 
 `src/claude/inbound.ts` examines at most 4,097 characters after the skill base-directory

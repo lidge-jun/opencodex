@@ -430,7 +430,7 @@ still stores operator intent rather than the frozen result; registry-only policy
 capture/route time and explicit false or empty declarations retain their field-specific meaning.
 
 ## Provider validation ownership
-
+`claudeCode.appendOnlyToolLoadingModels` follows the [append-only discovery contract](data-planes/inbound-compat.md#opt-in-append-only-claude-tool-discovery): at most 128 provider-qualified selectors of 512 characters, optional trailing prefix wildcard, absent/off by default. `src/claude/inbound-tool-loading.ts` shares fail-closed validation with the schema; writes reject malformed lists and `src/config/salvage.ts` drops only that optional field on load, preserving providers and other Claude settings.
 `src/config/provider-validation.ts` owns the pure provider payload checks shared by persisted config,
 CLI writes, and management DTO validation. `src/config.ts` imports those checks for Zod refinement
 and re-exports them as a compatibility facade; it must not grow a second copy. Validation error text,
