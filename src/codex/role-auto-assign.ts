@@ -14,10 +14,9 @@
  * 3. Otherwise it is unclassified and never proposed.
  *
  * A role gets the cheapest sufficient model: the lowest tier at or above what it was sized for,
- * then the lowest price, then the model the role already uses, then the picker's own order.
- * Keeping the current model on a tie means a proposal only changes a role when the change buys
- * a cheaper or better-fitting tier; the picker lists native models first, so without it every
- * tie between vendors priced alike went to the native one.
+ * then the lowest price, then the model the role already uses when it is one of the tied models,
+ * then the picker's own order. The picker lists native models first, so without the current-model
+ * step a role on a routed model moved to a native one priced and tiered the same.
  *
  * Effort binds to positions on the chosen model's ladder: glance is the floor, measured is the
  * model's default or the middle rung, exhaustive is the ceiling, and thorough is the rung above
