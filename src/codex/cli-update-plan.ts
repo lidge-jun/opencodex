@@ -334,6 +334,7 @@ export function createNpmConfigIsolation(dir?: string, boundEnv?: NodeJS.Process
     const env = codexCliUpdateBoundEnv(boundEnv);
     // npm enables Node's compile cache itself. Dropping the ambient output path
     // alone recreates <tmpdir>/node-compile-cache outside this owned lifetime.
+    // The version verification child inherits this same controlled path.
     env.NODE_COMPILE_CACHE = resolve(root, "node-compile-cache");
     return { dir: root, npmrc, globalNpmrc, cache, env };
   } catch (error) {

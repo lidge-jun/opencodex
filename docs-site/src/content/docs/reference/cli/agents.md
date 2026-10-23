@@ -1179,12 +1179,36 @@ using the launcher's captured PATH and isolated temporary npm configuration, cac
 settings and `NODE_EXTRA_CA_CERTS` remain supported; cleanup is best-effort. No Codex command runs.
 
 An applicable plan reports `applicable: true` and a deterministic `planId` binding platform,
-installation-root digest, installed version, channel and target version/integrity. The plan is never
+installation-root/content digests, installed version, channel and exact main/platform artifacts. The plan is never
 persisted. It refuses downgrades, already-current versions, active Codex sessions and incomplete
 process observation. Windows returns `windows_inspection_deferred` before registry/process queries.
 A refusal exits 0: inspect `applicable` and `refusal`. The printed install argv is indicative; this
-command installs nothing, changes no application state and never signals a session. No apply command
-is exposed, and a plan ID is not installation authorization.
+command installs nothing, changes no application state and never signals a session. A plan ID alone
+is not installation authorization: apply requires separate explicit confirmation.
+
+#### Confirmed POSIX Codex CLI apply and job status
+
+```bash
+ocx system codex-cli-update apply --plan-id <32-hex> --yes --request-id <stable-key> --json
+ocx system codex-cli-update status <job-id> --json
+```
+
+Apply supports only the selected, managed, non-shim npm-global CLI on Linux/macOS. It revalidates the
+approved plan under an installation lease, verifies the exact main/platform archives, installs them
+offline with lifecycle scripts disabled, and checks installed files and the selected CLI's version.
+Existing Codex sessions are never stopped; active or unknown process observations refuse the update.
+Windows apply, shim repair, native apps and other installation managers remain unsupported.
+
+Apply returns a job with `applied`, `not_applied`, `refused` or `ambiguous` outcome. Status reads the
+same private job record without a running proxy or GUI token. Reuse the same optional request ID after
+a lost response: the same key and plan return the original job; a changed plan with that key refuses.
+An ambiguous result is never automatically retried or rolled back. After an owner restart, an unfinished
+job reports unknown ownership instead of claiming the old process stopped. Inspect the job's outcome,
+child/lease state and cleanup errors; command exit status alone does not establish an installation result.
+
+The management API provides authenticated plan/status reads and confirmed trusted-loopback GUI-session
+apply admission. A published Node `ocx start` supplies the required inspection snapshot; direct Bun or
+compiled sidecar startup does not provide that proof. The Dashboard update panel is a separate follow-up.
 
 #### Explicit installation observation on Windows x64
 
