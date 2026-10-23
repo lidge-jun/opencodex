@@ -322,6 +322,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noPenaltyModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].preserveReasoningContentModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].openaiChatEofTolerance).toBe(true);
+    expect(KEY_LOGIN_PROVIDERS.moonshot.foldDeveloperRoleToSystem).toBe(true);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-coder"]).toBe(262_144);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);

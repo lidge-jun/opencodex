@@ -484,6 +484,10 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noPenaltyModels: KIMI_API_MODELS,
     autoToolChoiceOnlyModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     preserveReasoningContentModels: KIMI_API_MODELS,
+    // api.moonshot.ai answers `400 Invalid request: role 'developer' is not allowed`. The
+    // translated route already folds when nothing is recorded, but the native
+    // /v1/chat/completions passthrough only folds on an explicit record, so record it here.
+    foldDeveloperRoleToSystem: true,
     note: "International default (api.moonshot.ai). China accounts: choose China (.cn) or Custom for api.moonshot.cn.",
   },
   { id: "huggingface", label: "Hugging Face", baseUrl: "https://router.huggingface.co/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://huggingface.co/settings/tokens" },

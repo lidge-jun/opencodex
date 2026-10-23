@@ -313,6 +313,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.openaiChatEofTolerance === undefined && registryEntry.openaiChatEofTolerance !== undefined
       ? { openaiChatEofTolerance: registryEntry.openaiChatEofTolerance }
       : {}),
+    ...(provider.foldDeveloperRoleToSystem === undefined && registryEntry.foldDeveloperRoleToSystem !== undefined
+      ? { foldDeveloperRoleToSystem: registryEntry.foldDeveloperRoleToSystem }
+      : {}),
     ...(provider.reasoningWireFormat === undefined && registryEntry.reasoningWireFormat !== undefined
       ? { reasoningWireFormat: registryEntry.reasoningWireFormat }
       : {}),

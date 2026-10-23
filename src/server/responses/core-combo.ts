@@ -103,6 +103,7 @@ import type { ResponsesTerminalStatus } from "../../bridge";
 import { beginRequestAttempt, sealRequestAttemptIdentity, finishRequestAttempt } from "../request-log";
 import { rememberComboForLane } from "./combo-session-recall";
 import { COMBO_TOOL_LOOP_PIN_REASON, toolLoopPinnedPick } from "./combo-tool-loop-pin";
+import { JEV_SESSION_PIN_ROUTE_REASON, jevSessionPinScope } from "./jev-session-pin";
 import { runTurnAdapterSseResponses } from "./core-lifetime";
 import { normalizePersistedJevDecision } from "../../usage/jev-stats";
 import {
@@ -600,6 +601,10 @@ export async function executeComboResponses(
     eligible: targetEligible,
     now: initialNow,
   });
+  // Opt-in JEV session pin (#7525); override routes neither read nor write it, like the lane recall.
+  const jevPin = options.compactionRoutingOverride || options.mainHardLockFallbackOverride
+    ? undefined
+    : jevSessionPinScope({ combo, comboId, admission: options.admission, lane: sessionLaneIdFromRequest(req.headers) });
 
   if (unreadableEncryptedAgentTask && !pick) {
     pick = await pickWithWait({ now: initialNow });
@@ -674,8 +679,13 @@ export async function executeComboResponses(
         : null,
     };
     const decisionStartedAt = Date.now();
+    const pinReuse = jevPin?.reuse(
+      choices.map(choice => choice.candidate),
+      combo.decisionQuotaSignals === true ? { config, tiers: combo.decisionQuotaTiers } : undefined,
+    );
     let decision: JevDecision;
-    try {
+    if (pinReuse?.decision) decision = pinReuse.decision;
+    else try {
       decision = await resolveJevComboDecision({
         body,
         candidates: choices.map(choice => choice.candidate),
@@ -709,6 +719,7 @@ export async function executeComboResponses(
         latencyMs: Math.max(0, Date.now() - decisionStartedAt),
       };
     }
+    if (pinReuse?.released) decision = { ...decision, pinReason: pinReuse.released };
     jevDecision = decision;
     const selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
@@ -729,6 +740,8 @@ export async function executeComboResponses(
         : {}),
       ...(decision.usage ? { usage: decision.usage } : {}),
       ...(decision.quota ? { quota: decision.quota } : {}),
+      ...(decision.pinned ? { pinned: true } : {}),
+      ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
     });
     console.debug("[combo] JEV decision", {
       backend: decision.backend,
@@ -736,6 +749,7 @@ export async function executeComboResponses(
       effort: decision.effort,
       gate: decision.gate,
       latencyMs: decision.latencyMs,
+      ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
       ...(decision.confidence !== undefined ? { confidence: decision.confidence } : {}),
       ...(decision.chosenProbability !== undefined
         ? { chosenProbability: decision.chosenProbability }
@@ -748,7 +762,7 @@ export async function executeComboResponses(
   const decision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
   const selectedReason = options.memoryModelPhase
     ? memoryModelRouteReason(options.memoryModelPhase)
-    : toolLoopPin ? COMBO_TOOL_LOOP_PIN_REASON : undefined;
+    : toolLoopPin ? COMBO_TOOL_LOOP_PIN_REASON : jevDecision?.pinned ? JEV_SESSION_PIN_ROUTE_REASON : undefined;
   logCtx.routeDecision = selectedReason
     ? { ...decision, selected: { ...decision.selected, reason: selectedReason } }
     : decision;
@@ -991,6 +1005,7 @@ export async function executeComboResponses(
           && provider && provider.disabled !== true
           && currentCombo?.targets.some(target => targetKey(target) === targetKey(completedTarget))) {
           rememberComboForLane(sessionLaneIdFromRequest(req.headers), comboId, completedTarget, model, writerGeneration);
+          jevPin?.complete(targetKey(completedTarget), initialJevDecision, writerGeneration);
         }
         options.onResponseComplete?.(model);
       },
@@ -1003,6 +1018,8 @@ export async function executeComboResponses(
         if (childLog.terminalIncompleteReason !== undefined) logCtx.terminalIncompleteReason = childLog.terminalIncompleteReason;
         if (childLog.terminalErrorCode !== undefined) logCtx.terminalErrorCode = childLog.terminalErrorCode;
         if (childLog.upstreamError !== undefined) logCtx.upstreamError = childLog.upstreamError;
+        // A committed stream that ends failed is a target failure too; incomplete is an answer.
+        if (status === "failed") jevPin?.forget();
         options.onNativePassthroughTerminal?.(status);
       },
     });
@@ -1076,6 +1093,7 @@ export async function executeComboResponses(
         retainCancelledAttempt();
         return clientCancelledResponse();
       }
+      jevPin?.forget();
       finishRequestAttempt(attempt, 502, Date.now() - started, childLog.usage);
       throw error;
     }
@@ -1100,6 +1118,7 @@ export async function executeComboResponses(
           retainCancelledAttempt();
           return clientCancelledResponse();
         }
+        jevPin?.forget();
         finishRequestAttempt(attempt, 502, Date.now() - started, childLog.usage);
         throw error;
       }
@@ -1156,6 +1175,7 @@ export async function executeComboResponses(
         retainCancelledAttempt();
         return clientCancelledResponse();
       }
+      jevPin?.forget();
       finishRequestAttempt(attempt, 502, Date.now() - started, childLog.usage);
       throw error;
     }
@@ -1187,6 +1207,8 @@ export async function executeComboResponses(
     }
     attemptRetained = true;
     lastFailure = failure.response;
+    // A real target failure ends the session pin; the next turn is decided afresh (#7525).
+    jevPin?.forget();
     if (!quotaFailure && (lastFailure.status === 429 || lastFailure.status === 402)) {
       quotaFailure = lastFailure;
       quotaFailedChildLog = childLog;

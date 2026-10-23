@@ -196,6 +196,31 @@ checkboxes and `Create JEV Auto` template. Inside that editor, a JEV Combo's `De
 section (`gui/src/components/combo-workspace-jev-decision.tsx`) chooses TypeSafe, a System One row,
 or an opencodex model route, with the timeout and a Test probe; there is no separate decisions page.
 
+## Session pin
+
+`sessionPin: { ttlMs }` is an opt-in, JEV-only Combo field (#7525); `src/combos/jev-session-pin-config.ts`
+owns its 60000..86400000 ms range, the CLI duration grammar and the closed `pinReason` vocabulary.
+Validation, sparse storage, omitted-field preservation on JEV saves and removal on a strategy switch follow
+the quota fields above. Absent, `src/server/responses/core-combo.ts` asks JEV on every request exactly as before.
+`src/server/responses/jev-session-pin.ts` keys a process-local pin by the admitted caller (context principal,
+key id, or `loopback`), the Combo id and the explicit session lane from `sessionLaneIdFromRequest`; a request
+without a lane never pins and no body field is an identity. A pin is written only when the target of an applied
+(`gate: "apply"`) decision completes through the Combo callback gate, and every completion on that target
+(tool-loop continuations included) renews its idle window. Reuse runs after current eligibility: the pinned
+key must be among this request's JEV choices with its effort still offered, and opted-in quota evidence must
+not read `nearly_exhausted`; otherwise the pin is released and JEV decides. Any recorded target failure in the
+request forgets the pin, cancellation does not, and a config generation change invalidates both stored pins and
+in-flight writers. A reused turn sends no decision request and persists `pinned: true` with `pinReason: "session"`;
+a decision that replaced a released pin persists the reason. `src/usage/jev-stats.ts` counts pinned turns as
+`pinnedRequests`, never as decisions, gates or backend latency; request success, model fallback and physical
+attempts count every JEV-routed request, pinned or decided. The CLI projection reads an absent `pinnedRequests` as 0.
+Besides a classified failure response, a non-cancellation dispatch, preflight or failure-read exception and a
+committed stream that ends `failed` also forget the pin; `incomplete` is an answer and keeps it. Each forget stamps a
+per-session failure fence, so a request already in flight on that session cannot write the pin back.
+The store holds at most 512 pins with least-recently-written eviction. Coverage:
+`tests/routing/jev-session-pin.test.ts`, `tests/server/server-jev-session-pin.test.ts` and
+`tests/cli/cli-combo-session-pin.test.ts`.
+
 JEV setup stays inside those existing shells. A configured `jev-decision` provider Overview exposes
 **Create JEV Auto**, which navigates to the registered `models/combos/jev-auto` action hash.
 `gui/src/pages/Combos.tsx` owns that one-shot add intent and normalizes the hash when the modal

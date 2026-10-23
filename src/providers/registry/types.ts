@@ -357,6 +357,12 @@ export interface ProviderRegistryEntry {
   chatServiceTier?: boolean;
   /** OpenAI Chat EOF policy for gateways that omit terminal frames after complete tool calls. */
   openaiChatEofTolerance?: boolean;
+  /**
+   * Record that this destination rejects the Chat `developer` role (`400 role 'developer' is not
+   * allowed`), so both the translated route and the native `/v1/chat/completions` passthrough send
+   * `system` instead. Seeds `foldDeveloperRoleToSystem` on the provider config; a user value wins.
+   */
+  foldDeveloperRoleToSystem?: boolean;
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
   requiresReasoningPlaceholderModels?: string[];
@@ -393,6 +399,6 @@ export type ProviderConfigSeed = Pick<
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noStopModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "inlineThinkTagModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "showThinkingSummary"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "inlineThinkTagModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "foldDeveloperRoleToSystem" | "showThinkingSummary"
   | "googleMode" | "project" | "location" | "headers"
 >;

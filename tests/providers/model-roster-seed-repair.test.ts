@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { mergeConfiguredModelsIntoLiveCatalog } from "../../src/codex/catalog/provider-fetch";
+import { routedMaxOutputTokens } from "../../src/codex/catalog/model-hints";
 import { projectStartupConfigRepairs } from "../../src/providers/model-rename-startup";
 import { projectStaleModelRosters, STALE_MODEL_ROSTERS } from "../../src/providers/stale-model-roster-migration";
-import { MINIMAX_MODELS, MINIMAX_MODELS_BEFORE_M31 } from "../../src/providers/registry/model-seeds";
+import { ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS, MINIMAX_MODELS, MINIMAX_MODELS_BEFORE_M31 } from "../../src/providers/registry/model-seeds";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
@@ -163,6 +164,47 @@ describe.each([
     projectStaleModelRosters(absent);
     expect(absent.providers![entry.provider]!.modelContextWindows).toBeUndefined();
     expect(absent.providers![entry.provider]!.modelDefaultReasoningEfforts).toBeUndefined();
+  });
+  test("backfills the added id's output limit into a partial saved map", () => {
+    // Custom catalog rows hand the saved provider straight to routedMaxOutputTokens, so a
+    // partial map without the added id published it with no limit when discovery had none.
+    const config = makeConfig([...before]);
+    const row = config.providers![entry.provider]!;
+    row.modelMaxOutputTokens = { "qwen3.8-max": 4_096 };
+    expect(projectStaleModelRosters(config).changed).toBe(true);
+    const added = entry.to.filter(id => !before.includes(id));
+    expect(row.modelMaxOutputTokens).toEqual({
+      "qwen3.8-max": 4_096, ...Object.fromEntries(added.map(id => [id, ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS[id]])),
+    });
+    expect(routedMaxOutputTokens("custom-token-plan", row, { id: "deepseek-v4.1-flash-1017" } as never)).toBe(393_216);
+    const kept = makeConfig([...before]);
+    kept.providers![entry.provider]!.modelMaxOutputTokens = { "deepseek-v4.1-flash-1017": 8_192 };
+    projectStaleModelRosters(kept);
+    expect(kept.providers![entry.provider]!.modelMaxOutputTokens!["deepseek-v4.1-flash-1017"]).toBe(8_192);
+    const absent = makeConfig([...before]);
+    projectStaleModelRosters(absent);
+    expect(absent.providers![entry.provider]!.modelMaxOutputTokens).toBeUndefined();
+  });
+  test("backfills output limits on a row an earlier refresh already moved to the current roster", () => {
+    const config = makeConfig([...entry.to]);
+    const row = config.providers![entry.provider]!;
+    row.modelContextWindows = {};
+    row.modelMaxOutputTokens = { "qwen3.8-max": 4_096 };
+    const first = projectStartupConfigRepairs(config);
+    expect(first.changed).toBe(true);
+    const saved = first.config.providers![entry.provider]!;
+    expect(saved.modelMaxOutputTokens!["deepseek-v4.1-flash-1017"]).toBe(393_216);
+    expect(saved.modelMaxOutputTokens!["qwen3.8-max"]).toBe(4_096);
+    expect(saved.modelContextWindows).toEqual({});
+    expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
+    const kept = makeConfig([...entry.to]);
+    kept.providers![entry.provider]!.modelMaxOutputTokens = { "deepseek-v4.1-flash-1017": 8_192 };
+    projectStaleModelRosters(kept);
+    expect(kept.providers![entry.provider]!.modelMaxOutputTokens!["deepseek-v4.1-flash-1017"]).toBe(8_192);
+    const absent = makeConfig([...entry.to]);
+    const original = structuredClone(absent);
+    expect(projectStaleModelRosters(absent).changed).toBe(false);
+    expect(absent).toEqual(original);
   });
   test("preserves a custom adapter", () => {
     const config = makeConfig([...before]);

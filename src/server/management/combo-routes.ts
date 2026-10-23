@@ -225,6 +225,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...requestedCombo,
       ...(!Object.hasOwn(requestedCombo, "decisionQuotaSignals") && requestedCombo.strategy === "jev" && previous?.decisionQuotaSignals !== undefined ? { decisionQuotaSignals: previous.decisionQuotaSignals } : {}),
       ...(!Object.hasOwn(requestedCombo, "decisionQuotaTiers") && requestedCombo.strategy === "jev" && previous?.decisionQuotaTiers !== undefined ? { decisionQuotaTiers: previous.decisionQuotaTiers } : {}),
+      // The dashboard does not edit the session pin (#7525): an omitted field keeps it on a JEV save.
+      ...(!Object.hasOwn(requestedCombo, "sessionPin") && requestedCombo.strategy === "jev" && previous?.sessionPin != null ? { sessionPin: previous.sessionPin } : {}),
       ...(!Object.hasOwn(requestedCombo, "allowMeteredTargets") && previous?.allowMeteredTargets === true
         ? { allowMeteredTargets: true }
         : {}),

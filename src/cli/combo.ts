@@ -1,4 +1,5 @@
 import { normalizeJevQuotaTiers } from "../combos/jev-quota-config";
+import { parseJevSessionPinDuration } from "../combos/jev-session-pin-config";
 import { JEV_DECISION_TIMEOUT_MAX_MS, JEV_DECISION_TIMEOUT_MIN_MS } from "../combos/types";
 import {
   CliUsageError,
@@ -29,6 +30,7 @@ const USAGE = `Usage:
       [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>]
       [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->]
       [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->]
+      [--session-pin <duration|->] (e.g. 20m; keeps a session on JEV's target while active)
       (jev only; the provider must be a configured jev-decision row)
       [--rename-from <id>] [--json]
   ocx combo stats <id> [--range <7d|30d|all>] [--json]
@@ -141,6 +143,12 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   try { parsedQuotaTiers = quotaTiers === undefined || quotaTiers === "-" ? null : normalizeJevQuotaTiers(JSON.parse(quotaTiers)); } catch { throw new CliUsageError("invalid --decision-quota-tiers JSON", USAGE); }
   if (quotaTiers !== undefined && quotaTiers !== "-" && !parsedQuotaTiers) throw new CliUsageError("quota tiers must be finite 0..100 and strictly ascending", USAGE);
   if (strategy !== "jev" && (quotaSignals !== undefined && quotaSignals !== "-" || quotaTiers !== undefined && quotaTiers !== "-")) throw new CliUsageError("quota settings apply only to jev", USAGE);
+  const sessionPinRaw = takeOption(args, "--session-pin");
+  const sessionPinMs = sessionPinRaw === undefined || sessionPinRaw === "-" ? undefined : parseJevSessionPinDuration(sessionPinRaw);
+  if (sessionPinRaw !== undefined && sessionPinRaw !== "-" && sessionPinMs === undefined) {
+    throw new CliUsageError("--session-pin must be a duration from 1m to 24h (for example 90s, 20m, 1h, or milliseconds), or -", USAGE);
+  }
+  if (sessionPinMs !== undefined && strategy !== "jev") throw new CliUsageError("--session-pin applies only to the jev strategy", USAGE);
   const decisionTimeout = takeOption(args, "--decision-timeout");
   let decisionTimeoutMs: number | null | undefined;
   if (decisionTimeout !== undefined) {
@@ -184,12 +192,14 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<number> {
   if (decisionTimeoutMs !== undefined) combo.decisionTimeoutMs = decisionTimeoutMs;
   if (quotaSignals !== undefined) combo.decisionQuotaSignals = quotaSignals === "-" ? null : quotaSignals === "on";
   if (quotaTiers !== undefined) combo.decisionQuotaTiers = parsedQuotaTiers;
+  if (sessionPinRaw !== undefined) combo.sessionPin = sessionPinMs === undefined ? null : { ttlMs: sessionPinMs };
   if (strategy !== "jev") {
     delete combo.decisionProvider;
     delete combo.decisionModel;
     delete combo.decisionTimeoutMs;
     delete combo.decisionQuotaSignals;
     delete combo.decisionQuotaTiers;
+    delete combo.sessionPin;
   }
   const current = partialCurrent ?? await runtimeRequest<{ combos?: ComboRow[] }>("/api/combos", { redirect: "error" }, deps);
   const existing = (current.combos ?? []).find(row => row.id === (renameFrom ?? id));
