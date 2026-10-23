@@ -9,7 +9,7 @@ import { createTunnelHistoryBook, exitCause, type TunnelCause, type TunnelHistor
 import {
   classifySshStderr,
   dueForSpawn,
-  failedTunnel,
+  failedSpawnTunnel,
   HOME_TUNNEL_RETRY_POLICY,
   IDLE,
   reduceTunnel,
@@ -244,10 +244,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
 
   /** Fail a link whose attempt could not start; a due retry that fails this way counts as one. */
   const failAttempt = (linkId: string, prior: TunnelState | undefined, reason: TunnelFailure, cause: TunnelCause): void => {
-    const at = now();
-    const retried = prior?.kind === "failed";
-    put(linkId, failedTunnel(reason, at, HOME_TUNNEL_RETRY_POLICY, retried ? prior.since : at,
-      { retries: retried ? (prior.retries ?? 0) + 1 : 0 }), cause);
+    put(linkId, failedSpawnTunnel(prior, reason, now(), HOME_TUNNEL_RETRY_POLICY), cause);
   };
 
   const spawnFor = (record: LinkRecord): void => {

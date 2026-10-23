@@ -752,8 +752,11 @@ test("the Home's -R supervisor keeps the retry cadence when ssh cannot be starte
   spawnError = new Error("spawn ssh ENOENT");
   current = 65_000;
   timers[0]!();
-  // A retry that cannot even start counts as a failed retry, so the delay doubles.
-  expect(supervisor.status()[0]!.state).toEqual({ kind: "failed", since: 5_000, reason: "forward", retryAt: 185_000, inFlight: false, retries: 1 });
+  // A retry that cannot even start counts as a failed retry, so the delay doubles, and it keeps
+  // the peer's last answer because it learned nothing new about the link.
+  expect(supervisor.status()[0]!.state).toEqual({
+    kind: "failed", since: 5_000, reason: "forward", retryAt: 185_000, inFlight: false, retries: 1, detail: "remote_forward_conflict",
+  });
   spawnError = null;
   current = 185_000;
   timers[0]!();

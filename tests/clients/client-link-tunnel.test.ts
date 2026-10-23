@@ -557,6 +557,77 @@ test("after a six-minute outage the tunnel is back within a minute of the Home r
   }
 }, 30_000);
 
+/** A harness whose ssh spawn throws while `spawnError` is set, as when ssh is missing or the pidfile cannot be written. */
+function failingSpawnHarness() {
+  const control = { spawnError: null as Error | null };
+  const h = supervisorHarness({
+    runner: {
+      async run() { return { code: 0, stdout: "", stderr: "" }; },
+      spawnTunnel(argv) {
+        if (control.spawnError) throw control.spawnError;
+        return h.ssh.runner.spawnTunnel(argv);
+      },
+    },
+  });
+  const tunnel = () => {
+    const status = h.supervisor.status();
+    if (status.kind !== "tunnel" || status.state.kind !== "failed") throw new Error(`expected a failed tunnel, got ${JSON.stringify(status)}`);
+    return status.state;
+  };
+  /** Move the clock to the scheduled retry and run that check; returns the delay to the next one. */
+  const toRetry = async (): Promise<number> => {
+    await h.step(tunnel().retryAt! - h.view.clock);
+    return tunnel().retryAt! - h.view.clock;
+  };
+  return { h, control, tunnel, toRetry };
+}
+
+test("a due retry that cannot start ssh counts as a failed retry, so the Child's backoff keeps doubling", async () => {
+  const { h, control, tunnel, toRetry } = failingSpawnHarness();
+  try {
+    await h.start();
+    await h.step();
+    expect(h.state()).toBe("connected");
+    h.ssh.children[0]!.exit(255, "bind [127.0.0.1]:19001: Address already in use\nCould not request local forwarding.");
+    await h.settle();
+    const failedAt = h.view.clock;
+    expect(tunnel()).toMatchObject({ reason: "forward", since: failedAt, retryAt: failedAt + 60_000 });
+
+    control.spawnError = new Error("spawn ssh ENOENT");
+    const delays: number[] = [];
+    for (let retry = 0; retry < 4; retry += 1) delays.push(await toRetry());
+    expect(delays).toEqual([120_000, 240_000, 300_000, 300_000]);
+    expect(tunnel()).toMatchObject({ reason: "forward", since: failedAt, retries: 4, inFlight: false });
+    expect(h.ssh.children).toHaveLength(1);
+
+    control.spawnError = null;
+    await toRetry();
+    expect(h.ssh.children).toHaveLength(2);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a spawn failure on an authentication retry keeps the five-minute cadence", async () => {
+  const { h, control, tunnel, toRetry } = failingSpawnHarness();
+  try {
+    await h.start();
+    await h.step();
+    h.ssh.children[0]!.exit(255, "home@example: Permission denied (publickey).");
+    await h.settle();
+    expect(tunnel()).toMatchObject({ reason: "auth", retryAt: h.view.clock + 300_000 });
+
+    control.spawnError = new Error("pidfile is not writable");
+    // The attempt never reached the Home's sshd, yet it must not open a faster lane to it.
+    expect(await toRetry()).toBe(300_000);
+    expect(tunnel()).toMatchObject({ reason: "auth", retries: 1 });
+    expect(await toRetry()).toBe(300_000);
+    expect(tunnel()).toMatchObject({ reason: "auth", retries: 2 });
+  } finally {
+    await h.close();
+  }
+});
+
 test("a reconnect is promoted by a keyed readyz and the healthy ssh is never cut afterwards", async () => {
   const h = supervisorHarness();
   try {

@@ -10,7 +10,8 @@
  *   own `-L` tunnel both run with one) a reason that has a delay is tried again at `retryAt`, and
  *   the retry attempt runs with `inFlight` while the state still reads failed; a reason without a
  *   delay stays terminal. Each retry that fails again doubles the next delay, up to the policy's
- *   `maxRetryDelayMs`; `retries` counts those failed retries (absent before the first one).
+ *   `maxRetryDelayMs`; `retries` counts those failed retries (absent before the first one). A due
+ *   retry whose ssh could not even be started counts too (`failedSpawnTunnel`).
  */
 
 export type TunnelFailure = "auth" | "hostkey" | "forward" | "timeout";
@@ -111,6 +112,23 @@ export function failedTunnel(
   return delay === undefined
     ? { kind: "failed", since, reason, ...extra }
     : { kind: "failed", since, reason, retryAt: now + delay, inFlight: false, ...extra };
+}
+
+/**
+ * The state after an attempt whose ssh could not be started (ssh missing, a pidfile that cannot be
+ * written, no listener port). On a due retry of a failed link it counts as one more failed retry
+ * from the original moment and keeps the reason it was retrying: an attempt that reached no peer
+ * says nothing new about the link, so the backoff keeps its step and an auth failure keeps its
+ * five-minute cadence. Any other state fails fresh with `reason`.
+ */
+export function failedSpawnTunnel(
+  prior: TunnelState | undefined,
+  reason: TunnelFailure,
+  now: number,
+  policy?: TunnelRetryPolicy,
+): TunnelState {
+  if (prior?.kind !== "failed") return failedTunnel(reason, now, policy);
+  return failedTunnel(prior.reason, now, policy, prior.since, { retries: (prior.retries ?? 0) + 1, detail: prior.detail });
 }
 
 function failureOf(cls: StderrClass): TunnelFailure | null {

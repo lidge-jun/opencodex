@@ -14,7 +14,7 @@ import {
   CLIENT_TUNNEL_RETRY_POLICY,
   classifySshStderr,
   dueForSpawn,
-  failedTunnel,
+  failedSpawnTunnel,
   IDLE,
   reduceTunnel,
   type StderrClass,
@@ -759,7 +759,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
         peerListenerPort: sidecar.peerListenerPort,
       }, deps);
     } catch {
-      setState(failedTunnel("forward", timestamp, policy, state.kind === "failed" ? state.since : timestamp));
+      // A due retry that cannot start counts as a failed retry, so the backoff keeps its step.
+      setState(failedSpawnTunnel(state, "forward", timestamp, policy));
       deps.warn?.("client link tunnel could not be started");
       return;
     }
