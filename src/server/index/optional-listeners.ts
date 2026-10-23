@@ -14,6 +14,7 @@ import {
   type LinkListenerStatus,
 } from "./link-listener";
 import { createLinkSupervisor, type LinkSupervisor } from "../../link/supervisor";
+import { flushLinkDiagnostics, recordLinkDiagnostic } from "../../link/diagnostics";
 import { linkManagementRouteAllowed } from "../../link/management-routes";
 import { linkChildParityRouteAllowed } from "../../link/child-parity";
 import { saveConfigPreservingClaudeCode } from "../../config/live-reconcile";
@@ -56,6 +57,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
   let activeConfig: OcxConfig | undefined;
   let stopJevQuotaActivation: (() => void) | undefined;
   const supervisor = createLinkSupervisor({
+    // Tunnel state changes and their causes reach <configDir>/link/diagnostics.jsonl (bounded).
+    diagnostic: recordLinkDiagnostic,
+    flushDiagnostics: flushLinkDiagnostics,
     apiKeys: () => activeConfig?.apiKeys ?? [],
     revokeApiKey: id => {
       if (!activeConfig) return false;

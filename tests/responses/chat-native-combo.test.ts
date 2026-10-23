@@ -17,12 +17,14 @@ import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/c
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
+import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 import { chatErrorStream, chatStream, responsesSuccess } from "../helpers/combo-failover-upstream";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import type { DataPlaneAdmission } from "../../src/server/auth-cors";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 type Rec = Record<string, unknown>;
@@ -50,6 +52,7 @@ beforeEach(() => {
   clearComboTargetCooldowns();
   clearKeyCooldowns();
   clearResponseStateForTests();
+  clearReasoningReplayCacheForTests();
 });
 
 afterEach(async () => {
@@ -66,6 +69,7 @@ afterEach(async () => {
   clearComboTargetCooldowns();
   clearKeyCooldowns();
   resetProviderRequestPacingForTest();
+  clearReasoningReplayCacheForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -135,13 +139,21 @@ function comboConfig(
 
 const NATIVE_ON: OcxConfig["protocols"] = { rollout: { nativeChatCombos: true } };
 
-async function send(config: OcxConfig, body: Rec) {
+async function send(config: OcxConfig, body: Rec, options: {
+  headers?: Record<string, string>;
+  admission?: DataPlaneAdmission;
+} = {}) {
   const requestId = `pf07-${crypto.randomUUID()}`;
   const response = await handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...options.headers },
     body: JSON.stringify({ model: "combo/pair", messages: MESSAGES, ...body }),
-  }), config, { model: "", provider: "" }, { requestId, start: Date.now() });
+  }), config, { model: "", provider: "" }, {
+    requestId,
+    start: Date.now(),
+    // What the listener resolved; a loopback bind carries no caller identity of its own.
+    ...(options.admission ? { admission: options.admission } : {}),
+  });
   const text = await response.text();
   const rows = getRequestLogEntries().filter(entry => entry.requestId === requestId);
   return { response, text, rows };
@@ -193,6 +205,63 @@ describe("native Chat candidates in a combo", () => {
       inbound: "chat", mode: "native", requestPath: ["chat", "chat"],
       attempts: [{ ordinal: 1, mode: "native", requestPath: ["chat", "chat"] }],
     });
+  });
+
+  test("native combo plaintext reasoning replay follows admission without changing parent callbacks", async () => {
+    const a = upstream((_body, hit) => Response.json({
+      id: `chatcmpl-replay-${hit}`,
+      object: "chat.completion",
+      model: "m1",
+      choices: [{
+        index: 0,
+        message: hit === 1
+          ? { role: "assistant", content: null, reasoning_content: "private reasoning", tool_calls: [
+            { id: "call_replay", type: "function", function: { name: "inspect", arguments: "{}" } },
+          ] }
+          : { role: "assistant", content: "continued" },
+        finish_reason: hit === 1 ? "tool_calls" : "stop",
+      }],
+    }));
+    const config = comboConfig(
+      { a: provider("openai-chat", a.baseUrl) },
+      [{ provider: "a", model: "deepseek-v4.1-flash" }],
+      NATIVE_ON,
+    );
+    const owner: DataPlaneAdmission = {
+      kind: "configured", keyId: "fixture-owner", source: "dedicated", contextPrincipalId: "principal-owner",
+    };
+    const foreign: DataPlaneAdmission = {
+      kind: "configured", keyId: "fixture-foreign", source: "dedicated", contextPrincipalId: "principal-foreign",
+    };
+    const thread = { "thread-id": "combo-replay-thread" };
+    const first = await send(config, { stream: false }, { headers: thread, admission: owner });
+    expect(first.response.status).toBe(200);
+    expect(first.rows).toHaveLength(1);
+    expect(first.rows[0]!.spend).toMatchObject({ sends: 1, unresolved: 0 });
+
+    const history: Rec[] = [
+      { role: "user", content: "fixture" },
+      { role: "assistant", content: null, tool_calls: [
+        { id: "call_replay", type: "function", function: { name: "inspect", arguments: "{}" } },
+      ] },
+      { role: "tool", tool_call_id: "call_replay", content: "done" },
+      { role: "user", content: "continue" },
+    ];
+    const samePrincipal = await send(config, { stream: false, messages: history }, { headers: thread, admission: owner });
+    expect(samePrincipal.response.status).toBe(200);
+    expect(a.bodies[1]!.messages[1]!.reasoning_content).toBe("private reasoning");
+
+    const foreignPrincipal = await send(config, { stream: false, messages: history }, { headers: thread, admission: foreign });
+    expect(foreignPrincipal.response.status).toBe(200);
+    expect(a.bodies[2]!.messages[1]!.reasoning_content).toBe(" ");
+
+    const keyless = await send(config, { stream: false, messages: history }, { headers: thread });
+    expect(keyless.response.status).toBe(200);
+    expect(a.bodies[3]!.messages[1]!.reasoning_content).toBe(" ");
+    // Native children remain on the combo's parent row and retain its send accounting.
+    expect(keyless.rows).toHaveLength(1);
+    expect(keyless.rows[0]!.provider).toBe("combo");
+    expect(keyless.rows[0]!.spend).toMatchObject({ sends: 1, unresolved: 0 });
   });
 
   test.each([

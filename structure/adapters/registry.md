@@ -29,7 +29,10 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
 - `azure` and `azure-openai` inherit the `openai-responses` contract.
   The inherited contract includes Meta Muse's host-gated 64-character tool-name alias when the
   constructed send URL is `api.meta.ai` (`src/responses/muse-tool-name-alias.ts`).
-- `mimo-free` inherits the `openai-chat` contract.
+- `mimo-free` inherits the `openai-chat` contract. Its registry entry is `deprecated`: saved
+  providers keep resolving to this adapter with their stored configuration, while new-provider
+  discovery (presets, the init menu, the featured list, and key logins) excludes it and
+  `provider add` warns before creating one.
 - `claude-cli` inherits the `codebuddy` contract. Claude Code speaks the same stream-json
   protocol this repository already parses for CodeBuddy and Qoder, so the wire is inherited and the
   family module (`src/adapters/claude-cli/`) supplies only its own arguments and child environment.

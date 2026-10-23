@@ -32,12 +32,15 @@ import type {
 
 const MODEL = "opencode-go/deepseek-v4-flash";
 const REASONING = "I need to inspect files before answering.";
+const PRINCIPAL = "principal-deepseek-replay-fixture";
 function replayScope(
   clientThreadId = "test-thread",
   overrides: Partial<NonNullable<OcxReasoningReplayScopeRef["current"]>> = {},
+  clientPrincipalId?: string,
 ): OcxReasoningReplayScopeRef {
   return {
     clientThreadId,
+    ...(clientPrincipalId ? { clientPrincipalId } : {}),
     current: {
       providerName: "opencode-go",
       providerDestinationIdentity: "destination:opencode-zen-go",
@@ -48,7 +51,7 @@ function replayScope(
     },
   };
 }
-const REPLAY_SCOPE = replayScope();
+const REPLAY_SCOPE = replayScope("test-thread", {}, PRINCIPAL);
 const rememberReasoningForCall = (callId: string, text: string, scope = REPLAY_SCOPE): void =>
   rememberReasoningForCallRaw(callId, text, scope);
 const peekReasoningForCall = (callId: string, scope = REPLAY_SCOPE): string | undefined =>
@@ -71,7 +74,7 @@ function configFor(): OcxConfig {
 
 function wireFor(
   input: unknown[],
-  scope: OcxReasoningReplayScopeRef | null = REPLAY_SCOPE,
+  scope: OcxReasoningReplayScopeRef | null = replayScope(),
 ): { messages: Array<Record<string, unknown>> } {
   const parsed = parseRequest({ model: MODEL, input, stream: true });
   if (scope !== null) {
@@ -174,7 +177,7 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
       { type: "compaction", encrypted_content: "ocx1:c3VtbWFyeQ==" },
       functionCallItem(),
       functionCallOutputItem(),
-    ]);
+    ], REPLAY_SCOPE);
     const assistant = toolCallAssistant(messages);
     expect(assistant).toBeDefined();
     expect(assistant!["reasoning_content"]).toBe(REASONING);
@@ -186,8 +189,8 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     // must carry the reasoning recorded for that call id — and keep carrying it
     // on a retry of the same continuation (peek is non-destructive).
     rememberReasoningForCall("call_1", REASONING);
-    const first = toolCallAssistant(wireFor([userMessage(), functionCallOutputItem()]).messages);
-    const retry = toolCallAssistant(wireFor([userMessage(), functionCallOutputItem()]).messages);
+    const first = toolCallAssistant(wireFor([userMessage(), functionCallOutputItem()], REPLAY_SCOPE).messages);
+    const retry = toolCallAssistant(wireFor([userMessage(), functionCallOutputItem()], REPLAY_SCOPE).messages);
     expect(first).toBeDefined();
     expect(first!["reasoning_content"]).toBe(REASONING);
     expect(retry).toBeDefined();
@@ -195,8 +198,8 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
   });
 
   test("cross-request replay isolates threads and rejects an unscoped producer/consumer pair", () => {
-    const threadA = replayScope("thread-a");
-    const threadB = replayScope("thread-b");
+    const threadA = replayScope("thread-a", {}, PRINCIPAL);
+    const threadB = replayScope("thread-b", {}, PRINCIPAL);
     rememberReasoningForCallRaw("call_1", "thread alpha reasoning", threadA);
     rememberReasoningForCallRaw("call_1", "thread beta reasoning", threadB);
     const unscopedProducer: AdapterEvent[] = [
@@ -216,9 +219,11 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     const alpha = toolCallAssistant(wireFor(input, threadA).messages);
     const beta = toolCallAssistant(wireFor(input, threadB).messages);
     const unscoped = toolCallAssistant(wireFor(input, null).messages);
+    const keyless = toolCallAssistant(wireFor(input, replayScope("thread-a")).messages);
     expect(alpha?.reasoning_content).toBe("thread alpha reasoning");
     expect(beta?.reasoning_content).toBe("thread beta reasoning");
     expect(unscoped?.reasoning_content).toBe(" ");
+    expect(keyless?.reasoning_content).toBe(" ");
   });
 
   test("GAP D (issue #1193): replay cache MISS on the main assistant path injects a placeholder", () => {
@@ -279,13 +284,13 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     // requiresReasoningPlaceholderModels: [] for minimax so a cache miss never
     // fabricates one (chatgpt-codex-connector P2 on #1205). Real recorded
     // reasoning still replays via preserveReasoningContentModels.
-    const minimaxWire = (input: unknown[]) => {
+    const minimaxWire = (input: unknown[], clientPrincipalId?: string) => {
       const parsed = parseRequest({ model: "minimax/MiniMax-M3", input, stream: true });
       const minimaxReplayScope = replayScope("test-thread-minimax", {
         providerName: "minimax",
         providerDestinationIdentity: "destination:minimax",
         modelId: "MiniMax-M3",
-      });
+      }, clientPrincipalId);
       parsed._clientThreadId = minimaxReplayScope.clientThreadId;
       parsed._reasoningReplayScope = minimaxReplayScope;
       const config: OcxConfig = {
@@ -330,8 +335,8 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     ]).wire.messages;
     expect(thinkingOnly.some(message => message.role === "assistant")).toBeFalse();
     // Cache hit on the same path: the recorded reasoning still replays.
-    rememberReasoningForCall("call_1", REASONING, missResult.replayScope);
-    const hit = toolCallAssistant(minimaxWire([userMessage(), functionCallOutputItem()]).wire.messages);
+    rememberReasoningForCall("call_1", REASONING, { ...missResult.replayScope, clientPrincipalId: PRINCIPAL });
+    const hit = toolCallAssistant(minimaxWire([userMessage(), functionCallOutputItem()], PRINCIPAL).wire.messages);
     expect(hit).toBeDefined();
     expect(hit!["reasoning_content"]).toBeUndefined();
     expect(hit!["reasoning_details"]).toEqual([
@@ -410,8 +415,8 @@ describe("issue #950 — reasoning replay cache bounds", () => {
   });
 
   test("conversation scopes isolate entries with the same call id", () => {
-    const threadA = replayScope("thread-a");
-    const threadB = replayScope("thread-b");
+    const threadA = replayScope("thread-a", {}, PRINCIPAL);
+    const threadB = replayScope("thread-b", {}, PRINCIPAL);
     rememberReasoningForCall("call_1", "thread alpha reasoning", threadA);
     rememberReasoningForCall("call_1", "thread beta reasoning", threadB);
     expect(peekReasoningForCall("call_1", threadA)).toBe("thread alpha reasoning");

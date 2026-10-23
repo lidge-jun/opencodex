@@ -124,7 +124,7 @@ test("redacted-only history qualifies, and HTTP success alone does not memoize",
   expect(reasoningReplayOpaqueBlobRejectionMemoized(request._reasoningReplayScope)).toBe(true);
 });
 
-for (const variant of ["empty", "no-terminal", "error", "incomplete", "cancelled", "changed-identity", "changed-thread", "failed-fold"] as const) {
+for (const variant of ["empty", "no-terminal", "error", "incomplete", "cancelled", "changed-identity", "changed-thread", "changed-principal", "failed-fold"] as const) {
   test(`does not memoize a ${variant} replacement`, async () => {
     const { recovery, request, abort } = fixture();
     const rejectedScope = structuredClone(request._reasoningReplayScope);
@@ -137,6 +137,7 @@ for (const variant of ["empty", "no-terminal", "error", "incomplete", "cancelled
     if (variant === "cancelled") abort.abort();
     if (variant === "changed-identity") request._reasoningReplayScope!.current = { ...request._reasoningReplayScope!.current!, credentialDurableIdentity: "another-credential" };
     if (variant === "changed-thread") request._reasoningReplayScope = { ...request._reasoningReplayScope!, clientThreadId: "another-thread" };
+    if (variant === "changed-principal") request._reasoningReplayScope = { ...request._reasoningReplayScope!, clientPrincipalId: "another-principal" };
     recovery.rememberSuccess({ status: variant === "failed-fold" ? "failed" : "completed", output: [{ type: "message" }] });
     expect(reasoningReplayOpaqueBlobRejectionMemoized(rejectedScope)).toBe(false);
     expect(reasoningReplayOpaqueBlobRejectionMemoized(request._reasoningReplayScope)).toBe(false);

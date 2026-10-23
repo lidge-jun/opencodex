@@ -257,7 +257,7 @@ unqualified bare OpenAI model id. Bare `gpt-5.6-*` native aliases use Codex Pool
 Account-qualified OpenAI routes remain distinct, while provider-qualified routes such as
 `openai-apikey/gpt-5.6-*` use their configured API key and never fall through to the native alias.
 Read the safety and visibility contract in the guide before enabling the compatibility pair.
-With `--strategy jev` only, the decision method is chosen by one of two mutually exclusive flags.
+Only when the effective strategy is JEV (`--strategy jev`, or a stored JEV Combo when `--strategy` is omitted), the decision method is chosen by one of two mutually exclusive flags.
 `--decision-provider <provider|->` names a configured `jev-decision` row (for example a self-hosted
 Ollama `tev1`) as a System One-compatible server. `--decision-model <route|->` names an ordinary
 opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as JSON; it cannot be
@@ -266,10 +266,18 @@ decision deadline (1000–120000, default 4000); `-` clears any of the three.
 
 `ocx combo set <id> --decision-quota-signals on|off|-` controls per-Combo advisory evidence.
 `--decision-quota-tiers '{"limited":80}'` sets partial threshold overrides; `-` clears them.
-Both are JEV-only. Omitted policy survives `--targets-file` replacement, `--targets` with `--strategy jev`, and rename (`--targets` alone keeps the existing failover default). Off retains thresholds;
+Both are JEV-only. Omitted policy survives `--targets-file` or `--targets` replacement and rename. Without
+`--strategy`, replacing the targets of an existing Combo keeps its stored strategy, so a JEV Combo stays JEV with
+its decision method, quota settings and session pin; a new Combo defaults to failover. If the kept JEV
+policy rejects the new targets, the command fails, names that policy, and saves nothing. Off retains thresholds;
 switching away from JEV removes both settings. This adds quota data to the selected decision
 backend, not probes, new account selection or hard exclusions. See
 [quota defaults, freshness and privacy](/guides/combos/#advisory-quota-signals-for-jev).
+
+`ocx combo set <id> --session-pin <duration|->` (JEV only) keeps each client session on the target
+JEV chose for it while the session stays active, so the provider prompt cache stays warm. The
+duration is the idle window: `90s`, `20m`, `1h` or milliseconds, from 1 minute to 24 hours; `-`
+turns it off. See [Session pin for JEV](/guides/combos/#session-pin-for-jev).
 
 `ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
 [--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an
@@ -333,6 +341,25 @@ counts and snapshot-window boundaries. Zero observations do not prove success.
 There is no monetary cost or comparative savings field in this report.
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
+
+## Fallback off
+
+### `ocx fallback <status|off|on|clear|local> ...`
+
+```bash
+ocx fallback status --json
+ocx fallback off --kind provider
+ocx fallback on --route combo/coding
+ocx fallback clear --provider anthropic --kind model
+ocx fallback local on --device mac-studio
+```
+
+`off`, `on` and `clear` take `--kind model|provider|all` (default `all`) and at most one scope:
+`--provider <name>`, `--route <selector>` or `--device <id|alias>`; with none they set the global switch.
+A device set to off always refuses; otherwise route beats provider beats global. `local` records whether a
+device may use its own providers while the Home is unreachable, a permission GOAT reads; OpenCodex itself
+still answers `home_unreachable` there. The commands talk to the live proxy; on a Remote Link Child,
+`status` reads the Home and writes are refused. See [Fallback off](/guides/fallback-off/).
 
 ## Routing profiles
 

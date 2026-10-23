@@ -2,7 +2,9 @@ import type { OcxProviderConfig } from "./provider";
 import type { CodexAccount } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
+import type { OcxFallbackConfig } from "./fallback";
 export type { AnthropicAccountPoolConfig, AnthropicModelRoute, OcxAccountPoolRotationStrategy, OcxAccountPoolQuotaWindow } from "./anthropic-account-pool";
+export type { OcxFallbackConfig, OcxFallbackDeviceConfig, OcxFallbackKind, OcxFallbackSwitches } from "./fallback";
 
 /** Public inference API exposure. Responses and Chat Completions are always served. */
 export interface OcxApiSurfacesConfig {
@@ -1361,6 +1363,11 @@ export interface OcxConfig {
   tokenGuardian?: OcxTokenGuardianConfig;
   /** Additional exact origins allowed for CORS (e.g. HTTPS or chrome-extension://<id>). Loopback origins are always allowed. */
   corsAllowOrigins?: string[];
+  /**
+   * OCX-11 fallback off: refuse model or provider fallback per scope, and record per-device local
+   * fallback permission. Absent keeps every chain as it was. See src/routing/fallback-policy.ts.
+   */
+  fallback?: OcxFallbackConfig;
 }
 
 export type OcxComboStrategy = "failover" | "round-robin" | "random" | "least-used" | "reset-window" | "jev";
@@ -1489,6 +1496,12 @@ export interface OcxComboConfig {
   decisionQuotaSignals?: boolean | null;
   /** Partial 0..100 tier overrides; defaults limited 70/nearlyExhausted 90. null clears. */
   decisionQuotaTiers?: import("../combos/jev-quota-config").JevQuotaTiers | null;
+  /**
+   * `strategy: "jev"` only, default off: keep an explicit client session on the target JEV chose
+   * for it while the session stays active, so the provider prompt cache stays warm (#7525).
+   * `ttlMs` is the idle window after the last successful turn (60000..86400000). null clears.
+   */
+  sessionPin?: import("../combos/jev-session-pin-config").JevSessionPinConfig | null;
 }
 
 export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";

@@ -11,8 +11,9 @@ const MODEL = "deepseek-v4.1-flash";
 const PROVIDER: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key" };
 const tool = (id: string) => ({ id, type: "function", function: { name: "inspect", arguments: "{}" } });
 const history = (id = "call_a") => ({ messages: [{ role: "assistant", content: null, tool_calls: [tool(id)] }] });
-function scope(thread = "fixture-thread", provider = PROVIDER, providerName = "fixture", model = MODEL) {
-  const value = nativeChatReplayScope(new Headers({ "thread-id": thread }))!;
+function scope(thread = "fixture-thread", provider = PROVIDER, providerName = "fixture", model = MODEL,
+  principal = "fixture-principal") {
+  const value = nativeChatReplayScope(new Headers({ "thread-id": thread }), principal)!;
   bindNativeChatReplayScope(value, provider, providerName, model);
   return value;
 }
@@ -60,15 +61,19 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
     for (const foreign of [scope("other-thread"), scope("fixture-thread", PROVIDER, "other-provider"),
       scope("fixture-thread", { ...PROVIDER, baseUrl: "https://other.invalid/v1" }),
       scope("fixture-thread", { ...PROVIDER, apiKey: "other-key" }),
-      scope("fixture-thread", PROVIDER, "fixture", "deepseek-v5.2-flash")]) {
+      scope("fixture-thread", PROVIDER, "fixture", "deepseek-v5.2-flash"),
+      scope("fixture-thread", PROVIDER, "fixture", MODEL, "other-principal")]) {
       expect(reasoning(foreign)).toBe(" ");
     }
     bindNativeChatReplayScope(owner, { ...PROVIDER, apiKey: "rotated-key" }, "fixture", MODEL);
     expect(reasoning(owner)).toBe(" ");
     expect(reasoning(undefined)).toBe(" ");
-    expect(nativeChatReplayScope(new Headers())).toBeUndefined();
-    const keyless = scope("fixture-thread", { ...PROVIDER, apiKey: undefined });
-    expect(keyless.current).toBeUndefined();
+    expect(nativeChatReplayScope(new Headers(), "fixture-principal")).toBeUndefined();
+    const keyless = nativeChatReplayScope(new Headers({ "thread-id": "fixture-thread" }), undefined)!;
+    bindNativeChatReplayScope(keyless, PROVIDER, "fixture", MODEL);
+    // Physical identity remains available to other scope consumers even though a keyless caller
+    // cannot address the principal-scoped plaintext replay cache.
+    expect(keyless.current).toMatchObject({ providerName: "fixture", modelId: MODEL });
     expect(reasoning(keyless)).toBe(" ");
     budget.dispose();
   });

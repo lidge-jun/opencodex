@@ -10,6 +10,7 @@ import {
 import { linkStorePath } from "../../link/paths";
 import { linkRouteAllowed } from "../../link/routes";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
+import { registerFallbackLinkResolver } from "../../routing/fallback-policy";
 
 export const LINK_INGRESS_HOSTNAME = "opencodex-link.invalid";
 
@@ -93,6 +94,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   const readStoreForAdmission = (): LinkStore => {
     try { return readStore(storePath); } catch { return emptyLinkStore(); }
   };
+  // OCX-11: the fallback policy resolves a link data key to its link id through this slot.
+  const releaseFallbackLinkResolver = registerFallbackLinkResolver(keyId =>
+    readStoreForAdmission().links.find(link => link.apiKeyId === keyId)?.id);
 
   const bindIfNeeded = (): void => {
     if (stopped || listener || !startContext) return;
@@ -225,6 +229,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     close,
     async stop() {
       stopped = true;
+      releaseFallbackLinkResolver();
       // Process shutdown is deliberately forceful, unlike last-link removal. Every
       // authenticated socket is closed, and the client transport cannot reconnect it.
       relaySessions?.abortReservations();
