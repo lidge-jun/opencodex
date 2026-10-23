@@ -1,6 +1,7 @@
 import { describe, test } from "bun:test";
 import assert from "node:assert/strict";
 import { createServer, type AddressInfo, type Socket } from "node:net";
+import { createUploadWaiter } from "../../src/lib/socks5-upload-waiter";
 import { socks5Fetch } from "../../src/lib/socks5-fetch";
 
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -120,4 +121,164 @@ describe("SOCKS5 TLS handshake lifecycle", () => {
   test("a null cancellation reason is preserved", () => checkHandshakeFailure("null-abort"));
   test("premature peer close releases the TLS deadline", () => checkHandshakeFailure("close"));
   test("TLS protocol failure releases the TLS deadline", () => checkHandshakeFailure("invalid-tls"));
+});
+
+describe("SOCKS5 upload wait lifetime", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+  }
+
+  test("serial waits attach only one response observer", async () => {
+    const head = deferred<void>();
+    const originalThen = head.promise.then.bind(head.promise);
+    let observers = 0;
+    head.promise.then = ((...args: Parameters<typeof head.promise.then>) => {
+      observers++;
+      return originalThen(...args);
+    }) as typeof head.promise.then;
+    const waiter = createUploadWaiter(head.promise, new AbortController().signal);
+    try {
+      for (let index = 0; index < 256; index++) {
+        assert.equal(await waiter.wait(() => Promise.resolve(index)), index);
+      }
+      assert.equal(observers, 1);
+    } finally {
+      waiter.dispose();
+      head.resolve();
+    }
+  });
+
+  test("pending waits preserve null, false, object and Error abort reasons", async () => {
+    for (const reason of [null, false, { cancelled: true }, new Error("synthetic cancellation")]) {
+      const head = deferred<void>();
+      const controller = new AbortController();
+      const waiter = createUploadWaiter(head.promise, controller.signal);
+      try {
+        const pending = waiter.wait(() => new Promise<never>(() => {}));
+        const outcome = pending.then(() => assert.fail("unexpected success"), error => error);
+        controller.abort(reason);
+        assert.equal(await outcome, reason);
+      } finally {
+        waiter.dispose();
+        head.resolve();
+      }
+    }
+  });
+
+  test("both head outcomes interrupt a wait and observe its late rejection", async () => {
+    for (const failed of [false, true]) {
+      const head = deferred<void>();
+      const operation = deferred<void>();
+      const waiter = createUploadWaiter(head.promise, new AbortController().signal);
+      try {
+        const pending = waiter.wait(() => operation.promise);
+        if (failed) head.reject(new Error("synthetic head failure"));
+        else head.resolve();
+        assert.deepEqual(await pending, { kind: "answered" });
+        operation.reject(new Error("late read failure"));
+        await Promise.resolve();
+      } finally {
+        waiter.dispose();
+      }
+    }
+  });
+
+  test("an observed interruption does not start another operation", async () => {
+    const controller = new AbortController();
+    controller.abort(null);
+    const head = deferred<void>();
+    const waiter = createUploadWaiter(head.promise, controller.signal);
+    let calls = 0;
+    try {
+      const result = await waiter.wait(async () => { calls++; }).then(
+        () => assert.fail("unexpected success"), error => error,
+      );
+      assert.equal(result, null);
+      assert.equal(calls, 0);
+    } finally {
+      waiter.dispose();
+      head.resolve();
+    }
+  });
+
+  test("operation failures settle without poisoning the next serial wait", async () => {
+    const head = deferred<void>();
+    const waiter = createUploadWaiter(head.promise, new AbortController().signal);
+    const reason = new Error("synthetic operation failure");
+    try {
+      await assert.rejects(waiter.wait(() => Promise.reject(reason)), error => error === reason);
+      await assert.rejects(waiter.wait(() => { throw reason; }), error => error === reason);
+      assert.equal(await waiter.wait(async () => 7), 7);
+    } finally {
+      waiter.dispose();
+      head.resolve();
+    }
+  });
+
+  test("the real upload path does not repeatedly race shared pending promises", async () => {
+    const sockets = new Set<Socket>();
+    const server = createServer(socket => {
+      sockets.add(socket);
+      socket.on("error", () => {});
+      socket.on("close", () => sockets.delete(socket));
+      let stage: "greeting" | "connect" | "http" = "greeting";
+      let bytes = Buffer.alloc(0);
+      socket.on("data", chunk => {
+        bytes = Buffer.concat([bytes, Buffer.from(chunk)]);
+        if (stage === "greeting") {
+          if (bytes.length < 2 || bytes.length < 2 + bytes[1]!) return;
+          bytes = bytes.subarray(2 + bytes[1]!);
+          socket.write(Buffer.from([5, 0]));
+          stage = "connect";
+        }
+        if (stage === "connect") {
+          if (bytes.length < 5 || bytes.length < 7 + bytes[4]!) return;
+          bytes = bytes.subarray(7 + bytes[4]!);
+          socket.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 80]));
+          stage = "http";
+        }
+        if (stage === "http" && bytes.toString("latin1").endsWith("0\r\n\r\n")) {
+          socket.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        }
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const originalRace = Promise.race;
+    const uses = new Map<unknown, number>();
+    Promise.race = ((values: Iterable<unknown>) => {
+      const list = [...values];
+      for (const value of list) uses.set(value, (uses.get(value) ?? 0) + 1);
+      return originalRace.call(Promise, list);
+    }) as typeof Promise.race;
+    const controller = new AbortController();
+    const watchdog = setTimeout(() => controller.abort(new Error("upload fixture watchdog")), 2_000);
+    let produced = 0;
+    try {
+      const body = new ReadableStream<Uint8Array>({
+        pull(stream) {
+          if (produced++ < 256) stream.enqueue(new Uint8Array([120]));
+          else stream.close();
+        },
+      });
+      const init = { method: "POST", body, duplex: "half", signal: controller.signal } satisfies RequestInit & { duplex: "half" };
+      const port = (server.address() as AddressInfo).port;
+      const response = await socks5Fetch("http://destination.invalid/upload", init, `socks5://127.0.0.1:${port}`);
+      assert.equal(await response.text(), "ok");
+      assert.equal(produced, 257);
+      const mostReused = Math.max(0, ...uses.values());
+      assert.ok(mostReused <= 2, `shared promise accumulated ${mostReused} upload races`);
+    } finally {
+      Promise.race = originalRace;
+      clearTimeout(watchdog);
+      controller.abort();
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
 });
