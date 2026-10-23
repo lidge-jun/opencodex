@@ -3,7 +3,7 @@ import { normalizeRoutedAgentMessages } from "../routed-agent-messages";
 import { frameCompactionHistory } from "../../responses/compaction-history-framing";
 import { nameRoutedIdentity, repairIdentityInResponsesBody, stripRoutedIdentity } from "../identity";
 import { stripBracketedModelSuffix } from "../openai-chat";
-import { normalizeOpenCodeGoAdditionalTools } from "../opencode-go-additional-tools";
+import { isOpenCodeGoResponsesUrl, isXaiResponsesUrl, promoteResponsesAdditionalTools, normalizeOpenCodeGoAdditionalTools } from "../opencode-go-additional-tools";
 import { isXaiResponsesDestination } from "../../providers/xai-transport";
 import { applyGithubCopilotContextTier } from "../../providers/github-copilot-context";
 import { Buffer } from "node:buffer";
@@ -385,7 +385,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
       if (!forward) {
-        outBody = normalizeOpenCodeGoAdditionalTools(outBody, url, parsed._replayPrefixLen);
+        if (
+          isOpenCodeGoResponsesUrl(url)
+          || isXaiResponsesDestination(provider)
+          || isXaiResponsesUrl(url)
+          || (provider as { promoteAdditionalTools?: boolean }).promoteAdditionalTools === true
+        ) {
+          outBody = promoteResponsesAdditionalTools(outBody, parsed._replayPrefixLen);
+        }
       }
       // Same native-v2/portable predicate as the routedCompaction gate in handleResponses():
       // neither forward auth nor native v1 endpoint support implies trigger support. The
