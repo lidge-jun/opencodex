@@ -45,6 +45,7 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
+/** Build the synthetic Kiro completion frames consumed by all three dispatch fixtures. */
 function completedAnswer(): Response {
   const frame = (type: string, value: Record<string, unknown>) => encodeMessage(
     { ":message-type": "event", ":event-type": type },
