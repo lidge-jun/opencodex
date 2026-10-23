@@ -5,9 +5,53 @@ import { projectStartupConfigRepairs } from "../../src/providers/model-rename-st
 import { projectStaleModelRosters, STALE_MODEL_ROSTERS } from "../../src/providers/stale-model-roster-migration";
 import { ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS, MINIMAX_MODELS, MINIMAX_MODELS_BEFORE_M31 } from "../../src/providers/registry/model-seeds";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { enrichProviderFromRegistry } from "../../src/providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const PREVIEW = "MiniMax-M3.1-Flash-Preview";
+
+describe("DeepSeek Pro saved roster refresh", () => {
+  const before = ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"];
+  const configFor = (models = before, baseUrl = "https://api.deepseek.com") => ({ providers: { deepseek: {
+    adapter: "openai-chat", baseUrl, models: [...models], liveModels: false,
+    defaultModel: "deepseek-flash", modelContextWindows: { "deepseek-flash": 1_048_576 },
+  } } } as unknown as OcxConfig);
+
+  test("startup restores the exact native seed without live discovery", () => {
+    const first = projectStartupConfigRepairs(configFor());
+    const row = first.config.providers!.deepseek!;
+    expect(first.changed).toBe(true);
+    expect(row.models).toContain("deepseek-v4-pro");
+    expect(row.modelContextWindows?.["deepseek-v4-pro"]).toBe(1_048_576);
+    expect(row.liveModels).toBe(false);
+    expect(row.defaultModel).toBe("deepseek-flash");
+    expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
+    enrichProviderFromRegistry("deepseek", row);
+    expect(row.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["low", "high", "max"]);
+    expect(row.modelSupportsReasoningSummaries?.["deepseek-v4-pro"]).toBe(true);
+  });
+
+  test("preserves operator lists, custom destinations and adapters", () => {
+    for (const models of [[], before.slice(1), [...before].reverse(), [...before, "custom-model"]]) {
+      const config = configFor(models);
+      expect(projectStaleModelRosters(config).changed).toBe(false);
+      expect(config.providers!.deepseek!.models).toEqual(models);
+    }
+    expect(projectStaleModelRosters(configFor(before, "https://example.com")).changed).toBe(false);
+    const config = configFor();
+    config.providers!.deepseek!.adapter = "anthropic";
+    expect(projectStaleModelRosters(config).changed).toBe(false);
+  });
+
+  test("preserves explicit Pro context and absent metadata containers", () => {
+    const config = configFor();
+    config.providers!.deepseek!.modelContextWindows!["deepseek-v4-pro"] = 123;
+    expect(projectStaleModelRosters(config).config.providers!.deepseek!.modelContextWindows!["deepseek-v4-pro"]).toBe(123);
+    const absent = configFor();
+    delete absent.providers!.deepseek!.modelContextWindows;
+    expect(projectStaleModelRosters(absent).config.providers!.deepseek!.modelContextWindows).toBeUndefined();
+  });
+});
 
 function minimaxConfig(provider: string, row: Partial<OcxProviderConfig>): OcxConfig {
   return {
