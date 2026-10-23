@@ -38,6 +38,22 @@ export function isSystemOneEndpoint(baseUrl: string): boolean {
  */
 export function jevDecisionEndpointUrl(baseUrl: string): string {
   const raw = baseUrl.trim();
-  const stripped = raw.replace(/\/+$/, "");
+  let stripped = raw.replace(/\/+$/, "");
+  if (stripped.includes("ai-gateway.vercel.sh")) {
+    if (!stripped.endsWith("/decisions")) {
+      stripped = stripped.replace(/\/systemone$/, "").replace(/\/+$/, "") + "/decisions";
+    }
+    return stripped;
+  }
   return stripped.endsWith("/systemone") ? stripped : raw;
+}
+
+/** Check if endpoint path targets /decisions or Vercel AI Gateway */
+export function isDecisionsEndpoint(url: string): boolean {
+  try {
+    const parsed = new URL(url.trim());
+    return parsed.hostname === "ai-gateway.vercel.sh" || parsed.hostname.endsWith(".vercel.sh");
+  } catch {
+    return false;
+  }
 }

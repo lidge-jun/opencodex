@@ -7,7 +7,7 @@ import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../
 import { identifyRoutedModel } from "../identity";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "../tool-catalog-nudge";
 import { peekReasoningForCall } from "../../responses/reasoning-replay-cache";
-import { chatReasoningReplayPolicy } from "./reasoning-replay";
+import { chatReasoningReplayPolicy, isReflectionThinkingModel } from "./reasoning-replay";
 import type { ClaudeThinkingProjection } from "../../lib/claude-request-projection";
 import { inlineDocumentDataUrl } from "../../responses/inline-document";
 import type { OcxAssistantMessage, OcxContentPart, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall } from "../../types";
@@ -284,7 +284,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         let reasoningContent = thinkingParts.map(p => p.thinking).join("");
         if (
           reasoningContent.length === 0
-          && (toolCalls.length > 0 || thinkingParts.length > 0)
+          && (toolCalls.length > 0 || thinkingParts.length > 0 || (isReflectionThinkingModel(parsed.modelId) && chatReasoningReplayPolicy(provider, parsed.modelId).placeholder))
           && wireSerializesThinking
         ) {
           const cached = toolCalls

@@ -8,6 +8,7 @@ import {
   JEV_MAX_CANDIDATE_FIELD_CHARS,
 } from "./types";
 
+import { isDecisionsEndpoint } from "./jev-decision-contract";
 import {
   exchangeJevDecision,
   JEV_PROVIDER_ID,
@@ -570,19 +571,43 @@ export function parseJevDecision(
   payload: unknown,
   candidates: readonly JevCandidate[],
 ): Pick<JevDecision, "targetKey" | "effort" | "confidence" | "chosenProbability" | "usage"> {
-  if (!isRecord(payload) || !isRecord(payload.answers) || !isRecord(payload.answers.route)) {
+  if (!isRecord(payload)) {
     throw new Error("missing JEV route decision");
   }
-  const answer = payload.answers.route;
+  let answer: Record<string, unknown> | undefined;
+  if (isRecord(payload.answers) && isRecord(payload.answers.route)) {
+    answer = payload.answers.route as Record<string, unknown>;
+  } else if (Array.isArray(payload.answers)) {
+    const found = payload.answers.find(a => isRecord(a) && (a.name === "route" || a.type === "choice"));
+    if (isRecord(found)) {
+      answer = found as Record<string, unknown>;
+    }
+  }
+  if (!answer) {
+    throw new Error("missing JEV route decision");
+  }
   const options = candidateOptions(candidates);
-  if (typeof answer.choice !== "string" || !options.has(answer.choice)) {
+  const choiceValue = typeof answer.choice === "string" ? answer.choice : (typeof answer.value === "string" ? answer.value : undefined);
+  if (!choiceValue || !options.has(choiceValue)) {
     throw new Error("unknown JEV route choice");
   }
 
   let chosenProbability: number | undefined;
   if (answer.probabilities !== undefined) {
-    const probabilities = answer.probabilities;
-    if (!isRecord(probabilities)) throw new Error("invalid JEV route probabilities");
+    let probabilities: Record<string, unknown>;
+    if (Array.isArray(answer.probabilities)) {
+      probabilities = {};
+      for (const item of answer.probabilities) {
+        if (isRecord(item)) {
+          const k = typeof item.choice === "string" ? item.choice : (typeof item.value === "string" ? item.value : undefined);
+          if (k) probabilities[k] = item.probability;
+        }
+      }
+    } else if (isRecord(answer.probabilities)) {
+      probabilities = answer.probabilities as Record<string, unknown>;
+    } else {
+      throw new Error("invalid JEV route probabilities");
+    }
     const expected = [...options.keys()].sort();
     const actual = Object.keys(probabilities).sort();
     if (expected.length !== actual.length || expected.some((key, index) => key !== actual[index])) {
@@ -593,7 +618,7 @@ export function parseJevDecision(
       throw new Error("invalid JEV route probabilities");
     }
     const numeric = values as number[];
-    const selected = probabilities[answer.choice] as number;
+    const selected = probabilities[choiceValue] as number;
     if (Math.abs(numeric.reduce((sum, value) => sum + value, 0) - 1) > 0.02
       || selected < Math.max(...numeric) - 1e-6) {
       throw new Error("inconsistent JEV route distribution");
@@ -601,7 +626,7 @@ export function parseJevDecision(
     chosenProbability = selected;
   }
 
-  const option = options.get(answer.choice)!;
+  const option = options.get(choiceValue)!;
   const confidence = typeof answer.confidence === "number"
     && Number.isFinite(answer.confidence)
     && answer.confidence >= 0
@@ -656,6 +681,28 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
     }
     const state = buildJevState(options.body, options.candidates);
     if (!hasJevDecisionState(state)) return "no_state";
+    if (endpoint.url && isDecisionsEndpoint(endpoint.url)) {
+      const payload = boundedJevQuotaPayload(jevQuotaCandidates(options), rows => {
+        const routeOptions = candidateOptions(rows);
+        return JSON.stringify({
+          model: endpoint.model,
+          input: typeof state.task === "string" && state.task.trim() ? state.task : JSON.stringify(state),
+          questions: [
+            {
+              name: "route",
+              type: "choice",
+              instructions: "Which target AND reasoning effort together best fit the next model call? Select sufficient capability and reasoning for a correct next step while avoiding unnecessary resource use.",
+              choices: [...routeOptions.entries()].map(([choice, opt]) => ({
+                value: choice,
+                label: criterionDescription(opt.criterion, rows.find(r => r.key === opt.targetKey)?.quota),
+              })),
+            },
+          ],
+        });
+      }, REQUEST_LIMIT);
+      candidates = payload.candidates;
+      return { body: payload.body };
+    }
     const payload = boundedJevQuotaPayload(jevQuotaCandidates(options), rows => JSON.stringify({
       model: endpoint.model, state,
       questions: buildJevRouteQuestion(rows, { descriptiveCriteria: endpoint.descriptiveCriteria }),

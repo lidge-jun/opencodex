@@ -26,7 +26,8 @@ afterEach(() => clearReasoningReplayCacheForTests());
 describe("native Chat reasoning policy and physical replay ownership", () => {
   test("family detection is version-agnostic and independent of provider names", () => {
     for (const model of [MODEL, "deepseek-v4-flash", "deepseek-v15.12-pro-20261015",
-      "deepseek/deepseek-v4.1-flash-free", "gateway/DeepSeek-V5.2-Flash:thinking", "deepseek-flash"]) {
+      "deepseek/deepseek-v4.1-flash-free", "gateway/DeepSeek-V5.2-Flash:thinking", "deepseek-flash",
+      "reflection-beam", "reflection/beam", "command-code/reflection-beam:free", "stealth-glyph-cluster:free"]) {
       expect(chatReasoningReplayPolicy(PROVIDER, model)).toEqual({ preserve: true, placeholder: true });
     }
     for (const model of ["deepseek-chat", "deepseek-reasoner", "deepseek-r1-distill-llama",
@@ -194,6 +195,11 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
       expect(JSON.parse(request.body).messages[0].reasoning_content).toBe(expected);
     }
     expect(messages).toEqual([{ role: "assistant", content: "Earlier answer" }]);
+  });
+  test("reflection models replay placeholder on prior assistant turns even without tools", () => {
+    const messages = [{ role: "assistant", content: "Earlier plain answer" }];
+    const request = buildOpenAIChatPassthroughRequest(PROVIDER, { messages, tools: [] }, "reflection/beam", false);
+    expect(JSON.parse(request.body).messages[0].reasoning_content).toBe(" ");
   });
 });
 
