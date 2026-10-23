@@ -130,6 +130,23 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ファミリは `opus`、`fable`、`sonnet`、および `haiku` です。新しいルートは `opus` で始まります。 `none` は、そのファミリーが空の場合にのみ有効です。従来の適用フラグ `--static`、`--hybrid`、および `--discovery-only` は引き続きサポートされます。クロードコードの設定には`ocx claude config <status|set> ...`を使用してください。
 
+### `ocx codex [codex args...]`
+
+プロキシが実行されていることを確認し、`codex` をそのまま起動します。Codex のルーティングは設定
+(`~/.codex/config.toml` に注入された `openai_base_url`) が所有しているため、この起動は設定
+ファイルを書き換えません。環境に `OPENCODEX_API_AUTH_TOKEN` がない場合は、Codex オートスタート
+シムと同じ注入で `~/.opencodex/service-api-token` から補完します。
+
+`--help`/`-h`、`--version`/`-V`、および Codex 内部のサブコマンド (`login`、`doctor`、`exec` な
+ど) はプロキシの ensure をスキップし、環境をそのまま渡します (シムの引数文法と一致)。
+
+実行前にルーティングを判定します。注入されたルーティングがない場合は情報メッセージを出し、ensure
+なしで `codex` を起動します。外部ゲートウェイ (custom-local/custom-remote) では警告を出し、その
+ルートに触れずに渡します。検証できないルーティングでは警告を添えて ensure を試みます。ensure に失敗した場合は
+stderr に 1 行出力し、それでも `codex` を起動します。`codex` がオートスタートシムを指す場合は、シムが
+ensure を繰り返さないよう、その背後にある Codex を直接起動します。後でプレーン `codex` を起動すると、
+以前とまったく同じように動作します。
+
 ### `ocx opencode [opencode args...]`
 
 プロキシが実行されていることを確認し、OpenCode のインライン ランタイム層 (`OPENCODE_CONFIG_CONTENT`) で生成された `provider.opencodex` および `providers.opencodex` ブロックを使用してオープンコードを起動します。既存のインライン設定は保持され、今回の起動ではこの 2 つのキーのみが置き換えられます。グローバルまたはプロジェクトの `opencode.json` ファイルは、既存の上書きについて警告するために読み取られることがありますが、ディスク上のファイルは変更されません。ルーティングされたモデルは `opencodex/<provider>/<model>` として表示されます。後でプレーン `opencode` を起動すると、以前とまったく同じように動作します。

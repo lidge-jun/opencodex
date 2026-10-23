@@ -169,6 +169,27 @@ Les familles sont `opus`, `fable`, `sonnet` et `haiku` ; les nouveaux itinérai
 seulement quand cette famille est vide. Les anciens indicateurs d'application `--static`, `--hybrid` et `--discovery-only`
 restent soutenus. Utilisez `ocx claude config <status|set> ...` pour les réglages Claude Code.
 
+### `ocx codex [codex args...]`
+
+Vérifiez que le proxy est actif, puis lancez `codex` sans modification. Le routage de Codex reste
+la propriété de sa configuration — le `openai_base_url` injecté dans `~/.codex/config.toml` —
+aucun lancement ne réécrit donc de fichier de configuration. Un `OPENCODEX_API_AUTH_TOKEN` absent
+est renseigné depuis `~/.opencodex/service-api-token`, la même injection que celle du shim de
+démarrage automatique Codex.
+
+`--help`/`-h`, `--version`/`-V` et les sous-commandes internes de Codex (`login`, `doctor`, `exec`,
+...) sautent l'assurance du proxy et traversent l'environnement inchangé, en reprenant la
+grammaire d'arguments du shim.
+
+Le routage est examiné avant exécution : sans routage injecté, un message informatif s'affiche et
+`codex` est lancé sans assurance du proxy ; une passerelle étrangère (custom-local/custom-remote)
+provoque un avertissement et un passage sans toucher à cette route ; un routage invérifiable
+provoque un avertissement et tente quand même d'assurer le proxy. Si cette tentative échoue, une
+ligne s'affiche sur stderr et `codex` est lancé malgré tout. Lorsque `codex` correspond au shim de
+démarrage automatique, le lanceur exécute directement le Codex sous-jacent pour que le shim ne
+répète pas l'assurance. Un lancement ultérieur de `codex` sans opencodex se comporte
+exactement comme auparavant.
+
 ### `ocx opencode [opencode args...]`
 
 Vérifiez que le proxy est actif, puis lancez opencode avec les blocs `provider.opencodex` et `providers.opencodex` générés dans la couche d’exécution intégrée d’OpenCode (`OPENCODE_CONFIG_CONTENT`). La configuration intégrée existante est préservée et seules ces deux clés sont remplacées pour ce lancement. Les fichiers `opencode.json` globaux ou propres au projet peuvent être lus afin de signaler une substitution existante, mais les fichiers sur disque ne sont jamais modifiés. Les modèles routés apparaissent sous la forme `opencodex/<provider>/<model>`. Un lancement ultérieur de `opencode` sans intermédiaire se comporte exactement comme auparavant.

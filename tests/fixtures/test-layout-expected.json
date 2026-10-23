@@ -576,6 +576,7 @@
   "codex-runtime.test.ts": "codex-integration", "codex-runtime-macos-desktop.test.ts": "codex-integration", "codex-runtime-wsl-desktop.test.ts": "codex-integration", "codex-clamp-notice.test.ts": "codex-integration",
   "codex-service-manager-probe-hardening.test.ts": "codex-integration",
   "codex-service-manager-probe.test.ts": "codex-integration", "codex-systemd-env-probe.test.ts": "codex-integration",
+  "codex-launcher.test.ts": "codex-integration",
   "codex-shim-autorestore.test.ts": "codex-integration", "codex-shim-destroyed-probe.test.ts": "codex-integration",
   "codex-shim-bypass-token.test.ts": "codex-integration",
   "codex-shim-windows-revision.test.ts": "codex-integration",

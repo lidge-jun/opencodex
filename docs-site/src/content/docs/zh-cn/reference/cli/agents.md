@@ -134,6 +134,20 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 这些 family 是 `opus`、`fable`、`sonnet` 和 `haiku`；新路由默认进入 `opus`。只有在该 family 为空时，`none` 才有效。旧版 apply 标志 `--static`、`--hybrid` 和 `--discovery-only` 仍受支持。Claude Code 设置请使用 `ocx claude config <status|set> ...`。
 
+### `ocx codex [codex args...]`
+
+确保代理正在运行，然后原样启动 `codex`。Codex 的路由始终归配置所有（`~/.codex/config.toml` 中注入的
+`openai_base_url`），因此启动不会改写任何配置文件。环境缺少 `OPENCODEX_API_AUTH_TOKEN` 时，会从
+`~/.opencodex/service-api-token` 补上，与 Codex 自动启动 shim 采用相同的注入方式。
+
+`--help`/`-h`、`--version`/`-V` 以及 Codex 内部子命令（`login`、`doctor`、`exec` 等）会跳过代理
+ensure 并原样传递环境，与 shim 的 argv 语法保持一致。
+
+执行前会先判定路由：没有注入路由时输出提示信息，并不做 ensure 直接启动 `codex`；外部网关（custom-local/custom-remote）
+会输出警告，按原样通过且不触碰该路由；无法验证的路由会输出警告但仍尝试 ensure；ensure 失败时会在 stderr 输出一行，并仍然启动 `codex`。
+当 `codex` 指向自动启动 shim 时，启动器会直接运行其背后的 Codex，避免 shim 重复 ensure。
+稍后再启动普通 `codex` 时，行为与之前完全一致。
+
 ### `ocx opencode [opencode args...]`
 
 确保代理正在运行，然后在 OpenCode 的内联运行时层（`OPENCODE_CONFIG_CONTENT`）中启动 opencode，并注入生成的 `provider.opencodex` 和 `providers.opencodex` 块。现有的内联配置会被保留，仅本次启动会替换这两个键。可能会读取全局或项目级 `opencode.json` 文件以警告已有覆盖，但不会修改磁盘上的文件。路由后的模型会显示为 `opencodex/<provider>/<model>`。稍后再次启动普通 `opencode` 时，行为与之前完全一致。

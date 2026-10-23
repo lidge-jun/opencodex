@@ -710,6 +710,7 @@
     "codex-service-manager-probe-hardening.test.ts": "codex-integration",
     "codex-service-manager-probe.test.ts": "codex-integration",
     "codex-systemd-env-probe.test.ts": "codex-integration",
+    "codex-launcher.test.ts": "codex-integration",
     "codex-shim-autorestore.test.ts": "codex-integration",
     "codex-shim-destroyed-probe.test.ts": "codex-integration",
     "codex-shim-bypass-token.test.ts": "codex-integration",

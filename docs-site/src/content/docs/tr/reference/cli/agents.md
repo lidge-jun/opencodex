@@ -187,6 +187,24 @@ başlar. `none` yalnızca o aile boş olduğunda geçerlidir. Eski uygulama
 bayrakları `--static`, `--hybrid` ve `--discovery-only` desteklenmeye devam
 eder. Claude Code ayarları için `ocx claude config <status|set> ...` kullanın.
 
+### `ocx codex [codex args...]`
+
+Proxy'nin çalıştığından emin olun, ardından `codex`'i değiştirmeden başlatın. Codex yönlendirmesi
+yapılandırmaya aittir (`~/.codex/config.toml` içine yazılan `openai_base_url`), bu yüzden bir
+başlatma hiçbir zaman yapılandırma dosyalarını değiştirmez. Eksik `OPENCODEX_API_AUTH_TOKEN`,
+`~/.opencodex/service-api-token` üzerinden doldurulur — Codex otomatik başlatma shim'inin yaptığı
+injection ile aynı.
+
+`--help`/`-h`, `--version`/`-V` ve Codex'in iç alt komutları (`login`, `doctor`, `exec`, ...) proxy
+garantisini atlar ve ortamı değiştirmeden geçirir — shim'in argv dilbilgisiyle aynı.
+
+Başlatmadan önce yönlendirme değerlendirilir. Yazılmış yönlendirme yoksa bilgilendirme yazılır ve
+`codex` garanti olmadan başlatılır; yabancı bir ağ geçidi (custom-local/custom-remote) uyarı yazar
+ve o yola dokunmadan geçer; doğrulanamayan yönlendirme uyarı yazar ama garanti yine de denenir.
+Deneme başarısız olursa stderr'e tek satır yazılır ve `codex` yine de başlatılır. `codex` otomatik
+başlatma shim'ine çözülürse, shim garantiyi tekrarlamasın diye arkasındaki Codex doğrudan başlatılır. Daha sonra düz `codex` başlatmak tam
+olarak eskisi gibi davranır.
+
 ### `ocx opencode [opencode argumanlari...]`
 
 Proxy'nin çalıştığından emin olun, ardından OpenCode'un satır içi çalışma zamanı

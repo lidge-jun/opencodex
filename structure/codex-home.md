@@ -196,7 +196,7 @@ prior sibling runtime and `OPENCODEX_HOME`. Connected-client recycle issues it b
 the listener or removing that runtime record. `handleStart` consumes the record before any probe;
 a forged port env or replay grants no sibling status. A valid replacement stays a sibling while
 the owner is down, and its journal recovery remains skipped.
-Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`opencode`/`minimax`
+Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`codex`/`opencode`/`minimax`
 auto-start and the updater's restart) starts an ordinary owner and strips an inherited marker
 through `withoutSiblingMarker`.
 

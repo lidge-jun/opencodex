@@ -151,6 +151,23 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 `--hybrid` и `--discovery-only` для apply по-прежнему поддерживаются. Для настроек Claude Code
 используйте `ocx claude config <status|set> ...`.
 
+### `ocx codex [codex args...]`
+
+Убедиться, что прокси запущен, и затем запустить `codex` без изменений. Маршрутизация Codex остаётся
+владением config — инжектированный `openai_base_url` в `~/.codex/config.toml` — поэтому запуск
+никогда не переписывает файлы конфигурации. Отсутствующий `OPENCODEX_API_AUTH_TOKEN` берётся из
+`~/.opencodex/service-api-token` — та же инъекция, что и в autostart шиме Codex.
+
+`--help`/`-h`, `--version`/`-V` и внутренние подкоманды Codex (`login`, `doctor`, `exec`, ...)
+пропускают ensure прокси и передают окружение как есть — та же грамматика argv, что и у шима.
+
+Роутинг проверяется перед запуском: без инжектированного роутинга печатается информационное сообщение
+и `codex` запускается без ensure; чужой шлюз (custom-local/custom-remote) — warning и passthrough без
+касания этого пути; непроверяемый роутинг — warning, но попытка ensure всё равно выполняется. Если она
+не удалась, в stderr выводится одна строка, и `codex` всё равно запускается. Если `codex` указывает на
+autostart шим, лаунчер запускает исходный Codex напрямую, чтобы шим не повторял ensure. Последующий запуск обычного `codex` работает
+ровно как раньше.
+
 ### `ocx opencode [opencode args...]`
 
 Убедиться, что прокси запущен, и затем запустить opencode со сгенерированными блоками

@@ -162,6 +162,22 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 family는 `opus`, `fable`, `sonnet`, `haiku`이며, 새 route는 `opus`에서 시작합니다. `none`은 해당 family가 비어 있을 때만 유효합니다. 레거시 apply 플래그인 `--static`, `--hybrid`, `--discovery-only`도 계속 지원합니다. Claude Code 설정은 `ocx claude config <status|set> ...`를 사용하십시오.
 
+### `ocx codex [codex args...]`
+
+프록시가 실행 중인지 확인한 뒤, `codex`를 그대로 실행합니다. Codex 라우팅은 config(`~/.codex/config.toml`에 주입된
+`openai_base_url`)가 소유하므로, 이 실행은 config 파일을 재작성하지 않습니다. 환경에 `OPENCODEX_API_AUTH_TOKEN`이
+없으면 `~/.opencodex/service-api-token`에서 채웁니다. 이는 Codex 자동 시작 shim과 동일한 주입입니다.
+
+`--help`/`-h`, `--version`/`-V` 및 Codex 내부 하위 명령(`login`, `doctor`, `exec` 등)은 프록시 ensure를
+건너뛰고 환경을 그대로 전달합니다(shim의 argv 문법과 일치).
+
+실행 전에 라우팅을 확인합니다. 주입된 라우팅이 없으면 안내 메시지를 출력하고 ensure 없이 `codex`를 실행하고,
+다른 로컬/원격 게이트웨이(custom-local/custom-remote)는 경고를 출력한 뒤 해당 경로를 건드리지 않고 전달하며,
+확인 불가능한 라우팅은 경고를 출력하고 ensure를 시도합니다. ensure가 실패하면 stderr에 한 줄을 출력하고
+그래도 `codex`를 실행합니다. `codex`가 자동 시작 shim을 가리키면 shim이 ensure를 반복하지 않도록 그 뒤의 Codex를
+직접 실행합니다. 이후 plain
+`codex`를 실행하면 이전과 정확히 같은 방식으로 동작합니다.
+
 ### `ocx opencode [opencode args...]`
 
 프록시가 실행 중인지 확인한 뒤, OpenCode의 인라인 런타임 계층(`OPENCODE_CONFIG_CONTENT`)에 생성된 `provider.opencodex` 및 `providers.opencodex` 블록을 넣어 opencode를 실행합니다. 기존 인라인 config는 유지되고, 이번 실행에서는 이 두 키만 교체됩니다. 전역 또는 프로젝트 `opencode.json` 파일은 기존 override가 있는지 경고하기 위해 읽을 수 있지만, 디스크상의 파일은 절대 수정하지 않습니다. 라우팅된 model은 `opencodex/<provider>/<model>`로 나타납니다. 이후 plain `opencode`를 실행하면 이전과 정확히 같은 방식으로 동작합니다.
