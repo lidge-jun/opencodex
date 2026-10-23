@@ -109,11 +109,13 @@ for (const pathname of [exchange.pathname, `${exchange.pathname}/stream`]) {
         ? { version: 1, stream_id: 'fixture', sequence: 1, usage: record } : record);
       await ctl.rewriteJson(encode(usage), route);
       expect((await ctl.activate(consent)).accepted).toBe(true);
-      expect(await ctl.rewriteJson(encode(usage), route)).not.toBeNull();
-      const generation = ctl.snapshot().generation;
       const stream = ctl.registerStream(route, async () => {});
+      expect(await ctl.rewriteJson(encode(usage), route, stream)).not.toBeNull();
+      expect(ctl.snapshot().observation.validatedActiveStreams).toBe(pathname.endsWith('/stream') ? 1 : 0);
+      const generation = ctl.snapshot().generation;
       expect(await ctl.rewriteJson(encode({ ...usage, [field]: 'foreign' }), route, stream)).toBeNull();
       expect(ctl.snapshot()).toMatchObject({ mode: 'observe', phase: 'identity-invalidated', outputs: 0 });
+      expect(ctl.snapshot().observation.validatedActiveStreams).toBe(0);
       expect(ctl.snapshot().generation).toBeGreaterThan(generation);
       expect((await ctl.activate(consent)).accepted).toBe(false);
       expect(await ctl.rewriteJson(encode(usage), route)).toBeNull();
