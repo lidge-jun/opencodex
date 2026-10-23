@@ -1,3 +1,4 @@
+import { assertWorkBuddyDestination } from "../providers/workbuddy";
 import type { OcxProviderConfig } from "../types";
 import { isBuiltinAnthropicInstanceRow } from "../providers/anthropic-instance";
 import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
@@ -8,6 +9,10 @@ export function mayResolveModelsOAuth(name: string, provider: OcxProviderConfig 
   // The DSH account token is pinned to its own adapter and fixed DeepSeek hosts. Its catalog is
   // static, so no discovery path may resolve it, whatever adapter or baseUrl the row was edited to.
   if (name === "dsh-account") return false;
+  if (name === "workbuddy-ai" || provider?.adapter === "workbuddy-ai") {
+    if (name !== "workbuddy-ai" || provider?.adapter !== "workbuddy-ai" || provider.disabled) return false;
+    try { assertWorkBuddyDestination(provider.baseUrl); return true; } catch { return false; }
+  }
   return name !== "anthropic2" || (provider !== undefined && provider.disabled !== true
     && isBuiltinAnthropicInstanceRow(name, provider));
 }

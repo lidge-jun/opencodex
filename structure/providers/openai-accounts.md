@@ -257,16 +257,17 @@ successful main usage refresh clears the runtime mark.
 `src/codex/chatgpt-refresh-failure.ts` classifies token-endpoint failures for both stored-pool
 and native-main refresh. Exact structured terminal codes apply only to authentication-error
 statuses; HTTP 429/5xx and malformed responses remain transient. Description-only OAuth 400
-compatibility never overrides a structured code. Endpoint diagnostics contain fixed outcome,
-HTTP status and an allowlisted code, never provider descriptions or credential material. Pool
-refresh errors retain that same safe status/code metadata without changing cooldown classification.
+compatibility never overrides a structured code. Endpoint diagnostics contain fixed outcome, HTTP
+status, an allowlisted code and (pool only) the account's durable `p<hex6>` label, never descriptions
+or credential material. Pool refresh errors keep that status/code without changing cooldown class.
 Once a stored-pool record carries the persisted terminal verdict (`lastCodexValidationTerminal`
 with a failed status), `auth-api/pool-quota-probe.ts` answers passive quota reads with that
 `refresh_failed` reauthentication result instead of spending the dead grant again. Passive reads
 are GET listings including `?refresh=1`, dashboard quota polls, priming, and recovery probes. An
 explicit `POST /api/codex-auth/accounts/refresh` from any principal, a post-reset readback, and
 source-linked credentials still probe, and any credential write or completed validation clears
-the verdict.
+the verdict. The token guardian's pool sweep (`src/oauth/token-guardian.ts`) skips those records
+with the same source-linked exemption instead of re-posting the grant every backoff window.
 
 A native-main refusal is stored by physical auth path and refresh-grant fingerprint in a bounded
 process-local set (64 oldest-first entries). Ordinary quarantine clears and successful usage polls

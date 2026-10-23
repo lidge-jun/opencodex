@@ -781,7 +781,7 @@ describe("registry configuration isolation", () => {
     expect(refused.kind).toBe("unresolved");
   });
 
-  test("npm cache and log state stay inside the owned temporary root", () => {
+  test("npm and Node caches and logs stay inside the owned temporary root", () => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
     const target = resolveCodexCliUpdateTarget("latest", spawn);
     expect(target.kind).toBe("resolved");
@@ -791,6 +791,50 @@ describe("registry configuration isolation", () => {
       // The cache root (and therefore npm's _logs directory beneath it) must live
       // inside the owned isolation dir, not under an ambient ~/.npm.
       expect(cachePath(call)).toBe(join(cwd, "npm-cache"));
+      expect((call.options.env as NodeJS.ProcessEnv).NODE_COMPILE_CACHE).toBe(join(cwd, "node-compile-cache"));
+    }
+  });
+
+  test("real npm startup through the resolver seam cannot recreate an ambient Node compile cache", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-update-node-cache-"));
+    const home = join(root, "home"), temporaryRoot = join(root, "temp"), ambientCache = join(root, "ambient-cache");
+    const previous = process.env.NODE_COMPILE_CACHE;
+    let isolatedDir = "", observedCache: string | undefined, calls = 0;
+    try {
+      fs.mkdirSync(home); fs.mkdirSync(temporaryRoot);
+      process.env.NODE_COMPILE_CACHE = ambientCache;
+      const spawn = ((bin: string, args: string[], options: Record<string, unknown>) => {
+        const field = queriedField({ args } as CapturedCall);
+        if (calls++ === 0) {
+          isolatedDir = options.cwd as string;
+          const env = { ...(options.env as NodeJS.ProcessEnv), HOME: home, USERPROFILE: home,
+            TMPDIR: temporaryRoot, TMP: temporaryRoot, TEMP: temporaryRoot };
+          // Keep production argv/env/cwd; --version exercises npm startup without a registry call.
+          // cmd's last argument is one outer-quoted command, so append inside that quote.
+          const probeArgs = options.windowsVerbatimArguments
+            ? [...args.slice(0, 3), args[3]!.slice(0, -1) + ' --version --offline"']
+            : [...args, "--version", "--offline"];
+          for (const key of Object.keys(env)) if (key.toLowerCase() === "node_disable_compile_cache") delete env[key];
+          const result = spawnSync(bin, probeArgs, { ...options, env,
+            timeout: 15_000, windowsHide: true, encoding: "utf8" });
+          expect(result.error).toBeUndefined(); expect(result.status, result.stderr).toBe(0);
+          expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+          observedCache = env.NODE_COMPILE_CACHE;
+        }
+        // Only registry evidence is synthetic; npm startup above is real.
+        return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
+      }) as never;
+      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(calls).toBe(3);
+      expect(existsSync(isolatedDir)).toBe(false);
+      expect(readdirSync(temporaryRoot)).toEqual([]);
+      expect(existsSync(ambientCache)).toBe(false);
+      expect(readdirSync(home)).toEqual([]);
+      expect(observedCache).toBe(join(isolatedDir, "node-compile-cache"));
+    } finally {
+      if (previous === undefined) delete process.env.NODE_COMPILE_CACHE;
+      else process.env.NODE_COMPILE_CACHE = previous;
+      rmSync(root, { recursive: true });
     }
   });
 
@@ -870,7 +914,7 @@ describe("registry configuration isolation", () => {
       // Anything npm persisted was inside the owned root and is removed with it;
       // the disposable HOME stays completely empty (no ~/.npm, no ~/.npmrc, no _logs).
       for (const name of ownedDuringRun) {
-        expect(["package.json", "ocx-update.npmrc", "ocx-update-global.npmrc", "npm-cache"].includes(name)).toBe(true);
+        expect(["package.json", "ocx-update.npmrc", "ocx-update-global.npmrc", "npm-cache", "node-compile-cache"].includes(name)).toBe(true);
       }
       expect(existsSync(cwd)).toBe(false);
       expect(readdirSync(fakeHome)).toEqual([]);

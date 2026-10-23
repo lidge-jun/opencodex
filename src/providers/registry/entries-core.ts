@@ -517,6 +517,15 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     parallelToolCalls: false,
   },
   {
+    id: "workbuddy-ai", label: "WorkBuddy AI", adapter: "workbuddy-ai",
+    baseUrl: "https://www.workbuddy.ai/v2", authKind: "oauth", oauthId: "workbuddy-ai",
+    featured: false, dashboardPreset: true, liveModels: true,
+    defaultModel: "default-model", models: ["default-model"],
+    modelDiscovery: { path: "/v3/config", format: "workbuddy" },
+    dashboardUrl: "https://www.workbuddy.ai",
+    note: "Use your WorkBuddy AI international subscription. Sign in in your browser; models follow your account catalog.",
+  },
+  {
     id: "dsh-account",
     label: "DeepSeek Account (DSH)",
     adapter: "dsh-account",

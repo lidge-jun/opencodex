@@ -679,7 +679,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 104 built-in presets: 84 key-based, 16 OAuth, three local, and one default
+opencodex ships 105 built-in presets: 84 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -1236,6 +1236,35 @@ Create a key in [Novita's key manager](https://novita.ai/settings/key-management
 > hosts and schemas and are not routed by this preset.
 > Live discovery for this preset is capped at a 1 MiB response and 256 raw model rows.
 
+### WorkBuddy AI subscription
+
+`workbuddy-ai` connects your international WorkBuddy AI subscription as a model provider.
+Choose **WorkBuddy AI** in Providers and log in, or run:
+
+```bash
+ocx login workbuddy-ai
+```
+
+Complete the browser sign-in; OpenCodex polls for authorization for up to five minutes.
+Tokens are stored in OpenCodex and refreshed on demand. Adding accounts uses the existing
+OAuth account list; team identity stays attached to its own token. No WorkBuddy desktop
+installation or credential-file import is required.
+
+Models and capabilities come from your account's live product catalog. Select a
+`workbuddy-ai/<model-id>` model after login; `workbuddy-ai/default-model` is the fallback
+selector when discovery is unavailable. Streaming, tool calls and buffered responses use
+WorkBuddy's Chat endpoint. The Overview and Accounts tabs show remaining credits, used/total credits, base and gift
+balances, and the next expiring non-daily credits when available. Refresh reads the signed-in
+account's billing summary; an unavailable read is not a zero balance. These credits are
+informational and do not disable free models when paid credits run out.
+
+This uses an unofficial subscription protocol based on
+[Magpie's WorkBuddy plugin](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy).
+Upstream client-channel or account restrictions are returned to the caller. OpenCodex does
+not rewrite agent identity prompts to bypass them. Availability depends on your account,
+region, model entitlement and WorkBuddy's current API. This is separate from the CodeBuddy
+CLI API-key providers and does not connect the WorkBuddy desktop client to OpenCodex.
+
 ### Official CodeBuddy Code CLI (Global & CN)
 
 OpenCodex provides official adapter support for Tencent Cloud's CodeBuddy Code CLI via the `codebuddy` (Global) and `codebuddy-cn` (China) presets.
@@ -1301,6 +1330,7 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Authentication:** Create a PAT in the account integrations page
   ([Global](https://qoder.com/account/integrations), [CN](https://qoder.cn/account/integrations)) and paste it as the provider's API key. The stored key reaches the CLI only as `QODER_PERSONAL_ACCESS_TOKEN` (Global) or `QODERCN_PERSONAL_ACCESS_TOKEN` (CN) in a scoped child environment.
 - **Region Isolation:** Each preset accepts only its canonical destination (`https://qoder.com` or `https://qoder.cn`) and resolves its own executable. Credentials, model cache, usage, and health are independent; neither region falls back to the other. An older custom provider named `qoder` with a different destination keeps its existing adapter and URL.
+- **Windows executables:** Each preset launches its CLI's native executable (`qoder.exe` or `qodercli.exe` for Global, `qodercn.exe` or `qoderclicn.exe` for CN) when one is on PATH. Within one PATH folder the `.exe` wins over a same-name `.cmd`, and a later candidate name such as `qoderclicn.exe` anywhere on PATH wins over `qodercn.cmd`; an earlier PATH folder that holds only `qodercn.cmd` still shadows a later folder's `qodercn.exe`. Qoder turns pass empty `--tools` and `--setting-sources` values to keep the CLI's built-in tools and local settings out, and a dispatcher that forwards through PowerShell drops those empty values. When only such a dispatcher is found, the turn fails before the CLI starts with `cli_dispatcher_drops_empty_args`; add the folder holding the native executable to PATH (the official CN installer places it in `%USERPROFILE%\.qoder-cn\bin\qoderclicn`) and retry. A dispatcher that passes arguments straight through, such as an npm shim, keeps working.
 - **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
 - **Token usage:** Qoder CLI reports zero token counts unless its usage switch is on, so each preset turns it on in its scoped CLI child environment: `QODER_EXPOSE_TOKEN_USAGE=true` for Global and `QODERCN_EXPOSE_TOKEN_USAGE=true` for CN, which reads only its own prefix.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
@@ -1683,7 +1713,14 @@ provider-specific) is already consumed.
 Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
-custom provider.
+or Abliteration custom provider.
+
+**Abliteration credits.** A provider of any name whose `baseUrl` is
+`https://api.abliteration.ai` or `https://api.abliteration.ai/v1` reads
+`GET https://api.abliteration.ai/v1/credits` with its active key as a Bearer token and does not
+follow redirects. `total_credits` minus `total_usage` is the remaining USD balance, shown as a
+credits bar of consumed spend. An account with no credits shows no bar. A rejected key clears the
+row; `503 credit_balance_unavailable`, 408, and 429 keep the last reading.
 
 **OpenCode Go quota.** The canonical `opencode-go` preset reads
 `GET https://opencode.ai/zen/go/v1/usage` with the configured key as a Bearer token and
