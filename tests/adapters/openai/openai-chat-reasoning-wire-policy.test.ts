@@ -73,9 +73,11 @@ function finalToggleBodies(
   targetModel = toggleModel,
   thinkingEnabled?: boolean,
 ): Record<"translated" | "native", Record<string, unknown>> {
-  const requestForModel = { ...rawInput, model: targetModel };
+  const requestForModel = {
+    ...rawInput, model: targetModel,
+    ...(thinkingEnabled === undefined ? {} : { reasoning: { enabled: thinkingEnabled } }),
+  };
   const parsed = parseRequest(chatCompletionsToResponsesBody(requestForModel));
-  if (thinkingEnabled !== undefined) parsed.options.thinkingEnabled = thinkingEnabled;
   const translated = createOpenAIChatAdapter(target).buildRequest(parsed);
   const native = buildOpenAIChatPassthroughRequest(target, requestForModel, targetModel, false);
   return {
@@ -128,10 +130,20 @@ describe("toggle-only Chat reasoning capability", () => {
 
   test.each([[false, "disabled"], [true, "enabled"]] as const)("serializes direct boolean %s as %s", (thinkingEnabled, type) => {
     const bodies = finalToggleBodies(request(), toggleProvider, toggleModel, thinkingEnabled);
-    const translated = bodies.translated;
-    expect(translated.thinking).toEqual({ type });
-    expect(translated.reasoning_effort).toBeUndefined();
+    for (const body of Object.values(bodies)) {
+      expect(body.thinking).toEqual({ type });
+      expect(body.reasoning_effort).toBeUndefined();
+    }
   });
+
+  test.each([[false, "enabled", "disabled"], [true, "disabled", "enabled"]] as const)(
+    "explicit reasoning.enabled %s wins over conflicting raw thinking %s",
+    (enabled, conflictingType, type) => {
+      for (const body of Object.values(finalToggleBodies({
+        ...request(), reasoning: { enabled }, thinking: { type: conflictingType },
+      }))) expect(body.thinking).toEqual({ type });
+    },
+  );
 
   test("translates legacy Chat effort on both final wires", () => {
     for (const body of Object.values(finalToggleBodies(request("none")))) {
@@ -203,6 +215,45 @@ describe("toggle-only Chat reasoning capability", () => {
   });
 
   test.each([
+    [undefined, "medium", false, "medium", "high"],
+    [undefined, "enabled", false, "high", "high"],
+    [undefined, "__omit__", false, undefined, "high"],
+    [undefined, "medium", true, undefined, "high"],
+    [undefined, "enabled", false, "max", "ultra"],
+    ["gateway-object", "medium", false, "medium", "high"],
+    ["gateway-object", "enabled", false, "high", "high"],
+    ["gateway-object", "__omit__", false, undefined, "high"],
+    ["gateway-object", "medium", true, undefined, "high"],
+    ["gateway-object", "enabled", false, "max", "ultra"],
+  ] as const)("toggle-disabled effort keeps %s mapping %s with tools=%s for %s (%s)", (reasoningWireFormat, mapped, hasTools, expected, requested) => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      modelCapabilities: { [toggleModel]: {
+        supportsReasoning: true, supportsThinkingToggle: false, supportsReasoningEffort: true,
+      } },
+      modelReasoningEffortMap: { [toggleModel]: { [requested === "ultra" ? "max" : requested]: mapped } },
+      omitReasoningEffortWithToolsModels: [toggleModel],
+    };
+    const raw = { ...request(requested), thinking: { type: "enabled" }, ...(hasTools ? { tools: [tool] } : {}) };
+    const results = [
+      createOpenAIChatAdapter(target).buildRequest(parseRequest(chatCompletionsToResponsesBody(raw))),
+      buildOpenAIChatPassthroughRequest(target, raw, toggleModel, false),
+    ];
+    for (const result of results) {
+      const body = JSON.parse(result.body) as Record<string, unknown>;
+      expect(body.thinking).toBeUndefined();
+      expect(body.reasoning_effort).toBe(reasoningWireFormat ? undefined : expected);
+      expect(body.reasoning).toEqual(reasoningWireFormat && expected ? { enabled: true, effort: expected } : undefined);
+      expect(result.reasoningLog).toEqual(expected ? {
+        effectiveEffort: expected,
+        wireField: reasoningWireFormat ? "reasoning.effort" : "reasoning_effort",
+        wireValue: expected,
+      } : undefined);
+      if (hasTools) expect(body.tools).toEqual([tool]);
+    }
+  });
+
+  test.each([
     ["reasoning disabled", { supportsReasoning: false }],
     ["both controls disabled", { supportsThinkingToggle: false, supportsReasoningEffort: false }],
   ])("an explicit capability with %s drops both control wires", (_label, overrides) => {
@@ -240,7 +291,6 @@ describe("toggle-only Chat reasoning capability", () => {
     };
     const raw = { ...request("low"), thinking: { type: "enabled" } };
     const parsed = parseRequest(chatCompletionsToResponsesBody(raw));
-    parsed.options.thinkingEnabled = true;
     const translated = JSON.parse(createOpenAIChatAdapter(bothProvider).buildRequest(parsed).body) as Record<string, unknown>;
     const native = JSON.parse(buildOpenAIChatPassthroughRequest(bothProvider, raw, toggleModel, false).body) as Record<string, unknown>;
     for (const body of [translated, native]) {
@@ -291,7 +341,6 @@ describe("legacy mapped thinking discriminator wires", () => {
       reasoning: { enabled: false },
     };
     const parsed = parseRequest(chatCompletionsToResponsesBody(raw));
-    parsed.options.thinkingEnabled = false;
     const bodies = [
       JSON.parse(createOpenAIChatAdapter(target).buildRequest(parsed).body) as Record<string, unknown>,
       JSON.parse(buildOpenAIChatPassthroughRequest(target, raw, "glm-4.6", false).body) as Record<string, unknown>,

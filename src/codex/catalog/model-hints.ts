@@ -265,8 +265,9 @@ export function withVisionSidecarInput(
 }
 
 /** Reapply configured limits and captured wire capabilities without trusting stale discovery hints. */
-// Reapplying hints starts from discovered reasoning metadata, not the previous config projection.
-const reasoningHintSources = new WeakMap<CatalogModel, Partial<CatalogModel>>();
+// Enumerable symbol provenance survives dated/routed spread clones without entering wire JSON.
+const reasoningHintSource = Symbol("reasoningHintSource");
+type ReasoningHintModel = CatalogModel & { [reasoningHintSource]?: Partial<CatalogModel> };
 
 export function applyProviderConfigHints(
   name: string,
@@ -306,7 +307,7 @@ export function applyProviderConfigHints(
   const resolvedModalities = staticPolicy.model.inputModalities ?? model.inputModalities
     ?? (azureMetadata?.input ? modelInputModalities({ id: model.id, input_modalities: azureMetadata.input }, undefined) : undefined);
   const inputModalities = resolvedModalities ? [...resolvedModalities] : undefined;
-  const reasoningSource = reasoningHintSources.get(model) ?? model;
+  const reasoningSource = (model as ReasoningHintModel)[reasoningHintSource] ?? model;
   const reasoningCapabilities: Partial<CatalogModel> = {};
   for (const field of REASONING_CAPABILITY_FIELDS) {
     const value = modelInList(prov.noReasoningModels, model.id) ? staticPolicy.model[field]
@@ -412,7 +413,7 @@ export function applyProviderConfigHints(
     : withCap;
   const softCandidates = [model.autoCompactTokenLimit, configuredAutoCompact]
     .filter((value): value is number => typeof value === "number" && value > 0);
-  const result = contextWindow === undefined || softCandidates.length === 0 ? withHardBounds : {
+  const result: ReasoningHintModel = contextWindow === undefined || softCandidates.length === 0 ? withHardBounds : {
     ...withHardBounds,
     autoCompactTokenLimit: clampAutoCompactTokenLimit(
       contextWindow,
@@ -420,9 +421,14 @@ export function applyProviderConfigHints(
       Math.min(...softCandidates),
     ),
   };
-  reasoningHintSources.set(result, Object.fromEntries([
+  const reasoningFields = [
     ...REASONING_CAPABILITY_FIELDS, "reasoningEfforts", "defaultReasoningEffort",
-  ].map(field => [field, reasoningSource[field as keyof CatalogModel]])));
+  ] as const;
+  if (reasoningFields.some(field => result[field] !== reasoningSource[field])) {
+    result[reasoningHintSource] = Object.fromEntries(reasoningFields.map(field => [field, reasoningSource[field]]));
+  } else {
+    delete result[reasoningHintSource];
+  }
   return result;
 }
 
@@ -783,7 +789,8 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
     ?? item.reasoning_efforts
     ?? reasoningParameters?.efforts;
   const listedReasoningEfforts = normalizedStringList(rawReasoningEfforts, 8, 24);
-  const reasoningEfforts = listedReasoningEfforts
+  const reasoningEfforts = reasoningCapabilities.supportsReasoning === false || reasoningCapabilities.supportsReasoningEffort === false ? []
+    : listedReasoningEfforts
     ? sanitizeCodexReasoningEfforts(listedReasoningEfforts)
     : typeof rawReasoningEfforts === "boolean"
       ? (rawReasoningEfforts
@@ -802,7 +809,7 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
     ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     ...reasoningCapabilities,
-    ...(reasoningCapabilities.supportsReasoningEffort !== false && reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(capabilities ? { capabilities } : {}),
     // Omitted when the classification is "unknown", following this function's existing

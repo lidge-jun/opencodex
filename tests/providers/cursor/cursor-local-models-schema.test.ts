@@ -92,12 +92,27 @@ describe("modelCapabilityFields", () => {
       output_modalities: ["text"],
       supports_tool_use: true,
       supports_streaming: true,
-      supports_reasoning: false,
     });
     expect("context_length" in fields.capabilities).toBe(false);
     expect("input_modalities" in fields.capabilities).toBe(false);
     expect("supports_vision" in fields.capabilities).toBe(false);
     expect("reasoning_effort" in fields.capabilities).toBe(false);
+    expect("supports_reasoning" in fields.capabilities).toBe(false);
+  });
+
+  test.each([{ supportsThinkingToggle: true }, { supportsReasoningEffort: true }])("positive reasoning axis infers support: %j", input => {
+    const fields = modelCapabilityFields(input);
+    expect(fields.capabilities.supports_reasoning).toBe(true);
+    expect(fields.capabilities.reasoning_effort).toBeUndefined();
+  });
+
+  test("negative axes alone leave reasoning unknown and explicit false suppresses efforts", () => {
+    expect(modelCapabilityFields({ supportsThinkingToggle: false, supportsReasoningEffort: false })
+      .capabilities.supports_reasoning).toBeUndefined();
+    const fields = modelCapabilityFields({ supportsReasoning: false, supportsThinkingToggle: true,
+      supportsReasoningEffort: true, reasoningEfforts: ["low", "high"] });
+    expect(fields.capabilities.supports_reasoning).toBe(false);
+    expect(fields.capabilities.reasoning_effort).toBeUndefined();
   });
 
   test("non-positive context and text-only modalities are reported honestly", () => {
@@ -133,7 +148,7 @@ describe("modelCapabilityFields", () => {
     expect("max_output_tokens" in modelCapabilityFields({ maxOutputTokens: Number.MAX_SAFE_INTEGER + 2 }).capabilities)
       .toBe(false);
     expect(modelCapabilityFields({ maxOutputTokens: 1.9 }).capabilities.supports_reasoning)
-      .toBe(false);
+      .toBeUndefined();
   });
 
   test("mirrors top-level context_window and max_output_tokens for external and legacy client discovery", () => {
@@ -218,7 +233,7 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
       expect(plain).toBeDefined();
       expect(plain!.api_types).toEqual(["chat_completions", "responses", "anthropic_messages"]);
       const plainCaps = plain!.capabilities as Record<string, unknown>;
-      expect(plainCaps.supports_reasoning).toBe(false);
+      expect("supports_reasoning" in plainCaps).toBe(false);
       expect("reasoning_effort" in plainCaps).toBe(false);
       expect("max_output_tokens" in plainCaps).toBe(false);
 

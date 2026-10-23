@@ -18,6 +18,8 @@ import { deriveEntry } from "../../src/codex/catalog/derive-entry";
 import { MIMO_THINKING_MODELS } from "../../src/providers/mimo-thinking";
 import { resolveReasoningCapabilities } from "../../src/providers/reasoning-capabilities";
 import { catalogHintsFromModelsApiItem } from "../../src/codex/catalog/model-hints";
+import { mergeConfiguredModelsIntoLiveCatalog } from "../../src/codex/catalog/model-visibility";
+import { clearModelCache, getFreshCached, setCached } from "../../src/codex/model-cache";
 
 // Xiaomi's published V2.6 prices (USD per 1M tokens), as carried by models.dev on 2026-09-23.
 const PRO = { input: 0.435, output: 0.87, cacheRead: 0.0036, cacheWrite: 0 };
@@ -90,10 +92,77 @@ describe("independent reasoning capabilities", () => {
     const discovered = { provider: "synthetic", id, supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: false };
     const cached = applyProviderConfigHints("synthetic", { ...base, modelCapabilities: { [id]: { supportsThinkingToggle: false } } }, discovered);
     expect(cached.supportsThinkingToggle).toBe(false);
+    expect(applyProviderConfigHints("synthetic", { ...base, modelCapabilities: { [id]: { supportsThinkingToggle: false } } }, cached)).toEqual(cached);
     const restored = applyProviderConfigHints("synthetic", base, cached);
     expect(restored).toMatchObject(discovered);
     const configured = applyProviderConfigHints("synthetic", { ...base, modelCapabilities: { [id]: { supportsThinkingToggle: true } } }, { provider: "synthetic", id });
     expect(applyProviderConfigHints("synthetic", base, configured).supportsThinkingToggle).toBeUndefined();
+  });
+  test("dated aliases inherit discovery evidence, not the dated row's config projection", () => {
+    const datedId = `${id}-20261001`;
+    const discovered = { provider: "synthetic", id: datedId, supportsReasoning: true,
+      supportsThinkingToggle: true, supportsReasoningEffort: true, defaultThinkingEnabled: true,
+      reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" };
+    const provider = { ...base, modelCapabilities: { [datedId]: { supportsReasoning: false } } };
+    const dated = applyProviderConfigHints("synthetic", provider, discovered);
+    expect(dated.reasoningEfforts).toEqual([]);
+    const merged = mergeConfiguredModelsIntoLiveCatalog({ name: "synthetic", provider, models: [dated],
+      configured: [{ provider: "synthetic", id }] });
+    const alias = merged.models.find(row => row.id === id)!;
+    expect(alias).toMatchObject({ ...discovered, id });
+    expect(alias).toEqual(applyProviderConfigHints("synthetic", provider, { ...discovered, id }));
+    expect(applyProviderConfigHints("synthetic", provider, { ...alias })).toEqual(alias);
+    expect(dated.supportsReasoning).toBe(false);
+  });
+  test("routed spread clones restore discovery and withdraw removed config-only hints", () => {
+    const discovered = { provider: "synthetic", id, supportsReasoning: true, supportsThinkingToggle: true,
+      supportsReasoningEffort: true, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" };
+    const disabled = applyProviderConfigHints("synthetic", { ...base, noReasoningModels: [id] }, discovered);
+    const routed = { ...disabled, providerAlias: "routed", contextWindow: 100_000 };
+    const restoredDiscovery = applyProviderConfigHints("synthetic", base, routed);
+    expect(restoredDiscovery).toMatchObject(discovered);
+    expect(applyProviderConfigHints("synthetic", base, { ...restoredDiscovery })).toEqual(restoredDiscovery);
+    const configured = applyProviderConfigHints("synthetic", { ...base,
+      modelCapabilities: { [id]: { supportsThinkingToggle: true } },
+      modelReasoningEfforts: { [id]: ["high"] }, modelDefaultReasoningEfforts: { [id]: "high" },
+    }, { provider: "synthetic", id });
+    const restored = applyProviderConfigHints("synthetic", base, { ...configured, providerAlias: "routed" });
+    for (const field of ["supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "reasoningEfforts", "defaultReasoningEffort"] as const) {
+      expect(restored[field]).toBeUndefined();
+    }
+    expect(JSON.parse(JSON.stringify(routed))).toEqual({ ...JSON.parse(JSON.stringify(disabled)),
+      providerAlias: "routed", contextWindow: 100_000 });
+    const [source] = Object.getOwnPropertySymbols(routed);
+    expect(source).toBeDefined();
+    expect(Object.getOwnPropertyDescriptor(routed, source!)?.enumerable).toBe(true);
+    expect(Object.getOwnPropertySymbols(JSON.parse(JSON.stringify(routed)))).toEqual([]);
+    expect(JSON.stringify(routed)).not.toContain("reasoningHintSource");
+  });
+  test("cache reads and spread clones retain discovery through repeated config changes", () => {
+    const provider = "reasoning-provenance-test";
+    const discovered = { provider, id, supportsReasoning: true, supportsThinkingToggle: true,
+      supportsReasoningEffort: true, reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" };
+    try {
+      const disabled = applyProviderConfigHints(provider, { ...base, noReasoningModels: [id] }, discovered);
+      setCached(provider, [{ ...disabled }]);
+      const [cached] = getFreshCached(provider, 60_000)!;
+      expect(cached).toEqual(disabled);
+      const restored = applyProviderConfigHints(provider, base, { ...cached! });
+      expect(restored).toEqual(applyProviderConfigHints(provider, base, discovered));
+      expect(applyProviderConfigHints(provider, base, restored)).toEqual(restored);
+      expect(cached!.supportsReasoning).toBe(false);
+      expect(discovered.reasoningEfforts).toEqual(["low", "high"]);
+    } finally {
+      clearModelCache(provider);
+    }
+  });
+  test("unknown reasoning stays absent through a public discovery roundtrip", () => {
+    const fields = modelCapabilityFields({});
+    expect(fields.capabilities).not.toHaveProperty("supports_reasoning");
+    const hints = catalogHintsFromModelsApiItem("chain", { id, ...JSON.parse(JSON.stringify(fields)) });
+    for (const field of ["supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled", "reasoningEfforts"] as const) {
+      expect(hints).not.toHaveProperty(field);
+    }
   });
   test("chained public model flags preserve false and unknown independently of efforts", () => {
     const hints = catalogHintsFromModelsApiItem("chain", { id, capabilities: {
@@ -101,7 +170,7 @@ describe("independent reasoning capabilities", () => {
       default_thinking_enabled: false, reasoning_effort: ["low", "high"],
     } });
     expect(hints).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: false });
-    expect(hints.reasoningEfforts).toBeUndefined();
+    expect(hints.reasoningEfforts).toEqual([]);
     const chained = applyProviderConfigHints("chain", { ...base, reasoningEfforts: ["low", "medium", "high"] }, { provider: "chain", id, ...hints });
     expect(chained.supportsReasoningEffort).toBe(false);
     expect(chained.reasoningEfforts).toEqual([]);
@@ -111,6 +180,12 @@ describe("independent reasoning capabilities", () => {
     const explicitFalse = catalogHintsFromModelsApiItem("chain", { id, capabilities: { supports_reasoning: false, supports_thinking_toggle: false } });
     expect(explicitFalse).toMatchObject({ supportsReasoning: false, supportsThinkingToggle: false });
     expect(explicitFalse.supportsReasoningEffort).toBeUndefined();
+  });
+  test.each(["supports_reasoning", "supports_reasoning_effort"])("chained %s=false clears contradictory efforts", field => {
+    const hints = catalogHintsFromModelsApiItem("chain", { id, capabilities: {
+      [field]: false, reasoning_effort: ["low", "high"],
+    } });
+    expect(hints.reasoningEfforts).toEqual([]);
   });
 });
 

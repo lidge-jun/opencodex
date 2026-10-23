@@ -102,7 +102,7 @@ export function buildOpenAIChatPassthroughRequest(
     && typeof (rawBody.reasoning as { enabled?: unknown }).enabled === "boolean"
     ? (rawBody.reasoning as { enabled: boolean }).enabled
     : undefined;
-  applyExplicitChatReasoningWirePolicy({
+  const explicitReasoning = applyExplicitChatReasoningWirePolicy({
     provider,
     modelId,
     hasTools,
@@ -112,12 +112,15 @@ export function buildOpenAIChatPassthroughRequest(
     reasoningDisabled,
     body,
   });
+  let reasoningLog = explicitReasoning.handled ? explicitReasoning.reasoningLog : undefined;
   // A native caller's own thinking object is already in the upstream wire shape. Forward it only
-  // on a provider-declared toggle wire, where it remains more specific than a catalog default.
+  // on a provider-declared toggle wire, below an explicit reasoning.enabled but above a default.
   if (!reasoningDisabled && toggleWire
     && resolveReasoningCapabilities(provider, modelId).supportsThinkingToggle !== false
+    && explicitThinkingEnabled === undefined
     && rawBody.thinking !== undefined) {
     body.thinking = rawBody.thinking;
+    reasoningLog = undefined;
   }
 
   const openRouterRouting = resolveOpenRouterRouting(provider, modelId);
@@ -226,5 +229,8 @@ export function buildOpenAIChatPassthroughRequest(
     });
   }
 
-  return { url, method: "POST", headers, body: bodyJson };
+  return {
+    url, method: "POST", headers, body: bodyJson,
+    ...(reasoningLog ? { reasoningLog } : {}),
+  };
 }

@@ -40,6 +40,7 @@ import type {
   OpencodeV2ProviderBlock,
 } from "../clients/config-export";
 import type { EffectiveModelExportMetadata } from "../clients/config-export/contracts";
+import { resolveExportReasoningAxes } from "../clients/config-export/reasoning-metadata";
 import { filterCatalogVisibleModels, visibleNativeSlugs } from "../codex/catalog";
 import { commandInvocation } from "../lib/win-exec";
 import { configuredAdminToken, opencodeCatalogToken } from "../lib/admin-secrets";
@@ -385,19 +386,8 @@ export function opencodeCatalogFromProxyRows(
     const maxTokens = effective?.maxTokens ?? row.maxOutputTokens;
     const maxInputTokens = effective?.maxInputTokens ?? row.maxInputTokens;
     const inputModalities = effective?.inputModalities ?? row.inputModalities;
-    const supportsThinkingToggle = effective?.supportsThinkingToggle ?? row.supportsThinkingToggle;
-    const supportsReasoningEffort = effective?.supportsReasoningEffort ?? row.supportsReasoningEffort;
-    const defaultThinkingEnabled = effective?.defaultThinkingEnabled ?? row.defaultThinkingEnabled;
-    const declaredEfforts = effective?.reasoningEfforts ?? row.reasoningEfforts;
-    const effortDisabled = supportsReasoningEffort === false || (effective?.supportsReasoning ?? row.supportsReasoning) === false;
-    const reasoningEfforts = effortDisabled && declaredEfforts !== undefined ? [] : declaredEfforts;
-    // The projection is the authority on the default: when it exists, an absent default means
-    // NO declared default, and falling back to the row would reintroduce the picker's
-    // synthetic medium/low value. Rows without one (older hubs, hand-built rows) keep the
-    // row's own value.
-    const defaultReasoningEffort = effortDisabled ? undefined : effective !== undefined
-      ? effective.defaultReasoningEffort
-      : row.defaultReasoningEffort;
+    const { supportsThinkingToggle, supportsReasoningEffort, defaultThinkingEnabled,
+      reasoningEfforts, defaultReasoningEffort } = resolveExportReasoningAxes(effective, row);
     const supportsTools = effective?.supportsTools ?? row.supportsTools;
     const supportsReasoning = effective?.supportsReasoning ?? row.supportsReasoning;
     const supportsReasoningSummaries = effective?.supportsReasoningSummaries ?? row.supportsReasoningSummaries;

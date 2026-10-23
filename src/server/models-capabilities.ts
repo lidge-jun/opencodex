@@ -137,7 +137,7 @@ export interface ModelCapabilityFields {
     input_modalities?: string[];
     supports_tool_use: true;
     supports_streaming: true;
-    supports_reasoning: boolean;
+    supports_reasoning?: boolean;
     supports_thinking_toggle?: boolean;
     supports_reasoning_effort?: boolean;
     default_thinking_enabled?: boolean;
@@ -173,8 +173,10 @@ function positiveInt(value: unknown): number | undefined {
 }
 
 export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabilityFields {
-  const efforts = input.supportsReasoningEffort === false ? []
+  const efforts = input.supportsReasoning === false || input.supportsReasoningEffort === false ? []
     : (input.reasoningEfforts ?? []).filter(effort => typeof effort === "string" && effort.length > 0);
+  const supportsReasoning = input.supportsReasoning
+    ?? (input.supportsThinkingToggle === true || input.supportsReasoningEffort === true || efforts.length > 0 ? true : undefined);
   const contextLength = positiveInt(input.contextWindow);
   const longContextLength = positiveInt(input.longContextWindow);
   const maxOutputTokens = positiveInt(input.maxOutputTokens);
@@ -195,7 +197,7 @@ export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabil
       ...(modalities !== undefined && modalities.length > 0 ? { input_modalities: [...modalities] } : {}),
       supports_tool_use: true,
       supports_streaming: true,
-      supports_reasoning: input.supportsReasoning ?? efforts.length > 0,
+      ...(supportsReasoning !== undefined ? { supports_reasoning: supportsReasoning } : {}),
       ...(input.supportsThinkingToggle !== undefined ? { supports_thinking_toggle: input.supportsThinkingToggle } : {}),
       ...(input.supportsReasoningEffort !== undefined ? { supports_reasoning_effort: input.supportsReasoningEffort } : {}),
       ...(input.defaultThinkingEnabled !== undefined ? { default_thinking_enabled: input.defaultThinkingEnabled } : {}),

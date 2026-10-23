@@ -93,6 +93,8 @@ describe("anthropic extended-thinking gate", () => {
       } },
     });
     expect(b.thinking).toEqual({ type: "disabled" });
+    expect(b.output_config).toBeUndefined();
+    expect(b.max_tokens).toBe(8192);
     expect(b.temperature).toBe(0.3);
     expect(b.top_p).toBe(0.9);
   });
@@ -107,6 +109,44 @@ describe("anthropic extended-thinking gate", () => {
     });
     expect(b.thinking).toBeUndefined();
     expect(b.output_config).toBeUndefined();
+  });
+
+  test.each([
+    "claude-sonnet-5-5", "claude-opus-4-8", "claude-haiku-5-5", "claude-fable-5",
+  ])("%s keeps its native contract with a declared generic toggle", async (modelId) => {
+    const target = {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: {
+        supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false,
+      } },
+    };
+    const on = await bodyOf(parsed("high", {}, modelId), target);
+    expect(on.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(on.output_config).toEqual({ effort: "high" });
+    const off = await bodyOf(parsed("none", { maxOutputTokens: 64 }, modelId), target);
+    expect(off.thinking).toEqual(modelId === "claude-sonnet-5-5" ? { type: "between_tools" }
+      : modelId === "claude-haiku-5-5" ? { type: "disabled" } : undefined);
+    expect(off.output_config).toBeUndefined();
+    expect(off.max_tokens).toBe(64);
+    const explicitOff = await bodyOf(parsed("high", { thinkingEnabled: false, maxOutputTokens: 64 }, modelId), target);
+    expect(explicitOff.thinking).toEqual(off.thinking);
+    expect(explicitOff.output_config).toBeUndefined();
+    expect(explicitOff.max_tokens).toBe(64);
+    const explicitOn = await bodyOf(parsed(undefined, { thinkingEnabled: true }, modelId), target);
+    expect(explicitOn.thinking).toEqual(on.thinking);
+  });
+
+  test("both unsupported axes suppress native thinking and token headroom", async () => {
+    const modelId = "claude-sonnet-5-5";
+    const b = await bodyOf(parsed("high", { thinkingEnabled: true, maxOutputTokens: 64 }, modelId), {
+      ...provider,
+      thinkingToggleModels: [modelId],
+      modelCapabilities: { [modelId]: { supportsThinkingToggle: false, supportsReasoningEffort: false } },
+    });
+    expect(b.thinking).toBeUndefined();
+    expect(b.output_config).toBeUndefined();
+    expect(b.max_tokens).toBe(64);
   });
 
   // Sonnet 4.5 takes temperature or top_p alone but 400s on both (live 2026-09-29), so a request

@@ -1091,20 +1091,26 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const thinkingEnabled = thinkingToggleWire
         ? resolveThinkingEnabled(provider, parsed.modelId, parsed.options)
         : undefined;
+      const nativeThinkingContract = usesAdaptiveThinking(parsed.modelId);
       const supportsReasoningEffort = capabilities.supportsReasoningEffort === true;
-      const effectiveReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
-      if (!reasoningControlsUnsupported && thinkingEnabled !== undefined) {
+      const requestedReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
+      // Native Claude wire constraints outrank a generic toggle declaration. Decode the boolean
+      // into native effort intent, then let the family contract choose adaptive/disabled/between_tools.
+      const effectiveReasoning = nativeThinkingContract && thinkingEnabled !== undefined
+        ? thinkingEnabled ? (requestedReasoning && requestedReasoning !== "none" ? requestedReasoning : "high") : "none"
+        : requestedReasoning;
+      if (!reasoningControlsUnsupported && thinkingEnabled !== undefined && !nativeThinkingContract) {
         body.thinking = { type: thinkingEnabled ? "enabled" : "disabled" };
       }
-      if (!reasoningControlsUnsupported && thinkingEnabled === undefined && effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
+      if (!reasoningControlsUnsupported && (thinkingEnabled === undefined || nativeThinkingContract) && effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
         body.thinking = { type: "disabled" };
-      } else if (!reasoningControlsUnsupported && thinkingEnabled === undefined && effectiveReasoning === "none" && usesBetweenToolsFloor(parsed.modelId)) {
+      } else if (!reasoningControlsUnsupported && (thinkingEnabled === undefined || nativeThinkingContract) && effectiveReasoning === "none" && usesBetweenToolsFloor(parsed.modelId)) {
         // Sonnet 5.5 rejects `disabled`; `between_tools` is its lowest setting and turns off up-front
         // thinking. No effort is sent: the API default (high) is inside the range it accepts.
         body.thinking = { type: "between_tools" };
         delete body.temperature;
         delete body.top_p;
-      } else if (!reasoningControlsUnsupported && thinkingEnabled !== false && (thinkingEnabled === undefined || supportsReasoningEffort) && typeof effectiveReasoning === "string" && effectiveReasoning !== "none") {
+      } else if (!reasoningControlsUnsupported && thinkingEnabled !== false && (thinkingEnabled === undefined || supportsReasoningEffort || nativeThinkingContract) && typeof effectiveReasoning === "string" && effectiveReasoning !== "none") {
         if (usesAdaptiveThinking(parsed.modelId)) {
           // Adaptive-thinking models replace the token budget with an effort knob and reject
           // `thinking.type: "enabled"` outright. `max_tokens` still caps thinking plus visible

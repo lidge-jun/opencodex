@@ -4,6 +4,26 @@ import { knownReasoningSupport, type OpencodeCatalogModel } from "./contracts";
 type ReasoningMetadata = Pick<OpencodeCatalogModel, "reasoningEfforts" | "defaultReasoningEffort"
   | "supportsReasoning" | "supportsThinkingToggle" | "supportsReasoningEffort" | "defaultThinkingEnabled">;
 
+/** Shared row projection; an effective projection owns the default even when it omits it. */
+export function resolveExportReasoningAxes(effective: ReasoningMetadata | undefined, row: ReasoningMetadata) {
+  const supportsThinkingToggle = effective?.supportsThinkingToggle ?? row.supportsThinkingToggle;
+  const supportsReasoningEffort = effective?.supportsReasoningEffort ?? row.supportsReasoningEffort;
+  const defaultThinkingEnabled = effective?.defaultThinkingEnabled ?? row.defaultThinkingEnabled;
+  const declaredEfforts = effective?.reasoningEfforts ?? row.reasoningEfforts;
+  const effortDisabled = supportsReasoningEffort === false
+    || (effective?.supportsReasoning ?? row.supportsReasoning) === false;
+  return {
+    supportsThinkingToggle,
+    supportsReasoningEffort,
+    defaultThinkingEnabled,
+    reasoningEfforts: declaredEfforts === undefined ? undefined : effortDisabled ? [] : [...declaredEfforts],
+    // Falling back through an existing projection would revive a synthetic picker default.
+    // Older rows without a projection retain their own declared default.
+    defaultReasoningEffort: effortDisabled ? undefined : effective !== undefined
+      ? effective.defaultReasoningEffort : row.defaultReasoningEffort,
+  };
+}
+
 /** Effort-enum client compatibility only; never write these choices back into model facts. */
 export function exportReasoningEfforts(model: ReasoningMetadata): string[] | undefined {
   if (model.supportsReasoning === false) return [];

@@ -33,7 +33,7 @@ export function applyExplicitChatReasoningWirePolicy(options: {
     hasTools,
     thinkingEnabled,
     requestedEffort,
-    wireEffort,
+    wireEffort: mappedWireEffort,
     reasoningDisabled,
     body,
   } = options;
@@ -46,25 +46,22 @@ export function applyExplicitChatReasoningWirePolicy(options: {
     return { handled: true };
   }
   const toggleWire = declaresThinkingToggleWire(provider, modelId);
+  const toggleDisabled = toggleWire && capabilities.supportsThinkingToggle === false;
+  // Ignore legacy toggle discriminators on a disabled toggle axis, but retain real effort
+  // mappings (including omission) and run them through the shared effort policy below.
+  const requestedStrength = requestedEffort === "ultra" ? "max" : requestedEffort;
+  const wireEffort = toggleDisabled && isThinkingToggleType(mappedWireEffort) ? requestedStrength : mappedWireEffort;
   if (capabilities.supportsReasoningEffort === false && !toggleWire) {
     delete body.reasoning_effort;
     delete body.reasoning;
     if (capabilities.supportsThinkingToggle === false) delete body.thinking;
     return { handled: true };
   }
-  if (toggleWire) {
-    if (capabilities.supportsThinkingToggle === false) {
-      delete body.thinking;
-      delete body.reasoning;
-      if (requestedEffort !== undefined && capabilities.supportsReasoningEffort !== false) {
-        // A disabled toggle does not invalidate a separately supported effort axis. Preserve the
-        // caller's strength rather than reusing the legacy toggle discriminator.
-        body.reasoning_effort = requestedEffort;
-      } else {
-        delete body.reasoning_effort;
-      }
-      return { handled: true };
-    }
+  if (toggleDisabled) {
+    delete body.thinking;
+    delete body.reasoning;
+    delete body.reasoning_effort;
+  } else if (toggleWire) {
     const resolvedThinkingEnabled = resolveThinkingEnabled(provider, modelId, { thinkingEnabled, reasoning: requestedEffort });
     // These values are the provider's declared thinking discriminator, never strengths. This
     // remains true when the catalog also advertises a separate, real effort axis.
@@ -114,7 +111,15 @@ export function applyExplicitChatReasoningWirePolicy(options: {
     delete body.reasoning;
     return { handled: true };
   }
-  if (provider.reasoningWireFormat !== "gateway-object") return { handled: false };
+  if (provider.reasoningWireFormat !== "gateway-object") {
+    if (!toggleDisabled) return { handled: false };
+    if (wireEffort === undefined) return { handled: true };
+    body.reasoning_effort = wireEffort;
+    return {
+      handled: true,
+      reasoningLog: { effectiveEffort: wireEffort, wireField: "reasoning_effort", wireValue: wireEffort },
+    };
+  }
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
   if (requestedEffort === "none") {
@@ -141,7 +146,7 @@ export function applyExplicitChatReasoningWirePolicy(options: {
       },
     };
   }
-  if (wireEffort === undefined) return { handled: false };
+  if (wireEffort === undefined) return { handled: toggleDisabled };
 
   if (nativeOpenAI) {
     delete body.reasoning;

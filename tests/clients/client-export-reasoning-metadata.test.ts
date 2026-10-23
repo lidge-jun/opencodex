@@ -1,11 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { exportDefaultReasoningEffort, exportReasoningEfforts } from "../../src/clients/config-export/reasoning-metadata";
+import { exportDefaultReasoningEffort, exportReasoningEfforts, resolveExportReasoningAxes } from "../../src/clients/config-export/reasoning-metadata";
 import { inputBudgetFor } from "../../src/clients/config-export/model-metadata";
 import type { OpencodeCatalogModel } from "../../src/clients/config-export";
 
 const model: OpencodeCatalogModel = { namespaced: "mock/model" };
 
 describe("client export reasoning metadata", () => {
+  test("row projections share effective axes without reviving a picker default", () => {
+    const row = { reasoningEfforts: ["low", "high"], defaultReasoningEffort: "low",
+      supportsThinkingToggle: true, supportsReasoningEffort: true, defaultThinkingEnabled: true };
+    expect(resolveExportReasoningAxes(undefined, row)).toMatchObject(row);
+    expect(resolveExportReasoningAxes({}, row).defaultReasoningEffort).toBeUndefined();
+    for (const disabled of [{ supportsReasoning: false }, { supportsReasoningEffort: false }]) {
+      expect(resolveExportReasoningAxes(disabled, row)).toMatchObject({
+        reasoningEfforts: [], defaultReasoningEffort: undefined,
+      });
+      expect(resolveExportReasoningAxes(disabled, {}).reasoningEfforts).toBeUndefined();
+    }
+    expect(resolveExportReasoningAxes({ supportsThinkingToggle: false, defaultThinkingEnabled: false }, row))
+      .toMatchObject({ supportsThinkingToggle: false, defaultThinkingEnabled: false, reasoningEfforts: ["low", "high"] });
+  });
   test("unknown ladders remain unknown and explicit empty ladders remain empty", () => {
     expect(exportReasoningEfforts(model)).toBeUndefined();
     expect(exportReasoningEfforts({ ...model, reasoningEfforts: [] })).toEqual([]);

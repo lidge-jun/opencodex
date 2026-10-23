@@ -479,11 +479,13 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 ## Ultra reasoning level
 
-Ultra is always advertised in the catalog regardless of the `multi_agent_v2` toggle. The v2 toggle
-controls only the multi-agent collab surface, not ultra visibility. The `nativeEffortClamp` function
-wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire).
+Catalog rows retain independent reasoning facts from [per-model declarations](config.md#explicit-per-model-capability-declarations) and discovered optional snake-case capability flags. `src/codex/catalog/model-hints.ts` reapplies config over original discovered reasoning metadata rather than a previous projection; removing an override restores that source at the catalog clone sites that explicitly propagate it. Absent axes remain unknown and explicit false survives publication.
 
-For routed models, `modelSuppressSyntheticMax` is a catalog-only per-model setting. A true value
+`src/codex/catalog/effort.ts` uses the [client export projection](clients/integrations.md#model-output-limits) at Codex's effort-enum boundary: toggle-only models receive `none/high` off/on choices and a declared thinking default, without recording those choices as model strengths. Explicit toggle-axis declarations or negative reasoning/effort declarations constrain this projection and suppress synthetic top tiers. Positive strength support inferred from a legacy ladder alone retains its previous synthesis.
+
+Legacy catalog ladders advertise ultra regardless of the `multi_agent_v2` toggle, which controls only the multi-agent collab surface. `nativeEffortClamp` wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire).
+
+For routed models retaining legacy ladder synthesis, `modelSuppressSyntheticMax` is a catalog-only per-model setting. A true value
 prevents `src/codex/catalog/effort.ts` from adding a missing synthetic `max` and prevents
 `src/codex/catalog/build-entries.ts` from repairing that missing rung during observed-state merge.
 It never removes a provider-declared `max`, and `ultra` remains advertised. If the configured default
@@ -494,14 +496,9 @@ can remove the former. Codex uses this same membership for the picker and explic
 effort validation; an explicit `max` spawn can therefore fail client-side before proxy wire clamping,
 while retained `ultra` remains the supported harness path.
 
-`effortCap` and `subagentEffortCap` are hard ceilings applied on the V2 path
-(`src/server/effort-policy.ts`): they lower or preserve the requested effort rather than rejecting
-the request, and they never raise it.
+`effortCap` and `subagentEffortCap` are hard ceilings applied on the V2 path (`src/server/effort-policy.ts`): they lower or preserve the requested effort rather than rejecting the request, and they never raise it.
 
-Combo dispatch reads the final target ladder through the same `supportedLadderFor` authority. An
-explicit empty ladder means that target receives no effort control; an unknown ladder receives no
-parent effort controls only when the combo opts into `reasoningEffortMode: "adaptive"`. Known
-non-empty ladders continue through the existing per-target resolution.
+Combo dispatch reads the final target ladder through the same `supportedLadderFor` authority. An explicit empty ladder means that target receives no effort control; an unknown ladder receives no parent effort controls only when the combo opts into `reasoningEffortMode: "adaptive"`. Known non-empty ladders continue through the existing per-target resolution. Independent `reasoning.enabled` survives this strength-only stripping.
 
 The `ocx effort` CLI accepts only the same canonical cap ladder before live probing or persistence.
 Its status output preserves unsupported legacy cap values and reports that those fields are ignored;
@@ -512,7 +509,7 @@ Operator-owned `pinnedReasoningEffort`, `modelPinnedReasoningEfforts`, and root
 `modelPinnedEfforts` resolve before applicable effort caps at the final destination.
 Provider model pins precede provider-wide pins, then global selector/destination pins.
 A pin can raise the effective caller effort; the later cap can still lower or omit it.
-`none` means explicit-effort omission (provider default), not guaranteed reasoning disablement.
+On legacy effort paths, `none` means explicit-effort omission (provider default), not guaranteed reasoning disablement. For a declared thinking toggle, the client compatibility decoder resolves `none` to thinking off before strength policy; an independent `thinkingEnabled` boolean takes precedence. Effort caps do not clear that switch, and a destination change restores the original thinking choice alongside effort before normalization.
 Compaction maintenance is exempt. Pins are user overlays and do not alter registry seeds,
 model discovery or advertised ladders. Native Chat applies qualifying caps even without a
 pin, and normalizes pinned values and values rewritten by a cap through provider wire
@@ -577,7 +574,7 @@ Exact [model input declarations](config.md#explicit-per-model-capability-declara
 
 ## Renamed destination reasoning metadata
 
-`src/providers/derive.ts` fills missing reasoning tables for renamed providers accepted by the existing fixed-key destination matcher. Model entries are cloned and explicit user entries (including empty arrays) win, matched case-insensitively. Provider-wide effort defaults fill only when undefined; Command Code unknown models therefore keep the registry's empty picker policy unless overridden. Identity, transport and other capability axes are unchanged. The gathered row drives client exports; this metadata contract does not prove arbitrary gateway routing.
+`src/providers/derive.ts` fills missing reasoning tables for renamed providers accepted by the existing fixed-key destination matcher. Model entries are cloned and explicit user entries (including empty arrays) win, matched case-insensitively. Provider-wide effort defaults fill only when undefined; Command Code unknown models therefore keep the registry's empty picker policy unless overridden. Independent reasoning booleans merge per exact model and axis under the [capability declaration contract](config.md#explicit-per-model-capability-declarations). Identity, transport and unrelated capability axes are unchanged. The gathered row drives client exports; this metadata contract does not prove arbitrary gateway routing.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
 
