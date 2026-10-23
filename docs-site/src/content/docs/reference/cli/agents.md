@@ -266,7 +266,10 @@ decision deadline (1000–120000, default 4000); `-` clears any of the three.
 
 `ocx combo set <id> --decision-quota-signals on|off|-` controls per-Combo advisory evidence.
 `--decision-quota-tiers '{"limited":80}'` sets partial threshold overrides; `-` clears them.
-Both are JEV-only. Omitted policy survives `--targets-file` replacement, `--targets` with `--strategy jev`, and rename (`--targets` alone keeps the existing failover default). Off retains thresholds;
+Both are JEV-only. Omitted policy survives `--targets-file` or `--targets` replacement and rename. Without
+`--strategy`, replacing the targets of an existing Combo keeps its stored strategy, so a JEV Combo stays JEV with
+its decision method, quota settings and session pin; a new Combo defaults to failover. If the kept JEV
+policy rejects the new targets, the command fails, names that policy, and saves nothing. Off retains thresholds;
 switching away from JEV removes both settings. This adds quota data to the selected decision
 backend, not probes, new account selection or hard exclusions. See
 [quota defaults, freshness and privacy](/guides/combos/#advisory-quota-signals-for-jev).

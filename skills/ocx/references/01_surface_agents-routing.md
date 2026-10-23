@@ -993,7 +993,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--image-input` | string | auto or disabled; explicit auto clears the previous disabled choice. |
 | `--reasoning-effort-mode` | string | strict or adaptive, distinct from --effort-mode fallback/force. |
 
-- create and update are aliases of set. Existing fields are read before writing; --targets replaces targets.
+- create and update are aliases of set. Existing fields are read before writing; --targets replaces targets. Without --strategy an existing combo keeps its stored strategy and JEV policy; a new combo defaults to failover.
 - force overrides valid client effort and may increase cost and latency.
 - Only the implemented target grammar is supported; full GUI target metadata and routing-profile writes are separate tasks.
 - New file/flag conflicts refuse before transport. Partial edits preserve target metadata; explicit false/default values override server carry. Turning a native alias off may also require clearing its incompatible alias.

@@ -920,7 +920,8 @@ ocx combo remove <id> --yes
 `set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
 `--allow-metered-targets on|off`, `--display-name`, `--description`, `--decision-provider`, `--decision-timeout`, and `--rename-from`. Use `-` as the
 value of `--effort`, `--alias`, `--display-name`, `--description`, `--decision-provider`, or `--decision-timeout` to
-clear that field. The two decision flags apply only to `--strategy jev`. `--native-alias` requires a currently supported bare native
+clear that field. The two decision flags apply only to `--strategy jev`. On an existing combo, `--targets` replaces only
+the target list: without `--strategy` the stored strategy and its JEV settings stay as they are. `--native-alias` requires a currently supported bare native
 model alias and a non-empty display name. `create` and `update` are aliases for `set`; `delete` is an alias for
 `remove`; and the same subcommands are available under `ocx route combo`.
 
