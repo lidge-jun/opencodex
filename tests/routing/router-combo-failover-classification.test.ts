@@ -103,6 +103,9 @@ describe("combo failure cooldown scope", () => {
     // The pre-existing account-window quota cap keeps its provider scope.
     expect(comboFailureCooldownScope(429, "monthly usage limit reached")).toBe("provider");
     expect(comboFailureCooldownScope(429, "quota exhausted")).toBe("provider");
+    expect(comboFailureCooldownScope(429, "weekly usage quota exceeded")).toBe("provider");
+    expect(comboFailureCooldownScope(429, "weekly usage quota is exhausted")).toBe("provider");
+    expect(comboFailureCooldownScope(429, "weekly usage quota has been exhausted")).toBe("provider");
     expect(comboFailureCooldownScope(429, "Cognition chat failed (failed_precondition: quota exhausted)")).toBe("provider");
     expect(comboFailureCooldownScope(400, "Cognition chat failed (failed_precondition: quota exhausted)", {
       code: "failed_precondition",
