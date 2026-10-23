@@ -2,7 +2,7 @@ import { clientLinkStatusIdentity } from "../client/link-status";
 import { clientLinkTunnelStatus } from "../client/link-tunnel";
 import { loadConfig } from "../config";
 import {
-  projectLinkStatus, type ClientLinkIdentity, type LinkStatusConfig, type LinkStatusDto, type LinkTunnelDiagnostics,
+  projectLinkStatus, type ClientLinkIdentity, type LinkStatusConfig, type LinkStatusDto, type LinkTunnelDiagnostics, type LinkWireState,
 } from "../link/status-projection";
 import { TUNNEL_CAUSES } from "../link/tunnel-history";
 import { isEpochMs, type LinkChildParity } from "../link/child-parity";
@@ -43,30 +43,11 @@ export const LINK_USAGE = `Usage:
 Forced revoke skips remote cleanup. Run ocx disconnect on the remote client.
 Cleanup finds Windows Children and explains how to move them to Hub mode; it changes nothing.`;
 
-type LinkState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
-type ListenerState = "off" | "listening" | "failed";
-
-export interface LinkStatusPayload {
-  role: "standalone" | "home" | "child";
-  listener: { state: ListenerState; port: number | null };
-  links: Array<LinkChildParity & {
-    id: string;
-    alias: string;
-    direction: LinkDirection;
-    state: LinkState;
-    since: string;
-    reason: string | null;
-    tunnelPort: number;
-    peer?: LinkPeerStatus;
-  }>;
-  child: null | {
-    alias: string;
-    state: LinkState;
-    since: string;
-    reason: string | null;
-  };
-  local?: LinkLocalPeer;
-}
+/**
+ * What `ocx link status` prints: the runtime's status DTO itself, so a field the server adds (like
+ * `peer` or the diagnostics `tunnel`) is part of this type the moment it is part of the wire.
+ */
+export type LinkStatusPayload = LinkStatusDto;
 
 export interface LinkIssuePayload {
   linkId: string;
@@ -168,7 +149,7 @@ function validateStatus(value: unknown): LinkStatusPayload {
     throw new Error("invalid link API response: listener port");
   }
   if (!Array.isArray(value.links)) throw new Error("invalid link API response: links");
-  const links = value.links.map((candidate, index) => {
+  const links = value.links.map((candidate, index): LinkStatusPayload["links"][number] => {
     if (!isRecord(candidate)) throw new Error(`invalid link API response: link ${index}`);
     // The OCX-6 parity fields are optional on the wire (an older runtime omits them) and always
     // present in this output, null when absent.
@@ -183,15 +164,15 @@ function validateStatus(value: unknown): LinkStatusPayload {
     return {
       id: candidate.id,
       alias: candidate.alias,
-      direction: candidate.direction,
-      state: candidate.state,
+      direction: candidate.direction as LinkDirection,
+      state: candidate.state as LinkWireState,
       since: candidate.since,
       reason: candidate.reason,
       tunnelPort: candidate.tunnelPort,
       ...parity,
       ...(candidate.peer !== undefined ? { peer: validatePeer(candidate.peer, index) } : {}),
       ...(candidate.tunnel !== undefined ? { tunnel: validateTunnel(candidate.tunnel, index) } : {}),
-    } as LinkStatusPayload["links"][number];
+    };
   });
   let child: LinkStatusPayload["child"] = null;
   if (value.child !== null) {
