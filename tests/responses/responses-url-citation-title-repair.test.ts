@@ -64,9 +64,10 @@ describe("url_citation annotation repair on outbound history", () => {
     expect(repairUrlCitationAnnotations(null)).toBeNull();
   });
 
-  test("stripProviderInputItemMetadata (the OpenAI-operated outbound projection) applies it", () => {
+  test("metadata stripping and citation repair remain independent projections", () => {
     const body = { input: [{ role: "user", content: "hi" }, assistantWith([{ type: "url_citation", url: "https://a.example", start_index: 0, end_index: 0 }])] };
-    expect(annotationsOf(stripProviderInputItemMetadata(body))[0]!.title).toBe("https://a.example");
+    expect(annotationsOf(stripProviderInputItemMetadata(body))[0]).not.toHaveProperty("title");
+    expect(annotationsOf(repairUrlCitationAnnotations(body))[0]!.title).toBe("https://a.example");
   });
 
   const native: OcxProviderConfig[] = [

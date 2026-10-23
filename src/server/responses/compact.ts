@@ -25,7 +25,7 @@ import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { applyReasoningRetention, appendRetentionNotice, type ReasoningRetentionResult } from "../../responses/reasoning-retention";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
-import { stripProviderInputItemMetadata } from "../../adapters/openai-responses/request-strips";
+import { repairUrlCitationAnnotations, stripProviderInputItemMetadata } from "../../adapters/openai-responses/request-strips";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
 import { NoEligiblePolicyCandidateError, routeCompactionModel } from "../../router";
@@ -950,7 +950,7 @@ export async function handleResponsesCompact(
     // call-name repair the adapter applies. A damaged item here refuses the compaction itself,
     // which is the request a long task depends on to keep going.
     // This branch is OpenAI-only and bypasses the adapter's Google replay projection (#7111).
-    const compactBody = repairLegacyDottedToolCallNames(
+    let compactBody = repairLegacyDottedToolCallNames(
       stripProviderInputItemMetadata(sanitizeReasoningInputContent(compactBodyRaw, {
         preserveRawReasoningContent: !isOpenAiOperatedResponsesDestination(compactProvider)
           && compactProvider.preserveResponsesReasoningContent === true,
@@ -959,6 +959,9 @@ export async function handleResponsesCompact(
         requirePlaintextReasoning: requireCompactPlaintextReasoning,
       })),
     ) as typeof compactBodyRaw;
+    if (isOpenAiOperatedResponsesDestination(compactProvider)) {
+      compactBody = repairUrlCitationAnnotations(compactBody) as typeof compactBodyRaw;
+    }
     {
       const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
       if (binding) {

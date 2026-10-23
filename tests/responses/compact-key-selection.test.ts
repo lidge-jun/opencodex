@@ -65,10 +65,10 @@ async function queue(config: OcxConfig, id: string) {
     await Bun.sleep(5);
   }
 }
-function start(config: OcxConfig, abort: AbortController) {
+function start(config: OcxConfig, abort: AbortController, input: unknown[] = [{ role: "user", content: "fixture question" }]) {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const req = new Request("http://localhost/v1/responses/compact", { method: "POST", headers: { "content-type": "application/json" },
-    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5_000)]), body: JSON.stringify({ model: `${config.defaultProvider}/test`, input: [{ role: "user", content: "fixture question" }], stream: false }) });
+    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5_000)]), body: JSON.stringify({ model: `${config.defaultProvider}/test`, input, stream: false }) });
   const pending = handleResponsesCompact(req, config, logCtx).then(async response => ({ response, text: await response.text(), logCtx }));
   void pending.catch(() => {});
   return pending;
@@ -308,9 +308,11 @@ for (const reselect of [false, true]) test(`gateway compact preserves custom tra
   provider.supportsNativeCompactEndpoint = true;
   provider.headers = { "x-gateway-static": "initial" };
   saveConfig(config);
+  const citation = { type: "url_citation", url: "https://gateway.example/source", start_index: "3", end_index: -1 };
+  const input = [{ role: "user", content: "fixture question" }, { type: "message", role: "assistant", content: [{ type: "output_text", text: "fixture answer", annotations: [citation] }] }];
   const held = reselect ? await waitForProviderRequestSlot(config.defaultProvider, provider) : undefined;
   const abort = new AbortController();
-  const pending = start(config, abort);
+  const pending = start(config, abort, input);
   try {
     if (reselect) {
       await queue(config, "k1");
@@ -327,7 +329,7 @@ for (const reselect of [false, true]) test(`gateway compact preserves custom tra
     expect(seen[0]!.url).toBe(`https://gateway.example/v1/${reselect ? "refreshed-responses" : "custom-responses"}/compact`);
     expect(seen[0]!.headers.get("x-gateway-static")).toBe(reselect ? "replacement" : "initial");
     expect(seen[0]!.headers.get("chatgpt-account-id")).toBeNull();
-    expect(seen[0]!.body).toMatchObject({ model: "test", input: [{ role: "user", content: "fixture question" }] });
+    expect(seen[0]!.body).toMatchObject({ model: "test", input });
     noLeaks(config);
   } finally { abort.abort(); held?.release(); await pending.catch(() => undefined); }
 });
