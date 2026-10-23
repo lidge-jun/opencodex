@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { fallbackCodexAccountLogLabel } from "../../src/codex/account-label";
 
 /**
  * Refresh-failure classification: which upstream bodies are allowed to retire an account.
@@ -177,8 +178,10 @@ describe("codex refresh-failure classification", () => {
     try {
       await classify("diagnostic-known", () => Response.json({ error: "invalid_grant", error_description: "private-body-marker" }, { status: 400 }));
       await classify("diagnostic-unknown", () => Response.json({ error: "private-code-marker", error_description: "private-body-marker" }, { status: 400 }));
-      expect(lines).toContain("[codex] pool refresh: reauth status=400 code=invalid_grant");
-      expect(lines).toContain("[codex] pool refresh: transient status=400 code=none");
+      // The redacted pool label names the failing account (#7592); the raw id stays out.
+      expect(lines).toContain(`[codex] pool refresh ${fallbackCodexAccountLogLabel("diagnostic-known")}: reauth status=400 code=invalid_grant`);
+      expect(lines).toContain(`[codex] pool refresh ${fallbackCodexAccountLogLabel("diagnostic-unknown")}: transient status=400 code=none`);
+      expect(lines.join("\n")).not.toContain("diagnostic-known");
       expect(lines.join("\n")).not.toContain("private-body-marker");
       expect(lines.join("\n")).not.toContain("private-code-marker");
       expect(lines.join("\n")).not.toContain("grant-diagnostic");

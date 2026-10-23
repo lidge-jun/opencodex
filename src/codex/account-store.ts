@@ -19,6 +19,7 @@ import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import type { CodexAccountCredentialRecord, CodexAccountCredentials } from "../types";
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import { isValidCodexAccountId } from "./account-id";
+import { fallbackCodexAccountLogLabel } from "./account-label";
 import type { PoolQuotaWriter } from "./quota-types";
 import { CODEX_REFRESH_FLIGHT_CEILING_MS } from "./quota-recovery-timing";
 
@@ -1376,7 +1377,7 @@ async function resolveCodexToken(
         .catch(() => undefined);
       const failure = classifyChatgptRefreshFailure(res.status, body?.displaySafe ? body.text : "");
       const { reason } = failure;
-      noteChatgptRefreshFailure("pool", res.status, failure);
+      noteChatgptRefreshFailure("pool", res.status, failure, fallbackCodexAccountLogLabel(id));
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`, res.status, failure.code);
     }
     const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };

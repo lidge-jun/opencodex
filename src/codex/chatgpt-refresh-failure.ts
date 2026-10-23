@@ -45,12 +45,16 @@ export function classifyChatgptRefreshFailure(status: number, body: string): Cha
   return { reason, ...(code ? { code } : {}) };
 }
 
-/** Endpoint verdict only: no credential identity, body, or arbitrary upstream string. */
+/**
+ * Endpoint verdict plus, for pool accounts, the redacted `p<hex6>` log label so a multi-account
+ * pool can be triaged from the log. Never a token, email, body, or arbitrary upstream string.
+ */
 export function noteChatgptRefreshFailure(
   kind: "pool" | "native main",
   status: number,
   failure: ChatgptRefreshFailure,
+  accountLabel?: string,
 ): void {
-  console.warn(`[codex] ${kind} refresh: ${failure.reason === "unknown" ? "transient" : "reauth"}`
+  console.warn(`[codex] ${kind} refresh${accountLabel ? ` ${accountLabel}` : ""}: ${failure.reason === "unknown" ? "transient" : "reauth"}`
     + ` status=${status} code=${failure.code ?? "none"}`);
 }
