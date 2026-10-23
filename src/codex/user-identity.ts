@@ -19,6 +19,7 @@ import { isAbsolute, join, resolve } from "node:path";
 
 import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
 import { WINDOWS_PRINCIPAL_LOOKUP_TIMEOUT_MS } from "../lib/windows-user-principal";
+import { resolveWindowsCurrentSid } from "./windows-current-sid";
 import { resolveWindowsLocalAppData } from "./windows-local-appdata";
 
 import type {
@@ -213,8 +214,8 @@ export function decodeWindowsIdentityPowerShellOutputForTests(output: Uint8Array
  * Both helper values -- the effective token's SID and its known-folder local AppData --
  * are fixed for the lifetime of a process: neither can change without a new logon
  * token, and the lookups deliberately ignore the environment, so nothing a caller
- * does between two calls can alter the answer. The native x64 known-folder path
- * avoids this helper entirely. Each fallback call otherwise spawns a fresh
+ * does between two calls can alter the answer. The native x64 SID and known-folder
+ * paths avoid this helper entirely. Each fallback call otherwise spawns a fresh
  * PowerShell, roughly 150ms for the SID and 310ms for the folder, and the
  * coordinator asks for both on every config write and lock acquisition. That cost
  * pushed real multi-process injection tests past their budget while proving
@@ -259,12 +260,40 @@ function powershellValue(expression: string): string {
   return value;
 }
 
-function resolveWindowsSid(): string {
-  const sid = powershellValue(
-    "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-  );
+const WINDOWS_SID_EXPRESSION = "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value";
+
+/**
+ * Windows x64 reads the token SID in-process (`windows-current-sid.ts`, #7544);
+ * the PowerShell helper runs only where `bun:ffi` cannot. Every failure either
+ * path reports — a helper timeout, a native API error — refuses.
+ */
+function resolveWindowsSidWith(
+  powershellLookup: () => string,
+  nativeLookup?: (() => string) | null,
+): string {
+  let sid: string;
+  try {
+    sid = nativeLookup === undefined
+      ? resolveWindowsCurrentSid(powershellLookup)
+      : resolveWindowsCurrentSid(powershellLookup, nativeLookup);
+  } catch (cause) {
+    if (cause instanceof CodexUserIdentityRefusal) throw cause;
+    refuse("Windows effective-account lookup failed.", cause);
+  }
   if (!SID_PATTERN.test(sid)) refuse("Windows effective-account lookup returned an invalid SID.");
   return sid.toUpperCase();
+}
+
+function resolveWindowsSid(): string {
+  return resolveWindowsSidWith(() => powershellValue(WINDOWS_SID_EXPRESSION));
+}
+
+/** Test-only: the SID resolution and refusal mapping with both lookups injected. */
+export function resolveWindowsSidForTests(
+  powershellLookup: () => string,
+  nativeLookup: (() => string) | null,
+): string {
+  return resolveWindowsSidWith(powershellLookup, nativeLookup);
 }
 
 function windowsLocalAppData(): string {

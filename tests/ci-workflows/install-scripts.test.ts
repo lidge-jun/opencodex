@@ -66,7 +66,8 @@ describe("install scripts", () => {
     expect(pkg.main).toBe("./bin/package-main.mjs");
     expect(pkg.exports?.["."]?.bun).toBe("./src/index.ts");
     expect(pkg.exports?.["."]?.default).toBe("./bin/package-main.mjs");
-    // Bun 1.4.2 fixes the Windows fetch streaming regression reported in #6684.
+    // Bun 1.4.2 fixes the Windows fetch streaming regression reported in #6684; 1.4.4 keeps it
+    // and ships NSS 3.131.1 roots, which drop the compromised eMudhra CAs (October 2026).
     // CI's testRunnerBun skipped 1.4.2: it segfaults while RE-LOADING the bunfig
     // preload that `--isolate` re-enters once per test file:
     // `load_preloads -> JSModuleLoader::loadModule -> JSPromise::status` dereferences a dead
@@ -95,7 +96,7 @@ describe("install scripts", () => {
     // tests/ci-workflows/test-runner-spawnsync-finalizer.test.ts keeps the runner above it.
     // Rejoin after the upstream runner crash is fixed and a green `lane=all` dispatch
     // proves the unified version; then delete testRunnerBun and the setup action's role.
-    expect(pkg.dependencies?.bun).toBe("1.4.2");
+    expect(pkg.dependencies?.bun).toBe("1.4.4");
     expect(pkg.testRunnerBun).toBe("1.4.3");
     expect(pkg.dependencies?.zod).toBe("4.4.3");
     expect(pkg.devDependencies?.typescript).toBe("7.0.2");

@@ -15,6 +15,7 @@ import { repoPath } from "../helpers/repo-root";
 
 const REASONING = "I need to inspect files before answering.";
 const SCOPE: OcxReasoningReplayScopeRef = {
+  clientPrincipalId: "principal-empty-delta",
   clientThreadId: "thread-empty-delta",
   current: {
     providerName: "opencode-zen",
@@ -103,8 +104,9 @@ describe("reasoning replay empty-delta robustness", () => {
     const moduleUrl = pathToFileURL(repoPath("src/responses/reasoning-replay-cache.ts")).href;
     const script = [
       `const cache = await import(${JSON.stringify(moduleUrl)});`,
-      `const scope = {clientThreadId:"disk-guard",current:{providerName:"test",providerDestinationIdentity:"destination:test",adapterName:"openai-chat",modelId:"model",credentialIdentity:"key:test"}};`,
+      `const scope = {clientPrincipalId:"principal-disk-guard",clientThreadId:"disk-guard",current:{providerName:"test",providerDestinationIdentity:"destination:test",adapterName:"openai-chat",modelId:"model",credentialIdentity:"key:test"}};`,
       `cache.rememberReasoningForCall("call_disk_guard", ${JSON.stringify(REASONING)}, scope);`,
+      `if (cache.peekReasoningForCall("call_disk_guard", scope) !== ${JSON.stringify(REASONING)}) throw new Error("cache fixture was not admitted");`,
     ].join("\n");
 
     try {

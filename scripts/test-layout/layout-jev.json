@@ -1,0 +1,6 @@
+{
+  "jev-session-pin.test.ts": "routing",
+  "server-jev-session-pin.test.ts": "server",
+  "cli-combo-session-pin.test.ts": "cli",
+  "cli-combo-set-targets.test.ts": "cli"
+}

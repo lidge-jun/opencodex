@@ -238,9 +238,25 @@ account's own model discovery, because Google enables models per account: some a
 Claude Sonnet 4.6 and Claude Opus 4.6 (Thinking), others only Claude Opus and Sonnet 5.5 (directly
 billed, non-trial Pro or Ultra plans), and Gemini 4 Argon only on Ultra and Enterprise. Both Claude
 generations map: 4.6 takes its effort as a thinking level, 5.5 as its `-low`, `-medium`, or
-`-high` model. With several Antigravity accounts and `oauthAccountFailover.enabled`, a request
-prefers an account whose discovery lists the requested model. Saved selections of models that left
-the list keep routing as before.
+`-high` model.
+
+Antigravity requests go only to accounts that may serve the requested model. OpenCodex remembers
+each account's model list from that account's own discovery, in memory, for six hours. An account
+whose list includes the model is preferred; an account with no current list (not yet discovered,
+expired, or forgotten by a restart) is still used, because nothing proves it lacks the model. An
+account whose current list omits the model is never sent the request, including on 429 and
+authentication failover. If the selected account omits it and `oauthAccountFailover.enabled` is on,
+the request moves to another account that is not paused or awaiting reauthentication. Otherwise
+OpenCodex refuses the request locally with HTTP 403 `permission_denied` and sends nothing upstream:
+
+- `The selected Google Antigravity account does not list the model "<model>" in its model discovery. Select an account that lists it, or enable oauthAccountFailover so OpenCodex can choose one.`
+  Another usable account may serve the model, but failover is off.
+- `The selected Google Antigravity account does not list the model "<model>" in its model discovery, and no account that may serve it could be used for this request. Retry the request.`
+  Failover is on and chose another account, but that account could not be used for this request.
+- `No usable Google Antigravity account lists the model "<model>" in its model discovery. Choose a model your accounts list, or add an account that has access to it.`
+  Every usable account's current list omits the model.
+
+A saved selection of a model that left the list follows the same rule.
 
 To check which mode a provider is actually using, open it on the Providers page: the **Connection**
 block's **Authentication** row reads `OAuth`, `API key`, `ChatGPT passthrough`, `Local`, or
@@ -657,7 +673,7 @@ The account list marks Kiro accounts excluded from automatic selection with a re
 
 ## 3. API-key catalog
 
-opencodex ships 104 built-in presets: 84 key-based, 16 OAuth, three local, and one default
+opencodex ships 105 built-in presets: 84 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -739,7 +755,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Z.AI (GLM Coding) | `https://api.z.ai` — Responses at `/api/v1/responses` by default; Chat Completions at `/api/coding/paas/v4/chat/completions` per model through `modelAdapters` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
 | BigModel Coding Plan (Responses, static roster) | `https://open.bigmodel.cn/api/v1` |
-| Qwen Cloud | Token plan (default): `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · or Custom |
+| Qwen Cloud | Token plan (default): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · or Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
@@ -753,6 +769,27 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
+
+**Alibaba Token Plan** provides Beijing Personal Edition and International Team Edition
+presets. Both regions offer both subscription tiers. The presets keep static chat-model
+lists because upstream discovery also includes non-chat models. Existing selections and
+explicit International endpoint overrides are preserved.
+
+Both presets include `deepseek-v4.1-flash-1017` with text/image input, text output,
+1,000,000 context and `low`/`high`/`max` reasoning (default `high`). Its 393,216 output
+budget follows the existing published-budget normalization, not a measured boundary;
+the lab lists 384,000. Strict schemas reject and `json_object` is unverified for this
+exact ID, so Chat requests omit `response_format`. This is best-effort text, not
+guaranteed JSON. The bare model's verified JSON downgrade and existing Responses
+pins are unchanged. Beijing also includes now-listed `deepseek-v4-pro-0813`;
+International omits retired `deepseek-v3.2` and bare `deepseek-v4-flash` but retains
+`deepseek-v4-flash-0731`. Both presets keep the hosts their official quick starts
+document: Beijing `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` and
+International `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`.
+The Qwen Cloud preset uses the separate Token Plan host that Qwen Cloud documents above.
+See the [1017 model card](https://www.qianwenai.com/models/deepseek-v4.1-flash-1017),
+[Chat reference](https://docs.qwencloud.com/api-reference/chat/openai-chat) and
+[Personal overview](https://help.aliyun.com/en/model-studio/token-plan-personal-overview).
 
 **OpenGateway** is an OpenAI-compatible gateway operated by Sionic AI at
 `https://apis.opengateway.ai/v1`. Its public catalog contains about 80 active models
@@ -1192,6 +1229,35 @@ Create a key in [Novita's key manager](https://novita.ai/settings/key-management
 > with **Call Model APIs** access for shared/production use. Dedicated Truss `predict` endpoints use different
 > hosts and schemas and are not routed by this preset.
 > Live discovery for this preset is capped at a 1 MiB response and 256 raw model rows.
+
+### WorkBuddy AI subscription
+
+`workbuddy-ai` connects your international WorkBuddy AI subscription as a model provider.
+Choose **WorkBuddy AI** in Providers and log in, or run:
+
+```bash
+ocx login workbuddy-ai
+```
+
+Complete the browser sign-in; OpenCodex polls for authorization for up to five minutes.
+Tokens are stored in OpenCodex and refreshed on demand. Adding accounts uses the existing
+OAuth account list; team identity stays attached to its own token. No WorkBuddy desktop
+installation or credential-file import is required.
+
+Models and capabilities come from your account's live product catalog. Select a
+`workbuddy-ai/<model-id>` model after login; `workbuddy-ai/default-model` is the fallback
+selector when discovery is unavailable. Streaming, tool calls and buffered responses use
+WorkBuddy's Chat endpoint. The Overview and Accounts tabs show remaining credits, used/total credits, base and gift
+balances, and the next expiring non-daily credits when available. Refresh reads the signed-in
+account's billing summary; an unavailable read is not a zero balance. These credits are
+informational and do not disable free models when paid credits run out.
+
+This uses an unofficial subscription protocol based on
+[Magpie's WorkBuddy plugin](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy).
+Upstream client-channel or account restrictions are returned to the caller. OpenCodex does
+not rewrite agent identity prompts to bypass them. Availability depends on your account,
+region, model entitlement and WorkBuddy's current API. This is separate from the CodeBuddy
+CLI API-key providers and does not connect the WorkBuddy desktop client to OpenCodex.
 
 ### Official CodeBuddy Code CLI (Global & CN)
 
@@ -1640,7 +1706,14 @@ provider-specific) is already consumed.
 Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
-custom provider.
+or Abliteration custom provider.
+
+**Abliteration credits.** A provider of any name whose `baseUrl` is
+`https://api.abliteration.ai` or `https://api.abliteration.ai/v1` reads
+`GET https://api.abliteration.ai/v1/credits` with its active key as a Bearer token and does not
+follow redirects. `total_credits` minus `total_usage` is the remaining USD balance, shown as a
+credits bar of consumed spend. An account with no credits shows no bar. A rejected key clears the
+row; `503 credit_balance_unavailable`, 408, and 429 keep the last reading.
 
 **OpenCode Go quota.** The canonical `opencode-go` preset reads
 `GET https://opencode.ai/zen/go/v1/usage` with the configured key as a Bearer token and

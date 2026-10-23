@@ -182,4 +182,30 @@ describe("management CLI on a Remote Link Child", () => {
       "  fast mode: on",
     ]);
   });
+
+  test("a caller's deadline reaches the Home read and its body (ocx status keeps its 2 s bound)", async () => {
+    writeChild();
+    // The request itself: the signal the relay fetch sees aborts with the caller's.
+    const requestCaller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    const pending = runtimeRequest("/api/fallback", { signal: requestCaller.signal }, {
+      findLiveProxy: clientLive,
+      linkHome: { fetchImpl: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        requestSignal = init?.signal ?? undefined;
+        return Response.json({ schema: "ocx.fallback/1" });
+      }) as typeof fetch },
+    });
+    await pending;
+    expect(requestSignal?.aborted).toBe(false);
+    requestCaller.abort();
+    expect(requestSignal?.aborted).toBe(true);
+    // The body: a Home that sends headers and then stalls is cut off by the caller, not after 30 s.
+    const bodyCaller = new AbortController();
+    const stalled = runtimeRequest("/api/fallback", { signal: bodyCaller.signal }, {
+      findLiveProxy: clientLive,
+      linkHome: { fetchImpl: (async () => new Response(new ReadableStream({ start() { /* never ends */ } }), { status: 200 })) as typeof fetch },
+    }).then(() => "resolved", () => "rejected");
+    setTimeout(() => bodyCaller.abort(), 10);
+    expect(await stalled).toBe("rejected");
+  });
 });

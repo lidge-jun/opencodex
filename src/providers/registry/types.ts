@@ -63,6 +63,8 @@ export interface ProviderModelDiscoveryFilter {
 }
 
 interface ProviderModelDiscoverySharedSpec {
+  /** Product-config envelope used by WorkBuddy AI instead of an OpenAI model list. */
+  format?: "workbuddy";
   /** Query parameters applied to the resolved discovery URL. */
   query?: Readonly<Record<string, string>>;
   /** Top-level response key containing model rows; defaults to `data`. */
@@ -160,6 +162,14 @@ export interface ProviderRegistryEntry {
    */
   sponsor?: { tier: "main" | "standard"; url: string };
   dashboardPreset?: boolean;
+  /**
+   * The upstream route or service this entry depends on is gone. Deprecated entries stay in the
+   * registry so saved providers keep resolving and a pinned adapter keeps loading, but they are
+   * excluded from the add-provider picker, the init menu, the featured list, and new key logins.
+   * The value is the operator-facing reason; it is registry-only and never seeded into saved
+   * config.
+   */
+  deprecated?: string;
   note?: string;
   dashboardUrl?: string;
   defaultModel?: string;
@@ -334,6 +344,8 @@ export interface ProviderRegistryEntry {
    * `directReasoningEffortModels` above is registry-owned.
    */
   noJsonSchemaModels?: string[];
+  /** Exact models with no established structured-output wire format. Registry-owned at routing. */
+  noStructuredOutputModels?: string[];
   /** Opt this provider into parallel tool calls (see OcxProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;
   /** Opt this provider into forwarding prompt_cache_key (OpenAI-specific; strict backends reject it). */
@@ -346,6 +358,12 @@ export interface ProviderRegistryEntry {
   chatServiceTier?: boolean;
   /** OpenAI Chat EOF policy for gateways that omit terminal frames after complete tool calls. */
   openaiChatEofTolerance?: boolean;
+  /**
+   * Record that this destination rejects the Chat `developer` role (`400 role 'developer' is not
+   * allowed`), so both the translated route and the native `/v1/chat/completions` passthrough send
+   * `system` instead. Seeds `foldDeveloperRoleToSystem` on the provider config; a user value wins.
+   */
+  foldDeveloperRoleToSystem?: boolean;
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
   requiresReasoningPlaceholderModels?: string[];
@@ -382,6 +400,6 @@ export type ProviderConfigSeed = Pick<
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noStopModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "inlineThinkTagModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "showThinkingSummary"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "inlineThinkTagModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "foldDeveloperRoleToSystem" | "showThinkingSummary"
   | "googleMode" | "project" | "location" | "headers"
 >;

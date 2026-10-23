@@ -159,7 +159,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `anthropicEofTolerance?` | `boolean` | `message_stop` 전에 스트림이 끝나도 표시 텍스트 또는 완전한 JSON 객체 툴 입력을 받은 경우에만 완료를 허용합니다（Anthropic 호환 게이트웨이용）. 기본값은 꺼짐. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google 전송/인증 모드입니다. 기본값은 `ai-studio`입니다. |
 | `googleToolSchemaPolicy?` | `"compatible" \| "reject-lossy"` | Google 전용입니다. 생략하거나 `compatible`이면 호환 스키마와 기존 비직접 400 복구를 유지합니다. `reject-lossy`는 초기 손실 또는 판정 불가능한 상한 비교를 전송 전에 거부하고 제약을 개방하는 Vertex 또는 Cloud Code Assist 복구를 보류합니다. 직접 AI Studio는 이 복구를 수행하지 않습니다. |
-| `project?` | `string` | Vertex 또는 Antigravity Cloud Code Assist 프로젝트 id입니다. Vertex API 키는 이 값이 있으면 프로젝트 엔드포인트를 쓰고, 없으면 `GOOGLE_CLOUD_PROJECT`가 설정돼 있어도 express 모드를 씁니다. ADC는 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`로 폴백합니다. |
+| `project?` | `string` | Vertex 또는 Antigravity Cloud Code Assist 프로젝트 id입니다. Vertex API 키는 이 값이 있으면 프로젝트 엔드포인트를 쓰고, 없으면 `GOOGLE_CLOUD_PROJECT`가 설정돼 있어도 express 모드를 씁니다. ADC는 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT`로 폴백합니다.`"auto"`로 설정하면 각 Vertex API 키가 자신의 프로젝트를 확인합니다（확인에 성공한 결과는 키마다 캐시하고, 확인에 실패한 키는 이후 요청에서 다시 탐색합니다）. 하나의 키 풀이 여러 프로젝트에 걸칠 수 있으며, ADC는 `"auto"`를 거부합니다. |
 | `location?` | `string` | Vertex 위치입니다. API 키 프로젝트 엔드포인트는 기본값이 `global`이고 `GOOGLE_CLOUD_LOCATION`을 무시합니다. ADC는 이 값이나 `GOOGLE_CLOUD_LOCATION` 폴백이 필요합니다. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor 전용입니다. stdio 또는 Streamable HTTP MCP 서버입니다. |
 | `desktopExecutor?` | `DesktopExecutorConfig` | Cursor 전용입니다. 외부 computer-use 및 record-screen 명령입니다. |

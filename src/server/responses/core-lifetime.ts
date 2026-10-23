@@ -1,7 +1,7 @@
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { finalizeTranslatorBudgetResponse } from "../../lib/translator-budget";
-import { isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
+import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import {
   isNativePassthroughSseResponse,
   markNativePassthroughSseResponse,
@@ -76,7 +76,7 @@ export function finalizeAccountLease(response: Response, release: () => void, on
   if (isEagerRelaySseResponse(response)) markEagerRelaySseResponse(wrapped);
   if (isPreinspectedJsonResponse(response)) markPreinspectedJsonResponse(wrapped);
   if (runTurnAdapterSseResponses.has(response)) runTurnAdapterSseResponses.add(wrapped);
-  return carryResponseToolOwnership(response, wrapped);
+  return carryResponseToolOwnership(response, carryReplayRefusal(response, wrapped));
 }
 
 

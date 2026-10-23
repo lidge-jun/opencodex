@@ -120,6 +120,8 @@ export type CliRemoteHubStatus = {
 
 export type CliStatusJson = {
   mainAccountHardLock?: CodexMainAccountPolicyHealth;
+  /** OCX-11 fallback state; see src/cli/status-fallback.ts. */
+  fallback?: import("./status-fallback").StatusFallback;
   schemaVersion: 1;
   /**
    * This machine's topology role, named rather than inferred (#4236).
@@ -857,6 +859,13 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
   const mainAccountHardLock = options.mainAccountPolicy && live
     ? (await (await import("../oauth/health")).fetchCodexHealthFromLiveProxy(undefined, async () => live)).mainAccountHardLock
     : undefined;
+  // Same `--json`-only gate as the hard-lock read above: the human report stays one probe.
+  const fallback = options.mainAccountPolicy
+    ? await (await import("./status-fallback")).collectStatusFallback(config, {
+      live: Boolean(live), linkChild: config.client?.transport === "link",
+      deps: { findLiveProxy: async () => live },
+    })
+    : undefined;
   const pidFile = readPid();
   // Preserve an authoritative null from orphan/legacy liveness — do not restore pidFile.
   const pid = resolveStatusPid(live, pidFile);
@@ -1012,6 +1021,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
     healthLabel: formatCliStatusHealthLabel(health.label, cliCommand, remoteHub.connected),
     json: {
       ...(mainAccountHardLock ? { mainAccountHardLock } : {}),
+      ...(fallback ? { fallback } : {}),
       schemaVersion: 1,
       runtimeRole: config.runtimeRole ?? "standalone",
       proxy: {

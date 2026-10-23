@@ -1,4 +1,10 @@
 import { normalizeJevQuotaTiers, type ResolvedJevQuotaTiers } from "./jev-quota-config";
+import {
+  JEV_SESSION_PIN_TTL_MAX_MS,
+  JEV_SESSION_PIN_TTL_MIN_MS,
+  normalizeJevSessionPin,
+  type JevSessionPinConfig,
+} from "./jev-session-pin-config";
 import { isCodexReasoningEffort, isDeclaredReasoningEffort } from "../reasoning-effort";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
 import type { OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
@@ -79,6 +85,8 @@ export interface NormalizedComboConfig {
   decisionTimeoutMs?: number;
   decisionQuotaSignals?: boolean;
   decisionQuotaTiers?: ResolvedJevQuotaTiers;
+  /** JEV only, opt-in: keep a session on the target JEV chose for it (#7525). */
+  sessionPin?: JevSessionPinConfig;
   targets: NormalizedComboTarget[];
 }
 
@@ -310,6 +318,16 @@ export function comboConfigIssues(
     if (field === "decisionQuotaSignals" ? typeof body[field] !== "boolean" : !normalizeJevQuotaTiers(body[field]))
       issues.push({ path: [field], message: field === "decisionQuotaSignals" ? "decisionQuotaSignals must be a boolean" : "decisionQuotaTiers must contain finite 0..100 strictly ascending thresholds" });
   }
+  if (body.sessionPin !== undefined && body.sessionPin !== null) {
+    if (body.strategy !== "jev") {
+      issues.push({ path: ["sessionPin"], message: 'sessionPin is only valid with strategy "jev"' });
+    } else if (!normalizeJevSessionPin(body.sessionPin)) {
+      issues.push({
+        path: ["sessionPin"],
+        message: `sessionPin must be { "ttlMs": <integer from ${JEV_SESSION_PIN_TTL_MIN_MS} to ${JEV_SESSION_PIN_TTL_MAX_MS}> }`,
+      });
+    }
+  }
   if (body.decisionProvider !== undefined && body.decisionProvider !== null) {
     const decisionProvider = typeof body.decisionProvider === "string" ? body.decisionProvider.trim() : "";
     if (!decisionProvider) {
@@ -533,6 +551,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     ...(typeof raw.decisionTimeoutMs === "number" ? { decisionTimeoutMs: raw.decisionTimeoutMs } : {}),
     ...(raw.strategy === "jev" && raw.decisionQuotaSignals === true ? { decisionQuotaSignals: true } : {}),
     ...(raw.strategy === "jev" && normalizeJevQuotaTiers(raw.decisionQuotaTiers) ? { decisionQuotaTiers: normalizeJevQuotaTiers(raw.decisionQuotaTiers)! } : {}),
+    ...(raw.strategy === "jev" && normalizeJevSessionPin(raw.sessionPin) ? { sessionPin: normalizeJevSessionPin(raw.sessionPin)! } : {}),
     targets: raw.targets.map(target => ({
       provider: target.provider.trim(),
       model: target.model.trim(),

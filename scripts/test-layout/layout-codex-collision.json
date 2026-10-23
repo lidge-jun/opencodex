@@ -1,4 +1,5 @@
 {
   "codex-stored-main-duplicate.test.ts": "codex-integration",
-  "codex-pool-caller-fallback-policy.test.ts": "codex-integration"
+  "codex-pool-caller-fallback-policy.test.ts": "codex-integration",
+  "codex-windows-current-sid.test.ts": "codex-integration"
 }

@@ -178,6 +178,7 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `decisionTimeoutMs?` | `number` | `4000` | `strategy: "jev"` only. Decision deadline before failing open, 1000–120000 ms. |
 | `decisionQuotaSignals?` | `boolean` | `false` | JEV only. Explicit `true` sends loaded advisory quota evidence to the selected backend; never changes hard eligibility or account selection. |
 | `decisionQuotaTiers?` | `{ moderate?: number; limited?: number; nearlyExhausted?: number }` | `{ limited: 70, nearlyExhausted: 90 }` | JEV only. Partial overrides merge with defaults; finite 0–100 values must be strictly ascending. `moderate` is absent unless explicit. Does not enable signals by itself. |
+| `sessionPin?` | `{ ttlMs: number }` | off | JEV only. Keeps an explicit client session on the target JEV chose for it while the session stays active; `ttlMs` is the idle window, 60000–86400000. `null` clears. See [Session pin for JEV](/guides/combos/#session-pin-for-jev). |
 
 Quota settings, privacy and unknown-pool semantics are described in
 [Advisory quota signals for JEV](/guides/combos/#advisory-quota-signals-for-jev).
