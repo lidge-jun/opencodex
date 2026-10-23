@@ -49,6 +49,12 @@ devlog/**/security-advisory-draft*
 .omo/
 **/.omo/
 
+# Bun's on-disk build cache. Bun writes it into whichever directory it runs in, and
+# `git add -A` has swept two 59 MB copies of it into this history — see
+# tests/ci-workflows/repo-hygiene.test.ts, which fails if any path here becomes
+# tracked again.
+*.bun-build
+
 # Local development worktrees
 .worktrees/
 
