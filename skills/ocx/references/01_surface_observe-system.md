@@ -392,6 +392,7 @@ Drives no management route.
 | `--channel` | string | Registry channel to resolve. Only the stable latest channel is offered. |
 | `--json` | boolean | Emit the plan as JSON. |
 
+- Local counterpart of GET /api/codex/cli-update/plan: runs the same proof-bound plan builder without HTTP transport.
 - Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.
 - The registry evidence is pinned to the official npm registry with project/user npm configuration isolated, so a redirected .npmrc cannot supply the answer.
 - Installs nothing and mutates no application state; registry evidence is gathered under an isolated temporary npm root (npmrc, cwd, cache and logs) removed best-effort afterwards. A refusal is a normal dry-run answer and still exits 0.
@@ -416,6 +417,7 @@ Drives no management route.
 | `--request-id` | string | Optional stable retry key. |
 | `--json` | boolean | Emit the public job status. |
 
+- Local counterpart of POST /api/codex/cli-update/apply: invokes the same durable job owner with --yes confirmation; HTTP admission separately requires a trusted loopback GUI session.
 - Admission is stored under the protected current-user config root before the installer can run.
 - Only POSIX npm-global managed installs are currently supported; Windows, shims and other managers remain refused.
 
@@ -433,6 +435,7 @@ Drives no management route.
 |---|---|---|
 | `--json` | boolean | Emit the path-free job status. |
 
+- Local counterpart of GET /api/codex/cli-update/jobs/{jobId}: reads the same path-free job status without HTTP transport.
 - Reads the protected job record directly; the job id is not an authorization credential.
 
 ### `ocx system codex-restart`

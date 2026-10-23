@@ -602,6 +602,7 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: false,
     json: "envelope",
     details: [
+      "Local counterpart of GET /api/codex/cli-update/plan: runs the same proof-bound plan builder without HTTP transport.",
       "Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.",
       "The registry evidence is pinned to the official npm registry with project/user npm configuration isolated, so a redirected .npmrc cannot supply the answer.",
       "Installs nothing and mutates no application state; registry evidence is gathered under an isolated temporary npm root (npmrc, cwd, cache and logs) removed best-effort afterwards. A refusal is a normal dry-run answer and still exits 0.",
@@ -617,13 +618,13 @@ export const CAPABILITIES: readonly Capability[] = [
     routes: [],
     flags: [{ name: "--plan-id", value: "string", summary: "Required 32-hex id from the current plan." }, { name: "--yes", value: "boolean", summary: "Required confirmation." }, { name: "--request-id", value: "string", summary: "Optional stable retry key." }, { name: "--json", value: "boolean", summary: "Emit the public job status." }],
     mutates: true, json: "envelope",
-    details: ["Admission is stored under the protected current-user config root before the installer can run.", "Only POSIX npm-global managed installs are currently supported; Windows, shims and other managers remain refused."],
+    details: ["Local counterpart of POST /api/codex/cli-update/apply: invokes the same durable job owner with --yes confirmation; HTTP admission separately requires a trusted loopback GUI session.", "Admission is stored under the protected current-user config root before the installer can run.", "Only POSIX npm-global managed installs are currently supported; Windows, shims and other managers remain refused."],
     usage: "ocx system codex-cli-update apply --plan-id <32-hex> --yes [--request-id <key>] [--json]",
   },
   {
     command: ["system", "codex-cli-update", "status"],
     summary: "Read a Codex CLI update job by opaque id.", routes: [], flags: [{ name: "--json", value: "boolean", summary: "Emit the path-free job status." }],
-    mutates: false, json: "envelope", details: ["Reads the protected job record directly; the job id is not an authorization credential."],
+    mutates: false, json: "envelope", details: ["Local counterpart of GET /api/codex/cli-update/jobs/{jobId}: reads the same path-free job status without HTTP transport.", "Reads the protected job record directly; the job id is not an authorization credential."],
     usage: "ocx system codex-cli-update status <job-id> [--json]",
   },
   {
