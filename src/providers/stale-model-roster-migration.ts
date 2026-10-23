@@ -116,12 +116,17 @@ function servesRoster(baseUrl: unknown, destinations: readonly string[] | undefi
   return destinations.some(url => normalizedProviderEndpoint(url) === saved);
 }
 
-function fillExisting<T>(container: Record<string, T> | undefined, values: Readonly<Record<string, T>> | undefined, ids: readonly string[]): void {
-  if (!container || !values) return;
+function fillExisting<T>(container: Record<string, T> | undefined, values: Readonly<Record<string, T>> | undefined, ids: readonly string[]): boolean {
+  if (!container || !values) return false;
+  let filled = false;
   for (const id of ids) {
     const value = values[id];
-    if (value !== undefined && !Object.prototype.hasOwnProperty.call(container, id)) container[id] = value;
+    if (value !== undefined && !Object.prototype.hasOwnProperty.call(container, id)) {
+      container[id] = value;
+      filled = true;
+    }
   }
+  return filled;
 }
 
 /** Pure projection. The caller decides whether to persist. */
@@ -137,8 +142,18 @@ export function projectStaleModelRosters(
     if (!prov) continue;
     if (!registrySeeds(entry.provider, prov.adapter, entry.to)) continue;
     if (!servesRoster(prov.baseUrl, entry.destinationBaseUrls)) continue;
-    if (!sameList(prov.models, entry.from)) continue;
     const added = entry.to.filter(id => !entry.from.includes(id));
+    if (sameList(prov.models, entry.to)) {
+      // A row refreshed before output limits joined the refresh still has a partial map.
+      // Only that record is revisited: the earlier pass already filled windows and efforts,
+      // so refilling them could restore a key the operator has since removed.
+      if (fillExisting(prov.modelMaxOutputTokens, entry.maxOutputTokens, added)) {
+        changed = true;
+        warnings.push(`filled output limits for ${added.join(", ")} on the saved "${entry.provider}" row.`);
+      }
+      continue;
+    }
+    if (!sameList(prov.models, entry.from)) continue;
     prov.models = [...entry.to];
     fillExisting(prov.modelContextWindows, entry.contextWindows, added);
     fillExisting(prov.modelMaxOutputTokens, entry.maxOutputTokens, added);

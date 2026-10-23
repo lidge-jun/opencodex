@@ -185,6 +185,27 @@ describe.each([
     projectStaleModelRosters(absent);
     expect(absent.providers![entry.provider]!.modelMaxOutputTokens).toBeUndefined();
   });
+  test("backfills output limits on a row an earlier refresh already moved to the current roster", () => {
+    const config = makeConfig([...entry.to]);
+    const row = config.providers![entry.provider]!;
+    row.modelContextWindows = {};
+    row.modelMaxOutputTokens = { "qwen3.8-max": 4_096 };
+    const first = projectStartupConfigRepairs(config);
+    expect(first.changed).toBe(true);
+    const saved = first.config.providers![entry.provider]!;
+    expect(saved.modelMaxOutputTokens!["deepseek-v4.1-flash-1017"]).toBe(393_216);
+    expect(saved.modelMaxOutputTokens!["qwen3.8-max"]).toBe(4_096);
+    expect(saved.modelContextWindows).toEqual({});
+    expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
+    const kept = makeConfig([...entry.to]);
+    kept.providers![entry.provider]!.modelMaxOutputTokens = { "deepseek-v4.1-flash-1017": 8_192 };
+    projectStaleModelRosters(kept);
+    expect(kept.providers![entry.provider]!.modelMaxOutputTokens!["deepseek-v4.1-flash-1017"]).toBe(8_192);
+    const absent = makeConfig([...entry.to]);
+    const original = structuredClone(absent);
+    expect(projectStaleModelRosters(absent).changed).toBe(false);
+    expect(absent).toEqual(original);
+  });
   test("preserves a custom adapter", () => {
     const config = makeConfig([...before]);
     config.providers![entry.provider]!.adapter = "anthropic";
