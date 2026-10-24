@@ -30,7 +30,8 @@ function closeSessionSocket(socket: WebSocket & { terminate?: () => void }, imme
   timer = setTimeout(terminate, CODEX_WS_SESSION_CLOSE_GRACE_MS);
   timer.unref?.();
   try { socket.close(); } catch { terminate(); }
-  if (socket.readyState === 3) cleanup();
+  // close() may synchronously change the state narrowed by the earlier guard.
+  if ((socket.readyState as number) === 3) cleanup();
 }
 
 /** Owns one physical socket; request listeners belong to the exchange, not this object. */
