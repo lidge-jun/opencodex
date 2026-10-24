@@ -251,8 +251,7 @@ restored from the Accounts picker or Codex Auth through gated recovery: missing 
 from the canonical preset, disabled canonical rows are re-enabled without replacing saved mode or
 model settings, and noncanonical `openai` rows never receive that recovery path.
 
-Account listing and explicit refresh return stored pool accounts without creating a missing native `CODEX_HOME`; an unchecked main observation leaves credential/reauth state unchanged.
-When the native home is accessible, `GET /api/codex-auth/accounts?refresh=1` treats missing main credentials, HTTP 401 responses with a known terminal code, unrecognized HTTP 401 responses when the access token is not verifiably live, and allowlisted terminal 403 responses as `needsReauth`; successful refresh clears the runtime mark.
+Account listing and explicit refresh return stored pool accounts without creating a missing native `CODEX_HOME`; an unchecked main observation leaves credential/reauth state unchanged. When the native home is accessible, `GET /api/codex-auth/accounts?refresh=1` treats missing main credentials, HTTP 401 responses with a known terminal code, unrecognized HTTP 401 responses when the access token is not verifiably live, and allowlisted terminal 403 responses as `needsReauth`; successful refresh clears the runtime mark.
 Generic quota permission failures remain non-terminal; missing-home fallback requires proven absence, so non-directory homes, dangling links, and parent directories that cannot be traversed still fail closed for both default and explicit home paths. Native-profile context resolution validates OpenCodex storage before the native home, so unsafe storage fails closed even when that home is absent; credential operations retain their strict claim requirements.
 
 `src/codex/chatgpt-refresh-failure.ts` classifies token-endpoint failures for both stored-pool
