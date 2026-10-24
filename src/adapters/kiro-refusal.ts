@@ -25,7 +25,8 @@ export function classifyKiroRefusal(status: number, bodyText: string): KiroRefus
       message = (row as Record<string, unknown>).message;
     }
   } catch { /* Unrecognised bodies cannot establish an account verdict. */ }
-  if ((status === 400 || status === 429) && reason === "MONTHLY_REQUEST_COUNT")
+  if ((status === 400 || status === 429)
+    && (reason === "MONTHLY_REQUEST_COUNT" || reason === "OVERAGE_REQUEST_LIMIT_EXCEEDED"))
     return { kind: "monthly_quota" };
   // A 400 whose own validator calls the body improperly formed is not proof that the request is
   // impossible: Kiro answers this shape when the identity a request was routed under cannot serve
