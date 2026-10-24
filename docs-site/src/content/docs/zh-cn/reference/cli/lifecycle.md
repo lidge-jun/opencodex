@@ -172,6 +172,8 @@ ocx status --json
 
 当命令在 Codex 应用内部运行时，重启会交给分离的 helper，当前会话会随应用一起结束。
 
+**指定来源的同步。** `ocx sync --expect-link <linkId>`（Remote Link Child）和 `ocx sync --expect-hub-key <apiKeyId>`（hub 客户端）只有在本机仍连接到该链接或使用该密钥时才会同步。否则不做任何更改，也不同步本地提供方，命令以退出码 5 结束，stderr 最后一行为 `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`。格式错误或重复的标志以退出码 2 结束。详情见[英文参考](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)。
+
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 使 Codex 的本地模型选择器缓存失效，让它根据当前激活的 opencodex 目录重新生成。与 `ocx sync` 相同的陈旧 `app-server` 警告和可选重启标志同样适用。
