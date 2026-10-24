@@ -33,18 +33,20 @@ makes the refusal a single, non-retryable, model-scoped answer.
 ## Diff-level plan
 
 1. `src/adapters/command-code.ts`: generalize the credit normalizer into
-   `normalizeCommandCodeRefusal(response, oauth, signal, modelId)`. Status 400 keeps the existing
+   `normalizeCommandCodeRefusal(response, oauth, modelId, signal)`. Status 400 keeps the existing
    OAuth-only credit rewrite byte-for-byte. Status 403, for every auth mode, reads at most 8 KiB
    (fatal UTF-8, display-safe) and matches only `success === false`, `error.code === "FORBIDDEN"`
-   and a message starting with `MODEL_NOT_IN_PLAN`. It returns HTTP 400 with
+   and a message starting with `MODEL_NOT_IN_PLAN` followed by `:` or the end. It returns HTTP 400 with
    `{"error":{"type":"invalid_request_error","code":"model_not_in_plan","message":...}}`, headers
-   `x-opencodex-upstream-status: 403` and `x-opencodex-refusal: model-not-in-plan`. The message
-   names the canonical model, quotes the upstream detail (control characters stripped, redacted,
-   capped at 200 characters) and says retrying will not succeed. Any other 403, a malformed or
+   `x-opencodex-upstream-status: 403` and `x-opencodex-refusal: model-not-in-plan` (both diagnostic).
+   `commandCodePlanRefusalMessage` is fixed copy naming the canonical model; the upstream detail is
+   never quoted. The adapter marks the Response it builds in memory
+   (`markVerifiedModelNotInPlanResponse`); that object identity is the only provenance. Any other 403, a malformed or
    oversized body, or malformed UTF-8 is returned untouched. The reasoning-effort retry send uses the
    same normalizer. No account, key or provider cooldown is recorded; nothing is logged.
-2. `src/combos/failover.ts`: add `model_not_in_plan` to the structured model-scoped hop list in
-   `comboFailureDecision` (beside `model_not_found` / `unsupported_model`).
+2. `src/combos/failover.ts`: `comboFailureDecision` hops on `model_not_in_plan` only when the caller
+   passes `verifiedPlanRefusal` (combo loop from `consumeComboFailure`, policy fallback from the
+   envelope mark); a bare, passthrough, streamed or run-turn code is read like any unknown code.
    `comboFailureCooldownScope` then falls through to `target` for the 400, so only the refused
    provider/model target cools.
 3. `tests/providers/command-code-plan-denial.test.ts` (registered in
@@ -61,17 +63,17 @@ makes the refusal a single, non-retryable, model-scoped answer.
 - A 400 is a status change for this one refusal; clients that branched on 403 for it now see
   `invalid_request_error`. The upstream status is kept in `x-opencodex-upstream-status`.
 - The client body keeps the dispatch wrapper (`Provider error 400: {...}`); the formatter
-  allowlist does not forward `model_not_in_plan` as the top-level code. The code stays readable
-  inside the message and on the combo path.
+  keeps `model_not_in_plan` as the top-level code so clients and policy fallback can read it. The
+  wire code is not provenance; only the boundary that verified the refusal marks the envelope.
 
 ## Audit r1 amendment (GOAT task m5-plan-audit-r1, codex/gpt-6.1-sol high: GO-WITH-FIXES)
 
 1. Accepted (P2 policy fallback): `policy-fallback.ts` hops on the final envelope's `error.code`,
    which `adapter-dispatch.ts` never forwards. The constant `MODEL_NOT_IN_PLAN_CODE` lives in
    `src/lib/errors.ts`; `formatErrorResponse` keeps it when a caller passes it (same rule as
-   `undeclared_tool_call`). `adapter-dispatch.ts` passes it only when both the adapter's
-   `x-opencodex-refusal: model-not-in-plan` header and the body code agree. The diagnostic headers
-   stay on the adapter response only; the plan no longer claims them on the client response.
+   `undeclared_tool_call`). `adapter-dispatch.ts` passes it only when `isModelNotInPlanRefusal`
+   accepts the response: a 400 with the canonical body code whose Response object the adapter
+   marked in memory. The header is diagnostic only and is never read as provenance.
 2. Accepted (P2 misleading detail): the message is fixed wording built from the request's
    canonical model id (accepted only if it matches a conservative id pattern). Upstream detail is
    never quoted, so effort-repair, opaque-recovery and subagent quota classifiers cannot fire on it.
@@ -86,3 +88,17 @@ makes the refusal a single, non-retryable, model-scoped answer.
    cooled target; a policy-route hop.
 5. Noted: attribution moves from `credential-rejected` to `payload-rejected` by the status table;
    documented in the PR, not pinned by a test that would restate the table.
+
+## Review rounds (PR #7696)
+
+Independent review via GOAT task (codex/gpt-6.1-sol, high), each round at the exact head:
+
+- r1 MUSTFIX: the combo trust gate matched only the lowercase code while failover folds case,
+  space and hyphens. Fixed with `namesModelNotInPlanCode` (`6d92c0657`).
+- r2 MUSTFIX: policy fallback trusted a passthrough envelope's code. Fixed with the explicit
+  `verifiedPlanRefusal` option on `comboFailureDecision` (`5d41c59f5`).
+- r3 MUSTFIX: status, code and marker header are all upstream-forgeable. Fixed by making
+  provenance in-memory object identity (`bbc39eab6`). r4 PASS at `bbc39eab6`.
+- CodeRabbit: `formatErrorResponse` minted the mark from a caller-supplied code, which run-turn
+  combo children take from an adapter event. Fixed by marking only at the verifying boundaries
+  (`adapter-dispatch.ts`, `consumeComboFailure`); this plan text was also corrected.

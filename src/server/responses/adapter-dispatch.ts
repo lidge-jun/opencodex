@@ -108,6 +108,7 @@ import {
   isModelNotInPlanRefusal,
   CYBER_POLICY_FALLBACK_MESSAGE,
   CYBER_POLICY_ERROR_CODE,
+  markVerifiedModelNotInPlanResponse,
   MODEL_NOT_IN_PLAN_CODE,
   SEND_BUDGET_EXHAUSTED_CODE,
 } from "../../lib/errors";
@@ -1964,16 +1965,20 @@ export async function prepareAdapterExchange(
           upstreamRetryAfter,
           includeDefault: !(transportState.anthropicPoolAccountId && classifyAnthropic429(upstreamResponse.headers) === "request-scoped-unknown"),
         });
-      return formatErrorResponse(
+      const planRefusal = isModelNotInPlanRefusal(upstreamResponse, normalized.code);
+      const failure = formatErrorResponse(
         upstreamResponse.status,
         normalized.cyberPolicy ? (normalized.type ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
         message,
         {
           ...(normalized.cyberPolicy ? { code: CYBER_POLICY_ERROR_CODE } : {}),
-          ...(isModelNotInPlanRefusal(upstreamResponse, normalized.code) ? { code: MODEL_NOT_IN_PLAN_CODE } : {}),
+          ...(planRefusal ? { code: MODEL_NOT_IN_PLAN_CODE } : {}),
           ...(retryAfter !== undefined ? { retryAfter } : {}),
         },
       );
+      // Provenance travels to policy fallback only from the refusal this request verified.
+      if (planRefusal) markVerifiedModelNotInPlanResponse(failure);
+      return failure;
     }
   }
 

@@ -3,6 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCommandCodeAdapter } from "../../src/adapters/command-code";
+import { formatErrorResponse } from "../../src/bridge";
+import { isVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE } from "../../src/lib/errors";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { getAccountSet, saveCredential, setActiveAccount } from "../../src/oauth/store";
@@ -170,6 +172,17 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal at the adapter", () => {
     expect(response.status).toBe(400);
     expect(response.headers.get("x-opencodex-refusal")).toBe("model-not-in-plan");
     expect((await response.json()).error.code).toBe("model_not_in_plan");
+  });
+});
+
+describe("plan-refusal provenance at the shared formatter", () => {
+  test("a caller-supplied code keeps the wire code but never mints provenance", () => {
+    // run-turn combo children pass an adapter event's own code here with `classified: true`;
+    // an adapter other than Command Code can emit this code, so the formatter must not vouch for it.
+    for (const classified of [false, true]) {
+      const response = formatErrorResponse(400, "invalid_request_error", "fixture", { code: MODEL_NOT_IN_PLAN_CODE, classified });
+      expect(isVerifiedModelNotInPlanResponse(response), "classified=" + classified).toBe(false);
+    }
   });
 });
 

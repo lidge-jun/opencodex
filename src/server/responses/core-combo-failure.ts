@@ -12,6 +12,7 @@ import {
   CYBER_POLICY_ERROR_CODE,
   CYBER_POLICY_FALLBACK_MESSAGE,
   isModelNotInPlanRefusal,
+  markVerifiedModelNotInPlanResponse,
   namesModelNotInPlanCode,
 } from "../../lib/errors";
 import { normalizeUpstreamErrorText } from "./core-errors";
@@ -133,6 +134,7 @@ export async function consumeComboFailure(
     },
   );
   if (nonReplayable) markResponseNonReplayable(failureResponse);
+  if (verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failureResponse);
   carryAnthropicRefusalCredential(response, failureResponse);
   return {
     response: failureResponse,
