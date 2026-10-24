@@ -47,5 +47,6 @@ Whole-line result/error markers and tool-call line prefixes are recognized acros
 Thinking retains the existing vendor-scaffolding guard. Every non-heartbeat event, including reasoning, ends the current replay-text block.
 Held text is settled before reasoning or tool events, which are withheld if that text completes an envelope; the next text block starts with fresh line and fence state.
 Pending vendor signatures remain guarded across reasoning boundaries. The adapter records event offsets behind an ambiguous vendor prefix until it is released or suppressed; the queue is limited to 64 Ki characters and 1024 events, and overflow refuses the turn without publishing the held content.
+Boundary disambiguation preserves surrogate pairs supplied within one text delta, so it does not turn complete Unicode characters into invalid individual deltas.
 
 > Decision record: [ADR-7517](../decisions/ADR-7517-qoder-replay-envelope.md)

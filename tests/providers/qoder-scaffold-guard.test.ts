@@ -458,6 +458,18 @@ describe("Qoder replay envelope refusal (#7517)", () => {
     ]);
   });
 
+  for (const character of ["😀", "𠀀"]) test(`preserves astral character ${character} after a pending vendor boundary`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "a <" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    guard({ type: "text_delta", text: character });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe(`a <${character}`);
+    for (const event of events) if (event.type === "text_delta") expect(event.text.isWellFormed()).toBe(true);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
   test("pending boundaries never release split vendor tool markup", () => {
     const { events, emit } = collect();
     const guard = guardQoderScaffolding(emit);

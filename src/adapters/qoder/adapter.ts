@@ -192,7 +192,9 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
     if (event.type === "text_delta") {
       let at = 0;
       while (boundaries.length && at < event.text.length) {
-        const cleaned = textFilter.push(event.text[at++]!);
+        const width = event.text.codePointAt(at)! > 0xffff ? 2 : 1;
+        const cleaned = textFilter.push(event.text.slice(at, at + width));
+        at += width;
         if (cleaned.fail) { refuse(cleaned.fail); return; }
         // A pending vendor suffix is one marker prefix, starting with its only
         // '<'. Its first release resolves the entire suffix and all saved cuts.
