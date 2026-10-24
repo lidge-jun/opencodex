@@ -469,5 +469,3 @@ timeout, cancellation and half-close; `tests/lib/optional-desktop-upstream.test.
 checks all four proxy schemes close cleanly when the production consumer sees EOF.
 
 Generic OAuth conversation ownership and request-local selection receipts follow [generic OAuth affinity](../providers/generic-account-pool.md#conversation-affinity).
-
-Codex pool display capacity in `src/providers/codex-capacity.ts` calibrates the observed Business Premium plan `self_serve_business_prolite` at five Standard-seat units. This estimate does not drive routing or create a missing five-hour window; unknown plans retain the conservative baseline.
