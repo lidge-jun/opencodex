@@ -38,9 +38,9 @@ import {
 } from "./registry";
 import { declaredIntegrationTarget, resolveIntegrationTarget, type IneffectiveWrite, type IneffectiveWriteReason, type IntegrationTarget } from "./target";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
-import { buildIntegrationContribution, classifyIntegration, exportContextOf, readPath, type IntegrationState, type StateReason } from "./state";
+import { buildIntegrationContribution, classifyIntegration, exportContextOf, qoderLegacyCatalogConflict, readPath, type IntegrationState, type StateReason } from "./state";
 import { inspectKiloCandidates } from "./kilo-candidates";
-import { InvalidSelectorError } from "./merge";
+import { InvalidSelectorError, UnrepresentableSelectorError } from "./merge";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
 import type { OcxConfig } from "../types";
 import { matchesOperationResult, type JournalEntry } from "./journal";
@@ -378,7 +378,9 @@ function applyOutcome(input: PlanInput): PlanOutcome {
    */
   if (input.ineffectiveWrite !== null) return deny("superseded_store");
   // Overwrite exists precisely to proceed through a conflict the operator has been shown.
-  if (input.classified.state === "conflict" && input.operation !== "overwrite") return deny("conflict");
+  // A Qoder legacy-catalog collision is not on a path overwrite replaces, so it still refuses.
+  if (input.classified.state === "conflict" && (input.operation !== "overwrite"
+    || qoderLegacyCatalogConflict(input.parsed, input.record, input.contribution))) return deny("conflict");
   if (input.classified.state === "unsafe") return deny("unsafe");
   if (input.classified.state === "current") return NOOP;
   return CHANGE;
@@ -1002,7 +1004,13 @@ export function observeIntegration(
   const record = stored && stored.clientId === clientId && stored.configPath === configPath
     ? stored
     : null;
-  const contribution = buildIntegrationContribution(input, effective, parsed, record);
+  let contribution: ManagedContribution;
+  try {
+    contribution = buildIntegrationContribution(input, effective, parsed, record);
+  } catch (error) {
+    if (!(error instanceof UnrepresentableSelectorError)) throw error;
+    return { failed: observationFailure("unsafe", "unsafe", error.message) } as const;
+  }
   if (clientId === "droid" && input.models.length > 0 && contribution.fragments.length === 0 && !record) {
     return { failed: observationFailure("unsafe", "unsafe", "Factory Droid has no addressable models in the selected catalog") } as const;
   }

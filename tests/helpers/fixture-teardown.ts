@@ -1,4 +1,5 @@
 import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
+import { nativeMainOwnerHomesOpenAtOrBelow } from "../../src/codex/native-main-owner";
 import { flushConfigDirHardening } from "../../src/config/paths";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
@@ -11,6 +12,7 @@ export interface FixtureTeardownDeps {
   settleConfigFlights(root: string): Promise<void>;
   closeHistory(): void;
   drainAcl(root: string): Promise<void>;
+  openLocks(root: string): string[];
   remove(path: string): void;
 }
 export const defaultFixtureTeardownDeps: Readonly<FixtureTeardownDeps> = {
@@ -18,8 +20,17 @@ export const defaultFixtureTeardownDeps: Readonly<FixtureTeardownDeps> = {
   settleConfigFlights: flushConfigDirHardening,
   closeHistory: closeRequestHistoryIndex,
   drainAcl: flushWindowsSecretAclReapsBeforeRemoval,
+  openLocks: nativeMainOwnerHomesOpenAtOrBelow,
   remove: removeTreeWithRetry,
 };
+
+/** A lock this process still holds keeps its root: the owner is named now, not after a retry budget. */
+function assertNoOpenLocks(root: string, openLocks: (root: string) => string[]): void {
+  const open = openLocks(root);
+  if (open.length === 0) return;
+  throw new Error(`[test] not removing ${root}: native-main owner still open for ${open.join(", ")}; `
+    + "stop the server or release the owner before teardown");
+}
 
 /** Remove only roots whose owners settled; restoration cannot mask the first failure. */
 export async function drainAndRemoveFixtureRoots(
@@ -39,7 +50,8 @@ export async function drainAndRemoveFixtureRoots(
     const historyClosed = await attempt(() => deps.closeHistory());
     for (const [index, root] of plan.roots.entries()) {
       const drained = await attempt(() => deps.drainAcl(root.path));
-      ready[index] = ready[index] && drained;
+      const unlocked = drained && await attempt(() => assertNoOpenLocks(root.path, deps.openLocks));
+      ready[index] = ready[index] && unlocked;
     }
     if (producersSettled && historyClosed) {
       for (const [index, root] of plan.roots.entries()) {
