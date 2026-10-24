@@ -20,7 +20,7 @@ import type { ResponsesSendBudget } from "./request-send-budget";
 import { linkAbortSignal } from "./core-lifetime";
 import type { AdapterRequest } from "../../adapters/base";
 import type { AdapterEvent } from "../../types";
-import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "../../bridge";
+import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, formatUpstreamFailureResponse } from "../../bridge";
 import { trackStreamLifetime } from "../lifecycle";
 import {
   recordAdapterReasoning,
@@ -105,11 +105,8 @@ import { isFixedCodexAccount } from "./core-codex-account";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import {
   isCyberPolicyCode,
-  isModelNotInPlanRefusal,
   CYBER_POLICY_FALLBACK_MESSAGE,
   CYBER_POLICY_ERROR_CODE,
-  markVerifiedModelNotInPlanResponse,
-  MODEL_NOT_IN_PLAN_CODE,
   SEND_BUDGET_EXHAUSTED_CODE,
 } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
@@ -1965,20 +1962,15 @@ export async function prepareAdapterExchange(
           upstreamRetryAfter,
           includeDefault: !(transportState.anthropicPoolAccountId && classifyAnthropic429(upstreamResponse.headers) === "request-scoped-unknown"),
         });
-      const planRefusal = isModelNotInPlanRefusal(upstreamResponse, normalized.code);
-      const failure = formatErrorResponse(
+      return formatUpstreamFailureResponse(upstreamResponse, normalized.code,
         upstreamResponse.status,
         normalized.cyberPolicy ? (normalized.type ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
         message,
         {
           ...(normalized.cyberPolicy ? { code: CYBER_POLICY_ERROR_CODE } : {}),
-          ...(planRefusal ? { code: MODEL_NOT_IN_PLAN_CODE } : {}),
           ...(retryAfter !== undefined ? { retryAfter } : {}),
         },
       );
-      // Provenance travels to policy fallback only from the refusal this request verified.
-      if (planRefusal) markVerifiedModelNotInPlanResponse(failure);
-      return failure;
     }
   }
 

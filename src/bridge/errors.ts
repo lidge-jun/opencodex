@@ -12,6 +12,8 @@ import {
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
+  isModelNotInPlanRefusal,
+  markVerifiedModelNotInPlanResponse,
   MODEL_NOT_IN_PLAN_CODE,
   SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
@@ -95,6 +97,23 @@ export function formatErrorResponse(
   // recorder that no upstream produced this status. Carry the narrower marker across too.
   if (refusal) retainReplayRefusal(response);
   return response;
+}
+
+/**
+ * `formatErrorResponse` for an upstream failure that may be the adapter-normalized plan refusal
+ * (#7684). Only a verified refusal (`isModelNotInPlanRefusal` on the response the adapter marked)
+ * keeps `model_not_in_plan` and carries the in-memory mark policy fallback reads; the wire code
+ * alone is never provenance. Every other failure formats exactly as `formatErrorResponse` does.
+ */
+export function formatUpstreamFailureResponse(
+  source: Response,
+  sourceCode: string | undefined,
+  ...[status, type, message, options]: Parameters<typeof formatErrorResponse>
+): Response {
+  if (!isModelNotInPlanRefusal(source, sourceCode)) return formatErrorResponse(status, type, message, options);
+  const failure = formatErrorResponse(status, type, message, { ...options, code: MODEL_NOT_IN_PLAN_CODE });
+  markVerifiedModelNotInPlanResponse(failure);
+  return failure;
 }
 
 /**

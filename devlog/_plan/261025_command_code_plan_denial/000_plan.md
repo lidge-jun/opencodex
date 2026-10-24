@@ -115,3 +115,6 @@ Independent review via GOAT task (codex/gpt-6.1-sol, high), each round at the ex
   wording. `src/chat/outbound.ts` now treats every `isTerminalRefusalCode` code as a 400-class
   verdict that keeps its code (the existing cyber-policy rule, generalized).
 - CodeRabbit (tests): the sidecar route test asserts the injected `web_search` function tool.
+- Manager Linux verification: `adapter-dispatch.ts` grew to 2,007 lines, failing the file-size ratchet
+  and the responses-core module cap. The plan-refusal branch moved into `formatUpstreamFailureResponse`
+  (`src/bridge/errors.ts`); `adapter-dispatch.ts` is back to 1,999 lines with a one-call change.
