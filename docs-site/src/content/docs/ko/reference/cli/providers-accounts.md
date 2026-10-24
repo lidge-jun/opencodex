@@ -241,11 +241,27 @@ Codex pool selection applies to the next request after clearing existing affinit
 
 ### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
+저장된 ChatGPT 풀 계정은 네이티브 Codex 홈이 없는 호스트에서도 대시보드와 계정 새로 고침을
+포함해 계속 나열할 수 있습니다. 목록 조회는 Codex 홈을 만들거나 네이티브 메인 계정에서
+로그아웃하지 않습니다. Codex 클라이언트 통합을 비활성화해도 기존 네이티브 로그인의 할당량
+관측은 비활성화되지 않습니다. 명시적으로 지정한 `CODEX_HOME` 경로가 유효하지 않으면 계속
+설정 오류를 반환합니다. `OPENCODEX_HOME` 저장소가 안전하지 않으면 네이티브 Codex 홈이
+없어도 오류를 반환합니다.
+기본 Codex 홈의 경로를 확인할 때도 파일, 대상이 없는 심볼릭 링크, 탐색할 수 없는 상위 디렉터리는 오류를 발생시킵니다.
+
 제공자를 지정하지 않으면 Codex 풀, OAuth 계정, 설정된 API 키 풀을 나열합니다. `--all`이 없으면 비어 있는 제공자는 건너뜁니다. 제공자를 지정하면 해당 자격 증명 계열만 나열합니다. 사람이 보는 출력은 `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` 형식을 사용하며, 수동으로 선택한 Codex 행에는 `selected`가 표시됩니다. 사용 가능한 Kiro 계정이 두 개 이상 저장되어 있으면 기본적으로 429 응답 시 다른 계정으로 자동 전환하며, 알려진 잔여 할당량이 가장 많은 계정을 우선합니다. 이 전환은 계정 존재만으로 활성화되며 끌 수 없습니다. `oauthAccountFailover.enabled: false`는 429 복구가 아니라 요청을 보내기 전 계정을 고르는 동작만 거부합니다. `ocx account login kiro`는 계정을 한 번에 하나씩 풀에 추가합니다. 빈 결과도 성공입니다. `--json`은 다음을 반환합니다:
 
 ```text
 { accounts: AccountRow[], notes: string[] }
 ```
+
+Codex JSON 행에는 등록된 `id`와 같은 `slotId`, 그리고 `native-main` 또는 `pool`인
+`slotKind`가 포함됩니다. 프록시가 상위 계정과 사용자 식별값을 모두 확인하면
+`uai1_` 뒤에 소문자 16진수 64자리가 붙는 `upstreamAccountKey`도 제공합니다.
+같은 `openai` 제공자에서 키가 같으면 한 상위 사용자의 슬롯이며, 각 슬롯과 한도 상태는
+그대로 유지해야 합니다. 키는 이 설치 환경에 한정되고 관리자 토큰이 바뀌면 달라질 수
+있습니다. 키가 없을 때는 가려진 이메일이나 한도가 비슷하다는 이유로 묶지 않습니다.
+상위 계정 ID·사용자 식별값·인증 정보 원문은 목록에 포함되지 않습니다.
 
 ### `ocx account current <provider> [--json]`
 

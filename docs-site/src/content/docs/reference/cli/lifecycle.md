@@ -82,8 +82,19 @@ ocx start --socks5-off
 
 ### `ocx stop [--json]`
 
-Stop the running proxy (by PID), remove the PID file, and restore native Codex. If a managed
+Stop the running proxy (by PID), remove the PID file, and restore native Codex for standalone owners. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
+On a connected client (a Remote Link Child or a hub client), `ocx stop` leaves Codex routing, its
+model catalog and the Grok config as they are, including after a successful API stop: the connection
+owns them, and `ocx start` serves them again without re-injecting routing. Use `ocx disconnect` to hand Codex back to its own account. If Codex on a connected
+client already reads native routing, `ocx status` names `ocx sync --restart-codex` to point it back.
+A connected stop verifies the local runtime before changing its service: a client-role listener
+with the matching PID is supported, while an ordinary proxy must explicitly advertise preservation
+across API, signal and service shutdown. Older or unverified ordinary runtimes are refused before
+stop actions. Update/restart that runtime through its supervisor and retry; use `ocx disconnect`
+only when you intend to release the connection-owned integrations.
+Repeated stops of an already-stopped client confirm service-manager inactivity and absence at the
+known local endpoints before returning the normal not-running result.
 While the OpenCodex desktop app is running, `ocx stop` does not keep the proxy down: the app treats
 it as an unexpected exit and starts a proxy again, within seconds for one it started and after about
 a minute for one it had only attached to. Use the app's tray **Stop proxy** (for a proxy the app

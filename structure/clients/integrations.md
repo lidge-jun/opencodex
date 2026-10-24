@@ -125,6 +125,8 @@ client registry + export context
   -> ownership record + operation journal
 ```
 
+A generated contribution that raises `UnrepresentableSelectorError` produces an `unsafe` / `unresolvable-path` status for that client. The shared reader and mutation observer catch only that typed refusal: preview returns an unsafe plan with `canApply: false`, and mutations return the existing unsafe refusal (HTTP 409). Other clients in the status collection remain visible, and unexpected construction errors still propagate.
+
 Status and mutation must use the same classifier. A special case added only to a status endpoint
 would be misleading because refresh or disable could still reject the same file; a special case
 added only to a writer would let a mutation bypass the state users saw.
