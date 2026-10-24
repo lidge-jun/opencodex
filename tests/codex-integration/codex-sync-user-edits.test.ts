@@ -1,9 +1,9 @@
 // #7425: `ocx sync` re-runs Codex config injection, which must refresh only what OpenCodex owns in
 // config.toml. Every case runs the real injector in a child process whose HOME, CODEX_HOME,
 // OPENCODEX_HOME and CLAUDE_CONFIG_DIR all point into a fresh temporary directory, and the suite
-// asserts that the invoking user's own ~/.codex was left byte-for-byte alone.
+// asserts that the parent test process's Codex home was left byte-for-byte alone.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { join, sep } from "node:path";
@@ -26,11 +26,11 @@ const managedConfig = (injectionModel: string) => ({
   syncCodexSubagentDefaults: true,
 });
 
-/** Fingerprint of the invoking user's real Codex home: what must not change. */
-function realCodexHomeFingerprint(): string {
-  const realHome = join(process.env.HOME || homedir(), ".codex");
+/** The runner/preload isolates this parent's HOME; children must leave it unchanged too. */
+function parentCodexHomeFingerprint(): string {
+  const parentHome = join(process.env.HOME || homedir(), ".codex");
   return ["config.toml", "opencodex-journal.json", "opencodex.config.toml"].map(name => {
-    const path = join(realHome, name);
+    const path = join(parentHome, name);
     if (!existsSync(path)) return name + ":absent";
     const stat = statSync(path);
     return name + ":" + stat.size + ":" + Bun.hash(readFileSync(path)).toString(16);
@@ -40,13 +40,13 @@ function realCodexHomeFingerprint(): string {
 let sandbox: string;
 let codexHome: string;
 let configPath: string;
-let realBefore: string;
+let parentBefore: string;
 
-beforeAll(() => { realBefore = realCodexHomeFingerprint(); });
-afterAll(() => { expect(realCodexHomeFingerprint()).toBe(realBefore); });
+beforeAll(() => { parentBefore = parentCodexHomeFingerprint(); });
+afterAll(() => { expect(parentCodexHomeFingerprint()).toBe(parentBefore); });
 
 beforeEach(() => {
-  sandbox = mkdtempSync(join(tmpdir(), "ocx-sync-user-edits-"));
+  sandbox = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-sync-user-edits-")));
   codexHome = join(sandbox, "home", ".codex");
   mkdirSync(codexHome, { recursive: true });
   mkdirSync(join(sandbox, "opencodex"), { recursive: true });
@@ -81,8 +81,11 @@ function inSandbox(body: string): unknown {
   });
   if (result.status !== 0) throw new Error("sandboxed injection failed: " + result.stderr);
   const parsed = JSON.parse(result.stdout.trim().split("\n").pop()!) as { configPath: string; out: unknown };
-  // The child resolved its Codex config inside the sandbox, never the invoking user's home.
-  expect(parsed.configPath.startsWith(sandbox + sep)).toBe(true);
+  // paths.ts canonicalizes CODEX_HOME (/var aliases on macOS, short/case paths on Windows).
+  // Compare the exact existing file as well as the separator-bounded sandbox directory.
+  const childConfigPath = realpathSync.native(parsed.configPath);
+  expect(childConfigPath).toBe(realpathSync.native(configPath));
+  expect(childConfigPath.startsWith(sandbox + sep)).toBe(true);
   return parsed.out;
 }
 
