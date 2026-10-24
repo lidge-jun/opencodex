@@ -64,7 +64,7 @@ export interface WsData {
   liveUpstreamHandoff?: LiveSidebandUpstreamHandoff;
   /** Once teardown starts, ignore new client frames until the upstream closes. */
   liveClosing?: boolean;
-  /** Schedules one bounded close retry without surrendering native-main ownership. */
+  /** Terminates a stalled close without releasing ownership before transport closure. */
   liveCloseFallback?: ReturnType<typeof setTimeout>;
   /** Turn/account ownership retained for the complete sideband socket lifetime. */
   liveTurnAdmissionLease?: AdmissionLease;

@@ -90,6 +90,10 @@ returns 504, and client cancellation returns 499. Bun does not expose the exact 
 cannot currently be forwarded precisely. A successful connection preserves the initial session
 frames in order. This handshake policy is separate from the Responses WebSocket transport.
 
+When a sideband connection ends, the proxy allows one second for a graceful upstream
+close before terminating an unresponsive transport. It releases the account's active-call
+capacity only after that transport has closed, including when the client upgrade fails.
+
 ## Undeclared tool calls
 
 On the Responses endpoint, when a request declares a tool catalog, a native passthrough reply
