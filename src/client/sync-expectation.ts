@@ -95,4 +95,3 @@ export function assertClientSyncExpectation(expectation: ClientSyncExpectation):
   );
   if (reason) throw new ClientSyncExpectationError(expectation, reason);
 }
-

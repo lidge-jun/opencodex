@@ -77,6 +77,16 @@ Test hazard found while recording the red run: on an unfixed tree an argv contai
 `--restart-codex` is a real restart request, which ended the Codex app hosting the agent. The
 test carries no restart flag and stubs the restart helper.
 
+## PR review round 1 (codex/gpt-6.1-sol, FAIL) — decisions
+
+1. Blocker, **accepted**: `runCli` ran `maybeAutoRestoreCodexShim` before dispatch, so a pinned
+   sync could repair the shim on a mismatched machine, and a malformed one read shim state before
+   exiting 2. Fix: `src/cli/root.ts` validates the flags before any preflight (exit 2);
+   `skipsCodexShimAutoRestore` exempts a pinned sync (the `stop --expect-*` precedent); the sync
+   runner calls `runCodexShimAutoRestore` once the locked check passed, so a match still repairs
+   like an unpinned sync. Root-level tests added; without the fix 4 of 25 cases fail.
+2. Non-blocking, **accepted**: trailing blank lines at EOF removed (`git diff --check` clean).
+
 ## Verification
 
 Red run of the new test on the unfixed tree, then: focused test files, `bun run typecheck`,
@@ -89,4 +99,3 @@ Red run of the new test on the unfixed tree, then: focused test files, `bun run 
   status check for older versions, per the issue).
 - A connection that changes after the locked check but before a write still fails as today
   (`client_connection_changed`, exit 1), not as a mismatch: the expectation held when checked.
-

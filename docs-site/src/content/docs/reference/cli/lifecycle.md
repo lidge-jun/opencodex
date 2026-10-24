@@ -575,8 +575,8 @@ gap. `--expect-link` takes the `link.linkId` of a Remote Link Child and `--expec
 every later write is bound to the connection that passed it.
 
 When the identity holds, the command is exactly the connected sync above. Otherwise it changes
-nothing, never syncs the local providers, exits **5**, and prints a human line followed by one JSON
-line as the last line on stderr:
+nothing (not even the automatic Codex shim repair other commands run first), never syncs the local
+providers, exits **5**, and prints a human line followed by one JSON line as the last line on stderr:
 
 ```json
 {"phase":"child_link_mismatch","reason":"other_link"}

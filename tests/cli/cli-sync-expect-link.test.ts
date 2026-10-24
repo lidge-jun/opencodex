@@ -14,6 +14,8 @@ import * as connectApi from "../../src/client/connect";
 import { handleMachineApi } from "../../src/client/machine-api";
 import { markClientConnectPending } from "../../src/client/state";
 import * as restartScope from "../../src/cli/restart-scope";
+import * as shimAutoRestore from "../../src/cli/codex-shim-autorestore";
+import { runCli } from "../../src/cli/root";
 import * as codexSync from "../../src/codex/sync";
 import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
@@ -197,6 +199,7 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     // Never reach a real restart: on an unfixed tree a stray restart flag would end the Codex
     // app-servers and desktop app of whoever runs this file.
     const restarts = spyOn(restartScope, "handleRestartScopeAfterWrite").mockImplementation(async () => ({}));
+    const shimRepairs = spyOn(shimAutoRestore, "runCodexShimAutoRestore").mockImplementation(() => {});
     const error = spyOn(console, "error").mockImplementation((...parts: unknown[]) => { errors.push(parts.map(String).join(" ")); });
     const log = spyOn(console, "log").mockImplementation(() => {});
     try {
@@ -207,9 +210,13 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
         handleRestartStartWhenStopped: async () => { throw new Error("runtime restart must not run"); },
       } as unknown as CliDispatchDeps;
       const code = await dispatchCommand({ kind: "command", command: "sync", args }, deps);
-      return { code, discoveries, errors, connectedCalls, localSyncCalls: localSync.mock.calls.length };
+      return {
+        code, discoveries, errors, connectedCalls,
+        localSyncCalls: localSync.mock.calls.length, shimRepairs: shimRepairs.mock.calls.length,
+      };
     } finally {
-      localSync.mockRestore(); connected.mockRestore(); restarts.mockRestore(); error.mockRestore(); log.mockRestore();
+      localSync.mockRestore(); connected.mockRestore(); restarts.mockRestore(); shimRepairs.mockRestore();
+      error.mockRestore(); log.mockRestore();
     }
   }
 
@@ -223,6 +230,7 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     expect(run.code).toBe(5);
     expect(run.localSyncCalls).toBe(0);
     expect(run.discoveries).toBe(0);
+    expect(run.shimRepairs).toBe(0);
     expect(lastJson(run.errors)).toEqual({ phase: "child_link_mismatch", reason: "disconnected" });
     expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(SENTINEL_CATALOG);
   });
@@ -237,6 +245,7 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     expect(other.code).toBe(5);
     expect(lastJson(other.errors)).toEqual({ phase: "child_link_mismatch", reason: "other_link" });
     expect(hub.localSyncCalls + other.localSyncCalls).toBe(0);
+    expect(hub.shimRepairs + other.shimRepairs).toBe(0);
     expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(SENTINEL_CATALOG);
   });
 
@@ -271,6 +280,8 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     expect(run.code).toBe(0);
     expect(run.localSyncCalls).toBe(0);
     expect(run.discoveries).toBe(0);
+    // The root skipped the shim repair for a pinned sync; it runs once the identity held.
+    expect(run.shimRepairs).toBe(1);
     expect(run.connectedCalls).toEqual([{ restartCodex: false, expect: expectation }]);
     expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(HOME_CATALOG);
   });
@@ -289,6 +300,39 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     expect(run.connectedCalls).toEqual([]);
     expect(run.localSyncCalls).toBe(0);
     expect(run.discoveries).toBe(0);
+    expect(run.shimRepairs).toBe(0);
+  });
+});
+
+describe("the CLI root leaves a pinned sync to its own check", () => {
+  test("the shim preflight skips a pinned sync and keeps repairing a plain one", () => {
+    const skips = shimAutoRestore.skipsCodexShimAutoRestore;
+    expect(skips("sync", ["sync", "--expect-link", LINK_ID])).toBe(true);
+    expect(skips("sync", ["sync", `--expect-hub-key=${HUB_KEY_ID}`])).toBe(true);
+    expect(skips("sync", ["sync"])).toBe(false);
+    expect(skips("sync", ["sync", "--expect-linked"])).toBe(false);
+  });
+
+  test("a malformed pinned sync exits 2 at the root, before any preflight", async () => {
+    const exits: unknown[] = [];
+    const exit = spyOn(process, "exit").mockImplementation(((code?: number) => {
+      exits.push(code);
+      throw new Error("process.exit");
+    }) as typeof process.exit);
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const preflight = spyOn(shimAutoRestore, "maybeAutoRestoreCodexShim");
+    try {
+      await expect(runCli(["sync", "--expect-link", "not-a-link-id"])).rejects.toThrow("process.exit");
+      expect(exits).toEqual([2]);
+      expect(preflight).not.toHaveBeenCalled();
+      // Control: the spy does see the root preflight, which a valid pinned sync reaches and skips.
+      const head = await runCli(["sync", "--expect-link", LINK_ID]);
+      expect(head.kind).toBe("command");
+      expect(preflight).toHaveBeenCalledTimes(1);
+      expect(exits).toEqual([2]);
+    } finally {
+      exit.mockRestore(); error.mockRestore(); preflight.mockRestore();
+    }
   });
 });
 
@@ -306,4 +350,3 @@ test("the machine sync route does not return the saved connection", async () => 
   );
   expect(await response?.json()).toEqual({ success: true, catalogWritten: true, cacheSynced: true, injected: false, stale: false });
 });
-

@@ -430,6 +430,12 @@ const commandRunners: Record<string, CommandRunner> = {
       try {
         const { syncConnectedClient } = await import("../client/connect");
         const result = await syncConnectedClient(expectation ? { restartCodex, expect: expectation } : { restartCodex });
+        if (expectation) {
+          // The root preflight skipped the shim repair for a pinned sync; the identity held, so
+          // run it now, as an unpinned sync would have.
+          const { runCodexShimAutoRestore } = await import("./codex-shim-autorestore");
+          runCodexShimAutoRestore();
+        }
         // The connection the sync ran under, read inside its lock; the read above may be stale.
         const link = result.connection.transport === "link";
         console.log(result.stale

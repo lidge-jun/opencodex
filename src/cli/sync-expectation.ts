@@ -58,4 +58,3 @@ export function reportSyncExpectationMismatch(
   log.error(JSON.stringify({ phase: error.phase, reason: error.reason }));
   return SYNC_EXPECTATION_MISMATCH_EXIT;
 }
-
