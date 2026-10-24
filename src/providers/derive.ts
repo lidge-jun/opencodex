@@ -31,6 +31,7 @@ export interface DerivedKeyLoginProvider {
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
   modelInputModalities?: Record<string, string[]>;
+  inputModalities?: string[];
   modelMaxInputTokens?: Record<string, number>;
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
@@ -263,6 +264,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(staticPolicy.modelContextWindows ? { modelContextWindows: { ...staticPolicy.modelContextWindows } } : {}),
     ...(staticPolicy.modelDisplayNames ? { modelDisplayNames: { ...staticPolicy.modelDisplayNames } } : {}),
     ...(staticPolicy.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(staticPolicy.modelInputModalities) } : {}),
+    ...(entry.inputModalities ? { inputModalities: [...entry.inputModalities] } : {}),
     ...(staticPolicy.modelMaxInputTokens ? { modelMaxInputTokens: { ...staticPolicy.modelMaxInputTokens } } : {}),
     ...(entry.defaultMaxOutputTokens !== undefined ? { defaultMaxOutputTokens: entry.defaultMaxOutputTokens } : {}),
     ...(staticPolicy.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...staticPolicy.modelMaxOutputTokens } } : {}),
@@ -335,6 +337,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.contextWindow !== undefined ? { contextWindow: entry.contextWindow } : {}),
       ...(entry.modelContextWindows ? { modelContextWindows: { ...entry.modelContextWindows } } : {}),
       ...(entry.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(entry.modelInputModalities) } : {}),
+      ...(entry.inputModalities ? { inputModalities: [...entry.inputModalities] } : {}),
       ...(entry.modelMaxInputTokens ? { modelMaxInputTokens: { ...entry.modelMaxInputTokens } } : {}),
       ...(entry.defaultMaxOutputTokens !== undefined ? { defaultMaxOutputTokens: entry.defaultMaxOutputTokens } : {}),
       ...(entry.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...entry.modelMaxOutputTokens } } : {}),
@@ -573,6 +576,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.modelReasoningEffortMap && seed.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(seed.modelReasoningEffortMap);
   if (prov.reasoningWireFormat === undefined && seed.reasoningWireFormat !== undefined) prov.reasoningWireFormat = seed.reasoningWireFormat;
   if (!prov.noVisionModels && seed.noVisionModels) prov.noVisionModels = [...seed.noVisionModels];
+  if (!prov.inputModalities && seed.inputModalities) prov.inputModalities = [...seed.inputModalities];
   if (!prov.noReasoningModels && seed.noReasoningModels) prov.noReasoningModels = [...seed.noReasoningModels];
   if (!prov.noTemperatureModels && seed.noTemperatureModels) prov.noTemperatureModels = [...seed.noTemperatureModels];
   if (!prov.noTopPModels && seed.noTopPModels) prov.noTopPModels = [...seed.noTopPModels];

@@ -15,6 +15,8 @@ retain their existing behavior.
 
 Mistral's registry entry in `src/providers/registry/entries-extended.ts` declares `zai-glm-5-3` native input as text-only, so registry enrichment enrolls that model in the enabled vision sidecar for existing configurations: the catalog advertises image attachments and request preprocessing sends GLM descriptions. Native Mistral vision models and explicit operator modalities retain precedence (`tests/vision/mistral-vision-sidecar.test.ts`).
 
+A registry entry can also declare `inputModalities` for the whole provider. It covers ids the per-model maps do not list, such as models from live discovery, and a per-model declaration still wins. AI Stupid Level declares text, so an image for one of its pinned models is described or stripped instead of being sent to the router (`tests/providers/aistupidlevel-provider.test.ts`).
+
 Final image/video client tool output follows the [explicit empty client-catalog boundary](../transports/responses-wire-shapes.md#declared-tool-membership-by-inbound-wire), after internal hosted operations and before client delivery or continuation state. Internal media execution retains its existing behavior.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)

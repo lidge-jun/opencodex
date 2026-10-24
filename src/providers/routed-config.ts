@@ -298,6 +298,11 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.project === undefined && registryEntry.project !== undefined ? { project: registryEntry.project } : {}),
     ...(provider.location === undefined && registryEntry.location !== undefined ? { location: registryEntry.location } : {}),
     ...(provider.contextWindow === undefined && registryEntry.contextWindow !== undefined ? { contextWindow: registryEntry.contextWindow } : {}),
+    // The request path never calls enrichProviderFromRegistry(), so a row saved before the
+    // registry declared a provider-wide modality must inherit it here to reach the vision gate.
+    ...(provider.inputModalities === undefined && registryEntry.inputModalities !== undefined
+      ? { inputModalities: [...registryEntry.inputModalities] }
+      : {}),
     ...((provider.reasoningEfforts === undefined || hasLegacyClinePassReasoningEfforts(providerName, provider))
       && registryEntry.reasoningEfforts !== undefined
       ? { reasoningEfforts: [...registryEntry.reasoningEfforts] }
