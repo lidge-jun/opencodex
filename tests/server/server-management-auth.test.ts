@@ -28,6 +28,7 @@ import {
   hardenSecretPath,
   hardenedSecretPathCountForTests,
   resetHardenedStateForTests,
+  setAsyncIcaclsRunnerForTests,
   setIcaclsRunnerForTests,
   setPlatformForTests,
   timedOutSecretPathCountForTests,
@@ -117,6 +118,10 @@ beforeEach(() => {
   resetContextRelayActivationForTests();
   process.env.OPENCODEX_API_AUTH_TOKEN = "data-secret";
   process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret";
+  // These cases assert credential separation, not ACLs (tests/windows owns those). Real
+  // async icacls on the native-main owner lock under testHome left it with an empty DACL
+  // that the teardown could not delete (#7515). Sync-runner cases still inject their own.
+  setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
 });
 
 afterEach(async () => {
@@ -130,6 +135,7 @@ afterEach(async () => {
       else process.env.CODEX_HOME = previousCodexHome;
       setSystemRestartIoForTests();
       setIcaclsRunnerForTests(null);
+      setAsyncIcaclsRunnerForTests(null);
       setPlatformForTests(null);
       resetHardenedStateForTests();
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
