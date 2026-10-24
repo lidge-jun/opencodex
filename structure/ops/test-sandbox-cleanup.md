@@ -78,7 +78,7 @@ case roots (`tests/codex-integration/codex-quota-auto-refresh.test.ts`), and Ant
 root removal (`tests/helpers/anthropic-instance-fixture.ts`).
 It settles producers, then each root's config flights, closes the request-history SQLite index,
 drains each root's ACL work, then asks `nativeMainOwnerHomesOpenAtOrBelow` whether a native-main
-owner below the root is still open, acquiring (descriptor and SQLite handle held while its hardener
+owner at or below the root is still open, acquiring (descriptor and SQLite handle held while its hardener
 runs), waiting on a retry, or closing; only roots that pass both are removed. An open owner fails
 that root at once with an error naming the owner home, without spending the removal retry budget.
 A producer or history failure blocks every removal; a root-specific drain or owner failure
