@@ -582,3 +582,12 @@ terminal `invalid_request_error` stop, so an invalid payload is never resent to 
 Coverage: `tests/codex-integration/combos-kiro-profile-hop.test.ts` (unit, with non-Kiro and unrelated-field negatives) and
 `tests/server/server-kiro-refusal-e2e.test.ts` (account rotation, combo exhaustion hop, non-Kiro 400 stop,
 malformed-payload stop, `modelAdapters`-rerouted Kiro provider stop).
+
+## Upstream account quota exhaustion failover and provider cooldown
+
+`comboFailureDecision` checks `isAccountWindowExhausted` before generic `invalid_request_error` stops, granting `"hop"` so failover combos advance to alternative candidate targets when an account's quota window is exhausted. For cooldown scope, `comboFailureCooldownScope` returns `"provider"` on account window exhaustion, cooling all targets under that provider with `MAX_COOLDOWN_MS` (10 minutes).
+
+Account window exhaustion is recognized through authoritative error codes (`usage_limit_exceeded`, `usage_limit_reached`, `insufficient_quota`, `1308`) and distinct quota phrasing matched by `ACCOUNT_EXHAUSTION_TEXT` (including `weekly usage quota exceeded`, `weekly usage quota has been exhausted`, `weekly usage quota is exhausted`, `token-plan ... quota has been exhausted`, and `usage limit reached`). For HTTP 400 validation errors, quoted prompt or parameter text matching quota phrasing does not trigger account exhaustion or provider cooldown without a structured error code.
+
+For Devin (`failedAdapter === "devin"`), Connect RPC `failed_precondition` errors carrying quota evidence (such as `quota exhausted`, `rate limit`, `out of credits`) map to HTTP 429 in the direct chat adapter (`src/adapters/devin/cloud-direct/chat.ts`) and qualify as account window exhaustion in combo failover (`src/combos/failover.ts`), triggering a `"hop"` and provider-wide cooldown. Request-specific Devin preconditions (such as MCP configuration errors) remain terminal `"stop"` decisions and do not enter combo cooldown handling.
+Coverage: `tests/routing/router-combo-failover-classification.test.ts`, `tests/providers/devin-hardening.test.ts`, and `tests/server/error-fidelity.test.ts`.

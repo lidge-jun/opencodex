@@ -414,6 +414,13 @@ describe("connect trailer to HTTP status", () => {
     expect(connectTrailerHttpStatus("permission_denied", "an internal error occurred")).toBe(403);
   });
 
+  test("quota exhaustion delivered as failed_precondition is a 429, not a 400", () => {
+    expect(connectTrailerHttpStatus("failed_precondition", "Your weekly usage quota has been exhausted. Visit https://app.devin.ai/settings/usage to purchase on-demand usage or turn on auto-reload.")).toBe(429);
+    expect(connectTrailerHttpStatus("failed_precondition", "quota exhausted")).toBe(429);
+    expect(connectTrailerHttpStatus("failed_precondition", "usage limit reached")).toBe(429);
+    expect(connectTrailerHttpStatus("failed_precondition", "Unable to process request due to an MCP configuration issue.")).toBe(400);
+  });
+
   test("the remaining Connect codes map to the status core acts on", () => {
     expect(connectTrailerHttpStatus("unauthenticated", "")).toBe(401);
     expect(connectTrailerHttpStatus("resource_exhausted", "")).toBe(429);
@@ -678,6 +685,51 @@ describe("devin cloud trailer errors", () => {
       expect(caught).toBeInstanceOf(Error);
       expect((caught as Error).message).toBe("Cognition chat failed (cloud trace ID: n/a)");
       expect((caught as Error).message).not.toContain(credential);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearCachedCatalog();
+    }
+  });
+
+  test("synthesizes quota-exhausted copy when trailer matches quota pattern", async () => {
+    const credential = "devin-session-token$header.payload.signature";
+    const trailer = Buffer.from(JSON.stringify({
+      error: {
+        code: "failed_precondition",
+        message: `Your weekly usage quota has been exhausted. Visit https://app.devin.ai/settings/usage to purchase on-demand usage. ${credential}`,
+      },
+    }));
+    const envelope = Buffer.alloc(5 + trailer.length);
+    envelope[0] = 0x02;
+    envelope.writeUInt32BE(trailer.length, 1);
+    trailer.copy(envelope, 5);
+
+    const originalFetch = globalThis.fetch;
+    clearCachedCatalog();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response("catalog unavailable", { status: 503 })
+        : new Response(envelope, { status: 200 });
+    }) as typeof fetch;
+    try {
+      let caught: unknown;
+      try {
+        for await (const _event of streamChatEvents({
+          apiKey: credential,
+          modelUid: "swe-2-high",
+          messages: [{ role: "user", content: "hi" }],
+        })) { /* no data frames */ }
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as any).status).toBe(429);
+      expect((caught as any).code).toBe("failed_precondition");
+      expect((caught as Error).message).toContain("quota exhausted");
+      expect((caught as Error).message).not.toContain(credential);
+      expect((caught as Error).message).not.toContain("Your weekly usage quota");
     } finally {
       globalThis.fetch = originalFetch;
       clearCachedCatalog();

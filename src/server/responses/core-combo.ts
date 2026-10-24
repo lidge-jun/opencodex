@@ -1322,6 +1322,7 @@ export async function executeComboResponses(
     const attemptedTargets = pick.attempted;
     const failureCooldownScope = comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
+      failedAdapter: childLog.providerAdapter,
     });
     const failedTargetKey = targetKey(pick.target);
     let failedTargetCooldownRecorded = false;
