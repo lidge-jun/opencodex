@@ -310,3 +310,126 @@ describe("#7429 Chat reasoning_details carry Anthropic thinking across tool step
 });
 
 
+describe("Anthropic reasoning state stays off the native Chat lane to other providers", () => {
+  const CHAT_BASE = "https://chat.example.test";
+  const CHAT_MODEL = "target-model";
+
+  // preserveReasoningContentModels so the plaintext thinking actually serializes to the wire;
+  // without it the bridge would drop the text too and there would be nothing left to assert.
+  function chatDestination(): OcxConfig {
+    return {
+      defaultProvider: "chatv", emptyCompletionRetry: false,
+      providers: { chatv: { adapter: "openai-chat", baseUrl: CHAT_BASE, proxy: "direct",
+        models: [CHAT_MODEL], preserveReasoningContentModels: [CHAT_MODEL],
+        authMode: "key", apiKey: "synthetic-test-key" } },
+    } as OcxConfig;
+  }
+
+  function chatTransport(): Item[] {
+    const bodies: Item[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== `${CHAT_BASE}/chat/completions`) throw new Error(`Unexpected network target blocked: ${url}`);
+      const body = JSON.parse(String(init?.body)) as Item;
+      bodies.push(body);
+      if (body.stream === true) {
+        const chunk = { id: "chatcmpl_1", object: "chat.completion.chunk",
+          choices: [{ index: 0, delta: { role: "assistant", content: "Done." }, finish_reason: "stop" }] };
+        return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return Response.json({ id: "chatcmpl_1", object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "Done." }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    }) as typeof fetch;
+    return bodies;
+  }
+
+  async function sendChat(messages: unknown[]): Promise<void> {
+    const request = new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: `chatv/${CHAT_MODEL}`, messages, stream: false }),
+    });
+    const response = await handleChatCompletions(request, chatDestination(), { model: "", provider: "" });
+    const payload = await response.json();
+    expect(response.status, JSON.stringify(payload)).toBe(200);
+  }
+
+  // The marked (OpenRouter carrier) and unmarked (format omitted) spellings of the same
+  // signed Anthropic state both take the bridge, where the non-Anthropic gate keeps only
+  // the plaintext projection — no signature or redacted ciphertext may cross over.
+  const ANTHROPIC_HISTORY: Array<[string, Item[]]> = [
+    ["marked", [
+      { type: "reasoning.encrypted", data: REDACTED, format: FORMAT, index: 0 },
+      { type: "reasoning.text", text: THINKING[0], signature: SIGNATURES[0], format: FORMAT, index: 1 },
+    ]],
+    ["unmarked", [
+      { type: "reasoning.text", text: THINKING[0], signature: SIGNATURES[0], index: 0 },
+    ]],
+  ];
+  for (const [name, details] of ANTHROPIC_HISTORY) {
+    test(`${name} state reaches the openai-chat upstream as plaintext only`, async () => {
+      const bodies = chatTransport();
+      const assistant = { role: "assistant", content: "answer", reasoning_details: details };
+      await sendChat([USER, assistant]);
+      expect(bodies).toHaveLength(1);
+      const wireAssistant = (bodies[0]!.messages as Item[]).find(m => m.role === "assistant")!;
+      expect(wireAssistant.reasoning_content).toBe(THINKING[0]);
+      expect(wireAssistant.reasoning_details).toBeUndefined();
+      const serialized = JSON.stringify(bodies[0]);
+      expect(serialized).not.toContain(SIGNATURES[0]);
+      expect(serialized).not.toContain(REDACTED);
+    });
+  }
+
+  test("another provider's reasoning details keep the native passthrough", async () => {
+    const bodies = chatTransport();
+    const foreign = [
+      { type: "reasoning.text", text: THINKING[0], format: "minimax-response-v1", index: 0 },
+    ];
+    await sendChat([USER, { role: "assistant", content: "answer", reasoning_details: foreign }]);
+    expect(bodies).toHaveLength(1);
+    const wireAssistant = (bodies[0]!.messages as Item[]).find(m => m.role === "assistant")!;
+    // Native passthrough preserves caller message objects verbatim — scope stays Anthropic-only.
+    expect(wireAssistant.reasoning_details).toEqual(foreign);
+  });
+
+  test("state on non-assistant messages reaches the openai-chat upstream as plaintext only", async () => {
+    // The eligibility scan is role-agnostic on purpose: the native lane forwards caller
+    // message objects verbatim on any role, so Anthropic state sitting on a user, system,
+    // developer or tool-result message would disclose the signature and redacted ciphertext
+    // exactly as an assistant slot would. The bridge projects only plaintext whatever the slot.
+    const bodies = chatTransport();
+    const details = ANTHROPIC_HISTORY[0]![1];
+    await sendChat([
+      { role: "user", content: "hi", reasoning_details: details },
+      { role: "system", content: "s", reasoning_details: details },
+      { role: "developer", content: "d", reasoning_details: details },
+      { role: "assistant", content: null, tool_calls: [
+        { id: "call_1", type: "function", function: { name: "lookup", arguments: "{}" } },
+      ] },
+      { role: "tool", tool_call_id: "call_1", content: "result", reasoning_details: details },
+    ]);
+    expect(bodies).toHaveLength(1);
+    const serialized = JSON.stringify(bodies[0]);
+    expect(serialized).not.toContain(SIGNATURES[0]);
+    expect(serialized).not.toContain(REDACTED);
+    expect(serialized).not.toContain("reasoning_details");
+    // The opaque carrier is dropped, the tool result itself is not.
+    expect((bodies[0]!.messages as Item[]).find(m => m.role === "tool"))
+      .toMatchObject({ tool_call_id: "call_1", content: "result" });
+  });
+
+  test("another provider's reasoning details keep the native passthrough on a non-assistant role", async () => {
+    // The lane is verbatim on every role, which is why the Anthropic-state scan cannot
+    // afford to look at assistant messages only.
+    const bodies = chatTransport();
+    const foreign = [
+      { type: "reasoning.text", text: THINKING[0], format: "minimax-response-v1", index: 0 },
+    ];
+    await sendChat([{ role: "user", content: "hi", reasoning_details: foreign }]);
+    const wireUser = (bodies[0]!.messages as Item[]).find(m => m.role === "user")!;
+    expect(wireUser.reasoning_details).toEqual(foreign);
+  });
+});

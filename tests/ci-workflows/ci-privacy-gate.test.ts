@@ -123,6 +123,8 @@ describe.skipIf(cannotRunAggregate)("the aggregate ci gate, executed", () => {
         CHANGES_STRUCTURE: "false",
         CHANGES_SETUP_ACTION: "false",
         CHANGES_REMOTE_HELPER: "false",
+        CHANGES_DOCKER: "false",
+        CHANGES_KEYRING: "false",
         ...scope,
         // needs serializes as an object per job; the gate reads .value.result.
         RESULTS: JSON.stringify(Object.fromEntries(Object.entries(results).map(([job, result]) => [job, { result }]))),
