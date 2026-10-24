@@ -48,6 +48,13 @@
   ],
   "docs": [
     {
+      "path": "quota-snapshots.md",
+      "tier": 4,
+      "title": "Account Quota Snapshots",
+      "scope": "Bounded write deferral and cancellation for Codex and provider account quota snapshots.",
+      "documents": ["src/codex/quota.ts", "src/providers/account-quota-disk.ts"]
+    },
+    {
       "path": "providers/generic-account-pool.md",
       "tier": 4,
       "title": "Generic OAuth Account Pool",
