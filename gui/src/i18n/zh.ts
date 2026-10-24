@@ -1007,7 +1007,7 @@ export const zh: Record<TKey, string> = {
   "sub.featured": "精选",
   "sub.advanced": "高级",
   "sub.orderHintAria": "此顺序的用途",
-  "sub.orderHint": "此处所选并显示的顺序决定 Codex 模型选择器顶部第 1–5 位，以及 {cmd} 的默认模型候选。",
+  "sub.orderHint": "此处所选并显示的顺序决定 Codex 模型选择器顶部第 1–5 位，以及 {cmd} 的默认模型候选。若精选少于 5 个模型，剩余栏位会依目录优先级补位公开；精选满 5 个模型即可完全控制此名单。",
   "sub.noneSelected": "未选择 — 请从下方列表选择。",
   "sub.models": "模型",
   "sub.search": "搜索模型（原生 gpt + 已路由）…",

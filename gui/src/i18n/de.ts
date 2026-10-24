@@ -997,7 +997,7 @@ export const de: Record<TKey, string> = {
   "sub.featured": "Empfohlen",
   "sub.advanced": "Erweitert",
   "sub.orderHintAria": "Wie diese Reihenfolge verwendet wird",
-  "sub.orderHint": "Die hier gewählte und angezeigte Reihenfolge bestimmt die Plätze 1–5 oben in der Codex-Modellauswahl und die Standard-Modellkandidaten für {cmd}.",
+  "sub.orderHint": "Die hier gewählte und angezeigte Reihenfolge bestimmt die Plätze 1–5 oben in der Codex-Modellauswahl und die Standard-Modellkandidaten für {cmd}. Wenn weniger als 5 Modelle ausgewählt sind, werden die restlichen Plätze nach Katalogpriorität belegt; wählen Sie 5 Modelle, um die Liste vollständig zu steuern.",
   "sub.noneSelected": "Nichts ausgewählt — wähle aus der Liste unten.",
   "sub.models": "Modelle",
   "sub.search": "Modelle suchen (nativ gpt + geroutet)…",

@@ -1012,7 +1012,7 @@ export const fr: Record<TKey, string> = {
   "sub.featured": "À la une",
   "sub.advanced": "Avancé",
   "sub.orderHintAria": "Comment cet ordre est utilisé",
-  "sub.orderHint": "L’ordre affiché ici détermine les positions 1 à 5 en haut du sélecteur de modèles Codex et les modèles candidats par défaut pour {cmd}.",
+  "sub.orderHint": "L’ordre affiché ici détermine les positions 1 à 5 en haut du sélecteur de modèles Codex et les modèles candidats par défaut pour {cmd}. Si moins de 5 modèles sont mis en avant, les emplacements restants sont attribués selon la priorité du catalogue ; choisissez 5 modèles pour contrôler la liste complète.",
   "sub.noneSelected": "Aucun modèle sélectionné — faites votre choix dans la liste ci-dessous.",
   "sub.models": "Modèles",
   "sub.search": "Rechercher des modèles (gpt natifs + routés)…",

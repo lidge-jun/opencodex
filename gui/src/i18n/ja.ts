@@ -936,7 +936,7 @@ export const ja: Record<TKey, string> = {
   "sub.featured": "おすすめ",
   "sub.advanced": "詳細設定",
   "sub.orderHintAria": "この順序の使われ方",
-  "sub.orderHint": "ここでの表示順が Codex モデルピッカーの上位 1〜5 番目の位置と {cmd} のデフォルトモデル候補を決定します。",
+  "sub.orderHint": "ここでの表示順が Codex モデルピッカーの上位 1〜5 番目の位置と {cmd} のデフォルトモデル候補を決定します。注目モデルが 5 未満の場合、残りの枠はカタログの優先度順で補完されます。5 つすべて選択すると完全に制御できます。",
   "sub.noneSelected": "未選択 — 以下のリストから選んでください。",
   "sub.models": "モデル",
   "sub.search": "モデルを検索(ネイティブ gpt + ルーティング)…",

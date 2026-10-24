@@ -1012,7 +1012,7 @@ export const vi: Record<TKey, string> = {
   "sub.featured": "Nổi bật (Featured)",
   "sub.advanced": "Nâng cao (Advanced)",
   "sub.orderHintAria": "Cách thứ tự này được sử dụng",
-  "sub.orderHint": "Thứ tự hiển thị ở đây thiết lập các vị trí 1–5 ở đầu picker model của Codex và các model mặc định cho {cmd}.",
+  "sub.orderHint": "Thứ tự hiển thị ở đây thiết lập các vị trí 1–5 ở đầu picker model của Codex và các model mặc định cho {cmd}. Khi có ít hơn 5 model được chọn, các vị trí còn lại sẽ được bổ sung theo mức ưu tiên của danh mục; hãy chọn đủ 5 model để kiểm soát hoàn toàn danh sách.",
   "sub.noneSelected": "Chưa chọn — hãy chọn từ danh sách bên dưới.",
   "sub.models": "Models",
   "sub.search": "Tìm kiếm model (native gpt + routed)…",

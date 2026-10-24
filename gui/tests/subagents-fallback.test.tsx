@@ -745,3 +745,18 @@ test.each(compatibilityCases)("V2 compatibility guidance: $name", async ({ model
   }
   expect(requests.filter(request => request.method !== "GET")).toEqual([]);
 });
+
+test("order hint explains that fewer than 5 featured models fill remaining slots by catalog priority", async () => {
+  await mount();
+  const trigger = container.querySelector<HTMLButtonElement>(".swi-featured-head .ocx-tooltip");
+  if (!trigger) throw new Error("Expected the order-hint tooltip trigger to be rendered");
+  await act(async () => {
+    trigger.focus();
+    await new Promise<void>(resolve => testWindow.setTimeout(resolve, 250));
+  });
+  expect(trigger.getAttribute("aria-describedby")).toBeTruthy();
+  const tooltip = container.querySelector<HTMLElement>('[role="tooltip"]');
+  expect(tooltip?.textContent).toContain("spawn_agent");
+  expect(tooltip?.textContent).toContain("fewer than 5 models are featured");
+  expect(tooltip?.textContent).toContain("feature 5 models to fully control the list");
+});
