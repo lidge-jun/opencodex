@@ -88,6 +88,24 @@ provider credentials.
 
 ## Context and safety boundaries
 
+`advisor.contextMode` defaults to `context`. With `question-only`, the consultation sends only a
+fixed question-only system instruction and the worker's trimmed `question` (at most 2,000 Unicode
+code points plus a truncation notice). No task, transcript, tool catalog, worker identity or repair
+evidence is attached. The protocol guard and builder share `src/server/responses/advisor-question.ts`:
+clipping preserves surrogate pairs, scans only through the first excess code point and is idempotent.
+`buildAdvisorUserPrompt` returns before reading parsed task state. The
+synthetic tool requires a self-contained string question. Its schema omits length constraints so
+Google's `reject-lossy` policy can accept it; the runtime enforces nonempty input and the shared bound.
+Both the runtime and low-level consultation
+executor reject empty questions without dispatch. The runtime re-reads the mode before dispatch.
+Its synchronous admission hook also prevents invalid question-only calls from consuming the guard's
+consultation allowance. Worker continuations retain their independent hard limit, including invalid calls.
+Automatic preflight and adaptive repair consultation are disabled in this mode because they have
+no worker-written question. Existing consent, request limits and adaptive task budgets still apply.
+The management API, CLI `--context-mode` and dashboard checkbox configure the same field.
+The CLI capability registry publishes the flag and automation exception in the generated `skills/ocx/` operating reference.
+`tests/advisor/advisor-consult.test.ts` checks real loopback request equality across history sizes.
+
 **Context-sharing consent is required before any of that transfer.** `advisor.enabled` does not
 grant it. The operator records `advisor.contextSharingConsent: "v1"` from the dashboard checkbox,
 `ocx advisor consent` / `ocx advisor on --ack-context-sharing`, or `PUT /api/advisor/settings`.

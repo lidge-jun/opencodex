@@ -28,7 +28,12 @@ import {
 } from "../lib/local-internal-call-capability";
 import { configuredPort } from "../server/auth-cors";
 import { readAdvisorReasoning } from "../server/inference/advisor-diagnostics";
-import { ADVISOR_SYSTEM_INSTRUCTION, buildAdvisorUserPrompt, type AdvisorContextInput } from "./context";
+import {
+  ADVISOR_SYSTEM_INSTRUCTION,
+  ADVISOR_QUESTION_ONLY_INSTRUCTION,
+  buildAdvisorUserPrompt,
+  type AdvisorContextInput,
+} from "./context";
 
 /**
  * The header the advisor presents on its own loopback request. Its VALUE is this process's
@@ -118,6 +123,13 @@ export async function consultAdvisor(
   baseUrlOverride?: string,
 ): Promise<AdvisorConsultationResult> {
   const t0 = Date.now();
+  // A low-level guard as well as the plan check: never fall back to task context or pay for an empty question.
+  if (input.contextMode === "question-only" && !input.question?.trim()) {
+    return {
+      ok: false, advice: "", advisorModel: input.advisorModel, durationMs: 0,
+      error: "A non-empty question is required in question-only mode; no consultation sent.",
+    };
+  }
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     [ADVISOR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
@@ -133,7 +145,7 @@ export async function consultAdvisor(
     stream: false,
     reasoning_effort: effort,
     messages: [
-      { role: "system", content: ADVISOR_SYSTEM_INSTRUCTION },
+      { role: "system", content: input.contextMode === "question-only" ? ADVISOR_QUESTION_ONLY_INSTRUCTION : ADVISOR_SYSTEM_INSTRUCTION },
       { role: "user", content: buildAdvisorUserPrompt(input) },
     ],
   };

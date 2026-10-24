@@ -187,6 +187,8 @@ export const tr: Record<TKey, string> = {
   "advisor.modelsEmpty": "Seçilebilir model yok. Sağlayıcıyı ve modeli etkinleştirip yeniden deneyin.",
   "advisor.effort": "Muhakeme düzeyi",
   "advisor.policy": "Politika",
+  "advisor.questionOnly": "Yalnızca çalışanın sorusunu gönder",
+  "advisor.questionOnlyNote": "Yalnızca çalışanın sorusu (en fazla 2000 karakter korunur; daha uzunsa kırpma bildirimi eklenir) ve sabit danışman talimatı gönderilir. Geçmiş, araç sonuçları ve görev bağlamı eklenmez. Çalışan gerekli arka planı soruya eklemelidir. Otomatik danışmalar duraklatılır; mevcut çağrı sınırları geçerlidir.",
   "advisor.policy.manual": "Manuel — yalnızca worker istediğinde",
   "advisor.policy.preflight": "Preflight — yönelim kanıtı oluşunca otomatik danışma denemesi",
   "advisor.policy.adaptive": "Uyarlanabilir — başlangıç ve başarısız onarım danışmaları",

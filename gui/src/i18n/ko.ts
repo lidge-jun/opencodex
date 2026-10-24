@@ -187,6 +187,8 @@ export const ko: Record<TKey, string> = {
   "advisor.modelsEmpty": "선택할 모델이 없습니다. 공급자와 모델을 활성화한 뒤 다시 시도하세요.",
   "advisor.effort": "추론 강도",
   "advisor.policy": "정책",
+  "advisor.questionOnly": "워커의 질문만 전송",
+  "advisor.questionOnlyNote": "워커의 질문(최대 2000자를 유지하며, 초과하면 잘림 안내 추가)과 고정된 자문 지침만 전송합니다. 대화 기록, 도구 결과, 작업 맥락은 자동으로 첨부하지 않습니다. 워커가 필요한 배경을 질문에 포함해야 합니다. 자동 자문은 일시 중지되며 기존 횟수 제한은 유지됩니다.",
   "advisor.policy.manual": "수동 — Worker가 요청할 때만",
   "advisor.policy.preflight": "Preflight — 방향 증거가 생기면 자동 상담 시도",
   "advisor.policy.adaptive": "적응형 — 초기 탐색 및 수정 실패 시 상담",

@@ -90,6 +90,51 @@ function makePlan(options: {
 }
 
 describe("advisor plan — eligibility", () => {
+  test("switching to question-only after an automatic claim releases it without spending or injection", async () => {
+    const calls = fakeLoopback();
+    const ledger = createAdvisorPreflightLedger();
+    const config = configWith({ enabled: true, model: "expert/m", policy: "preflight", contextSharingConsent: "v1" });
+    const parsed = orientedParsed("mode switch after claim", "mode-switch-thread");
+    const history = JSON.stringify(parsed.context.messages);
+    const plan = createAdvisorRuntimePlan({
+      config, ledger, workerIdentity: "w", workerModelId: "m", baseUrlOverride: "http://advisor.test",
+      afterPreflightClaim: () => { config.advisor!.contextMode = "question-only"; },
+    })!;
+    expect(await plan.preflightInject(parsed)).toBe(false);
+    expect(calls).toHaveLength(0);
+    expect(JSON.stringify(parsed.context.messages)).toBe(history);
+    expect(ledger.claim(advisorLedgerKey(parsed, "m")!).state).toBe("claimed");
+  });
+
+  test("question-only pauses automation for every policy and requires a question", async () => {
+    const calls = fakeLoopback();
+    for (const policy of ["manual", "preflight", "adaptive"] as const) {
+      const plan = makePlan({ advisor: { enabled: true, model: "expert/m", policy, contextMode: "question-only" } });
+      const parsed = orientedParsed();
+      expect(await plan.preflightInject(parsed)).toBe(false);
+      expect((await plan.consult(parsed, "manual")).ok).toBe(false);
+      expect(plan.tool.parameters.required).toEqual(["question"]);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  test("question-only uses the live setting and spends no allowance on an empty question", async () => {
+    const calls = fakeLoopback();
+    const config = configWith({ enabled: true, model: "expert/m", policy: "adaptive", contextSharingConsent: "v1" });
+    let reservations = 0;
+    const plan = createAdvisorRuntimePlan({ config, workerIdentity: "worker", workerModelId: "w",
+      budget: { reserve: () => ({ ok: true, used: ++reservations }) }, baseUrlOverride: "http://advisor.test" })!;
+    config.advisor!.contextMode = "question-only";
+    const parsed = orientedParsed();
+    expect((await plan.consult(parsed, "manual", " ")).ok).toBe(false);
+    expect(reservations).toBe(0);
+    expect((await plan.consult(parsed, "manual", "Assess this concise question.")).ok).toBe(true);
+    expect(reservations).toBe(1);
+    const messages = calls[0]!.body.messages as { role: string; content: string }[];
+    expect(messages[1]!.content).toBe("Assess this concise question.");
+    expect(JSON.stringify(messages)).not.toContain("3 tests failed");
+  });
+
   test("no plan when the advisor is disabled or unconfigured", () => {
     expect(createAdvisorRuntimePlan({ config: configWith(undefined), workerIdentity: "w", workerModelId: "m" })).toBeNull();
     expect(createAdvisorRuntimePlan({ config: configWith({ enabled: true }), workerIdentity: "w", workerModelId: "m" })).toBeNull();
