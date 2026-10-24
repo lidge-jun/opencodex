@@ -1401,6 +1401,7 @@
   "management-desktop-compatibility-runtime-routes.test.ts": "server",
   "management-desktop-compatibility-settings.test.ts": "server",
   "optional-desktop-upstream.test.ts": "lib",
+  "codex-cli-windows-plan.test.ts": "codex-integration",
   "opaque-proxy-tunnel.test.ts": "lib",
   "opaque-proxy-tunnel-protocol.test.ts": "lib",
   "server-desktop-compatibility-startup.test.ts": "server",

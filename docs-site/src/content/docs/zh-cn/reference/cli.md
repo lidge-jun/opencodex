@@ -17,7 +17,7 @@ opencodex 的 CLI 是 `ocx`。它会根据第一个命令名进行分发；文�
 
 管理命令会通过实时代理的管理 API 往返调用，使用记录下来的运行时端口和身份检查，而不是维护第二条配置路径。已停止或不可达的代理会被表示为 HTTP 503，并导致 CLI 以非零状态退出。明确标注为离线配置操作的命令，则可以在没有实时代理的情况下验证并编辑配置文件。
 
-`check` 不查询注册表，也不运行 Codex。在 POSIX 上，当已发布启动器捕获的环境候选项与运行时解析器选择的规范路径一致时，`selectionAttested` 可以为 `true`；如果关联的 npm-global 软件包清单证明了所有权，`managed` 可以为 `true`。持久化候选项仍不获认证。Windows 不读取候选项或配置文件，而是推迟检查。直接通过 Bun 或源码运行时没有启动器证明。`plan` 使用隔离的临时 npm 配置、缓存和日志查询官方注册表，并拒绝活动会话或不完整的进程观测。它不安装软件，也不向进程发送信号。请参阅[完整命令和拒绝原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
+`check` 不查询注册表，也不运行 Codex。在 POSIX 上，当已发布启动器捕获的环境候选项与运行时解析器选择的规范路径一致时，`selectionAttested` 可以为 `true`；如果关联的 npm-global 软件包清单证明了所有权，`managed` 可以为 `true`。持久化候选项仍不获认证。Windows x64 还支持经证明绑定的绝对路径标准 npm `codex.cmd`，以及前缀本地 Node/npm 和已验证的前缀内平台支持组件，并使用拒绝重解析的持有句柄。其他 Windows 布局仍然推迟或不受管理。直接通过 Bun 或源码运行时没有启动器证明。`plan` 使用隔离的临时 npm 配置、缓存和日志查询官方注册表，并拒绝活动会话或不完整的进程观测。它不安装软件，也不向进程发送信号。受支持的 Windows 安装可以生成 `applicable: false` 且 `refusal: windows_apply_disabled` 的确定性只读 plan；仅 PATH 选择、独立前缀的 Node 和 OpenCodex 自启动包装器仍然推迟。请参阅[完整命令和拒绝原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
 
 有关 Windows x64 安装观察，请参阅 [`attest` 命令](/zh-cn/reference/cli/agents/)。未提供显式路径时，该命令观察由受证明约束的启动器快照识别出的已选候选项；它不授予更新权限，也不证明运行时选择。
 

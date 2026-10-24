@@ -15,6 +15,8 @@ import { posix, win32 } from "node:path";
 import { getConfigDir } from "../config";
 import { parseStrictSemver } from "../lib/strict-semver";
 import { CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS } from "../update/codex-cli-update-launch-policy.mjs";
+import { MAX_NATIVE_BACKING_BYTES } from "./cli-installation-limits";
+export { MAX_NATIVE_BACKING_BYTES } from "./cli-installation-limits";
 import { isSpawnableCodexCandidate } from "./exec-invocation";
 import {
   codexRuntimeStatePath,
@@ -36,15 +38,6 @@ const MAX_RUNTIME_STATE_BYTES = 256 * 1024;
 const MAX_MANIFEST_ANCESTORS = 12;
 /** The published package entrypoint is a few KB; 1 MiB leaves wide headroom. */
 const MAX_PACKAGE_ENTRYPOINT_BYTES = 1024 * 1024;
-/**
- * The native companion binary is streamed in HELD_READ_CHUNK_BYTES chunks and
- * never buffered whole, so this bound limits read time, not memory. Published
- * backings outgrew the former 256 MiB: `@openai/codex@0.163.0-linux-x64` ships a
- * 296,865,480-byte binary, in platform packages of 341-430 MB unpacked. 1 GiB
- * leaves more than 3x headroom over that binary while staying finite; larger
- * files are refused by fstat before any read.
- */
-export const MAX_NATIVE_BACKING_BYTES = 1024 * 1024 * 1024;
 const HELD_READ_CHUNK_BYTES = 1024 * 1024;
 
 export type CodexCliInstallKind =
@@ -434,6 +427,7 @@ export function isAppBundledCodexPath(path: string, platform: NodeJS.Platform): 
   if (platform === "win32") {
     return normalized.includes("/windowsapps/")
       || normalized.includes("/microsoft/windowsapps/")
+      || normalized.includes("/openai/codex/bin/")
       || normalized.includes("/packages/openai.codex_");
   }
   if (platform === "darwin") return /[.]app\/contents\//i.test(normalized);
@@ -1079,11 +1073,9 @@ export async function inspectCodexCliInstall(
 
   const env = deps.env ?? process.env;
   if (platform === "win32") {
-    // This first slice never opens a candidate-controlled Windows pathname.
-    // A boolean precheck followed by lstat/realpath/open is raceable when an
-    // ancestor can be replaced with a remote reparse point. Preserve only
-    // lexical, report-only classifications until a handle-bound inspector is
-    // introduced; every result remains unattested and unmanaged.
+    // Lexical exclusions precede the restricted handle-bound plan predicate.
+    // Other Windows layouts remain observation-only; pathname prechecks alone
+    // cannot prove a writable ancestor stayed local and non-reparse.
     const lexicalCandidatePath = win32.isAbsolute(candidate.command)
       && isLocalAbsoluteInspectionPath(candidate.command, platform)
       ? win32.normalize(candidate.command)
@@ -1116,9 +1108,12 @@ export async function inspectCodexCliInstall(
         evidence: Object.freeze([appBundle ? "app_bundle_path" : "version_manager_path"]),
       });
     }
-   return unknownWindowsReport("windows_inspection_deferred", candidate, {
+   const deferred = unknownWindowsReport("windows_inspection_deferred", candidate, {
      location: publicExecutableLocation(lexicalCandidatePath, platform),
    });
+   return (await import("./cli-windows-plan-provenance")).inspectWindowsCodexCliPlanInstall(deps, deferred,
+     path => isAppBundledCodexPath(path, platform) || isCodexCliUpdateVersionManagerPath(path, platform)
+       || isWithinConfiguredVersionManagerRoot(path, managerRoots, platform));
  }
   const configDir = deps.configDir ?? getConfigDir();
   if (!isSafeLocalInspectionPath(configDir, deps)) {

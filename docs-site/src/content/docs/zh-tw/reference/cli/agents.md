@@ -223,7 +223,7 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check` 不查詢註冊表，也不執行 Codex。在 POSIX 上，當已發布啟動器擷取的環境候選項與執行階段解析器選擇的正規路徑相同時，`selectionAttested` 可以為 `true`；若關聯的 npm-global 套件資訊清單證明了所有權，`managed` 可以為 `true`。持久化候選項仍不獲認證。Windows 不讀取候選項或設定檔，而是延後檢查。直接透過 Bun 或原始碼執行時沒有啟動器證明。`plan` 使用隔離的暫存 npm 設定、快取和日誌查詢官方註冊表，並拒絕活動工作階段或不完整的程序觀測。它不安裝軟體，也不向程序傳送訊號。請參閱[完整命令與拒絕原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
+`check` 不查詢註冊表，也不執行 Codex。在 POSIX 上，當已發布啟動器擷取的環境候選項與執行階段解析器選擇的正規路徑相同時，`selectionAttested` 可以為 `true`；若關聯的 npm-global 套件資訊清單證明了所有權，`managed` 可以為 `true`。持久化候選項仍不獲認證。Windows x64 也支援經證明繫結的絕對路徑標準 npm `codex.cmd`，以及前綴本機 Node/npm 和已驗證的前綴內平台支援元件，並使用拒絕重新剖析的持有控制代碼。其他 Windows 配置仍然延後或不受管理。直接透過 Bun 或原始碼執行時沒有啟動器證明。`plan` 使用隔離的暫存 npm 設定、快取和日誌查詢官方註冊表，並拒絕活動工作階段或不完整的程序觀測。它不安裝軟體，也不向程序傳送訊號。受支援的 Windows 安裝可產生 `applicable: false` 且 `refusal: windows_apply_disabled` 的確定性唯讀 plan；僅 PATH 選取、獨立前綴的 Node 和 OpenCodex 自動啟動包裝器仍然延後。請參閱[完整命令與拒絕原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
 
 在 Windows 上，如果擷取到 `CODEX_CLI_PATH=codex` 這類單純命令名稱、遠端路徑或裝置路徑，則回報 `candidate_path_unavailable`。這些情況已有擷取的候選項，但其路徑不適用於此檢查。
 

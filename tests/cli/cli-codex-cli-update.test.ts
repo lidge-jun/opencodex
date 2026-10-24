@@ -297,6 +297,11 @@ describe("Codex CLI job persistence failures", () => {
     expect(safe).toMatchObject({ outcome: "ambiguous", reason: "job_result_unknown", leaseRetained: true, cleanupErrors: [] });
     expect(JSON.stringify(safe)).not.toContain("private/");
     expect(normalizeCodexCliJobResult(result)).toEqual(result);
+    // The Windows refusal is a first-class job reason: it survives normalization
+    // instead of collapsing into job_result_unknown.
+    expect(normalizeCodexCliJobResult({ ...result, outcome: "refused",
+      reason: "windows_apply_disabled", leaseRetained: false }))
+      .toMatchObject({ outcome: "refused", reason: "windows_apply_disabled" });
   });
 
   test("a missing generation returns null without running the engine", async () => {

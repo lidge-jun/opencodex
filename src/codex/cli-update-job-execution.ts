@@ -1,7 +1,7 @@
 import type { CodexCliApplyResult } from "./cli-update-apply";
 import type { CodexCliUpdateJobDto } from "./cli-update-job";
 
-export const CODEX_CLI_JOB_REASONS: ReadonlySet<string> = new Set(["invalid_plan_id", "windows_inspection_deferred", "cancelled", "mutation_evidence_unverified",
+export const CODEX_CLI_JOB_REASONS: ReadonlySet<string> = new Set(["invalid_plan_id", "windows_inspection_deferred", "windows_apply_disabled", "cancelled", "mutation_evidence_unverified",
   "installation_prefix_changed", "installation_prefix_unsupported", "installation_lease_unavailable", "installation_busy", "plan_refused", "plan_changed", "target_artifacts_unverified",
   "installation_changed", "npm_unavailable", "blocked_process_state_unknown", "blocked_active_session",
   "installer_state_unknown", "version_process_state_unknown", "version_readback_unverified", "verified_target",

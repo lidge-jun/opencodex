@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, symlinkSync, truncateSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +10,7 @@ import {
   setWindowsInstallationFilesOpenedForTests,
 } from "../../src/codex/windows-installation-files";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-installation-limits";
 
 const nativeTest = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 let fixture = "";
@@ -44,9 +46,11 @@ describe("explicit Windows installation file snapshot", () => {
     expect(await inspectWindowsInstallationFiles(Array.from({ length: 13 }, () => ({ path: "C:\\package.json", maxBytes: 10 }))))
       .toEqual({ kind: "refused", reason: "invalid-request" });
     expect(await inspectWindowsInstallationFiles([
-      { path: "C:\\node.exe", maxBytes: 256 * 1024 * 1024, hashOnly: true },
-      { path: "C:\\other.exe", maxBytes: 256 * 1024 * 1024, hashOnly: true },
+      { path: "C:\\native.exe", maxBytes: MAX_NATIVE_BACKING_BYTES, hashOnly: true },
+      { path: "C:\\other.exe", maxBytes: MAX_NATIVE_BACKING_BYTES, hashOnly: true },
     ])).toEqual({ kind: "refused", reason: "invalid-request" });
+    expect(await inspectWindowsInstallationFiles([{ path: "C:\\native.exe", maxBytes: MAX_NATIVE_BACKING_BYTES + 1, hashOnly: true }]))
+      .toEqual({ kind: "refused", reason: "invalid-request" });
   });
 
   nativeTest("reports absent leaf and ancestor as not-found", async () => {
@@ -160,6 +164,22 @@ describe("explicit Windows installation file snapshot", () => {
     expect(file.identity.fileId).toMatch(/^[a-f0-9]{32}$/);
     expect(file.bytes).toHaveLength(0);
     expect(file.digest).toBe("");
+  });
+
+  nativeTest("one byte over the native limit refuses before reads and releases its handles", async () => {
+    const path = join(fixture, "oversized-native.fixture");
+    writeFileSync(path, "");
+    expect(process.env.SystemRoot).toBeDefined();
+    const sparse = spawnSync(join(process.env.SystemRoot!, "System32", "fsutil.exe"), ["sparse", "setflag", path],
+      { windowsHide: true, encoding: "utf8", timeout: 5_000 });
+    expect(sparse.error).toBeUndefined(); expect(sparse.status).toBe(0);
+    truncateSync(path, MAX_NATIVE_BACKING_BYTES + 1);
+    let opened = 0;
+    setWindowsInstallationFilesOpenedForTests(() => { opened++; });
+    expect(await inspectWindowsInstallationFiles([{ path, maxBytes: MAX_NATIVE_BACKING_BYTES, hashOnly: true }]))
+      .toEqual({ kind: "refused", reason: "size-limit" });
+    expect(opened).toBe(0);
+    renameSync(path, path + ".released");
   });
 
   nativeTest("prefixOnly returns a bounded prefix of an oversized file without a digest", async () => {

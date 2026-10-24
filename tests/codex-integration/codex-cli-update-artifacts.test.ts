@@ -303,6 +303,6 @@ describe("Codex CLI apply consumer", () => {
   test("Windows apply refuses before inspecting or installing", async () => {
     let calls = 0;
     const result = await applyCodexCliUpdate("a".repeat(32), { platform: "win32", inspect: async () => { calls++; throw new Error("not reached"); } });
-    expect(result.reason).toBe("windows_inspection_deferred"); expect(calls).toBe(0);
+    expect(result.reason).toBe("windows_apply_disabled"); expect(calls).toBe(0);
   });
 });

@@ -1163,9 +1163,9 @@ resolver selects the same canonical environment candidate without executing it. 
 can then establish `managed: true` when it proves ownership and, if a candidate version is reported, that version matches the manifest; persisted candidates remain unattested. The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`,
 and `selectionAttested`. Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
-`candidate_unavailable` on POSIX. On Windows this first slice performs no candidate or configuration filesystem I/O:
-only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels;
-every other Windows candidate fails closed. Because that slice never consults persisted state, a Windows run
+`candidate_unavailable` on POSIX. On Windows x64, a proof-captured absolute standard npm `codex.cmd`
+can be managed when held local handles bind its package, prefix-local Node/npm and the first in-prefix
+platform backing. Other Windows layouts remain deferred or unmanaged. Windows never consults persisted state, so a run
 with no captured environment candidate reports `windows_inspection_deferred` rather than `candidate_unavailable`:
 the command cannot observe whether a Codex CLI is installed, so it reports the deferral instead of asserting
 that no candidate exists. The command does not execute Codex or a package manager, repair a shim,
@@ -1182,7 +1182,9 @@ ocx system codex-cli-update plan --channel latest --json
 ```
 
 Run through the published Node launcher with the intended `CODEX_CLI_PATH` in the shell environment.
-The plan requires an attested POSIX npm-global installation and a linked package manifest version.
+The plan requires an attested npm-global installation and a linked package manifest version.
+Windows supports only an explicit absolute standard npm `codex.cmd` with prefix-local Node/npm;
+PATH-only selection, separate-prefix Node, OpenCodex autostart wrappers and global/vendor fallback stay deferred.
 It queries the official npm registry for an exact version, SHA-512 integrity and same-origin tarball,
 using the launcher's captured PATH and isolated temporary npm configuration, cache and logs. Proxy
 settings and `NODE_EXTRA_CA_CERTS` remain supported; cleanup is best-effort. No Codex command runs.
@@ -1190,10 +1192,13 @@ settings and `NODE_EXTRA_CA_CERTS` remain supported; cleanup is best-effort. No 
 An applicable plan reports `applicable: true` and a deterministic `planId` binding platform,
 installation-root/content digests, installed version, channel and exact main/platform artifacts. The plan is never
 persisted. It refuses downgrades, already-current versions, active Codex sessions and incomplete
-process observation. Windows returns `windows_inspection_deferred` before registry/process queries.
+process observation. Supported Windows metadata queries use the observed Node/npm under matching
+held handles. A completed Windows read-only plan reports a deterministic ID, `applicable: false`
+and `refusal: windows_apply_disabled`; active/unknown sessions still refuse earlier. Unsupported
+Windows layouts return `windows_inspection_deferred` before registry/process queries.
 A refusal exits 0: inspect `applicable` and `refusal`. The printed install argv is indicative; this
-command installs nothing, changes no application state and never signals a session. A plan ID alone
-is not installation authorization: apply requires separate explicit confirmation.
+command installs nothing, changes no application state and never signals a session. Windows apply
+remains disabled, and a plan ID alone is not installation authorization: apply requires separate explicit confirmation.
 
 #### Confirmed POSIX Codex CLI apply and job status
 
@@ -1238,7 +1243,7 @@ ocx system codex-cli-update attest --candidate <absolute-path> --npm-prefix <abs
 
 Native handles hold the ancestor directories and files during bounded reads. Unsupported platforms, reparse points/junctions, conflicting writers, unsafe paths, and oversized files are refused. The fixed report contains no paths: `status` is `observed` or `refused`, with `installationIdentityObserved`; `selectionAttested`, `managed`, and `applyAllowed` remain `false`. Check `status`, not just the process exit code: a reported refusal can exit 0.
 
-An observed identity or digest describes those files during this observation. It is not a durable update permit and does not prove the selected runtime, the past installer, effective npm configuration, or tool authenticity. The supplied Node is observed only, not proven to be the Node a launcher would select. No target is executed; no registry request, installation, configuration write, or process control occurs. The existing Windows `check` command still performs no candidate/configuration filesystem I/O.
+An observed identity or digest describes those files during this observation. It is not a durable update permit and does not prove the selected runtime, the past installer, effective npm configuration, or tool authenticity. The supplied Node is observed only, not proven to be the Node a launcher would select. No target is executed; no registry request, installation, configuration write, or process control occurs. The separate Windows `check`/`plan` predicate above can establish read-only planning evidence; `attest` remains observation-only.
 
 ### `ocx config [show|get|set|unset|validate|export|import] ...`
 

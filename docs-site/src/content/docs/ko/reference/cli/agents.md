@@ -256,7 +256,7 @@ ocx system settings --stream-mode eager-relay
 ocx system codex-cli-update check --json
 ```
 
-`check`는 레지스트리를 조회하거나 Codex를 실행하지 않습니다. POSIX에서는 배포 런처가 캡처한 환경 후보와 런타임 리졸버가 선택한 정규 경로가 같으면 `selectionAttested: true`가 될 수 있습니다. 연결된 npm-global 패키지 매니페스트가 소유권을 증명하고, 후보 버전이 보고된 경우 그 버전이 매니페스트 버전과 일치하면 `managed: true`가 될 수 있으며 저장된 후보는 인증되지 않습니다. Windows는 후보나 설정 파일을 읽지 않고 검사를 연기합니다. 직접 Bun/소스 실행은 런처 증거가 없어 후보를 신뢰하지 않습니다. `plan`은 격리된 임시 npm 설정·캐시·로그로 공식 레지스트리를 조회하고 활성 세션이나 불완전한 프로세스 관측을 거절합니다. 설치하거나 프로세스에 신호를 보내지 않습니다. [명령과 거절 사유의 전체 설명(영문)](/reference/cli/agents/#read-only-codex-cli-update-plan)을 참고하세요.
+`check`는 레지스트리를 조회하거나 Codex를 실행하지 않습니다. POSIX에서는 배포 런처가 캡처한 환경 후보와 런타임 리졸버가 선택한 정규 경로가 같으면 `selectionAttested: true`가 될 수 있습니다. 연결된 npm-global 패키지 매니페스트가 소유권을 증명하고, 후보 버전이 보고된 경우 그 버전이 매니페스트 버전과 일치하면 `managed: true`가 될 수 있으며 저장된 후보는 인증되지 않습니다. Windows x64는 증명에 바인딩된 절대 표준 npm `codex.cmd`와 프리픽스 로컬 Node/npm, 검증된 인프리픽스 플랫폼 백킹도 지원하며 reparse를 거부하는 보유 핸들을 사용합니다. 다른 Windows 레이아웃은 계속 연기되거나 관리되지 않습니다. 직접 Bun/소스 실행은 런처 증거가 없어 후보를 신뢰하지 않습니다. `plan`은 격리된 임시 npm 설정·캐시·로그로 공식 레지스트리를 조회하고 활성 세션이나 불완전한 프로세스 관측을 거절합니다. 설치하거나 프로세스에 신호를 보내지 않습니다. 지원되는 Windows 설치는 `applicable: false`와 `refusal: windows_apply_disabled`를 가진 결정적 읽기 전용 plan을 생성할 수 있으며 PATH 전용 선택·분리된 프리픽스 Node·OpenCodex 자동 시작 래퍼는 계속 연기됩니다. [명령과 거절 사유의 전체 설명(영문)](/reference/cli/agents/#read-only-codex-cli-update-plan)을 참고하세요.
 
 Windows에서 `CODEX_CLI_PATH=codex` 같은 단순 명령 이름이나 원격 경로·장치 경로가 후보로 캡처되면 `candidate_path_unavailable`을 보고합니다. 후보는 캡처됐지만 해당 경로가 이 검사 대상에 적합하지 않은 경우입니다.
 

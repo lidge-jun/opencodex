@@ -152,16 +152,19 @@ manifest can then establish `managed: true` when it proves ownership and, if a c
 The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSource`, and `selectionAttested`.
 Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
-`candidate_unavailable` on POSIX or `windows_inspection_deferred` on Windows. On Windows this first slice performs no candidate or configuration filesystem I/O:
-only a proof-captured absolute environment candidate can receive lexical app-bundle or version-manager labels;
-every other Windows candidate fails closed. The command does not install or repair software, execute
+`candidate_unavailable` on POSIX or `windows_inspection_deferred` on Windows. Windows x64 also supports
+a proof-captured absolute standard npm `codex.cmd` with prefix-local Node/npm and a verified in-prefix
+platform backing. It uses reparse-refusing held handles; other Windows layouts remain deferred or unmanaged.
+The command does not install or repair software, execute
 Codex or npm, control a running process, or write configuration/cache state.
 
 `ocx system codex-cli-update plan --json` adds a read-only update decision for an attested POSIX
 npm-global installation. It resolves `latest` through the official npm registry, validates the
 exact version and SHA-512 integrity, and refuses active sessions or incomplete process observation.
 Registry queries use isolated temporary npm configuration, cache and logs with best-effort cleanup.
-No software is installed and no process is signalled. Windows returns `windows_inspection_deferred`.
+No software is installed and no process is signalled. A supported Windows installation can produce a
+deterministic read-only plan with `applicable: false` and `refusal: windows_apply_disabled`.
+PATH-only selection, separate-prefix Node and OpenCodex autostart wrappers remain deferred.
 See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
 
 For a reviewed POSIX non-shim npm-global plan, `ocx system codex-cli-update apply --plan-id <id> --yes`

@@ -28,7 +28,7 @@ opencodex 的命令列工具是 `ocx`。它依第一個命令名稱分派，有�
 設定路徑。停止或無法連線的代理以 HTTP 503 呈現，並產生非零的 CLI 離開碼。明確記載為
 離線設定操作的命令，可以在沒有執行中代理的情況下驗證與編輯設定檔。
 
-`check` 不查詢註冊表，也不執行 Codex。在 POSIX 上，當已發布啟動器擷取的環境候選項與執行階段解析器選擇的正規路徑相同時，`selectionAttested` 可以為 `true`；若關聯的 npm-global 套件資訊清單證明了所有權，`managed` 可以為 `true`。持久化候選項仍不獲認證。Windows 不讀取候選項或設定檔，而是延後檢查。直接透過 Bun 或原始碼執行時沒有啟動器證明。`plan` 使用隔離的暫存 npm 設定、快取和日誌查詢官方註冊表，並拒絕活動工作階段或不完整的程序觀測。它不安裝軟體，也不向程序傳送訊號。請參閱[完整命令與拒絕原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
+`check` 不查詢註冊表，也不執行 Codex。在 POSIX 上，當已發布啟動器擷取的環境候選項與執行階段解析器選擇的正規路徑相同時，`selectionAttested` 可以為 `true`；若關聯的 npm-global 套件資訊清單證明了所有權，`managed` 可以為 `true`。持久化候選項仍不獲認證。Windows x64 也支援經證明繫結的絕對路徑標準 npm `codex.cmd`，以及前綴本機 Node/npm 和已驗證的前綴內平台支援元件，並使用拒絕重新剖析的持有控制代碼。其他 Windows 配置仍然延後或不受管理。直接透過 Bun 或原始碼執行時沒有啟動器證明。`plan` 使用隔離的暫存 npm 設定、快取和日誌查詢官方註冊表，並拒絕活動工作階段或不完整的程序觀測。它不安裝軟體，也不向程序傳送訊號。受支援的 Windows 安裝可產生 `applicable: false` 且 `refusal: windows_apply_disabled` 的確定性唯讀 plan；僅 PATH 選取、獨立前綴的 Node 和 OpenCodex 自動啟動包裝器仍然延後。請參閱[完整命令與拒絕原因（英文）](/reference/cli/agents/#read-only-codex-cli-update-plan)。
 
 觀測 Windows x64 安裝的方式請參閱 [`attest` 命令](/zh-tw/reference/cli/agents/)。未提供明確路徑時，該命令會觀測由受證明約束的啟動器快照識別出的已選候選項；它不授予更新權限，也不證明執行階段選擇。
 

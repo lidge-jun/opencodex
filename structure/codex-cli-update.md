@@ -42,7 +42,7 @@ no bound content is refused install_content_unverified before any registry query
 observation only — it carries no execution guarantee — so the apply phase re-observes
 rather than rely on it. The observation is opt-in: the plan path requests it because the planId
 binds it, while a bare check leaves the digest null rather than paying the bounded read.
-Selection observation uses the runtime resolver with provenance's bounded no-follow, nonblocking state reader and local executable-path policy. Windows returns before invoking the resolver; its deferred inspection performs no candidate or configuration I/O.
+Selection observation uses the runtime resolver with provenance's bounded no-follow, nonblocking state reader and local executable-path policy. Windows supports the restricted handle-bound plan predicate below; other Windows layouts remain deferred.
 Its child environment drops npm configuration overrides, named Node startup/output controls,
 the `LD_*`/`DYLD_*` loader families and the OpenSSL startup configuration and
 provider/engine search variables; proxy settings and `NODE_EXTRA_CA_CERTS` remain supported.
@@ -61,6 +61,43 @@ Linux per-process `status`/`cmdline` read failures invalidate a complete observa
 (a process that disappeared); incomplete observation refuses with `blocked_process_state_unknown`;
 the restart/kill path skips unreadable entries while retaining independently verified same-user app-server targets. This plan neither installs a runtime nor signals
 an existing Codex session. Windows enumeration/installation limits remain unchanged.
+
+## Windows read-only plan predicate
+
+`src/codex/cli-windows-plan-provenance.ts` admits only a proof-captured, drive-absolute
+`CODEX_CLI_PATH` naming the exact standard npm `codex.cmd` grammar. The global npm
+package prefix comes from the shim directory and its `node_modules` tree. This plan
+currently requires prefix-local `node.exe` and npm. Derivation may propose a PATH Node only
+when the local Node probe proves `not-found`; a refused/reparse probe never counts as absent.
+The production plan still refuses that external candidate: a standard npm cmd-shim runs bare
+`node` when its local Node is absent, and CMD can prefer the invocation working directory.
+The proof-bound launcher snapshot has PATH/PATHEXT but no target-shim invocation
+cwd/search-result evidence, so a separate Node cannot be selected safely yet. The production runtime resolver confirms the explicit Codex override's
+priority without saved-state reads or probes. A PE header binds Node's architecture;
+the package manifest/bin, npm manifest/bin, Node and the first in-prefix platform
+package plus native backing are observed together. Backing lookup follows the
+nearest-first Node lanes and is repeated while the files and ancestors remain held.
+Native handles refuse reparse points, writers and rename/delete sharing; initial
+manifest and Node identities must match the final observation. Text stays bounded
+to 256 KiB and Node to 128 MiB. The native backing uses the same finite 1 GiB
+`MAX_NATIVE_BACKING_BYTES` as POSIX, defined in `src/codex/cli-installation-limits.ts`.
+The native reader bounds aggregate requests to that backing plus 128 MiB Node
+and twelve 1 MiB text requests; hash-only bytes are never buffered whole.
+Only the opt-in content observation streams the entrypoint, npm CLI, Node and native bytes. The
+plan path sets it, so the plan-bound `installContentDigest` is preserved; a bare check holds the
+same files — Node and native included — open and identity-checked metadata-only, with zero content
+bytes read and a null `installContentDigest`.
+
+PATH-only or separate-prefix Node selection, autostart wrappers, global/vendor fallback,
+app/Store/MSIX bundles and version-manager ownership remain unverified and unmanaged.
+The explicit `attest` report stays observation-only. Only the production plan predicate
+creates private plan evidence; copying a public report cannot enable Windows planning.
+This observes linkage and content, not publisher authenticity or a whole-tree guarantee.
+Metadata queries use the observed Node/npm paths under freshly matching held handles,
+the existing isolated npm configuration/cache, and the pinned registry. No installer runs.
+A completed Windows read-only plan has a deterministic ID and `applicable: false`,
+`refusal: windows_apply_disabled`; active/unknown sessions still refuse earlier.
+The independent Windows apply entrypoint remains refused before inspection or lease creation.
 
 ## Explicit POSIX apply
 
