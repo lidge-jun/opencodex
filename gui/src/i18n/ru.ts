@@ -2225,7 +2225,7 @@ export const ru: Record<TKey, string> = {
   "integrations.hermes.profilesHint": "У каждого профиля Hermes свой config.yaml. Выберите профиль, чтобы подключить его; остальные не изменятся.",
   "integrations.hermes.defaultProfile": "Профиль по умолчанию",
   "integrations.hermes.select": "Управление: {name}",
-  "integrations.hermes.loadError": "Не удалось загрузить профили Hermes. Показан только профиль по умолчанию.",
+  "integrations.hermes.loadError": "Не удалось загрузить профили Hermes. Повторите попытку, чтобы проверить их состояние.",
   "integrations.hermes.profileTitle": "Профиль Hermes: {name}",
   "integrations.codex.title": "Codex CLI",
   "integrations.codex.body": "Подключением Codex управляет прокси-сервис. При запуске opencodex оно применяется, а при остановке сервиса восстанавливается нативная маршрутизация.",

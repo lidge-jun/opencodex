@@ -2134,7 +2134,7 @@ export const ja: Record<TKey, string> = {
   "integrations.hermes.profilesHint": "Hermesのプロファイルはそれぞれ独自のconfig.yamlを持ちます。接続するプロファイルを選んでください。他のプロファイルは変更されません。",
   "integrations.hermes.defaultProfile": "デフォルトプロファイル",
   "integrations.hermes.select": "{name}を管理",
-  "integrations.hermes.loadError": "Hermesのプロファイルを読み込めませんでした。デフォルトプロファイルのみ表示しています。",
+  "integrations.hermes.loadError": "Hermesのプロファイルを読み込めませんでした。再試行して状態を確認してください。",
   "integrations.hermes.profileTitle": "Hermesプロファイル: {name}",
   "integrations.codex.title": "Codex CLI",
   "integrations.codex.body": "Codex の接続はプロキシサービスが管理します。opencodex を起動すると適用され、サービスを停止するとネイティブのルーティングに戻ります。",

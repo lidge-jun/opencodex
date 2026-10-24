@@ -2267,7 +2267,7 @@ export const en = {
   "integrations.hermes.profilesHint": "Each Hermes profile keeps its own config.yaml. Choose a profile to connect it; the others stay unchanged.",
   "integrations.hermes.defaultProfile": "Default profile",
   "integrations.hermes.select": "Manage {name}",
-  "integrations.hermes.loadError": "Could not load Hermes profiles. Only the default profile is shown.",
+  "integrations.hermes.loadError": "Could not load Hermes profiles. Retry to check their state.",
   "integrations.hermes.profileTitle": "Hermes profile: {name}",
   "integrations.codex.title": "Codex CLI",
   "integrations.codex.body": "Codex wiring is owned by the proxy service. Starting opencodex applies it; stopping the service restores native routing.",

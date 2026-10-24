@@ -3172,7 +3172,7 @@ export const zhTW: Record<TKey, string> = {
   "integrations.hermes.profilesHint": "每個 Hermes 設定檔都有自己的 config.yaml。選擇要連接的設定檔；其他設定檔保持不變。",
   "integrations.hermes.defaultProfile": "預設設定檔",
   "integrations.hermes.select": "管理 {name}",
-  "integrations.hermes.loadError": "無法載入 Hermes 設定檔。僅顯示預設設定檔。",
+  "integrations.hermes.loadError": "無法載入 Hermes 設定檔。請重試以查看狀態。",
   "integrations.hermes.profileTitle": "Hermes 設定檔：{name}",
   "integrations.codex.title": "Codex CLI",
   "integrations.codex.body": "Codex 連線由代理服務管理。啟動 opencodex 時套用；停止服務時還原原生路由。",

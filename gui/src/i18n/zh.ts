@@ -1698,7 +1698,7 @@ export const zh: Record<TKey, string> = {
   "integrations.hermes.profilesHint": "每个 Hermes 配置文件都有自己的 config.yaml。选择要连接的配置文件；其他配置文件保持不变。",
   "integrations.hermes.defaultProfile": "默认配置文件",
   "integrations.hermes.select": "管理 {name}",
-  "integrations.hermes.loadError": "无法加载 Hermes 配置文件。仅显示默认配置文件。",
+  "integrations.hermes.loadError": "无法加载 Hermes 配置文件。请重试以查看状态。",
   "integrations.hermes.profileTitle": "Hermes 配置文件：{name}",
   "integrations.codex.title": "Codex CLI",
   "integrations.codex.body": "Codex 连接由代理服务管理。启动 opencodex 时应用该连接；停止服务时恢复原生路由。",

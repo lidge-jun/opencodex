@@ -57,7 +57,14 @@ export default function HermesProfilesPage({ apiBase, active = true }: { apiBase
           </div>
         </>
       )}
-      {resource.state.showError && <Notice tone="err">{t("integrations.hermes.loadError")}</Notice>}
+      {resource.state.showError && (
+        <Notice tone="err">
+          <span>{t("integrations.hermes.loadError")}</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => void resource.refresh()} disabled={resource.state.refreshing}>
+            {t("common.retry")}
+          </button>
+        </Notice>
+      )}
       <FileIntegrationPage
         apiBase={apiBase}
         client="hermes"

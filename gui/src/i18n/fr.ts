@@ -2239,7 +2239,7 @@ export const fr: Record<TKey, string> = {
   "integrations.hermes.profilesHint": "Chaque profil Hermes a son propre config.yaml. Choisissez un profil pour le connecter ; les autres restent inchangés.",
   "integrations.hermes.defaultProfile": "Profil par défaut",
   "integrations.hermes.select": "Gérer {name}",
-  "integrations.hermes.loadError": "Impossible de charger les profils Hermes. Seul le profil par défaut est affiché.",
+  "integrations.hermes.loadError": "Impossible de charger les profils Hermes. Réessayez pour vérifier leur état.",
   "integrations.hermes.profileTitle": "Profil Hermes : {name}",
   "integrations.codex.title": "Codex CLI",
   "integrations.codex.body": "Le câblage de Codex est géré par le service proxy. Le démarrage d’opencodex l’applique ; l’arrêt du service rétablit le routage natif.",

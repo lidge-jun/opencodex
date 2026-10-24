@@ -2252,7 +2252,7 @@ export const tr: Record<TKey, string> = {
   "integrations.hermes.profilesHint": "Her Hermes profilinin kendi config.yaml dosyası vardır. Bağlamak için bir profil seçin; diğerleri değişmez.",
   "integrations.hermes.defaultProfile": "Varsayılan profil",
   "integrations.hermes.select": "{name} profilini yönet",
-  "integrations.hermes.loadError": "Hermes profilleri yüklenemedi. Yalnızca varsayılan profil gösteriliyor.",
+  "integrations.hermes.loadError": "Hermes profilleri yüklenemedi. Durumlarını kontrol etmek için yeniden deneyin.",
   "integrations.hermes.profileTitle": "Hermes profili: {name}",
   "integrations.codex.title": "Codex CLI",
   "integrations.codex.body": "Codex bağlantısı proxy servisine aittir.",

@@ -1725,7 +1725,7 @@ export const ko: Record<TKey, string> = {
   "integrations.hermes.profilesHint": "Hermes 프로필마다 config.yaml이 따로 있습니다. 연결할 프로필을 고르세요. 다른 프로필은 바뀌지 않습니다.",
   "integrations.hermes.defaultProfile": "기본 프로필",
   "integrations.hermes.select": "{name} 관리",
-  "integrations.hermes.loadError": "Hermes 프로필을 불러오지 못했습니다. 기본 프로필만 표시합니다.",
+  "integrations.hermes.loadError": "Hermes 프로필을 불러오지 못했습니다. 다시 시도해 상태를 확인하세요.",
   "integrations.hermes.profileTitle": "Hermes 프로필: {name}",
   "integrations.codex.title": "Codex CLI",
   "integrations.codex.body": "Codex 연결은 프록시 서비스가 관리합니다. opencodex를 시작하면 적용되고 서비스를 중지하면 기본 라우팅으로 복원됩니다.",

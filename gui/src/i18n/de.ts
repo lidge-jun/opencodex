@@ -1681,7 +1681,7 @@ export const de: Record<TKey, string> = {
   "integrations.hermes.profilesHint": "Jedes Hermes-Profil hat seine eigene config.yaml. Wähle ein Profil, um es zu verbinden; die anderen bleiben unverändert.",
   "integrations.hermes.defaultProfile": "Standardprofil",
   "integrations.hermes.select": "{name} verwalten",
-  "integrations.hermes.loadError": "Hermes-Profile konnten nicht geladen werden. Nur das Standardprofil wird angezeigt.",
+  "integrations.hermes.loadError": "Hermes-Profile konnten nicht geladen werden. Versuche es erneut, um ihren Status zu prüfen.",
   "integrations.hermes.profileTitle": "Hermes-Profil: {name}",
   "integrations.codex.title": "Codex CLI",
   "integrations.codex.body": "Die Codex-Anbindung wird vom Proxy-Dienst verwaltet. Beim Start von opencodex wird sie angewendet; beim Stoppen des Dienstes wird das native Routing wiederhergestellt.",
