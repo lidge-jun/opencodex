@@ -3,14 +3,39 @@ import { Agent, createServer, request } from "node:https";
 import { connect, constants, type ClientHttp2Session, type ClientHttp2Stream } from "node:http2";
 import type { ClientRequest, IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { createServer as createTlsServer } from "node:tls";
 import { createLocalInterceptCa, issueLocalInterceptLeaf } from "../../src/claude/intercept/local-ca";
 import { startPickerListener, type PickerListenerOptions } from "../../src/claude/intercept/picker-listener";
 
-async function fixture(handler: (req: IncomingMessage, res: ServerResponse) => void,
+async function fixture(handler: ((req: IncomingMessage, res: ServerResponse) => void) | "early-fin",
   options: Partial<PickerListenerOptions> = {}) {
   const ca = createLocalInterceptCa();
   const leaf = issueLocalInterceptLeaf(ca, ["claude.ai"]);
-  const upstream = createServer({ cert: leaf.certPem, key: leaf.keyPem }, handler);
+  const earlyReplies: Array<{ requestComplete: boolean; flushed: boolean }> = [];
+  // A wire-level origin sends the reply and FIN while continuing to drain input. Bun's HTTP
+  // server also tears down unfinished requests; overriding destroySoon alone does not prevent
+  // that reset racing ahead of the reply on Windows with a buffered upload.
+  const upstream = handler === "early-fin" ? createTlsServer({ cert: leaf.certPem, key: leaf.keyPem, allowHalfOpen: true }, socket => {
+    socket.on("error", () => socket.destroy());
+    let headers = "";
+    let replied = false;
+    socket.on("data", chunk => {
+      if (replied) return;
+      headers += chunk.toString("latin1");
+      const end = headers.indexOf("\r\n\r\n");
+      if (end < 0) return;
+      replied = true;
+      const early = headers.startsWith("POST /early ");
+      const body = early ? "early" : "ordinary";
+      const length = /\r\ncontent-length: (\d+)\r\n/i.exec(headers.slice(0, end + 2));
+      const requestBody = headers.slice(end + 4);
+      const observation = { requestComplete: length ? requestBody.length >= Number(length[1])
+        : requestBody.endsWith("0\r\n\r\n"), flushed: false };
+      if (early) earlyReplies.push(observation);
+      socket.once("finish", () => { observation.flushed = true; });
+      socket.end(`HTTP/1.1 ${early ? "413 Payload Too Large" : "200 OK"}\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`);
+    });
+  }) : createServer({ cert: leaf.certPem, key: leaf.keyPem }, handler);
   const sockets = new Set<Duplex>();
   for (const event of ["connection", "secureConnection"] as const) upstream.on(event, socket => {
     sockets.add(socket); socket.once("close", () => sockets.delete(socket));
@@ -34,7 +59,7 @@ async function fixture(handler: (req: IncomingMessage, res: ServerResponse) => v
       rejectUnauthorized: true, agent: h1Agent, path, method, headers: { Host: "claude.ai", ...headers } });
     clients.push(req); return req;
   };
-  return { logs, h2, h1, relay,
+  return { logs, h2, h1, relay, earlyReplies,
     async close() {
       const closed = clients.map(client => client.destroyed ? Promise.resolve() : observeClose(client));
       await relay.close();
@@ -353,7 +378,7 @@ for (const protocol of ["h1", "h2"] as const) {
   // "buffered" answers early while 4 MiB of an advertised 32 MiB body is still queued.
   for (const input of protocol === "h1" ? ["small", "buffered"] as const : ["small"] as const)
   bounded(`${protocol} early upstream response closes ${input === "buffered" ? "a buffered" : "an"} unfinished upload without losing the reply`, async wait => {
-    const f = await fixture((req, res) => {
+    const f = await fixture(input === "buffered" ? "early-fin" : (req, res) => {
       // Answer like a real origin that replies early: keep reading the body and close with a FIN.
       // Bun's own server would close this unfinished request with destroySoon(), a reset that
       // Windows delivers before the reply bytes, so the relay could never read what it should relay.
@@ -373,6 +398,7 @@ for (const protocol of ["h1", "h2"] as const) {
       upload.write(input === "buffered" ? Buffer.alloc(4 * 1024 * 1024, 0x61) : "x");
       expect(await wait(result)).toEqual({ status: 413, text: "early" });
       await wait(closed);
+      if (input === "buffered") expect(f.earlyReplies).toEqual([{ requestComplete: false, flushed: true }]);
       if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_NO_ERROR);
       expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
     } finally { await wait(f.close()); }
