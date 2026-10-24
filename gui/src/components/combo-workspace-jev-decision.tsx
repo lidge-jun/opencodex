@@ -309,7 +309,14 @@ export function ComboJevDecisionSection({
             disabled={disabled}
             aria-invalid={pinInvalid || undefined}
             aria-describedby={pinInvalid ? `${idPrefix}-session-pin-hint ${idPrefix}-session-pin-error` : `${idPrefix}-session-pin-hint`}
-            onChange={(e) => onChange({ sessionPin: { ttlMs: Number(e.target.value) } })}
+            onChange={(e) => {
+              if (e.target.value === "") {
+                onChange({ sessionPin: { ttlMs: 0 } });
+                return;
+              }
+              const ttlMs = Number(e.target.value);
+              onChange({ sessionPin: { ttlMs: Number.isFinite(ttlMs) ? ttlMs : 0 } });
+            }}
           />
           {pinInvalid && <p id={`${idPrefix}-session-pin-error`} className="notice-err text-label" role="alert">
             {t("cws.err.invalidSessionPin", { min: JEV_SESSION_PIN_TTL_MIN_MS, max: JEV_SESSION_PIN_TTL_MAX_MS })}
