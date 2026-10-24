@@ -49,9 +49,14 @@ function peArch(bytes: Uint8Array): "x64" | "arm64" | null {
 
 /**
  * Read-only supported subset: a proof-captured absolute standard npm cmd-shim
- * override, its global-prefix package, prefix-local Node/npm, and the prefix-local
- * optional backing. PATH-only Node selection remains refused until the snapshot
- * proves the target cmd-shim's cwd and search policy.
+ * override, its global-prefix package, a held-bound Node/npm toolchain, and the
+ * in-prefix optional backing. When the prefix has no node.exe, the toolchain is
+ * the npm pair the captured PATH resolves — the updater's own metadata vehicle,
+ * never a claim about which interpreter a later codex.cmd invocation resolves:
+ * the shim's bare `node` falls through to the ambient invocation working
+ * directory, which no launcher snapshot can prove. A separate toolchain
+ * therefore also requires the launcher arch anchor, keeping the backing lane
+ * tied to the selection instead of to an arbitrary PATH hit.
  */
 export async function inspectWindowsCodexCliPlanInstall(
   deps: CodexCliInstallProvenanceDeps, fallback: CodexCliInstallReport, excluded: (path: string) => boolean,
@@ -79,7 +84,11 @@ export async function inspectWindowsCodexCliPlanInstall(
   const npmCli = derivation.input.npmCli;
   const npmRoot = win32.dirname(win32.dirname(npmCli));
   const pathNode = !sameWindowsPath(node, localNodePath);
-  if (pathNode) return fallback;
+  // A prefix-local node.exe is provably the shim's own interpreter; a PATH-resolved
+  // separate toolchain is bound as the updater's metadata vehicle only. Without the
+  // launcher arch the toolchain's arch cannot be tied to the selection at all, so a
+  // separate toolchain stays refused rather than claim an unanchored backing lane.
+  if (pathNode && !deps.arch) return fallback;
   const root = win32.join(prefix, "node_modules", "@openai", "codex");
   const manifest = win32.join(root, "package.json");
   const npmManifest = win32.join(npmRoot, "package.json");
@@ -150,7 +159,7 @@ export async function inspectWindowsCodexCliPlanInstall(
     const backing = json(files.get(backingManifest)!);
     if (!backing || "exports" in backing || ![pkg, "@openai/codex"].includes(String(backing.name))
       || ![main.version, `${main.version}-win32-${arch}`].includes(String(backing.version))) return fallback;
-    const content = observe ? hash(JSON.stringify(["windows-npm-read-only-plan-v2", arch, prefix, candidate, node, npmCli,
+    const content = observe ? hash(JSON.stringify(["windows-npm-read-only-plan-v3", arch, prefix, candidate, node, npmCli,
       ...final.files.map(file => [file.path, file.identity, file.digest])])) : null;
     const report: CodexCliInstallReport = Object.freeze({ ...fallback, managed: true, selectionAttested: true,
       provenance: "npm-global", reason: "managed_npm_global", packageVersion: main.version,

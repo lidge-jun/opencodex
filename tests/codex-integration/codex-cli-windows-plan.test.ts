@@ -184,13 +184,15 @@ native("a selected override changing during observation refuses the original pre
 });
 
 native("npm toolchain drift after inspection refuses metadata without executing the replacement", async () => {
-  const f = fixture(); let queries = 0;
-  const plan = await createCodexCliUpdatePlan({ inspectionDeps: f.deps, inspect: async deps => {
-    const report = await inspectCodexCliInstall(deps); expect(report.managed).toBe(true);
-    writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"), "throw new Error('replacement');");
-    return report;
-  }, resolveTarget: () => { queries++; throw new Error("must not query changed toolchain"); } });
-  expect(queries).toBe(0); expect(plan.refusal).toBe("target_unresolved");
+  for (const f of [fixture(), fixture(true)]) {
+    let queries = 0;
+    const plan = await createCodexCliUpdatePlan({ inspectionDeps: f.deps, inspect: async deps => {
+      const report = await inspectCodexCliInstall(deps); expect(report.managed).toBe(true);
+      writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"), "throw new Error('replacement');");
+      return report;
+    }, resolveTarget: () => { queries++; throw new Error("must not query changed toolchain"); } });
+    expect(queries).toBe(0); expect(plan.refusal).toBe("target_unresolved");
+  }
 });
 
 native("the observed toolchain denies replacement until an asynchronous resolver settles", async () => {
@@ -228,18 +230,54 @@ native("the observed toolchain denies replacement until an asynchronous resolver
   expect(readFileSync(join(moved, "node_modules", "npm", "bin", "npm-cli.js"), "utf8")).toBe("replacement");
 });
 
-native("a separate PATH Node is refused without proof of the target cmd-shim's search result", async () => {
+native("a separate PATH Node/npm toolchain binds for read-only planning under the launcher arch anchor", async () => {
   const f = fixture(true);
   expect((await inspectCodexCliInstall({ ...f.deps, selectionAttested: false })).managed).toBe(false);
   const report = await inspectCodexCliInstall(f.deps);
+  expect(report).toMatchObject({ managed: true, selectionAttested: true, provenance: "npm-global",
+    reason: "managed_npm_global", packageVersion: "1.2.3" });
+  expect(report.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
+  expect((await inspectCodexCliInstall(f.deps)).installContentDigest).toBe(report.installContentDigest);
+  expect(JSON.stringify(report)).not.toContain(f.root);
+
+  const deps = { inspectionDeps: f.deps,
+    resolveTarget: () => ({ kind: "resolved" as const, version: "1.2.4", integrity: "sha512-" + Buffer.alloc(64, 1).toString("base64") }),
+    scanProcesses: () => ({ kind: "observed" as const, processes: [] }) };
+  const first = await createCodexCliUpdatePlan(deps);
+  expect(first).toMatchObject({ managed: true, applicable: false, refusal: "windows_apply_disabled",
+    installedVersion: "1.2.3", targetVersion: "1.2.4" });
+  expect(first.planId).toMatch(/^[a-f0-9]{32}$/);
+  expect((await createCodexCliUpdatePlan(deps)).planId).toBe(first.planId);
+  expect(JSON.stringify(first)).not.toContain(f.root);
+});
+
+native("a separate PATH Node without the launcher arch anchor stays refused", async () => {
+  const f = fixture(true);
+  const report = await inspectCodexCliInstall({ ...f.deps, arch: undefined });
   expect(report).toMatchObject({ managed: false, installContentDigest: null });
   let targetQueries = 0;
-  const plan = await createCodexCliUpdatePlan({ inspectionDeps: f.deps,
-    resolveTarget: () => { targetQueries++; throw new Error("unproven Node must not query registry"); } });
+  const plan = await createCodexCliUpdatePlan({ inspectionDeps: { ...f.deps, arch: undefined },
+    resolveTarget: () => { targetQueries++; throw new Error("unanchored Node must not query registry"); } });
   expect(targetQueries).toBe(0);
   expect(plan.managed).toBe(false);
   expect(plan.refusal).toBe("windows_inspection_deferred");
   expect(JSON.stringify(plan)).not.toContain(f.root);
+});
+
+native("a separate PATH Node whose PE arch disagrees with the launcher anchor stays refused", async () => {
+  const f = fixture(true);
+  const report = await inspectCodexCliInstall({ ...f.deps, arch: "arm64" as const });
+  expect(report).toMatchObject({ managed: false, installContentDigest: null });
+});
+
+native("a separate PATH Node without its adjacent npm-cli.js stays deferred", async () => {
+  const f = fixture(true);
+  removeTreeWithRetry(f.npmRoot);
+  const report = await inspectCodexCliInstall(f.deps);
+  expect(report).toMatchObject({ managed: false, installContentDigest: null });
+  const plan = await createCodexCliUpdatePlan({ inspectionDeps: f.deps });
+  expect(plan.managed).toBe(false);
+  expect(plan.refusal).toBe("windows_inspection_deferred");
 });
 
 native("synthetic CMD lookup selects a current-directory node.cmd ahead of PATH", () => {
@@ -294,26 +332,29 @@ native("actual CLI handler reaches production inspector and plan from the proof-
 });
 
 native("published Node CLI uses the production inspector and observed toolchain for read-only metadata", () => {
-  const f = fixture(); const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
-  const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
-  const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
-  const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
-    dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
-  const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
-    tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
-  // Controlled registry protocol fixture; no real npm installation or network request.
-  writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
-    `const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
-  const run = spawnSync(node, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
-    cwd: repoRoot(), encoding: "utf8", windowsHide: true, timeout: 45_000,
-    env: { ...process.env, CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
-      OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
-  });
-  expect(run.error).toBeUndefined(); expect(run.status).toBe(0);
-  const plan = JSON.parse(run.stdout);
-  expect(plan.managed).toBe(true); expect(plan.targetVersion).toBe("1.2.4");
-  expect(plan.targetIntegrity).toBe(integrity);
-  expect(plan.applicable).toBe(false);
-  expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
-  expect(JSON.stringify(plan)).not.toContain(f.root);
+  const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
+  for (const f of [fixture(), fixture(true)]) {
+    const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
+    const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
+    const main = { name: "@openai/codex", version: "1.2.4", optionalDependencies: { "@openai/codex-win32-x64": "1.2.4" },
+      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
+    const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
+      tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
+    // Controlled registry protocol fixture; no real npm installation or network request.
+    writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
+      `const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+    const run = spawnSync(node, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "plan", "--json"], {
+      cwd: repoRoot(), encoding: "utf8", windowsHide: true, timeout: 45_000,
+      env: { ...process.env, PATH: f.toolchainPrefix + ";" + process.env.PATH,
+        CODEX_CLI_PATH: f.deps.env.CODEX_CLI_PATH, OPENCODEX_HOME: f.deps.configDir,
+        OPENCODEX_BUN_PATH: process.execPath, OCX_NO_DESKTOP_HANDOFF: "1" },
+    });
+    expect(run.error).toBeUndefined(); expect(run.status).toBe(0);
+    const plan = JSON.parse(run.stdout);
+    expect(plan.managed).toBe(true); expect(plan.targetVersion).toBe("1.2.4");
+    expect(plan.targetIntegrity).toBe(integrity);
+    expect(plan.applicable).toBe(false);
+    expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+    expect(JSON.stringify(plan)).not.toContain(f.root);
+  }
 }, 60_000);

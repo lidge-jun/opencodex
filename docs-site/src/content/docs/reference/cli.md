@@ -153,8 +153,12 @@ The JSON report exposes `candidateAvailable`, `candidateVersion`, `candidateSour
 Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
 `candidate_unavailable` on POSIX or `windows_inspection_deferred` on Windows. Windows x64 also supports
-a proof-captured absolute standard npm `codex.cmd` with prefix-local Node/npm and a verified in-prefix
-platform backing. It uses reparse-refusing held handles; other Windows layouts remain deferred or unmanaged.
+a proof-captured absolute standard npm `codex.cmd` with a held-bound Node/npm toolchain — prefix-local
+when present, otherwise the captured-PATH pair anchored to the launcher architecture — and a verified
+in-prefix platform backing. It uses reparse-refusing held handles; other Windows layouts remain deferred
+or unmanaged. A `managed` Windows result classifies the observed installation layout only: the bound Node/npm
+is the updater's read-only metadata toolchain, never a claim about which interpreter a later `codex.cmd`
+invocation resolves, and planning stays read-only with apply disabled.
 The command does not install or repair software, execute
 Codex or npm, control a running process, or write configuration/cache state.
 
@@ -164,7 +168,7 @@ exact version and SHA-512 integrity, and refuses active sessions or incomplete p
 Registry queries use isolated temporary npm configuration, cache and logs with best-effort cleanup.
 No software is installed and no process is signalled. A supported Windows installation can produce a
 deterministic read-only plan with `applicable: false` and `refusal: windows_apply_disabled`.
-PATH-only selection, separate-prefix Node and OpenCodex autostart wrappers remain deferred.
+PATH-only selection and OpenCodex autostart wrappers remain deferred.
 See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
 
 For a reviewed POSIX non-shim npm-global plan, `ocx system codex-cli-update apply --plan-id <id> --yes`

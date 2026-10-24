@@ -1164,8 +1164,12 @@ can then establish `managed: true` when it proves ownership and, if a candidate 
 and `selectionAttested`. Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
 `candidate_unavailable` on POSIX. On Windows x64, a proof-captured absolute standard npm `codex.cmd`
-can be managed when held local handles bind its package, prefix-local Node/npm and the first in-prefix
-platform backing. Other Windows layouts remain deferred or unmanaged. Windows never consults persisted state, so a run
+can be managed when held local handles bind its package, a held-bound Node/npm toolchain — prefix-local
+when present, otherwise the captured-PATH pair anchored to the launcher architecture — and the first
+in-prefix platform backing. Other Windows layouts remain deferred or unmanaged. A `managed` Windows result classifies
+the observed installation layout only: the bound Node/npm is the updater's read-only metadata toolchain, never a claim
+about which interpreter a later `codex.cmd` invocation resolves, and planning stays read-only with apply disabled.
+Windows never consults persisted state, so a run
 with no captured environment candidate reports `windows_inspection_deferred` rather than `candidate_unavailable`:
 the command cannot observe whether a Codex CLI is installed, so it reports the deferral instead of asserting
 that no candidate exists. The command does not execute Codex or a package manager, repair a shim,
@@ -1183,8 +1187,9 @@ ocx system codex-cli-update plan --channel latest --json
 
 Run through the published Node launcher with the intended `CODEX_CLI_PATH` in the shell environment.
 The plan requires an attested npm-global installation and a linked package manifest version.
-Windows supports only an explicit absolute standard npm `codex.cmd` with prefix-local Node/npm;
-PATH-only selection, separate-prefix Node, OpenCodex autostart wrappers and global/vendor fallback stay deferred.
+Windows supports only an explicit absolute standard npm `codex.cmd` with a held-bound Node/npm toolchain —
+prefix-local when present, otherwise the captured-PATH pair anchored to the launcher architecture;
+PATH-only selection, OpenCodex autostart wrappers and global/vendor fallback stay deferred.
 It queries the official npm registry for an exact version, SHA-512 integrity and same-origin tarball,
 using the launcher's captured PATH and isolated temporary npm configuration, cache and logs. Proxy
 settings and `NODE_EXTRA_CA_CERTS` remain supported; cleanup is best-effort. No Codex command runs.
