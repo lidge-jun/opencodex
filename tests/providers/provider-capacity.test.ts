@@ -44,6 +44,19 @@ describe("configured-weight Codex pool capacity", () => {
     expect(aggregateCodexPoolCapacity(rows(9), NOW).quota?.weeklyPercent).toBeCloseTo(39.33333333, 8);
   });
 
+  test("Business Premium seats contribute five weekly units without inventing a burst window (#7440)", () => {
+    const result = aggregateCodexPoolCapacity([
+      account("self_serve_business_prolite", 100),
+      account(" SELF_SERVE_BUSINESS_PROLITE ", 0),
+      account("team", 100),
+    ], NOW);
+    expect(result.aggregation).toMatchObject({ includedAccounts: 3, unknownPlanAccounts: 0 });
+    expect(result.aggregation?.weekly).toMatchObject({ totalWeight: 11, consumedWeight: 6, remainingWeight: 5 });
+    expect(result.quota?.weeklyPercent).toBeCloseTo(600 / 11, 8);
+    expect(result.quota?.fiveHourPercent).toBeUndefined();
+    expect(result.aggregation?.fiveHour).toBeUndefined();
+  });
+
   test("legacy Team and Business plans share configured weight", () => {
     const result = aggregateCodexPoolCapacity([
       account("team", 20, { isMain: true, active: true }),
@@ -100,7 +113,7 @@ describe("configured-weight Codex pool capacity", () => {
       account("business", 30, { needsReauth: true }),
     ], NOW);
     // #3155: an unrecognized plan string no longer drops the account. The upstream plan
-    // field is unrestricted - the bundled snapshot alone carries 21 names against the five
+    // field is unrestricted - the bundled snapshot alone carries 21 names against the small set
     // calibrated here - so "future-plan" is weighted at the baseline seat instead of being
     // silently omitted from a coverage figure the operator is reading as complete.
     expect(result.aggregation).toMatchObject({

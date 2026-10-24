@@ -44,7 +44,7 @@ import {
   type IntegrationClientId,
 } from "./registry";
 import { declaredIntegrationTarget } from "./target";
-import { buildIntegrationContribution, exportContextOf } from "./state";
+import { buildIntegrationContribution, exportContextOf, qoderLegacyCatalogConflict } from "./state";
 import type { IntegrationState } from "./state";
 import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
@@ -317,6 +317,10 @@ function applyOrRefreshIntegration(
           : `${clientId} now reads its providers from ${readsFrom}, whose schema opencodex does not recognise, so writing ${configPath} would change nothing it loads. ${fallback}`);
   }
   if (classified.state === "conflict") {
+    if (qoderLegacyCatalogConflict(parsed, record, contribution)) {
+      return refuse(clientId, "conflict", "conflict",
+        `${configPath} lists an opencodex model in modelConfigs.customModels that opencodex did not write; Qoder rejects the opencodex provider while that row exists, so remove or rename it first`);
+    }
     if (conflictPolicy === "refuse") {
       return refuse(clientId, "conflict", "conflict",
         classified.reason === "foreign-edit"
@@ -545,7 +549,7 @@ export function refreshIntegration(input: IntegrationWriteInput): WriteOutcome {
 export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
   const pre = preflight(input, "disable");
   if (pre.failed) return pre.failed;
-  const { store, io, clientId, spec, target, configPath, before, parsed, record, classified } = pre;
+  const { store, io, clientId, spec, target, configPath, before, parsed, record, classified, contribution } = pre;
 
   if (classified.state === "absent") {
     return { ok: true, changed: false, state: "absent", clientId, message: "not applied" };
@@ -554,7 +558,9 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
     return refuse(clientId, "conflict", "conflict",
       classified.reason === "foreign-edit"
         ? `${configPath} changed after opencodex wrote it; disabling would discard that edit`
-        : `${configPath} contains an opencodex block we did not write`);
+        : qoderLegacyCatalogConflict(parsed, record, contribution)
+          ? `${configPath} lists an opencodex model in modelConfigs.customModels that opencodex did not write; remove or rename that row, then disable again`
+          : `${configPath} contains an opencodex block we did not write`);
   }
   /*
    * `unsafe` reaches here the same way it reaches apply, and the code below

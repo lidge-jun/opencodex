@@ -164,6 +164,15 @@ et la colonne plan/label recouvre le plan, l'e-mail masqué, l'étiquette et la 
 
 ### `ocx account list [provider] [--json] [--all]`
 
+Les comptes ChatGPT enregistrés dans le pool restent consultables sur les hôtes sans répertoire
+Codex natif, y compris dans le tableau de bord et lors de l'actualisation des comptes. Cette consultation
+ne crée pas de répertoire Codex et ne déconnecte pas le compte principal natif. Désactiver l'intégration
+du client Codex ne désactive pas l'observation du quota d'une connexion native existante. Un chemin
+`CODEX_HOME` explicite invalide continue de produire une erreur de configuration. Un stockage
+`OPENCODEX_HOME` non sûr produit une erreur même si le répertoire Codex natif est absent. La résolution
+du chemin Codex par défaut renvoie également une erreur s'il désigne un fichier, un lien symbolique
+dont la cible n'existe pas, ou si son répertoire parent ne peut pas être traversé.
+
 Sans fournisseur, répertorie le groupe de comptes Codex, les comptes OAuth et les groupes de clés API configurés. Les fournisseurs vides
 sont ignorés à moins que `--all` soit présent. Avec un fournisseur, répertorie uniquement cette famille d’informations d’identification.
 La sortie destinée aux utilisateurs utilise `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` ; une ligne Codex sélectionnée manuellement porte la mention
