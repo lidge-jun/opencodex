@@ -99,6 +99,31 @@ A completed Windows read-only plan has a deterministic ID and `applicable: false
 `refusal: windows_apply_disabled`; active/unknown sessions still refuse earlier.
 The independent Windows apply entrypoint remains refused before inspection or lease creation.
 
+## Independent Windows archive layout
+
+The independent `src/codex/cli-update-windows-layout.ts` verifies Windows x64 archives and
+returns only prefix-relative expected files, sizes and content digests; `applicable` and
+`mutationAuthority` remain false. No plan, selection, installer, lease or apply consumer uses it.
+The main root is `node_modules/@openai/codex`; the explicit sibling backing is
+`node_modules/@openai/codex-win32-x64`, with `vendor/x86_64-pc-windows-msvc/bin/codex.exe`.
+Exact direct-version and npm-alias references retain the archive verifier's metadata/linkage rules.
+An opt-in Windows archive mode uses `src/codex/cli-update-windows-paths.ts` to reject ASCII case
+and file/directory collisions, ADS, device names, trailing dots/spaces and unknown non-ASCII paths,
+including directory records. Embedded node_modules files cannot shadow the modeled backing.
+The full native member still streams into its digest; at most 4 KiB from that same stream is retained
+for the AMD64 PE32+ header check. This does not prove a complete valid image, signature or execution.
+Native members remain unbuffered and Windows does not use POSIX executable-bit admission.
+The exact codex/codex.cmd/codex.ps1 size/hash expectations model npm cmd-shim 8.0.0's node-shebang
+output; tests/fixtures/codex-windows-npm-shims.json records the official npm tarball URL/integrity,
+raw archive source-file hashes and actual exported-function generation with intercepted filesystem
+calls. All three generated strings matched the retained bytes. No npm installation or lifecycle
+script ran; the offline fixture test checks byte consistency, not registry provenance afresh.
+Other shim grammars remain unsupported. All archive auxiliary files enter the expected set and digest, and
+readback comparison requires the complete set. A future consumer must separately prove live held
+file identities, package lookup, selected Node/shim and write authority; a matching DTO grants none.
+Coverage: `tests/codex-integration/codex-cli-update-windows-layout.test.ts` uses only synthetic
+archives and captured shim bytes, with no npm installation or native executable invocation.
+
 ## Explicit POSIX apply
 
 `src/cli/codex-cli-update.ts` accepts `apply --plan-id <32 lowercase hex> --yes` with optional JSON output.

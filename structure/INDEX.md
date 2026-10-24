@@ -222,6 +222,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/cli-update-job.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-lease.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-plan.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-windows-layout.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-windows-paths.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/signed-in-identity.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |

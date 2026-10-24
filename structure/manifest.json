@@ -183,6 +183,8 @@
         "src/codex/cli-update-inspection-context.ts",
         "bin/ocx.mjs",
         "src/codex/cli-update-artifacts.ts",
+        "src/codex/cli-update-windows-layout.ts",
+        "src/codex/cli-update-windows-paths.ts",
         "src/codex/cli-update-files.ts",
         "src/codex/cli-update-lease.ts",
         "src/codex/app-server-processes.ts",
