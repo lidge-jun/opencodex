@@ -275,22 +275,6 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
       yield { type: "error", message: "Qoder adapter uses runTurn; the fetch/parseStream path is disabled." };
     },
     async runTurn(parsed, incoming, emit): Promise<void> {
-      if (resolveQoderProfile(provider.baseUrl)?.region === "cn") {
-        const hasImage = parsed.context.messages.some(message =>
-          Array.isArray(message.content) && message.content.some(part => part.type === "image"),
-        );
-        if (hasImage) {
-          emit({
-            type: "error",
-            message: "Qoder image input is not enabled because the CLI provider route has no verified multimodal contract.",
-            status: 400,
-            errorType: "invalid_request_error",
-            code: "unsupported_input_modality",
-            retryable: false,
-          });
-          return;
-        }
-      }
       let catalog: ReturnType<typeof buildCodingAgentToolCatalog>;
       try {
         catalog = buildCodingAgentToolCatalog(parsed, QODER_MCP_SERVER_NAME);

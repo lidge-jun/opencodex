@@ -735,7 +735,11 @@ export function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: 
   if (message.role === "user") {
     const text = typeof message.content === "string"
       ? message.content
-      : message.content.map(p => (p.type === "text" || p.type === "document" ? p.text : `[${p.type}]`)).join("\n");
+      : message.content.map(p => {
+        if (p.type === "text" || p.type === "document") return p.text;
+        if (p.type === "image" && !imagePart(p.imageUrl)) return "[image omitted: unsupported reference]";
+        return `[${p.type}]`;
+      }).join("\n");
     return `USER:\n${text}`;
   }
   if (message.role === "assistant") {
@@ -758,7 +762,11 @@ export function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: 
   if (message.role === "toolResult") {
     const text = typeof message.content === "string"
       ? message.content
-      : message.content.map(p => (p.type === "text" || p.type === "document" ? p.text : "[image]")).join("");
+      : message.content.map(p => {
+        if (p.type === "text" || p.type === "document") return p.text;
+        if (p.type === "image" && !imagePart(p.imageUrl)) return "[image omitted: unsupported reference]";
+        return "[image]";
+      }).join("");
     const status = message.isError ? " (error)" : "";
     return `TOOL RESULT (call_id: ${message.toolCallId})${status}:\n${text}`;
   }
@@ -788,6 +796,7 @@ export function buildInputLines(
         else if (part.type === "image") {
           const image = imagePart(part.imageUrl);
           if (image) content.push(image);
+          else content.push(textPart("[image omitted: unsupported reference]"));
         } else if (part.type === "document") {
           content.push(textPart(part.text));
         } else {

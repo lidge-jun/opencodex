@@ -605,25 +605,269 @@ describe("qoder adapter", () => {
     expect(isModelVisionSidecarConsumer(global, "unknown-live-id")).toBe(false);
   });
 
-  test("keeps residual Qoder CN image input rejected before spawn", async () => {
+  test("forwards Qoder CN raw image input through the shared coding-agent projection", async () => {
     let spawned = 0;
+    let stdin = "";
+    const child = fakeChild(['{"type":"result","subtype":"success","is_error":false}\n']);
+    child.stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        stdin += chunk.toString();
+        callback();
+      },
+    });
     const adapter = createQoderAdapter(provider({ baseUrl: "https://qoder.cn" }), {
       which: () => "/bin/qodercn",
       spawn: () => {
         spawned++;
-        return fakeChild([]);
+        return child;
       },
     });
     const request = parsed({ context: { messages: [{ role: "user", content: [{ type: "image", imageUrl: "data:image/png;base64,AA==" }], timestamp: 0 }] } });
     const events: AdapterEvent[] = [];
     await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
-    expect(spawned).toBe(0);
-    expect(events[0]).toMatchObject({
-      type: "error",
-      status: 400,
-      code: "unsupported_input_modality",
-      retryable: false,
+    expect(spawned).toBe(1);
+    const wire = JSON.parse(stdin.trim());
+    expect(wire.message.content).toContainEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "AA==" },
     });
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  test("forwards Qoder CN multiple images and preserves history ordering", async () => {
+    let spawned = 0;
+    let stdin = "";
+    const child = fakeChild(['{"type":"result","subtype":"success","is_error":false}\n']);
+    child.stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        stdin += chunk.toString();
+        callback();
+      },
+    });
+    const adapter = createQoderAdapter(provider({ baseUrl: "https://qoder.cn" }), {
+      which: () => "/bin/qodercn",
+      spawn: () => {
+        spawned++;
+        return child;
+      },
+    });
+    const request = parsed({
+      context: {
+        messages: [
+          { role: "user", content: [{ type: "image", imageUrl: "data:image/png;base64,HIST==" }], timestamp: 0 },
+          { role: "assistant", content: [{ type: "text", text: "I see the first image." }], timestamp: 1 },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Look at these two:" },
+              { type: "image", imageUrl: "data:image/jpeg;base64,CURR1==" },
+              { type: "image", imageUrl: "data:image/png;base64,CURR2==" },
+            ],
+            timestamp: 2,
+          },
+        ],
+      },
+    });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    expect(spawned).toBe(1);
+    const wire = JSON.parse(stdin.trim());
+    const images = wire.message.content.filter((part: { type: string }) => part.type === "image");
+    expect(images).toHaveLength(3);
+    expect(images[0]).toEqual({ type: "image", source: { type: "base64", media_type: "image/png", data: "HIST==" } });
+    expect(images[1]).toEqual({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "CURR1==" } });
+    expect(images[2]).toEqual({ type: "image", source: { type: "base64", media_type: "image/png", data: "CURR2==" } });
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  test("forwards Qoder CN toolResult images through shared projection", async () => {
+    let spawned = 0;
+    let stdin = "";
+    const child = fakeChild(['{"type":"result","subtype":"success","is_error":false}\n']);
+    child.stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        stdin += chunk.toString();
+        callback();
+      },
+    });
+    const adapter = createQoderAdapter(provider({ baseUrl: "https://qoder.cn" }), {
+      which: () => "/bin/qodercn",
+      spawn: () => {
+        spawned++;
+        return child;
+      },
+    });
+    const request = parsed({
+      context: {
+        messages: [
+          { role: "user", content: "take screenshot", timestamp: 0 },
+          { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "screenshot", arguments: {} }], timestamp: 1 },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            content: [
+              { type: "text", text: "captured screenshot:" },
+              { type: "image", imageUrl: "data:image/png;base64,TOOL_IMG==" },
+            ],
+            timestamp: 2,
+          },
+        ],
+      },
+    });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    expect(spawned).toBe(1);
+    const wire = JSON.parse(stdin.trim());
+    expect(wire.message.content).toContainEqual({
+      type: "image",
+      source: { type: "base64", media_type: "image/png", data: "TOOL_IMG==" },
+    });
+    const textPart = wire.message.content.find((part: { type: string }) => part.type === "text");
+    expect(textPart?.text).toContain("[image attached below]");
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  test("omits unsupported image reference schemes cleanly without crashing", async () => {
+    let spawned = 0;
+    let stdin = "";
+    const child = fakeChild(['{"type":"result","subtype":"success","is_error":false}\n']);
+    child.stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        stdin += chunk.toString();
+        callback();
+      },
+    });
+    const adapter = createQoderAdapter(provider({ baseUrl: "https://qoder.cn" }), {
+      which: () => "/bin/qodercn",
+      spawn: () => {
+        spawned++;
+        return child;
+      },
+    });
+    const request = parsed({
+      context: {
+        messages: [
+          { role: "user", content: "first turn", timestamp: 0 },
+          { role: "assistant", content: [{ type: "text", text: "response" }], timestamp: 1 },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "inspect link" },
+              { type: "image", imageUrl: "ftp://invalid-scheme.test/image.png" },
+            ],
+            timestamp: 2,
+          },
+        ],
+      },
+    });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    expect(spawned).toBe(1);
+    const wire = JSON.parse(stdin.trim());
+    const images = wire.message.content.filter((part: { type: string }) => part.type === "image");
+    expect(images).toHaveLength(0);
+    const textPart = wire.message.content.find((part: { type: string }) => part.type === "text");
+    expect(textPart?.text).toContain("[image omitted: unsupported reference]");
+    expect(textPart?.text).toContain("ASSISTANT:\nresponse");
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  test("marks unsupported image references in a single-turn user message", () => {
+    const lines = buildConversationInput(parsed({
+      context: {
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "inspect link" },
+            { type: "image", imageUrl: "ftp://invalid-scheme.test/image.png" },
+          ],
+          timestamp: 0,
+        }],
+      },
+    }));
+
+    expect(lines).toHaveLength(1);
+    const frame = JSON.parse(lines[0]!);
+    expect(frame.message.content).toContainEqual({ type: "text", text: "inspect link" });
+    expect(frame.message.content).toContainEqual({ type: "text", text: "[image omitted: unsupported reference]" });
+  });
+
+  test("keeps a single-turn frame for an unsupported image-only message", () => {
+    const lines = buildConversationInput(parsed({
+      context: {
+        messages: [{
+          role: "user",
+          content: [{ type: "image", imageUrl: "ftp://invalid-scheme.test/image.png" }],
+          timestamp: 0,
+        }],
+      },
+    }));
+
+    expect(lines).toHaveLength(1);
+    const frame = JSON.parse(lines[0]!);
+    expect(frame.message.content).toContainEqual({ type: "text", text: "[image omitted: unsupported reference]" });
+  });
+
+  test("marks unsupported images in prior user and tool-result history as omitted", () => {
+    const lines = buildConversationInput(parsed({
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", imageUrl: "ftp://invalid-scheme.test/user.png" }],
+            timestamp: 0,
+          },
+          { role: "assistant", content: [{ type: "text", text: "I saw the image." }], timestamp: 1 },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            content: [{ type: "image", imageUrl: "ftp://invalid-scheme.test/tool.png" }],
+            timestamp: 2,
+          },
+          { role: "user", content: "What was attached?", timestamp: 3 },
+        ],
+      },
+    }));
+
+    expect(lines).toHaveLength(1);
+    const frame = JSON.parse(lines[0]!);
+    const text = frame.message.content.find((part: { type: string }) => part.type === "text")?.text;
+    expect(text).toContain("USER:\n[image omitted: unsupported reference]");
+    expect(text).toContain("TOOL RESULT (call_id: call_1):\n[image omitted: unsupported reference]");
+    expect(frame.message.content.filter((part: { type: string }) => part.type === "image")).toHaveLength(0);
+  });
+
+  test("leaves plain text-only requests completely unaffected", async () => {
+    let spawned = 0;
+    let stdin = "";
+    const child = fakeChild(['{"type":"result","subtype":"success","is_error":false}\n']);
+    child.stdin = new Writable({
+      write(chunk, _encoding, callback) {
+        stdin += chunk.toString();
+        callback();
+      },
+    });
+    const adapter = createQoderAdapter(provider({ baseUrl: "https://qoder.cn" }), {
+      which: () => "/bin/qodercn",
+      spawn: () => {
+        spawned++;
+        return child;
+      },
+    });
+    const request = parsed({
+      context: {
+        messages: [{ role: "user", content: "Hello, plain text only", timestamp: 0 }],
+      },
+    });
+    const events: AdapterEvent[] = [];
+    await adapter.runTurn!(request, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    expect(spawned).toBe(1);
+    const wire = JSON.parse(stdin.trim());
+    const images = wire.message.content.filter((part: { type: string }) => part.type === "image");
+    expect(images).toHaveLength(0);
+    const textPart = wire.message.content.find((part: { type: string }) => part.type === "text");
+    expect(textPart?.text).toContain("Hello, plain text only");
+    expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
   test("forwards Qoder Global raw image input through the shared coding-agent projection", async () => {
