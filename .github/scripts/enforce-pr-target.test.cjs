@@ -94,7 +94,9 @@ describe("enforce-pr-target workflow", () => {
 
   it("writes exactly one consolidated comment via a single upsert helper", () => {
     assert.match(workflow, /GATE_MARKER,/);
-    assert.match(workflow, /comment\.body\?\.includes\(GATE_MARKER\)/);
+    // The gate comment is the bot comment that starts with GATE_MARKER; a
+    // marker echoed inside another comment does not classify it.
+    assert.match(workflow, /comments\.find\(isGateComment\)/);
     assert.match(workflow, /upsertGateComment/);
     assert.match(workflow, /buildGateCommentBody/);
     // No legacy two-comment write path remains.

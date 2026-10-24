@@ -53,6 +53,37 @@ function inlineCode(value) {
   return `${delimiter}${text}${delimiter}`;
 }
 
+/**
+ * Render contributor-supplied text (a changed path) on one line: control
+ * characters, including newlines, become `\uXXXX` escapes. Without this an
+ * echoed path could add whole lines, such as delimiter or record lines, to a
+ * bot comment.
+ */
+function escapeControlCharacters(value) {
+  return String(value).replace(
+    /[\u0000-\u001f\u007f\u2028\u2029]/g,
+    character => "\\u" + character.charCodeAt(0).toString(16).padStart(4, "0")
+  );
+}
+
+/** The consolidated gate comment: written by the workflow bot, marker first. */
+function isGateComment(comment) {
+  return (
+    comment?.user?.login === "github-actions[bot]" &&
+    typeof comment.body === "string" &&
+    comment.body.startsWith(GATE_MARKER)
+  );
+}
+
+/** The standalone hygiene comment posted before a gate comment exists. */
+function isStandaloneHygieneComment(comment) {
+  return (
+    comment?.user?.login === "github-actions[bot]" &&
+    typeof comment.body === "string" &&
+    comment.body.startsWith(HYGIENE_MARKER)
+  );
+}
+
 function readinessChecklistLines(readiness) {
   return REVIEW_READINESS_ITEMS.map(
     (item, index) =>
@@ -179,16 +210,15 @@ function withHygieneSection(body, hygieneLines) {
 
 /**
  * The text the hygiene workflow last wrote for this pull request: the hygiene
- * block of the first bot comment carrying GATE_MARKER, or the standalone
- * hygiene comment while that gate comment has no block yet (the gate never
- * absorbs the standalone one). An ambiguous gate block yields `null`; later
- * comments are never searched for a more convenient candidate.
+ * block of the first bot comment that starts with GATE_MARKER, or the first
+ * bot comment that starts with HYGIENE_MARKER while that gate comment has no
+ * block yet (the gate never absorbs it). A marker elsewhere in a comment does
+ * not classify it. An ambiguous gate block yields `null`; later comments are
+ * never searched for a more convenient candidate.
  */
 function authoritativeHygieneSection(comments) {
-  const bot = (comments ?? []).filter(
-    comment => comment?.user?.login === "github-actions[bot]" && typeof comment.body === "string"
-  );
-  const gate = bot.find(comment => comment.body.includes(GATE_MARKER));
+  const list = comments ?? [];
+  const gate = list.find(isGateComment);
   if (gate) {
     const section = extractHygieneSection(gate.body);
     if (section !== null) return section;
@@ -199,7 +229,7 @@ function authoritativeHygieneSection(comments) {
       return null;
     }
   }
-  const standalone = bot.find(comment => comment !== gate && comment.body.includes(HYGIENE_MARKER));
+  const standalone = list.find(isStandaloneHygieneComment);
   return standalone ? standalone.body : null;
 }
 
@@ -369,6 +399,9 @@ module.exports = {
   HYGIENE_BLOCK_START,
   HYGIENE_BLOCK_END,
   inlineCode,
+  escapeControlCharacters,
+  isGateComment,
+  isStandaloneHygieneComment,
   readinessChecklistLines,
   buildGateCommentBody,
   extractHygieneSection,

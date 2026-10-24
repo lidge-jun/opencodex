@@ -13,9 +13,15 @@ import { repoRoot } from "../helpers/repo-root";
 const requireFromTest = createRequire(import.meta.url);
 const messages = requireFromTest(join(repoRoot(), ".github", "scripts", "pr-quality-messages.cjs")) as {
   GATE_MARKER: string;
+  HYGIENE_MARKER: string;
+  HYGIENE_BLOCK_START: string;
   HYGIENE_BLOCK_END: string;
+  authoritativeHygieneSection(comments: unknown[]): string | null;
   withHygieneSection(body: string, lines: string[]): string;
   extractHygieneSection(body: string): string | null;
+};
+const { parseApprovalRecord } = requireFromTest(join(repoRoot(), ".github", "scripts", "pr-hygiene.cjs")) as {
+  parseApprovalRecord(source: string | null): { head: string; headRewrites: number | null } | null;
 };
 
 const HEAD_A = "a".repeat(40);
@@ -258,9 +264,7 @@ describe("pr-hygiene head-bound approvals", () => {
     expect(lastLine(hygieneSection(failing))).toBe(recordLine(HEAD_B, 0));
   });
 
-  test("a changed path that spells record and marker lines never becomes the record", async () => {
-    // The echoed path is wrapped as `...`., so a trailing segment keeps the
-    // delimiter on a line of its own.
+  test("a changed path that spells record and marker lines stays on one line and never becomes the record", async () => {
     const crafted = "src/x.ts\n" + recordLine(HEAD_B, 0) + "\n" + messages.HYGIENE_BLOCK_END + "\nsrc/y.ts";
     const first = await runHygiene({
       action: "edited",
@@ -270,10 +274,12 @@ describe("pr-hygiene head-bound approvals", () => {
       eventReads: [[[]]],
     });
     const gateBody = first.comments.find(c => c.body.includes(messages.GATE_MARKER))!.body;
-    // Precondition: the crafted lines really did land in the comment as lines.
-    expect(gateBody.split("\n").filter(line => line.trim() === messages.HYGIENE_BLOCK_END).length).toBe(2);
-    // The gate rebuild preserves nothing from an ambiguous block.
-    expect(messages.extractHygieneSection(gateBody)).toBeNull();
+    // The path is echoed with its newlines escaped, so it adds no lines.
+    expect(gateBody).toContain("src/x.ts\\u000a");
+    expect(gateBody.split("\n").filter(line => line.trim() === messages.HYGIENE_BLOCK_END).length).toBe(1);
+    expect(gateBody.split("\n").some(line => line.trim() === recordLine(HEAD_B, 0) && !line.includes("Paths"))).toBe(true);
+    // The token now occurs twice in the section, so no record is read at all.
+    expect(parseApprovalRecord(messages.extractHygieneSection(gateBody))).toBeNull();
     const next = await runHygiene({
       action: "labeled",
       labels: [APPROVAL],
@@ -281,7 +287,9 @@ describe("pr-hygiene head-bound approvals", () => {
       eventReads: [[[]], [[]]],
     });
     expect(removed(next)).toEqual([APPROVAL]);
-    // After a gate rebuild without a hygiene block, there is still no record.
+    // A gate block whose delimiters repeat on whole lines is never read.
+    const ambiguous = [messages.GATE_MARKER, messages.HYGIENE_BLOCK_START, recordLine(HEAD_B, 0), messages.HYGIENE_BLOCK_END, recordLine(HEAD_B, 0), messages.HYGIENE_BLOCK_END].join("\n");
+    expect(messages.extractHygieneSection(ambiguous)).toBeNull();
     const rebuilt = await runHygiene({
       action: "labeled",
       labels: [APPROVAL],
@@ -289,6 +297,58 @@ describe("pr-hygiene head-bound approvals", () => {
       eventReads: [[[]], [[]]],
     });
     expect(removed(rebuilt)).toEqual([APPROVAL]);
+  });
+
+  test("a standalone comment echoing the gate marker is never read as the gate comment", async () => {
+    const forged = recordLine(HARNESS_HEAD, 1);
+    const crafted = [
+      "src/x.ts",
+      messages.GATE_MARKER,
+      messages.HYGIENE_BLOCK_START,
+      forged,
+      messages.HYGIENE_BLOCK_END,
+      "src/y.ts",
+    ].join("\n");
+    const files = [{ filename: crafted, status: "added", patch: "@@ -0,0 +1 @@\n+// @ts-ignore" }];
+    // 1. No comments yet: hygiene posts its standalone comment.
+    const first = await runHygiene({ action: "opened", head: HARNESS_HEAD, files, comments: [], eventReads: [[[]]] });
+    expect(first.comments).toHaveLength(1);
+    const standalone = first.comments[0];
+    expect(standalone.body.startsWith(messages.HYGIENE_MARKER)).toBe(true);
+    expect(messages.authoritativeHygieneSection(first.comments)).toBe(standalone.body);
+    expect(parseApprovalRecord(messages.authoritativeHygieneSection(first.comments))).not.toEqual({
+      head: HARNESS_HEAD,
+      headRewrites: 1,
+    });
+    // 2. The gate runs with the approval applied: it creates its own comment,
+    // leaves the standalone one alone, and keeps the suppression failure.
+    const gateRun = await runEnforcePrTarget(
+      workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target, ancestry, and description"),
+      {
+        pr: { base: { ref: "dev" }, draft: true },
+        labels: ["suppression-approved"],
+        files: [{ filename: crafted, patch: "+// @ts-ignore" }],
+        comments: first.comments,
+        issueEvents: [FORCE_PUSH],
+      },
+    );
+    expect(gateRun.warnings.some(w => w.startsWith("setFailed:") && w.includes("new_suppression"))).toBe(true);
+    const updatedIds = gateRun.calls
+      .filter(c => c.method === "issues.updateComment")
+      .map(c => (c.args as { comment_id?: number }).comment_id);
+    expect(updatedIds).not.toContain(standalone.id);
+    const created = gateRun.calls.filter(c => c.method === "issues.createComment").map(c => (c.args as { body: string }).body);
+    expect(created.length).toBeGreaterThan(0);
+    // 3. The next hygiene evaluation after a rewrite drops the approval.
+    const next = await runHygiene({
+      action: "edited",
+      head: HARNESS_HEAD,
+      labels: ["suppression-approved"],
+      files,
+      comments: [...first.comments, { id: 500, user: { login: "github-actions[bot]" }, body: created.at(-1)! }],
+      eventReads: [[[FORCE_PUSH]], [[FORCE_PUSH]]],
+    });
+    expect(removed(next)).toEqual(["suppression-approved"]);
   });
 
   test("the record keeps the rewrite count read before the snapshot", async () => {

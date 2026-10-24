@@ -73,9 +73,11 @@ jobs:
               path.join(process.cwd(), ".github", "scripts", "pr-referenced-authors.cjs"),
             );
             const {
-              GATE_MARKER,
               HYGIENE_MARKER,
               authoritativeHygieneSection,
+              escapeControlCharacters,
+              isGateComment,
+              isStandaloneHygieneComment,
               withHygieneSection
             } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-quality-messages.cjs"),
@@ -244,9 +246,10 @@ jobs:
               // The comment list was read once above, before the approval
               // check; both workflows share one concurrency group, so no gate
               // write lands in between.
-              const gateComment = comments.find(
-                (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.includes(GATE_MARKER),
-              );
+              // Classified by the marker each body starts with, the same rule
+              // the approval-record reader uses: echoed paths can contain a
+              // marker string but never start the comment.
+              const gateComment = comments.find(isGateComment);
               if (gateComment) {
                 // The hygiene block already carries the marker; strip the
                 // standalone body's own marker line before merging.
@@ -258,9 +261,7 @@ jobs:
                 await github.rest.issues.updateComment({ owner, repo, comment_id: gateComment.id, body: merged });
                 return;
               }
-              const existingHygiene = comments.find(
-                (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.includes(marker),
-              );
+              const existingHygiene = comments.find(isStandaloneHygieneComment);
               if (existingHygiene) {
                 await github.rest.issues.updateComment({ owner, repo, comment_id: existingHygiene.id, body });
               } else {
@@ -276,7 +277,7 @@ jobs:
 
             const lines = failures.map((failure) => {
               const paths = failure.paths?.length
-                ? ` Paths: ${failure.paths.map((p) => `\`${p}\``).join(", ")}.`
+                ? ` Paths: ${failure.paths.map((p) => `\`${escapeControlCharacters(p)}\``).join(", ")}.`
                 : "";
               return `- **${failure.code}** — ${HYGIENE_FAILURE_HINTS[failure.code] ?? failure.code}${paths}`;
             });

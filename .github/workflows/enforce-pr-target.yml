@@ -271,6 +271,8 @@ jobs:
               buildGateCommentBody,
               extractHygieneSection,
               authoritativeHygieneSection,
+              escapeControlCharacters,
+              isGateComment,
               buildFailureSections,
               failureSummary,
               buildStaleNotice,
@@ -342,13 +344,10 @@ jobs:
             );
 
             // One consolidated comment. The gate finds its own comment by the
-            // single GATE_MARKER; the legacy enforcer/readiness markers are
-            // matched only to migrate pre-consolidation PRs.
-            let gateComment = comments.find(
-              comment =>
-                comment.user?.login === "github-actions[bot]" &&
-                comment.body?.includes(GATE_MARKER)
-            );
+            // single GATE_MARKER its body starts with (a marker echoed inside
+            // another bot comment does not count); the legacy enforcer/readiness
+            // markers are matched only to migrate pre-consolidation PRs.
+            let gateComment = comments.find(isGateComment);
             let gateCommentId = gateComment?.id ?? null;
             const storedGateState = parseGateState(
               gateComment?.body,
@@ -1271,7 +1270,7 @@ jobs:
                 const hint = HYGIENE_FAILURE_HINTS[failure.code];
                 if (!hint) continue;
                 const paths = failure.paths?.length
-                  ? ` Paths: ${failure.paths.map(p => inlineCode(p)).join(", ")}.`
+                  ? ` Paths: ${failure.paths.map(p => inlineCode(escapeControlCharacters(p))).join(", ")}.`
                   : "";
                 actions.push(`Fix **${failure.code}** — ${hint}${paths}`);
               }

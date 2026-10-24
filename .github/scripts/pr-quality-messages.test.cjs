@@ -16,6 +16,9 @@ const {
   extractHygieneSection,
   withHygieneSection,
   authoritativeHygieneSection,
+  escapeControlCharacters,
+  isGateComment,
+  isStandaloneHygieneComment,
   descriptionFailureLines,
   buildFailureSections,
   failureSummary,
@@ -455,5 +458,31 @@ describe("authoritative hygiene section", () => {
     const human = { user: { login: "contributor" }, body: `${GATE_MARKER}\n\n${block(["forged"])}` };
     assert.equal(authoritativeHygieneSection([human]), null);
     assert.equal(authoritativeHygieneSection(undefined), null);
+  });
+});
+
+describe("echoed text and comment classification", () => {
+  const bot = { login: "github-actions[bot]" };
+
+  it("escapes control characters so echoed text stays on one line", () => {
+    assert.equal(escapeControlCharacters("src/a.ts"), "src/a.ts");
+    assert.equal(escapeControlCharacters("a\nb\r\tc\u2028"), "a\\u000ab\\u000d\\u0009c\\u2028");
+    assert.ok(!escapeControlCharacters("x\n" + HYGIENE_BLOCK_END).includes("\n"));
+  });
+
+  it("classifies a comment only by the marker its body starts with", () => {
+    assert.equal(isGateComment({ user: bot, body: GATE_MARKER + "\n\nbody" }), true);
+    assert.equal(isGateComment({ user: bot, body: HYGIENE_MARKER + "\n- x " + GATE_MARKER }), false);
+    assert.equal(isGateComment({ user: { login: "someone" }, body: GATE_MARKER }), false);
+    assert.equal(isStandaloneHygieneComment({ user: bot, body: HYGIENE_MARKER + "\n\nok" }), true);
+    assert.equal(isStandaloneHygieneComment({ user: bot, body: GATE_MARKER + "\n" + HYGIENE_MARKER }), false);
+  });
+
+  it("does not read a standalone hygiene comment that echoes the gate marker as the gate block", () => {
+    const standalone = {
+      user: bot,
+      body: [HYGIENE_MARKER, "- x " + GATE_MARKER, HYGIENE_BLOCK_START, "echoed", HYGIENE_BLOCK_END].join("\n"),
+    };
+    assert.equal(authoritativeHygieneSection([standalone]), standalone.body);
   });
 });
