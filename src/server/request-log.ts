@@ -1625,7 +1625,10 @@ function finalizedUsage(
   const usageFallback = !finalUsage && estimate !== undefined
     ? { inputTokens: estimate, outputTokens: 0, estimated: true }
     : undefined;
-  const combinedInputTokens = finalUsage && estimate !== undefined
+  // The estimate is a floor under a count the adapter could only guess. A count the adapter read
+  // off the upstream's own usage frame stays exact: max() against a larger local estimate would
+  // replace it and mark it estimated.
+  const combinedInputTokens = finalUsage && !finalUsage.upstreamReported && estimate !== undefined
     ? Math.max(finalUsage.inputTokens, estimate)
     : undefined;
   const loggedUsage = finalUsage && combinedInputTokens !== undefined
@@ -1907,6 +1910,7 @@ export function aggregateAttemptUsage(
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(status === "estimated" ? { estimated: true } : {}),
+    ...(usages.every(usage => usage.upstreamReported) ? { upstreamReported: true as const } : {}),
   };
   return { usage: aggregate, status, totalTokens };
 }
