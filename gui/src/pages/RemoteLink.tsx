@@ -254,7 +254,8 @@ export default function RemoteLink({ apiBase, sessionReady, pairingRecoveryAvail
     if (dialog && !dialog.open) {
       if (typeof dialog.showModal === "function") dialog.showModal(); else dialog.setAttribute("open", "");
     }
-    window.setTimeout(() => dialog?.querySelector<HTMLElement>("input, button")?.focus(), 0);
+    const timer = window.setTimeout(() => dialog?.querySelector<HTMLElement>("input, button")?.focus(), 0);
+    return () => window.clearTimeout(timer);
   }, [sheetOpen]);
 
   useEffect(() => {
