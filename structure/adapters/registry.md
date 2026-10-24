@@ -1,5 +1,6 @@
 # Adapter Registry Authority
 
+`workbuddy-ai` inherits the `openai-chat` contract with a fixed-origin subscription adapter; see [WorkBuddy AI](../providers/workbuddy.md).
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.

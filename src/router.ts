@@ -33,6 +33,7 @@ import {
 import { decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
 import { effectiveProviderAliasDecision, resolveModelAlias } from "./providers/default-aliases";
 import { resolveBlockedModelRedirect } from "./lib/shadow-call";
+import { workBuddyCatalogIdentity } from "./providers/workbuddy";
 import { getRoutingCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 import {
@@ -177,6 +178,7 @@ export function knownModelIdsForProvider(
       if (!account || account.needsReauth || !Number.isFinite(account.credential.expires)
         || account.credential.expires <= Date.now()) return undefined;
       key = account.credential.access;
+      if (provName === "workbuddy-ai") return workBuddyCatalogIdentity(key, account.credential.workbuddy);
       if (routed.adapter === "devin") destination = validateDevinApiBaseUrl(account.credential.apiBaseUrl) ?? routed.baseUrl;
     }
     if (!key) return undefined;

@@ -1,0 +1,6 @@
+{
+  "workbuddy-login.test.ts": "oauth",
+  "workbuddy-adapter.test.ts": "adapters",
+  "workbuddy-provider.test.ts": "providers",
+  "workbuddy-quota.test.ts": "providers"
+}

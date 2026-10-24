@@ -55,6 +55,12 @@ import {
 export function nativeEffortClamp(slug: string, effort: string | undefined): string | null {
   if (!effort || (effort !== "max" && effort !== "ultra")) return null;
   if (slug.includes("/")) return null; // routed models map efforts in their adapters
+  // `ultra` is a client-facing catalog choice (max reasoning plus proactive delegation) that
+  // codex-rs converts to `max` before any request (core/src/client.rs
+  // `reasoning_effort_for_request`). The ChatGPT backend rejects it with HTTP 400 even for a
+  // model whose pinned ladder lists it (#7590), so it is never a native wire value: fold it to
+  // `max`, then clamp `max` like a direct selection.
+  const wire = "max";
   const entry = UPSTREAM_NATIVE_ENTRIES.get(slug);
   const levels = Array.isArray(entry?.supported_reasoning_levels)
     ? entry.supported_reasoning_levels as Array<{ effort?: string }>
@@ -65,10 +71,11 @@ export function nativeEffortClamp(slug: string, effort: string | undefined): str
     // a retired slug a client still asks for, and future old-ladder slugs)
     // really stops at xhigh — the ChatGPT backend error names exactly none..xhigh — so clamp
     // the synthetic top tier.
-    return isGpt56NativeSlug(slug) ? null : "xhigh";
+    if (!isGpt56NativeSlug(slug)) return "xhigh";
+    return effort === wire ? null : wire;
   }
   const supported = levels.flatMap(l => typeof l.effort === "string" ? [l.effort] : []);
-  if (supported.includes(effort)) return null;
+  if (supported.includes(wire)) return effort === wire ? null : wire;
   const rank = ["minimal", "low", "medium", "high", "xhigh", "max"];
   const highest = supported
     .filter(e => rank.includes(e))

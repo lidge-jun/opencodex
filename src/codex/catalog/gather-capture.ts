@@ -119,6 +119,7 @@ export interface CatalogGatherProviderModelOutcome {
   readonly state: "authoritative" | "degraded";
 }
 export interface ModelsAuthResolution {
+  readonly workbuddy?: import("../../oauth/types").WorkBuddyOAuthMetadata;
   readonly apiKey: string | undefined;
   readonly observed: boolean;
   readonly oauthAccountId?: string;
@@ -334,8 +335,9 @@ export function captureModelsRequest(
   name: string,
   provider: OcxProviderConfig,
   oauthApiBaseUrl: string | undefined,
+  workbuddy?: import("../../oauth/types").WorkBuddyOAuthMetadata,
 ): CapturedModelsRequest {
-  const observed = { oauthApiBaseUrl };
+  const observed = { oauthApiBaseUrl, workbuddy };
   const withoutCredential = buildModelsRequest(provider, undefined, name, observed);
   const withCredential = buildModelsRequest(provider, REQUEST_CREDENTIAL_SENTINEL, name, observed);
   const method = withoutCredential.method ?? "GET";
@@ -400,7 +402,7 @@ export function captureProviderGather(
     : authResolver.kind === "refreshing" && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider)
       ? getOAuthCredentialApiBaseUrl(name)
       : undefined;
-  const request = captureModelsRequest(name, provider, oauthApiBaseUrl);
+  const request = captureModelsRequest(name, provider, oauthApiBaseUrl, observedAuth?.workbuddy);
   const refreshingOAuthAccountId = !observedAuth && authResolver.kind === "refreshing" && provider.authMode === "oauth" && mayResolveModelsOAuth(name, provider)
     ? getAccountSet(name)?.activeAccountId
     : undefined;
