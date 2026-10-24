@@ -418,6 +418,10 @@ describe("Hermes profile store facade (#7674 audit round 3)", () => {
     expect(scoped).not.toBeInstanceOf(Response);
     const scope = hermesRequestScope(req)!;
     const opId = scope.store.listOperations("hermes")[0]!.opId;
+    // Captured before the swap, as a writer holds it through a transaction.
+    const io = scope.store.io();
+    const record = scope.store.readRecords().hermes!;
+    const entry = scope.store.listOperations("hermes")[0]!;
 
     const foreign = join(base, "foreign-store");
     mkdirSync(foreign, { recursive: true });
@@ -430,6 +434,9 @@ describe("Hermes profile store facade (#7674 audit round 3)", () => {
     expect(() => scope.store.retryPendingPrunes()).toThrow(HermesProfileError);
     expect(() => scope.store.retireOperation({ tombstone: opId, at: new Date().toISOString(), by: "admin-token" })).toThrow(HermesProfileError);
     expect(() => scope.store.io()).toThrow(HermesProfileError);
+    expect(() => io.putRecord(record)).toThrow(HermesProfileError);
+    expect(() => io.dropRecord("hermes")).toThrow(HermesProfileError);
+    expect(() => io.appendJournal(entry)).toThrow(HermesProfileError);
     expect(readFileSync(join(foreign, "maintenance.json"), "utf8")).toBe(marker);
     expect(readdirSync(foreign)).toEqual(["maintenance.json"]);
   });
