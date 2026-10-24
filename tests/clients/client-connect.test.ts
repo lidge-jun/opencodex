@@ -60,8 +60,22 @@ const CLIENT_LIFECYCLE_FIXTURE_IMPORT_PROLOGUE =
 const CLIENT_FIXTURE_FAILURE_CATEGORIES = ["module_load", "config_setup", "desktop_setup", "scenario", "child_failed"] as const;
 type ClientFixtureFailureCategory = typeof CLIENT_FIXTURE_FAILURE_CATEGORIES[number];
 
-const TRANSACTION_PHASES = ["module_load", "module_ready", "connect_entered", "connect_resolved", "connect_rejected", "state_read", "result_published"] as const;
+const TRANSACTION_PHASES = [
+  "module_load", "module_ready", "connect_entered", "connect_resolved", "connect_rejected",
+  "operation_entered", "operation_settled", "state_read", "result_published",
+] as const;
 type TransactionProgress = { phase: typeof TRANSACTION_PHASES[number]; elapsedMs: number };
+
+/**
+ * Child-side half of transactionProgress: each --eval child writes its milestones to stderr
+ * synchronously, so a deadline SIGKILL cannot drop the last one it reached.
+ */
+const CHILD_MILESTONE_PROLOGUE = `
+  const transactionStarted = Date.now();
+  const markTransaction = phase => require("node:fs").writeSync(2, JSON.stringify({
+    clientTransactionPhase: phase, elapsedMs: Math.max(0, Date.now() - transactionStarted),
+  }) + "\\n");
+`;
 
 /** Only this fixed diagnostic envelope may reach a parent-side failure message. */
 function transactionProgress(stderr: unknown): TransactionProgress | undefined {
@@ -82,6 +96,17 @@ function transactionProgress(stderr: unknown): TransactionProgress | undefined {
   return undefined;
 }
 
+/** The last lifecycle-fixture phase the child reached, so a deadline kill still names where it stopped. */
+function lastFixturePhase(stderr: unknown): ClientFixtureFailureCategory | undefined {
+  if (typeof stderr !== "string") return undefined;
+  for (const line of stderr.slice(-8192).split("\n").reverse()) {
+    const reached = /^\{"clientFixturePhase":"([a-z_]+)"\}$/.exec(line.trim())?.[1];
+    const phase = CLIENT_FIXTURE_FAILURE_CATEGORIES.find(value => value === reached);
+    if (phase) return phase;
+  }
+  return undefined;
+}
+
 class ClientStateProbeError extends Error {
   constructor(
     readonly pid: number,
@@ -95,6 +120,32 @@ class ClientStateProbeError extends Error {
     super(`Client state probe ${timedOut ? "timed out" : "failed"} (status=${status}, signal=${signal}${failureCategory ? `, category=${failureCategory}` : ""}${progress ? `, phase=${progress.phase}, elapsedMs=${progress.elapsedMs}` : ""})`);
     this.name = "ClientStateProbeError";
   }
+}
+
+/**
+ * Run one repository --eval child under a finite deadline and parse its last stdout line.
+ *
+ * spawnSync blocks this worker, so Bun's per-test timeout cannot end a wedged child: a call
+ * without `timeout` turns one stalled child into a file that never finishes (#7404).
+ * Every synchronous child in this file goes through here; the only child text that may reach a
+ * failure message is the allowlisted milestone read by transactionProgress.
+ */
+function runEvalChild(script: string, env: NodeJS.ProcessEnv, timeoutMs = INTERNAL_DEADLINE_MS) {
+  const result = spawnSync(process.execPath, ["--eval", script], {
+    cwd: repoRoot,
+    env,
+    encoding: "utf8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
+  const progress = transactionProgress(result.stderr);
+  if (result.error || result.status !== 0 || result.signal !== null) {
+    throw new ClientStateProbeError(result.pid, result.status, result.signal, (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT", undefined, progress);
+  }
+  let parsed: Record<string, any>;
+  try { parsed = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "{}"); }
+  catch { throw new ClientStateProbeError(result.pid, result.status, result.signal, false, undefined, progress); }
+  return { status: result.status, stderr: result.stderr, parsed };
 }
 
 async function readStateProbe(script: string, home: string, timeoutMs = INTERNAL_DEADLINE_MS) {
@@ -421,10 +472,7 @@ function runTransactionScenario(
   }
   const script = options.script ?? `
     const { existsSync, readFileSync, writeSync } = require("node:fs");
-    const transactionStarted = Date.now();
-    const markTransaction = phase => writeSync(2, JSON.stringify({
-      clientTransactionPhase: phase, elapsedMs: Math.max(0, Date.now() - transactionStarted),
-    }) + "\\n");
+    ${CHILD_MILESTONE_PROLOGUE}
     markTransaction("module_load");
     const { createHash } = require("node:crypto");
     ${CLIENT_TRANSACTION_EVAL_IMPORT_PROLOGUE}
@@ -522,21 +570,10 @@ function runTransactionScenario(
     if (failures.length) throw new AggregateError(failures, "Could not clean client transaction homes");
   };
   try {
-    const result = spawnSync(process.execPath, ["--eval", script], {
-      cwd: repoRoot,
-      env: { ...process.env, OPENCODEX_HOME: opencodexHome, CODEX_HOME: codexHome, OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop") },
-      encoding: "utf8",
-      timeout: options.timeoutMs ?? INTERNAL_DEADLINE_MS,
-      killSignal: "SIGKILL",
-    });
-    const progress = transactionProgress(result.stderr);
-    if (result.error || result.status !== 0 || result.signal !== null) {
-      throw new ClientStateProbeError(result.pid, result.status, result.signal, (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT", undefined, progress);
-    }
-    let parsed: Record<string, any>;
-    try { parsed = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "{}"); }
-    catch { throw new ClientStateProbeError(result.pid, result.status, result.signal, false, undefined, progress); }
-    return { status: result.status, stderr: result.stderr, parsed, configBytes: readFileSync(configPath, "utf8"), cleanup };
+    const result = runEvalChild(script, {
+      ...process.env, OPENCODEX_HOME: opencodexHome, CODEX_HOME: codexHome, OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop"),
+    }, options.timeoutMs);
+    return { ...result, configBytes: readFileSync(configPath, "utf8"), cleanup };
   } catch (error) {
     try { cleanup(); }
     catch (cleanupError) { throw new AggregateError([error, cleanupError], "Client transaction failed and fixture cleanup failed"); }
@@ -577,7 +614,8 @@ describe("connect transaction and offline disconnect", () => {
   test("transaction fixture stops a child retained after valid output", async () => {
     const proofHome = mkdtempSync(join(tmpdir(), "ocx-transaction-child-proof-"));
     const markerPath = join(proofHome, "child-started.json");
-    const naturalExitPath = join(proofHome, "natural-exit");
+    // The child never exits on its own, so only the deadline kill can end it. A natural-exit
+    // timer here would race that kill on wall-clock time under load.
     const script = `
       const fs = require("node:fs");
       fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
@@ -586,7 +624,7 @@ describe("connect transaction and offline disconnect", () => {
       fs.writeSync(1, '{"ok":true}\\n');
       fs.writeSync(2, '{"clientTransactionPhase":"result_published","elapsedMs":1}\\n');
       fs.writeSync(2, '{"clientTransactionPhase":"private-child-secret","elapsedMs":2}\\n');
-      setTimeout(() => { fs.writeFileSync(${JSON.stringify(naturalExitPath)}, "exited"); }, 5_000);
+      setInterval(() => {}, 1_000);
     `;
     let run: Awaited<ReturnType<typeof runTransactionScenario>> | undefined;
     try {
@@ -600,7 +638,6 @@ describe("connect transaction and offline disconnect", () => {
       expect(failure.timedOut).toBe(true);
       expect(failure.progress).toEqual({ phase: "result_published", elapsedMs: 1 });
       expect(failure.message).not.toContain("private-child-secret");
-      expect(existsSync(naturalExitPath)).toBe(false);
       const proof = JSON.parse(readFileSync(markerPath, "utf8")) as { pid: number; home: string; codexHome: string };
       expect(proof.pid).toBe(failure.pid);
       expect(existsSync(proof.home)).toBe(false);
@@ -806,19 +843,25 @@ function runConnectedStateScenario(mode: "sync-401" | "sync-503" | "disconnect-c
   const script = `
     const fs = require("node:fs");
     const path = require("node:path");
+    ${CHILD_MILESTONE_PROLOGUE}
+    markTransaction("module_load");
     const { disconnectClient, syncConnectedClient } = require("./src/client/connect");
     const { readClientConnectionState } = require("./src/client/state");
     const mode = ${JSON.stringify(mode)};
+    markTransaction("module_ready");
     (async () => {
       let result = null;
       let error = null;
       try {
+        markTransaction("operation_entered");
         if (mode === "disconnect-conflict" || mode === "disconnect-process-journal") result = await disconnectClient({}, { lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" } });
         else result = await syncConnectedClient({}, {
           lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" },
           fetchImpl: async () => Response.json({ error: "fixture" }, { status: mode === "sync-401" ? 401 : 503 }),
         });
       } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+      markTransaction("operation_settled");
+      markTransaction("state_read");
       console.log(JSON.stringify({
         result,
         error,
@@ -826,22 +869,27 @@ function runConnectedStateScenario(mode: "sync-401" | "sync-503" | "disconnect-c
         tokenExists: fs.existsSync(path.join(process.env.OPENCODEX_HOME, "service-api-token")),
         journalExists: fs.existsSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json")),
       }));
+      markTransaction("result_published");
     })();
   `;
-  const child = spawnSync(process.execPath, ["--eval", script], {
-    cwd: repoRoot,
-    env: { ...process.env, OPENCODEX_HOME: opencodexHome, CODEX_HOME: codexHome, OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop") },
-    encoding: "utf8",
-  });
-  const parsed = JSON.parse(child.stdout.trim().split("\n").at(-1) ?? "{}") as Record<string, any>;
-  return {
-    status: child.status,
-    parsed,
-    cleanup: () => {
-      removeTreeWithRetry(opencodexHome);
-      removeTreeWithRetry(codexHome);
-    },
+  const cleanup = () => {
+    const failures: unknown[] = [];
+    for (const home of [opencodexHome, codexHome]) {
+      try { removeTreeWithRetry(home); }
+      catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, "Could not clean connected client homes");
   };
+  try {
+    const { status, parsed } = runEvalChild(script, {
+      ...process.env, OPENCODEX_HOME: opencodexHome, CODEX_HOME: codexHome, OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop"),
+    });
+    return { status, parsed, cleanup };
+  } catch (error) {
+    try { cleanup(); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], "Connected client scenario failed and fixture cleanup failed"); }
+    throw error;
+  }
 }
 
 describe("connected sync and disconnect conflicts", () => {
@@ -923,8 +971,11 @@ describe("recoverable connected key rotation", () => {
     const script = `
       const fs = require("node:fs");
       const path = require("node:path");
+      ${CHILD_MILESTONE_PROLOGUE}
+      markTransaction("module_load");
       const { rotateConnectedClientKey } = require("./src/client/connect");
       const { readClientConnectionState } = require("./src/client/state");
+      markTransaction("module_ready");
       let commitCalls = 0;
       let committed = false;
       const oldKey = ${JSON.stringify(oldKey)};
@@ -953,7 +1004,10 @@ describe("recoverable connected key rotation", () => {
       };
       (async () => {
         const credential = new TextEncoder().encode("ocx_admin_rotation_test");
+        markTransaction("operation_entered");
         const result = await rotateConnectedClientKey({ credential: { kind: "admin", value: credential } }, { fetchImpl, lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" } });
+        markTransaction("operation_settled");
+        markTransaction("state_read");
         console.log(JSON.stringify({
           result,
           state: readClientConnectionState(),
@@ -962,16 +1016,13 @@ describe("recoverable connected key rotation", () => {
           commitCalls,
           credentialZeroed: credential.every(value => value === 0),
         }));
+        markTransaction("result_published");
       })();
     `;
-    const child = spawnSync(process.execPath, ["--eval", script], {
-      cwd: repoRoot,
-      env: { ...process.env, OPENCODEX_HOME: opencodexHome, OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop") },
-      encoding: "utf8",
-    });
     try {
-      expect(child.status).toBe(0);
-      const result = JSON.parse(child.stdout.trim().split("\n").at(-1) ?? "{}") as Record<string, any>;
+      const { parsed: result } = runEvalChild(script, {
+        ...process.env, OPENCODEX_HOME: opencodexHome, OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop"),
+      });
       expect(result.commitCalls).toBe(2);
       expect(result.tokenIsNew).toBe(true);
       expect(result.backup).toBe(false);
@@ -1055,7 +1106,7 @@ function runDesktopLifecycleScenario(mode: string) {
       catalogFingerprint: crypto.createHash("sha256").update(catalog).digest("base64url"),
       priorCatalog: Buffer.from(prior).toString("base64"),
     } };
-    fixtureFailurePhase = "config_setup";
+    markFixturePhase("config_setup");
     configApi.saveConfig(config);
     if (configApi.readConfigDiagnostics().source !== "file" || stateApi.readClientConnectionState().kind !== "connected") {
       throw new Error("fixture_config_invalid");
@@ -1067,7 +1118,7 @@ function runDesktopLifecycleScenario(mode: string) {
     const profilePath = path.join(desktop, "fixture.json");
     const baselinePath = path.join(home, "desktop-remote", "baseline.json");
     const unused = mode.startsWith("status-") || mode === "disconnect-expected-owner";
-    fixtureFailurePhase = "desktop_setup";
+    markFixturePhase("desktop_setup");
     if (!unused) {
       fs.writeFileSync(path.join(desktop, "_meta.json"), JSON.stringify({ appliedId: "fixture", entries: [{ id: "fixture", name: "opencodex" }], foreignMeta: "preserve" }));
       fs.writeFileSync(profilePath, JSON.stringify({
@@ -1135,7 +1186,7 @@ function runDesktopLifecycleScenario(mode: string) {
       }
       throw new Error("unexpected fixture request");
     };
-    fixtureFailurePhase = "scenario";
+    markFixturePhase("scenario");
     await (async () => {
       let result = null, error = null, second = null, statusInside = null, statusOutside = null, cliRotation = null;
       const credential = new TextEncoder().encode("ocx_admin_fixture");
@@ -1254,7 +1305,13 @@ function runDesktopLifecycleScenario(mode: string) {
   const fixturePath = join(root, "client-lifecycle-fixture.test.ts");
   writeFileSync(fixturePath, `import { test } from "bun:test";
     test("isolated client lifecycle scenario", async () => {
-      let fixtureFailurePhase = "module_load";
+      // Written synchronously to stderr so a deadline SIGKILL still leaves the phase it stopped in.
+      let fixtureFailurePhase;
+      const markFixturePhase = phase => {
+        fixtureFailurePhase = phase;
+        require("node:fs").writeSync(2, JSON.stringify({ clientFixturePhase: phase }) + "\\n");
+      };
+      markFixturePhase("module_load");
       try {
         ${resolvedScript}
       } catch {
@@ -1276,7 +1333,8 @@ function runDesktopLifecycleScenario(mode: string) {
     let envelope: { fixtureFailure?: unknown; fixtureResult?: unknown } | undefined;
     try { if (marker) envelope = JSON.parse(marker); } catch { /* fixed category below */ }
     if (child.error || child.status !== 0 || child.signal || !envelope?.fixtureResult) {
-      const category = CLIENT_FIXTURE_FAILURE_CATEGORIES.find(value => value === envelope?.fixtureFailure) ?? "child_failed";
+      const category = CLIENT_FIXTURE_FAILURE_CATEGORIES.find(value => value === envelope?.fixtureFailure)
+        ?? lastFixturePhase(child.stderr) ?? "child_failed";
       throw new ClientStateProbeError(child.pid, child.status, child.signal, (child.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT", category);
     }
     return envelope.fixtureResult as Record<string, any>;
