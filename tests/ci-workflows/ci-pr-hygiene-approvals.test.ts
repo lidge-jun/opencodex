@@ -567,3 +567,29 @@ describe("approval record survives comment rewrites", () => {
     });
   }
 });
+
+describe("gate preservation ignores marker text in echoed paths", () => {
+  test("a changed path containing the block marker text does not drop the record", async () => {
+    const existing = gateComment(["⚠️ **Deterministic hygiene checks failed.**", recordLine(HARNESS_HEAD, 0)]);
+    const gateRun = await runEnforcePrTarget(
+      workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target, ancestry, and description"),
+      {
+        pr: { base: { ref: "dev" }, draft: true },
+        // new_suppression echoes this path into the rebuilt gate body.
+        files: [{ filename: "src/pr-hygiene-block.ts", patch: "+// @ts-ignore" }],
+        comments: [existing],
+        issueEvents: [],
+      },
+    );
+    const writes = gateRun.calls
+      .filter(c => c.method === "issues.updateComment" || c.method === "issues.createComment")
+      .map(c => (c.args as { body: string }).body);
+    expect(writes.length).toBeGreaterThan(0);
+    const rebuilt = writes.at(-1)!;
+    expect(rebuilt).toContain("pr-hygiene-block.ts");
+    expect(parseApprovalRecord(messages.authoritativeHygieneSection([{ id: 7, user: { login: "github-actions[bot]" }, body: rebuilt }]))).toEqual({
+      head: HARNESS_HEAD,
+      headRewrites: 0,
+    });
+  });
+});

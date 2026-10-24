@@ -444,7 +444,9 @@ jobs:
               // unconditionally (a rebuilt body may not end in whitespace) and
               // never through a replacement template.
               const existingHygiene = extractHygieneSection(gateComment?.body);
-              if (existingHygiene && !body.includes("pr-hygiene-block")) {
+              // Delimiter-aware: an echoed path that merely contains the marker
+              // text must not suppress the preservation.
+              if (existingHygiene && extractHygieneSection(body) === null) {
                 body = withHygieneSection(body, existingHygiene.split("\n"));
               }
               if (gateCommentId) {
