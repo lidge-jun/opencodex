@@ -1,7 +1,7 @@
 import { canInferVendorContext, vendorContextInference } from "./vendor-context";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
-import { supportsConfiguredUltraFast } from "./configured-tiers";
+import { supportsConfiguredFlex, supportsConfiguredUltraFast } from "./configured-tiers";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -319,6 +319,7 @@ export function applyProviderConfigHints(
     contextCapped: previousContextCapped,
     supportsServiceTier: _staleServiceTier,
     supportsUltraFastTier: _staleUltraFastTier,
+    supportsFlexTier: _staleFlexTier,
     fastTierDescription: _staleFastTierDescription,
     providerAlias: _staleProviderAlias,
     suppressSyntheticMax: _staleSuppressSyntheticMax,
@@ -360,6 +361,7 @@ export function applyProviderConfigHints(
     ...(typeof supportsVerbosity === "boolean" ? { supportsVerbosity } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
     supportsUltraFastTier: supportsConfiguredUltraFast(fastPolicy),
+    supportsFlexTier: supportsConfiguredFlex(fastPolicy),
     ...(supportsServiceTier === true && fastPolicy.fastTierDescription !== undefined
       ? { fastTierDescription: fastPolicy.fastTierDescription }
       : {}),

@@ -133,6 +133,8 @@ export interface CatalogModel {
   supportsServiceTier?: boolean;
   /** Captured eligible service-tier wire explicitly maps ultrafast to ultrafast. */
   supportsUltraFastTier?: boolean;
+  /** Explicitly verified exact Flex wire and foreign caller-tier forwarding on this route. */
+  supportsFlexTier?: boolean;
   /** Optional provider-specific copy for the advertised Fast tier. */
   fastTierDescription?: string;
   supportsReasoningSummaries?: boolean;
