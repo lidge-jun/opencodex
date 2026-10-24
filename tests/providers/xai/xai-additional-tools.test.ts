@@ -154,4 +154,31 @@ describe("xAI Responses additional_tools promotion", () => {
     const { body } = build(unapprovedProvider, raw);
     expect(body.input).toEqual(raw.input);
   });
+
+  test("promoteResponsesAdditionalTools recalculates replay boundary when reasoning items are dropped", () => {
+    const xaiProvider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      dropResponsesReasoningItems: true,
+      headers: { authorization: "Bearer xai-key" },
+    };
+
+    const raw = {
+      model: "grok-4.7",
+      input: [
+        { type: "reasoning", content: "thinking..." },
+        { type: "message", role: "user", content: "hello" },
+        { type: "additional_tools", tools: [lookup] },
+      ],
+    };
+
+    // Original prefix len is 2 (reasoning + user message).
+    // When reasoning is dropped, prefix len must adjust from 2 to 1.
+    // additional_tools moves from index 2 to index 1, which matches the new prefix boundary (>= 1),
+    // so its tools are promoted to top-level tools.
+    const { body } = build(xaiProvider, raw, 2);
+    expect(body.input).toEqual([{ type: "message", role: "user", content: "hello" }]);
+    expect(body.tools).toBeArray();
+    expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
+  });
 });

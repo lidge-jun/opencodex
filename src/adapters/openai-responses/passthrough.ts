@@ -229,7 +229,18 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           repairOrphanOutputs,
         );
       }
+      let replayPrefixLen = parsed._replayPrefixLen;
       if (provider.dropResponsesReasoningItems === true) {
+        if (
+          typeof replayPrefixLen === "number"
+          && replayPrefixLen > 0
+          && isPlainObject(outBody)
+          && Array.isArray(outBody.input)
+        ) {
+          const prefixItems = outBody.input.slice(0, Math.min(outBody.input.length, Math.trunc(replayPrefixLen)));
+          const droppedInPrefix = prefixItems.filter(item => isPlainObject(item) && item.type === "reasoning").length;
+          replayPrefixLen = Math.max(0, replayPrefixLen - droppedInPrefix);
+        }
         outBody = dropResponsesReasoningInputItems(outBody);
       }
       if (adjacentToolResults) {
@@ -337,7 +348,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // generic capability fallback removes the private OpenAI fields. Grok relayed through
         // OpenCode Go speaks the same dialect, which the final model id and URL identify.
         outBody = normalizeXaiResponsesWebSearch(outBody, provider, { modelId: parsed.modelId, responseUrl: url });
-        outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
+        outBody = injectXaiResponsesXSearch(outBody, provider, replayPrefixLen);
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
         // extensions. Keep them for OpenAI API-key traffic and unclassified gateways.
         if (provider.supportsOpenAiWebSearchToolFields === false) {
@@ -362,7 +373,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           || isXaiResponsesUrl(url)
           || provider.promoteAdditionalTools === true
         ) {
-          outBody = promoteResponsesAdditionalTools(outBody, parsed._replayPrefixLen);
+          outBody = promoteResponsesAdditionalTools(outBody, replayPrefixLen);
         }
       }
       // Same native-v2/portable predicate as the routedCompaction gate in handleResponses():
