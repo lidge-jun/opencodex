@@ -561,14 +561,21 @@ describe("desktop picker freshness inputs (#4761)", () => {
     expect(listCodexDesktopShellPids({ adapter: fixtureAdapter(listed, false), execFile: exec })).toBeNull();
   });
 
-  test("classifies a picker as current only when every shell started strictly after the catalog", () => {
-    expect(classifyDesktopPicker([2_000, 3_000], 1_000)).toBe("current");
+  test("does not mistake a newer shell for proof that it loaded the current binding", () => {
+    // The shell may have loaded catalog A before an earlier sync rebound config.toml to
+    // the already-existing catalog B. B's older mtime cannot distinguish that case.
+    expect(classifyDesktopPicker([2_000, 3_000], 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([2_000, 1_000], 1_000)).toBe("stale");
     expect(classifyDesktopPicker([500], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([500, null], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([null, 500], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([1_000, null], 1_000)).toBe("stale");
+    expect(classifyDesktopPicker([null, null], 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([], 1_000)).toBe("not_running");
     expect(classifyDesktopPicker([], null)).toBe("not_running");
     expect(classifyDesktopPicker(null, 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([2_000, null], 1_000)).toBe("unknown");
+    expect(classifyDesktopPicker([null, 2_000], 1_000)).toBe("unknown");
     expect(classifyDesktopPicker([2_000], null)).toBe("unknown");
   });
 
@@ -580,7 +587,7 @@ describe("desktop picker freshness inputs (#4761)", () => {
       catalogMtimeMs: path => { expect(path).toBe("/codex/opencodex-catalog.json"); return catalogMtimeMs; },
     });
     const bound = "/codex/opencodex-catalog.json";
-    expect(read(bound, 1_000, new Map([[10, 5_000]]))).toBe("current");
+    expect(read(bound, 1_000, new Map([[10, 5_000]]))).toBe("unknown");
     expect(read(bound, 9_000, new Map([[10, 5_000]]))).toBe("stale");
     expect(read(bound, 1_000, new Map([[10, null]]))).toBe("unknown");
     expect(read(bound, null, new Map([[10, 5_000]]))).toBe("unknown");

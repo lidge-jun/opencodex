@@ -98,3 +98,96 @@ test("A to B to A during the async build check cannot publish a corrected old re
   expect(await correcting).toBeNull(); expect(controller.snapshot().mode).toBe("observe"); expect(controller.snapshot().outputs).toBe(0);
   upstream.verify(["synthetic-access-A", "synthetic-access-A"]);
 });
+
+for (const pathname of [exchange.pathname, `${exchange.pathname}/stream`]) {
+  for (const field of ['account_id', 'user_id', 'plan_type'] as const) {
+    test(`explicit foreign ${field} revokes the trial on ${pathname}`, async () => {
+      const account = { id: usage.account_id, userId: usage.user_id, plan: 'pro' as const, structure: 'personal' as const };
+      const ctl = new UsageRelayController(account, async () => account, async () => account, () => 1000, 600000);
+      const route = { ...exchange, pathname };
+      const encode = (record: unknown) => JSON.stringify(pathname.endsWith('/stream')
+        ? { version: 1, stream_id: 'fixture', sequence: 1, usage: record } : record);
+      await ctl.rewriteJson(encode(usage), route);
+      expect((await ctl.activate(consent)).accepted).toBe(true);
+      const stream = ctl.registerStream(route, async () => {});
+      expect(await ctl.rewriteJson(encode(usage), route, stream)).not.toBeNull();
+      expect(ctl.snapshot().observation.validatedActiveStreams).toBe(pathname.endsWith('/stream') ? 1 : 0);
+      const generation = ctl.snapshot().generation;
+      expect(await ctl.rewriteJson(encode({ ...usage, [field]: 'foreign' }), route, stream)).toBeNull();
+      expect(ctl.snapshot()).toMatchObject({ mode: 'observe', phase: 'identity-invalidated', outputs: 0 });
+      expect(ctl.snapshot().observation.validatedActiveStreams).toBe(0);
+      expect(ctl.snapshot().generation).toBeGreaterThan(generation);
+      expect((await ctl.activate(consent)).accepted).toBe(false);
+      expect(await ctl.rewriteJson(encode(usage), route)).toBeNull();
+      expect((await ctl.activate(consent)).accepted).toBe(true);
+      expect(await ctl.rewriteJson(encode(usage), route)).not.toBeNull();
+      stream?.release();
+    });
+  }
+}
+
+for (const failure of ['mismatch', 'null', 'throw'] as const) {
+  test(`fresh activation identity ${failure} revokes existing consent`, async () => {
+    const account = { id: usage.account_id, userId: usage.user_id, plan: 'pro' as const, structure: 'personal' as const };
+    let fail = false;
+    const ctl = new UsageRelayController(account, async () => account, async () => {
+      if (!fail) return account;
+      if (failure === 'throw') throw new Error('synthetic verification failure');
+      return failure === 'null' ? null : { ...account, userId: 'foreign' };
+    }, () => 1000, 600000);
+    await ctl.rewriteJson(JSON.stringify(usage), exchange);
+    expect((await ctl.activate(consent)).accepted).toBe(true);
+    fail = true;
+    expect(await ctl.activate(consent)).toMatchObject({ accepted: false, reason: 'identity-not-verified', mode: 'observe' });
+    fail = false;
+    expect((await ctl.activate(consent)).accepted).toBe(false);
+    expect(await ctl.rewriteJson(JSON.stringify(usage), exchange)).toBeNull();
+    expect((await ctl.activate(consent)).accepted).toBe(true);
+  });
+}
+
+for (const failure of ['foreign usage', 'failed reauthentication'] as const) {
+  test(`${failure} cancels a response waiting for its final context check`, async () => {
+    const account = { id: usage.account_id, userId: usage.user_id, plan: 'pro' as const, structure: 'personal' as const };
+    let verify = true, waiting = false, entered!: () => void, release!: (valid: boolean) => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const ctl = new UsageRelayController(account, async () => account, async () => verify ? account : null,
+      () => 1000, 600000, 180000, () => waiting ? (entered(), new Promise<boolean>(resolve => { release = resolve; })) : true);
+    await ctl.rewriteJson(JSON.stringify(usage), exchange); await ctl.activate(consent);
+    waiting = true; const pending = ctl.rewriteJson(JSON.stringify(usage), exchange); await started;
+    waiting = false;
+    try {
+      if (failure === 'foreign usage') await ctl.rewriteJson(JSON.stringify({ ...usage, account_id: 'foreign' }), exchange);
+      else { verify = false; await ctl.activate(consent); }
+    } finally { release(true); }
+    expect(await pending).toBeNull();
+    expect(ctl.snapshot()).toMatchObject({ mode: 'observe', outputs: 0 });
+  });
+}
+
+for (const failure of ['mismatch', 'null', 'throw'] as const) {
+  test(`stale activation ${failure} cannot cancel a newer trial`, async () => {
+    const account = { id: usage.account_id, userId: usage.user_id, plan: 'pro' as const, structure: 'personal' as const };
+    let deferred = false, entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const ctl = new UsageRelayController(account, async () => account, async () => {
+      if (!deferred) return account;
+      entered(); await gate;
+      if (failure === 'throw') throw new Error('synthetic stale verification failure');
+      return failure === 'null' ? null : { ...account, userId: 'foreign' };
+    }, () => 1000, 600000);
+    await ctl.rewriteJson(JSON.stringify(usage), exchange); await ctl.activate(consent);
+    deferred = true; const pending = ctl.activate(consent); await started;
+    deferred = false;
+    try {
+      await ctl.observeOnly();
+      await ctl.rewriteJson(JSON.stringify(usage), exchange);
+      expect((await ctl.activate(consent)).accepted).toBe(true);
+    } finally { release(); }
+    const current = ctl.snapshot();
+    expect(await pending).toMatchObject({ accepted: false, reason: 'identity-not-verified' });
+    expect(ctl.snapshot()).toEqual(current);
+    expect(await ctl.rewriteJson(JSON.stringify(usage), exchange)).not.toBeNull();
+  });
+}

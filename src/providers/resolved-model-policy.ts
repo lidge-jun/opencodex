@@ -31,8 +31,8 @@ export type StaticProviderPolicyField =
   | "modelMaxOutputTokens" | "reasoningEfforts" | "modelReasoningEfforts" | "modelReasoningEffortsAuthoritative"
   | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap"
   | "reasoningWireFormat" | "noVisionModels" | "noReasoningModels" | "noTemperatureModels"
-  | "noTopPModels" | "noStopModels" | "noPenaltyModels" | "noJsonSchemaModels" | "parallelToolCalls"
-  | "promptCacheKey" | "chatServiceTier" | "openaiChatEofTolerance" | "statelessResponses"
+  | "noTopPModels" | "noStopModels" | "noPenaltyModels" | "noJsonSchemaModels" | "noStructuredOutputModels" | "parallelToolCalls"
+  | "promptCacheKey" | "chatServiceTier" | "openaiChatEofTolerance" | "foldDeveloperRoleToSystem" | "statelessResponses"
   | "requiresAdjacentResponsesToolResults" | "requiresPairedResponsesToolResults" | "annotateEmptyToolOutputs"
   | "fastWire" | "supportsServiceTier" | "modelSupportsServiceTier" | "supportsOpenAiWebSearchToolFields"
   | "supportsResponsesCustomTools" | "preserveResponsesReasoningContent" | "dropResponsesReasoningItems"
@@ -173,7 +173,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     "responsesPath", "chatCompletionsPath", "keyOptional", "freeTier", "modelSuffixBracketStrip",
     "defaultModel", "models", "liveModels", "contextWindow", "defaultMaxOutputTokens",
     "reasoningWireFormat", "parallelToolCalls", "promptCacheKey",
-    "openaiChatEofTolerance", "statelessResponses",
+    "openaiChatEofTolerance", "foldDeveloperRoleToSystem", "statelessResponses",
     "requiresAdjacentResponsesToolResults", "requiresPairedResponsesToolResults",
     "annotateEmptyToolOutputs", "fastWire", "supportsServiceTier",
     "supportsOpenAiWebSearchToolFields", "supportsResponsesCustomTools",
@@ -231,7 +231,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   for (const key of [
     "noVisionModels", "noReasoningModels", "noTemperatureModels", "noTopPModels",
     "noStopModels",
-    "noPenaltyModels", "noJsonSchemaModels", "autoToolChoiceOnlyModels",
+    "noPenaltyModels", "noJsonSchemaModels", "noStructuredOutputModels", "autoToolChoiceOnlyModels",
     "preserveReasoningContentModels", "requiresReasoningPlaceholderModels",
     "reasoningSplitModels", "reasoningDetailsModels", "thinkingToggleModels", "thinkingBudgetModels",
   ] as const) putUnion(key, entry?.[key]);

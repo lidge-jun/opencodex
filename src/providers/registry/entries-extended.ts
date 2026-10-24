@@ -483,6 +483,10 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noPenaltyModels: KIMI_API_MODELS,
     autoToolChoiceOnlyModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"],
     preserveReasoningContentModels: KIMI_API_MODELS,
+    // api.moonshot.ai answers `400 Invalid request: role 'developer' is not allowed`. The
+    // translated route already folds when nothing is recorded, but the native
+    // /v1/chat/completions passthrough only folds on an explicit record, so record it here.
+    foldDeveloperRoleToSystem: true,
     note: "International default (api.moonshot.ai). China accounts: choose China (.cn) or Custom for api.moonshot.cn.",
   },
   { id: "huggingface", label: "Hugging Face", baseUrl: "https://router.huggingface.co/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://huggingface.co/settings/tokens" },
@@ -837,6 +841,8 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   {
     id: "alibaba-token-plan",
     label: "Alibaba Token Plan (Beijing)",
+    // Official Personal quick start (2026-10-23) still documents this host:
+    // https://help.aliyun.com/en/model-studio/token-plan-personal-quick-start
     baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
     adapter: "openai-chat",
     authKind: "key",
@@ -887,19 +893,23 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "deepseek-v4-pro-0813": deepseekThinkingEffortsFor("deepseek-v4-pro-0813"),
       "deepseek-v4-flash-0731": deepseekThinkingEffortsFor("deepseek-v4-flash-0731"),
       "deepseek-v4.1-flash": deepseekThinkingEffortsFor("deepseek-v4.1-flash"),
+      "deepseek-v4.1-flash-1017": deepseekThinkingEffortsFor("deepseek-v4.1-flash-1017"),
     },
     modelReasoningEffortMap: {
       "deepseek-v4-pro": deepseekReasoningMapFor("deepseek-v4-pro"),
       "deepseek-v4-pro-0813": deepseekReasoningMapFor("deepseek-v4-pro-0813"),
       "deepseek-v4-flash-0731": deepseekReasoningMapFor("deepseek-v4-flash-0731"),
       "deepseek-v4.1-flash": deepseekReasoningMapFor("deepseek-v4.1-flash"),
+      "deepseek-v4.1-flash-1017": deepseekReasoningMapFor("deepseek-v4.1-flash-1017"),
     },
     // Probed 260915 on the plan gateway: json_object returns valid JSON, strict
     // json_schema is rejected 400 ("This response_format type is unavailable now")
     // in both thinking modes, so requests downgrade to json_object rather than
     // sending a schema the gateway refuses.
     noJsonSchemaModels: ["deepseek-v4.1-flash"],
-    modelDefaultReasoningEfforts: Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])),
+    // 261020 strict schema rejected; json_object unverified. Omit rather than invent a fallback.
+    noStructuredOutputModels: ["deepseek-v4.1-flash-1017"],
+    modelDefaultReasoningEfforts: { ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])), "deepseek-v4.1-flash-1017": "high" },
     directReasoningEffortModels: QWEN38_FAMILY,
     thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS.filter(id => !QWEN38_FAMILY.includes(id)),
     preserveReasoningContentModels: ALIBABA_TOKEN_PLAN_PRESERVE_REASONING,
@@ -935,25 +945,27 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
       "glm-5.3": ZAI_GLM_53_REASONING_EFFORTS,
       "deepseek-v4-pro": deepseekThinkingEffortsFor("deepseek-v4-pro"),
       "deepseek-v4-pro-0813": deepseekThinkingEffortsFor("deepseek-v4-pro-0813"),
-      "deepseek-v4-flash": deepseekThinkingEffortsFor("deepseek-v4-flash"),
       "deepseek-v4-flash-0731": deepseekThinkingEffortsFor("deepseek-v4-flash-0731"),
       "deepseek-v4.1-flash": deepseekThinkingEffortsFor("deepseek-v4.1-flash"),
+      "deepseek-v4.1-flash-1017": deepseekThinkingEffortsFor("deepseek-v4.1-flash-1017"),
     },
     modelReasoningEffortMap: {
       "deepseek-v4-pro": deepseekReasoningMapFor("deepseek-v4-pro"),
       "deepseek-v4-pro-0813": deepseekReasoningMapFor("deepseek-v4-pro-0813"),
-      "deepseek-v4-flash": deepseekReasoningMapFor("deepseek-v4-flash"),
       "deepseek-v4-flash-0731": deepseekReasoningMapFor("deepseek-v4-flash-0731"),
       "deepseek-v4.1-flash": deepseekReasoningMapFor("deepseek-v4.1-flash"),
+      "deepseek-v4.1-flash-1017": deepseekReasoningMapFor("deepseek-v4.1-flash-1017"),
     },
     // Same 260915 json_schema rejection probe as the Beijing entry.
     noJsonSchemaModels: ["deepseek-v4.1-flash"],
+    // 261020 strict schema rejected; json_object unverified. Omit rather than invent a fallback.
+    noStructuredOutputModels: ["deepseek-v4.1-flash-1017"],
     directReasoningEffortModels: QWEN38_FAMILY,
     thinkingBudgetModels: ALIBABA_INTL_TOKEN_PLAN_QWEN_MODELS.filter(id => !QWEN38_FAMILY.includes(id)),
     preserveReasoningContentModels: ALIBABA_TOKEN_PLAN_PRESERVE_REASONING,
     noVisionModels: ALIBABA_TOKEN_PLAN_NO_VISION,
-    noReasoningModels: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "deepseek-v3.2", "glm-5.1", "glm-5", "MiniMax-M2.5"],
-    modelDefaultReasoningEfforts: Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])),
+    noReasoningModels: ["kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "glm-5.1", "glm-5", "MiniMax-M2.5"],
+    modelDefaultReasoningEfforts: { ...Object.fromEntries(QWEN38_FAMILY.map(id => [id, "xhigh"])), "deepseek-v4.1-flash-1017": "high" },
     promptCacheKey: true,
   },
   // NEEDS_HUMAN 2026-07-10: kept for config compatibility, but this is a dashboard URL,

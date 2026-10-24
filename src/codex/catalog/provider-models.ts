@@ -117,6 +117,7 @@ import type {
   CatalogTrustedOpenAiApiPolicySnapshot,
 } from "../convergence-types";
 import type { CapturedProviderGather, CatalogGatherProviderAuthOutcome, CatalogGatherProviderModelOutcome, ModelsAuthResolution, ModelsAuthResolver } from "./gather-capture";
+import { workBuddyCatalogIdentity } from "../../providers/workbuddy";
 import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig, withVisionSidecarInput } from "./model-hints";
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
 import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
@@ -161,6 +162,7 @@ export function observedModelsAuthResolver(
         observed: true,
         oauthAccountId: observation.snapshot.accountId,
         oauthGeneration: observation.snapshot.generation,
+        ...(observation.snapshot.workbuddy ? { workbuddy: observation.snapshot.workbuddy } : {}),
         ...(observation.snapshot.providerUserId ? { oauthProviderUserId: observation.snapshot.providerUserId } : {}),
         ...(observation.snapshot.apiBaseUrl ? { oauthApiBaseUrl: observation.snapshot.apiBaseUrl } : {}),
         ...(observation.snapshot.projectId ? { oauthProjectId: observation.snapshot.projectId } : {}),
@@ -280,6 +282,7 @@ export async function fetchProviderModelsWithAuth(
           observed: false,
           oauthAccountId: snapshot.accountId,
           oauthGeneration: snapshot.generation,
+          ...(snapshot.workbuddy ? { workbuddy: snapshot.workbuddy } : {}),
           ...(snapshot.providerUserId ? { oauthProviderUserId: snapshot.providerUserId } : {}),
           ...(snapshot.apiBaseUrl ? { oauthApiBaseUrl: snapshot.apiBaseUrl } : {}),
           ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
@@ -646,7 +649,10 @@ export async function fetchProviderModelsWithAuth(
   const cloudCodeAssist = effectiveGoogleMode(name, prov) === "cloud-code-assist";
   const project = prov.project ?? auth.oauthProjectId;
   if (cloudCodeAssist && !project) return observed(configured, "degraded");
-  const fresh = getFreshCached(name, ttlMs);
+  // WorkBuddy model entitlements belong to the captured account and tenant.
+  const catalogAuthority = name === "workbuddy-ai"
+    ? workBuddyCatalogIdentity(apiKey!, auth.workbuddy) : undefined;
+  const fresh = getFreshCached(name, ttlMs, Date.now(), catalogAuthority);
   if (fresh) {
     return observed(
       withConfiguredRetention(
@@ -655,10 +661,10 @@ export async function fetchProviderModelsWithAuth(
       "authoritative",
     ); // dedups Codex's frequent /v1/models polling within the TTL
   }
-  if (isModelsFetchCoolingDown(name)) {
+  if (isModelsFetchCoolingDown(name, undefined, undefined, catalogAuthority)) {
     // A recently-failed provider (unreachable API, missing proxy, bad key) must not re-pay the
     // fetch timeout on every catalog poll — the dashboard polls this path per page load.
-    const stale = getStaleCached(name);
+    const stale = getStaleCached(name, catalogAuthority);
     return observed(
       withConfiguredRetention(
         stale
@@ -671,7 +677,7 @@ export async function fetchProviderModelsWithAuth(
   // The captured request predates any refresh, so a refreshing gather rebuilds it
   // from the auth it resolved: the token and its origin, together.
   const request = resolveAuth.kind === "refreshing" && name !== "anthropic2"
-    ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl)
+    ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl, auth.workbuddy)
     : captured.request;
   const url = request.url;
   let headers = materializeCapturedHeaders(request, apiKey);
@@ -701,9 +707,9 @@ export async function fetchProviderModelsWithAuth(
     // suppress an identical repeated failure (#395 log flood). The failure stays observable via the
     // discovery-status API regardless.
     const shouldLog = shouldLogDiscoveryFailure(name, failure);
-    markModelsFetchFailure(name);
+    markModelsFetchFailure(name, undefined, catalogAuthority);
     markProviderDiscoveryFailed(name, failure);
-    const stale = getStaleCached(name);
+    const stale = getStaleCached(name, catalogAuthority);
     return {
       models: withConfiguredRetention(
         stale
@@ -812,7 +818,7 @@ export async function fetchProviderModelsWithAuth(
       // Entitlement is per account (Claude 4.6 vs 5.5, Argon): remember what THIS account
       // lists so account selection can prefer one that serves the requested model.
       if (auth.oauthAccountId) recordAntigravityAccountRoster(name, auth.oauthAccountId, antigravity);
-      if (!setCached(name, forCache, Date.now(), cacheGeneration)) {
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, catalogAuthority)) {
         return observed(withConfiguredRetention(configured), "degraded");
       }
       markProviderDiscoveryOk(name, live.length);
@@ -898,7 +904,7 @@ export async function fetchProviderModelsWithAuth(
         `[opencodex] Provider model discovery for "${name}" returned an authoritative empty catalog; ${droppedConfiguredIds.length > 0 ? `dropping configured model ids: ${droppedConfiguredIds.join(", ")}` : "no models will be exposed"}.`,
       );
     }
-    if (!maySendAnthropicDiscovery() || !setCached(name, forCache, Date.now(), cacheGeneration)) {
+    if (!maySendAnthropicDiscovery() || !setCached(name, forCache, Date.now(), cacheGeneration, catalogAuthority)) {
       return observed(withConfiguredRetention(configured), "degraded");
     }
     markProviderDiscoveryOk(name, liveModelCount);

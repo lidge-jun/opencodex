@@ -3,6 +3,7 @@ import { COST_VENDOR_PRIORITY, getModelMetadata, getModelMetadataCaseInsensitive
 import { cloneFastWire } from "./fastwire";
 import { isAzureModelMetadataDestination, publishedAzureModelMetadata, type AzureModelMetadata } from "./azure-model-metadata";
 import { resolveModelPolicy } from "./resolved-model-policy";
+import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-merge";
 import {
   PROVIDER_REGISTRY,
   registryEntryForProviderDestination,
@@ -56,6 +57,7 @@ export interface DerivedKeyLoginProvider {
   thinkingBudgetModels?: string[];
   escapeBuiltinToolNames?: boolean;
   openaiChatEofTolerance?: boolean;
+  foldDeveloperRoleToSystem?: boolean;
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   project?: string;
   location?: string;
@@ -280,6 +282,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.promptCacheKey !== undefined ? { promptCacheKey: entry.promptCacheKey } : {}),
     ...(entry.chatServiceTier !== undefined ? { chatServiceTier: entry.chatServiceTier } : {}),
     ...(entry.openaiChatEofTolerance !== undefined ? { openaiChatEofTolerance: entry.openaiChatEofTolerance } : {}),
+    ...(entry.foldDeveloperRoleToSystem !== undefined ? { foldDeveloperRoleToSystem: entry.foldDeveloperRoleToSystem } : {}),
     ...(entry.responsesPath !== undefined ? { responsesPath: entry.responsesPath } : {}),
     ...(entry.chatCompletionsPath !== undefined ? { chatCompletionsPath: entry.chatCompletionsPath } : {}),
     ...(entry.statelessResponses !== undefined ? { statelessResponses: entry.statelessResponses } : {}),
@@ -358,6 +361,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.thinkingBudgetModels ? { thinkingBudgetModels: [...entry.thinkingBudgetModels] } : {}),
       ...(entry.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: entry.escapeBuiltinToolNames } : {}),
       ...(entry.openaiChatEofTolerance !== undefined ? { openaiChatEofTolerance: entry.openaiChatEofTolerance } : {}),
+      ...(entry.foldDeveloperRoleToSystem !== undefined ? { foldDeveloperRoleToSystem: entry.foldDeveloperRoleToSystem } : {}),
       ...(entry.googleMode ? { googleMode: entry.googleMode } : {}),
       ...(entry.project ? { project: entry.project } : {}),
       ...(entry.location ? { location: entry.location } : {}),
@@ -474,13 +478,22 @@ function applyVerbosityDefaults(prov: OcxProviderConfig, entry: ProviderRegistry
  * was skipped and the reasoning ladder was advertised without summary support — exactly the
  * inconsistency that makes Codex drop the inbound reasoning object.
  *
- * Deliberately narrow: reasoning-summary, effort, and replay-compatibility metadata only, via
+ * Deliberately narrow: reasoning-summary, effort, structured-output, and replay-compatibility metadata only, via
  * `registryEntryForProviderDestination`, which matches fixed key destinations and refuses
  * templated or overridable base URLs. A custom row keeps its own identity for everything else.
  */
 function enrichReasoningMetadataByDestination(prov: OcxProviderConfig): void {
   const destination = registryEntryForProviderDestination(prov);
   applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
+  if (destination?.modelDefaultReasoningEfforts) {
+    prov.modelDefaultReasoningEfforts = mapFill(destination.modelDefaultReasoningEfforts, prov.modelDefaultReasoningEfforts)[0];
+  }
+  if (destination?.modelReasoningEffortMap) {
+    prov.modelReasoningEffortMap = nestedMapFill(destination.modelReasoningEffortMap, prov.modelReasoningEffortMap)[0];
+  }
+  if (destination?.noStructuredOutputModels?.length) {
+    prov.noStructuredOutputModels = stableUnion(destination.noStructuredOutputModels, prov.noStructuredOutputModels)[0];
+  }
   if (prov.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined) {
     prov.dropResponsesReasoningItems = destination.dropResponsesReasoningItems;
   }
@@ -570,6 +583,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.chatServiceTier === undefined && seed.chatServiceTier !== undefined) prov.chatServiceTier = seed.chatServiceTier;
   if (prov.openaiChatEofTolerance === undefined && seed.openaiChatEofTolerance !== undefined) {
     prov.openaiChatEofTolerance = seed.openaiChatEofTolerance;
+  }
+  if (prov.foldDeveloperRoleToSystem === undefined && seed.foldDeveloperRoleToSystem !== undefined) {
+    prov.foldDeveloperRoleToSystem = seed.foldDeveloperRoleToSystem;
   }
   // Fill-only: a hand-edited path must survive, and a config saved before the registry
   // learned this route still gets backfilled.

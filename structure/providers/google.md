@@ -1,6 +1,6 @@
 # Google Provider
 
-Created: 2026-10-16 | Updated: 2026-10-18 | Version: 1.1 (Vertex endpoint selection)
+Created: 2026-10-16 | Updated: 2026-10-18 | Version: 1.2 (Vertex per-key project)
 
 ## Vertex API-key endpoint selection
 
@@ -18,6 +18,21 @@ single path segment before any credential is attached; keys stay in `x-goog-api-
 `tests/adapters/google/gcp-adc.test.ts` and
 `tests/adapters/google/google-vertex-thought-signature.test.ts` cover the selection, ambient
 environment isolation, ADC fallbacks, model-path rejection, and replay isolation.
+
+`provider.project: "auto"` is an explicit opt-in for key pools that span projects. An express
+key belongs to one project, and Google's projectless NOT_FOUND names it (probed 2026-10-18 across
+five express keys; undocumented error text, not a stable discovery API), so
+`src/adapters/google-vertex-key-project.ts` sends one countTokens call for a nonexistent model to
+the fixed `aiplatform.googleapis.com` authority (manual redirects, 10 s timeout) through the
+provider's configured egress (`provider.fetch` or `configuredOutboundFetch` with `providerEgressSendInit`)
+and reads the 404 body through `readBoundedResponseBody` with a 4 KiB ceiling and UTF-8 check.
+Results are cached per key digest in an insertion-order LRU of 64 entries; concurrent first
+requests share one probe, and a caller abort detaches only that waiter unless every waiter has
+aborted. A failed, truncated, oversized or stalled probe is not cached and that request uses the
+express endpoint, so Google's own 401/403/429 for the key reaches the normal key-pool failover.
+The resolved number then takes the ordinary project path, so the replay namespace stays per
+project. ADC rejects `"auto"`.
+`tests/adapters/google/google-vertex-key-project.test.ts` covers these cases.
 
 ## Vertex credential markers
 

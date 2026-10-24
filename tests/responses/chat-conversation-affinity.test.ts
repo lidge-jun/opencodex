@@ -3,6 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleChatCompletions } from "../../src/server/chat-completions";
+import { handleResponses } from "../../src/server/responses";
+import { normalizeLogConversationId } from "../../src/server/request-log-conversation";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -104,4 +106,216 @@ describe("Chat conversation identity at canonical Responses outbound boundary", 
       }
     }, 20_000);
   }
+  test("Hermes x-hermes-conversation-id is captured into logCtx and stripped before Responses outbound wire", async () => {
+    const seen = mockNativeWire();
+    const rawHermesId = "hermes-fixture-wire";
+    const logCtx = { model: "", provider: "" } as Parameters<typeof handleChatCompletions>[2];
+    const token = fakeChatGptJwt({ chatgpt_account_id: "fixture-chat-caller", exp: Math.floor(Date.now() / 1000) + 86400 });
+    const config = { defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {
+      openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+        baseUrl: "https://chatgpt.com/backend-api/codex", models: ["gpt-5.6-luna"] },
+    } } as OcxConfig;
+    const req = new Request("http://localhost/v1/chat/completions", { method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}`,
+        "chatgpt-account-id": "fixture-chat-caller", "x-hermes-conversation-id": rawHermesId },
+      body: JSON.stringify({ model: "openai/gpt-5.6-luna", messages: [{ role: "user", content: "ping" }], stream: false }),
+    });
+    const response = await handleChatCompletions(req, config, logCtx);
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(logCtx.conversationId).toBe(normalizeLogConversationId(rawHermesId));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers.has("x-hermes-conversation-id")).toBe(false);
+  });
+
+  test("native session-id header strictly wins over x-hermes-conversation-id across the Chat bridge", async () => {
+    const seen = mockNativeWire();
+    const rawHermesId = "hermes-fixture-wire";
+    const rawSessionId = "native-session-precedence-456";
+    const logCtx = { model: "", provider: "" } as Parameters<typeof handleChatCompletions>[2];
+    const token = fakeChatGptJwt({ chatgpt_account_id: "fixture-chat-caller", exp: Math.floor(Date.now() / 1000) + 86400 });
+    const config = { defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {
+      openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+        baseUrl: "https://chatgpt.com/backend-api/codex", models: ["gpt-5.6-luna"] },
+    } } as OcxConfig;
+    const req = new Request("http://localhost/v1/chat/completions", { method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}`,
+        "chatgpt-account-id": "fixture-chat-caller", "x-hermes-conversation-id": rawHermesId, "session_id": rawSessionId },
+      body: JSON.stringify({ model: "openai/gpt-5.6-luna", messages: [{ role: "user", content: "ping" }], stream: false }),
+    });
+    const response = await handleChatCompletions(req, config, logCtx);
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(logCtx.conversationId).toBe(normalizeLogConversationId(rawSessionId));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers.get("session_id")).toBe(rawSessionId);
+    expect(seen[0]!.headers.has("x-hermes-conversation-id")).toBe(false);
+  });
+  test("empty or whitespace parent-thread header does not suppress valid native session_id over Hermes", async () => {
+    const seen = mockNativeWire();
+    const rawHermesId = "hermes-fixture-wire";
+    const rawSessionId = "valid-native-session-id";
+    const logCtx = { model: "", provider: "" } as Parameters<typeof handleChatCompletions>[2];
+    const token = fakeChatGptJwt({ chatgpt_account_id: "fixture-chat-caller", exp: Math.floor(Date.now() / 1000) + 86400 });
+    const config = { defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {
+      openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+        baseUrl: "https://chatgpt.com/backend-api/codex", models: ["gpt-5.6-luna"] },
+    } } as OcxConfig;
+    const req = new Request("http://localhost/v1/chat/completions", { method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}`,
+        "chatgpt-account-id": "fixture-chat-caller",
+        "x-codex-parent-thread-id": "   ",
+        "session_id": rawSessionId,
+        "x-hermes-conversation-id": rawHermesId },
+      body: JSON.stringify({ model: "openai/gpt-5.6-luna", messages: [{ role: "user", content: "ping" }], stream: false }),
+    });
+    const response = await handleChatCompletions(req, config, logCtx);
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(logCtx.conversationId).toBe(normalizeLogConversationId(rawSessionId));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers.get("session_id")).toBe(rawSessionId);
+    expect(seen[0]!.headers.has("x-hermes-conversation-id")).toBe(false);
+  });
+
+  test("hyphenated session-id header strictly wins over x-hermes-conversation-id across the Chat bridge", async () => {
+    const seen = mockNativeWire();
+    const rawHermesId = "hermes-fixture-wire";
+    const rawSessionId = "native-hyphenated-session-789";
+    const logCtx = { model: "", provider: "" } as Parameters<typeof handleChatCompletions>[2];
+    const token = fakeChatGptJwt({ chatgpt_account_id: "fixture-chat-caller", exp: Math.floor(Date.now() / 1000) + 86400 });
+    const config = { defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {
+      openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+        baseUrl: "https://chatgpt.com/backend-api/codex", models: ["gpt-5.6-luna"] },
+    } } as OcxConfig;
+    const req = new Request("http://localhost/v1/chat/completions", { method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}`,
+        "chatgpt-account-id": "fixture-chat-caller",
+        "session-id": rawSessionId,
+        "x-hermes-conversation-id": rawHermesId },
+      body: JSON.stringify({ model: "openai/gpt-5.6-luna", messages: [{ role: "user", content: "ping" }], stream: false }),
+    });
+    const response = await handleChatCompletions(req, config, logCtx);
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(logCtx.conversationId).toBe(normalizeLogConversationId(rawSessionId));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers.get("session_id")).toBe(rawSessionId);
+    expect(seen[0]!.headers.has("x-hermes-conversation-id")).toBe(false);
+  });
+
+  test("preserves native precedence of session_id over thread-id across the Chat bridge", async () => {
+    const seen = mockNativeWire();
+    const rawHermesId = "hermes-fixture-wire";
+    const rawSessionId = "native-session-preferred";
+    const rawThreadId = "native-thread-secondary";
+    const logCtx = { model: "", provider: "" } as Parameters<typeof handleChatCompletions>[2];
+    const token = fakeChatGptJwt({ chatgpt_account_id: "fixture-chat-caller", exp: Math.floor(Date.now() / 1000) + 86400 });
+    const config = { defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {
+      openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+        baseUrl: "https://chatgpt.com/backend-api/codex", models: ["gpt-5.6-luna"] },
+    } } as OcxConfig;
+    const req = new Request("http://localhost/v1/chat/completions", { method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}`,
+        "chatgpt-account-id": "fixture-chat-caller",
+        "session_id": rawSessionId,
+        "thread-id": rawThreadId,
+        "x-hermes-conversation-id": rawHermesId },
+      body: JSON.stringify({ model: "openai/gpt-5.6-luna", messages: [{ role: "user", content: "ping" }], stream: false }),
+    });
+    const response = await handleChatCompletions(req, config, logCtx);
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(logCtx.conversationId).toBe(normalizeLogConversationId(rawSessionId));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers.get("session_id")).toBe(rawSessionId);
+    expect(seen[0]!.headers.has("x-hermes-conversation-id")).toBe(false);
+  });
+
+  test("empty session_id spelling does not mask valid hyphenated session-id over Hermes across Chat bridge", async () => {
+    const seen = mockNativeWire();
+    const rawHermesId = "hermes-fixture-wire";
+    const rawSessionId = "native-valid-hyphen-session";
+    const logCtx = { model: "", provider: "" } as Parameters<typeof handleChatCompletions>[2];
+    const token = fakeChatGptJwt({ chatgpt_account_id: "fixture-chat-caller", exp: Math.floor(Date.now() / 1000) + 86400 });
+    const config = { defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {
+      openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+        baseUrl: "https://chatgpt.com/backend-api/codex", models: ["gpt-5.6-luna"] },
+    } } as OcxConfig;
+    const req = new Request("http://localhost/v1/chat/completions", { method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}`,
+        "chatgpt-account-id": "fixture-chat-caller",
+        "session_id": "",
+        "session-id": rawSessionId,
+        "x-hermes-conversation-id": rawHermesId },
+      body: JSON.stringify({ model: "openai/gpt-5.6-luna", messages: [{ role: "user", content: "ping" }], stream: false }),
+    });
+    const response = await handleChatCompletions(req, config, logCtx);
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(logCtx.conversationId).toBe(normalizeLogConversationId(rawSessionId));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers.get("session_id")).toBe(rawSessionId);
+    expect(seen[0]!.headers.has("x-hermes-conversation-id")).toBe(false);
+  });
+});
+
+describe("Responses preparation keeps the Hermes log id a fallback", () => {
+  const hermesLogId = normalizeLogConversationId("hermes-fixture-wire")!;
+  async function responses(headers: Record<string, string>, logCtx: Parameters<typeof handleResponses>[2],
+    options: Parameters<typeof handleResponses>[3] = {}) {
+    const token = fakeChatGptJwt({ chatgpt_account_id: "fixture-chat-caller", exp: Math.floor(Date.now() / 1000) + 86400 });
+    const config = { defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {
+      openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+        baseUrl: "https://chatgpt.com/backend-api/codex", models: ["gpt-5.6-luna"] },
+    } } as OcxConfig;
+    const req = new Request("http://localhost/v1/responses", { method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}`,
+        "chatgpt-account-id": "fixture-chat-caller", ...headers },
+      body: JSON.stringify({ model: "openai/gpt-5.6-luna", input: "ping", stream: false }),
+    });
+    const response = await handleResponses(req, config, logCtx, options);
+    await response.text();
+    expect(response.status).toBe(200);
+  }
+
+  test("a native identity resolved in preparation replaces the Hermes fallback", async () => {
+    const seen = mockNativeWire();
+    const logCtx = { model: "", provider: "", conversationId: hermesLogId,
+      conversationIdIsHermesFallback: true } as Parameters<typeof handleResponses>[2];
+    await responses({ session_id: "native-bridge-session" }, logCtx);
+    expect(seen).toHaveLength(1);
+    expect(logCtx.conversationId).toBe(normalizeLogConversationId("native-bridge-session"));
+    expect(logCtx.conversationIdIsHermesFallback).toBeUndefined();
+  });
+
+  test("the Hermes fallback survives when preparation resolves no native identity", async () => {
+    const seen = mockNativeWire();
+    const logCtx = { model: "", provider: "", conversationId: hermesLogId,
+      conversationIdIsHermesFallback: true } as Parameters<typeof handleResponses>[2];
+    await responses({}, logCtx);
+    expect(seen).toHaveLength(1);
+    expect(logCtx.conversationId).toBe(hermesLogId);
+  });
+
+  test("a caller-owned pre-populated id (routed Claude) is kept over native headers", async () => {
+    const seen = mockNativeWire();
+    const callerOwned = normalizeLogConversationId("routed-claude-metadata")!;
+    const logCtx = { model: "", provider: "", conversationId: callerOwned } as Parameters<typeof handleResponses>[2];
+    await responses({ session_id: "native-bridge-session" }, logCtx);
+    expect(seen).toHaveLength(1);
+    expect(logCtx.conversationId).toBe(callerOwned);
+  });
+
+  test("direct Responses correlates Hermes only without native identity and never forwards it", async () => {
+    const seen = mockNativeWire();
+    const bare = { model: "", provider: "" } as Parameters<typeof handleResponses>[2];
+    await responses({ "x-hermes-conversation-id": "hermes-fixture-wire" }, bare);
+    const native = { model: "", provider: "" } as Parameters<typeof handleResponses>[2];
+    await responses({ "x-hermes-conversation-id": "hermes-fixture-wire", "thread-id": "native-thread" }, native);
+    expect(seen).toHaveLength(2);
+    expect(bare.conversationId).toBe(hermesLogId);
+    expect(native.conversationId).toBe(normalizeLogConversationId("native-thread"));
+    for (const wire of seen) expect(wire.headers.has("x-hermes-conversation-id")).toBe(false);
+  });
 });

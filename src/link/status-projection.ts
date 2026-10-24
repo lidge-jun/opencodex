@@ -22,6 +22,8 @@ export interface LinkStatusDto {
     tunnelPort: number;
     /** Home only: what the link carried from this Child, and the compatibility verdict. */
     peer?: LinkPeerStatus;
+    /** Home-initiated links on request (`?diagnostics=1`): retry progress and the last failure. */
+    tunnel?: LinkTunnelDiagnostics;
   }>;
   child: null | {
     alias: string;
@@ -31,6 +33,43 @@ export interface LinkStatusDto {
   };
   /** This build's version and link protocol, the side every `peer` verdict compares against. */
   local?: LinkLocalPeer;
+}
+
+/**
+ * The Home's account of one `-R` tunnel: ssh attempts since it was last connected, when the next
+ * one is due (null while one runs or none is scheduled), the last state change and the last
+ * failure. `cause` is a fixed word from `tunnel-history.ts`, never ssh output.
+ */
+export interface LinkTunnelDiagnostics {
+  attempt: number;
+  nextRetryAt: string | null;
+  lastTransition: { from: LinkWireState; to: LinkWireState; at: string; cause: string | null } | null;
+  lastFailure: { cause: string; at: string } | null;
+}
+
+function iso(at: number): string {
+  return new Date(at).toISOString();
+}
+
+/** Add `tunnel` to each Home-initiated link the supervisor reports. */
+export function attachLinkTunnelDiagnostics(dto: LinkStatusDto, supervisorStates: readonly LinkTunnelStatus[]): LinkStatusDto {
+  const byId = new Map(supervisorStates.map(status => [status.linkId, status]));
+  for (const link of dto.links) {
+    const status = byId.get(link.id);
+    if (!status || status.direction !== "hub-initiated") continue;
+    const { state, history } = status;
+    const due = (state.kind === "failed" || state.kind === "reconnecting") && state.retryAt !== undefined && state.inFlight !== true
+      ? state.retryAt : null;
+    link.tunnel = {
+      attempt: history?.attempt ?? 0,
+      nextRetryAt: due === null ? null : iso(due),
+      lastTransition: history?.lastTransition
+        ? { from: history.lastTransition.from, to: history.lastTransition.to, at: iso(history.lastTransition.at), cause: history.lastTransition.cause }
+        : null,
+      lastFailure: history?.lastFailure ? { cause: history.lastFailure.cause, at: iso(history.lastFailure.at) } : null,
+    };
+  }
+  return dto;
 }
 
 /** Add this build's identity and, on a Home, each Child's observed peer status. */

@@ -358,14 +358,17 @@ export async function applyFinalRouteRequestNormalization(args: {
 
   {
     const { nativeEffortClamp, shouldApplyNativeEffortClamp } = await import("../../codex/catalog");
+    const raw = parsed._rawBody as { reasoning?: { effort?: string } } | undefined;
+    // The parser folds `ultra` to `max` only in options.reasoning; the passthrough adapter
+    // serializes the raw body, so a raw `ultra` must reach the clamp itself (#7590).
+    const rawUltra = raw?.reasoning && typeof raw.reasoning === "object" && raw.reasoning.effort === "ultra";
     const clamped = shouldApplyNativeEffortClamp(route.providerName, route.provider, finalSelectedModelId)
-      ? nativeEffortClamp(route.modelId, parsed.options.reasoning)
+      ? nativeEffortClamp(route.modelId, rawUltra ? "ultra" : parsed.options.reasoning)
       : null;
     if (clamped) {
       parsed.options.reasoning = clamped;
-      const raw = parsed._rawBody as { reasoning?: { effort?: string } } | undefined;
       if (raw?.reasoning && typeof raw.reasoning === "object") raw.reasoning.effort = clamped;
-      logCtx.requestedEffort = `${logCtx.requestedEffort ?? "max"}->${clamped}`;
+      logCtx.requestedEffort = `${logCtx.requestedEffort ?? (rawUltra ? "ultra" : "max")}->${clamped}`;
     }
   }
   // Chat ingress cannot strip effort against a provisional policy pick. Apply the

@@ -193,6 +193,7 @@ describe("codebuddy runTurn fails closed before any spawn", () => {
     const adapter = createCodeBuddyAdapter(provider(), {
       platform: "win32",
       which: () => "C:\\npm\\codebuddy.cmd",
+      readDispatcher: () => '@ECHO off\r\n"%_prog%"  "%dp0%\\node_modules\\@tencent-ai\\codebuddy-code\\bin\\codebuddy" %*\r\n',
       spawn: (seenCommand, seenArgs, seenOptions) => {
         command = seenCommand;
         args = seenArgs;
@@ -730,6 +731,7 @@ describe("codebuddy runTurn streams a headless turn", () => {
       platform: "win32",
       spawn: () => child as unknown as ChildProcess,
       which: () => "C:\\npm\\codebuddy.cmd",
+      readDispatcher: () => '@ECHO off\r\n"%_prog%"  "%dp0%\\node_modules\\@tencent-ai\\codebuddy-code\\bin\\codebuddy" %*\r\n',
       killWindowsProcessTree: pid => {
         killedTrees.push(pid);
         child.exitCode = 1;

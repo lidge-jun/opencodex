@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
+import { recordLinkDiagnostic } from "../../src/link/diagnostics";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { recycleStandalone, standaloneRecycleEnv } from "../../src/client/runtime";
 
 describe("standalone recycle environment", () => {
@@ -127,6 +129,36 @@ describe("standalone recycle", () => {
       });
       expect(calls).toEqual(["spawn", "exit:1"]);
     });
+  });
+
+  test("persists queued diagnostics before a supervised recycle exits", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-recycle-diagnostics-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = dir;
+    try {
+      await withServiceMarker("1", async () => {
+        recordLinkDiagnostic({ event: "relay_failure", outcome: "auth_failed" });
+        recordLinkDiagnostic({ event: "relay_retry", outcome: "deadline" });
+        recordLinkDiagnostic({ event: "relay_recovered", outcome: "recovered" });
+        let exited = false;
+        await recycleStandalone(serviceApiTokenFingerprint("disconnected-hub-token"), {
+          configuredPort: () => 10456,
+          isDesktopSupervised: () => false,
+          exitProcess: code => {
+            expect(code).toBe(1);
+            const records = readFileSync(join(dir, "link", "diagnostics.jsonl"), "utf8")
+              .trim().split("\n").map(line => JSON.parse(line));
+            expect(records.map(({ event }) => event)).toEqual(["relay_failure", "relay_retry", "relay_recovered"]);
+            exited = true;
+          },
+        });
+        expect(exited).toBe(true);
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(dir);
+    }
   });
 
   test("a supervised client still exits 1 without spawning", async () => {

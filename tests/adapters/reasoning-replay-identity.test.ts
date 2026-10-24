@@ -61,24 +61,66 @@ async function drain(events: AsyncIterable<AdapterEvent>, replayScope: OcxReason
   }
 }
 
+function authenticatedScope(
+  overrides: Partial<NonNullable<OcxReasoningReplayScopeRef["current"]>> = {},
+): OcxReasoningReplayScopeRef {
+  return { ...scope(overrides), clientPrincipalId: "principal-a" };
+}
+
 describe("reasoning replay provider and credential identity", () => {
   beforeEach(() => clearReasoningReplayCacheForTests());
   afterEach(() => clearReasoningReplayCacheForTests());
 
   test("the same tuple replays but provider, destination, wire, model, or credential changes miss", () => {
-    const original = scope();
+    const original = authenticatedScope();
     rememberReasoningForCall(CALL_ID, REASONING, original);
-    expect(peekReasoningForCall(CALL_ID, scope())).toBe(REASONING);
+    expect(peekReasoningForCall(CALL_ID, authenticatedScope())).toBe(REASONING);
 
     for (const changed of [
-      scope({ providerName: "provider-b" }),
-      scope({ providerDestinationIdentity: "destination:provider-b" }),
-      scope({ adapterName: "openai-responses" }),
-      scope({ modelId: "deepseek-v4" }),
-      scope({ credentialIdentity: "key:physical-b" }),
+      authenticatedScope({ providerName: "provider-b" }),
+      authenticatedScope({ providerDestinationIdentity: "destination:provider-b" }),
+      authenticatedScope({ adapterName: "openai-responses" }),
+      authenticatedScope({ modelId: "deepseek-v4" }),
+      authenticatedScope({ credentialIdentity: "key:physical-b" }),
     ]) {
       expect(peekReasoningForCall(CALL_ID, changed)).toBeUndefined();
     }
+  });
+
+  test("binding the same physical identity isolates plaintext by principal and refuses keyless writes", () => {
+    const principalA: OcxReasoningReplayScopeRef = { clientThreadId: THREAD, clientPrincipalId: "principal-a" };
+    const principalB: OcxReasoningReplayScopeRef = { clientThreadId: THREAD, clientPrincipalId: "principal-b" };
+    const keyless: OcxReasoningReplayScopeRef = { clientThreadId: THREAD };
+    for (const holder of [principalA, principalB, keyless]) bindReasoningReplayScope(holder, scope().current);
+    rememberReasoningForCall(CALL_ID, REASONING, principalA);
+    expect(peekReasoningForCall(CALL_ID, principalA)).toBe(REASONING);
+    expect(peekReasoningForCall(CALL_ID, principalB)).toBeUndefined();
+    expect(peekReasoningForCall(CALL_ID, keyless)).toBeUndefined();
+    rememberReasoningForCall(CALL_ID, "keyless overwrite", keyless);
+    expect(peekReasoningForCall(CALL_ID, keyless)).toBeUndefined();
+    expect(peekReasoningForCall(CALL_ID, principalA)).toBe(REASONING);
+    rememberReasoningForCall(CALL_ID, "principal b reasoning", principalB);
+    expect(peekReasoningForCall(CALL_ID, principalB)).toBe("principal b reasoning");
+    expect(peekReasoningForCall(CALL_ID, principalA)).toBe(REASONING);
+  });
+
+  test("keyless physical binding retains serving changes and rejection memos but rejects incomplete identity", () => {
+    const holder: OcxReasoningReplayScopeRef = { clientThreadId: THREAD };
+    const identity = scope().current;
+    bindReasoningReplayScope(holder, identity);
+    expect(holder.current).toEqual(identity);
+    expect(holder.current).not.toBe(identity);
+    commitReasoningReplayServingIdentity(holder);
+    rememberReasoningReplayOpaqueBlobRejection(holder);
+    expect(reasoningReplayOpaqueBlobRejectionMemoized(holder)).toBe(true);
+    bindReasoningReplayScope(holder, scope({ modelId: "changed-model" }).current);
+    expect(reasoningReplayServingIdentityChange(holder)).toMatchObject({ modelChanged: true });
+    expect(reasoningReplayOpaqueBlobRejectionMemoized(holder)).toBe(false);
+    bindReasoningReplayScope(holder, scope({ credentialIdentity: "" }).current);
+    expect(holder.current).toBeUndefined();
+    const threadless: OcxReasoningReplayScopeRef = {};
+    bindReasoningReplayScope(threadless, scope().current);
+    expect(threadless.current).toBeUndefined();
   });
 
   test("serving identity ignores credential generation but reports durable route changes", () => {
@@ -264,8 +306,8 @@ describe("reasoning replay provider and credential identity", () => {
   });
 
   test("invalidating a bound holder prevents writes under its stale identity", () => {
-    const bound = scope();
-    const oldIdentity = scope();
+    const bound = authenticatedScope();
+    const oldIdentity = authenticatedScope();
     rememberReasoningForCall(CALL_ID, "old reasoning", oldIdentity);
 
     bindReasoningReplayScope(bound, undefined);
@@ -388,9 +430,9 @@ describe("reasoning replay provider and credential identity", () => {
   });
 
   test("a bridge created before credential rotation writes under the holder's current identity", async () => {
-    const oldScope = scope();
+    const oldScope = authenticatedScope();
     rememberReasoningForCall(CALL_ID, "old reasoning", oldScope);
-    const holder = scope();
+    const holder = authenticatedScope();
     async function* events(): AsyncGenerator<AdapterEvent> {
       yield { type: "reasoning_raw_delta", text: "new reasoning" };
       holder.current = { ...holder.current!, credentialIdentity: "key:physical-b" };
@@ -534,7 +576,7 @@ describe("selective opaque-blob rejection memos", () => {
   test("falls back to the old blanket entry when a valid set cannot fit beside a near-limit key", () => {
     const current = scope().current!;
     const identity = JSON.stringify([current.providerName, current.providerDestinationDurableIdentity, current.adapterName, current.modelId, current.credentialDurableIdentity]);
-    const overhead = Buffer.byteLength(JSON.stringify(["", identity]));
+    const overhead = Buffer.byteLength(JSON.stringify([JSON.stringify([null, ""]), identity]));
     const nearLimit = { ...scope(), clientThreadId: "t".repeat(256 * 1024 - overhead - 1) };
     rememberReasoningReplayOpaqueBlobRejection(nearLimit, new Set([digest(1)]));
     expect(getReasoningReplayOpaqueBlobRejection(nearLimit)).toEqual({ mode: "blanket" });

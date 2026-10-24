@@ -127,6 +127,19 @@ native-main writer objects bind the observed bearer generation. Display-only and
 rows cannot republish advisory evidence. Producer/store bounds overflow to unknown, not a
 truncated supposedly exhaustive pool.
 
+`src/providers/quota-decision-antigravity.ts` owns Antigravity's separate loaded OAuth evidence.
+`src/providers/quota/antigravity.ts` captures an opaque receipt from the actual authenticated probe;
+display reports cannot mint one. Loaded auth-store notifications prove a sole active, usable account
+and retire receipts on credential/project, login, selection or roster transitions. Root, config
+generation and explicit invalidation also fence outstanding probes. The pure policy in
+`src/providers/antigravity-quota-identity.ts` requires the canonical `google-antigravity` OAuth store
+key, the Google cloud-code-assist mode and the canonical destination. Inference resolves its token from
+`store[route.providerName]` through the OAuth definition registered under that name, so the quota probe
+reads the same key and a renamed row neither probes nor borrows the canonical account; it reads unknown.
+Only Gem/Cla five-hour and weekly buckets contribute. A same-owner display-only refresh may retain
+previous family observations with their original clocks; without a matching observation it stays unknown.
+Per-model rows, Argon and last-good display data never create or restamp family evidence.
+
 `src/combos/jev-quota.ts` uses the worst valid relevant 5h/weekly/monthly/requested-family
 window per account, then the best usable pool tier in stable order. Observations older than
 30 minutes, future/invalid clocks or percentages and expired resets are ignored. Unknown ties
@@ -142,6 +155,9 @@ An Anthropic reset grant that drops one account's cached quota row also drops th
 `src/combos/jev-quota-route.ts` enriches only opted-in candidates. Authorization precedes
 service evidence reads. TypeSafe criteria carry scalar quota fields, System One/model descriptions
 carry advisory clauses, and all retain target/effort ordering and parser/deadline/abort contracts.
+Quota family lookup uses the native provider/model identity already resolved for the candidate;
+configured choice keys and effort allowlists remain unchanged. Native `gemini-*` and `claude-*`
+prefixes select Gem and Cla respectively; conflicting words elsewhere and unclassified ids do not.
 If additions exceed 64 KiB, serialization retries without quota before ordinary size refusal.
 `src/combos/jev-model-request.ts` owns the exact detached Responses JSON envelope, including escaping. The model backend uses it for quota sizing; the invoker adds its existing reasoning effort and checks that same serialized budget before admission/dispatch, selecting the supplied quota-free prompt only on overflow. This never retries a sent request or malformed output.
 Off payload bytes remain unchanged. Outbound quota omits ids/fingerprints; the optional v1
@@ -179,6 +195,31 @@ Direct models and every other Combo strategy bypass this path. The shared Combo 
 checkboxes and `Create JEV Auto` template. Inside that editor, a JEV Combo's `Decision method`
 section (`gui/src/components/combo-workspace-jev-decision.tsx`) chooses TypeSafe, a System One row,
 or an opencodex model route, with the timeout and a Test probe; there is no separate decisions page.
+
+## Session pin
+
+`sessionPin: { ttlMs }` is an opt-in, JEV-only Combo field (#7525); `src/combos/jev-session-pin-config.ts`
+owns its 60000..86400000 ms range, the CLI duration grammar and the closed `pinReason` vocabulary.
+Validation, sparse storage, omitted-field preservation on JEV saves and removal on a strategy switch follow
+the quota fields above. Absent, `src/server/responses/core-combo.ts` asks JEV on every request exactly as before.
+`src/server/responses/jev-session-pin.ts` keys a process-local pin by the admitted caller (context principal,
+key id, or `loopback`), the Combo id and the explicit session lane from `sessionLaneIdFromRequest`; a request
+without a lane never pins and no body field is an identity. A pin is written only when the target of an applied
+(`gate: "apply"`) decision completes through the Combo callback gate, and every completion on that target
+(tool-loop continuations included) renews its idle window. Reuse runs after current eligibility: the pinned
+key must be among this request's JEV choices with its effort still offered, and opted-in quota evidence must
+not read `nearly_exhausted`; otherwise the pin is released and JEV decides. Any recorded target failure in the
+request forgets the pin, cancellation does not, and a config generation change invalidates both stored pins and
+in-flight writers. A reused turn sends no decision request and persists `pinned: true` with `pinReason: "session"`;
+a decision that replaced a released pin persists the reason. `src/usage/jev-stats.ts` counts pinned turns as
+`pinnedRequests`, never as decisions, gates or backend latency; request success, model fallback and physical
+attempts count every JEV-routed request, pinned or decided. The CLI projection reads an absent `pinnedRequests` as 0.
+Besides a classified failure response, a non-cancellation dispatch, preflight or failure-read exception and a
+committed stream that ends `failed` also forget the pin; `incomplete` is an answer and keeps it. Each forget stamps a
+per-session failure fence, so a request already in flight on that session cannot write the pin back.
+The store holds at most 512 pins with least-recently-written eviction. Coverage:
+`tests/routing/jev-session-pin.test.ts`, `tests/server/server-jev-session-pin.test.ts` and
+`tests/cli/cli-combo-session-pin.test.ts`.
 
 JEV setup stays inside those existing shells. A configured `jev-decision` provider Overview exposes
 **Create JEV Auto**, which navigates to the registered `models/combos/jev-auto` action hash.

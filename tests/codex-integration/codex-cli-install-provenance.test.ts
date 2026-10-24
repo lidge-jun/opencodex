@@ -1,15 +1,46 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  ftruncateSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   inspectCodexCliInstall,
   isAppBundledCodexPath,
+  MAX_NATIVE_BACKING_BYTES,
   isCodexCliUpdateVersionManagerPath,
   type CodexCliInstallProvenanceDeps,
 } from "../../src/codex/cli-install-provenance";
 import { buildUnixCodexShim } from "../../src/codex/shim";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import {
+  VIRTUAL_BACKING_BINARY,
+  VIRTUAL_BACKING_MANIFEST,
+  VIRTUAL_ENTRYPOINT,
+  VIRTUAL_LAUNCHER,
+  VIRTUAL_MANIFEST,
+  VIRTUAL_PACKAGE_ROOT,
+  VIRTUAL_VENDOR_BINARY,
+  virtualInspectionDeps,
+  virtualManagedNpmGlobal,
+  virtualPosixFs,
+  VIRTUAL_MANIFEST_TEXT,
+  VIRTUAL_ENTRYPOINT_TEXT,
+  VIRTUAL_BACKING_TEXT,
+} from "../helpers/codex-cli-content-fs";
 
 const roots: string[] = [];
 
@@ -661,5 +692,470 @@ describe("Codex CLI install provenance", () => {
       expect(report.shim.status).toBe("matched");
       expect(report.managed).toBe(false);
     }
+  });
+});
+
+describe("install content binding", () => {
+  test("an ownership-only read never opens the backing bytes", async () => {
+    const fs = virtualManagedNpmGlobal();
+    const probed: string[] = [];
+    const deps = virtualInspectionDeps(fs, {
+      lstat: (path: string) => {
+        if (path.includes("@openai/codex-")) probed.push(path);
+        return fs.lstat(path);
+      },
+      readFile: (path: string) => {
+        if (path === VIRTUAL_BACKING_BINARY) {
+          throw new Error("must not read the native backing on a plain inspection");
+        }
+        return fs.readFile(path);
+      },
+    });
+    const report = await inspectCodexCliInstall(deps);
+    expect(report.managed).toBe(true);
+    expect(report.installContentDigest).toBeNull();
+    expect(report.evidence).not.toContain("install_content_digest");
+    expect(probed).toEqual([]);
+  });
+
+  test("a managed npm-global report binds the observed manifest, entrypoint and backing bytes", async () => {
+    const fs = virtualManagedNpmGlobal();
+    const report = await inspectCodexCliInstall(virtualInspectionDeps(fs, { observeInstallContent: true }));
+    expect(report.managed).toBe(true);
+    expect(report.reason).toBe("managed_npm_global");
+    expect(report.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(report.evidence).toContain("install_content_digest");
+  });
+
+  test("the same bytes observed again produce the same digest", async () => {
+    const first = await inspectCodexCliInstall(virtualInspectionDeps(virtualManagedNpmGlobal(), { observeInstallContent: true }));
+    const second = await inspectCodexCliInstall(virtualInspectionDeps(virtualManagedNpmGlobal(), { observeInstallContent: true }));
+    expect(first.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(second.installContentDigest).toBe(first.installContentDigest);
+    expect(second.installDigest).toBe(first.installDigest);
+  });
+
+  test.each([
+    ["manifest", VIRTUAL_MANIFEST, VIRTUAL_MANIFEST_TEXT.replace("1.2.3", "1.2.4")],
+    ["entrypoint", VIRTUAL_ENTRYPOINT, "#!/usr/bin/env node\n// synthetic fixture altered!!!\n"],
+    ["backing manifest", VIRTUAL_BACKING_MANIFEST, JSON.stringify({ name: "@openai/codex-linux-x64", version: "9.9.9" }) + "\n"],
+    ["backing binary", VIRTUAL_BACKING_BINARY, "synthetic-native-backing-v2\n"],
+  ])("a same-length change to the %s changes the content digest but keeps the location digest", async (_role, path, replacement) => {
+    const original = virtualManagedNpmGlobal();
+    const before = await inspectCodexCliInstall(virtualInspectionDeps(original, { observeInstallContent: true }));
+    expect(before.installContentDigest).not.toBeNull();
+    const mutated = virtualManagedNpmGlobal();
+    const prior = (mutated.readFile(path)).length;
+    mutated.setBytes(path, replacement);
+    expect(mutated.readFile(path).length).toBe(prior);
+    const after = await inspectCodexCliInstall(virtualInspectionDeps(mutated, { observeInstallContent: true }));
+    expect(after.installContentDigest).not.toBeNull();
+    expect(after.installContentDigest).not.toBe(before.installContentDigest);
+    expect(after.installDigest).toBe(before.installDigest);
+  });
+
+  test("a missing platform backing package is refused, not bound as absent", async () => {
+    const fs = virtualManagedNpmGlobal();
+    fs.remove(VIRTUAL_BACKING_MANIFEST);
+    fs.remove(VIRTUAL_BACKING_BINARY);
+    // With no resolve hit and no modelable fallback globals, the lane is ambiguous.
+    const report = await inspectCodexCliInstall(virtualInspectionDeps(fs, { observeInstallContent: true }));
+    expect(report.managed).toBe(true);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  test("a backing manifest resolving outside the npm prefix is refused", async () => {
+    const fs = virtualManagedNpmGlobal({
+      "/outside/codex-linux-x64/package.json": {
+        data: JSON.stringify({ name: "@openai/codex-linux-x64", version: "1.2.3" }) + "\n",
+      },
+    });
+    fs.redirect(VIRTUAL_BACKING_MANIFEST, "/outside/codex-linux-x64/package.json");
+    const report = await inspectCodexCliInstall(virtualInspectionDeps(fs, { observeInstallContent: true }));
+    expect(report.managed).toBe(true);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  test("a backing read failure is never treated as absent backing", async () => {
+    const fs = virtualManagedNpmGlobal();
+    const deps = virtualInspectionDeps(fs, {
+      observeInstallContent: true,
+      readFile: (path: string) => {
+        if (path === VIRTUAL_BACKING_MANIFEST) throw new Error("synthetic read denial");
+        return fs.readFile(path);
+      },
+    });
+    const report = await inspectCodexCliInstall(deps);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  test("an identity change between observations refuses", async () => {
+    const fs = virtualManagedNpmGlobal();
+    const backingStats = { count: 0 };
+    const stat = fs.stat;
+    const deps = virtualInspectionDeps(fs, {
+      observeInstallContent: true,
+      stat: (path: string) => {
+        const result = stat(path);
+        if (path === VIRTUAL_BACKING_BINARY) {
+          backingStats.count += 1;
+          if (backingStats.count === 1) fs.bumpIdentity(path);
+        }
+        return result;
+      },
+    });
+    const report = await inspectCodexCliInstall(deps);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  test("the package-vendor fallback binds when no resolve hit exists and globals are fully probed", async () => {
+    const fs = virtualPosixFs({
+      [VIRTUAL_LAUNCHER]: { link: VIRTUAL_ENTRYPOINT },
+      [VIRTUAL_MANIFEST]: { data: VIRTUAL_MANIFEST_TEXT },
+      [VIRTUAL_ENTRYPOINT]: { data: VIRTUAL_ENTRYPOINT_TEXT, mode: 0o755 },
+      [VIRTUAL_VENDOR_BINARY]: { data: VIRTUAL_BACKING_TEXT, mode: 0o755 },
+      "/virtual-npm/bin/node": { data: "synthetic-node\n", mode: 0o755 },
+      "/virtual-home/.keep": { data: "" },
+    });
+    const deps = virtualInspectionDeps(fs, {
+      observeInstallContent: true,
+      env: { CODEX_CLI_PATH: VIRTUAL_LAUNCHER, PATH: "/virtual-npm/bin", HOME: "/virtual-home" },
+    });
+    const report = await inspectCodexCliInstall(deps);
+    expect(report.managed).toBe(true);
+    expect(report.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("the vendor fallback refuses when the Node global lookup cannot be modeled", async () => {
+    const fs = virtualPosixFs({
+      [VIRTUAL_LAUNCHER]: { link: VIRTUAL_ENTRYPOINT },
+      [VIRTUAL_MANIFEST]: { data: VIRTUAL_MANIFEST_TEXT },
+      [VIRTUAL_ENTRYPOINT]: { data: VIRTUAL_ENTRYPOINT_TEXT, mode: 0o755 },
+      [VIRTUAL_VENDOR_BINARY]: { data: VIRTUAL_BACKING_TEXT, mode: 0o755 },
+    });
+    // PATH is empty: node cannot be resolved, so <node-prefix>/lib/node cannot be
+    // probed and the require.resolve failure the fallback needs is unproven.
+    const report = await inspectCodexCliInstall(virtualInspectionDeps(fs, { observeInstallContent: true }));
+    // Selection stays intact; only the content observation is refused.
+    expect(report.managed).toBe(true);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  test("missing lookup seeds refuse a global backing hit while preserving a local hit", async () => {
+    const fs = virtualManagedNpmGlobal({
+      "/virtual-npm/bin/node": { data: "synthetic-node\n", mode: 0o755 },
+    });
+    const env = { CODEX_CLI_PATH: VIRTUAL_LAUNCHER, PATH: "/virtual-npm/bin" };
+    const deps = virtualInspectionDeps(fs, { observeInstallContent: true, env });
+    // Missing HOME/NODE_PATH does not affect a local optional-package hit.
+    expect((await inspectCodexCliInstall(deps)).installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+
+    fs.remove(VIRTUAL_BACKING_MANIFEST);
+    fs.remove(VIRTUAL_BACKING_BINARY);
+    const globalRoot = "/virtual-npm/lib/node/@openai/codex-linux-x64";
+    fs.create(globalRoot + "/package.json", {
+      data: JSON.stringify({ name: "@openai/codex-linux-x64", version: "1.2.3" }) + "\n",
+    });
+    fs.create(globalRoot + "/vendor/x86_64-unknown-linux-musl/bin/codex", {
+      data: VIRTUAL_BACKING_TEXT, mode: 0o755,
+    });
+    // This same in-prefix Node-global backing binds with complete lookup seeds.
+    expect((await inspectCodexCliInstall({ ...deps, env: { ...env, HOME: "/virtual-home" } }))
+      .installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+    // Without them, unknown earlier global lanes can shadow the observed hit.
+    const report = await inspectCodexCliInstall(deps);
+    expect(report.managed).toBe(true);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  test("a backing package appearing in an earlier lookup lane mid-observation refuses", async () => {
+    const fs = virtualManagedNpmGlobal();
+    const earlierManifest = VIRTUAL_PACKAGE_ROOT + "/bin/node_modules/@openai/codex-linux-x64/package.json";
+    const deps = virtualInspectionDeps(fs, {
+      observeInstallContent: true,
+      readFile: (path: string) => {
+        const bytes = fs.readFile(path);
+        if (path === VIRTUAL_BACKING_BINARY) {
+          // The modeled selector already resolved the nested optional package;
+          // a package.json materializing in an earlier lane changes the answer.
+          fs.create(earlierManifest, {
+            data: JSON.stringify({ name: "@openai/codex-linux-x64", version: "1.2.3" }) + "\n",
+          });
+        }
+        return bytes;
+      },
+    });
+    const report = await inspectCodexCliInstall(deps);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  test("a backing package disappearing after selection refuses", async () => {
+    const fs = virtualManagedNpmGlobal();
+    const deps = virtualInspectionDeps(fs, {
+      observeInstallContent: true,
+      readFile: (path: string) => {
+        const bytes = fs.readFile(path);
+        if (path === VIRTUAL_BACKING_MANIFEST) fs.remove(VIRTUAL_BACKING_MANIFEST);
+        return bytes;
+      },
+    });
+    const report = await inspectCodexCliInstall(deps);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  test("a selected launcher retargeted while the backing is read refuses", async () => {
+    const fs = virtualManagedNpmGlobal({
+      "/elsewhere/codex.js": { data: "// swapped-in entrypoint\n", mode: 0o755 },
+    });
+    expect((await inspectCodexCliInstall(virtualInspectionDeps(fs, { observeInstallContent: true })))
+      .installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+    const deps = virtualInspectionDeps(fs, {
+      observeInstallContent: true,
+      readFile: (path: string) => {
+        const bytes = fs.readFile(path);
+        // Canonical-path checks cannot see this: the entrypoint file itself is
+        // untouched; only the selected launcher's lexical->canonical link moved.
+        if (path === VIRTUAL_BACKING_BINARY) fs.redirect(VIRTUAL_LAUNCHER, "/elsewhere/codex.js");
+        return bytes;
+      },
+    });
+    const report = await inspectCodexCliInstall(deps);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  test("a backing package symlink retargeted while its binary is read refuses", async () => {
+    const fs = virtualManagedNpmGlobal({
+      "/elsewhere/codex-linux-x64/package.json": {
+        data: JSON.stringify({ name: "@openai/codex-linux-x64", version: "9.9.9" }) + "\n",
+      },
+    });
+    expect((await inspectCodexCliInstall(virtualInspectionDeps(fs, { observeInstallContent: true })))
+      .installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+    const deps = virtualInspectionDeps(fs, {
+      observeInstallContent: true,
+      readFile: (path: string) => {
+        const bytes = fs.readFile(path);
+        if (path === VIRTUAL_BACKING_BINARY) {
+          fs.redirect(VIRTUAL_BACKING_MANIFEST, "/elsewhere/codex-linux-x64/package.json");
+        }
+        return bytes;
+      },
+    });
+    const report = await inspectCodexCliInstall(deps);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  test("content observation is independent of the caller's selection attestation", async () => {
+    const fs = virtualManagedNpmGlobal();
+    const report = await inspectCodexCliInstall(virtualInspectionDeps(fs, { selectionAttested: false, observeInstallContent: true }));
+    expect(report.managed).toBe(false);
+    expect(report.reason).toBe("selection_unattested");
+     // The digest binds the bytes that were read; ownership and selection stay separate.
+     expect(report.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+   });
+
+  // Linux only: descriptor counting uses /proc/self/fd, and the held-read seam
+  // is the native O_NOFOLLOW/O_NONBLOCK path. A refused file once leaked the
+  // descriptor it had just opened, so each refusal is repeated enough times to
+  // make a surviving leak impossible to miss.
+  test.skipIf(process.platform !== "linux")("a refused content file never leaks its descriptor", async () => {
+    const triples: Record<string, string> = {
+      "linux:x64": "x86_64-unknown-linux-musl",
+      "linux:arm64": "aarch64-unknown-linux-musl",
+    };
+    const packages: Record<string, string> = {
+      "linux:x64": "@openai/codex-linux-x64",
+      "linux:arm64": "@openai/codex-linux-arm64",
+    };
+    const triple = triples[process.platform + ":" + process.arch];
+    const backingName = packages[process.platform + ":" + process.arch];
+    expect(triple).toBeDefined();
+    expect(backingName).toBeDefined();
+
+    const root = tempRoot("ocx-cli-content-fd-");
+    const prefix = join(root, "npm-prefix");
+    const pkgRoot = join(prefix, "lib", "node_modules", "@openai", "codex");
+    const backingPkg = join(pkgRoot, "node_modules", "@openai", backingName!.split("/")[1]);
+    const backingBin = join(backingPkg, "vendor", triple!, "bin", "codex");
+    mkdirSync(join(prefix, "bin"), { recursive: true });
+    mkdirSync(join(pkgRoot, "bin"), { recursive: true });
+    mkdirSync(join(backingPkg, "vendor", triple!, "bin"), { recursive: true });
+    writeFileSync(join(pkgRoot, "package.json"), JSON.stringify({
+      name: "@openai/codex",
+      version: "1.2.3",
+      description: "synthetic fixture package - not a published artifact",
+      bin: { codex: "bin/codex.js" },
+    }, null, 2) + "\n");
+    writeFileSync(join(pkgRoot, "bin", "codex.js"), "#!/usr/bin/env node\n// synthetic fixture\n");
+    chmodSync(join(pkgRoot, "bin", "codex.js"), 0o755);
+    writeFileSync(join(backingPkg, "package.json"), JSON.stringify({
+      name: backingName,
+      version: "1.2.3",
+    }) + "\n");
+    const launcher = join(prefix, "bin", "codex");
+    symlinkSync(join("..", "lib", "node_modules", "@openai", "codex", "bin", "codex.js"), launcher);
+
+    const deps: CodexCliInstallProvenanceDeps = {
+      platform: "linux",
+      arch: process.arch as NodeJS.Architecture,
+      configDir: join(root, "config"),
+      env: { CODEX_CLI_PATH: launcher, PATH: "", HOME: join(root, "home") },
+      selectionAttested: true,
+      selectedCommand: launcher,
+      observeInstallContent: true,
+      inspectShim: () => ({ status: "not-tracked" }),
+    };
+    const fdCount = () => readdirSync("/proc/self/fd").length;
+
+    // A healthy install must bind before the refusal checks: without this the
+    // loops below could pass while never reaching the descriptor path at all.
+    writeFileSync(backingBin, "#!/bin/sh\n# synthetic fixture backing\n");
+    const healthy = await inspectCodexCliInstall(deps);
+    expect(healthy.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+
+    // A directory at the backing-binary slot opens fine under O_RDONLY and is
+    // then refused by the type check — the path that used to leak the fd.
+    rmSync(backingBin);
+    mkdirSync(backingBin);
+    const beforeNonregular = fdCount();
+    for (let i = 0; i < 25; i += 1) {
+      const report = await inspectCodexCliInstall(deps);
+      expect(report.installContentDigest).toBeNull();
+    }
+    expect(fdCount()).toBe(beforeNonregular);
+
+    // A sparse oversize regular file takes the size check instead; same rule.
+    rmSync(backingBin, { recursive: true, force: true });
+    const fd = openSync(backingBin, "w");
+    try {
+      ftruncateSync(fd, MAX_NATIVE_BACKING_BYTES + 1);
+    } finally {
+      closeSync(fd);
+    }
+    const beforeOversize = fdCount();
+    for (let i = 0; i < 25; i += 1) {
+      const report = await inspectCodexCliInstall(deps);
+      expect(report.installContentDigest).toBeNull();
+    }
+    expect(fdCount()).toBe(beforeOversize);
+  });
+
+  // POSIX only: exercises the native held-fd path and the end-of-observation
+  // lexical->canonical re-resolution. The launcher swap happens at its final
+  // resolution; Linux additionally verifies the backing descriptor is still
+  // open at that boundary. No held descriptor prevents the symlink mutation.
+  test.skipIf(process.platform === "win32")("a launcher retargeted during the native observation refuses", async () => {
+    const backing: Record<string, { triple: string; pkg: string }> = {
+      "linux:x64": { triple: "x86_64-unknown-linux-musl", pkg: "@openai/codex-linux-x64" },
+      "linux:arm64": { triple: "aarch64-unknown-linux-musl", pkg: "@openai/codex-linux-arm64" },
+      "darwin:x64": { triple: "x86_64-apple-darwin", pkg: "@openai/codex-darwin-x64" },
+      "darwin:arm64": { triple: "aarch64-apple-darwin", pkg: "@openai/codex-darwin-arm64" },
+    };
+    const selected = backing[process.platform + ":" + process.arch];
+    expect(selected).toBeDefined();
+
+    const root = tempRoot("ocx-cli-content-retarget-");
+    const prefix = join(root, "npm-prefix");
+    const { launcher, packageRoot } = createPosixNpmGlobal(prefix);
+    const backingPkg = join(packageRoot, "node_modules", "@openai", selected!.pkg.split("/")[1]);
+    const backingBin = join(backingPkg, "vendor", selected!.triple, "bin", "codex");
+    mkdirSync(join(backingPkg, "vendor", selected!.triple, "bin"), { recursive: true });
+    writeFileSync(join(backingPkg, "package.json"), JSON.stringify({
+      name: selected!.pkg,
+      version: "1.2.3",
+    }) + "\n");
+    writeFileSync(backingBin, "#!/bin/sh\n# synthetic fixture backing\n");
+    // realpath reports canonical paths; macOS temp roots sit behind /var -> /private/var.
+    const canonicalBackingBin = realpathSync.native(backingBin);
+    const swapped = join(root, "elsewhere", "codex.js");
+    mkdirSync(dirname(swapped), { recursive: true });
+    writeFileSync(swapped, "// swapped-in entrypoint\n");
+
+    const baseDeps: CodexCliInstallProvenanceDeps = {
+      platform: process.platform,
+      arch: process.arch,
+      configDir: join(root, "config"),
+      env: { CODEX_CLI_PATH: launcher, PATH: "", HOME: join(root, "home") },
+      selectionAttested: true,
+      selectedCommand: launcher,
+      observeInstallContent: true,
+      inspectShim: () => ({ status: "not-tracked" }),
+    };
+    // Positive control first: without the seam the same fixture must bind, or
+    // the refusal below proves nothing about the retarget path.
+    const healthy = await inspectCodexCliInstall(baseDeps);
+    expect(healthy.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+
+    let backingSeen = false;
+    let flipped = false;
+    const report = await inspectCodexCliInstall({
+      ...baseDeps,
+      realpath: (path: string) => {
+        if (backingSeen && !flipped && path === launcher) {
+          if (process.platform === "linux") {
+            const backingHeld = readdirSync("/proc/self/fd").some(fd => {
+              try { return readlinkSync("/proc/self/fd/" + fd) === canonicalBackingBin; }
+              catch { return false; }
+            });
+            expect(backingHeld).toBe(true);
+          }
+          flipped = true;
+          rmSync(launcher);
+          symlinkSync(swapped, launcher);
+        }
+        const resolved = realpathSync.native(path);
+        if (resolved === canonicalBackingBin) backingSeen = true;
+        return resolved;
+      },
+    });
+    expect(flipped).toBe(true);
+    // Selection still classified; only the content observation refused.
+    expect(report.managed).toBe(true);
+    expect(report.installContentDigest).toBeNull();
+  });
+
+  // POSIX only (the native held-descriptor reader). Sparse files keep this
+  // cheap: the accepted size streams holes, and the over-limit size is refused
+  // by fstat before any read.
+  test.skipIf(process.platform === "win32")("a published-size native backing binds and one past the finite bound refuses", async () => {
+    const backing: Record<string, { triple: string; pkg: string }> = {
+      "linux:x64": { triple: "x86_64-unknown-linux-musl", pkg: "@openai/codex-linux-x64" },
+      "linux:arm64": { triple: "aarch64-unknown-linux-musl", pkg: "@openai/codex-linux-arm64" },
+      "darwin:x64": { triple: "x86_64-apple-darwin", pkg: "@openai/codex-darwin-x64" },
+      "darwin:arm64": { triple: "aarch64-apple-darwin", pkg: "@openai/codex-darwin-arm64" },
+    };
+    const selected = backing[process.platform + ":" + process.arch];
+    expect(selected).toBeDefined();
+
+    const root = tempRoot("ocx-cli-content-large-");
+    const { launcher, packageRoot } = createPosixNpmGlobal(join(root, "npm-prefix"));
+    const backingPkg = join(packageRoot, "node_modules", "@openai", selected!.pkg.split("/")[1]);
+    const backingBin = join(backingPkg, "vendor", selected!.triple, "bin", "codex");
+    mkdirSync(dirname(backingBin), { recursive: true });
+    writeFileSync(join(backingPkg, "package.json"), JSON.stringify({ name: selected!.pkg, version: "1.2.3" }) + "\n");
+    const deps: CodexCliInstallProvenanceDeps = {
+      platform: process.platform,
+      arch: process.arch,
+      configDir: join(root, "config"),
+      env: { CODEX_CLI_PATH: launcher, PATH: "", HOME: join(root, "home") },
+      selectionAttested: true,
+      selectedCommand: launcher,
+      observeInstallContent: true,
+      inspectShim: () => ({ status: "not-tracked" }),
+    };
+
+    // The size of @openai/codex@0.163.0-linux-x64's binary, above the former 256 MiB bound.
+    const publishedSize = 296_865_480;
+    expect(publishedSize).toBeGreaterThan(256 * 1024 * 1024);
+    writeFileSync(backingBin, "");
+    truncateSync(backingBin, publishedSize);
+    const published = await inspectCodexCliInstall(deps);
+    expect(published.managed).toBe(true);
+    expect(published.installContentDigest).toMatch(/^[0-9a-f]{64}$/);
+
+    truncateSync(backingBin, MAX_NATIVE_BACKING_BYTES + 1);
+    const oversized = await inspectCodexCliInstall(deps);
+    expect(oversized.managed).toBe(true);
+    expect(oversized.installContentDigest).toBeNull();
   });
 });

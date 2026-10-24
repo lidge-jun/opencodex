@@ -98,6 +98,7 @@ describe("procfs process read failures", () => {
         selectionAttested: true, versionEvidence: { kind: "package-manifest" }, provenance: "npm-global",
         managed: true, reason: "managed_npm_global", location: "<npm-global>/@openai/codex",
         installDigest: "a".repeat(64), packageVersion: "1.0.0", shim: { status: "not-tracked", backingKind: null },
+        installContentDigest: "c".repeat(64),
         evidence: ["package_manifest", "global_npm_layout"],
       }),
       resolveTarget: () => ({ kind: "resolved", version: "1.1.0", integrity: "sha512-AAAA" }),

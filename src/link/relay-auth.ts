@@ -2,6 +2,12 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const LINK_RELAY_AUTH_PATH = "/.well-known/opencodex/link-relay-auth";
 export const LINK_RELAY_SESSION_HEADER = "x-opencodex-link-session";
+/**
+ * Marks a challenge that only asks whether the Home answers (the Child's readiness preflight): the
+ * Home proves itself without reserving a session, so no data request can follow it and it holds
+ * neither session capacity nor a drain lease. An older Home ignores it and reserves as before.
+ */
+export const LINK_RELAY_PROBE_HEADER = "x-opencodex-link-probe";
 export const LINK_RELAY_AUTH_VERSION = "2";
 export const LINK_RELAY_AUTH_TIMEOUT_MS = 5_000;
 
