@@ -133,6 +133,10 @@ jobs:
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner, repo, pull_number, per_page: 100,
             });
+            // The file list must belong to the head the approvals are judged
+            // against; if the head moved while listing, none is confirmed.
+            const { data: prAfterFiles } = await github.rest.pulls.get({ owner, repo, pull_number });
+            const filesAtHead = prAfterFiles.head?.sha === pr.head.sha;
             const labels = new Set(pr.labels.map((label) => label.name));
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number: pull_number, per_page: 100,
@@ -145,7 +149,7 @@ jobs:
             // replaced by a later event before it executes.
             const approvalInput = {
               labels: [...labels],
-              headSha: pr.head.sha,
+              headSha: filesAtHead ? pr.head.sha : null,
               record: parseApprovalRecord(authoritativeHygieneSection(comments)),
               eventAction: context.payload.action,
             };

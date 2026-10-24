@@ -65,6 +65,8 @@ type HygieneRun = {
 async function runHygiene(options: {
   action: string;
   head?: string;
+  /** Head reported by each successive pulls.get; the last one repeats. */
+  headReads?: string[];
   labels?: string[];
   files?: Array<{ filename: string; status: string; patch: string }>;
   comments?: Comment[];
@@ -75,6 +77,8 @@ async function runHygiene(options: {
   const failures: string[] = [];
   const labels = new Set(options.labels ?? []);
   const reads = [...(options.eventReads ?? [])];
+  const headReads = [...(options.headReads ?? [])];
+  let lastHead = options.head ?? HEAD_B;
   let comments = (options.comments ?? []).map(comment => ({ ...comment }));
   const note = (method: string, args: Record<string, unknown>) => calls.push({ method, args });
   const ok = <T>(data: T) => ({ data });
@@ -126,7 +130,7 @@ async function runHygiene(options: {
             title: "fix: adjust feature",
             body: "",
             user: { login: "contributor" },
-            head: { sha: options.head ?? HEAD_B },
+            head: { sha: (lastHead = headReads.shift() ?? lastHead) },
             base: { ref: "dev" },
             labels: [...labels].map(name => ({ name })),
           });
@@ -433,6 +437,18 @@ describe("pr-hygiene head-bound approvals", () => {
     expect(broken.calls.some(c => c.method === "issues.updateComment" || c.method === "issues.createComment")).toBe(false);
   });
 
+  test("files listed after the head moved confirm no approval", async () => {
+    const run = await runHygiene({
+      action: "edited",
+      headReads: [HEAD_B, HEAD_A],
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_B, 0)])],
+      eventReads: [[[]], [[]]],
+    });
+    expect(removed(run)).toEqual([APPROVAL]);
+    expect(regressionFailure(run)).toBe(true);
+  });
+
   test("a rewrite not yet visible in either read is not counted (accepted limitation)", async () => {
     const run = await runHygiene({
       action: "edited",
@@ -477,6 +493,22 @@ describe("enforce gate reads the hygiene head binding", () => {
     expect(gateFlagsRegression(moved)).toBe(true);
     const unreadable = await gate({ labels: [APPROVAL], record: recordLine(HARNESS_HEAD, 0), failOn: ["issues.listEvents"] });
     expect(gateFlagsRegression(unreadable)).toBe(true);
+  });
+
+  test("a maintainer PR whose files were listed at a newer head does not clear the failure", async () => {
+    const result = await runEnforcePrTarget(gateScript(), {
+      pr: { base: { ref: "dev" }, draft: false },
+      authorPermission: "write",
+      labels: [APPROVAL],
+      files: [{ filename: "src/feature.ts", patch: "+b" }],
+      comments: [{ ...gateComment([recordLine(HARNESS_HEAD, 0)]), updated_at: "2026-10-25T00:00:00Z" }],
+      issueEvents: [],
+      // First read is this run's PR snapshot; the file snapshot sees a push.
+      pullSnapshots: [{}, { head: { sha: "f".repeat(40) } }],
+    });
+    expect(gateFlagsRegression(result)).toBe(true);
+    const graphqlCalls = result.calls.filter(c => c.method === "graphql").map(c => String((c.args as { query?: string }).query ?? ""));
+    expect(graphqlCalls.some(query => query.includes("markPullRequestReadyForReview"))).toBe(false);
   });
 
   test("no approval label means no history read", async () => {

@@ -749,6 +749,10 @@ jobs:
             const changedFiles = [];
             const changedFilePaths = [];
             let filesTruncated = true;
+            // The head the changed-file list was verified against; null when the
+            // head moved during the snapshot. Head-bound approvals are judged
+            // against the same head the files belong to.
+            let changedFilesHeadSha = null;
             for (let attempt = 0; attempt < 2; attempt += 1) {
               const { data: fileSnapshot } = await github.rest.pulls.get({
                 owner,
@@ -776,6 +780,8 @@ jobs:
                 core.warning(
                   "PR head moved during changed-file snapshot; treating file list as truncated."
                 );
+              } else {
+                changedFilesHeadSha = headShaForFiles;
               }
               changedFiles.length = 0;
               changedFiles.push(...listedFiles);
@@ -820,7 +826,12 @@ jobs:
             // never removes labels or writes it.
             const approvalInput = {
               labels: liveLabelNames,
-              headSha: pr.head?.sha,
+              // Files listed at another head than this run's PR snapshot
+              // confirm no approval.
+              headSha:
+                changedFilesHeadSha !== null && changedFilesHeadSha === pr.head?.sha
+                  ? changedFilesHeadSha
+                  : null,
               record: parseApprovalRecord(authoritativeHygieneSection(comments)),
               eventAction: context.payload.action,
             };
