@@ -200,6 +200,10 @@ or an opencodex model route, with the timeout and a Test probe; there is no sepa
 
 `sessionPin: { ttlMs }` is an opt-in, JEV-only Combo field (#7525); `src/combos/jev-session-pin-config.ts`
 owns its 60000..86400000 ms range, the CLI duration grammar and the closed `pinReason` vocabulary.
+The shared JEV Decision method editor exposes a pin checkbox and an exact millisecond idle window.
+GUI drafts preserve omission from older responses; enable saves `{ ttlMs }`, disable saves `null`,
+and invalid or blank enabled windows block saving. Failed saves retain the draft for retry.
+Fresh Combo rows supersede the optimistic saved baseline, including same-ID pin changes.
 Validation, sparse storage, omitted-field preservation on JEV saves and removal on a strategy switch follow
 the quota fields above. Absent, `src/server/responses/core-combo.ts` asks JEV on every request exactly as before.
 `src/server/responses/jev-session-pin.ts` keys a process-local pin by the admitted caller (context principal,

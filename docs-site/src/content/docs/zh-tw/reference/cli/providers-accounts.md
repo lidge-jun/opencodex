@@ -113,6 +113,11 @@ Codex 池選擇套用於清除既有親和性後的下一個請求；進行中�
 
 ### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
+即使主機沒有原生 Codex 主目錄，仍可列出已儲存的 ChatGPT 池帳號，包括在儀表板中及重新整理帳號時。
+列出帳號不會建立 Codex 主目錄，也不會將原生主帳號登出。停用 Codex 用戶端整合不會停用對既有原生登入的額度觀測；
+明確設定但無效的 `CODEX_HOME` 路徑仍會回報設定錯誤。若 `OPENCODEX_HOME` 儲存空間不安全，即使原生 Codex 主目錄不存在，也會回報錯誤。
+解析預設 Codex 主目錄路徑時，若該路徑是檔案、目標不存在的符號連結，或父目錄無法遍歷，也會回報錯誤。
+
 未指定供應商時，列出 Codex 池、OAuth 帳號與已設定的 API-key 池。除非存在 `--all`，否則空的供應商會被跳過。指定供應商時，僅列出該憑證家族。人類輸出使用 `PROVIDER TYPE ID PLAN/LABEL STATUS`；手動選擇的 Codex 列標記為 `selected`。當儲存了兩個以上符合資格的 Kiro 帳號時，預設情況下 429 會自動輪換至另一個帳號，並優先選擇已知剩餘額度最多的帳號；輪換由帳號存在與否驅動，且無法關閉；`oauthAccountFailover.enabled: false` 拒絕的是送出前的帳號優選，而非 429 復原。`ocx account login kiro` 每次將一個帳號加入池中。空結果仍為成功。`--json` 回傳：
 
 ```text

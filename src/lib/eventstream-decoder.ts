@@ -1,10 +1,10 @@
 /**
  * `application/vnd.amazon.eventstream` decoder.
  *
- * Ported from jawcode `packages/ai/src/providers/aws-eventstream.ts` (verbatim logic).
+ * Framing logic ported from jawcode `packages/ai/src/providers/aws-eventstream.ts`.
  * Foundational dependency for AWS-eventstream providers: kiro (CodeWhisperer
- * GenerateAssistantResponse) and amazon-bedrock (Converse). Self-contained — only
- * uses Buffer / DataView / TextDecoder (Bun + Node compatible).
+ * GenerateAssistantResponse) and amazon-bedrock (Converse). Checksums use Bun's
+ * native CRC32; framing uses Buffer / DataView / TextDecoder.
  *
  * Wire format (all integers big-endian):
  *
@@ -32,21 +32,9 @@ export interface EventStreamMessage {
 	payload: Uint8Array;
 }
 
-/** CRC32 (IEEE / zlib polynomial 0xEDB88320), matches `@aws-crypto/crc32`. */
-const CRC_TABLE = (() => {
-	const t = new Uint32Array(256);
-	for (let i = 0; i < 256; i++) {
-		let c = i;
-		for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-		t[i] = c >>> 0;
-	}
-	return t;
-})();
-
+/** Unsigned IEEE CRC32 over this byte view; the seed may continue a previous checksum. */
 export function crc32(bytes: Uint8Array, seed = 0): number {
-	let c = (seed ^ 0xffffffff) >>> 0;
-	for (let i = 0; i < bytes.length; i++) c = (CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8)) >>> 0;
-	return (c ^ 0xffffffff) >>> 0;
+	return Bun.hash.crc32(bytes, seed >>> 0);
 }
 
 /**
