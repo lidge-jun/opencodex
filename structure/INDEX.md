@@ -84,6 +84,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/opengateway.md`](providers/opengateway.md) | Preset discovery, paired Responses tool-result projection and bounded empty-completion recovery. |
 | [`providers/jev-decision.md`](providers/jev-decision.md) | JEV Combo decision methods (TypeSafe, self-hosted System One rows, opencodex models), the decision request path, dashboard surfaces, and the content-free statistics projection. |
 | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) | Exact billing refusal evidence, immutable physical credential ownership, pacing provenance and bounded pre-output key recovery. |
+| [`providers/workbuddy.md`](providers/workbuddy.md) | Browser login, account-bound refresh and catalogs, fixed-origin Chat transport, tool continuity and display-only credit balances. |
 | [`providers/dsh-account.md`](providers/dsh-account.md) | Explicit read-only DSH credential import, verified account identity, disabled refresh, pinned inference and probe destinations, and authoritative-empty quota. |
 | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) | Anthropic OAuth instances (primary and Pool 2), account pause, model routes, quota labels, and pool-bound helpers, quota, reset grants and management surfaces. |
 | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md) | Headless code-display OAuth login: flow ownership, expiry, unsupported providers, single-operator store. |
@@ -178,6 +179,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/openai-chat/` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
 | `src/adapters/openai-responses/opengateway-input.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/adapters/openai-responses/passthrough.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
+| `src/adapters/workbuddy-schema.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
+| `src/adapters/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/advisor/` | [`advisor.md`](advisor.md) |
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
 | `src/bridge/` | [`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
@@ -247,17 +250,26 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/oauth/meta-muse-errors.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/oauth/meta-muse-keychain.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/oauth/meta-muse.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
+| `src/oauth/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/plugins/` | [`ops/plugins.md`](ops/plugins.md) |
 | `src/protocols/` | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) |
 | `src/providers/` | [`runtime.md`](runtime.md)<br>[`subagents.md`](subagents.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
 | `src/providers/anthropic-billing-ownership.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/anthropic-billing-recovery.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/anthropic-billing-refusal.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
+| `src/providers/antigravity-quota-identity.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/api-key-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/providers/dsh-account-destination.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
+| `src/providers/quota-decision-antigravity.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
+| `src/providers/quota-decision-publication.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
+| `src/providers/quota-decision-snapshot.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/providers/quota/anthropic-account-quota.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/providers/quota/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
+| `src/providers/quota/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/providers/request-pacing.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
+| `src/providers/workbuddy-credit-balance.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
+| `src/providers/workbuddy-models.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
+| `src/providers/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/quota-pool/` | [`quota-pool.md`](quota-pool.md) |
 | `src/quota/` | [`dashboard-and-usage.md`](dashboard-and-usage.md) |
 | `src/reasoning-effort.ts` | [`runtime.md`](runtime.md) |

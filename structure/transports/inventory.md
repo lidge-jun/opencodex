@@ -1,5 +1,6 @@
 # Transport Inventory
 
+WorkBuddy AI uses bounded fixed-origin login requests and shared Chat inference transport; see the [WorkBuddy contract](../providers/workbuddy.md).
 OpenCode Go's Gemini model uses the [Go Gemini transport contract](../providers/google.md#opencode-go-gemini-transport)
 through the Google adapter and the default server fetch path.
 

@@ -52,7 +52,7 @@ function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfi
     codebuddy: "https://www.codebuddy.ai",
   };
   // Semantic wrappers with provider-specific URL shapes must override the wire-family default here.
-  const baseUrl = adapterId === "mimo-free"
+  const baseUrl = adapterId === "workbuddy-ai" ? "https://www.workbuddy.ai/v2" : adapterId === "mimo-free"
     ? "https://api.xiaomimimo.com/api/free-ai/openai/chat"
     : adapterId === "azure" || adapterId === "azure-openai"
       ? "https://example.openai.azure.com/openai/v1"
@@ -71,6 +71,7 @@ function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfi
 }
 
 function prepareForWire(parsed: OcxParsedRequest, wire: AdapterWire): OcxParsedRequest {
+  parsed._workbuddyAuthContext = { uid: "fixture-user", domain: "international" };
   if (wire !== "kiro") return parsed;
   return { ...parsed, _kiroAuthContext: { apiRegion: "us-east-1" } };
 }

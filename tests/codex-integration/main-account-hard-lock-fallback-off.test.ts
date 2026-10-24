@@ -10,6 +10,7 @@ import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaIden
 import { clearAccountQuota, setAccountQuotaFromParsed, type StoredAccountQuota } from "../../src/codex/quota";
 import { handleResponses } from "../../src/server/responses";
 import { FallbackRefusedError, clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import type { OcxConfig } from "../../src/types";
 import type { OcxFallbackConfig } from "../../src/types/fallback";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -33,10 +34,100 @@ afterEach(() => {
   releaseSpendHome?.();
   releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
+  // Profile evaluation opens this index; release its Windows handle before removing the home.
+  closeRequestHistoryIndex();
   clearAccountQuota();
   clearMainAccountInfoCache();
   clearFallbackEventsForTests();
   home.remove();
+});
+
+describe("hard-lock first-dispatch policy", () => {
+  function comboDispatchConfig(fallback: OcxFallbackConfig): OcxConfig {
+    return {
+      ...config(fallback),
+      providers: {
+        ...config().providers,
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      },
+      codexMainAccountHardLockFallback: { model: "combo/random-rescue" },
+      combos: { "random-rescue": { strategy: "random", targets: [
+        { provider: "openai", model: "gpt-5.4" },
+        { provider: "deepseek", model: "deepseek-chat" },
+      ] } },
+    } as OcxConfig;
+  }
+
+  async function dispatchFallback(cfg: OcxConfig, random: () => number): Promise<{ response: Response; sent: string[] }> {
+    const sent: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      sent.push(String(input instanceof Request ? input.url : input));
+      return Response.json({ id: "resp_dispatch_fixture", status: "completed",
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+    }) as typeof fetch;
+    const originalRandom = Math.random;
+    Math.random = random;
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.3", stream: false, input: "hello" }),
+      }), cfg, { model: "", provider: "" });
+      return { response, sent };
+    } finally {
+      Math.random = originalRandom;
+    }
+  }
+
+  // The existing pre-admission samples the combo. Let that real check choose the allowed
+  // provider hop, then let the dispatch independently choose the same-provider model hop.
+  function sampledProviderThenModel(): () => number {
+    let samples = 0;
+    return () => samples++ === 0 ? 0.999 : 0;
+  }
+
+  test("model fallback off: the first same-provider pick is refused at dispatch with no send", async () => {
+    observe({ weeklyPercent: 98 });
+    const { response, sent } = await dispatchFallback(
+      comboDispatchConfig({ provider: true, model: false }), sampledProviderThenModel());
+    expect(recentFallbackEvents()).toContainEqual(expect.objectContaining({
+      site: "hard-lock", outcome: "taken", kind: "provider", to: "deepseek/deepseek-chat",
+    }));
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-opencodex-fallback")).toBe("refused");
+    expect(sent).toEqual([]);
+    expect(recentFallbackEvents().at(-1)).toMatchObject({
+      site: "combo", outcome: "refused", kind: "model", trigger: "hard_lock",
+      from: "openai/gpt-5.3", to: "openai/gpt-5.4",
+    });
+  });
+
+  test("model fallback on: the same-provider pick is admitted past the dispatch guard", async () => {
+    observe({ weeklyPercent: 98 });
+    const { response, sent } = await dispatchFallback(
+      comboDispatchConfig({ provider: true, model: true }), sampledProviderThenModel());
+    // Taken records guard admission. The separate canonical account lock still refuses this
+    // child, and the combo then dispatches its allowed provider fallback to the fetch stub.
+    expect(recentFallbackEvents()).toContainEqual(expect.objectContaining({
+      site: "combo", outcome: "taken", kind: "model", trigger: "hard_lock",
+      from: "openai/gpt-5.3", to: "openai/gpt-5.4",
+    }));
+    expect(response.headers.get("x-opencodex-fallback")).toBeNull();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("deepseek");
+    expect(response.status).toBe(200);
+  });
+
+  test("provider fallback on: a cross-provider first pick still dispatches", async () => {
+    observe({ weeklyPercent: 98 });
+    const { response, sent } = await dispatchFallback(
+      comboDispatchConfig({ provider: true, model: false }), () => 0.999);
+    expect(response.headers.get("x-opencodex-fallback")).toBeNull();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("deepseek");
+    expect(response.status).toBe(200);
+  });
 });
 
 function observe(quota: Omit<StoredAccountQuota, "updatedAt">): void {

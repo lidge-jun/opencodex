@@ -253,7 +253,7 @@ function buildResponseJSONWithBudget(
     const text = stripCitationMarkers(currentTextStr);
     const sourceBytes = pendingWebSources.reduce((sum, source) => sum + bytesOf(JSON.stringify(source)), 0);
     const annotations = pendingWebSources.map(s => ({
-      type: "url_citation", url: s.url, ...(s.title ? { title: s.title } : {}), start_index: 0, end_index: 0,
+      type: "url_citation", url: s.url, title: s.title || s.url, start_index: 0, end_index: 0,
     }));
     pendingWebSources = [];
     const item = {

@@ -872,6 +872,14 @@ export interface OcxProviderConfig {
    */
   responsesSnapshotRepair?: boolean;
   /**
+   * Infer the commentary/final_answer phase on assistant messages for Responses passthrough
+   * providers whose upstream omits it (e.g. third-party gateways). Codex desktop collapses
+   * commentary into progress rows; without this every narration renders fully expanded.
+   * Disabled by default. Applies in the client-facing SSE rewrite chain, including
+   * buffered JSON reconstructed from upstream SSE; ordinary upstream JSON is unchanged.
+   */
+  messagePhaseInference?: boolean;
+  /**
    * Opt-in hosted-web-search bridge for this KEY-auth Responses passthrough provider (#3761).
    * Absent or disabled leaves the passthrough byte-identical to today.
    */
@@ -1116,7 +1124,7 @@ export interface OcxProviderConfig {
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   /** Google tool-schema compatibility policy. Omitted preserves compatible report-only behavior. */
   googleToolSchemaPolicy?: "compatible" | "reject-lossy";
-  /** Vertex AI GCP project id. API keys use it to select the project endpoint; ADC falls back to GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env. */
+  /** Vertex AI GCP project id. API keys use it to select the project endpoint; "auto" resolves each API key's own project. ADC falls back to GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env. */
   project?: string;
   /** Vertex AI location, e.g. "us-central1" or "global". API-key project endpoints default to "global"; ADC falls back to GOOGLE_CLOUD_LOCATION env. */
   location?: string;

@@ -41,12 +41,14 @@ import {
 import {
   GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST,
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  antigravityModelRefusal,
   eligibleFailoverAccounts,
   forgetGenericFailoverRoster,
   isGenericFailoverProvider,
   isProactivePreferenceEnabled,
   preferredInitialAccount,
   refusalAwareInitialKiroAccount,
+  routeAntigravityModel,
   noteGenericPoolSelection,
 } from "../../oauth/generic-account-failover";
 import { admitGenericSessionAccount, bindGenericSessionAccount, genericSessionAccount, genericSessionAccountEligible, genericSessionAffinityEnabled, preferredGenericSessionAccount } from "../../oauth/generic-session-affinity";
@@ -79,7 +81,7 @@ import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuo
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
-import { sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
+import { assignNativeLogConversationId, sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
@@ -183,6 +185,7 @@ export async function prepareResponsesTransport(
     || route.providerName === "orcarouter-oauth"
     // runTurn transport: the replay runs on the first-event preflight in run-turn-execution.
     || route.providerName === "devin"
+    || route.providerName === "workbuddy-ai"
     || route.providerName === "dsh-account"
   ) && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
@@ -244,6 +247,9 @@ export async function prepareResponsesTransport(
       if (candidate.provider !== route.providerName) return null;
       if (anthropicInstance) anthropicRouteDecision = currentAnthropicRouteDecision();
       if (anthropicRouteDecision && !routeCandidates(anthropicRouting!.getEligibleAnthropicAccounts(Date.now(), route.modelId), anthropicRouteDecision).includes(candidate.accountId)) return null;
+      // #7500: no admission, initial or a recovery/failover rebind, may land on an Antigravity
+      // account whose own roster omits the model. Callers abandon the send on null.
+      if (antigravityModelRefusal(config, route.providerName, candidate.accountId, route.modelId)) return null;
       const committed = genericAffinityMode
         ? admitGenericSessionAccount(config, route.providerName, oauthSelection, candidate, route.modelId, genericAffinityMode)
         : await commitOAuthAccountSelection(route.providerName, candidate.accountId, {
@@ -484,6 +490,10 @@ export async function prepareResponsesTransport(
       // the retry. Keep both owners synchronized; for ordinary paths they are identical.
       parsed._kiroAuthContext = kiroContext;
       if (retryParsed !== parsed) retryParsed._kiroAuthContext = { ...kiroContext };
+    }
+    if (route.providerName === "workbuddy-ai") {
+      parsed._workbuddyAuthContext = snapshot.workbuddy;
+      if (retryParsed !== parsed) retryParsed._workbuddyAuthContext = snapshot.workbuddy;
     }
     if (route.providerName === "zed") {
       // Zed signs with its own user id; `snapshot.accountId` is the local slot hash.
@@ -978,10 +988,16 @@ export async function prepareResponsesTransport(
           ?? refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
           ? preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)
           : null);
+        // #7500: an Antigravity account whose own discovery omits the model is never sent to.
+        // A usable listing (or not-yet-discovered) sibling replaces it, or the request is refused.
+        const modelRoute = routeAntigravityModel(config, route.providerName,
+          proposedAccountId ?? oauthSelection?.accountId, route.modelId);
+        if (modelRoute.kind === "refuse") return formatErrorResponse(403, "permission_error", modelRoute.message);
+        const routedAccountId = modelRoute.kind === "reroute" ? modelRoute.accountId : proposedAccountId;
         // An unchanged active choice must retain the ordinary resolver's terminal-refresh
         // recovery (not the speculative-preference fallback that resolves the same dead grant).
-        const preferredAccountId = genericAffinityMode && proposedAccountId === oauthSelection?.accountId
-          ? null : proposedAccountId;
+        const preferredAccountId = genericAffinityMode && routedAccountId === oauthSelection?.accountId
+          ? null : routedAccountId;
         let safetyAlternateId: string | null = !affinityAccountId && preferredAccountId === refusalAwareId ? refusalAwareId : null;
         // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
         // rotation site, and rotation sites must apply their credential through
@@ -1041,6 +1057,10 @@ export async function prepareResponsesTransport(
           resolved = await getValidAccessTokenSnapshot(route.providerName);
           usedPreferredAccount = false;
         }
+        // Resolution fallbacks can still land on an omitting account; answer with the refusal
+        // here, since the commit below would only report it as a changed selection.
+        const unlisted = antigravityModelRefusal(config, route.providerName, resolved.accountId, route.modelId);
+        if (unlisted) return formatErrorResponse(403, "permission_error", unlisted);
         const admitted = await commitResolvedOAuthSelection(resolved, safetyAlternateId === null);
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
@@ -1104,6 +1124,7 @@ export async function prepareResponsesTransport(
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
         }
+        if (route.providerName === "workbuddy-ai") parsed._workbuddyAuthContext = resolved.workbuddy;
         if (route.providerName === "zed") {
           parsed._zedAuthContext = { userId: resolved.providerUserId ?? "" };
         }
@@ -1198,9 +1219,7 @@ export async function prepareResponsesTransport(
     codexAuthContext: admissionState.authCtx,
     forwardHeaders: requestState.selectedForwardHeaders,
   });
-  if (!logCtx.conversationId && parsed._cursorConversationId) {
-    logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
-  }
+  assignNativeLogConversationId(logCtx, normalizeLogConversationId(parsed._cursorConversationId));
   logCtx.providerAdapter = adapter.name;
   // Ordinary requests receive one durable attempt only after their final initial
   // adapter is resolved. Combo children own their attempt and retries keep it.

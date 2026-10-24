@@ -29,9 +29,9 @@ the unsent repair uncharged. Recovery preserves the original thinking classifica
 
 Only a delivery-validated completed response with actual text/tool output and an observed
 successful terminal can memoize the rejection. Errors, incomplete/empty responses, missing
-terminals, cancellation and changed serving identity cannot memoize it. The existing thread and
-durable-serving-identity key and five-minute TTL in `src/responses/reasoning-replay-cache.ts` are
-unchanged. Selective memos retain at most 256 payload digests within the existing cache byte cap;
+terminals, cancellation and changed principal or serving identity cannot memoize it. The key in
+`src/responses/reasoning-replay-cache.ts` includes the principal, thread and durable serving identity;
+keyless callers have a separate namespace. The five-minute TTL and 256-payload digest cap remain;
 merged sets that cannot fit fall back to the existing blanket policy. `src/server/responses/core-replay.ts`
 binds a memo only for the current serving scope; a serving-identity change retains its independent
 blanket strip. No prefix hashes or local prefix validator participate in replay admission.

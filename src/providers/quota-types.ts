@@ -53,6 +53,8 @@ export interface ProviderQuotaCreditsUsd {
 }
 
 export interface ProviderQuota {
+  /** Display-only subscription credits; not a routing or exhaustion window. */
+  workbuddyCredits?: import("./workbuddy-credit-balance").WorkBuddyCreditBalance;
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
   weeklyPercent?: number;

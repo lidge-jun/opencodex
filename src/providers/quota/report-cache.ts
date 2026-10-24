@@ -1,5 +1,6 @@
-import { decisionQuotaSinkActive, invalidateDecisionKeyQuotas, publishDecisionKeyQuota } from "../../lib/decision-quota-sink";
+import { decisionQuotaSinkActive, invalidateDecisionKeyQuotas, replaceCollectedDecisionQuotas, type AntigravityQuotaObservation, type AntigravityQuotaReceipt, type DecisionKeyObservation } from "../../lib/decision-quota-sink";
 import { providerDecisionWindows } from "../quota-decision-publication";
+import type { DecisionQuotaWindow } from "../quota-decision-snapshot";
 import { createHash } from "node:crypto";
 import { effectiveCodexAuthAccountId, listCodexAuthAccountsSnapshot } from "../../codex/auth-api";
 import { withoutRetiredCodexQuota, type StoredAccountQuota } from "../../codex/quota";
@@ -21,6 +22,8 @@ export const LAST_GOOD_MAX_AGE_MS = CODEX_CAPACITY_MAX_QUOTA_AGE_MS;
 const nativeMainReportGenerations = new WeakMap<ProviderQuotaReport, number>();
 export const accountReportCurrent = new WeakMap<ProviderQuotaReport, () => boolean>();
 export const routingEvidence = new WeakMap<ProviderQuotaReport, ProviderQuotaRoutingEvidence>();
+/** Only the live Antigravity probe binds this projection; display/last-good rows cannot create it. */
+export const antigravityEvidence = new WeakMap<ProviderQuotaReport, { receipt: AntigravityQuotaReceipt; windows: readonly DecisionQuotaWindow[] }>();
 export let providerQuotaBeforePublishForTests: (() => void | Promise<void>) | null = null;
 
 /** Test-only seam for identity/config invalidation after probes but before publication. */
@@ -100,6 +103,7 @@ export function clearProviderQuotaCache(): void {
   cache = null;
   clearCachedProviderQuotas();
   clearProviderApiKeyQuotaCache();
+  invalidateDecisionKeyQuotas();
   invalidationEpoch += 1;
 }
 
@@ -350,13 +354,18 @@ export function isProviderQuotaReportCurrent(value: ProviderQuotaReport): boolea
 /** Called only by an accepted collector/cache publication, never the JEV read path. */
 export function publishCollectedDecisionQuota(reports: ProviderQuotaReport[], config: OcxConfig): void {
   if (!decisionQuotaSinkActive()) return;
-  invalidateDecisionKeyQuotas();
+  const keys: DecisionKeyObservation[] = [];
+  const oauth: AntigravityQuotaObservation[] = [];
   for (const report of reports) {
     const provider = config.providers[report.provider];
+    if (!provider || !isProviderQuotaReportCurrent(report)) continue;
+    const observation = antigravityEvidence.get(report);
+    if (observation) oauth.push({ name: report.provider, provider, ...observation });
     const evidence = routingEvidence.get(report);
-    if (provider && evidence && evidence.binding === providerQuotaRoutingBinding(report.provider, provider))
-      publishDecisionKeyQuota(report.provider, provider, providerDecisionWindows(evidence.quota));
+    if (evidence && evidence.binding === providerQuotaRoutingBinding(report.provider, provider))
+      keys.push({ name: report.provider, provider, windows: providerDecisionWindows(evidence.quota) });
   }
+  replaceCollectedDecisionQuotas(keys, oauth);
 }
 
 /**

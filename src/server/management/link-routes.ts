@@ -6,7 +6,7 @@ import { clearCompensationFailed, compensationPath, readCompensation } from "../
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, type LinkStore } from "../../link/store";
 import { sshFailureHint, sshRunnerErrorHint } from "../../link/ssh-runner";
-import { attachLinkPeers, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
+import { attachLinkPeers, attachLinkTunnelDiagnostics, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
 import { homeLinkChildParity } from "../../link/child-parity";
 import { localLinkPeer } from "../../link/compatibility";
 import { packageVersion } from "../../lib/package-version";
@@ -268,8 +268,9 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     if (denied) return denied;
     const store = readStoreFor(ctx);
     const listenerStatus = state.listener.status();
+    const supervisorStates = state.supervisor.status();
     const dto: LinkStatusDto = projectLinkStatus(
-      store, state.supervisor.status(), listenerStatus, ctx.config, readCompensation(),
+      store, supervisorStates, listenerStatus, ctx.config, readCompensation(),
       ctx.config.runtimeRole === "client" ? clientLinkTunnelStatus() : null,
       ctx.config.runtimeRole === "client" && ctx.config.client?.link ? clientLinkStatusIdentity(ctx.config.client.link.linkId) : null,
       linkId => homeLinkChildParity.get(linkId),
@@ -288,6 +289,8 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
       attachLinkPeers(dto, localLinkPeer(packageVersion("0.0.0"), buildPeerFeatures()),
         linkId => state.listener.peerObservation?.(linkId) ?? { observed: null, refused: null });
     }
+    // The same opt-in for each Home-initiated tunnel's retry progress and last failure cause.
+    if (url.searchParams.get("diagnostics") === "1") attachLinkTunnelDiagnostics(dto, supervisorStates);
     // A dashboard session also learns why it cannot join as a Child. The admin-token answer stays
     // the exact K16 document that `ocx link status` validates key by key.
     const denial = ctx.principal === "gui-session" ? joinDenied(ctx) : null;

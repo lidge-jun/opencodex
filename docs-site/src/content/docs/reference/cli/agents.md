@@ -257,19 +257,28 @@ unqualified bare OpenAI model id. Bare `gpt-5.6-*` native aliases use Codex Pool
 Account-qualified OpenAI routes remain distinct, while provider-qualified routes such as
 `openai-apikey/gpt-5.6-*` use their configured API key and never fall through to the native alias.
 Read the safety and visibility contract in the guide before enabling the compatibility pair.
-With `--strategy jev` only, the decision method is chosen by one of two mutually exclusive flags.
+Only when the effective strategy is JEV (`--strategy jev`, or a stored JEV Combo when `--strategy` is omitted), the decision method is chosen by one of two mutually exclusive flags.
 `--decision-provider <provider|->` names a configured `jev-decision` row (for example a self-hosted
 Ollama `tev1`) as a System One-compatible server. `--decision-model <route|->` names an ordinary
 opencodex route (for example `ollama/qwen3:4b`) that answers the same choice as JSON; it cannot be
-this combo or any JEV combo. Omitting both uses TypeSafe. `--decision-timeout <ms|->` sets the
+this combo or any JEV combo. A new JEV Combo that omits both uses TypeSafe; an existing JEV Combo keeps
+its stored decision method until one of the flags changes it. `--decision-timeout <ms|->` sets the
 decision deadline (1000–120000, default 4000); `-` clears any of the three.
 
 `ocx combo set <id> --decision-quota-signals on|off|-` controls per-Combo advisory evidence.
 `--decision-quota-tiers '{"limited":80}'` sets partial threshold overrides; `-` clears them.
-Both are JEV-only. Omitted policy survives `--targets-file` replacement, `--targets` with `--strategy jev`, and rename (`--targets` alone keeps the existing failover default). Off retains thresholds;
+Both are JEV-only. Omitted policy survives `--targets-file` or `--targets` replacement and rename. Without
+`--strategy`, replacing the targets of an existing Combo keeps its stored strategy, so a JEV Combo stays JEV with
+its decision method, quota settings and session pin; a new Combo defaults to failover. If the kept JEV
+policy rejects the new targets, the command fails, names that policy, and saves nothing. Off retains thresholds;
 switching away from JEV removes both settings. This adds quota data to the selected decision
 backend, not probes, new account selection or hard exclusions. See
 [quota defaults, freshness and privacy](/guides/combos/#advisory-quota-signals-for-jev).
+
+`ocx combo set <id> --session-pin <duration|->` (JEV only) keeps each client session on the target
+JEV chose for it while the session stays active, so the provider prompt cache stays warm. The
+duration is the idle window: `90s`, `20m`, `1h` or milliseconds, from 1 minute to 24 hours; `-`
+turns it off. See [Session pin for JEV](/guides/combos/#session-pin-for-jev).
 
 `ocx combo test [--combo <id>] [--decision-provider <provider|jev> | --decision-model <route>]
 [--decision-timeout <ms>]` sends one synthetic decision probe through a saved combo's method or an

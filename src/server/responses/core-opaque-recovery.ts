@@ -547,6 +547,7 @@ export async function attemptOpaqueBlobRecovery<Failure = Response>(
   const rejectedScope = args.parsed._reasoningReplayScope
     ? {
         clientThreadId: args.parsed._reasoningReplayScope.clientThreadId,
+        clientPrincipalId: args.parsed._reasoningReplayScope.clientPrincipalId,
         ...(args.parsed._reasoningReplayScope.current
           ? { current: { ...args.parsed._reasoningReplayScope.current } }
           : {}),
