@@ -350,7 +350,7 @@ const ACCOUNT_EXHAUSTION_CODES = new Set(["usage_limit_exceeded", "usage_limit_r
 // Token-plan windows (Alibaba's DeepSeek/Qwen plans) report "Your token-plan 1-week quota has been
 // exhausted" (#5494). The match is anchored to that phrasing: a looser "quota ... exhausted" would
 // also catch per-minute limits, and this arm outranks the transient rate-limit duration.
-const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached|token-plan\s+\S+\s+quota has been exhausted|(?:weekly|monthly|daily)?\s*(?:usage\s+)?quota (?:(?:has been |is )?exhausted|exceeded)/i;
+const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached|token-plan\s+\S+\s+quota has been exhausted|(?:account|weekly|monthly|daily)\s*(?:usage\s+)?quota (?:(?:has been |is )?exhausted|exceeded)/i;
 
 /**
  * Determines whether an error signals that an account's quota or usage window has been exhausted.
