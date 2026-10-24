@@ -5,6 +5,7 @@
 Standalone recovery (#7260) is separate from
 [structured-call/identified-wrapper reconciliation](chat-compat.md#serialized-tool-call-content).
 `src/adapters/openai-chat.ts` composes both paths without changing the identified-wrapper contract.
+Its fragmented-line carry follows the [stream-buffer accounting contract](../transports/byte-accounting.md#stream-buffer-accounting); avoiding repeated carry scans does not change reconciliation or terminal dispatch.
 `src/adapters/openai-chat/standalone-bare-tool-calls.ts` enables it only for MiMo `mimo-v2` or
 dotted `mimo-v2.*` model IDs when no structured calls exist. Complete bare `<tool_call>` blocks
 must name an exact declared freeform wire tool. They may follow prose on the same line;

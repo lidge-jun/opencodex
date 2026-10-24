@@ -65,6 +65,7 @@ const OAUTH_LABELS: Record<string, string> = {
   // stored row can never reach this map under the old id.
   devin: "Devin",
   "dsh-account": "DeepSeek Account (DSH)",
+  "workbuddy-ai": "WorkBuddy AI",
 };
 
 export const oauthLabel = (id: string) => OAUTH_LABELS[id] ?? id;

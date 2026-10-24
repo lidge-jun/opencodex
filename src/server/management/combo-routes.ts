@@ -208,7 +208,6 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const {
       clearComboSelectionState,
       clearComboTargetCooldowns,
-      comboConfigError,
       comboDisabledModelId,
       comboDisabledModelSelectors,
       comboModelId,
@@ -225,6 +224,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...requestedCombo,
       ...(!Object.hasOwn(requestedCombo, "decisionQuotaSignals") && requestedCombo.strategy === "jev" && previous?.decisionQuotaSignals !== undefined ? { decisionQuotaSignals: previous.decisionQuotaSignals } : {}),
       ...(!Object.hasOwn(requestedCombo, "decisionQuotaTiers") && requestedCombo.strategy === "jev" && previous?.decisionQuotaTiers !== undefined ? { decisionQuotaTiers: previous.decisionQuotaTiers } : {}),
+      // The dashboard does not edit the session pin (#7525): an omitted field keeps it on a JEV save.
+      ...(!Object.hasOwn(requestedCombo, "sessionPin") && requestedCombo.strategy === "jev" && previous?.sessionPin != null ? { sessionPin: previous.sessionPin } : {}),
       ...(!Object.hasOwn(requestedCombo, "allowMeteredTargets") && previous?.allowMeteredTargets === true
         ? { allowMeteredTargets: true }
         : {}),
@@ -257,7 +258,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...(Array.isArray(requestedCombo.targets) && Array.isArray(previous?.targets)
         ? {
             targets: requestedCombo.targets.map(target => {
-              // A non-record entry stays as the client sent it so comboConfigError reports it.
+              // A non-record entry stays as the client sent it so comboConfigIssues reports it.
               // Reading `lastResort` off it here would throw in place of that structured 400.
               if (!isPlainRecord(target)) return target;
               if (["lastResort", "metered"].every(key => Object.hasOwn(target, key))) return target;
@@ -331,8 +332,13 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       excludeComboId: sourceId,
       normalizeDecisionModel: (model: string) => normalizeDecisionModelSelector(prospectiveConfig, model),
     };
-    const error = comboConfigError(id, effectiveCombo, config.providers, validationOptions);
-    if (error) return jsonResponse({ error }, 400);
+    // `field` names the top-level combo field of the first issue, so a client can tell a target or
+    // JEV-setting refusal from an alias or rename one without parsing the message (#7579).
+    const invalid = comboConfigIssues(id, effectiveCombo, config.providers, validationOptions)[0];
+    if (invalid) {
+      const field = invalid.path[0];
+      return jsonResponse({ error: invalid.message, ...(typeof field === "string" ? { field } : {}) }, 400);
+    }
     for (const [otherId, combo] of Object.entries(nextCombos)) {
       if (typeof combo.decisionModel !== "string") continue;
       const issue = otherId === id ? undefined : comboConfigIssues(otherId, combo, config.providers, {

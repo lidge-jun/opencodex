@@ -16,3 +16,12 @@ export const CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS: readonly [
   "VOLTA_HOME",
 ];
 export function isCodexCliUpdateInspectionArgv(argv: readonly string[]): boolean;
+export const NODE_LAUNCH_CONTEXT_MAX_CHARS: number;
+export function codexCliInspectionLookupSeeds(
+  platform: string,
+  home: string | null,
+  nodePath: string | null,
+  serializedContextChars: number,
+): { home: string | null; nodePath: string | null };
+export const CODEX_CLI_TRANSPORT_ENV_KEYS: readonly string[];
+export function captureCodexCliTransportEnv(env: Readonly<NodeJS.ProcessEnv>): Record<string, string>;

@@ -192,9 +192,9 @@ export type FallbackGuardResult =
     ok: true;
     kind: OcxFallbackKind | null;
     /**
-     * Record the hop as taken. A site calls it once the fallback dispatch is admitted (send
-     * budget reserved, candidate not locally skipped), so the ring never claims a target that was
-     * never contacted. Idempotent; a no-op for a same-target retry.
+     * Record the hop as taken at the site's admission boundary (body rewrite, send-budget
+     * reservation, or accepted candidate). This does not prove upstream contact or billing;
+     * later preparation may still refuse. Idempotent; a no-op for a same-target retry.
      */
     commit: () => void;
   }

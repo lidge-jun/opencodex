@@ -3,17 +3,17 @@
 ## Explicit restart
 
 `ocx system codex-restart` requests a Codex app-server restart through the management
-endpoint. `src/codex/app-server-restart-service.ts` also quits and relaunches the desktop
-app only when `src/codex/desktop-app/picker-freshness.ts` reports that a root shell started
-at or before the mtime of the catalog `config.toml` binds through `model_catalog_json`,
-because the picker is built at shell launch and an app-server restart cannot refresh it.
-A shell that started strictly later is left running (`desktopApp.reason: "picker_current"`),
-so its unsaved drafts, picker selections and pending approvals survive while it respawns its
-own app-server. An unbound config, an unreadable shell list, start time or catalog mtime, or a
-binding the request's own sync changed all take the full restart; `desktopApp.pickerState`
-reports which reading decided. `config.toml`'s own mtime is not evidence, because injection
-rewrites identical bytes. A binding changed by an earlier sync over a byte-identical catalog
-is not observable.
+endpoint. `src/codex/app-server-restart-service.ts` also requests a full quit and relaunch of the
+desktop app whenever a root shell is running, because the picker is built at shell launch and an
+app-server restart cannot refresh it. A shell at or before the mtime of the catalog
+`config.toml` binds through `model_catalog_json` is provably stale. A newer shell is still
+`unknown`: its start time cannot prove which binding it loaded, because an earlier sync may
+have rebound an already-existing, byte-identical catalog. An unbound config or an unreadable
+shell list or catalog mtime is unknown; an unreadable shell start time is unknown unless another
+readable shell is already known stale. A binding this request's own
+sync changed is stale. Both states request the full restart; `desktopApp.pickerState` reports
+which reading decided. A closed desktop is left closed. `config.toml`'s own mtime is not
+evidence, because injection rewrites identical bytes.
 `src/cli/capabilities.ts` and `src/cli/system-command.ts` warn that unsaved client state
 may be lost and report which outcome happened.
 The unconfirmed path sends no restart request; JSON output preserves refused outcomes.
@@ -150,6 +150,11 @@ when the ordinary rate limit is exhausted. Their original snapshots disarm Apply
 Reserve schemas pass unchanged. Neither observation nor correction changes entitlement state.
 Later exhaustion does not resume that trial; it requires another explicit activation.
 Pending response checks from the previous generation cannot emit a correction after recovery.
+An explicit non-empty foreign account, user or plan in a usage record invalidates the trial,
+clears its observation and outputs, and excludes that stream from refresh. A failed fresh
+activation identity check also invalidates the current trial. A verification result from an
+older binding or generation cannot invalidate a newer trial. Resuming correction requires
+another matched exhaustion observation and explicit activation; native cache refresh remains unconfirmed.
 Native identity verification also binds an opaque reader-local credential generation from a stable file-stat/content snapshot. Replacement, token rotation and A-to-B-to-A restoration invalidate pending identity checks and response correction; they require a fresh observation runtime. Neither credential hashes nor tokens appear in public status. `tests/clients/desktop-compatibility-native-identity.test.ts` exercises delayed verification and build-check races with synthetic auth files.
 Fresh identity checks, generation changes, unknown schemas and elapsed deadlines refuse
 correction. `usage-sse-controller.ts` preserves event metadata and original sequence IDs;

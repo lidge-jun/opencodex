@@ -4,7 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatherRoutedModels as gatherRoutedModelsDirect } from "../../../src/codex/catalog";
 import { clearModelCache } from "../../../src/codex/model-cache";
-import { preferKiroModelSupport, preferredInitialAccount } from "../../../src/oauth/generic-account-failover";
+import {
+  antigravityModelUnlistedMessage,
+  antigravityModelRefusal,
+  antigravityReplacementUnavailableMessage,
+  antigravitySelectedAccountUnlistedMessage,
+  clearGenericFailoverHealth,
+  hasEligibleGenericOAuthFailoverTarget,
+  preferKiroModelSupport,
+  preferredInitialAccount,
+  rotateAntigravityAccountOnAuthRefusal,
+  rotateGenericOAuthAccountOn429,
+  routeAntigravityModel,
+} from "../../../src/oauth/generic-account-failover";
 import {
   ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS,
   antigravityAccountRosterModelIds,
@@ -59,12 +71,13 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   clearModelCache();
   clearAntigravityAccountRosters();
+  clearGenericFailoverHealth();
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
   for (const home of homes.splice(0)) removeTreeWithRetry(home);
 });
 
-function homeWithAccounts(accountIds: string[], activeAccountId: string): string {
+function homeWithAccounts(accountIds: string[], activeAccountId: string, paused: string[] = []): string {
   const home = mkdtempSync(join(tmpdir(), "ocx-agy-roster-"));
   homes.push(home);
   process.env.OPENCODEX_HOME = home;
@@ -73,6 +86,7 @@ function homeWithAccounts(accountIds: string[], activeAccountId: string): string
       activeAccountId,
       accounts: accountIds.map(id => ({
         id,
+        ...(paused.includes(id) ? { paused: true } : {}),
         credential: { access: `access-${id}`, refresh: `refresh-${id}`, expires: Date.now() + 3_600_000, projectId: "project-id" },
       })),
     },
@@ -157,8 +171,8 @@ describe("account selection prefers an account whose roster lists the model", ()
     expect(preferKiroModelSupport(PROVIDER, ["acct-46", "acct-55"], "claude-sonnet-4-6")).toEqual(["acct-46"]);
     // No roster yet means unknown, never "unsupported".
     expect(preferKiroModelSupport(PROVIDER, ["acct-46", "acct-new"], "claude-opus-5-5")).toEqual(["acct-new"]);
-    // Nobody lists it: fall back to every eligible account rather than refusing.
-    expect(preferKiroModelSupport(PROVIDER, ["acct-46"], "claude-opus-5-5")).toEqual(["acct-46"]);
+    // Every account's fresh roster omits it: nothing is eligible (#7500), never a fallback.
+    expect(preferKiroModelSupport(PROVIDER, ["acct-46"], "claude-opus-5-5")).toEqual([]);
     expect(antigravityAccountSupportsModel(PROVIDER, "acct-new", "claude-opus-5-5")).toBeUndefined();
   });
 
@@ -174,5 +188,87 @@ describe("account selection prefers an account whose roster lists the model", ()
     recordBoth();
     const config = { providers: { [PROVIDER]: provider({ oauthAccountFailover: { enabled: true } }) } } as unknown as OcxConfig;
     expect(preferredInitialAccount(config, PROVIDER, Date.now(), "claude-opus-5-5")).toBe("acct-55");
+  });
+});
+
+describe("model routing fails closed on a proven roster omission (#7500)", () => {
+  const config = (enabled?: boolean) => ({ providers: { [PROVIDER]: provider(
+    enabled === undefined ? {} : { oauthAccountFailover: { enabled } },
+  ) } }) as unknown as OcxConfig;
+  const record = (id: string, roster: unknown) =>
+    recordAntigravityAccountRoster(PROVIDER, id, parseAntigravityAvailableModels(roster)!);
+
+  test("an account that lists the model, or has no roster yet, keeps the request", () => {
+    homeWithAccounts(["acct-55", "acct-new"], "acct-55");
+    record("acct-55", ROSTER_55);
+    expect(routeAntigravityModel(config(), PROVIDER, "acct-55", "claude-opus-5-5")).toEqual({ kind: "keep" });
+    expect(routeAntigravityModel(config(), PROVIDER, "acct-new", "claude-opus-5-5")).toEqual({ kind: "keep" });
+    // Other providers and model-less requests are never judged.
+    expect(routeAntigravityModel(config(), "kiro", "acct-55", "claude-sonnet-4-6")).toEqual({ kind: "keep" });
+    expect(routeAntigravityModel(config(), PROVIDER, "acct-55", null)).toEqual({ kind: "keep" });
+  });
+
+  test("an omitting account is replaced by a listing sibling before an unknown one", () => {
+    homeWithAccounts(["acct-46", "acct-new", "acct-55"], "acct-46");
+    record("acct-46", ROSTER_46);
+    record("acct-55", ROSTER_55);
+    expect(routeAntigravityModel(config(true), PROVIDER, "acct-46", "claude-opus-5-5"))
+      .toEqual({ kind: "reroute", accountId: "acct-55" });
+  });
+
+  test("an unknown sibling serves when none lists the model, and a cooled one ranks last", () => {
+    homeWithAccounts(["acct-46", "acct-cooled", "acct-new"], "acct-46");
+    record("acct-46", ROSTER_46);
+    record("acct-cooled", ROSTER_55);
+    rotateGenericOAuthAccountOn429(config(true), PROVIDER, "acct-cooled", "120", Date.now(), "claude-opus-5-5");
+    expect(routeAntigravityModel(config(true), PROVIDER, "acct-46", "claude-opus-5-5"))
+      .toEqual({ kind: "reroute", accountId: "acct-new" });
+  });
+
+  test("no usable sibling serving the model refuses; paused accounts do not count", () => {
+    homeWithAccounts(["acct-46", "acct-46b", "acct-paused"], "acct-46", ["acct-paused"]);
+    record("acct-46", ROSTER_46);
+    record("acct-46b", ROSTER_46);
+    record("acct-paused", ROSTER_55);
+    expect(routeAntigravityModel(config(true), PROVIDER, "acct-46", "claude-opus-5-5"))
+      .toEqual({ kind: "refuse", message: antigravityModelUnlistedMessage("claude-opus-5-5") });
+  });
+
+  test("without proactive failover the selected account is not moved; the request is refused", () => {
+    homeWithAccounts(["acct-46", "acct-55"], "acct-46");
+    record("acct-46", ROSTER_46);
+    record("acct-55", ROSTER_55);
+    for (const enabled of [undefined, false]) {
+      expect(routeAntigravityModel(config(enabled), PROVIDER, "acct-46", "claude-opus-5-5"))
+        .toEqual({ kind: "refuse", message: antigravitySelectedAccountUnlistedMessage("claude-opus-5-5") });
+      expect(antigravityModelRefusal(config(enabled), PROVIDER, "acct-46", "claude-opus-5-5"))
+        .toBe(antigravitySelectedAccountUnlistedMessage("claude-opus-5-5"));
+    }
+    // With failover on, an omitting account that still resolved means the replacement failed;
+    // the refusal must not advise enabling a setting that is already on.
+    expect(antigravityModelRefusal(config(true), PROVIDER, "acct-46", "claude-opus-5-5"))
+      .toBe(antigravityReplacementUnavailableMessage("claude-opus-5-5"));
+    expect(antigravityModelRefusal(config(true), PROVIDER, "acct-55", "claude-opus-5-5")).toBeNull();
+  });
+
+  test("429 rotation and its target probe never pick a sibling whose roster omits the model", () => {
+    homeWithAccounts(["acct-55", "acct-46"], "acct-55");
+    record("acct-55", ROSTER_55);
+    record("acct-46", ROSTER_46);
+    expect(hasEligibleGenericOAuthFailoverTarget(PROVIDER, "acct-55", Date.now(), "claude-opus-5-5")).toBe(false);
+    expect(rotateGenericOAuthAccountOn429(config(true), PROVIDER, "acct-55", null, Date.now(), "claude-opus-5-5")).toBeNull();
+    // The sibling still serves a model it lists.
+    expect(hasEligibleGenericOAuthFailoverTarget(PROVIDER, "acct-55", Date.now(), "gemini-3.8-flash")).toBe(true);
+  });
+
+  test("auth-refusal rotation walks past an omitting sibling to one that may serve", () => {
+    homeWithAccounts(["acct-a", "acct-46", "acct-55"], "acct-a");
+    record("acct-a", ROSTER_55);
+    record("acct-46", ROSTER_46);
+    record("acct-55", ROSTER_55);
+    expect(rotateAntigravityAccountOnAuthRefusal(true, "acct-a", "stale-generation", "claude-opus-5-5")).toBe("acct-55");
+    clearAntigravityAccountRosters(PROVIDER, "acct-55");
+    record("acct-55", ROSTER_46);
+    expect(rotateAntigravityAccountOnAuthRefusal(true, "acct-a", "stale-generation", "claude-opus-5-5")).toBeNull();
   });
 });

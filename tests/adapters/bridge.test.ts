@@ -1277,8 +1277,8 @@ describe("Responses bridge web_search_call native item", () => {
     const streamingMessage = frames.find(f => f.event === "response.output_item.done"
       && (f.data.item as Record<string, unknown>)?.type === "message")!.data.item as Record<string, unknown>;
     const streamingAnnotations = (streamingMessage.content as Record<string, unknown>[])[0].annotations as Record<string, unknown>[];
-    expect(streamingAnnotations.map(({ url, title }) => ({ url, ...(title ? { title } : {}) })))
-      .toEqual(streamingSources);
+    expect(streamingAnnotations.map(({ url, title }) => ({ url, title })))
+      .toEqual(streamingSources.map(({ url, title }) => ({ url, title: title ?? url })));
 
     const json = buildResponseJSON(events, "routed/model");
     const output = json.output as Record<string, unknown>[];

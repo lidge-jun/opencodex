@@ -79,6 +79,60 @@ For a v2 roster, eligibility has three states: an entry stamped `"v2"`, explicit
 with no `multi_agent_version` field is eligible. A genuine `"v1"` pin is excluded because it states
 that the model belongs to the other collaboration surface.
 
+## Which models `spawn_agent` advertises
+
+Codex lists at most five models in the `spawn_agent` tool description, and it chooses them
+itself: it sorts the picker-visible catalog rows by `priority`, lowest first, and takes the first
+five. The roster on the **Subagents** page (`subagentModels`) shapes that list only by giving its
+models the lowest priorities in roster order (`0` through `4` without account selectors). It
+does not limit the list to the roster.
+
+When you feature one to four models, Codex fills the remaining slots with the next rows by
+priority. You did not choose those rows, and the dashboard does not show which ones they are. They
+depend on the catalog:
+
+| Catalog | Rows that fill the remaining slots |
+| --- | --- |
+| No Codex account selectors | Other routed `provider/model` rows. They all share priority `5`, so they appear by provider name and then model id, alphabetically. Unfeatured native GPT rows sit at priority `100` plus the number of featured ids or higher, so they come later. |
+| Codex account selectors | Account-qualified native rows (`<selector>/<native-model>`), which directly follow the featured rows. Unfeatured routed rows move to priority `1005` and come after them. |
+
+For example, with no account selectors and this roster:
+
+```json
+{ "subagentModels": ["xai/grok-4.5", "anthropic/claude-sonnet-5"] }
+```
+
+| Slot | Model | Priority | Why |
+| ---: | --- | ---: | --- |
+| 1 | `xai/grok-4.5` | `0` | First roster entry |
+| 2 | `anthropic/claude-sonnet-5` | `1` | Second roster entry |
+| 3 | `deepseek/deepseek-v4-flash` | `5` | First remaining routed row alphabetically |
+| 4 | `google/gemini-3-pro` | `5` | Next routed row |
+| 5 | `moonshot/kimi-k3` | `5` | Next routed row |
+| 6+ | `zai/glm-5.2`, then native GPT rows | `5`, then `102` | Outside the five |
+
+With an empty roster, opencodex pins nothing and the five follow the catalog's normal
+priorities.
+
+The filled slots are ordinary advertisements, so the main agent may pick one of those models.
+The list is also not an allowlist: Codex accepts a catalog model outside the five when the main
+agent names it exactly. To control what Codex advertises:
+
+- Feature five models. With a full roster, no slot is left to fill.
+- Disable a model you never want offered, or leave it out of its provider's `selectedModels`.
+  A disabled or unselected model leaves the picker and cannot fill a slot.
+- `modelPickerOrder` changes the priorities Codex sorts by. A routed-only list moves the listed
+  unfeatured rows to `1000` and up, so the unlisted routed rows fill the slots first. A list that
+  contains a bare native id orders the complete picker, featured rows included: listed rows come
+  first and take the advertised slots before any unlisted row. See
+  [Model ordering](/guides/model-ordering/).
+
+On v2, Codex skips rows pinned `"disabled"` before it takes the five; otherwise the window works
+the same way. The opencodex v2 guidance roster (`{{roster}}`) names only configured roster models
+inside the five, so filler models appear in Codex's tool description and never in opencodex
+guidance. Codex reads the catalog when a session starts, so a roster change applies to new
+sessions.
+
 ## Delegation model and effort
 
 The dashboard's **Sub-agent delegation** controls three related settings:
@@ -305,6 +359,12 @@ a positive partial count before passing a model or effort override.
 
 It may be picker-hidden, outside the five-model display limit, missing from the catalog, or pinned
 to v1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin is not.
+
+### Why does `spawn_agent` list models I did not feature?
+
+Codex fills up to five advertised slots from the catalog by priority. With fewer than five
+featured models, the next rows take the remaining slots; see
+[Which models `spawn_agent` advertises](#which-models-spawn_agent-advertises).
 
 ### Do mode changes affect running sessions?
 
