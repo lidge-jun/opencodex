@@ -51,6 +51,8 @@ function classifyQoderFailure(failure: CodingAgentFailure): Extract<AdapterEvent
 
 const QODER_MCP_SERVER_NAME = "opencodex";
 const QODER_MCP_SERVER_PATH = fileURLToPath(new URL("../coding-agent/mcp-server.ts", import.meta.url));
+const MAX_PENDING_BOUNDARY_CHARS = 64 * 1024;
+const MAX_PENDING_BOUNDARY_EVENTS = 1024;
 
 export function buildQoderChildEnv(profile: QoderProfile, apiKey: string, systemPrompt?: string): Record<string, string> {
   // Each build reads its own brand prefix with no fallback: qodercn ignores QODER_EXPOSE_TOKEN_USAGE.
@@ -98,10 +100,14 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
   const thinkingFilter = new QoderScaffoldFilter();
   let replayFilter = new ToolEnvelopeEchoFilter();
   let closed = false;
+  let boundaries: { offset: number; event: AdapterEvent }[] = [];
+  let boundaryChars = 0;
 
   const refuse = (reason: string): void => {
     if (closed) return;
     closed = true;
+    boundaries = [];
+    boundaryChars = 0;
     emit({
       type: "error",
       message: qoderScaffoldErrorMessage(reason),
@@ -133,10 +139,10 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
    * must not split a marker. The next text block starts at a line start, so an
    * envelope opening it is recognized even when the previous block ended mid-line.
    */
-  const settleText = (): boolean => {
+  const settleText = (refuseOnMatch = true): boolean => {
     const tail = replayFilter.finish();
     if (replayFilter.matched || replayFilter.unverifiedMarker) {
-      refuse("replayed tool envelope");
+      if (refuseOnMatch) refuse("replayed tool envelope");
       return false;
     }
     if (tail) emit({ type: "text_delta", text: tail });
@@ -144,24 +150,70 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
     return true;
   };
 
+  const forwardEvent = (event: AdapterEvent): void => {
+    // A vendor prefix can still turn a replay marker into ordinary prose. Keep
+    // its event cuts until the vendor filter resolves it instead of flushing it.
+    if (textFilter.pendingTextLength > 0) {
+      const size = event.type === "thinking_delta" ? event.thinking.length : JSON.stringify(event).length;
+      if (boundaryChars + size > MAX_PENDING_BOUNDARY_CHARS
+        || boundaries.length >= MAX_PENDING_BOUNDARY_EVENTS) {
+        refuse("an unresolved text boundary exceeding its buffer limit");
+        return;
+      }
+      boundaryChars += size;
+      const last = boundaries.at(-1);
+      if (last?.offset === textFilter.pendingTextLength
+        && last.event.type === "thinking_delta" && event.type === "thinking_delta") {
+        last.event = { type: "thinking_delta", thinking: last.event.thinking + event.thinking };
+      } else boundaries.push({ offset: textFilter.pendingTextLength, event });
+      return;
+    }
+    if (settleText() && (event.type !== "thinking_delta" || event.thinking)) emit(event);
+  };
+
+  const drainBoundaries = (text: string, refuseOnMatch = true): void => {
+    const queued = boundaries;
+    boundaries = [];
+    boundaryChars = 0;
+    let at = 0;
+    for (const boundary of queued) {
+      // A suppressed prefix contributes no text; surviving prefixes keep their offsets.
+      const end = text ? boundary.offset : 0;
+      forwardText(text.slice(at, end), refuseOnMatch);
+      if (closed || !settleText(refuseOnMatch)) return;
+      if (boundary.event.type !== "thinking_delta" || boundary.event.thinking) emit(boundary.event);
+      at = end;
+    }
+    if (!closed) forwardText(text.slice(at), refuseOnMatch);
+  };
+
   return (event: AdapterEvent): void => {
     if (closed) return;
     if (event.type === "text_delta") {
-      const cleaned = textFilter.push(event.text);
+      let at = 0;
+      while (boundaries.length && at < event.text.length) {
+        const cleaned = textFilter.push(event.text[at++]!);
+        if (cleaned.fail) { refuse(cleaned.fail); return; }
+        // A pending vendor suffix is one marker prefix, starting with its only
+        // '<'. Its first release resolves the entire suffix and all saved cuts.
+        if (cleaned.text || textFilter.pendingTextLength === 0) drainBoundaries(cleaned.text);
+        if (closed) return;
+      }
+      const cleaned = textFilter.push(event.text.slice(at));
       if (cleaned.text) forwardText(cleaned.text);
       if (cleaned.fail) refuse(cleaned.fail);
       return;
     }
     if (event.type === "thinking_delta") {
       const cleaned = thinkingFilter.push(event.thinking);
-      if (cleaned.text) emit({ ...event, thinking: cleaned.text });
+      forwardEvent({ ...event, thinking: cleaned.text });
       if (cleaned.fail) refuse(cleaned.fail);
       return;
     }
     if (event.type === "done" || event.type === "error" || event.type === "incomplete") {
       const tail = textFilter.flush();
       const reasoning = thinkingFilter.flush();
-      if (tail.text) forwardText(tail.text, false);
+      drainBoundaries(tail.text, false);
       if (closed) return;
       const replayTail = replayFilter.finish();
       if (replayTail && !replayFilter.unverifiedMarker) emit({ type: "text_delta", text: replayTail });
@@ -178,8 +230,8 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
       emit(event);
       return;
     }
-    if (event.type !== "heartbeat" && !settleText()) return;
-    emit(event);
+    if (event.type === "heartbeat") emit(event);
+    else forwardEvent(event);
   };
 }
 

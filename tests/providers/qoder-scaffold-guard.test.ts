@@ -362,4 +362,137 @@ describe("Qoder replay envelope refusal (#7517)", () => {
     expect(JSON.stringify(events)).not.toContain("private-fixture");
     expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, status: 502 });
   });
+
+  test("thinking cannot overtake replay-held prose", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "[" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    guard({ type: "done", stopReason: "stop" });
+    expect(events).toEqual([
+      { type: "text_delta", text: "[" },
+      { type: "thinking_delta", thinking: "Reasoning." },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  for (const echo of ["[Tool Result]", "```text\n[Tool call: probe]\nprivate-fixture"]) {
+    test(`settles ${JSON.stringify(echo)} before thinking`, () => {
+      const { events, emit } = collect();
+      const guard = guardQoderScaffolding(emit);
+      guard({ type: "text_delta", text: echo });
+      guard({ type: "thinking_delta", thinking: "Reasoning." });
+      guard({ type: "done", stopReason: "stop" });
+      expect(events.some(event => event.type === "thinking_delta")).toBe(false);
+      expect(JSON.stringify(events)).not.toContain("private-fixture");
+      expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, status: 502, retryable: false });
+    });
+  }
+
+  for (const before of ["Working", "```text\n"]) {
+    test(`thinking resets replay line and fence state after ${JSON.stringify(before)}`, () => {
+      const { events, emit } = collect();
+      const guard = guardQoderScaffolding(emit);
+      guard({ type: "text_delta", text: before });
+      guard({ type: "thinking_delta", thinking: "Reasoning." });
+      guard({ type: "thinking_delta", thinking: "More reasoning." });
+      guard({ type: "text_delta", text: "[Tool Result]\nprivate-fixture\n```\n" });
+      guard({ type: "done", stopReason: "stop" });
+      expect(textOf(events)).toBe(before);
+      expect(JSON.stringify(events)).not.toContain("private-fixture");
+      expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, status: 502 });
+    });
+  }
+
+  for (const terminal of ["done", "error"] as const) {
+    test(`keeps marker prose with a held vendor prefix across thinking before ${terminal}`, () => {
+      const { events, emit } = collect();
+      const guard = guardQoderScaffolding(emit);
+      guard({ type: "text_delta", text: "[Tool Result]<s" });
+      guard({ type: "thinking_delta", thinking: "Reasoning." });
+      const end: AdapterEvent = terminal === "done" ? { type: "done", stopReason: "stop" }
+        : { type: "error", message: "original vendor error", status: 429 };
+      guard(end);
+      expect(textOf(events)).toBe("[Tool Result]<s");
+      expect(events.at(-1)).toEqual(end);
+    });
+  }
+
+  test("a thinking boundary does not release a split vendor reminder", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "Safe.<system" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    guard({ type: "text_delta", text: "-reminder>private-fixture</system-reminder>Answer." });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe("Safe.Answer.");
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("heartbeats keep a split replay marker in the same text block", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "[Tool " });
+    guard({ type: "heartbeat" });
+    guard({ type: "text_delta", text: "Result]\nprivate-fixture" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe("");
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+    expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE });
+  });
+
+  test("preserves multiple thinking cuts within one pending vendor prefix", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "<" });
+    guard({ type: "thinking_delta", thinking: "A" });
+    guard({ type: "text_delta", text: "s" });
+    guard({ type: "thinking_delta", thinking: "B" });
+    guard({ type: "text_delta", text: "x" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(events).toEqual([
+      { type: "text_delta", text: "<" }, { type: "thinking_delta", thinking: "A" },
+      { type: "text_delta", text: "s" }, { type: "thinking_delta", thinking: "B" },
+      { type: "text_delta", text: "x" }, { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  test("pending boundaries never release split vendor tool markup", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "<fun" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    guard({ type: "text_delta", text: "ctions.exec>private-fixture" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, retryable: false });
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+  });
+
+  test("an upstream error survives envelope recognition while draining pending boundaries", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "```text\n[Tool Result]\npayload<" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    const error: AdapterEvent = { type: "error", message: "original vendor error", status: 429 };
+    guard(error);
+    expect(textOf(events)).toBe("```text\n");
+    expect(events.some(event => event.type === "thinking_delta")).toBe(false);
+    expect(events.at(-1)).toEqual(error);
+  });
+
+  for (const overflow of ["characters", "events"] as const) {
+    test(`bounds deferred boundary ${overflow} without releasing held content`, () => {
+      const { events, emit } = collect();
+      const guard = guardQoderScaffolding(emit);
+      guard({ type: "text_delta", text: "<s" });
+      if (overflow === "characters") guard({ type: "thinking_delta", thinking: "private-fixture".repeat(10_000) });
+      else for (let index = 0; index < 2_000; index++) guard({ type: "tool_call_end" });
+      guard({ type: "done", stopReason: "stop" });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, retryable: false });
+      expect(JSON.stringify(events)).not.toContain("private-fixture");
+    });
+  }
 });
