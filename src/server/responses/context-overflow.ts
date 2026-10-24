@@ -99,6 +99,8 @@ export interface SidecarLoopFailure {
   upstreamCode?: string;
   /** The failed response was marked non-replayable: the provider may already have run the turn. */
   nonReplayable?: boolean;
+  /** The failed response was a verified plan refusal; the loop's own envelope must carry the mark. */
+  verifiedPlanRefusal?: boolean;
 }
 
 /**

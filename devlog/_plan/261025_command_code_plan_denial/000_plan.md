@@ -102,3 +102,7 @@ Independent review via GOAT task (codex/gpt-6.1-sol, high), each round at the ex
 - CodeRabbit: `formatErrorResponse` minted the mark from a caller-supplied code, which run-turn
   combo children take from an adapter event. Fixed by marking only at the verifying boundaries
   (`adapter-dispatch.ts`, `consumeComboFailure`); this plan text was also corrected.
+- r5 MUSTFIX: the web-search and image sidecar loops rebuilt a failed first iteration as their own
+  envelope, dropping the fixed copy, code and mark, so a sidecar combo or policy stopped instead of
+  moving on. Fixed with `verifiedPlanRefusalMessage` in both loops and mark propagation across the
+  `sidecar-execution.ts` stream wrappers.

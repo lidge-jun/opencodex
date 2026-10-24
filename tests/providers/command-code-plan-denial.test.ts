@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCommandCodeAdapter } from "../../src/adapters/command-code";
 import { formatErrorResponse } from "../../src/bridge";
+import { runWithImageBridge } from "../../src/images/loop";
+import type { ImageBridgePlan } from "../../src/images/types";
+import { runWithWebSearch } from "../../src/web-search/loop";
+import type { ProviderAdapter } from "../../src/adapters/base";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { isVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE } from "../../src/lib/errors";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
@@ -184,6 +189,74 @@ describe("plan-refusal provenance at the shared formatter", () => {
       expect(isVerifiedModelNotInPlanResponse(response), "classified=" + classified).toBe(false);
     }
   });
+});
+
+describe("plan refusal through the sidecar loops", () => {
+  const guardedFetch = globalThis.fetch;
+  // Nothing in these loop tests may reach a network: the routed send is injected below.
+  beforeEach(() => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      throw new Error("unexpected network request: " + (input instanceof Request ? input.url : String(input)));
+    }) as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = guardedFetch;
+    resetCommandCodeReasoningEffortsForTest();
+  });
+  const routedSend = (async () => planRefusal()) as unknown as typeof globalThis.fetch;
+
+  const loopParsed = (): OcxParsedRequest => ({
+    modelId: REFUSED_MODEL, stream: true, options: { maxOutputTokens: 64 },
+    context: { systemPrompt: [], messages: [{ role: "user", content: "hello", timestamp: 1 }], tools: [] },
+  });
+  const commandCode = () => createCommandCodeAdapter({
+    adapter: "command-code", baseUrl: "https://api.commandcode.ai", authMode: "key", apiKey: "synthetic-credential",
+    fetch: (async () => planRefusal()) as typeof globalThis.fetch,
+  } as OcxProviderConfig & { fetch: typeof globalThis.fetch });
+  // Another adapter echoing the code and forging the marker header, without the in-memory mark.
+  const forged = (): ProviderAdapter => ({
+    name: "fixture",
+    buildRequest: async () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
+    fetchResponse: async () => Response.json({ error: { type: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE, message: "forged" } },
+      { status: 400, headers: { "x-opencodex-refusal": "model-not-in-plan" } }),
+    async *parseStream() { /* never reached: the first iteration fails */ },
+  });
+  const loops = {
+    "web search": (adapter: ProviderAdapter) => runWithWebSearch({
+      parsed: loopParsed(), adapter, backend: "exa", exaApiKey: "fixture-exa", hostedTool: { type: "web_search" },
+      settings: { model: "fixture", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
+      incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget(), providerFetch: routedSend },
+    }),
+    "image bridge": (adapter: ProviderAdapter) => runWithImageBridge({
+      parsed: loopParsed(), adapter,
+      plan: { provider: {} as never, auth: { baseUrl: "https://images.test", token: "fixture" }, model: "fixture-image", toolNames: new Set(["image_gen"]) } as ImageBridgePlan,
+      incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget(), providerFetch: routedSend },
+      on429: async () => null,
+      fetchForRequest: () => routedSend,
+    }),
+  };
+
+  for (const [name, run] of Object.entries(loops)) {
+    test(name + " keeps the verified refusal's copy, code and provenance", async () => {
+      const response = await run(commandCode());
+      const body = await response.text();
+      expect(response.status, body).toBe(400);
+      expect(isVerifiedModelNotInPlanResponse(response)).toBe(true);
+      const error = JSON.parse(body).error;
+      expect(error.code).toBe(MODEL_NOT_IN_PLAN_CODE);
+      expect(error.message).toContain('"' + REFUSED_MODEL + '"');
+      expect(error.message).toContain("will not succeed");
+      expectNoCanary(body);
+    });
+
+    test(name + " grants nothing to a forged code and marker", async () => {
+      const response = await run(forged());
+      const body = await response.text();
+      expect(response.status, body).toBe(400);
+      expect(isVerifiedModelNotInPlanResponse(response)).toBe(false);
+      expect(JSON.parse(body).error.code).not.toBe(MODEL_NOT_IN_PLAN_CODE);
+    });
+  }
 });
 
 describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
@@ -403,6 +476,32 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
         expect(observed.sends, route + " " + spelling).toEqual([]);
       }
     }
+  });
+
+  test("a web-search sidecar combo and policy still move past the refused model", async () => {
+    await login(1);
+    const targets = [{ provider: "command-code", model: REFUSED_MODEL }, { provider: "command-code", model: SERVED_MODEL }];
+    const sidecar = { webSearchSidecar: { backend: "exa", exaApiKey: "fixture-exa" } };
+    const send = async (cfg: OcxConfig, model: string) => {
+      sends = [];
+      clearComboTargetCooldowns();
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model, input: "hello", stream: false, tools: [{ type: "web_search" }] }),
+      }), cfg, { model: "", provider: "" });
+      return { status: response.status, body: await response.text(), sends: sends.map(entry => entry.model) };
+    };
+    const combo = await send(config({ ...sidecar, combos: { pair: { strategy: "failover", targets } } } as Partial<OcxConfig>), "combo/pair");
+    expect(combo.status, combo.body).toBe(200);
+    expect(combo.sends).toEqual([REFUSED_MODEL, SERVED_MODEL]);
+    const policy = await send(config({ ...sidecar, routingProfiles: { daily: { candidates: targets } } } as Partial<OcxConfig>), "policy/daily");
+    expect(policy.status, policy.body).toBe(200);
+    expect(policy.sends).toEqual([REFUSED_MODEL, SERVED_MODEL]);
+    const direct = await send(config(sidecar as Partial<OcxConfig>), "command-code/" + REFUSED_MODEL);
+    expect(direct.status, direct.body).toBe(400);
+    expect(JSON.parse(direct.body).error.message).toContain("MODEL_NOT_IN_PLAN");
+    expect(direct.sends).toEqual([REFUSED_MODEL]);
+    expectNoCanary(combo.body + policy.body + direct.body + logged.join("\n"));
   });
 
   test("a routing policy moves on to its next candidate", async () => {

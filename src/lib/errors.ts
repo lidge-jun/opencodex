@@ -58,6 +58,19 @@ export function isModelNotInPlanRefusal(response: Response, bodyCode: string | n
 }
 
 /**
+ * The proxy's own fixed message from a verified plan refusal's body, or `undefined` for any other
+ * response. Sidecar loops rebuild a failed iteration as their own error envelope and use this to
+ * keep the actionable copy; the text is trusted only because the marked object is ours.
+ */
+export function verifiedPlanRefusalMessage(response: Response, bodyText: string): string | undefined {
+  if (response.status !== 400 || !verifiedPlanRefusalResponses.has(response)) return undefined;
+  try {
+    const error = (JSON.parse(bodyText) as { error?: { code?: unknown; message?: unknown } }).error;
+    return error?.code === MODEL_NOT_IN_PLAN_CODE && typeof error.message === "string" ? error.message : undefined;
+  } catch { return undefined; }
+}
+
+/**
  * Whether a code names the plan refusal in any spelling combo failover folds into it (case,
  * surrounding space, hyphens). The trust gate has to match the same set, or an unmarked
  * `MODEL_NOT_IN_PLAN` would pass the gate and still be read as the hop code downstream.
