@@ -1,4 +1,5 @@
 import { normalizeJevQuotaTiers } from "../combos/jev-quota-config";
+import { normalizeJevSessionPin } from "../combos/jev-session-pin-config";
 import { parseComboTargets } from "./combo-input";
 import { printCatalogResult } from "./catalog-command-result";
 
@@ -38,6 +39,11 @@ function publicCombo(value: unknown): Record<string, unknown> {
       const tiers = normalizeJevQuotaTiers(child);
       if (!tiers) invalid();
       result[key] = tiers;
+      continue;
+    } else if (key === "sessionPin") {
+      const pin = normalizeJevSessionPin(child);
+      if (!pin) invalid();
+      result[key] = pin;
       continue;
     } else if (key === "nativeAlias" || key === "allowMeteredTargets" || key === "decisionQuotaSignals") {
       if (typeof child !== "boolean") invalid();

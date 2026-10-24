@@ -238,6 +238,22 @@ outbound contract is covered by `tests/responses/chat-conversation-affinity.test
 caller `x-session-id` arrives at this bridge already as `session_id` (see above).
 This transport contract does not prove a client's emission, Pool selection stability or cache hits.
 
+The optional `x-hermes-conversation-id` header is accepted on `/v1/chat/completions` and `/v1/responses`
+strictly as a log-only correlation fallback (`logCtx.conversationId`), normalized to a 32-hex-character
+digest and stripped before upstream forwarding. It never modifies native session lane allocation
+(`sessionLaneIdFromRequest`), turn termination (`bindTurnTerminationScope`), or upstream prompt caching.
+Native header candidates (`x-codex-parent-thread-id`, `session_id`, `session-id`, `thread-id`) are each
+normalized independently in priority order before considering Hermes, ensuring that an empty or whitespace
+candidate does not mask a valid native identity. Configuring `session_affinity_header: x-hermes-conversation-id`
+on Hermes replaces the client's `session-id` header, trading away native session identity and lane scoping
+for log-only correlation; `session-id` remains the generated default.
+A Hermes-derived log id is marked `conversationIdIsHermesFallback` (in memory, never persisted). Chat sets
+it before routing so pre-dispatch refusals stay correlated; `assignNativeLogConversationId` lets any later
+native id replace it — `prepareResponsesRequest` resolution and the Cursor conversation backfills in
+`run-turn-execution.ts`, `sidecar-execution.ts` and `request-transport.ts` — while a caller-owned
+pre-populated id (routed Claude) is kept. Covered by `tests/usage/request-log-conversation.test.ts` and
+`tests/responses/chat-conversation-affinity.test.ts`.
+
 ## Chat streaming client with a JSON upstream result
 
 The translated inbound path in `src/server/chat-completions.ts` may receive a complete JSON

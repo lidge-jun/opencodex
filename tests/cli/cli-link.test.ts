@@ -144,7 +144,7 @@ describe("ocx link", () => {
         ...statusResponse,
         links: statusResponse.links.map(link => ({ ...link, ...NO_PARITY })),
       });
-      expect(calls[0]?.url).toBe("http://127.0.0.1:19101/api/link/status?compatibility=1");
+      expect(calls[0]?.url).toBe("http://127.0.0.1:19101/api/link/status?compatibility=1&diagnostics=1");
       expect(new Headers(calls[0]?.init?.headers).get("x-opencodex-api-key")).toBe("ocx_admin_test-token");
     } finally {
       output.restore();

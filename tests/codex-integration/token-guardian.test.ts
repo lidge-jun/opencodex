@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { getAccountSet, saveCredential, setAccountPaused } from "../../src/oauth/store";
 import { getConfigPath } from "../../src/config";
 import { flushConfigDirHardening } from "../../src/config/paths";
-import { markCodexAccountValidated, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
+import { markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { __resetGuardianState, guardianSweep } from "../../src/oauth/token-guardian";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import {
@@ -350,6 +350,57 @@ describe("token guardian", () => {
     expect(record.credential?.accessToken).toBe("reauthed");
     expect(record.lastCodexValidationTerminal).toBeUndefined();
     expect(record.lastCodexValidationStatus).toBe("ok");
+  });
+
+  // #7592: the verdict persisted above was never read back. Once the in-memory backoff window
+  // lapsed (or the process restarted) the sweep POSTed the same dead grant again, one guaranteed
+  // 401 per ceiling interval per account, until someone re-logged in.
+  test("a persisted terminal verdict stops pool refresh until re-login or revalidation clears it", async () => {
+    writeConfig({
+      tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60 },
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool", refreshPolicy: "proactive" } },
+    });
+    saveCodexAccountCredential("acct-dead", {
+      accessToken: "old", refreshToken: "rt", expiresAt: Date.now() + 5_000, chatgptAccountId: "cg-1",
+    });
+    markCodexAccountValidated("acct-dead", Date.now() - 120_000);
+    let tokenCalls = 0;
+    let revoked = true;
+    globalThis.fetch = (async () => {
+      tokenCalls++;
+      return revoked
+        ? new Response(JSON.stringify({ error: "refresh_token_invalidated" }), { status: 401, headers: { "content-type": "application/json" } })
+        : new Response(JSON.stringify(OK_TOKEN), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    expect((await guardianSweep(Date.now())).failed).toContain("codex:acct-dead");
+    expect(tokenCalls).toBe(1);
+    expect(readCodexAccountRecord("acct-dead")?.lastCodexValidationTerminal).toBe(true);
+
+    // The backoff window lapsing and a restart look the same to the sweep: no in-memory entry.
+    __resetGuardianState();
+    const held = await guardianSweep(Date.now() + 2 * 3600_000);
+    expect(tokenCalls).toBe(1);
+    expect(held.failed).toEqual([]);
+    expect(held.refreshed).toEqual([]);
+
+    // A completed validation refutes the verdict, so the account is maintained again.
+    revoked = false;
+    markCodexAccountValidated("acct-dead", Date.now());
+    expect((await guardianSweep(Date.now())).refreshed).toContain("codex:acct-dead");
+    expect(tokenCalls).toBe(2);
+
+    // A re-login is the other way out: the credential write drops the marker.
+    markCodexAccountValidationFailed("acct-dead", "refresh_revoked", { terminal: true });
+    __resetGuardianState();
+    await guardianSweep(Date.now() + 2 * 3600_000);
+    expect(tokenCalls).toBe(2);
+    saveCodexAccountCredential("acct-dead", {
+      accessToken: "relogin", refreshToken: "rt-new", expiresAt: Date.now() + 5_000, chatgptAccountId: "cg-1",
+    });
+    expect(readCodexAccountRecord("acct-dead")?.lastCodexValidationTerminal).toBeUndefined();
+    expect((await guardianSweep(Date.now())).refreshed).toContain("codex:acct-dead");
+    expect(tokenCalls).toBe(3);
   });
 
   test("direct mode warms main only and never enumerates the added-account store", async () => {

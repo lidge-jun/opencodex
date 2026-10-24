@@ -47,6 +47,42 @@ olarak ayarlanmış veya `multi_agent_version` alanı olmayan bir girdi uygundur
 Gerçek bir `"v1"` sabitlemesi hariç tutulur çünkü modelin diğer işbirliği
 yüzeyine ait olduğunu belirtir.
 
+## `spawn_agent` hangi modelleri sunar?
+
+Codex, `spawn_agent` araç açıklamasında en fazla beş model listeler ve bunları kendisi seçer: seçicide görünen katalog satırlarını `priority` değerine göre küçükten büyüğe sıralar ve ilk beşini alır. **Subagents** sayfasındaki kadro (`subagentModels`) bu listeyi yalnızca kendi modellerine kadro sırasıyla en düşük öncelikleri vererek etkiler (hesap seçicisi yoksa `0` ile `4` arası). Listeyi kadroyla sınırlamaz.
+
+Bir ile dört arasında model öne çıkarırsanız Codex kalan yuvaları önceliğe göre sonraki satırlarla doldurur. Bu satırları siz seçmediniz ve pano hangilerinin girdiğini göstermez. Hangi satırların gireceği kataloğa bağlıdır:
+
+| Katalog | Kalan yuvaları dolduran satırlar |
+| --- | --- |
+| Codex hesap seçicisi yok | Diğer yönlendirilmiş `provider/model` satırları. Hepsi `5` önceliğini paylaştığı için sağlayıcı adına, ardından model kimliğine göre alfabetik sırayla gelir. Öne çıkarılmamış yerel GPT satırlarının önceliği en az `100` artı öne çıkarılan kimlik sayısıdır; bu yüzden daha sonra gelirler. |
+| Codex hesap seçicisi var | Hesaba bağlı yerel satırlar (`<selector>/<native-model>`); öne çıkarılan satırların hemen ardından gelir. Öne çıkarılmamış yönlendirilmiş satırlar `1005` önceliğine taşınır ve onlardan sonra gelir. |
+
+Örneğin hesap seçicisi yokken ve kadro şöyleyken:
+
+```json
+{ "subagentModels": ["xai/grok-4.5", "anthropic/claude-sonnet-5"] }
+```
+
+| Yuva | Model | Öncelik | Neden |
+| ---: | --- | ---: | --- |
+| 1 | `xai/grok-4.5` | `0` | Kadronun ilk girdisi |
+| 2 | `anthropic/claude-sonnet-5` | `1` | Kadronun ikinci girdisi |
+| 3 | `deepseek/deepseek-v4-flash` | `5` | Alfabetik olarak kalan ilk yönlendirilmiş satır |
+| 4 | `google/gemini-3-pro` | `5` | Sonraki yönlendirilmiş satır |
+| 5 | `moonshot/kimi-k3` | `5` | Sonraki yönlendirilmiş satır |
+| 6+ | `zai/glm-5.2`, ardından yerel GPT satırları | `5`, ardından `102` | Beşin dışında |
+
+Kadro boşsa opencodex hiçbir satırı sabitlemez ve beş yuva kataloğun normal önceliklerine göre belirlenir.
+
+Doldurulan yuvalar sıradan sunumlardır; ana ajan bu modellerden birini seçebilir. Liste bir izin listesi de değildir: ana ajan tam adını verirse Codex beşin dışındaki bir katalog modelini de kabul eder. Codex'in sunduğu listeyi denetlemek için:
+
+- Beş model öne çıkarın. Kadro doluysa doldurulacak yuva kalmaz.
+- Hiç sunulmasını istemediğiniz bir modeli devre dışı bırakın ya da sağlayıcısının `selectedModels` listesine eklemeyin. Devre dışı ya da seçilmemiş bir model seçiciden çıkar ve yuva dolduramaz.
+- `modelPickerOrder`, Codex'in sıralamada kullandığı öncelikleri değiştirir. Yalnızca yönlendirilmiş satırlardan oluşan bir liste, listelenen öne çıkarılmamış satırları `1000` ve üzerine taşır; bu yüzden listelenmemiş yönlendirilmiş satırlar yuvaları önce doldurur. Yalın bir yerel kimlik içeren liste, öne çıkarılan satırlar dahil tüm seçiciyi sıralar: listelenen satırlar önce gelir ve listelenmemiş her satırdan önce sunulan yuvaları alır. Bkz. [Model ordering](/guides/model-ordering/).
+
+v2'de Codex beşi almadan önce `"disabled"` olarak sabitlenmiş satırları atlar; geri kalanı aynı şekilde çalışır. opencodex v2 yönlendirmesindeki kadro (`{{roster}}`) yalnızca beşin içindeki yapılandırılmış kadro modellerini adlandırır; dolgu modelleri Codex'in araç açıklamasında görünür, opencodex yönlendirmesinde hiç görünmez. Codex kataloğu oturum başlarken okur; bu yüzden kadro değişikliği yeni oturumlarda geçerli olur.
+
 ## Yetkilendirme modeli ve çaba
 
 Kontrol panelinin **Alt ajan yetkilendirmesi** üç ilgili ayarı denetler:
@@ -265,6 +301,10 @@ sayıya ayarlayan bir spawn kullanın.
 Seçicide gizlenmiş olabilir, beş modelli görüntüleme sınırının dışında olabilir,
 katalogda eksik olabilir veya v1'e sabitlenmiş olabilir. Bir `"v2"`, `null` veya
 bulunmayan arayüz değeri uygundur; gerçek bir `"v1"` sabitlemesi uygun değildir.
+
+### `spawn_agent` neden öne çıkarmadığım modelleri listeliyor?
+
+Codex sunduğu en fazla beş yuvayı katalogdan önceliğe göre doldurur. Beşten az model öne çıkardığınızda kalan yuvaları sonraki satırlar alır; yukarıdaki "`spawn_agent` hangi modelleri sunar?" bölümüne bakın.
 
 ### Mod değişiklikleri çalışan oturumları etkiler mi?
 

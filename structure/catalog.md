@@ -1,5 +1,5 @@
 # Model Catalog
-
+WorkBuddy AI discovery and account-scoped cache follow the [WorkBuddy contract](providers/workbuddy.md).
 Activation-owned metadata discovery no longer refreshes known deadlines merely because quota snapshots age. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). Pool 2 discovery uses the [instance credential ownership contract](providers/anthropic-account-pool.md#discovery-credential-ownership). The retained writer uses an observed catalog's nonblocking runtime snapshot for effort diagnostics; it does not run a synchronous version probe. Unchanged clamp diagnostics follow the [effort-clamp observation contract](catalog-effort-clamp.md). Portable Rust-driven Bun contracts run in `.github/workflows/catalog-async-contracts.yml` on Linux, macOS and Windows.
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
@@ -481,7 +481,7 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 Ultra is always advertised in the catalog regardless of the `multi_agent_v2` toggle. The v2 toggle
 controls only the multi-agent collab surface, not ultra visibility. The `nativeEffortClamp` function
-wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire).
+wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire). `ultra` itself is never a native wire value: the ChatGPT backend accepts `none` through `max`, so the clamp folds it to `max` even on rows whose pinned ladder lists it (`gpt-6-astra`, `gpt-6.1-sol`), and `src/server/responses/core-normalize.ts` applies that to the raw body the passthrough serializes, which the parser's options-only fold does not reach (#7590; `tests/responses/responses-native-ultra-effort-wire.test.ts`).
 
 For routed models, `modelSuppressSyntheticMax` is a catalog-only per-model setting. A true value
 prevents `src/codex/catalog/effort.ts` from adding a missing synthetic `max` and prevents

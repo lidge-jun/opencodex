@@ -322,6 +322,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noPenaltyModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].preserveReasoningContentModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].openaiChatEofTolerance).toBe(true);
+    expect(KEY_LOGIN_PROVIDERS.moonshot.foldDeveloperRoleToSystem).toBe(true);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-coder"]).toBe(262_144);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);
@@ -556,7 +557,7 @@ describe("provider registry parity", () => {
       liveModels: false,
       models: [
         "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-        "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
+        "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
       ],
       modelInputModalities: {
         "qwen3.8-max": ["text", "image"],
@@ -576,8 +577,8 @@ describe("provider registry parity", () => {
         "deepseek-v4-pro": 393_216,
       },
       noVisionModels: expect.arrayContaining(["qwen3.7-max", "deepseek-v4-pro", "glm-5.2"]),
-      // Beijing is the Personal Edition roster: the Team-only 0813 snapshot and the
-      // still-phantom glm-5.3-flash must stay out of this preset's models list.
+      // Beijing retains Personal curation; 0813 is now listed on Personal too.
+      // The still-phantom glm-5.3-flash stays out of this preset.
       // glm-5.3 itself joined the plan on 260917 and is Personal-entitled (probed 260918).
 
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
@@ -1837,7 +1838,7 @@ describe("free-provider directory isolation", () => {
       { provider: "opencode-go", model: "deepseek-v4.1-flash", flash: true },
       { provider: "opencode-go", model: "deepseek-v4-flash", flash: true },
       { provider: "volcengine-coding-plan", model: "deepseek-v4-flash", flash: true },
-      { provider: "alibaba-token-plan-intl", model: "deepseek-v4-flash", flash: true },
+      { provider: "alibaba-token-plan-intl", model: "deepseek-v4.1-flash-1017", flash: true },
     ];
 
     for (const { provider, model, flash } of cases) {
