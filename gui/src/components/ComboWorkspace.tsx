@@ -214,7 +214,7 @@ export default function ComboWorkspace({
       </aside>
 
       <div className="combos-workspace-main">
-        {baseline ? (
+        {baseline && selected ? (
           <DetailPanel
             key={baseline.id}
             apiBase={apiBase}
