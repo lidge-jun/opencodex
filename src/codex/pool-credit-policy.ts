@@ -1,8 +1,9 @@
 import type { OcxConfig } from "../types";
-import { codexUsageLimitResetAt, isCodexAccountHeldForCredits } from "./account-credit-use";
+import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt, isCodexAccountHeldForCredits } from "./account-credit-use";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import { getAccountQuota } from "./quota";
+import { hasSpendableCodexCredits } from "./quota-types";
 
 export type PoolCreditPolicyConfig = Readonly<Pick<OcxConfig, "creditCodexAccountIds" | "codexAccounts">>;
 type PoolContext = { kind: "pool"; accountId: string };
@@ -64,4 +65,24 @@ export function poolContextCreditHoldResetAt(
   if (!policy) return undefined;
   const catalog = override?.codexAccounts ? override : bound?.config ?? policy;
   return poolCreditHoldResetAt(policy, context.accountId, catalog, now);
+}
+
+/** Retry advice only: absent/uncertain evidence can be re-observed, never spent. */
+export function poolCreditRecoveryNeeded(policy: PoolCreditPolicyConfig, accountId: string, now = Date.now()): boolean {
+  if (!codexAccountUsesCreditsAfterLimit(policy, accountId)) return false;
+  const quota = getAccountQuota(accountId);
+  const credits = quota?.credits;
+  // Only parser-proven unavailable null is re-observable. Legacy null and known
+  // vetoes remain conservative; unlimited overrides balance, never an explicit veto.
+  if (credits === null) return quota?.creditObservationUnavailable === true;
+  if (credits?.allowed === false || credits?.overageLimitReached === true
+    || credits?.hasCredits === false || (credits?.unlimited !== true && typeof credits?.balance === "number"
+      && Number.isFinite(credits.balance) && credits.balance <= 0)) return false;
+  return !hasSpendableCodexCredits({ credits }, now);
+}
+
+/** Use the same live policy/override as the context's admission check. */
+export function poolContextCreditRecoveryNeeded(context: PoolContext, override?: PoolCreditPolicyConfig): boolean {
+  const policy = override ?? policies.get(context)?.policy;
+  return !!policy && poolCreditRecoveryNeeded(policy, context.accountId);
 }
