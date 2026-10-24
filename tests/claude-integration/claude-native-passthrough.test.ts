@@ -939,6 +939,27 @@ test("a read rejection that lands before the client abort listener still finaliz
   expect(calls).toEqual([{ status: 499, closeReason: "client_cancel" }]);
   expect(logCtx.transportPhase).toBeUndefined();
   expect(logCtx.upstreamError).toBeUndefined();
+  // A cancelled turn still bills what it consumed before the client left.
+  expect(logCtx.usage?.inputTokens).toBe(12);
+});
+
+test("an upstream error event is the turn's terminal, logged as that failure rather than a 200", async () => {
+  const errorFrame = `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } })}\n\n`;
+  const source = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(PARTIAL_TURN_SSE + errorFrame));
+      controller.close();
+    },
+  });
+  const calls: unknown[] = [];
+  const logCtx: RequestLogContext = { model: "claude-fable-5", provider: "anthropic-native" };
+  const tapped = tapAnthropicSseForLog(source, logCtx, (status, meta) => calls.push({ status, ...meta }), { stallMs: 5_000, maxBytes: 0 });
+  // The client receives the upstream's own error event unchanged.
+  expect(await new Response(tapped).text()).toBe(PARTIAL_TURN_SSE + errorFrame);
+  // The status every other surface maps this error to (`httpStatusFromTerminalError`).
+  expect(calls).toEqual([{ status: 503, closeReason: "terminal", terminalStatus: "failed" }]);
+  expect(logCtx.upstreamError).toBe("Overloaded");
+  expect(logCtx.usage?.inputTokens).toBe(12);
 });
 
 const COMPLETE_TURN_SSE = PARTIAL_TURN_SSE + [
