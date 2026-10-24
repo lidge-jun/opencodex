@@ -408,6 +408,12 @@ jobs:
               - 'scripts/ci/docker-smoke.ts'
               - 'scripts/generate-compatibility-version.ts'
               - 'scripts/model-metadata.source.json'
+              # The image's final RUN imports version.ts to prove the generated compatibility
+              # manifest; these four files are its whole module closure (Bun.build metafile).
+              - 'src/routing/compatibility/version.ts'
+              - 'src/lab/digest.ts'
+              - 'src/lab/conformance/digest.ts'
+              - 'src/lab/conformance/jcs.ts'
               - 'src/cli/index.ts'
               - 'package.json'
               - 'bun.lock'
