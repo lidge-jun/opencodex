@@ -90,7 +90,7 @@ function connectSocket(hostname: string, port: number, signal?: AbortSignal): Pr
 }
 
 class SocketReader {
-  private buffer = Buffer.alloc(0);
+  private buffer: Buffer = Buffer.alloc(0);
   private ended = false;
   private failure: Error | undefined;
   private readonly exactWaiters: Array<{
