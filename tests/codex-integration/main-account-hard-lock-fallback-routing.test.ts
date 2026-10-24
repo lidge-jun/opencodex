@@ -18,7 +18,7 @@ import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { drainAndRemoveFixtureRoots } from "../helpers/fixture-teardown";
 
 const now = Date.UTC(2026, 8, 5);
 const FALLBACK = { model: "deepseek/deepseek-chat", reasoningEffort: "low" };
@@ -39,7 +39,7 @@ beforeEach(() => {
   observeMainQuotaIdentity("fallback-account-a");
 });
 
-afterEach(() => {
+afterEach(async () => {
   releaseSpendHome?.();
   releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
@@ -47,9 +47,15 @@ afterEach(() => {
   clearMainAccountInfoCache();
   deleteAllScopedHealth("pool-a");
   clearComboRecallForTests();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  removeTreeWithRetry(home);
+  // Saving a pool account starts the config-dir ACL harden without awaiting it; the
+  // shared teardown settles that flight and its icacls child before removing the home.
+  await drainAndRemoveFixtureRoots({
+    roots: [{ path: home }],
+    restoreEnvironment: () => {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    },
+  });
 });
 
 function observe(quota: Omit<StoredAccountQuota, "updatedAt">): void {
