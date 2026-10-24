@@ -1122,9 +1122,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
     if (typeof body.name !== "string" || typeof body.id !== "string" || typeof body.paused !== "boolean") return jsonResponse({ error: "name, id and paused required" }, 400);
     if (!isValidProviderName(body.name) || !hasOwnProvider(config.providers, body.name)) return jsonResponse({ error: "unknown provider" }, 404);
-    const { setProviderApiKeyPaused } = await import("../../providers/api-key-pause");
-    return setProviderApiKeyPaused(config, body.name, body.id, body.paused)
-      ? jsonResponse({ ok: true }) : jsonResponse({ error: "key not found" }, 404);
+    const { setProviderApiKeyPausedWithResult } = await import("../../providers/api-key-pause");
+    const result = setProviderApiKeyPausedWithResult(config, body.name, body.id, body.paused);
+    return result.ok ? jsonResponse(result) : jsonResponse({ error: "key not found" }, 404);
   }
   if (url.pathname === "/api/providers/keys/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; id?: string };

@@ -30,6 +30,7 @@ import { sidecarEnter } from "../lib/sidecar-tracker";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../providers/openai-sidecar";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { recordDistributedKeyFailure, selectProactiveApiKeyTransport } from "../providers/key-failover";
 import { requestPacingOverloadResponse } from "./responses/pacing-overload";
 import { getProviderRegistryEntry } from "../providers/registry";
@@ -668,7 +669,7 @@ export async function handleImages(
     if (xaiRelay) return xaiRelay;
   }
   if (candidates.error) {
-    return formatErrorResponse(400, "invalid_request_error", candidates.error);
+    return formatErrorResponse(candidates.paused ? 403 : 400, candidates.paused ? "permission_error" : "invalid_request_error", candidates.error);
   }
   const explicitKeyedProvider = config.images?.provider !== undefined && candidates.keyed !== undefined;
   // Admission bearer is valid proxy auth (requireApiAuth already passed) but must never be
@@ -809,8 +810,13 @@ export async function handleImages(
     // Transport variant: this branch reads `provider.baseUrl` and `provider.headers` to build
     // the URL and the request, and it comes back with the credential already resolved.
     let warmKeyProvider;
-    try { warmKeyProvider = selectProactiveApiKeyTransport(config, providerName, candidates.keyed.provider); }
-    catch (error) {
+    try {
+      warmKeyProvider = selectProactiveApiKeyTransport(config, providerName, candidates.keyed.provider);
+      if (isProviderApiKeyPaused(warmKeyProvider ?? candidates.keyed.provider)) throw new ProviderApiKeyPausedError();
+    } catch (error) {
+      if (error instanceof OAuthAccountPausedError) {
+        return formatErrorResponse(403, "permission_error", error.message);
+      }
       const refusal = requestPacingOverloadResponse(error);
       if (refusal) return refusal;
       throw error;

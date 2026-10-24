@@ -1,4 +1,5 @@
 import { resolveProviderApiKey } from "./key-store";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "./api-key-pause";
 import { createOpenAiSidecarCreditGuard } from "./openai-sidecar-credit";
 import {
   CodexPoolAuthenticationError,
@@ -57,6 +58,7 @@ export interface OpenAiImagesProviderSelection {
     provider: OcxProviderConfig;
     apiKey: string;
   };
+  paused?: boolean;
   error?: string;
 }
 
@@ -300,6 +302,7 @@ export function selectOpenAiImagesProvider(config: OcxConfig): OpenAiImagesProvi
     && provider.authMode !== "forward"
     && provider.baseUrl.replace(/\/+$/, "") === "https://api.openai.com/v1"
   ) {
+    if (isProviderApiKeyPaused(provider)) return selection;
     const apiKey = resolveProviderApiKey(provider.apiKey)?.trim();
     if (apiKey) selection.keyed = { providerName: OPENAI_API_PROVIDER_ID, provider, apiKey };
   }
@@ -336,6 +339,9 @@ export function selectImagesProvider(config: OcxConfig): OpenAiImagesProviderSel
       forwardCandidates: [],
       error: `images.provider "${providerName}" must be an API-key openai-responses provider`,
     };
+  }
+  if (provider.apiKeyPool?.length && provider.apiKeyPool.every(entry => entry.disabled === true)) {
+    return { forwardCandidates: [], paused: true, error: new ProviderApiKeyPausedError().message };
   }
 
   const apiKey = resolveProviderApiKey(provider.apiKey)?.trim();

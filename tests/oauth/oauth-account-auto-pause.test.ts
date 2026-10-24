@@ -276,3 +276,35 @@ test("a stale pre-resume response cannot erase the resumed account's refusal str
   await f.capture()(refusal());
   expect(getAccountSet("command-code")!.accounts[0]!.paused).toBe(true);
 });
+
+test("manual idempotent resume on an enabled key fences in-flight account auto-pause attempts", async () => {
+  const config = configFor("fixture", "key");
+  const provider = config.providers.fixture!;
+  provider.apiKey = "synthetic-A";
+  provider.apiKeyPool = [{ id: "A", key: "synthetic-A" }, { id: "B", key: "synthetic-B" }];
+  provider.accountAutoPause!.consecutiveFailures = 1;
+  saveConfig(config);
+  const routed = routedProviderConfig("fixture", provider);
+  const observe = captureAccountAutoPauseAttempt("fixture", routed, { config }, new Headers({ authorization: `Bearer ${routed.apiKey}` }))!;
+  expect(observe).toBeDefined();
+
+  // Manual resume (including an already enabled key) clears details and changes the revision, fencing already-sent refusals.
+  expect(setProviderApiKeyPaused(config, "fixture", "A", false)).toBe(true);
+
+  const response = refusal();
+  await observe(response);
+  expect(wasAccountAutoPaused(response)).toBe(false);
+  expect(config.providers.fixture!.apiKeyPool![0]!.disabled).not.toBe(true);
+  expect(loadConfig().providers.fixture!.apiKeyPool![0]!.disabled).not.toBe(true);
+  expect(config.providers.fixture!.apiKey).toBe("synthetic-A");
+  expect(loadConfig().providers.fixture!.apiKey).toBe("synthetic-A");
+
+  const freshRouted = routedProviderConfig("fixture", config.providers.fixture!);
+  const freshObserve = captureAccountAutoPauseAttempt("fixture", freshRouted, { config }, new Headers({ authorization: `Bearer ${freshRouted.apiKey}` }))!;
+  const freshResponse = refusal();
+  await freshObserve(freshResponse);
+  expect(wasAccountAutoPaused(freshResponse)).toBe(true);
+  expect(config.providers.fixture!.apiKeyPool![0]!.disabled).toBe(true);
+  expect(loadConfig().providers.fixture!.apiKeyPool![0]!.disabled).toBe(true);
+  expect(config.providers.fixture!.apiKey).toBe("synthetic-B");
+});

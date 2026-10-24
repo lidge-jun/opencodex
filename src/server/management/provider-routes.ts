@@ -2,6 +2,7 @@ import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelC
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers, snapshotProviderGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
+import { providerHasStoredApiKey } from "../../providers/api-keys";
 import { providerGcpCredentialInputResponse, removeProviderWithGcpCredentials } from "./provider-gcp-credential-routes";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -902,7 +903,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
   if (url.pathname === "/api/providers" && req.method === "GET") {
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
-      name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel, hasApiKey: !!p.apiKey,
+      name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
+      hasApiKey: providerHasStoredApiKey(p),
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
@@ -1599,7 +1601,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       success: true,
       name,
       disabled: config.providers[name]!.disabled === true,
-      hasApiKey: !!config.providers[name]!.apiKey,
+      hasApiKey: providerHasStoredApiKey(config.providers[name]!),
       ...(shadowDependency ? { dependentShadowIntercept: shadowDependency } : {}),
       ...(name === "xai"
         ? { xaiResponsesOptInState: xaiResponsesOptInState(config.providers[name]!) }

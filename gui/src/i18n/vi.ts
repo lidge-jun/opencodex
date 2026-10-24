@@ -1832,6 +1832,7 @@ export const vi: Record<TKey, string> = {
   "pws.accountSwitching": "Đang chuyển…",
   "pws.accountCurrent": "Tài khoản hiện tại",
   "pws.accountPausedHint": "Được loại trừ khỏi chọn tài khoản tự động, thử lại, hồi phục sau thời gian chờ, lựa chọn thủ công và làm mới token chủ động cho đến khi tiếp tục.",
+  "pws.resumeAndActivateKey": "Tiếp tục và sử dụng",
   "pws.defaultModelNone": "Không có (sử dụng mặc định của provider)",
   "pws.discardSettings": "Huỷ bỏ",
   "pws.jsonEditorDesc": "Chỉnh sửa config dạng JSON thô của provider. Các thay đổi sẽ được lưu ngay lập tức.",

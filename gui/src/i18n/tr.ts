@@ -1848,6 +1848,7 @@ export const tr: Record<TKey, string> = {
   "pws.accountSwitching": "Değiştiriliyor…",
   "pws.accountCurrent": "Mevcut hesap",
   "pws.accountPausedHint": "Devam ettirilene kadar otomatik seçim, yeniden deneme, bekleme süresinden kurtarma, manuel seçim ve proaktif belirteç yenilemesinden hariç tutulur.",
+  "pws.resumeAndActivateKey": "Devam ettir ve kullan",
   "pws.defaultModelNone": "Yok (sağlayıcı varsayılanını kullan)",
   "pws.discardSettings": "Vazgeç",
   "pws.jsonEditorDesc": "Ham sağlayıcı JSON konfigürasyonunu düzenleyin.",

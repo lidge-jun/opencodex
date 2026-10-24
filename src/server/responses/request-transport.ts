@@ -72,6 +72,7 @@ import {
   providerApiKeySelectionIsCurrent,
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { codexWsExecutorBinding, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
@@ -702,7 +703,12 @@ export async function prepareResponsesTransport(
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...route.provider, _apiKeyAttempt: undefined });
         if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
       }
-      if (!current) throw new Error("API key selection is unavailable before dispatch");
+      if (!current) {
+        // Rethrown through oauthDispatch so adapter-dispatch / passthrough-dispatch map it
+        // as a local 403 admission refusal without charging an upstream send.
+        if (isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
+        throw new Error("API key selection is unavailable before dispatch");
+      }
       route.provider = current;
       await resolveCopilotSelection(requestParsed, true);
     }
@@ -1167,13 +1173,24 @@ export async function prepareResponsesTransport(
   // The Transport variant, not the bare picker: the picker answers with the PERSISTED row, and
   // a built-in provider stored in its valid minimal form would lose the adapter id, base URL
   // and static headers registry backfill supplies, throwing `Unknown adapter: undefined`.
-  const proactiveKeyProvider = selectProactiveApiKeyTransport(
-    config,
-    route.providerName,
-    route.provider,
-    parsed.options.promptCacheKey,
-  );
+  let proactiveKeyProvider: OcxProviderConfig | null;
+  try {
+    proactiveKeyProvider = selectProactiveApiKeyTransport(
+      config,
+      route.providerName,
+      route.provider,
+      parsed.options.promptCacheKey,
+    );
+  } catch (err) {
+    if (err instanceof OAuthAccountPausedError) {
+      return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err));
+    }
+    throw err;
+  }
   if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+  if (isProviderApiKeyPaused(route.provider)) {
+    return formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(new ProviderApiKeyPausedError()));
+  }
   route.provider = resolveProviderTransport(
     route.providerName,
     route.provider,

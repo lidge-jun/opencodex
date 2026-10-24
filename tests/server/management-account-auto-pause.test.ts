@@ -43,7 +43,7 @@ function harness(policy?: OcxProviderConfig["accountAutoPause"]) {
   const config: OcxConfig = { port: 10100, defaultProvider: "relay", providers: {
     relay: { ...base, ...(policy === undefined ? {} : { accountAutoPause: policy }) },
   } };
-  const path = join(home, "saved.json");
+  const path = join(home, "config.json");
   writeFileSync(path, JSON.stringify(config));
   async function request(method: "POST" | "PUT", body: unknown, pathname = "/api/providers") {
     const url = new URL(pathname, "http://127.0.0.1");
@@ -132,4 +132,25 @@ describe("account auto-pause management", () => {
     expect((await h.request("PUT", body, "/api/providers/keys/pause"))?.status).toBe(400);
     expect(readFileSync(h.path, "utf8")).toBe(before);
   });
+
+  test("API-key pause returns the committed active-key state", async () => {
+    const h = harness();
+    h.config.providers.relay = {
+      ...base,
+      authMode: "key",
+      apiKey: "key-a",
+      apiKeyPool: [
+        { id: "key-a", key: "key-a", label: "Primary" },
+        { id: "key-b", key: "key-b", label: "Backup" },
+      ],
+    };
+    writeFileSync(h.path, JSON.stringify(h.config));
+
+    const response = await h.request("PUT", { name: "relay", id: "key-a", paused: true }, "/api/providers/keys/pause");
+
+    expect(response?.status).toBe(200);
+    expect(await response?.json()).toEqual({ ok: true, activeAccountId: "key-b", activeAccountChanged: true });
+    expect(h.config.providers.relay!.apiKey).toBe("key-b");
+  });
+
 });

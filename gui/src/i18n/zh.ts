@@ -3006,6 +3006,7 @@ export const zh: Record<TKey, string> = {
   "pws.accountSwitching": "切换中…",
   "pws.accountCurrent": "当前账户",
   "pws.accountPausedHint": "恢复前不会参与自动切换、重试、冷却恢复、手动选择或主动令牌刷新。",
+  "pws.resumeAndActivateKey": "恢复并使用",
   "pws.defaultModelNone": "无（使用提供商默认值）",
   "pws.discardSettings": "放弃",
   "pws.jsonEditorDesc": "直接编辑提供商 JSON 配置。更改将立即保存。",

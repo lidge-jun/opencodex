@@ -86,6 +86,7 @@ import { getUsageDebugLogEntries } from "../../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
+import { providerHasStoredApiKey } from "../../providers/api-keys";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../../reasoning-effort";
 import { normalizeVisionReasoningForModel } from "../../vision/reasoning";
 import {
@@ -364,7 +365,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   // for up to 15s, including the admin-token check. An injected reader stays authoritative.
   const readStartupHealthSnapshot = deps.getCachedStartupHealth ?? getStartupHealthSnapshot;
   if (url.pathname === "/api/config" && req.method === "GET") {
-    return jsonResponse(withProviderCatalogCapabilityDTO(safeConfigDTO(config), config));
+    const dto = safeConfigDTO(config) as { providers: Record<string, Record<string, unknown>> };
+    for (const [name, provider] of Object.entries(config.providers)) {
+      const publicProvider = dto.providers[name];
+      if (publicProvider) publicProvider.hasApiKey = providerHasStoredApiKey(provider);
+    }
+    return jsonResponse(withProviderCatalogCapabilityDTO(dto, config));
   }
 
   if (url.pathname === "/api/config" && req.method === "PUT") {

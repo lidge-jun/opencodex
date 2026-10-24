@@ -389,7 +389,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const {
     accountSets, setAccountSets, accountLoadStates, switchingAccounts, pausingAccounts, keyPools, fetchAccountSets, fetchKeyPools,
     refreshAccountRosters, oauthCardProviders, keyCardProviders,
-    switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
+    switchAccount, pauseAccount, setAccountPoolThreshold, setAccountThreshold, switchApiKey, pauseApiKey, removeApiKey, addApiKeyValue, editCredentialAlias,
     removeAccount, activeAccountNeedsReauth,
   } = pools;
   const refreshSelection = useCallback((target?: AccountSelectionTarget) => {
@@ -593,6 +593,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     onRetryAccounts: async provider => { await fetchAccountSets([provider]); },
     onAddApiKey: addApiKeyValue,
     onSwitchApiKey: switchApiKey,
+    onPauseApiKey: pauseApiKey,
     onRemoveApiKey: removeApiKey,
     onEditAlias: editCredentialAlias,
     onRefreshQuota: refreshProviderQuota,

@@ -1846,6 +1846,7 @@ export const pt: Record<TKey, string> = {
   "pws.accountSwitching": "Alternando…",
   "pws.accountCurrent": "Conta atual",
   "pws.accountPausedHint": "Excluída da seleção automática, das novas tentativas, da recuperação de cooldown, da seleção manual e da renovação proativa de token até ser retomada.",
+  "pws.resumeAndActivateKey": "Retomar e usar",
   "pws.defaultModelNone": "Nenhum (usar o padrão do provedor)",
   "pws.discardSettings": "Descartar",
   "pws.jsonEditorDesc": "Edite a configuração JSON bruta do provedor. As alterações são salvas imediatamente.",

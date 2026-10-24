@@ -151,7 +151,7 @@ Codex 池選擇套用於清除既有親和性後的下一個請求；進行中�
 
 ### `ocx account pause|resume <provider> <id|alias|main> [--json]`
 
-暫停或恢復 Codex、Anthropic 或通用 OAuth 供應商池中的單一帳號，包括
+暫停或恢復 Codex、Anthropic、通用 OAuth 或 API-key 供應商池中的單一帳號或金鑰，包括
 `google-antigravity`。在 Codex 池中，`main` 僅代表 Codex 內建帳號；OAuth 帳號必須用 id 或唯一別名識別。
 已暫停的 OAuth 帳號不會參與請求選帳、429 輪替或主動 Token 刷新，也不能手動選取。
 若暫停目前使用中的帳號，系統會在有其他可用帳號時切換過去。若全部帳號都已暫停，

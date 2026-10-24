@@ -204,6 +204,10 @@ export function sanitizeApiKeyValue(value: unknown): string | undefined {
 }
 
 /** Seed the pool from a legacy bare `apiKey`, and keep `apiKey` mirrored to the active entry. */
+export function providerHasStoredApiKey(provider: OcxProviderConfig): boolean {
+  return !!provider.apiKey || (isKeyAuthProvider(provider) && (provider.apiKeyPool?.length ?? 0) > 0);
+}
+
 function ensurePool(provider: OcxProviderConfig): NonNullable<OcxProviderConfig["apiKeyPool"]> {
   if (!provider.apiKeyPool) provider.apiKeyPool = [];
   if (provider.apiKeyPool.length === 0 && provider.apiKey) {
@@ -276,7 +280,8 @@ export function addProviderApiKey(config: OcxConfig, name: string, key: string, 
               pool.push({ id, key: marker, ...(label?.trim() ? { label: label.trim() } : {}), addedAt: Date.now() });
             }
           }
-          fresh.apiKey = stored[0]!.marker;
+          const activeCandidate = stored.find(({ id }) => !pool.find(e => e.id === id)?.disabled);
+          if (activeCandidate) fresh.apiKey = activeCandidate.marker;
           return { changed: true, selectionChanged: true, value: stored[0]!.id };
         });
         if (committed.status === "committed") {
@@ -345,10 +350,14 @@ export function removeProviderApiKey(config: OcxConfig, name: string, id: string
       : provider.apiKey ? [{ id: apiKeyPoolEntryId(provider.apiKey), key: provider.apiKey }] : [];
     const entry = pool.find(e => e.id === id);
     if (!entry) return { changed: false, value: false };
+    const idx = pool.indexOf(entry);
     removed = entry.key;
     provider.apiKeyPool = pool.filter(e => e.id !== id);
     if (provider.apiKey === entry.key) {
-      const next = provider.apiKeyPool.find(candidate => !candidate.disabled);
+      const ordered = idx >= 0
+        ? [...provider.apiKeyPool.slice(idx), ...provider.apiKeyPool.slice(0, idx)]
+        : provider.apiKeyPool;
+      const next = ordered.find(candidate => !candidate.disabled);
       if (next) provider.apiKey = next.key;
       else delete provider.apiKey;
     }

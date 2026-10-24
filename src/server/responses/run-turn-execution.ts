@@ -268,6 +268,7 @@ export async function executeResponsesRunTurn(
     const failedKeys = new Set<string>();
     const keyAttemptLimit = route.provider.apiKeyPool?.length ?? 0;
     let lastKeyFailure: Extract<AdapterEvent, { type: "error" }> | undefined;
+    let authRecoveryRefusal: Response | undefined;
     let runTurnAttemptSeq = 0;
     const runTurnAttempt = async (
       targetQueue: AdapterEventQueue,
@@ -374,8 +375,13 @@ export async function executeResponsesRunTurn(
           Object.assign(parsed, routeState);
         }
       } catch (err) {
-        const storageRefusal = mapSpendLedgerStorageError(err, logCtx);
-        emit(storageRefusal ? { type: "error", ...storageRefusal } : err instanceof RequestPacingQueueOverloadError
+        if (err instanceof OAuthAccountPausedError) {
+          const message = publicOAuthAuthenticationErrorMessage(err);
+          authRecoveryRefusal ??= formatErrorResponse(403, "permission_error", message);
+          emit({ type: "error", status: 403, errorType: "permission_error", message });
+        } else {
+          const storageRefusal = mapSpendLedgerStorageError(err, logCtx);
+          emit(storageRefusal ? { type: "error", ...storageRefusal } : err instanceof RequestPacingQueueOverloadError
           ? {
               type: "error",
               status: 429,
@@ -399,6 +405,7 @@ export async function executeResponsesRunTurn(
                 type: "error",
                 message: err instanceof Error ? err.message : String(err),
               });
+        }
       } finally {
         if (attemptSeq === 1) options.comboInitialSend?.permit.release();
         devinProducers.delete(producerAbort);
@@ -477,7 +484,6 @@ export async function executeResponsesRunTurn(
     // selected; the turn then moves to a surviving stored account, or, with none, the client
     // gets the login instruction instead of an opaque upstream 401.
     let oauth401ReplayAttempted = false;
-    let authRecoveryRefusal: Response | undefined;
     const refuseLocalAuthRecovery = (error: Extract<AdapterEvent, { type: "error" }>, cause: unknown): boolean => {
       const cancelled = runTurnAbort.signal.aborted;
       if (!cancelled && !(cause instanceof OAuthTokenRefreshBusyError) && !(cause instanceof OAuthAccountPausedError)) return false;
@@ -810,14 +816,14 @@ export async function executeResponsesRunTurn(
         // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
         // replayed transparently; after any output reaches the bridge, a later error stays terminal.
         eventSource = await preflightRunTurnFailover(eventSource, wsFirstParsed, preflightDeadlineAt);
-        if (authRecoveryRefusal) {
-          cancelResponseCompletion();
-          runTurnAbort.abort();
-          queue.close();
-          cleanupRunTurnAbort();
-          releaseSearchProbeLease();
-          return authRecoveryRefusal;
-        }
+      }
+      if (authRecoveryRefusal) {
+        cancelResponseCompletion();
+        runTurnAbort.abort();
+        queue.close();
+        cleanupRunTurnAbort();
+        releaseSearchProbeLease();
+        return authRecoveryRefusal;
       }
       if (grokDevinPreflight) {
         const preflight = await preflightAdapterEvents(eventSource, undefined, {
@@ -961,14 +967,14 @@ export async function executeResponsesRunTurn(
       for await (const event of await preflightRunTurnFailover(
         (async function* () { yield* firstAttemptEvents; })(),
       )) runTurnEvents.push(event);
-      if (authRecoveryRefusal) {
-        cancelResponseCompletion();
-        runTurnAbort.abort();
-        queue.close();
-        cleanupRunTurnAbort();
-        releaseSearchProbeLease();
-        return authRecoveryRefusal;
-      }
+    }
+    if (authRecoveryRefusal) {
+      cancelResponseCompletion();
+      runTurnAbort.abort();
+      queue.close();
+      cleanupRunTurnAbort();
+      releaseSearchProbeLease();
+      return authRecoveryRefusal;
     }
     if (grokDevinPreflight) {
       const preflight = await preflightAdapterEvents(

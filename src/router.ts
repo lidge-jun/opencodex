@@ -14,6 +14,7 @@ import {
 import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider } from "./config/provider-name";
 import { anthropicInstanceRowShapeMatches } from "./providers/anthropic-instance-id";
+import { isProviderApiKeyPaused } from "./providers/api-key-pause";
 import { reconcileRouterWarningMemos, routedProviderConfig } from "./providers/routed-config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import {
@@ -303,6 +304,7 @@ function crossProviderRedirectTarget(config: OcxConfig, providerName: string, va
       );
       return usable ? value : undefined;
     }
+    if (isProviderApiKeyPaused(effective)) return undefined;
     return authMode === "local" || effective.keyOptional === true || Boolean(effective.apiKey?.trim())
       ? value : undefined;
   } catch {

@@ -64,6 +64,7 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner, recordDistributedResponseFailure } from "../providers/api-key-response-ownership";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
@@ -447,8 +448,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     try {
       const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
       if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+      if (isProviderApiKeyPaused(route.provider)) throw new ProviderApiKeyPausedError();
     } catch (error) {
       cleanupAbort(); upstream.abort();
+      const localRefusal = localOAuthFailure(error);
+      if (localRefusal) return localRefusal;
       if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
       const refusal = fail(429, error.message, "rate_limit_error");
       refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
@@ -591,6 +595,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
                   if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
                 }
                 if (!current || nativeMessagesDeclineReason({ ...route, provider: current }, body, config, selector) !== undefined) {
+                  if (!current && isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
                   throw new Error("Provider key selection is no longer available for native Messages");
                 }
                 rebuildFor(current);

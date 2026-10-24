@@ -2986,6 +2986,7 @@ export const de: Record<TKey, string> = {
   "pws.accountSwitching": "Wechsel läuft…",
   "pws.accountCurrent": "Aktuelles Konto",
   "pws.accountPausedHint": "Bis du das Konto fortsetzt, ist es von der automatischen Auswahl, von Wiederholungen, von der Cooldown-Wiederherstellung, von der manuellen Auswahl und von der proaktiven Token-Erneuerung ausgeschlossen.",
+  "pws.resumeAndActivateKey": "Fortsetzen und verwenden",
   "pws.defaultModelNone": "Keins (Standard des Anbieters verwenden)",
   "pws.discardSettings": "Verwerfen",
   "pws.jsonEditorDesc": "Bearbeiten Sie die JSON-Konfiguration des Anbieters. Änderungen werden sofort gespeichert.",

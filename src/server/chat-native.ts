@@ -62,6 +62,7 @@ import { fastPolicyForModel } from "../providers/service-tier";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
@@ -336,8 +337,12 @@ export async function runNativeChatAttempt(
   try {
     const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
     if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+    if (isProviderApiKeyPaused(route.provider)) throw new ProviderApiKeyPausedError();
   } catch (error) {
     cleanupAbort(); upstream.abort();
+    if (error instanceof ProviderApiKeyPausedError) {
+      return fail(403, error.message, "permission_error");
+    }
     if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
     const refusal = fail(429, error.message, "rate_limit_error");
     refusal.headers.set("Retry-After", String(error.retryAfterSeconds));
@@ -502,6 +507,7 @@ export async function runNativeChatAttempt(
                   if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
                 }
                 if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, execution.chatBody, config)) {
+                  if (!current && isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
                   throw new Error("Provider key selection is no longer available for native Chat");
                 }
                 activeProvider = current;
@@ -673,6 +679,9 @@ export async function runNativeChatAttempt(
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "client_cancelled");
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendError instanceof ProviderApiKeyPausedError) {
+      return fail(403, sendError.message, "permission_error");
+    }
     if (sendError instanceof RequestPacingQueueOverloadError) {
       const refusal = fail(429, sendError.message, "rate_limit_error");
       refusal.headers.set("Retry-After", String(sendError.retryAfterSeconds));
