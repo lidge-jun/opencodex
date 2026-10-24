@@ -334,7 +334,7 @@ identity retries: WHAM success and terminal 401/403 responses never set or clear
 this mode. Native token preparation also preserves the traffic quarantine. Other callers retain
 the existing auth behavior. Failed or incomplete observations never renew the credit clock;
 refreshing usage does not redeem reset credits or validate pending accounts through inference.
-Coverage: `tests/codex-integration/main-account-credit-renewal.test.ts`. Pool accounts use the separate [pool credit renewal](pool-credit-renewal.md) contract; their fresh spendable-evidence requirement is identical.
+Coverage: `tests/codex-integration/main-account-credit-renewal.test.ts`. Stored accounts, including explicit namespace targets in Direct mode, use the separate [pool credit renewal](pool-credit-renewal.md) contract; their fresh spendable-evidence requirement is identical.
 
 Credit parsing, expiry, partial updates and reset-ticket separation are covered in
 `tests/codex-integration/codex-quota-parser-parity.test.ts`; selection and bulk-pause behavior
