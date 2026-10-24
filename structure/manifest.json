@@ -1030,8 +1030,10 @@
       "path": "ops/test-sandbox-cleanup.md",
       "tier": 6,
       "title": "Test Sandbox Cleanup",
-      "scope": "Test-runner home and case-scoped lifecycle teardown ordering.",
+      "scope": "Test-runner home, case-scoped lifecycle teardown, and Bun test lock generation ownership.",
       "documents": [
+        "scripts/test-run-lock.ts",
+        "scripts/test-run-lock-gate.ts",
         "tests/"
       ]
     },
