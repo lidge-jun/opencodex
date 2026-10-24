@@ -201,7 +201,9 @@ function withHygieneSection(body, hygieneLines) {
   ].join("\n");
 
   if (HYGIENE_BLOCK_RE.test(base)) {
-    return base.replace(HYGIENE_BLOCK_RE, block);
+    // A callback, not a replacement string: echoed paths can contain $&, $1
+    // and similar tokens that a template would expand into extra lines.
+    return base.replace(HYGIENE_BLOCK_RE, () => block);
   }
 
   // No existing block: append one at the end.

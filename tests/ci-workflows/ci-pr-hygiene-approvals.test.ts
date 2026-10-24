@@ -484,3 +484,54 @@ describe("enforce gate reads the hygiene head binding", () => {
     expect(result.calls.some(c => c.method === "issues.listEvents")).toBe(false);
   });
 });
+
+describe("approval record survives comment rewrites", () => {
+  const gateScript = () => workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target, ancestry, and description");
+
+  test("a gate rebuild keeps the record, so the next hygiene run keeps a current approval", async () => {
+    const existing = gateComment(["✅ **Deterministic PR hygiene checks passed.**", recordLine(HARNESS_HEAD, 0)]);
+    const gateRun = await runEnforcePrTarget(gateScript(), {
+      pr: { base: { ref: "dev" }, draft: true },
+      labels: [APPROVAL],
+      files: [{ filename: "src/feature.ts", patch: "+b" }],
+      comments: [existing],
+      issueEvents: [],
+    });
+    const writes = gateRun.calls
+      .filter(c => c.method === "issues.updateComment" || c.method === "issues.createComment")
+      .map(c => (c.args as { body: string }).body);
+    expect(writes.length).toBeGreaterThan(0);
+    const rebuilt = writes.at(-1)!;
+    expect(rebuilt).not.toBe(existing.body);
+    const rebuiltComment = { id: 7, user: { login: "github-actions[bot]" }, body: rebuilt };
+    expect(parseApprovalRecord(messages.authoritativeHygieneSection([rebuiltComment]))).toEqual({
+      head: HARNESS_HEAD,
+      headRewrites: 0,
+    });
+    const next = await runHygiene({
+      action: "edited",
+      head: HARNESS_HEAD,
+      labels: [APPROVAL],
+      comments: [rebuiltComment],
+      eventReads: [[[]], [[]]],
+    });
+    expect(removed(next)).toEqual([]);
+  });
+
+  for (const token of ["$&", "$1", "$`", "$'"]) {
+    test("an echoed path containing " + token + " is written literally", async () => {
+      const filename = "src/" + token + ".ts";
+      const run = await runHygiene({
+        action: "edited",
+        files: [{ filename, status: "added", patch: "@@ -0,0 +1 @@\n+// @ts-ignore" }],
+        comments: [gateComment(["✅ **Deterministic PR hygiene checks passed.**", recordLine(HEAD_B, 0)])],
+        eventReads: [[[]]],
+      });
+      const body = run.comments.find(c => c.body.startsWith(messages.GATE_MARKER))!.body;
+      expect(body).toContain(filename);
+      expect(body.split("\n").filter(line => line.trim() === messages.HYGIENE_BLOCK_START)).toHaveLength(1);
+      expect(body.split("\n").filter(line => line.trim() === messages.HYGIENE_BLOCK_END)).toHaveLength(1);
+      expect(parseApprovalRecord(messages.authoritativeHygieneSection(run.comments))).toEqual({ head: HEAD_B, headRewrites: 0 });
+    });
+  }
+});

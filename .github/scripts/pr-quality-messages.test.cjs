@@ -486,3 +486,14 @@ describe("echoed text and comment classification", () => {
     assert.equal(authoritativeHygieneSection([standalone]), standalone.body);
   });
 });
+
+describe("hygiene block replacement", () => {
+  it("writes replacement tokens in hygiene lines literally", () => {
+    const base = withHygieneSection(GATE_MARKER, ["first"]);
+    for (const token of ["$&", "$1", "$`", "$'", "$$"]) {
+      const updated = withHygieneSection(base, ["Paths: src/" + token + ".ts"]);
+      assert.ok(updated.includes("Paths: src/" + token + ".ts"), token);
+      assert.equal(extractHygieneSection(updated), "Paths: src/" + token + ".ts", token);
+    }
+  });
+});

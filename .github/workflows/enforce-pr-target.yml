@@ -264,13 +264,11 @@ jobs:
             const {
               GATE_MARKER,
               READINESS_MARKER,
-              HYGIENE_MARKER,
-              HYGIENE_BLOCK_START,
-              HYGIENE_BLOCK_END,
               inlineCode,
               buildGateCommentBody,
               extractHygieneSection,
               authoritativeHygieneSection,
+              withHygieneSection,
               escapeControlCharacters,
               isGateComment,
               buildFailureSections,
@@ -441,13 +439,13 @@ jobs:
             async function upsertGateComment(state, opts) {
               let body = buildGateCommentBody(state, opts).join("\n");
               // The hygiene workflow writes its status into this same comment.
-              // Preserve whatever it left so a gate rebuild does not drop it.
+              // Preserve whatever it left so a gate rebuild does not drop it;
+              // it carries the approval record the next runs read. Appended
+              // unconditionally (a rebuilt body may not end in whitespace) and
+              // never through a replacement template.
               const existingHygiene = extractHygieneSection(gateComment?.body);
               if (existingHygiene && !body.includes("pr-hygiene-block")) {
-                body = body.replace(
-                  /\s+$/,
-                  `\n\n## Hygiene\n\n${HYGIENE_BLOCK_START}\n${HYGIENE_MARKER}\n\n${existingHygiene}\n\n${HYGIENE_BLOCK_END}`
-                );
+                body = withHygieneSection(body, existingHygiene.split("\n"));
               }
               if (gateCommentId) {
                 // Skip the write when the rebuilt body matches what is already
