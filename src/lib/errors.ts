@@ -36,6 +36,13 @@ export const UNDECLARED_TOOL_CALL_ERROR_CODE = "undeclared_tool_call";
 export const MODEL_NOT_IN_PLAN_CODE = "model_not_in_plan";
 /** Diagnostic `x-opencodex-refusal` value on the adapter's refusal; never read as provenance. */
 export const MODEL_NOT_IN_PLAN_REFUSAL_MARKER = "model-not-in-plan";
+/**
+ * The code a verified plan refusal carries once the response is already a 200 stream. The 400
+ * status can no longer stop Codex there, and it reconnects on any `response.failed` code outside
+ * {@link TERMINAL_REFUSAL_CODES}; `invalid_prompt` is the member that says "this request, as sent,
+ * cannot succeed" without naming a policy family. The message keeps `MODEL_NOT_IN_PLAN`.
+ */
+export const MODEL_NOT_IN_PLAN_STREAM_CODE = "invalid_prompt";
 
 /**
  * Responses this process built as a verified plan refusal: the Command Code adapter's normalized

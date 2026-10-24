@@ -106,3 +106,7 @@ Independent review via GOAT task (codex/gpt-6.1-sol, high), each round at the ex
   envelope, dropping the fixed copy, code and mark, so a sidecar combo or policy stopped instead of
   moving on. Fixed with `verifiedPlanRefusalMessage` in both loops and mark propagation across the
   `sidecar-execution.ts` stream wrappers.
+- r6 MUSTFIX: a refusal on a later sidecar iteration lands inside an already committed 200 stream,
+  where `model_not_in_plan` made Codex CLI 0.163.0 reconnect (6 sends). It now ends as `invalid_prompt`
+  with `retryable: false` and the same copy (1 send), via `sidecarLoopTerminalEvent`.
+- CodeRabbit (tests): whole-body assertion and positive streamed combo/policy fallbacks.

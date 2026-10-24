@@ -202,9 +202,12 @@ describe("plan refusal through the sidecar loops", () => {
   });
   afterEach(() => {
     globalThis.fetch = guardedFetch;
+    laterRefusal = async () => planRefusal();
     resetCommandCodeReasoningEffortsForTest();
   });
-  const routedSend = (async () => planRefusal()) as unknown as typeof globalThis.fetch;
+  // Each test may swap the routed answer; the default is an immediate refusal.
+  let laterRefusal: () => Promise<Response> = async () => planRefusal();
+  const routedSend = (async () => laterRefusal()) as unknown as typeof globalThis.fetch;
 
   const loopParsed = (): OcxParsedRequest => ({
     modelId: REFUSED_MODEL, stream: true, options: { maxOutputTokens: 64 },
@@ -256,6 +259,35 @@ describe("plan refusal through the sidecar loops", () => {
       expect(response.status, body).toBe(400);
       expect(isVerifiedModelNotInPlanResponse(response)).toBe(false);
       expect(JSON.parse(body).error.code).not.toBe(MODEL_NOT_IN_PLAN_CODE);
+    });
+  }
+
+  for (const [name, tool, run] of [
+    ["web search", { name: "web_search", input: { query: "fixture" } }, loops["web search"]],
+    ["image bridge", { name: "image_gen", input: { prompt: "a cat" } }, loops["image bridge"]],
+  ] as const) {
+    test(name + " ends a later-iteration refusal with a terminal stream code", async () => {
+      // Iteration one asks for the sidecar tool (the sidecar call itself fails under the network
+      // guard); iteration two is the verified refusal, inside an already committed 200 stream.
+      let generate = 0;
+      laterRefusal = async () => {
+        generate += 1;
+        if (generate > 1) return planRefusal();
+        return new Response([
+          JSON.stringify({ type: "tool-call", toolCallId: "call_1", toolName: tool.name, input: tool.input }),
+          JSON.stringify({ type: "finish", finishReason: "tool-calls" }),
+        ].join("\n") + "\n");
+      };
+      const response = await run(commandCode());
+      const body = await response.text();
+      expect(response.status, body).toBe(200);
+      expect(generate).toBe(2);
+      const failed = body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)))
+        .find(frame => frame.type === "response.failed");
+      expect(failed?.response?.error?.code, body).toBe("invalid_prompt");
+      expect(failed?.response?.error?.message).toContain("MODEL_NOT_IN_PLAN");
+      expect(body).not.toContain('"code":"model_not_in_plan"');
+      expectNoCanary(body);
     });
   }
 });
