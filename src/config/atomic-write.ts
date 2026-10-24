@@ -408,6 +408,15 @@ export function atomicWriteFileNoFollow(
   atomicWriteFileToTarget(path, content, join(resolveWriteTarget(dirname(path)), basename(path)), io, hooks);
 }
 
+/** Content fsync before rename is mandatory; parent-directory sync is best effort. */
+export function atomicWriteFileNoFollowStreamed(
+  path: string,
+  write: (descriptor: number) => void,
+  hooks: AtomicWriteHooks = {},
+): void {
+  atomicWriteFileToTarget(path, write, join(resolveWriteTarget(dirname(path)), basename(path)), undefined, hooks);
+}
+
 /**
  * The no-follow replacement above, for rewriting a file whose uninstall ownership must stay as
  * it was: it does not record the path in the owner manifest. Used to rewrite the OAuth downgrade
