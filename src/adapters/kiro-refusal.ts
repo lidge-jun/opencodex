@@ -13,6 +13,10 @@ const SUSPENSION_WORDS = [
   "locked your account", "locked it as a",
 ] as const;
 
+/**
+ * Classify a Kiro HTTP error for account rotation and quota or suspension evidence.
+ * Reads bounded, top-level JSON fields; unrecognized 429 bodies retain rate recovery.
+ */
 export function classifyKiroRefusal(status: number, bodyText: string): KiroRefusal {
   if (Buffer.byteLength(bodyText, "utf8") > BOUNDED_BODY_MAX_BYTES)
     return { kind: status === 429 ? "rate" : "other" };
