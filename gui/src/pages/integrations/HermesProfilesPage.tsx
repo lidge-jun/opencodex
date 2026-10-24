@@ -32,9 +32,9 @@ export default function HermesProfilesPage({ apiBase, active = true }: { apiBase
         <>
           <h3>{t("integrations.hermes.profilesTitle")}</h3>
           <p className="page-sub">{t("integrations.hermes.profilesHint")}</p>
-          <div className="aside-profile-list" role="list">
+          <ul className="aside-profile-list hermes-profile-list">
             {profiles.map(profile => (
-              <div className="aside-profile-row" role="listitem" key={profile.hermesProfile}>
+              <li className="aside-profile-row" key={profile.hermesProfile}>
                 <div className="aside-profile-info">
                   <button
                     type="button"
@@ -52,9 +52,9 @@ export default function HermesProfilesPage({ apiBase, active = true }: { apiBase
                   <IntegrationStateBadge state={profile.state} installed={profile.installed}
                     id={`hermes-profile-state-${profile.hermesProfile}`} />
                 </div>
-              </div>
+              </li>
             ))}
-          </div>
+          </ul>
         </>
       )}
       {resource.state.showError && (
