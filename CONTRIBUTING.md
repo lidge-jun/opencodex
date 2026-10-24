@@ -69,9 +69,11 @@ A ready-for-review PR is the author's claim that the change is complete, underst
 
 ## Local validation and hooks
 
-The suite uses Bun 1.4.3 (`testRunnerBun`) while the shipped runtime is 1.4.4.
-`scripts/test.ts` finds a 1.4.3 binary on PATH or in `~/.bun/bin`, or uses
+The suite uses Bun 1.4.4 (`testRunnerBun`) while the shipped runtime is 1.4.4.
+`scripts/test.ts` finds a 1.4.4 binary on PATH or in `~/.bun/bin`, or uses
 `OCX_TEST_RUNNER_BUN`; install that version locally if it is missing.
+The roles remain independently checked even when their versions match. Promotion requires
+a successful full cross-platform `lane=all` run on the candidate head.
 
 Run `bun run test` before review readiness. If the full local suite is too costly
 for the task or available resources, run at least focused regression tests for
