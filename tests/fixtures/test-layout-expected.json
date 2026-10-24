@@ -651,6 +651,7 @@
   "cursor-message-mapper.test.ts": "providers/cursor", "cursor-native-exec-common.test.ts": "providers/cursor",
   "cursor-native-exec-policy.test.ts": "providers/cursor", "cursor-native-exec-shell.test.ts": "providers/cursor",
   "cursor-foreground-shell.test.ts": "providers/cursor", "cursor-native-exec.test.ts": "providers/cursor",
+  "cursor-native-grep-globs.test.ts": "providers/cursor",
   "cursor-oauth-shell.test.ts": "providers/cursor", "cursor-oauth.test.ts": "providers/cursor",
   "cursor-pool.test.ts": "providers/cursor", "cursor-protobuf-events.test.ts": "providers/cursor",
   "cursor-repetition-breaker.test.ts": "providers/cursor", "cursor-request-builder.test.ts": "providers/cursor",
