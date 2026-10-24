@@ -1026,7 +1026,9 @@ export async function restoreIntegrationCoordinated(
   if (!prepared.ok) return prepared.refusal;
   const frozen = prepared.value;
   const spec = INTEGRATION_CLIENTS[frozen.clientId];
-  const run = () => restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
+  // The synchronous guard is the last word here too: nothing awaits between it and the restore.
+  const run = () => options?.guard?.(frozen)
+    ?? restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
     return refused ?? run();

@@ -840,6 +840,17 @@
       ]
     },
     {
+      "path": "clients/hermes.md",
+      "tier": 5,
+      "title": "Hermes Profiles",
+      "scope": "Hermes profile discovery, per-profile selection, ownership stores, and boundaries.",
+      "documents": [
+        "src/cli/",
+        "src/integrations/",
+        "src/server/"
+      ]
+    },
+    {
       "path": "clients/qoder.md",
       "tier": 5,
       "title": "Qoder Client Integration",

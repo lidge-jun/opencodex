@@ -285,7 +285,7 @@ non-empty list without `image` becomes `false`; an absent or empty modality list
 model object so Hermes receives no guessed capability. OpenCodex does not emit `supports_video`
 because its authoritative input-modality vocabulary currently has no video value.
 
-> Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md)
+> Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md). Profile selection and per-profile ownership: [Hermes Profiles](hermes.md).
 
 ## Hermes session affinity
 

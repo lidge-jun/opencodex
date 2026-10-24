@@ -330,6 +330,28 @@ exception to the conflict rule above: other edits, a different header name, or a
 matching ownership record still require conflict resolution. Unrelated YAML settings and comments
 remain untouched, and the existing snapshot and Restore workflow applies to the upgrade.
 
+## Hermes profiles
+
+Hermes keeps a separate home for each bot profile. The default profile uses
+`~/.hermes/config.yaml` (`%LOCALAPPDATA%\hermes\config.yaml` on Windows, or `$HERMES_HOME/config.yaml`),
+and each named profile created with `hermes profile create <name>` uses
+`<Hermes home>/profiles/<name>/config.yaml`. See Hermes'
+[profiles guide](https://hermes-agent.nousresearch.com/docs/user-guide/profiles).
+
+When named profiles exist, **Connect → Hermes** lists every profile with its own status. Select a
+profile to apply, disable, replace, or restore OpenCodex for that profile alone; each profile keeps its
+own backups and rollback history, and the other profiles stay unchanged. Every profile keeps its own
+`model.default` and other providers: OpenCodex adds only `providers.opencodex`. With no named profiles,
+the page works as before and changes the default profile.
+
+The management API selects a profile with `profile=<name>` on `/api/client-integrations/hermes` and with
+`client=hermes&profile=<name>` on the preview, journal, and restore endpoints;
+`GET /api/client-integrations/hermes/profiles` lists the profiles. A directory under `profiles/` counts
+only when Hermes would list it: a valid name, a Hermes identity file such as `config.yaml` or `SOUL.md`,
+and no deletion marker. A profile reached through a symbolic link or junction is not offered. If
+`HERMES_HOME` later points at a different Hermes home, a profile with the same name there is refused
+until you disconnect the original one, so OpenCodex never loses track of a file it changed.
+
 ## Preview and confirm changes
 
 In the dashboard, Apply, Replace, Disable, and Restore begin with a preview. The dialog shows exactly which
