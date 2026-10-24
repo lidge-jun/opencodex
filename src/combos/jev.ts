@@ -580,9 +580,11 @@ export function parseJevDecision(
   if (isRecord(payload.answers) && isRecord(payload.answers.route)) {
     answer = payload.answers.route as Record<string, unknown>;
   } else if (Array.isArray(payload.answers)) {
-    const found = payload.answers.find(a => isRecord(a) && (a.name === "route" || a.type === "choice"));
-    if (isRecord(found)) {
-      answer = found as Record<string, unknown>;
+    const routeAnswers = payload.answers.filter((a): a is Record<string, unknown> => isRecord(a) && a.name === "route");
+    if (routeAnswers.length === 1) {
+      answer = routeAnswers[0];
+    } else if (routeAnswers.length > 1) {
+      throw new Error("duplicate JEV route decision");
     }
   }
   if (!answer) {

@@ -382,6 +382,45 @@ describe("JEV decision parser", () => {
     });
   });
 
+  test("selects the unique route answer when array answers include earlier unrelated choices", () => {
+    const payload = {
+      answers: [
+        {
+          name: "sentiment",
+          type: "choice",
+          value: "positive",
+        },
+        {
+          name: "route",
+          type: "choice",
+          value: "openai/gpt-6-astra:high",
+        },
+      ],
+    };
+
+    expect(parseJevDecision(payload, candidates)).toEqual({
+      targetKey: "openai/gpt-6-astra",
+      effort: "high",
+    });
+  });
+
+  test("rejects array answers with duplicate route choices or without a route answer", () => {
+    const duplicateRoute = {
+      answers: [
+        { name: "route", type: "choice", value: "openai/gpt-6-astra:high" },
+        { name: "route", type: "choice", value: "openai/gpt-5.6-sol:low" },
+      ],
+    };
+    expect(() => parseJevDecision(duplicateRoute, candidates)).toThrow("duplicate JEV route decision");
+
+    const unrelatedOnly = {
+      answers: [
+        { name: "survey", type: "choice", value: "positive" },
+      ],
+    };
+    expect(() => parseJevDecision(unrelatedOnly, candidates)).toThrow("missing JEV route decision");
+  });
+
   test("treats malformed confidence as absent without weakening the route choice", () => {
     expect(parseJevDecision({
       answers: { route: { choice: "openai/gpt-5.6-sol:low", confidence: 2 } },

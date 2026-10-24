@@ -73,14 +73,15 @@ history. Route choices are sent in `questions` as `{ value, description }` entri
 descriptions with operator `modelProfile` notes when configured.
 
 Answer selection and probability validation (`parseJevDecision` in `src/combos/jev.ts`):
-The parser accepts answers as an object (`payload.answers.route`) or an array (`payload.answers` matching
-name `route` or type `choice`). Selected route values read from `choice` or `value`. The probability
+The parser accepts answers as an object (`payload.answers.route`) or an array (`payload.answers`),
+selecting the unique route answer (`name === "route"`) while ignoring unrelated choices and throwing on
+duplicate route answers. Selected route values read from `choice` or `value`. The probability
 distribution accepts an object mapping option keys to numbers or an array of `{ choice | value, probability }`
 entries. Array distributions strictly refuse duplicate choice keys (`invalid JEV route probabilities`).
 Parsing validates that: (1) distribution keys match expected candidate choices exactly, (2) probabilities are
 finite numbers between 0 and 1, (3) total probability sums to 1.00 ± 0.02, and (4) the selected option holds
 the maximum probability (within 1e-6). Missing route answers, unknown choices, malformed distributions, duplicate
-array keys, or inconsistent totals throw and fail open to the first eligible target.
+route answers or array keys, or inconsistent totals throw and fail open to the first eligible target.
 
 The service exchange owns the canonical `jev-latest` destination, the self-hosted URL (shared
 `jevDecisionEndpointUrl`: an HTTPS path as configured with Vercel `/decisions` rewrite, `/systemone` trailing slashes normalized),
