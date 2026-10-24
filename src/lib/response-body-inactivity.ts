@@ -1,3 +1,5 @@
+import { inheritCacheObservation } from "./anthropic-cache-observation";
+
 /** A response-body guard owns one reader, never the request-wide abort controller. */
 export interface ResponseBodyInactivityGuard {
   response: Response;
@@ -171,7 +173,7 @@ export async function readResponseBodyWithInactivity<T>(
 ): Promise<T> {
   const guarded = guardResponseBodyInactivity(response, signal, timeoutMs);
   try {
-    return await parse(guarded.response);
+    return await parse(inheritCacheObservation(response, guarded.response));
   } finally {
     guarded.dispose();
   }
@@ -186,7 +188,7 @@ export async function* readResponseStreamWithInactivity<T>(
 ): AsyncGenerator<T> {
   const guarded = guardResponseBodyInactivity(response, signal, timeoutMs);
   try {
-    yield* parse(guarded.response);
+    yield* parse(inheritCacheObservation(response, guarded.response));
   } finally {
     guarded.dispose();
   }

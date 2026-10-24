@@ -68,8 +68,8 @@ describe("image-retry gate (030 R3)", () => {
   });
 });
 
-describe("imageTierBias plumbing (030 R1 — bias activation through the real adapter)", () => {
-  test("bias 0 passes a tier-0-sized image through; bias 1 re-encodes it at the tier-1 edge", async () => {
+describe("stable image encoding through the real adapter", () => {
+  test("retry bias cannot change a previously valid image encoding", async () => {
     const dataUrl = await realPngDataUrl(1500, 1000);
     const adapter = createAnthropicAdapter(provider);
 
@@ -81,8 +81,8 @@ describe("imageTierBias plumbing (030 R1 — bias activation through the real ad
     const biased = await adapter.buildRequest(parsedWithImages([dataUrl]), { headers: new Headers(), imageTierBias: 1 });
     const biasedBody = JSON.parse(biased.body as string) as { messages: Array<{ content: Array<{ type: string; source?: { media_type?: string; data?: string } }> }> };
     const biasedImg = biasedBody.messages[0].content.find(b => b.type === "image");
-    expect(biasedImg?.source?.media_type).toBe("image/jpeg"); // tier 1: 1500px > 1024 — re-encoded
+    expect(biasedImg?.source).toEqual(unbiasedImg?.source);
     const dims = sniffImageDimensions(biasedImg?.source?.data ?? "");
-    expect(Math.max(dims!.width, dims!.height)).toBeLessThanOrEqual(1024);
+    expect(Math.max(dims!.width, dims!.height)).toBe(1500);
   });
 });

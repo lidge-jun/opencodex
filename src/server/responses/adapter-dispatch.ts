@@ -92,7 +92,6 @@ import {
   anthropicFastRefused,
 } from "./core-opaque-recovery";
 import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
-import { shouldAttemptImageTierRetry } from "../image-retry";
 import {
   isTransientConsoleGoUploadRejection,
   enrichOpenCodeZenUpstreamMessage,
@@ -118,6 +117,8 @@ import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
+import { naturalCacheScope } from "../../anthropic/cache-renewal-runtime";
+import { recoverImageContextResponse, type ImageContextPreparation } from "./image-context-recovery";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -190,6 +191,7 @@ export async function prepareAdapterExchange(
     | "initialSendAllowance"
     | "noteInitialDispatch"
   >,
+  prepareImageContext?: ImageContextPreparation,
 ) {
   const { options, config, logCtx, req } = requestContext;
   const {
@@ -216,6 +218,9 @@ export async function prepareAdapterExchange(
     subagentQuotaFailureModel,
   } = requestState;
   const { cancelResponseCompletion, notifyResponseComplete, refreshRequestToolAliases } = responseEffects;
+  const cacheRenewalScope = () => naturalCacheScope({ ...requestContext, parsed,
+    adapterName: transportState.activeAdapter.name, providerName: route.providerName,
+    oauth: route.provider.authMode === "oauth", conversationId: logCtx.conversationId });
   const {
     adapterSendBudget,
     adapterDispatchBudget,
@@ -400,8 +405,11 @@ export async function prepareAdapterExchange(
   };
   const autoPauseEnabled = config.providers[route.providerName]?.accountAutoPause?.enabled === true;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
+  const imageContextBudget = parsed._anthropicImageOwner !== undefined || transportState.activeAdapter.name === "anthropic"
+    && !!prepareImageContext && parsed.context.messages.some(m => Array.isArray(m.content) && m.content.some(p => p.type === "image"));
+  let imageRecoveryAttempted = false;
   let billingRecoveryActive = false;
-  const genericRefetchCountsSends = () => options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
+  const genericRefetchCountsSends = () => imageContextBudget || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
     || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
@@ -498,6 +506,7 @@ export async function prepareAdapterExchange(
             body: builtInitialRequest.body,
           }, recovery), upstream.signal, connectMs, parsed.stream,
             providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              anthropicCacheRenewal: cacheRenewalScope(),
               dispatchOverride: oauthDispatch(builtInitialRequest),
               providerName: route.providerName,
               modelId: route.modelId,
@@ -524,11 +533,11 @@ export async function prepareAdapterExchange(
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
-          ...(sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
+          ...(imageContextBudget || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
             || billingPoolRequest || autoPauseEnabled
             ? {
               // A pending compaction permit already booked this leg's first physical send.
-              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || autoPauseEnabled
+              ...(imageContextBudget || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || autoPauseEnabled
                 ? {
                   attempts: Math.min(initialSendCap,
                     sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
@@ -596,16 +605,8 @@ export async function prepareAdapterExchange(
   // `attempts` same-key replays in total (bounded per request).
   const rateLimitPolicy = rateLimitRetryPolicyFor(route.provider);
   let rateLimitRetries = 0;
-  // Shared with the terminal-guard continuation below: an image-tier reduction that let the
-  // main request clear a 413 must not be forgotten on the very next continuation build.
   // Recovery helpers also serve initial HTTP-200 adapter errors during delivery.
-    // Recovery loop: multi-key 429 failover + at most ONE opaque-state rebuild and ONE
-    // anthropic 413 tightened retry
-    // (devlog/260714_image_normalization_pipeline/030). One mutable activeAdapter serves
-    // both paths so a 429→413 sequence never rebuilds against a stale pre-rotation
-    // adapter, and imageTierBias — once armed — rides EVERY subsequent rebuild so a
-    // 413→429 rotation cannot silently undo the tightening.
-    let imageRetryAttempted = false;
+    // Recover credentials and opaque state without changing historical image encodings.
     const opaqueBlobRecoveryGuard: OpaqueBlobRecoveryGuard = { attempted: false };
     const thinkingSignatureRecovery = createAnthropicThinkingRecovery(
       parsed, upstream.signal, opaqueBlobRecoveryGuard, () => !sendBudgetExhausted(),
@@ -793,6 +794,7 @@ export async function prepareAdapterExchange(
                     method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
                   }, recoveryKind), upstream.signal, connectMs, parsed.stream,
                   providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                    anthropicCacheRenewal: cacheRenewalScope(),
                     dispatchOverride: oauthDispatch(retryRequest),
                     onPhysicalDispatch: deferredRefetch ? () => {
                       if (!deferredRefetch.beforeDispatch()) throw new SendBudgetExhaustedError(safeHostLabel(retryRequest.url));
@@ -1783,26 +1785,17 @@ export async function prepareAdapterExchange(
         upstreamResponse = opaqueBlobRecovery.response;
         continue recovery;
       }
-      // Anthropic 413 request_too_large: rebuild once with every image one tier lower
-      // (spiral guard: single attempt). The biased response re-enters the 429 check above.
-      if (shouldAttemptImageTierRetry({
-        status: upstreamResponse.status,
-        adapterName: transportState.activeAdapter.name,
-        parsed,
-        alreadyAttempted: imageRetryAttempted,
-      })) {
-        imageRetryAttempted = true;
-        transportState.imageTierBias = 1;
-        invalidateSameTargetRequest();
-        const failedResponse = await retainFailureResponse();
-        const result = await rebuildAndRefetch("image-413", undefined, failedResponse);
-        if ("failed" in result) {
-          if (result.failed !== failedResponse) return result.failed;
-          break recovery;
+      if (upstreamResponse.status === 413 && transportState.activeAdapter.name === "anthropic"
+        && !imageRecoveryAttempted && prepareImageContext && !sendBudgetExhausted()) {
+        imageRecoveryAttempted = true;
+        const recovered = await recoverImageContextResponse(upstreamResponse, parsed, transportState.activeAdapter, prepareImageContext, upstream.signal);
+        upstreamResponse = recovered.response;
+        if (recovered.changed) {
+          invalidateSameTargetRequest();
+          const result = await rebuildAndRefetch("image-413", undefined, upstreamResponse);
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result; continue recovery;
         }
-        try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* closed */ }
-        upstreamResponse = result;
-        continue recovery;
       }
       // Console Go (opencode-zen / opencode-go) intermittently rejects a body it accepts seconds
       // later with 400 invalid_request_error / "Invalid upload request." Replay the

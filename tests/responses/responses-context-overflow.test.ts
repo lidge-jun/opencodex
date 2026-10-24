@@ -221,7 +221,7 @@ describe("Responses provider input overflow", () => {
     }
   });
 
-  test("the bounded Anthropic image retry runs once before the terminal failure", async () => {
+  test("an upstream Anthropic image 413 is terminal without degrading and resending history", async () => {
     let hits = 0;
     const upstream = upstream413(() => { hits += 1; });
     saveConfig(config({ target: provider("anthropic", upstream) }));
@@ -244,7 +244,7 @@ describe("Responses provider input overflow", () => {
         }],
       ));
       expect((failed.error as { code?: string }).code).toBe("context_length_exceeded");
-      expect(hits).toBe(2);
+      expect(hits).toBe(1);
     } finally {
       await server.stop(true);
     }

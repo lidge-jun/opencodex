@@ -93,6 +93,7 @@ export interface DirectRequestOption {
 }
 
 export interface HandleResponsesOptions {
+  imageSummaryContext?: import("./anthropic-image-context").ImageSummaryContext;
   /** Internal request-owned policy authorization; never read from client headers or body. */
   policyRequestScope?: PolicyRequestScope;
   /** Internal concrete selector chosen from the original policy evaluation. */

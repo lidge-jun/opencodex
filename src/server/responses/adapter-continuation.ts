@@ -64,10 +64,11 @@ import {
 } from "../../lib/response-body-inactivity";
 import { resolveStallTimeoutMs } from "../../stall-timeout";
 import { guardTerminalEventStream } from "./terminal-guard";
+import { naturalCacheScope } from "../../anthropic/cache-renewal-runtime";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export function createAdapterContinuations(
-  requestContext: Pick<ResponsesRequestContext, "options" | "logCtx" | "config">,
+  requestContext: Pick<ResponsesRequestContext, "options" | "logCtx" | "config" | "req">,
   requestState: Pick<
     PreparedResponsesRequest,
     | "route"
@@ -287,6 +288,9 @@ export function createAdapterContinuations(
               connectMs,
               nextParsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                anthropicCacheRenewal: naturalCacheScope({ ...requestContext, parsed: nextParsed,
+                  adapterName: transportState.activeAdapter.name, providerName: route.providerName,
+                  oauth: route.provider.authMode === "oauth", conversationId: logCtx.conversationId }),
               dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
                 providerName: route.providerName,
                 modelId: nextParsed.modelId,
@@ -677,7 +681,7 @@ export function createAdapterContinuations(
         }
       }
       }
-      if (shouldAttemptImageTierRetry({
+      if (transportState.activeAdapter.name !== "anthropic" && shouldAttemptImageTierRetry({
         status: response.status,
         adapterName: transportState.activeAdapter.name,
         parsed: nextParsed,
@@ -722,7 +726,8 @@ export function createAdapterContinuations(
       const parse = async function* (current: Response): AsyncGenerator<AdapterEvent> {
         if (!current.ok) {
           yield await adapterExchange.thinkingSignatureRecovery.projectHttpFailure(current, upstream.signal);
-        } else if (nextParsed.stream) {
+        } else if (nextParsed.stream || (transportState.activeAdapter.name === "anthropic"
+          && current.headers.get("content-type")?.includes("text/event-stream") === true)) {
           yield* readResponseStreamWithInactivity(current, upstream.signal, bodyInactivityMs,
             guarded => transportState.activeAdapter.parseStream(guarded, translatorBudget, logCtx.activeTierMetadata));
         } else if (transportState.activeAdapter.parseResponse) {

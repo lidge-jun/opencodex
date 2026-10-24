@@ -305,6 +305,7 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  */
 export interface ImageBridgeDeps {
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
+  recoverImageContext?: (response: Response, parsed: OcxParsedRequest, adapter: ProviderAdapter, signal: AbortSignal) => Promise<{ response: Response; changed: boolean }>;
   parsed: OcxParsedRequest;
   clientToolCatalogRestriction?: ClientToolCatalogRestriction;
   adapter: ProviderAdapter;
@@ -448,6 +449,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   };
 
   const messages: OcxMessage[] = [...parsed.context.messages];
+  let imageRecoveryAttempted = false;
   const allTools = parsed.context.tools ?? [];
   // Merge tool names from both plans for event scanning.
   const mediaToolNames = new Set<string>();
@@ -760,6 +762,17 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         prepared = await fetchOnce(adapter, rotated.recoveryKind);
       }
 
+      if (prepared.response.status === 413 && prepared.responseAdapter.name === "anthropic" && !imageRecoveryAttempted && deps.recoverImageContext) {
+        imageRecoveryAttempted = true; headerDeadline.clear();
+        const recovered = await deps.recoverImageContext(prepared.response, iterParsed, prepared.responseAdapter, signal);
+        prepared.response = recovered.response;
+        if (recovered.changed) {
+          messages.splice(0, messages.length, ...iterParsed.context.messages); iterParsed.context.messages = messages;
+          parsed._anthropicImageOwner = iterParsed._anthropicImageOwner;
+          cachedRequest = cachedAdapter = undefined; headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+          prepared = await fetchOnce(prepared.responseAdapter, "image-413");
+        }
+      }
       if (await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         cachedRequest = undefined;

@@ -7,17 +7,14 @@ import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
 import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { formatErrorResponse } from "../../bridge";
-import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
+import { planWebSearch, runWithWebSearch } from "../../web-search";
+import { applySidecarToolSurface, type SidecarToolSurface } from "./sidecar-tool-surface";
 import { createRegisteredAdvisorPlan } from "./advisor-plan-slot";
 import { ADVISOR_TOOL_NAME } from "./advisor-slot";
 import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
   planVideoBridge,
-  IMAGE_GEN_TOOL_NAME,
-  buildImageTool,
-  VIDEO_GEN_TOOL_NAME,
-  buildVideoTool,
   runWithImageBridge,
   clampImageMaxRounds,
 } from "../../images";
@@ -47,7 +44,6 @@ import {
 } from "../../oauth/anthropic-routing";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope, adapterNeedsForcedContinuation, adapterNeedsToolCallContinuation } from "./core-replay";
-import { namespacedToolName } from "../../types";
 import { providerFetch } from "./fetch-helpers";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
@@ -57,11 +53,13 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
 import { createSidecarSendBudget } from "./sidecar-send-budget";
+import { naturalCacheScope } from "../../anthropic/cache-renewal-runtime";
 import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
+import { recoverImageContextResponse, type ImageContextPreparation } from "./image-context-recovery";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesSidecars(
-  requestContext: Pick<ResponsesRequestContext, "config" | "options" | "logCtx">,
+  requestContext: Pick<ResponsesRequestContext, "config" | "options" | "logCtx" | "req">,
   requestState: Pick<
     PreparedResponsesRequest,
     | "parsed"
@@ -95,7 +93,7 @@ export async function executeResponsesSidecars(
     | "noteRoutedAttemptSend"
     | "bindKeyUsageFromBridge"
   >,
-  sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction" | "openAiSidecar">,
+  sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction" | "preserveCompactionPrefix" | "openAiSidecar">,
   responseEffects: Pick<
     ResponsesEffects,
     | "commitReasoningReplayServingRoute"
@@ -104,6 +102,7 @@ export async function executeResponsesSidecars(
     | "cancelResponseCompletion"
   >,
   sendBudgetState: Pick<ResponsesSendBudget, "sendBudgetExhausted" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit">,
+  prepareImageContext?: ImageContextPreparation,
 ) {
   const { config, options, logCtx } = requestContext;
   const antigravityPoolActivated = requestState.route.providerName === "google-antigravity"
@@ -126,9 +125,19 @@ export async function executeResponsesSidecars(
     rememberKiroDeliveredFinalAnswer,
     responseStateOptions,
   } = requestState;
-  const { routedCompaction, openAiSidecar } = sidecarState;
+  const { routedCompaction, preserveCompactionPrefix, openAiSidecar } = sidecarState;
   const { reserveCredentialHop } = sendBudgetState;
   const sidecarBudget = createSidecarSendBudget(options, sendBudgetState, () => logCtx.usageLogInputTokens);
+  const recoverImageContext = prepareImageContext ? (response: Response, attempt: OcxParsedRequest, adapter: ProviderAdapter, signal: AbortSignal) =>
+    sendBudgetState.sendBudgetExhausted() ? Promise.resolve({ response, changed: false })
+      : recoverImageContextResponse(response, attempt, adapter, prepareImageContext, signal) : undefined;
+  // These executors send the routed primary model; search/media helper sends own separate policy.
+  const primaryFetchOptions = (adapter: ProviderAdapter, requestParsed = parsed) => ({
+    ...sidecarBudget.fetchOptions(adapter),
+    anthropicCacheRenewal: naturalCacheScope({ ...requestContext, parsed: requestParsed,
+      adapterName: adapter.name, providerName: route.providerName,
+      oauth: route.provider.authMode === "oauth", conversationId: logCtx.conversationId }),
+  });
   const {
     commitReasoningReplayServingRoute,
     continuationStateForResponse,
@@ -180,47 +189,50 @@ export async function executeResponsesSidecars(
     }
   }
 
-  // Advisor sidecar plan (optional subsystem; null when disabled, unconfigured, or when this
-  // request IS an advisor loopback consultation — the recursion fence). The plan carries
-  // request-scoped state only; preflight keeps fixed policy separate from user-role advice
-  // before the worker is dispatched. Registration seam: the core path sees only
-  // `parsed._advisorGuard`; only an activated factory can load the optional implementation.
-  const advisorPlan = options.advisorInternal === true
-    ? null
-    : await createRegisteredAdvisorPlan({
-      config,
-      workerIdentity: `${route.modelId} (provider ${route.providerName})`,
-      workerModelId: route.modelId,
-      abortSignal: options.abortSignal,
-    });
-  // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
-  // and injecting advice into it would pollute the summary Codex replaces its history with.
-  if (advisorPlan && !routedCompaction) {
-    await advisorPlan.preflightInject(parsed);
+  if (options.imageSummaryContext) {
+    parsed.context.tools = options.imageSummaryContext.tools;
+    parsed.context.systemPrompt = options.imageSummaryContext.systemPrompt;
+    return undefined;
   }
-
-  // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
-  // Routed-compaction turns must NOT hit the image bridge: compaction clears tools/_webSearch but
-  // leaves _imageGeneration, so planImageBridge would activate and return a normal Responses
-  // completion instead of the synthetic compaction item Codex expects (#424).
-  //
-  // Web-search's loop only supports buildRequest/fetch/parseStream — NOT adapter.runTurn. Sending
-  // Cursor/runTurn requests into runWithWebSearch produces empty HTTP failures. So:
-  //   - non-runTurn: web-search wins over image when both eligible (documented priority)
-  //   - runTurn: a search plan takes priority over media bridges and is executed
-  //     by executeResponsesRunTurn; the fetch loop below remains fetch-only.
-  // LOCAL PATCH (runturn-websearch): runTurn adapters run their own web-search
-  // loop inside executeResponsesRunTurn (src/web-search/run-turn-loop.ts); the
-  // fetch-path loop below stays non-runTurn-only.
-  const wsPlan = !routedCompaction
-    ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar, {
-      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
-    })
-    : undefined;
-  const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
-  // Replayed search pairs call the synthetic web_search tool only the sidecar declares (#7269).
-  if (!wsPlan) stripReplayedSearchPairs(parsed);
-  const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
+  let advisorPlan: Awaited<ReturnType<typeof createRegisteredAdvisorPlan>>;
+  let wsPlan: ReturnType<typeof planWebSearch>;
+  let imgPlan: Awaited<ReturnType<typeof planImageBridge>>;
+  let vidPlan: Awaited<ReturnType<typeof planVideoBridge>>;
+  try {
+    advisorPlan = options.advisorInternal === true
+      ? null
+      : await createRegisteredAdvisorPlan({
+        config,
+        workerIdentity: `${route.modelId} (provider ${route.providerName})`,
+        workerModelId: route.modelId,
+        abortSignal: options.abortSignal,
+      });
+    if (advisorPlan && !routedCompaction) await advisorPlan.preflightInject(parsed);
+    if (!routedCompaction || preserveCompactionPrefix) {
+      wsPlan = planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar, {
+        admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
+      });
+      imgPlan = await planImageBridge(config, parsed, route.provider);
+      // Replayed search pairs require the synthetic tool declared by the search sidecar.
+      if (!wsPlan) stripReplayedSearchPairs(parsed);
+      vidPlan = await planVideoBridge(config, parsed, route.provider);
+      const surface: SidecarToolSurface = wsPlan
+        ? transportState.adapter.runTurn ? { kind: "none" } : { kind: "web-search" }
+        : (imgPlan || vidPlan) && (parsed.stream || preserveCompactionPrefix)
+          ? { kind: "media", image: imgPlan, video: vidPlan }
+          : advisorPlan && !transportState.adapter.runTurn && !imgPlan && !vidPlan
+            ? { kind: "advisor", tool: advisorPlan.tool }
+            : { kind: "none" };
+      applySidecarToolSurface(parsed, surface);
+    }
+  } finally {
+    if (routedCompaction) releaseSearchProbeLease();
+  }
+  try {
+    const refusal = await prepareImageContext?.();
+    if (refusal) { releaseSearchProbeLease(); return refusal; }
+  } catch (error) { releaseSearchProbeLease(); throw error; }
+  if (routedCompaction) return undefined;
   const canRunWebSearch = !!wsPlan && !transportState.adapter.runTurn;
   let sidecarOutputStarted = false;
   const sidecarHasCommittedOutput = () => sidecarOutputStarted
@@ -517,42 +529,13 @@ export async function executeResponsesSidecars(
       }
       // Video-only: skip bridge for non-streaming requests
     } else {
-    // Replace any pre-existing image_gen/video_gen aliases instead of appending duplicate wire names.
-    const priorTools = parsed.context.tools ?? [];
-    const bridgeTools = [...priorTools.filter(t => {
-      if (t.imageGeneration) return false;
-      if (t.videoGeneration) return false;
-      if (imgPlan && imgPlan.toolNames.has(t.name)) return false;
-      if (imgPlan && t.namespace && imgPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
-      // Only strip unnamespaced video_gen aliases — a namespaced MCP video_gen is left alone.
-      if (vidPlan && !t.namespace && vidPlan.toolNames.has(t.name)) return false;
-      return true;
-    })];
-    const existingNames = new Set(bridgeTools.map(t => t.name));
-    if (imgPlan && !existingNames.has(IMAGE_GEN_TOOL_NAME)) bridgeTools.push(buildImageTool());
-    if (vidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) bridgeTools.push(buildVideoTool());
-    parsed.context.tools = bridgeTools;
-    // Hosted image_generation tool_choice / allowed_tools must target the synthetic function name.
-    // Gate on imgPlan — in a video-only turn buildImageTool() was never injected, so rewriting
-    // image_generation/image_gen aliases would add an undeclared tool that strict upstreams reject.
-    const tc = parsed.options.toolChoice;
-    if (imgPlan && tc && typeof tc === "object" && "allowedTools" in tc && Array.isArray(tc.allowedTools)) {
-      const mapped = tc.allowedTools.map(name =>
-        name === "image_generation" || name === "image_gen" || (imgPlan.toolNames.has(name) ?? false)
-          ? IMAGE_GEN_TOOL_NAME
-          : name,
-      );
-      parsed.options.toolChoice = { ...tc, allowedTools: [...new Set(mapped)] };
-    } else if (imgPlan && tc && typeof tc === "object" && "name" in tc && typeof tc.name === "string"
-      && (tc.name === "image_generation" || imgPlan.toolNames.has(tc.name))) {
-      parsed.options.toolChoice = { ...tc, name: IMAGE_GEN_TOOL_NAME };
-    }
     const imageProviderFetch = providerFetch(
       route.provider,
       options.codexWsRuntimeIdentity,
-      { providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(transportState.adapter) },
+      { providerName: route.providerName, modelId: route.modelId, ...primaryFetchOptions(transportState.adapter) },
     );
     const imgLoopResponse = await runWithImageBridge({
+      recoverImageContext,
       parsed, adapter: transportState.adapter,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
@@ -578,7 +561,7 @@ export async function executeResponsesSidecars(
       fetchForRequest: (request, iterParsed, adapter, recovery) => {
         const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
           dispatchOverride: oauthDispatch(request, iterParsed),
-          providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(adapter),
+          providerName: route.providerName, modelId: route.modelId, ...primaryFetchOptions(adapter, iterParsed),
           ...thinkingReceipt(request, adapter, recovery),
         });
         return fetch.unpacedFetch ?? fetch;
@@ -646,23 +629,23 @@ export async function executeResponsesSidecars(
   // Placed BEFORE the runTurn early-return for non-runTurn adapters so dual-tool turns dispatch
   // through web-search instead of being swallowed. runTurn adapters never enter this branch.
   if (canRunWebSearch && wsPlan) {
-    parsed.context.tools = [...(parsed.context.tools ?? []), buildWebSearchTool()];
     // Resolve the mutable route at send time: a 429 rotation replaces route.provider, so retaining
     // one pre-rotation providerFetch would keep the old credential and transport pin.
     const routedProviderFetch = ((input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
       providerFetch(route.provider, options.codexWsRuntimeIdentity, {
         providerName: route.providerName,
         modelId: route.modelId,
-        ...sidecarBudget.fetchOptions(transportState.adapter),
+        ...primaryFetchOptions(transportState.adapter),
       })(input, init)) as typeof globalThis.fetch;
     const loopResponse = await runWithWebSearch({
+      recoverImageContext,
       parsed, adapter: transportState.adapter,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
       onIterationEnd: sidecarBudget.releaseUnsentHop,
       fetchForRequest: (request, iterParsed, adapter, recovery) => providerFetch(route.provider, options.codexWsRuntimeIdentity, {
         dispatchOverride: oauthDispatch(request, iterParsed),
-        providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(adapter),
+        providerName: route.providerName, modelId: route.modelId, ...primaryFetchOptions(adapter, iterParsed),
         ...thinkingReceipt(request, adapter, recovery),
       }),
       incomingMeta: {
@@ -763,13 +746,7 @@ export async function executeResponsesSidecars(
   // run-turn adapter, not compaction). The web-search/image loops own their own event handling;
   // run-turn adapters execute their own loop; both would leak the synthetic tool call they
   // cannot intercept. Preflight (above) still applies to those paths — only the tool does not.
-  if (advisorPlan && !routedCompaction && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
-    // A client-declared tool named "advisor" would collide with the synthetic injection (one
-    // wire name, two schemas); the synthetic runtime owns the name for this turn.
-    parsed.context.tools = [
-      ...(parsed.context.tools ?? []).filter(t => !t.advisor && t.name !== ADVISOR_TOOL_NAME),
-      advisorPlan.tool,
-    ];
+  if (advisorPlan && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
     // The advisor tool joined AFTER prepare computed the bridge maps; recompute so the tool is
     // declared (undeclared-tool guard, tool_choice mapping, schema repair) on this turn.
     //

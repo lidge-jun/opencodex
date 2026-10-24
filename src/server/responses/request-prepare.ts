@@ -224,7 +224,7 @@ export async function prepareResponsesRequest(
 ) {
   const { options, config, req, logCtx } = requestContext;
   const policyScope = options.policyRequestScope ?? { triedDestinations: new Set<string>() };
-  const concreteSelection = options.comboAttempt || options.policyFallbackCandidate !== undefined;
+  const concreteSelection = options.comboAttempt || options.policyFallbackCandidate !== undefined || options.imageSummaryContext !== undefined;
 
   // The Chat and Anthropic surfaces replay through here with a Responses-shaped body,
   // so an omitted value means a genuine Responses inbound.
@@ -249,6 +249,10 @@ export async function prepareResponsesRequest(
     options.promptCacheKeyIsSharedCohort === true
       ? "system-derived"
       : options.promptCacheKeyIsSharedCohort === false ? "metadata-derived" : "caller",
+    { endpoint: inboundWire === "anthropic" ? "messages" : inboundWire === "chat" ? "chat-completions" : "responses",
+      transport: options.inboundTransport,
+      internalHelper: !!(options.internalDecisionCall || options.memoryModelPhase || options.shadowCallIntercepted
+        || options.visionDescribeTerminal || options.advisorInternal) },
   );
   if (!concreteSelection && !options.compactionRoutingOverride && inboundWire === "responses") {
     options.compactionRoutingOverride = applyCompactionRoutingOverride(body, req.headers, config, {

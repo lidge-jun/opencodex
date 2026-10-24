@@ -33,6 +33,7 @@ import {
 import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
+import type { NaturalCacheScope } from "../../anthropic/cache-renewal-runtime";
 
 export { withUpstreamHttpVersion };
 
@@ -53,6 +54,9 @@ const PHYSICAL_DISPATCH = Symbol.for("opencodex.physical-dispatch");
 // Final destination and headers after plugin rewrites and queued rebuilds, for observers that
 // must attribute a response to the credential that actually reached the wire.
 const PHYSICAL_SEND_OBSERVER = Symbol.for("opencodex.physical-send-observer");
+// The request owner supplies observation; transport must not load its runtime or watchers.
+const NATURAL_CACHE_SCOPE = Symbol("anthropic-natural-cache-scope");
+const RENEWAL_DISPATCH = Symbol("anthropic-cache-renewal-dispatch");
 export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
   physical?: (sameDestination: boolean, headers: Headers) => void;
 };
@@ -234,16 +238,30 @@ export function sendWithConnectionPolicy(
   // Final headers, after plugin rewrites: an upstream can only echo what it received here, so the
   // request log refuses any diagnostic that repeats one of these values (see request-log-terminal-status).
   outboundCredentials().remember(headers);
-  return physicalFetch(input, {
+  const physicalInit = {
     ...init,
     ...(compressed ? { body: compressed.body } : largeCodexBody ? { body: Buffer.from(body, "utf8") } : {}),
     headers,
-    redirect: "manual",
+    redirect: "manual" as const,
     ...(fresh ? { keepalive: false } : {}),
     ...egressInit,
     ...(decide || redirectedToLoopback ? { [EGRESS_DECIDED]: true } : {}),
     ...{ [UPSTREAM_REWRITTEN]: true },
-  });
+  };
+  const renewalDispatch = (init as Record<symbol, (() => void) | undefined> | undefined)?.[RENEWAL_DISPATCH];
+  renewalDispatch?.();
+  delete (physicalInit as Record<symbol, unknown>)[RENEWAL_DISPATCH];
+  const scope = (init as Record<symbol, NaturalCacheScope | undefined> | undefined)?.[NATURAL_CACHE_SCOPE];
+  delete (physicalInit as Record<symbol, unknown>)[NATURAL_CACHE_SCOPE];
+  if (scope && egress && "adapter" in egress.provider && typeof egress.provider.adapter === "string"
+    && "baseUrl" in egress.provider && typeof egress.provider.baseUrl === "string") {
+    const pinned = { ...egress.provider } as OcxProviderConfig;
+    return scope.observeSend(scope, input, physicalInit, physicalFetch, (url, renewalHeaders, renewalBody, signal, dispatched) =>
+      providerFetch(pinned, undefined, { httpOnly: true, providerName: egress.providerName,
+        modelId: JSON.parse(renewalBody).model })(url, { method: "POST", headers: renewalHeaders, body: renewalBody, signal,
+          [RENEWAL_DISPATCH]: dispatched } as RequestInit));
+  }
+  return physicalFetch(input, physicalInit);
 }
 
 interface CodexWsExecutor { provider: OcxProviderConfig; http: typeof globalThis.fetch }
@@ -262,6 +280,7 @@ export const codexWsExecutorBinding = (execute: unknown): CodexWsExecutor | unde
 
 export interface ProviderFetchOptions {
   accountAutoPause?: (name: string, provider: OcxProviderConfig, headers: Headers) => AccountAutoPauseObserver | undefined;
+  anthropicCacheRenewal?: NaturalCacheScope;
   /**
    * Keep this send on HTTP even where the WebSocket upstream would normally be selected.
    *
@@ -366,6 +385,7 @@ export function providerFetch(
       const sharedReceipt = (init as Record<symbol, (() => void) | undefined> | undefined)?.[WS_FALLBACK_RECEIPT];
       let notified = false;
       const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0,
+        ...(options.anthropicCacheRenewal ? { [NATURAL_CACHE_SCOPE]: options.anthropicCacheRenewal } : {}),
         ...(options.onPhysicalDispatch ? { [PHYSICAL_DISPATCH]: () => {
           if (sharedReceipt) sharedReceipt();
           else if (!notified) { options.onPhysicalDispatch!(); notified = true; }

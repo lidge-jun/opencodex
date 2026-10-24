@@ -194,6 +194,7 @@ import {
   sealRequestAttemptIdentity,
   usageFromResponsesPayload,
   type RequestLogContext,
+  observeRequestOrigin,
 } from "../request-log";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import {
@@ -667,6 +668,7 @@ export async function handleResponsesCompact(
     return formatErrorResponse(400, "invalid_request_error", "Invalid compaction request body");
   }
   // Compaction forwards client history upstream too; keep local artifact paths out of it.
+  observeRequestOrigin(logCtx, body, req.headers, { endpoint: "responses-compact" });
   redactHostedImageDisplayPaths(body);
   if (!options.compactionRoutingOverride) {
     options = { ...options, compactionRoutingOverride: applyCompactionRoutingOverride(body, req.headers, config, { endpoint: "compact" }) };

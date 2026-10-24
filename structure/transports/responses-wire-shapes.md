@@ -11,14 +11,14 @@ Unknown reasons remain verbatim, including `adapter_eof`, `max_messages`, and `s
 
 ## Compaction image input
 
-For translated routed compaction, `src/responses/compaction-images.ts` replaces earlier user and
+For non-Anthropic translated routed compaction, `src/responses/compaction-images.ts` replaces earlier user and
 tool-result images with a short reopening note only when a later nonempty `final_answer` message
 exists. This structural boundary does not prove the image was analyzed: text and source references
 remain, and the note asks the next model to reopen unresolved visual evidence. Pending images and
 commentary-only or unphased histories stay intact. Sidecar preparation projects parsed messages before
 vision planning. The projection does not rewrite `_rawBody` or stored history; later vision preprocessing
 may rewrite the request-local raw body for transport safety. Normal generation and native compaction
-stay unchanged. Both routed v1 and v2 pass through this boundary; raw Responses gateways retain their existing text-only compaction conversion.
+stay unchanged. Both routed v1 and v2 pass through this boundary; raw Responses gateways retain their existing text-only compaction conversion. Anthropic retains image bytes and the tool/system prefix under the [cache lifecycle contract](../providers/anthropic-cache-lifecycle.md#stable-images-and-overflow-recovery).
 The [decoded checkpoint continuation contract](responses.md#decoded-checkpoint-continuation) governs the conditional system note and its authorization limits.
 
 ## Direct MCP calls in code mode

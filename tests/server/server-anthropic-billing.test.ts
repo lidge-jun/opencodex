@@ -493,7 +493,7 @@ for (const lane of ["native", "translated"] as const) describe(`${lane} Anthropi
   });
 });
 
-for (const statusCode of [401, 429, 413]) test(`translated ${statusCode} recovery releases the refused response concurrency lease`, async () => {
+for (const statusCode of [401, 429, 413]) test(`translated ${statusCode} refusal releases the response concurrency lease`, async () => {
   setProviderRequestPacingLimitsForTest({ maxQueueAgeMs: 200 });
   const config = fixture((index, stream) => index === 0
     ? refusal(statusCode, statusCode === 429 ? "fixture rate refusal" + " ".repeat(5_000) : "fixture credential/image refusal",
@@ -507,8 +507,12 @@ for (const statusCode of [401, 429, 413]) test(`translated ${statusCode} recover
         image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2G0AAAAAASUVORK5CYII=" }] }]
       : "hello" }) });
   const response = await handleResponses(request, config, { model: "", provider: "" }, { abortSignal: AbortSignal.timeout(2_000) });
-  expect(response.status).toBe(200);
-  expect(await response.text()).toContain("billing recovered");
-  expect(seen.map(entry => entry.key)).toEqual(statusCode === 413 ? ["fixture-key-0", "fixture-key-0"] : ["fixture-key-0", "fixture-key-1"]);
+  expect(response.status).toBe(statusCode === 413 ? 413 : 200);
+  const text = await response.text();
+  if (statusCode === 413) {
+    expect(text).toContain("context_length_exceeded");
+    expect(JSON.stringify(seen[0]!.body)).toContain("iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB");
+  } else expect(text).toContain("billing recovered");
+  expect(seen.map(entry => entry.key)).toEqual(statusCode === 413 ? ["fixture-key-0"] : ["fixture-key-0", "fixture-key-1"]);
   expect(providerRequestPacingStatus("anth", config.providers.anth!)).toMatchObject({ inFlight: 0, queued: 0 });
 });

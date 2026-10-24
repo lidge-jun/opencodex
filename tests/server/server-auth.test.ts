@@ -1359,6 +1359,7 @@ describe("server local API auth", () => {
       fetch() {
         // Anthropic non-stream response carrying the summarizer's text.
         return Response.json({
+          stop_reason: "end_turn",
           content: [{ type: "text", text: "compact summary body" }],
           usage: { input_tokens: 10, output_tokens: 5 },
         });

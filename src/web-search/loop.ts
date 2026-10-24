@@ -369,6 +369,7 @@ export interface WebSearchLoopDeps {
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Request-scoped executor retains the core's selection binding across loop retries. */
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
+  recoverImageContext?: (response: Response, parsed: OcxParsedRequest, adapter: ProviderAdapter, signal: AbortSignal) => Promise<{ response: Response; changed: boolean }>;
   fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) => typeof globalThis.fetch;
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
@@ -432,6 +433,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // Put recorded results back into replayed search pairs before the first iteration (#7269).
   restoreSidecarSearchResults(parsed);
   const messages: OcxMessage[] = [...parsed.context.messages];
+  let imageRecoveryAttempted = false;
   const replaySnapshots = new Set<AnthropicReplaySnapshot>();
   const loopT0 = Date.now();
   const allTools = adapter.name === "anthropic" ? anthropicDeclaredTools(parsed) : parsed.context.tools ?? [];
@@ -736,6 +738,17 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         prepared = replacement;
       }
 
+      if (prepared.response.status === 413 && prepared.responseAdapter.name === "anthropic" && !imageRecoveryAttempted && deps.recoverImageContext) {
+        imageRecoveryAttempted = true; headerDeadline.clear();
+        const recovered = await deps.recoverImageContext(prepared.response, iterParsed, prepared.responseAdapter, signal);
+        prepared.response = recovered.response;
+        if (recovered.changed) {
+          messages.splice(0, messages.length, ...iterParsed.context.messages); iterParsed.context.messages = messages;
+          parsed._anthropicImageOwner = iterParsed._anthropicImageOwner;
+          cachedRequest = cachedAdapter = undefined; headerDeadline = pacingHeaderDeadline(connectTimeoutMs, signal);
+          prepared = await fetchOnce(prepared.responseAdapter, "image-413");
+        }
+      }
       if (await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         cachedRequest = undefined;

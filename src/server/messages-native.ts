@@ -308,7 +308,7 @@ async function prepareNativeBody(body: Rec, signal: AbortSignal): Promise<void> 
   if (!Array.isArray(body.messages)) return;
   // The adapter normally owns these; this lane bypasses it, so it runs the same steps as the
   // caller-forward passthrough: tier-normalize and guard images, then repair tool-call ids.
-  await normalizeAnthropicImages(body.messages, { abortSignal: signal });
+  await normalizeAnthropicImages(body.messages, { abortSignal: signal, stablePerImage: false });
   enforceAnthropicImageLimits(body.messages);
   sanitizePassthroughToolCallIds(body.messages);
 }

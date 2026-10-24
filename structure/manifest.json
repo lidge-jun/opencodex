@@ -48,6 +48,13 @@
   ],
   "docs": [
     {
+      "path": "providers/anthropic-cache-lifecycle.md",
+      "tier": 4,
+      "title": "Anthropic Cache Lifecycle",
+      "scope": "Opt-in running-turn cache renewal, stable historical images and bounded overflow compaction.",
+      "documents": ["src/anthropic/", "src/codex/cache-runtime-state.ts", "src/codex/rollout-cache-runtime.ts", "src/codex/thread-writer-lock.ts", "src/codex/request-provenance.ts", "src/server/responses/anthropic-image-context.ts", "src/server/responses/image-context-recovery.ts", "src/responses/compaction-summary.ts", "src/server/request-origin.ts", "src/lib/anthropic-cache-observation.ts"]
+    },
+    {
       "path": "providers/generic-account-pool.md",
       "tier": 4,
       "title": "Generic OAuth Account Pool",

@@ -29,6 +29,35 @@ uses the fresh-install default: one `openai` forward provider.
 
 ## Precedence and defaults
 
+### Anthropic running-turn cache renewal
+
+`anthropicCacheRenewal` is an optional top-level boolean, off by default. Set it to `true`
+in `config.json` to renew compatible five-minute Anthropic caches while a verified Codex
+main or child turn is running. Existing `cacheRetention` choices are preserved; one-hour
+and disabled caches are not renewed. Natural cache usage resets the timer. At four minutes
+and thirty seconds without a newer confirmation, OpenCodex sends the same cached prefix
+with zero output tokens. Renewal stops when the turn ends or its running state is unknown.
+
+Renewal is billable at the provider's cache-read rates. Failed or cancelled sends can still
+incur charges; renewal cannot guarantee a hit during outages or after expiry. Reliable local
+IPC is required. Renewal currently supports Windows only: the default IPC endpoint and native
+rollout/writer-lock fallback do not resolve macOS or Linux runtime ownership. A configured
+`spend.root.maxTokens`, `spend.identity.maxTokens` or `spend.pool.maxTokens` disables renewal;
+detached renewal does not yet participate in workflow spend reservations. Empty spend scopes
+and retention-only accounting do not disable it. Natural requests retain normal spend admission.
+This setting has no dedicated dashboard control and does not change native Codex.
+
+Anthropic image history keeps stable encodings. The aggregate image allowance is **26 MiB**.
+When the local image or complete request limit is reached, the Responses bridge summarizes old history and continues with the newest
+image and its paired tool results. An individually oversized latest input still needs to be
+reduced. Requests without a verified conversation and serving owner fail explicitly on overflow
+rather than silently deleting old images. Summary calls are also billed normally; no tools execute
+during summarization. An EOF without a normal completion reason cannot publish a summary checkpoint.
+If an upstream returns HTTP 413 for an image-bearing history with compactable old images,
+the same request can summarize that old prefix and retry once. Another refusal stays terminal.
+Image-free requests do not enter this recovery. Native Messages retains its original processing
+policy with the explicitly increased 26 MiB allowance.
+
 ### Provider and model aliases
 
 Aliases are optional short request names. They never change the native model id sent upstream, and omitting every alias field preserves existing routing exactly.

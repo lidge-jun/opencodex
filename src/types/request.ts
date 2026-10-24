@@ -105,6 +105,7 @@ export interface OcxParsedRequest {
    * parent. Only a surface that must distinguish siblings should read it.
    */
   _codexOwnThreadId?: string;
+  _anthropicImageOwner?: OcxProviderContinuationOwner;
   /** True when promptCacheKey identifies a shared cache cohort rather than one conversation. */
   _promptCacheKeyIsSharedCohort?: boolean;
   /** Cursor-only thread owner; may be an opaque process-local Desktop session/thread identity. */

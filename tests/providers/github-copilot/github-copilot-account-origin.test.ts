@@ -242,7 +242,7 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
     expect(sent).toEqual(["Bearer synthetic-b"]);
   });
 
-  test("a pacing switch to B keeps B when Anthropic rebuilds an image after 413", async () => {
+  test("a pacing switch to B keeps B on an image rejection without a lossy 413 retry", async () => {
     for (const id of ["a", "b"]) await saveCredential("anthropic", {
       access: `synthetic-anthropic-${id}`, refresh: `synthetic-refresh-${id}`,
       expires: Date.now() + 3_600_000, accountId: id,
@@ -267,8 +267,9 @@ describe("GitHub Copilot bearer/origin snapshot atomicity", () => {
         { type: "input_image", image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
       ] }],
     }), cfg, { model: "", provider: "" });
-    expect(await response.text()).toContain("ok");
-    expect(sent).toEqual(["Bearer synthetic-anthropic-b", "Bearer synthetic-anthropic-b"]);
+    expect(response.status).toBe(413);
+    expect(await response.text()).toContain("context_length_exceeded");
+    expect(sent).toEqual(["Bearer synthetic-anthropic-b"]);
   });
 
   test("a pacing switch to B keeps B for an empty-completion continuation", async () => {

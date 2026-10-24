@@ -52,13 +52,17 @@ export async function prepareResponsesSidecarAuth(
   const visionDescribeTerminal = options.visionDescribeTerminal === true;
   const routedCompaction = parsed._compactionRequest === true
     && (!supportsNativeResponsesCompactionTrigger(route.provider) || parsed._portableCompaction === true);
-  if (routedCompaction) parsed.context.messages = omitEarlierCompactionImages(parsed.context.messages);
+  const preserveCompactionPrefix = routedCompaction && transportState.adapter.name === "anthropic";
+  if (options.imageSummaryContext) return { openAiSidecar, routedCompaction, preserveCompactionPrefix };
+  if (routedCompaction && !preserveCompactionPrefix) {
+    parsed.context.messages = omitEarlierCompactionImages(parsed.context.messages);
+  }
   const needsOpenAiVision = !visionDescribeTerminal
     && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
   // LOCAL PATCH (runturn-websearch): runTurn adapters can run the web-search
   // sidecar through src/web-search/run-turn-loop.ts, so resolve the helper
   // credential for them too. The passthrough bridge stays fetch-only.
-  const needsOpenAiSearch = !routedCompaction
+  const needsOpenAiSearch = (!routedCompaction || preserveCompactionPrefix)
     && (transportState.adapter.runTurn
       ? shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
       : (shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough)
@@ -158,6 +162,7 @@ export async function prepareResponsesSidecarAuth(
   return {
     openAiSidecar,
     routedCompaction,
+    preserveCompactionPrefix,
   };
 }
 

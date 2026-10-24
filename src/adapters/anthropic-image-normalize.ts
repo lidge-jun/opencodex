@@ -1,12 +1,7 @@
 /**
- * Anthropic image normalization: resize/re-encode images to fit Anthropic's request
- * limits instead of dropping them (devlog/260714_image_normalization_pipeline/020).
- *
- * Age-tier pyramid: newest images keep near-full fidelity, older images become
- * progressively smaller JPEG thumbnails, so a whole session's screenshots stay visible
- * under the request byte budget. An aggregate demotion loop re-encodes the OLDEST
- * not-yet-terminal image one ladder position at a time until the total fits; only when
- * every image is terminal-floored does the guard's Rule 4 (textify) fire as backstop.
+ * Anthropic uses a fixed per-image encoding. Aggregate pressure is handled by context
+ * compaction, so appending an image cannot change already-emitted historical bytes.
+ * Other adapters retain the shared core's age tiers and aggregate demotion policy.
  *
  * Runs inside the anthropic adapter's buildRequest BEFORE enforceAnthropicImageLimits,
  * on freshly-built wire messages (in-place mutation is safe: messagesToAnthropicFormat
@@ -112,6 +107,7 @@ export interface NormalizeTarget {
 }
 
 export interface NormalizeTargetsOptions extends NormalizeOptions {
+  stablePerImage?: boolean;
   /** Total base64 budget across all targets. Default: TOTAL_IMAGE_BASE64_BUDGET. */
   budget?: number;
   /**
@@ -133,7 +129,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
   const encode = options.encode ?? bunImageEncode;
   const validate = options.validate ?? bunImageValidate;
   const bias = options.tierBias ?? 0;
-  const budget = options.budget ?? TOTAL_IMAGE_BASE64_BUDGET;
+  const budget = options.stablePerImage ? Infinity : options.budget ?? TOTAL_IMAGE_BASE64_BUDGET;
   const overflowAction = options.overflowAction ?? "none";
   const processLimit = options.processLimit ?? Number.POSITIVE_INFINITY;
   const abortSignal = options.abortSignal;
@@ -224,7 +220,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
       // fixed snapshot gives each occurrence its own age tier on a cold store,
       // which is the pre-#4532 behaviour.
       const recorded = recordedPositions[i];
-      const pos = Math.min((recorded ?? initialPosition(newestFirstIndex, 0)) + Math.max(0, bias), TERMINAL_POS);
+      const pos = options.stablePerImage ? 0 : Math.min((recorded ?? initialPosition(newestFirstIndex, 0)) + Math.max(0, bias), TERMINAL_POS);
       const result = await process(b64, pos, sourceMedia);
       if (result.kind === "failed") {
         target.drop(UNDECODABLE_TEXT);
@@ -300,7 +296,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
   // position, so a repeated image converges on the most-demoted tier it was ever
   // emitted at and never moves back up.
   for (const entry of entries) {
-    if (entry) recordEmittedPosition(entry.sourceB64, entry.sourceMedia, entry.pos);
+    if (entry && !options.stablePerImage) recordEmittedPosition(entry.sourceB64, entry.sourceMedia, entry.pos);
   }
 
   // Terminal overflow (050 audit round 1, blocker 3): with no downstream guard, drop
@@ -325,7 +321,7 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
  * Normalize every base64 image in already-built Anthropic wire messages (mutates in
  * place). URL-source images pass through untouched. See module header for the contract.
  */
-export async function normalizeAnthropicImages(messages: unknown[], options: NormalizeOptions = {}): Promise<void> {
+export async function normalizeAnthropicImages(messages: unknown[], options: NormalizeOptions & { stablePerImage?: boolean } = {}): Promise<void> {
   const refs = collectImageRefs(messages);
   if (refs.length === 0) return;
   const targets: NormalizeTarget[] = refs.map(ref => ({
@@ -334,8 +330,7 @@ export async function normalizeAnthropicImages(messages: unknown[], options: Nor
     replace: (data: string, mediaType: string) => replaceImage(ref, data, mediaType),
     drop: (note: string) => textify(ref, note),
   }));
-  // Anthropic hard-caps 100 images/request and its guard textifies the surplus, so
-  // processing beyond the newest 100 is pure waste; terminal overflow stays with the
-  // guard's Rule 4 backstop (overflowAction "none").
-  await normalizeImageTargets(targets, { ...options, processLimit: 100, overflowAction: "none" });
+  // Native Messages keeps its legacy tiers; Responses owns stable bytes and compaction.
+  const stablePerImage = options.stablePerImage !== false;
+  await normalizeImageTargets(targets, { ...options, stablePerImage, processLimit: stablePerImage ? Infinity : 100, overflowAction: "none" });
 }
