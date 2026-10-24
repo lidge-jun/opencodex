@@ -163,7 +163,7 @@ import {
 import { acquireUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { applyCompactionRoutingOverride, compactionRoutingKeepsProviderIdentity } from "./compaction-routing";
 import { applyMainHardLockFallbackOverride } from "./main-hard-lock-routing";
-import { FallbackRefusedError } from "../../routing/fallback-policy";
+import { FallbackRefusedError, guardFallbackHop } from "../../routing/fallback-policy";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   conversationStateBindingFromAuth,
@@ -778,6 +778,23 @@ export async function prepareResponsesRequest(
     if (parsed._compactionRequest === true || options.compactionRoutingOverride) parsed._cursorIsolateConversation = true;
     route = memoryRoute ?? shadowRoute ?? resolveRoute(options.policyFallbackCandidate
       ? `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}` : parsed.modelId);
+    // The hard-lock rewrite checked a declared profile representative. Enforce the actual
+    // ranked destination against the locked source before admitting this first selection.
+    const hardLockProfileTrace = options.mainHardLockFallbackOverride ? route.routeDecision?.profile : undefined;
+    if (hardLockProfileTrace && options.mainHardLockFallbackOverride) {
+      const override = options.mainHardLockFallbackOverride;
+      const hop = guardFallbackHop(config, {
+        site: "routing-profile",
+        route: override.sourceModel,
+        aliases: [`policy/${hardLockProfileTrace.id}`],
+        from: { provider: OPENAI_CODEX_PROVIDER_ID, model: override.sourceModel },
+        to: { provider: route.providerName, model: route.modelId },
+        trigger: "hard_lock",
+        admission: options.admission,
+      });
+      if (!hop.ok) return hop.response;
+      hop.commit();
+    }
     leaveDirectLaneIfRerouted(options, route, parsed, logCtx);
     // Name the phase in the persisted route decision, so the request log says why this turn went to
     // the memory destination instead of leaving it looking like a plain user selection. Set here, on

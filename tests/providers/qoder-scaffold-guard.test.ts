@@ -276,3 +276,297 @@ describe("guardQoderScaffolding", () => {
     expect(events.map(event => event.type)).toEqual(["tool_call_start", "done"]);
   });
 });
+
+
+describe("Qoder replay envelope refusal (#7517)", () => {
+  for (const marker of ["[Tool call: probe (call_id: call_fixture) with args: ", "[Tool Result]\n", "[Tool Error]\n", "[tool_result]\n", "[Tool Call]\n"]) {
+    for (const size of [1, 2, 7, 64]) test(`refuses ${marker.trim()} split in ${size}-character deltas`, () => {
+      const { events, emit } = collect();
+      const guard = guardQoderScaffolding(emit);
+      const text = "Safe answer.\n" + marker + JSON.stringify({ input: "private-fixture\n".repeat(6000) });
+      for (let at = 0; at < text.length; at += size) guard({ type: "text_delta", text: text.slice(at, at + size) });
+      guard({ type: "done", stopReason: "stop" });
+      expect(textOf(events)).toBe("Safe answer.\n");
+      expect(events.filter(event => event.type === "error")).toHaveLength(1);
+      expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, status: 502, retryable: false });
+      expect(JSON.stringify(events)).not.toContain("private-fixture");
+      expect(events.some(event => event.type === "done")).toBe(false);
+    });
+  }
+
+  for (const marker of ["[Tool Result", "[Tool Call"]) for (const terminal of ["done", "incomplete", "error"] as const) test(`settles trailing ${marker} before ${terminal}`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "Safe.\n" + marker });
+    const end: AdapterEvent = terminal === "done" ? { type: "done", stopReason: "stop" }
+      : terminal === "incomplete" ? { type: "incomplete", reason: "max_output_tokens" }
+      : { type: "error", message: "original vendor error", status: 429 };
+    guard(end);
+    expect(textOf(events)).toBe("Safe.\n");
+    expect(events.at(-1)).toMatchObject(terminal === "error" ? end : { type: "error", status: 502, retryable: false });
+  });
+
+  test("keeps ordinary marker prose, closed fenced examples and partial nonmarkers", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    const answer = "[Tool Result] means a returned value.\n```text\n[Tool call: example]\nquoted payload\n```\nFinal [Tool Res";
+    for (const text of answer) guard({ type: "text_delta", text });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe(answer);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("refuses an unclosed fenced envelope without releasing an overflowing hold", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "```text\n[Tool call: probe]\n" + "private-fixture".repeat(6000) });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).not.toContain("[Tool call:");
+    expect(textOf(events)).not.toContain("private-fixture");
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 502, retryable: false });
+  });
+
+  test("a tool event settles held text first, so it neither overtakes prose nor leaks after an envelope", () => {
+    const tool = (guard: (event: AdapterEvent) => void) => {
+      guard({ type: "tool_call_start", id: "call_1", name: "exec" });
+      guard({ type: "tool_call_delta", arguments: "{}" });
+      guard({ type: "tool_call_end" });
+      guard({ type: "done", stopReason: "stop" });
+    };
+    const prose = collect();
+    const guarded = guardQoderScaffolding(prose.emit);
+    guarded({ type: "text_delta", text: "Checking:\n[" });
+    tool(guarded);
+    expect(prose.events.map(event => event.type)).toEqual(["text_delta", "text_delta", "tool_call_start", "tool_call_delta", "tool_call_end", "done"]);
+    expect(textOf(prose.events)).toBe("Checking:\n[");
+    for (const echo of ["[Tool Result]", "Safe.\n[Tool Error]", "```text\n[Tool call: probe]\nprivate-fixture"]) {
+      const refused = collect();
+      const guard = guardQoderScaffolding(refused.emit);
+      guard({ type: "text_delta", text: echo });
+      tool(guard);
+      expect(refused.events.some(event => event.type.startsWith("tool_call"))).toBe(false);
+      expect(JSON.stringify(refused.events)).not.toContain("private-fixture");
+      expect(refused.events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, status: 502, retryable: false });
+    }
+  });
+
+  test("text after a tool event starts a new line for envelope detection", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "Working" });
+    guard({ type: "tool_call_start", id: "call_1", name: "exec" });
+    guard({ type: "tool_call_end" });
+    guard({ type: "text_delta", text: "[Tool Result]\nprivate-fixture" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe("Working");
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+    expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, status: 502 });
+  });
+
+  test("thinking cannot overtake replay-held prose", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "[" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    guard({ type: "done", stopReason: "stop" });
+    expect(events).toEqual([
+      { type: "text_delta", text: "[" },
+      { type: "thinking_delta", thinking: "Reasoning." },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  for (const echo of ["[Tool Result]", "```text\n[Tool call: probe]\nprivate-fixture"]) {
+    test(`settles ${JSON.stringify(echo)} before thinking`, () => {
+      const { events, emit } = collect();
+      const guard = guardQoderScaffolding(emit);
+      guard({ type: "text_delta", text: echo });
+      guard({ type: "thinking_delta", thinking: "Reasoning." });
+      guard({ type: "done", stopReason: "stop" });
+      expect(events.some(event => event.type === "thinking_delta")).toBe(false);
+      expect(JSON.stringify(events)).not.toContain("private-fixture");
+      expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, status: 502, retryable: false });
+    });
+  }
+
+  for (const before of ["Working", "```text\n"]) {
+    test(`thinking resets replay line and fence state after ${JSON.stringify(before)}`, () => {
+      const { events, emit } = collect();
+      const guard = guardQoderScaffolding(emit);
+      guard({ type: "text_delta", text: before });
+      guard({ type: "thinking_delta", thinking: "Reasoning." });
+      guard({ type: "thinking_delta", thinking: "More reasoning." });
+      guard({ type: "text_delta", text: "[Tool Result]\nprivate-fixture\n```\n" });
+      guard({ type: "done", stopReason: "stop" });
+      expect(textOf(events)).toBe(before);
+      expect(JSON.stringify(events)).not.toContain("private-fixture");
+      expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, status: 502 });
+    });
+  }
+
+  for (const terminal of ["done", "error"] as const) {
+    test(`keeps marker prose with a held vendor prefix across thinking before ${terminal}`, () => {
+      const { events, emit } = collect();
+      const guard = guardQoderScaffolding(emit);
+      guard({ type: "text_delta", text: "[Tool Result]<s" });
+      guard({ type: "thinking_delta", thinking: "Reasoning." });
+      const end: AdapterEvent = terminal === "done" ? { type: "done", stopReason: "stop" }
+        : { type: "error", message: "original vendor error", status: 429 };
+      guard(end);
+      expect(textOf(events)).toBe("[Tool Result]<s");
+      expect(events.at(-1)).toEqual(end);
+    });
+  }
+
+  test("a thinking boundary does not release a split vendor reminder", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "Safe.<system" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    guard({ type: "text_delta", text: "-reminder>private-fixture</system-reminder>Answer." });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe("Safe.Answer.");
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("heartbeats keep a split replay marker in the same text block", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "[Tool " });
+    guard({ type: "heartbeat" });
+    guard({ type: "text_delta", text: "Result]\nprivate-fixture" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe("");
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+    expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE });
+  });
+
+  test("preserves multiple thinking cuts within one pending vendor prefix", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "<" });
+    guard({ type: "thinking_delta", thinking: "A" });
+    guard({ type: "text_delta", text: "s" });
+    guard({ type: "thinking_delta", thinking: "B" });
+    guard({ type: "text_delta", text: "x" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(events).toEqual([
+      { type: "text_delta", text: "<" }, { type: "thinking_delta", thinking: "A" },
+      { type: "text_delta", text: "s" }, { type: "thinking_delta", thinking: "B" },
+      { type: "text_delta", text: "x" }, { type: "done", stopReason: "stop" },
+    ]);
+  });
+
+  for (const character of ["😀", "𠀀"]) test(`preserves astral character ${character} after a pending vendor boundary`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "a <" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    guard({ type: "text_delta", text: character });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe(`a <${character}`);
+    for (const event of events) if (event.type === "text_delta") expect(event.text.isWellFormed()).toBe(true);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  for (const prefix of ["", "a <"]) for (const character of ["😀", "𠀀"]) test(`joins split input ${character} after ${JSON.stringify(prefix)}`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: prefix });
+    guard({ type: "thinking_delta", thinking: "Before." });
+    guard({ type: "text_delta", text: character[0]! });
+    guard({ type: "thinking_delta", thinking: "Between." });
+    guard({ type: "heartbeat" });
+    guard({ type: "text_delta", text: "" });
+    guard({ type: "text_delta", text: character[1]! + " suffix" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe(prefix + character + " suffix");
+    for (const event of events) if (event.type === "text_delta") expect(event.text.isWellFormed()).toBe(true);
+    const scalar = events.findIndex(event => event.type === "text_delta" && event.text.includes(character));
+    expect(scalar).toBeGreaterThan(events.findIndex(event => event.type === "thinking_delta" && event.thinking === "Before."));
+    expect(scalar).toBeLessThan(events.findIndex(event => event.type === "thinking_delta" && event.thinking === "Between."));
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("deferred events stay after a joined scalar and before a fresh replay block", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "\uD83D" });
+    guard({ type: "thinking_delta", thinking: "A" });
+    guard({ type: "tool_call_start", id: "call_1", name: "exec" });
+    guard({ type: "thinking_delta", thinking: "B" });
+    guard({ type: "text_delta", text: "\uDE00[Tool Result]\nprivate-fixture" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe("😀");
+    expect(events.map(event => event.type)).toEqual(["text_delta", "thinking_delta", "tool_call_start", "thinking_delta", "error"]);
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+    expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE });
+  });
+
+  for (const terminal of ["done", "incomplete", "error"] as const) test(`settles an unpaired high before ${terminal}`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "a <\uD83D" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    const end: AdapterEvent = terminal === "done" ? { type: "done", stopReason: "stop" }
+      : terminal === "incomplete" ? { type: "incomplete", reason: "max_output_tokens" }
+      : { type: "error", message: "original vendor error", status: 429 };
+    guard(end);
+    expect(textOf(events)).toBe("a <�");
+    for (const event of events) if (event.type === "text_delta") expect(event.text.isWellFormed()).toBe(true);
+    expect(events.at(-1)).toEqual(end);
+    expect(events.at(-2)).toEqual({ type: "thinking_delta", thinking: "Reasoning." });
+  });
+
+  for (const [chunks, expected] of [
+    [["\uDE00"], "�"], [["\uD83D", "x"], "�x"], [["\uD83D", "\uD83D", "\uDE00"], "�😀"],
+  ] as const) test(`replaces unpaired input ${JSON.stringify(chunks)}`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    for (const text of chunks) guard({ type: "text_delta", text });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe(expected);
+    for (const event of events) if (event.type === "text_delta") expect(event.text.isWellFormed()).toBe(true);
+  });
+
+  test("pending boundaries never release split vendor tool markup", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "<fun" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    guard({ type: "text_delta", text: "ctions.exec>private-fixture" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, retryable: false });
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+  });
+
+  for (const suffix of ["<", "\uD83D"]) for (const terminal of ["done", "incomplete", "error"] as const) test(`withholds held reasoning when draining an envelope with ${JSON.stringify(suffix)} before ${terminal}`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "```text\n[Tool Result]\npayload" + suffix });
+    guard({ type: "thinking_delta", thinking: "<s" });
+    const end: AdapterEvent = terminal === "done" ? { type: "done", stopReason: "stop" }
+      : terminal === "incomplete" ? { type: "incomplete", reason: "max_output_tokens" }
+      : { type: "error", message: "original vendor error", status: 429 };
+    guard(end);
+    expect(textOf(events)).toBe("```text\n");
+    expect(events.some(event => event.type === "thinking_delta")).toBe(false);
+    expect(events.at(-1)).toMatchObject(terminal === "error" ? end : { type: "error", code: QODER_SCAFFOLD_ERROR_CODE, retryable: false });
+  });
+
+  for (const prefix of ["<s", "\uD83D"]) for (const overflow of ["characters", "events"] as const) {
+    test(`bounds deferred boundary ${overflow} after ${JSON.stringify(prefix)} without releasing held content`, () => {
+      const { events, emit } = collect();
+      const guard = guardQoderScaffolding(emit);
+      guard({ type: "text_delta", text: prefix });
+      if (overflow === "characters") guard({ type: "thinking_delta", thinking: "private-fixture".repeat(10_000) });
+      else for (let index = 0; index < 2_000; index++) guard({ type: "tool_call_end" });
+      guard({ type: "done", stopReason: "stop" });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE, retryable: false });
+      expect(JSON.stringify(events)).not.toContain("private-fixture");
+    });
+  }
+});
