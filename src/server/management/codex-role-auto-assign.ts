@@ -172,7 +172,7 @@ export async function proposeCodexRoleModels(options: {
   let capabilityError: string | null = null;
   if (domains.size > 0) {
     try {
-      table = await (options.loadCapability ?? capability.loadCapabilityTable)();
+      table = await (options.loadCapability ?? capability.loadCapabilityTable)(options.config);
     } catch {
       capabilityError = "the measured capability source could not be read";
     }
@@ -192,14 +192,24 @@ export async function proposeCodexRoleModels(options: {
     sizingError,
     proposals: assign.buildRoleProposals(roleRows, outcomes, classified, classifiedByDomain),
     candidates: classified.map(({ model, tier, tierSource, unitPrice }) => ({ model, tier, tierSource, unitPrice })),
-    capability: {
-      ...capability.CAPABILITY_SOURCE,
-      publishedAt: table?.publishedAt ?? null,
-      error: capabilityError,
-      domains: Object.fromEntries([...classifiedByDomain].map(([domain, list]) => [domain,
-        list.filter(candidate => candidate.tierSource === "measured")
-          .map(({ model, tier, score }) => ({ model, tier, score }))])),
-    },
+    capability: capabilityReport(table?.source ?? capability.ARENA_SOURCE, table, capabilityError, classifiedByDomain),
+  };
+}
+
+/** The attribution and per-domain tiers; raw scores only from a source whose terms allow it. */
+function capabilityReport(
+  { redistributable, ...source }: import("../../codex/role-capability").CapabilitySource,
+  table: import("../../codex/role-capability").CapabilityTable | null,
+  error: string | null,
+  classifiedByDomain: ReadonlyMap<SizingDomain, ReturnType<typeof import("../../codex/role-auto-assign").classifyRoleModelCandidates>>,
+) {
+  return {
+    ...source,
+    publishedAt: table?.publishedAt ?? null,
+    error: error ?? table?.fallbackReason ?? null,
+    domains: Object.fromEntries([...classifiedByDomain].map(([domain, list]) => [domain,
+      list.filter(candidate => candidate.tierSource === "measured")
+        .map(({ model, tier, score }) => (redistributable ? { model, tier, score } : { model, tier }))])),
   };
 }
 

@@ -341,8 +341,10 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   opencodex config first, then measured score in the role's task domain, then price rank (input plus output
   per 1M tokens). The sizing answer carries a neutral `domain` (coding, agentic, reasoning, writing,
   knowledge, general; missing means general), and `src/codex/role-capability.ts` reads that domain's
-  scores from the LMArena leaderboard dataset (CC BY 4.0, attributed in the response's `capability`
-  block), once per clock hour. With two or more measured candidates the measured ones are tiered by score
+  scores from Artificial Analysis once per UTC day when `codexRoleCapability.artificialAnalysis.apiKey`
+  resolves, otherwise or on failure from the LMArena leaderboard dataset (CC BY 4.0) once per clock hour.
+  The response's `capability` block attributes the source; Artificial Analysis terms forbid
+  redistribution, so its scores are dropped from that block. With two or more measured candidates the measured ones are tiered by score
   and unmeasured ones are not proposed; otherwise, or when the source cannot be read, price rank decides
   and `capability.error` says why. Each proposal names its `tierSource`. Three or more priced models
   split evenly across the three tiers. Fewer are anchored at the top, the dearest frontier and each cheaper

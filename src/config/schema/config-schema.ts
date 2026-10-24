@@ -303,6 +303,10 @@ export const configSchema = z.object({
     standard: z.array(z.string().trim().min(1)).optional(),
     frontier: z.array(z.string().trim().min(1)).optional(),
   }).strict().optional().catch(undefined),
+  // A malformed block falls back to the open leaderboard.
+  codexRoleCapability: z.object({
+    artificialAnalysis: z.object({ apiKey: z.string().trim().min(1).optional() }).strict().optional(),
+  }).strict().optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),

@@ -718,6 +718,11 @@ export interface OcxConfig {
    */
   codexRoleTiers?: { fast?: string[]; standard?: string[]; frontier?: string[] };
   /**
+   * Measured-capability source for Codex role auto-assign. With an Artificial Analysis API key
+   * (a literal, ${ENV} or keychain reference) its indexes replace the LMArena leaderboard.
+   */
+  codexRoleCapability?: { artificialAnalysis?: { apiKey?: string } };
+  /**
    * TTL (ms) for cached sub-agent model availability probes. Default 60_000.
    */
   subagentModelFallbackPollMs?: number;

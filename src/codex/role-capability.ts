@@ -1,23 +1,45 @@
 /**
  * Measured capability per task domain, so role auto-assign can tier candidates by what they score
- * instead of what they cost. Read live from the LMArena leaderboard dataset,
- * https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset, published under CC BY 4.0;
- * every response that uses it carries CAPABILITY_SOURCE as the attribution.
+ * instead of what they cost. Two sources, both read live and attributed in every response:
  *
- * Each domain maps to one published leaderboard table. Arena names a model by display name and
- * lists one row per reasoning setting ("Claude Opus 5.5 (High)"); capabilityModelKey drops the
+ * - Artificial Analysis (https://artificialanalysis.ai/api-reference), when the user configures
+ *   their own API key. Its terms allow that user's internal use with attribution and forbid
+ *   redistributing the raw data, so its scores never leave this process.
+ * - The LMArena leaderboard dataset, https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset,
+ *   published under CC BY 4.0, otherwise, and whenever Artificial Analysis cannot be read.
+ *
+ * Each domain maps to one published index or table. Both sources name a model by display name
+ * with one row per reasoning setting ("Claude Opus 5.5 (High)"); capabilityModelKey drops the
  * setting and folds the rest to a slug, which matches a catalog id once its provider prefix is
  * gone ("cpa/claude-opus-5-5"). The best setting's score stands for the model, since a role can
  * be given that setting. A candidate with no row is unmeasured, never guessed.
  */
 import { parquetReadObjects } from "hyparquet";
+import { resolveProviderApiKey } from "../providers/api-key-resolve";
+import type { OcxConfig } from "../types";
 import type { SizingDomain } from "./role-sizing";
 
-export const CAPABILITY_SOURCE = {
+export interface CapabilitySource {
+  readonly name: string;
+  readonly url: string;
+  readonly license: string;
+  /** Whether the terms let a response carry the raw scores. */
+  readonly redistributable: boolean;
+}
+
+export const ARENA_SOURCE: CapabilitySource = {
   name: "LMArena leaderboard dataset",
   url: "https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset",
   license: "CC BY 4.0",
-} as const;
+  redistributable: true,
+};
+
+export const ARTIFICIAL_ANALYSIS_SOURCE: CapabilitySource = {
+  name: "Artificial Analysis",
+  url: "https://artificialanalysis.ai",
+  license: "Artificial Analysis API terms: internal use, attribution required, no redistribution",
+  redistributable: false,
+};
 
 interface DomainTable {
   readonly config: string;
@@ -34,17 +56,33 @@ const DOMAIN_TABLES: Record<SizingDomain, DomainTable> = {
   general: { config: "text", category: "overall", metric: "rating" },
 };
 
+const ARTIFICIAL_ANALYSIS_URL = "https://artificialanalysis.ai/api/v2/data/llms/models";
+
+/** Per domain, the indexes to read in order; the first one the response carries is used. */
+const INTELLIGENCE_INDEX = "artificial_analysis_intelligence_index";
+const ARTIFICIAL_ANALYSIS_INDEXES: Record<SizingDomain, readonly string[]> = {
+  coding: ["artificial_analysis_coding_index", INTELLIGENCE_INDEX],
+  agentic: ["artificial_analysis_agentic_index", INTELLIGENCE_INDEX],
+  reasoning: ["artificial_analysis_math_index", INTELLIGENCE_INDEX],
+  writing: [INTELLIGENCE_INDEX],
+  knowledge: [INTELLIGENCE_INDEX],
+  general: [INTELLIGENCE_INDEX],
+};
+
 const FETCH_TIMEOUT_MS = 30_000;
 /** Each published table is under 1 MB today; 16 MB leaves room to grow and still bounds memory. */
 export const MAX_TABLE_BYTES = 16 * 1024 * 1024;
 
 export interface CapabilityTable {
+  readonly source: CapabilitySource;
   readonly publishedAt: string | null;
   /** Per domain: model key to its best published score. */
   readonly domains: Partial<Record<SizingDomain, ReadonlyMap<string, number>>>;
+  /** Why a configured source was passed over for this one. */
+  readonly fallbackReason?: string;
 }
 
-export type LoadCapability = () => Promise<CapabilityTable>;
+export type LoadCapability = (config: OcxConfig) => Promise<CapabilityTable>;
 
 export function capabilityModelKey(name: string): string {
   return name.toLowerCase().replace(/\([^)]*\)/g, " ").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -71,7 +109,33 @@ export function capabilityTableFromRows(rowsByConfig: ReadonlyMap<string, readon
     }
     if (scores.size > 0) domains[domain] = scores;
   }
-  return { publishedAt, domains };
+  return { source: ARENA_SOURCE, publishedAt, domains };
+}
+
+function keepBest(scores: Map<string, number>, key: string, value: number) {
+  if (key) scores.set(key, Math.max(value, scores.get(key) ?? -Infinity));
+}
+
+export function capabilityTableFromArtificialAnalysis(body: unknown): CapabilityTable {
+  const rows = (body as { data?: unknown } | null)?.data;
+  if (!Array.isArray(rows)) throw new Error("Artificial Analysis returned no model list");
+  const domains: Partial<Record<SizingDomain, Map<string, number>>> = {};
+  for (const [domain, indexes] of Object.entries(ARTIFICIAL_ANALYSIS_INDEXES) as [SizingDomain, readonly string[]][]) {
+    for (const index of indexes) {
+      const scores = new Map<string, number>();
+      for (const row of rows as Record<string, unknown>[]) {
+        const value = (row?.evaluations as Record<string, unknown> | undefined)?.[index];
+        if (typeof value !== "number" || !Number.isFinite(value)) continue;
+        if (typeof row.name === "string") keepBest(scores, capabilityModelKey(row.name), value);
+        if (typeof row.slug === "string") keepBest(scores, capabilityModelKey(row.slug), value);
+      }
+      if (scores.size > 0) {
+        domains[domain] = scores;
+        break;
+      }
+    }
+  }
+  return { source: ARTIFICIAL_ANALYSIS_SOURCE, publishedAt: null, domains };
 }
 
 /** The body's bytes, refused once they pass maxBytes, whatever the transport declared. */
@@ -100,7 +164,7 @@ export async function readBoundedBytes(response: Response, maxBytes: number): Pr
 }
 
 async function readLatest(config: string, fetchImpl: typeof fetch): Promise<LeaderboardRow[]> {
-  const url = `${CAPABILITY_SOURCE.url}/resolve/main/${config}/latest-00000-of-00001.parquet`;
+  const url = `${ARENA_SOURCE.url}/resolve/main/${config}/latest-00000-of-00001.parquet`;
   const response = await fetchImpl(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return await parquetReadObjects({ file: await readBoundedBytes(response, MAX_TABLE_BYTES) }) as LeaderboardRow[];
@@ -112,15 +176,44 @@ export async function fetchCapabilityTable(fetchImpl: typeof fetch = fetch): Pro
   return capabilityTableFromRows(new Map(configs.map((config, index) => [config, rows[index]!])));
 }
 
-let cached: { hour: string; table: Promise<CapabilityTable> } | null = null;
+export async function fetchArtificialAnalysisTable(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<CapabilityTable> {
+  const response = await fetchImpl(ARTIFICIAL_ANALYSIS_URL, {
+    headers: { "x-api-key": apiKey },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const bytes = await readBoundedBytes(response, MAX_TABLE_BYTES);
+  return capabilityTableFromArtificialAnalysis(JSON.parse(new TextDecoder().decode(bytes)));
+}
 
-/** One fetch per clock hour; a failed fetch is forgotten so the next request retries. */
-export const loadCapabilityTable: LoadCapability = () => {
-  const hour = new Date().toISOString().slice(0, 13);
-  if (cached?.hour !== hour) {
-    const table = fetchCapabilityTable();
-    cached = { hour, table };
-    table.catch(() => { if (cached?.table === table) cached = null; });
+/** One fetch per period key; a failed fetch is forgotten so the next request retries. */
+function periodCache() {
+  let slot: { key: string; table: Promise<CapabilityTable> } | null = null;
+  return (key: string, fetchTable: () => Promise<CapabilityTable>): Promise<CapabilityTable> => {
+    if (slot?.key === key) return slot.table;
+    const table = fetchTable();
+    slot = { key, table };
+    table.catch(() => { if (slot?.table === table) slot = null; });
+    return table;
+  };
+}
+
+const arenaCache = periodCache();
+const artificialAnalysisCache = periodCache();
+
+/**
+ * Artificial Analysis when the user's key resolves, read once per UTC day to stay inside the
+ * free tier's daily request quota; LMArena once per clock hour otherwise, or when Artificial
+ * Analysis fails.
+ */
+export const loadCapabilityTable: LoadCapability = async config => {
+  const now = new Date().toISOString();
+  const arena = () => arenaCache(now.slice(0, 13), () => fetchCapabilityTable());
+  const apiKey = resolveProviderApiKey(config.codexRoleCapability?.artificialAnalysis?.apiKey)?.trim();
+  if (!apiKey) return arena();
+  try {
+    return await artificialAnalysisCache(`${now.slice(0, 10)} ${apiKey}`, () => fetchArtificialAnalysisTable(apiKey));
+  } catch {
+    return { ...await arena(), fallbackReason: "Artificial Analysis could not be read" };
   }
-  return cached.table;
 };

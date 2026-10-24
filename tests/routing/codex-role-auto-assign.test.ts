@@ -6,7 +6,7 @@ import {
   mapEffortToLevel,
   type RoleModelCandidate,
 } from "../../src/codex/role-auto-assign";
-import { candidateModelKey, capabilityTableFromRows, readBoundedBytes } from "../../src/codex/role-capability";
+import { candidateModelKey, capabilityTableFromArtificialAnalysis, capabilityTableFromRows, readBoundedBytes } from "../../src/codex/role-capability";
 import type { RoleSizingOutcome } from "../../src/codex/role-sizing";
 
 const FULL = ["low", "medium", "high", "xhigh"];
@@ -209,5 +209,22 @@ describe("capabilityTableFromRows", () => {
     }));
     expect((await readBoundedBytes(body(), 12)).byteLength).toBe(12);
     await expect(readBoundedBytes(body(), 11)).rejects.toThrow("response exceeded byte bound");
+  });
+});
+
+describe("capabilityTableFromArtificialAnalysis", () => {
+  test("reads each domain's index, falls back to the intelligence index, and matches catalog slugs", () => {
+    const table = capabilityTableFromArtificialAnalysis({
+      status: 200,
+      data: [
+        { name: "Claude Opus 5.5 (Reasoning)", slug: "claude-opus-5-5-reasoning", evaluations: { artificial_analysis_intelligence_index: 71, artificial_analysis_coding_index: 66 } },
+        { name: "Claude Opus 5.5", slug: "claude-opus-5-5", evaluations: { artificial_analysis_intelligence_index: 64, artificial_analysis_coding_index: 58 } },
+        { name: "GPT-6.1 Sol", slug: "gpt-6-1-sol", evaluations: { artificial_analysis_intelligence_index: 73, artificial_analysis_coding_index: 61 } },
+      ],
+    });
+    expect(table.source.redistributable).toBe(false);
+    expect([candidateModelKey("cpa/claude-opus-5-5"), candidateModelKey("gpt-6.1-sol")].map(key => table.domains.coding!.get(key))).toEqual([66, 61]);
+    expect(table.domains.agentic!.get(candidateModelKey("gpt-6.1-sol"))).toBe(73);
+    expect(() => capabilityTableFromArtificialAnalysis({ error: "API key is required" })).toThrow();
   });
 });

@@ -875,15 +875,33 @@ exists only while LazyCodex is detected. Without it the dashboard shows neither,
 
 Auto-assign proposes a model for every role at once. opencodex asks your
 default Codex model (the root `model` in Codex `config.toml`) one question: for each role, given its
-description and the start of its instructions, which capability tier (fast, standard or frontier)
-and how much reasoning (glance, measured, thorough or exhaustive) does it need? That model never
-picks a model. opencodex then picks the cheapest model from your picker list that reaches the tier:
+description and the start of its instructions, which capability tier (fast, standard or frontier),
+how much reasoning (glance, measured, thorough or exhaustive) and which task domain (coding, agentic,
+reasoning, writing, knowledge or general) does it need? That model never picks a model. opencodex
+then picks the cheapest model from your picker list that reaches the tier:
 
 - Models listed under `codexRoleTiers` in the opencodex config (`{ "fast": [...], "standard": [...], "frontier": [...] }`)
   have that tier.
+- When two or more of the other models have a published score in the role's domain, those models are
+  tiered by that score, and unscored models are left out. Scores come from the
+  [LMArena leaderboard dataset](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset)
+  (CC BY 4.0), or from [Artificial Analysis](https://artificialanalysis.ai) when you add your own API key
+  (below). The response's `capability` block names the source it used.
 - Other models with a known price are ranked by price and split evenly across the three tiers. With only
   one or two priced models, the dearest is frontier and the other, if any, is standard.
 - Models with no price and no listed tier are never proposed. List them to include them.
+
+To use Artificial Analysis, create a free API key at [artificialanalysis.ai](https://artificialanalysis.ai/api-reference)
+and set it as a literal, an `${ENV}` reference or a keychain reference:
+
+```json
+{ "codexRoleCapability": { "artificialAnalysis": { "apiKey": "${ARTIFICIAL_ANALYSIS_API_KEY}" } } }
+```
+
+opencodex reads it once per day, which stays inside the free tier's daily request limit. Its terms allow
+using the data for your own decisions and forbid passing it on, so auto-assign keeps the scores
+internal: the response carries the tier each model got and the attribution, without the scores. If
+the read fails, the LMArena dataset is used and `capability.error` says so.
 
 Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
 it up or down. A role the model could not size clearly is shown as not sized, with the reason, and
