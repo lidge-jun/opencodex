@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { saveConfig } from "../../src/config";
 import { gatherRoutedModels } from "../../src/codex/catalog";
 import { clearModelCache } from "../../src/codex/model-cache";
 import { buildModelsRequest } from "../../src/oauth";
@@ -6,10 +10,15 @@ import { KEY_LOGIN_PROVIDERS, validateApiKey } from "../../src/oauth/key-provide
 import { deriveInitProviders, deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { routeModel } from "../../src/router";
+import { startServer } from "../../src/server";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { resetVisionDescriptionCache } from "../../src/vision";
 import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
+import { requiresVisionPreprocessing } from "../../src/vision/plan";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
+import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 const baseUrl = "https://aistupidlevel.info/v1";
@@ -105,6 +114,90 @@ describe("AI Stupid Level provider", () => {
         return new Response(status === 200 ? JSON.stringify({ object: "list", data: [] }) : null, { status });
       }) as typeof fetch;
       expect(await validateApiKey("aistupidlevel", KEY_LOGIN_PROVIDERS.aistupidlevel!, "test-key")).toBe(expected);
+    }
+  });
+});
+
+describe("AI Stupid Level text-only contract for pinned models", () => {
+  // A live id that no registry map lists: the provider-wide declaration must cover it.
+  const PINNED = "claude-sonnet-4-6";
+  const IMAGE = "data:image/png;base64,aGVsbG8taW1hZ2UtYnl0ZXM=";
+  let previousHome: string | undefined;
+  let home = "";
+  let codexHome: IsolatedCodexHome;
+  let mainCalls: Array<Record<string, unknown>>;
+
+  beforeEach(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    codexHome = installIsolatedCodexHome("ocx-asl-text-only-codex-");
+    home = mkdtempSync(join(tmpdir(), "ocx-asl-text-only-"));
+    process.env.OPENCODEX_HOME = home;
+    clearModelCache();
+    resetVisionDescriptionCache();
+    mainCalls = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin === "https://aistupidlevel.info") {
+        if (url.pathname === "/v1/models") return Response.json({ object: "list", data: [{ id: PINNED, object: "model" }] });
+        if (url.pathname === "/v1/chat/completions") {
+          mainCalls.push(JSON.parse(String(init?.body)));
+          return Response.json({
+            id: "chatcmpl-asl-text-only", object: "chat.completion", model: PINNED,
+            choices: [{ index: 0, message: { role: "assistant", content: "No image here." }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+          });
+        }
+      }
+      if (url.hostname === "127.0.0.1") return originalFetch(input, init);
+      throw new Error("Unexpected network destination in AI Stupid Level text-only fixture");
+    }) as typeof fetch;
+  });
+
+  afterEach(() => {
+    clearModelCache();
+    resetVisionDescriptionCache();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    codexHome.restore();
+    removeTreeWithRetry(home);
+  });
+
+  test("a pinned live id needs vision preprocessing, also for a row saved before the declaration", () => {
+    const saved = config();
+    delete saved.providers.aistupidlevel!.inputModalities;
+    for (const candidate of [config(), saved]) {
+      const route = routeModel(candidate, `aistupidlevel/${PINNED}`);
+      expect(route.modelId).toBe(PINNED);
+      expect(route.provider.inputModalities).toEqual(["text"]);
+      expect(requiresVisionPreprocessing(candidate, route.provider, route.modelId, route.providerName)).toBe(true);
+    }
+  });
+
+  test("an image sent to a pinned model never reaches the router", async () => {
+    saveConfig({
+      port: 0, hostname: "127.0.0.1", defaultProvider: "aistupidlevel",
+      providers: { aistupidlevel: { ...providerConfigSeed(entry()), apiKey: "fixture-asl-key" } },
+    });
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: `aistupidlevel/${PINNED}`, stream: false,
+          input: [{ role: "user", content: [
+            { type: "input_text", text: "Describe this image." }, { type: "input_image", image_url: IMAGE },
+          ] }],
+        }),
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(mainCalls).toHaveLength(1);
+      const forwarded = JSON.stringify(mainCalls[0]);
+      expect(forwarded).not.toContain(IMAGE);
+      expect(forwarded).not.toContain("image_url");
+      expect(forwarded).toContain("[image omitted:");
+    } finally {
+      await server.stop(true);
     }
   });
 });

@@ -661,6 +661,12 @@ export interface OcxProviderConfig {
   modelContextTiers?: Record<string, "default" | "long_context">;
   /** Model-specific Codex catalog input modalities, e.g. ["text"] or ["text", "image"]. */
   modelInputModalities?: Record<string, string[]>;
+  /**
+   * Provider-wide input modalities, applied to models `modelInputModalities` does not enumerate
+   * (a live-discovered id, for example). Seeded and backfilled from the registry; a per-model
+   * declaration still wins.
+   */
+  inputModalities?: string[];
   modelCapabilities?: Record<string, ModelCapabilities>;
   /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
   modelMaxInputTokens?: Record<string, number>;

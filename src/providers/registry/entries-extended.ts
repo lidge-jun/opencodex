@@ -1313,6 +1313,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelContextWindows: AISTUPIDLEVEL_MODEL_CONTEXT_WINDOWS,
     modelMaxOutputTokens: AISTUPIDLEVEL_MODEL_MAX_OUTPUT_TOKENS,
     modelInputModalities: AISTUPIDLEVEL_MODEL_INPUT_MODALITIES,
+    // Text only for every id, including the pinned models live discovery adds: the router
+    // answers an image, audio or file part with 400 `unsupported_content`.
+    inputModalities: ["text"],
     note: "Smart Router that sends each request to a model chosen from AI Stupid Level's benchmarks, using the provider keys saved on your AI Stupid Level account (OpenAI, Anthropic, Google, DeepSeek, Kimi, GLM), so each provider bills you directly with no markup. Routing modes: auto-coding (the default), auto-tooling, auto-reasoning, auto-best, plus value and speed modes. A real model id from the live list, such as claude-opus-5-5, pins one model. The X-AISM-Model response header names the model that answered. Text only.",
   },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect

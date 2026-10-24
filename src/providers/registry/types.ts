@@ -318,6 +318,12 @@ export interface ProviderRegistryEntry {
    */
   modelDisplayNames?: Record<string, string>;
   modelInputModalities?: Record<string, string[]>;
+  /**
+   * Provider-wide input modalities for every model `modelInputModalities` does not enumerate,
+   * including ids that arrive from live discovery. Declare it where the limit belongs to the
+   * provider's API rather than to one model; a per-model entry still wins over it.
+   */
+  inputModalities?: string[];
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
   reasoningEfforts?: string[];
@@ -395,7 +401,7 @@ export type ProviderConfigSeed = Pick<
   OcxProviderConfig,
   "anthropicOAuthInstance" |
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "chatCompletionsPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
-  | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
+  | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities" | "inputModalities"
   | "modelDisplayNames"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
