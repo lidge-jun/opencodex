@@ -172,10 +172,8 @@ restoration has held exactly these bodies since #5047 and this is the two paths 
 new restriction invented for one of them. Bodies that are not objects, which is what an `exec`
 program or an `apply_patch` envelope actually looks like, are unaffected and still stream.
 
-Routed restoration additionally keeps its existing hold for an unrecognized JSON object and its
-separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that become invalid
-only after a valid prefix was emitted remain bounded exceptions: completion is authoritative
-because preserving progressive canonical input leaves no rewind mechanism.
+Routed restoration keeps its hold for an unrecognized JSON object and its separate code-mode patch-envelope hold. Duplicate `input` keys and wrappers that become invalid only after a valid prefix was emitted remain bounded exceptions for ordinary freeform tools. Routed `apply_patch` narrows that boundary: after an exact canonical `*** Begin Patch` line resolves, `src/responses/apply-patch-envelope.ts` exposes only bytes that delimiter normalization cannot rewrite.
+A possible decorated terminal marker and the line break behind it remain held until authoritative. If a late-invalid or duplicate-key wrapper makes the completed repaired input disagree with an emitted canonical patch prefix, the routed rewrite fails closed before input-done, item-done, or completed output rather than publishing a rewound executable call.
 
 Codex-private tool fields are removed at the same boundary from one table
 (`CANONICAL_ONLY_TOOL_FIELDS`) rather than one bespoke pass each: `external_web_access` on either

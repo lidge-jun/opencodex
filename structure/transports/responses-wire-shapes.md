@@ -531,8 +531,8 @@ request-log accounting without promoting a truncated repair candidate. Terminal 
 
 OpenGateway result-array and image-detail projection follows the [OpenGateway transport contract](../providers/opengateway.md).
 Inbound function-call history with a missing JSON object prefix is repaired for every provider when restoring it produces an object. A terminal MiMo `</function></tool_call>` suffix is removed only when the remaining text parses as an object unchanged or after restoring a closing brace or quote and brace. Valid JSON containing these tags stays opaque; unrelated malformed arguments replay as `{}` without logging their content (`src/responses/parser.ts`). Regression coverage lives in `tests/responses/responses-mimo-envelope.test.ts`.
-Function-wrapper restoration supports `default.`-prefixed `exec` and `apply_patch` aliases while
-retaining the existing ambiguity and foreign-grammar boundaries.
+Function-wrapper restoration supports `default.`-prefixed `exec` and `apply_patch` aliases while retaining the existing ambiguity and foreign-grammar boundaries.
+For routed canonical `apply_patch`, an exact LF or CRLF opening marker unlocks only a monotonic completion-stable preview; a terminal decoration that normalization could remove stays buffered. Every success boundary verifies that authoritative repaired input retains an emitted preview as a prefix; disagreement fails the rewrite before completion or execution.
 
 For a verified code-mode catalog, `src/responses/code-mode-shell-input.ts` recognizes a structured
 `cmd` or `command` object submitted under `exec` and the canonical `input` wrapper. Only known shell

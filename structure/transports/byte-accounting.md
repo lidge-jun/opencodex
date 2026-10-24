@@ -177,6 +177,10 @@ their charge/release lifecycle while it asks the pure progressive decoder in
 `src/responses/progressive-freeform-input.ts` which prefix is safe to publish. The decoder neither
 charges nor releases translator budget; extracting it from `src/bridge/sse.ts` does not create a
 second retention owner or change terminal, failure, incomplete, or disposal release behavior.
+Canonical routed `apply_patch` progress is also tracked by that owner. If authoritative completion
+does not extend the emitted stable prefix, the owner releases every retained call and pending block
+before raising the rewrite failure; the relay emits a failed terminal and never exposes a successful
+tool completion with rewritten arguments.
 
 `src/adapters/openai-responses.ts` counts new compaction fragments, including surrogate pairs formed
 across deltas, while retaining snapshot/done/delta precedence and existing terminal ownership.
