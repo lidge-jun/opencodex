@@ -301,6 +301,8 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
   let releaseSpend: (() => void) | undefined;
   let logged: string[] = [];
   let sends: Array<{ model: string; authorization: string }> = [];
+  // Tool names each Command Code send declared, so a route test can prove which path built it.
+  let sentToolNames: string[][] = [];
 
   beforeEach(() => {
     fixtureHome = mkdtempSync(join(tmpdir(), "ocx-command-plan-denial-"));
@@ -322,6 +324,8 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
       if (url !== GENERATE_URL) throw new Error("Unexpected fixture request: " + url);
       const model = String((JSON.parse(String(init?.body)) as { params: { model: string } }).params.model);
       sends.push({ model, authorization: new Headers(init?.headers).get("authorization") ?? "" });
+      const declared = (JSON.parse(String(init?.body)) as { params: { tools?: Array<{ name?: unknown }> } }).params.tools ?? [];
+      sentToolNames.push(declared.map(tool => String(tool.name)));
       return model === REFUSED_MODEL ? planRefusal() : new Response(COMPLETED);
     }) as typeof fetch;
   });
@@ -525,23 +529,29 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
     const sidecar = { webSearchSidecar: { backend: "exa", exaApiKey: "fixture-exa" } };
     const send = async (cfg: OcxConfig, model: string) => {
       sends = [];
+      sentToolNames = [];
       clearComboTargetCooldowns();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ model, input: "hello", stream: false, tools: [{ type: "web_search" }] }),
       }), cfg, { model: "", provider: "" });
-      return { status: response.status, body: await response.text(), sends: sends.map(entry => entry.model) };
+      return { status: response.status, body: await response.text(), sends: sends.map(entry => entry.model),
+        // The web-search sidecar is the path under test: every send carries its injected function tool.
+        viaSidecar: sentToolNames.map(names => names.includes("web_search")) };
     };
     const combo = await send(config({ ...sidecar, combos: { pair: { strategy: "failover", targets } } } as Partial<OcxConfig>), "combo/pair");
     expect(combo.status, combo.body).toBe(200);
     expect(combo.sends).toEqual([REFUSED_MODEL, SERVED_MODEL]);
+    expect(combo.viaSidecar).toEqual([true, true]);
     const policy = await send(config({ ...sidecar, routingProfiles: { daily: { candidates: targets } } } as Partial<OcxConfig>), "policy/daily");
     expect(policy.status, policy.body).toBe(200);
     expect(policy.sends).toEqual([REFUSED_MODEL, SERVED_MODEL]);
+    expect(policy.viaSidecar).toEqual([true, true]);
     const direct = await send(config(sidecar as Partial<OcxConfig>), "command-code/" + REFUSED_MODEL);
     expect(direct.status, direct.body).toBe(400);
     expect(JSON.parse(direct.body).error.message).toContain("MODEL_NOT_IN_PLAN");
     expect(direct.sends).toEqual([REFUSED_MODEL]);
+    expect(direct.viaSidecar).toEqual([true]);
     expectNoCanary(combo.body + policy.body + direct.body + logged.join("\n"));
   });
 
