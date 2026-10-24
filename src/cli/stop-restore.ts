@@ -3,11 +3,13 @@ import type { RetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
 import { readClientConnectionState, type ClientConnectionState } from "../client/state";
 import { readPid, readRuntimePort } from "../config/process-state";
+import { loadConfig } from "../config";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { gracefulStopHost, isProcessAlive, ProxyOwnershipRefusedError } from "../lib/process-control";
 import { directLocalHttpFetch } from "../server/direct-local-http";
-import { findLiveProxy, proveLiveProxyOwnedByHome } from "../server/proxy-liveness";
+import { findLiveProxy, probeEndpointLiveness, proveLiveProxyOwnedByHome } from "../server/proxy-liveness";
+import { observeGuardedManagerStopped } from "../service/guarded-manager-target";
 import type { StartExitTeardown } from "./dispatch";
 import type { StopOutcome } from "./stop-report";
 
@@ -21,7 +23,7 @@ export function preserveConnectedClientRoutingOnExit(teardown: StartExitTeardown
 type ConnectedStopTarget = { pid: number; port: number; hostname?: string };
 const CONNECTED_STOP_PROBE_MS = 2000;
 const unsupportedConnectedStop = () => new ProxyOwnershipRefusedError(
-  "Connected-client stop refused: this runtime cannot prove it preserves connection-owned integrations. Keep it running and update/restart it through its supervisor, then retry; use 'ocx disconnect' only if you intend to release those integrations.",
+  "Connected-client stop refused: runtime identity, shutdown preservation or safe runtime absence could not be verified. Inspect 'ocx service status' and update/restart an incompatible runtime through its supervisor, then retry; use 'ocx disconnect' only if you intend to release those integrations.",
   "connected_client_stop_unsupported",
 );
 
@@ -57,17 +59,31 @@ export async function assertConnectedClientStopSupported(target: ConnectedStopTa
 }
 
 /** Fail before either service-manager path, including a manager that cascades process exit. */
-export async function preflightConnectedClientStop(approved?: ConnectedStopTarget): Promise<StopOutcome | null> {
+export async function preflightConnectedClientStop(approved?: ConnectedStopTarget): Promise<StopOutcome | "already-stopped" | null> {
   try {
     let target = approved;
     if (!target) {
       const pid = readPid();
-      const runtime = pid ? readRuntimePort(pid) : null;
-      if (pid && runtime && isProcessAlive(pid)) target = { ...runtime, pid };
+      const runtime = readRuntimePort(pid ?? undefined);
+      if (pid && isProcessAlive(pid)) {
+        if (!runtime) throw unsupportedConnectedStop();
+        target = { ...runtime, pid };
+      }
       else {
         const live = await findLiveProxy({ acceptPackageTreeFenced: true });
-        if (!live?.pid || await proveLiveProxyOwnedByHome(live) !== "proven") throw unsupportedConnectedStop();
-        target = { ...live, pid: live.pid };
+        if (live?.pid) {
+          if (await proveLiveProxyOwnedByHome(live) !== "proven") throw unsupportedConnectedStop();
+          target = { ...live, pid: live.pid };
+        } else {
+          const config = loadConfig();
+          const endpoints = [...(runtime ? [runtime] : []), { port: config.port, hostname: config.hostname }];
+          if (endpoints.some(endpoint => !Number.isInteger(endpoint.port) || endpoint.port <= 0 || endpoint.port > 65535)
+            || await observeGuardedManagerStopped({ kind: "absent" }) !== "inactive") throw unsupportedConnectedStop();
+          for (const endpoint of endpoints) {
+            if (await probeEndpointLiveness(endpoint) !== "dead") throw unsupportedConnectedStop();
+          }
+          return "already-stopped";
+        }
       }
     }
     if (!isProcessAlive(target.pid)) throw unsupportedConnectedStop();

@@ -66,6 +66,7 @@ async function runParentStop(options: {
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
   managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
   nativeSignal?: boolean; apiFailure?: boolean;
+  alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
@@ -86,11 +87,35 @@ async function runParentStop(options: {
     urls: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
-  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup ? 0 : 1);
+  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
 describe("parent CLI shared teardown completion", () => {
+  test("consecutive connected stops preserve configuration and the stopped managed client remains update-eligible", async () => {
+    const first = await runParentStop({ receipt: true, clientTransport: "link", serverTeardown: true, json: true,
+      response: null, restore: restoreResult(true) });
+    const before = readFileSync(join(home, "config.json"), "utf8");
+    const second = await runParentStop({ receipt: true, clientTransport: "link", alreadyStopped: true, json: true,
+      response: null, restore: restoreResult(true) });
+    expect(first.exitCode).toBe(0);
+    expect(second.exitCode, second.stderr).toBe(0);
+    expect(second.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, cleared: 0 });
+    expect(JSON.parse(second.stdout)).toMatchObject({ ok: true, runtimeDown: true, proxy: "not-running", sharedTeardown: "skipped" });
+    expect(readFileSync(join(home, "config.json"), "utf8")).toBe(before);
+    const { decidePostStopUpdate } = await import("../../src/update/stop-decision.mjs");
+    expect(decidePostStopUpdate({ status: second.exitCode, hasRuntimeState: false, liveness: "dead", teardownOutstanding: false }))
+      .toMatchObject({ proceed: true, reason: "ok" });
+  });
+  for (const [absence, managerState] of [["unknown", "inactive"], ["live", "inactive"], ["dead", "active"], ["dead", "unknown"]] as const) {
+    test(`missing connected target still refuses ${absence} liveness / ${managerState} manager`, async () => {
+      const outcome = await runParentStop({ receipt: true, clientTransport: "hub", alreadyStopped: true, absence, managerState,
+        json: true, response: null, restore: restoreResult(true) });
+      expect(outcome.exitCode).toBe(1);
+      expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, cleared: 0 });
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false });
+    });
+  }
   test("preservation probes bypass environment proxies without exposing the admin token", async () => {
     const targetPaths: string[] = [];
     const proxyPaths: string[] = [];

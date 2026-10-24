@@ -632,7 +632,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     // A sibling never runs under a service manager, so an installed one is the live owner's. Asking
     // it failed the ownership check from the sibling's home: exit 1, and after a hard kill the
     // stale sibling records were never purged.
-    expect(stop).toContain(': stoppingSibling ? "absent" : stopServiceIfInstalledDetailed();');
+    expect(stop).toContain(': stoppingSibling || connectedClientAlreadyStopped ? "absent" : stopServiceIfInstalledDetailed();');
     // The only other caller is the guarded desktop step, which reaches the manager only when it
     // provably owns the approved pid; a sibling's pid never is.
     expect(stop.split("stopServiceIfInstalledDetailed()").length - 1).toBe(2);

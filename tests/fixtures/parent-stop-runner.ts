@@ -22,6 +22,9 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   nativeSignal?: boolean;
   apiFailure?: boolean;
   proxyProbePort?: number;
+  alreadyStopped?: boolean;
+  absence?: "dead" | "unknown" | "live";
+  managerState?: "inactive" | "active" | "unknown";
 };
 if (options.proxyProbePort) {
   // Deliberately bypass every fixture mock for the real proxy-environment regression.
@@ -47,7 +50,7 @@ const calls = { killed: 0, native: 0, grok: 0, cleared: 0, exited: 0, service: 0
 const urls: string[] = [];
 const probes: string[] = [];
 const unexpectedIo: string[] = [];
-let alive = true;
+let alive = !options.alreadyStopped;
 let nonce: string | undefined;
 
 function unexpected(operation: string): never {
@@ -97,8 +100,8 @@ mock.module("../../src/config/pending-teardown", () => ({
 const state = await import("../../src/config/process-state");
 mock.module("../../src/config/process-state", () => ({
   ...state,
-  readPid: () => options.orphan ? null : fakePid,
-  readRuntimePort: () => endpoint,
+  readPid: () => options.orphan || options.alreadyStopped ? null : fakePid,
+  readRuntimePort: () => options.alreadyStopped ? null : endpoint,
   removePid() {},
   removeRuntimePort() {},
 }));
@@ -122,11 +125,18 @@ if (options.guarded) {
     inspectGuardedManagerTarget: () => manager, observeGuardedManagerStopped: () => "stopped",
   }));
 }
-if (options.orphan) {
+if (options.orphan || options.alreadyStopped) {
   const liveness = await import("../../src/server/proxy-liveness");
   mock.module("../../src/server/proxy-liveness", () => ({ ...liveness,
     findLiveProxy: async () => alive ? { ...endpoint, pid: fakePid, source: "config" } : null,
     proveLiveProxyOwnedByHome: async () => "proven",
+    probeEndpointLiveness: async () => options.absence ?? "dead",
+  }));
+}
+if (options.alreadyStopped) {
+  const guarded = await import("../../src/service/guarded-manager-target");
+  mock.module("../../src/service/guarded-manager-target", () => ({ ...guarded,
+    observeGuardedManagerStopped: async () => options.managerState ?? "inactive",
   }));
 }
 const native = await import("../../src/codex/inject");

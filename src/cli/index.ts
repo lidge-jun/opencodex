@@ -1088,9 +1088,11 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   const siblingOfPort = readRuntimePort()?.siblingOfPort;
   const stoppingSibling = siblingOfPort !== undefined;
   const connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(readClientConnectionState());
+  let connectedClientAlreadyStopped = false;
   if (connectedClientSkip) {
-    const refused = await preflightConnectedClientStop(snapshot?.approval);
-    if (refused) return refused;
+    const preflight = await preflightConnectedClientStop(snapshot?.approval);
+    if (preflight === "already-stopped") connectedClientAlreadyStopped = true;
+    else if (preflight) return preflight;
   }
   // Structured twin of the human lines below, for `ocx stop --json`: one document the
   // desktop shell can read across the process boundary (D4). Every field is assigned
@@ -1180,7 +1182,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
         })).service
       // A sibling never runs under a service manager: an installed one belongs to the live owner,
       // and its ownership check would fail this stop and skip the stale-record purge below.
-      : stoppingSibling ? "absent" : stopServiceIfInstalledDetailed();
+      : stoppingSibling || connectedClientAlreadyStopped ? "absent" : stopServiceIfInstalledDetailed();
     record.service = serviceStop;
     stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
     schedulerCanRespawn = serviceStop === "stopped-respawnable";
