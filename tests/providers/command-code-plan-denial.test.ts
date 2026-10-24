@@ -351,6 +351,43 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
     }
   });
 
+  test("an unmarked code from a passthrough or streamed candidate is read like any unknown code", async () => {
+    await login(1);
+    const generate = globalThis.fetch;
+    let echo = { code: "", stream: false };
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!url.startsWith("https://other.example/")) return generate(input, init);
+      const error = { type: "invalid_request_error", code: echo.code, message: "fixture" };
+      if (!echo.stream) return Response.json({ error }, { status: 400 });
+      const failed = { type: "response.failed", response: { id: "resp_fixture", object: "response", status: "failed", error, output: [] } };
+      return new Response("event: response.failed\ndata: " + JSON.stringify(failed) + "\n\n", { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const other = { adapter: "openai-responses", baseUrl: "https://other.example/v1", authMode: "key", apiKey: "synthetic-other", models: ["m1"] } as OcxProviderConfig;
+    const candidates = [{ provider: "other", model: "m1" }, { provider: "command-code", model: SERVED_MODEL }];
+    const policy = config({ routingProfiles: { daily: { candidates } } } as Partial<OcxConfig>);
+    policy.providers.other = other;
+    const combo = config({ combos: { pair: { strategy: "failover", targets: candidates } } } as Partial<OcxConfig>);
+    combo.providers.other = other;
+
+    // The control is a code nothing recognizes; every plan-refusal spelling must route exactly like it.
+    const outcome = async (code: string, route: "policy/daily" | "combo/pair", stream: boolean) => {
+      echo = { code, stream };
+      sends = [];
+      clearComboTargetCooldowns();
+      const result = await responses(route === "policy/daily" ? policy : combo, route, stream);
+      return { status: result.response.status, sends: sends.map(send => send.model), planCode: result.body.includes('"code":"model_not_in_plan"') };
+    };
+    for (const [route, stream] of [["policy/daily", false], ["combo/pair", true]] as const) {
+      const control = await outcome("fixture_unknown_code", route, stream);
+      for (const spelling of ["model_not_in_plan", "MODEL_NOT_IN_PLAN", "model-not-in-plan"]) {
+        const observed = await outcome(spelling, route, stream);
+        expect({ ...observed, planCode: false }, route + " " + spelling).toEqual({ ...control, planCode: false });
+        expect(observed.sends, route + " " + spelling).toEqual([]);
+      }
+    }
+  });
+
   test("a routing policy moves on to its next candidate", async () => {
     await login(1);
     const cfg = config({ routingProfiles: { daily: { candidates: [

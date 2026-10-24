@@ -52,6 +52,21 @@ export function namesModelNotInPlanCode(code: string | null | undefined): boolea
   return typeof code === "string" && code.trim().toLowerCase().replaceAll("-", "_") === MODEL_NOT_IN_PLAN_CODE;
 }
 
+/**
+ * Client envelopes `formatErrorResponse` built from a verified plan refusal. The envelope's body
+ * code cannot prove provenance -- native passthrough returns an upstream body unchanged -- so
+ * policy fallback reads this in-memory marker, the same way it reads non-replayability.
+ */
+const verifiedPlanRefusalResponses = new WeakSet<Response>();
+
+export function markVerifiedModelNotInPlanResponse(response: Response): void {
+  verifiedPlanRefusalResponses.add(response);
+}
+
+export function isVerifiedModelNotInPlanResponse(response: Response): boolean {
+  return verifiedPlanRefusalResponses.has(response);
+}
+
 /** First nonblank string across the canonical upstream error paths, in priority order. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;

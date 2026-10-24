@@ -12,6 +12,7 @@ import {
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
+  markVerifiedModelNotInPlanResponse,
   MODEL_NOT_IN_PLAN_CODE,
   SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
@@ -89,6 +90,7 @@ export function formatErrorResponse(
     headers,
   });
   if (replayBlocked) markResponseNonReplayable(response);
+  if (options?.code === MODEL_NOT_IN_PLAN_CODE) markVerifiedModelNotInPlanResponse(response);
   // Re-wrapping is where the refusal loses its provenance: combo failure consumption parses
   // the JSON and builds a new Response, and the code alone does not tell a later quota
   // recorder that no upstream produced this status. Carry the narrower marker across too.
