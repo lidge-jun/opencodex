@@ -753,6 +753,12 @@ export const ALIBABA_TOKEN_PLAN_PRESERVE_REASONING = [
 export const KIMI_K3_STANDARD_CONTEXT_WINDOW = 262_144;
 export const KIMI_K3_1M_CONTEXT_WINDOW = 1_048_576;
 export const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]", "k3-256k"];
+// 261024 Kimi K3.1 Pro: live GET /coding/v1/models now also lists k3.1-pro and
+// k3.1-pro-highspeed, both advertising context_length 1048576 (flat 1M, no entitlement
+// alias). Both run thinking-only: the endpoint rejects thinking-disabled requests with
+// HTTP 400, and an absent effort defaults to max — the same low/high/max ladder as k3.
+// Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html
+export const KIMI_CODING_K31_MODELS = ["k3.1-pro", "k3.1-pro-highspeed"];
 // 260921 Kimi K2.8: `kimi-for-coding` is the stable subscription alias Moonshot re-points
 // at each coding release. Live GET /coding/v1/models lists only kimi-for-coding[-highspeed],
 // k3, k3-256k — the k2.x ids are retired from the subscription endpoint. Since K2.8 Preview
@@ -761,7 +767,7 @@ export const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]", "k3-256k"];
 // with "model token limit: 1048576" beyond that.
 // Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html
 export const KIMI_CODING_K28_MODELS = ["kimi-for-coding"];
-export const KIMI_CODING_LIVE_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CODING_K28_MODELS];
+export const KIMI_CODING_LIVE_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CODING_K31_MODELS, ...KIMI_CODING_K28_MODELS];
 export const KIMI_CODING_ADJUSTABLE_THINKING_MODELS = [...KIMI_CODING_LIVE_MODELS];
 export const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
 export const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
@@ -884,7 +890,7 @@ export const NVIDIA_NIM_NO_VISION_MODELS = [
   "poolside/laguna-xs-2.1", "z-ai/glm-5.3", "z-ai/glm-5.2",
 ];
 export const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  KIMI_CODING_LIVE_MODELS.map(id => [id, (id === "k3[1m]" || KIMI_CODING_K28_MODELS.includes(id)) ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
+  KIMI_CODING_LIVE_MODELS.map(id => [id, (id === "k3[1m]" || KIMI_CODING_K31_MODELS.includes(id) || KIMI_CODING_K28_MODELS.includes(id)) ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
 );
 export const KIMI_CODING_MODEL_INPUT_MODALITIES = Object.fromEntries(
   KIMI_CODING_ADJUSTABLE_THINKING_MODELS.map(id => [id, ["text", "image"]]),

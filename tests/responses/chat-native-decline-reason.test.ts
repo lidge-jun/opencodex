@@ -43,6 +43,58 @@ describe("native Chat decline reasons", () => {
     expect(nativeChatDeclineReason(route(), { tools: [{ type: "web_search" }] })).toBe("hosted-tool");
   });
 
+  test("Anthropic reasoning state cannot cross the native provider boundary", () => {
+    const assistant = { role: "assistant", content: null, reasoning_details: [
+      { type: "reasoning.text", text: "thinking", signature: "opaque", format: "anthropic-claude-v1" },
+      { type: "reasoning.encrypted", data: "ciphertext", format: "anthropic-claude-v1" },
+    ] };
+    expect(nativeChatDeclineReason(route(), { messages: [{ role: "user", content: "hi" }, assistant] }))
+      .toBe("opaque-state-stripped");
+    expect(isNativeChatRouteEligible(route(), { messages: [assistant] })).toBe(false);
+  });
+
+  test("an unmarked signed thinking entry carries the same provider state", () => {
+    // The inbound replay accepts a format-less reasoning.text whose signature has Anthropic's
+    // spelling, so it is the same opaque state the marker check catches and must decline too.
+    const assistant = { role: "assistant", reasoning_details: [
+      { type: "reasoning.text", text: "thinking", signature: "SyntheticStepOneSignature0000==", index: 0 },
+    ] };
+    expect(nativeChatDeclineReason(route(), { messages: [{ role: "user", content: "hi" }, assistant] }))
+      .toBe("opaque-state-stripped");
+    expect(isNativeChatRouteEligible(route(), { messages: [assistant] })).toBe(false);
+  });
+
+  test("the same state on a user, system, developer or tool message declines the same way", () => {
+    // Native passthrough preserves every caller message object, not only assistant turns, so
+    // the scan is role-agnostic: a signature or redacted payload is the same disclosure in
+    // whichever slot it sits.
+    const details = [
+      { type: "reasoning.encrypted", data: "ciphertext", format: "anthropic-claude-v1" },
+      { type: "reasoning.text", text: "thinking", signature: "SyntheticStepOneSignature0000==", format: "anthropic-claude-v1" },
+    ];
+    for (const role of ["user", "system", "developer"]) {
+      expect(nativeChatDeclineReason(route(), { messages: [{ role, content: "hi", reasoning_details: details }] }))
+        .toBe("opaque-state-stripped");
+    }
+    expect(nativeChatDeclineReason(route(), { messages: [{ role: "tool", tool_call_id: "call_1", content: "r", reasoning_details: details }] }))
+      .toBe("opaque-state-stripped");
+  });
+
+  test("unsigned or foreign-format reasoning details remain native-eligible", () => {
+    const assistant = { role: "assistant", reasoning_details: [
+      { type: "reasoning.text", text: "thinking", format: "minimax-response-v1" },
+    ] };
+    expect(nativeChatDeclineReason(route(), { messages: [assistant] })).toBeUndefined();
+    const foreignSigned = { role: "assistant", reasoning_details: [
+      { type: "reasoning.text", text: "thinking", signature: "SyntheticStepOneSignature0000==", format: "minimax-response-v1" },
+    ] };
+    expect(nativeChatDeclineReason(route(), { messages: [foreignSigned] })).toBeUndefined();
+    const unsigned = { role: "assistant", reasoning_details: [
+      { type: "reasoning.text", text: "thinking", index: 0 },
+    ] };
+    expect(nativeChatDeclineReason(route(), { messages: [unsigned] })).toBeUndefined();
+  });
+
   test("the first failing rule wins", () => {
     expect(nativeChatDeclineReason(route({ authMode: "oauth", routeKind: "policy" } as Partial<RouteResult>), { store: true }))
       .toBe("auth-mode-not-native");

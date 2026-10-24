@@ -74,15 +74,22 @@ ocx integration client disable --client qoder
 ```
 
 Qoder uses `settings.json` in `QODER_CONFIG_DIR` when that variable is set, and
-`~/.qoder/settings.json` otherwise; a relative `QODER_CONFIG_DIR` is refused. Enable merges `providers.opencodex` and
-OpenCodex entries in `modelConfigs.customModels`, preserving other providers, custom models,
-and settings. Disable removes the recorded OpenCodex entries; restore uses the existing
+`~/.qoder/settings.json` otherwise; a relative `QODER_CONFIG_DIR` is refused. Enable merges only `providers.opencodex`, preserving other providers, custom models,
+and settings. Models appear once in the provider catalog; duplicating them in
+`modelConfigs.customModels` causes Qoder to reject the provider. Refreshing an older managed
+integration removes its recorded duplicate rows; user-edited rows remain conflicts. Disable removes the recorded OpenCodex entries; restore uses the existing
 snapshot workflow. The provider's default model is the first model in the sorted export.
-Custom models use their catalog context window, falling back to 128000 input tokens.
+If `modelConfigs.customModels` already holds an `opencodex` row for an exported model that
+OpenCodex did not write, enable, refresh, overwrite and disable report a conflict and leave the
+file unchanged; remove or rename that row in Qoder's settings, then try again. Rows for other
+providers or for models outside the export are left alone.
+Provider models use their catalog `contextWindow`, falling back to 128000 input tokens.
+Restart Qoder after refreshing an existing integration to reload the provider registry.
 The generated API key is a non-secret placeholder: Qoder integration requires loopback
 access and refuses an authenticated non-loopback bind. When the dedicated unauthenticated
 loopback listener is enabled, exports point Qoder at that listener. `ocx sync` and catalog
 changes refresh an already enabled Qoder integration like the other managed clients.
+Model IDs containing `,` or `]` (for example `kimi/k3[1m]`) are exported like any other model.
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
@@ -342,6 +349,8 @@ Aside uses the same preview and confirmation flow for one selected profile at a 
 profiles** remains a separate bulk action and is not bound to one combined preview.
 
 ## What to expect, honestly
+
+If a generated managed path cannot be represented safely, that client reports an unsafe status and its preview refuses the operation. Attempts to apply, overwrite or disable return HTTP 409 without changing the configuration. Other clients remain available.
 
 **Managed configuration files are limited to 4 MiB (4,194,304 UTF-8 bytes).**
 The shared integration reader refuses larger files as unsafe to read, and the writer
