@@ -6,6 +6,10 @@
 LocalAppData. `src/codex/windows-local-appdata.ts` calls `SHGetKnownFolderPath` in-process on Windows
 x64, loading Shell32/Ole32 from the OS-resolved system directory. It uses `KF_FLAG_DEFAULT_PATH`
 and a null token, bounds UTF-16 decoding, and frees the allocation even when the API fails.
+`src/codex/windows-current-sid.ts` reads the effective SID the same way: `OpenProcessToken`,
+`GetTokenInformation(TokenUser)` and `ConvertSidToStringSidW` from the same system directory,
+with a bounded SID read, `LocalFree` and `CloseHandle` on every exit. A cold PowerShell start
+cannot breach the lookup budget on x64 because no child process starts (#7544).
 Unsupported FFI retains the bounded trusted PowerShell helper; native API failures refuse.
 `USERPROFILE` and `LOCALAPPDATA` never choose this root. Runtime canonicalization/reparse checks
 and the Bun test lock's required ACL hardening remain separate admission checks.

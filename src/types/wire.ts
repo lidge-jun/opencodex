@@ -101,6 +101,7 @@ function normalizedEndpoint(value: unknown): string | undefined {
  * URL. The empty prefix covers every model id.
  */
 const CREDENTIAL_PINNED_ADAPTERS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
+  "workbuddy-ai": Object.freeze({ "": "workbuddy-ai" }),
   "dsh-account": Object.freeze({ "": "dsh-account" }),
 });
 

@@ -958,7 +958,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--session-pin <duration|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
 
 Create, update or rename a combo.
 
@@ -985,6 +985,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--decision-timeout` | string | JEV deadline 1000-120000 ms; - clears. |
 | `--decision-quota-signals` | string | JEV advisory quota on/off; - clears. |
 | `--decision-quota-tiers` | string | Partial JSON thresholds; - clears. |
+| `--session-pin` | string | JEV session pin idle window 1m-24h (90s, 20m, 1h); - clears. |
 | `--rename-from` | string | Existing combo ID to rename. |
 | `--json` | boolean | Emit structured JSON. |
 | `--native-alias` | string | Bare legacy flag means on; explicit on/off preserves presence, including false. |
@@ -992,7 +993,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--image-input` | string | auto or disabled; explicit auto clears the previous disabled choice. |
 | `--reasoning-effort-mode` | string | strict or adaptive, distinct from --effort-mode fallback/force. |
 
-- create and update are aliases of set. Existing fields are read before writing; --targets replaces targets.
+- create and update are aliases of set. Existing fields are read before writing; --targets replaces targets. Without --strategy an existing combo keeps its stored strategy and JEV policy; a new combo defaults to failover.
 - force overrides valid client effort and may increase cost and latency.
 - Only the implemented target grammar is supported; full GUI target metadata and routing-profile writes are separate tasks.
 - New file/flag conflicts refuse before transport. Partial edits preserve target metadata; explicit false/default values override server carry. Turning a native alias off may also require clearing its incompatible alias.

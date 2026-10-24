@@ -299,7 +299,12 @@ parse, or one whose structure we cannot reason about, still refuses.
 ## Hermes session affinity
 
 The generated `providers.opencodex` block includes `session_affinity_header: session-id` for all
-models. This names a header; Hermes supplies its dynamic conversation identifier. OpenCodex does
+models. Retain this generated default unless you deliberately choose log-only correlation:
+changing `session_affinity_header` from `session-id` to `x-hermes-conversation-id` replaces the
+header sent by Hermes. Because OpenCodex treats `x-hermes-conversation-id` strictly as a request-log
+correlation fallback and not as a native routing or turn-termination identity, switching to
+`x-hermes-conversation-id` removes native session affinity and lane assignment while correlating
+agent loops in request logs. This names a header; Hermes supplies its dynamic conversation identifier. OpenCodex does
 not write a shared static identifier or change `api_mode` to enable affinity.
 
 Use a Hermes version supporting [per-provider request options](https://hermes-agent.nousresearch.com/docs/user-guide/configuring-models#per-provider-request-options).

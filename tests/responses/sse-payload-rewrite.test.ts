@@ -176,6 +176,85 @@ describe("SSE payload rewrite composition", () => {
     }
   });
 
+  test("does not send a growing unfinished frame to the delimiter regex on each fragment", () => {
+    const text = `data: ${"x".repeat(256 * 1024)}\r\n\r\n`;
+    const budget = createTestTranslatorBudget();
+    const buffer = createSseBlockBuffer(budget);
+    const original = RegExp.prototype.exec;
+    const pattern = /(?:\r\n|\r(?!\n)|\n){2}/g.source;
+    let regexInputUnits = 0;
+    const exec = spyOn(RegExp.prototype, "exec").mockImplementation(function (this: RegExp, input: string) {
+      if (this.source === pattern && this.global) regexInputUnits += input.length;
+      return original.call(this, input);
+    });
+    try {
+      let delivered = "";
+      for (let index = 0; index < text.length; index += 512) {
+        buffer.append(text.slice(index, index + 512));
+        let block;
+        while ((block = buffer.next())) delivered += block.block + block.delimiter;
+      }
+      expect(delivered).toBe(text);
+      // Deterministic work bound: even a near-end regex search can flatten a
+      // growing rope, so count the full subject passed to that native operation.
+      expect(regexInputUnits).toBeLessThan(text.length * 4);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally { exec.mockRestore(); buffer.clear(); }
+  });
+
+  test("append boundary checks do not index into the growing carry on each fragment", () => {
+    const text = `data: ${"x".repeat(256 * 1024)}\n\n`;
+    const budget = createTestTranslatorBudget(), buffer = createSseBlockBuffer(budget);
+    const original = String.prototype.charCodeAt;
+    let indexedSubjectUnits = 0;
+    const charCodeAt = spyOn(String.prototype, "charCodeAt").mockImplementation(function (this: string, position: number) {
+      indexedSubjectUnits += this.length;
+      return original.call(this, position);
+    });
+    try {
+      let delivered = "";
+      for (let index = 0; index < text.length; index += 512) {
+        buffer.append(text.slice(index, index + 512));
+        let block;
+        while ((block = buffer.next())) delivered += block.block + block.delimiter;
+      }
+      expect(delivered).toBe(text);
+      expect(indexedSubjectUnits).toBeLessThan(text.length * 4);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally { charCodeAt.mockRestore(); buffer.clear(); }
+  });
+
+  test("a failed delimiter scan retains the surrogate boundary of the carry", () => {
+    const budget = createTestTranslatorBudget(), buffer = createSseBlockBuffer(budget);
+    buffer.append("data: \r\ud800");
+    expect(buffer.next()).toBeNull();
+    buffer.append("\udc00");
+    expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength("data: \r\ud800\udc00", "utf8"));
+    buffer.clear();
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("scan eligibility survives queued appends, compaction and clear", () => {
+    const budget = createTestTranslatorBudget();
+    const buffer = createSseBlockBuffer(budget);
+    let reference = "";
+    for (const fragments of [["data: one", "x", "\r", "\n", "\r", "\n", "tail"], ["plain", "x", "\n", "\n", "data: two\r\r", "last"], ["\ud800", "\udc00", "\n", "\n"]]) {
+      for (const fragment of fragments) { buffer.append(fragment); reference += fragment; }
+      for (;;) {
+        const expected = nextSseBlock(reference), actual = buffer.next();
+        expect(actual).toEqual(expected && {block: expected.block, delimiter: expected.delimiter});
+        if (!expected) break;
+        reference = expected.rest;
+        buffer.compact();
+      }
+      expect(buffer.tail()).toBe(reference);
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(reference, "utf8"));
+      buffer.clear(); reference = "";
+      buffer.append("plain"); expect(buffer.next()).toBeNull(); buffer.clear();
+    }
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
   test("rejects an oversized replacement before encoding or delivering it", async () => {
     const upstream = streamFromText("data: small\n\n");
     const budget = createTestTranslatorBudget({ maxTurnBytes: 64 });

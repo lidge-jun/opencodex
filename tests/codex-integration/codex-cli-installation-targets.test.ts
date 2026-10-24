@@ -131,6 +131,33 @@ describe("selected Codex CLI installation target derivation", () => {
     });
   });
 
+  test("a refused prefix-local Node probe does not fall through to a PATH Node", async () => {
+    const files = fixtureFiles(); const base = depsFor(files); const probes: string[] = [];
+    const result = await deriveCodexCliInstallationInput(
+      snapshot({ codexCliPath: PREFIX + "\\codex.cmd", path: "C:\\empty;" + NODE_DIR }),
+      { ...base, exists: (path: string) => {
+        probes.push(path.toLowerCase());
+        return path.toLowerCase() === (PREFIX + "\\node.exe").toLowerCase() ? "refused" : base.exists(path);
+      } },
+    );
+    expect(result).toEqual({ kind: "unavailable", reason: "toolchain_unresolved" });
+    expect(probes).not.toContain((NODE_DIR + "\\node.exe").toLowerCase());
+  });
+
+  test("an unavailable prefix-local Node volume is not absence evidence for a PATH Node", async () => {
+    const files = fixtureFiles(); const base = depsFor(files); const probes: string[] = [];
+    const result = await deriveCodexCliInstallationInput(
+      snapshot({ codexCliPath: PREFIX + "\\codex.cmd", path: "C:\\empty;" + NODE_DIR }),
+      { ...base, exists: (path: string) => {
+        probes.push(path.toLowerCase());
+        return path.toLowerCase() === (PREFIX + "\\node.exe").toLowerCase()
+          ? "volume-unavailable" : base.exists(path);
+      } },
+    );
+    expect(result).toEqual({ kind: "unavailable", reason: "toolchain_unresolved" });
+    expect(probes).not.toContain((NODE_DIR + "\\node.exe").toLowerCase());
+  });
+
   test("an earlier PATH codex.exe is the selected launcher and refuses the layout", async () => {
     const files = fixtureFiles();
     files.delete((PREFIX + "\\codex.cmd").toLowerCase());

@@ -1,8 +1,23 @@
 import { constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync,
   realpathSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, join } from "node:path";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { remoteError, REMOTE_LIMITS } from "./remote-contract";
+
+/** macOS reports access ACLs separately from otherwise-private POSIX mode bits. */
+export function macAclOutputIsPrivate(output: string): boolean {
+  const lines = output.trimEnd().split("\n");
+  return lines.length === 1 && /^[d-][rwxStTs-]{9}[.@]?\s/.test(lines[0]!);
+}
+function checkMacAcl(path: string): void {
+  if (process.platform !== "darwin") return;
+  const result = spawnSync("/bin/ls", ["-lde", path], {
+    encoding: "utf8", timeout: 1_000, shell: false, windowsHide: true,
+    env: { ...process.env, LC_ALL: "C" },
+  });
+  if (result.error || result.status !== 0 || result.stderr || !macAclOutputIsPrivate(result.stdout)) throw new Error();
+}
 
 /** Check the entire path ancestry before using the private messaging subtree. */
 export function checkRemoteDirectory(path: string): void {
@@ -17,6 +32,7 @@ function checkDirectory(path: string, privateLeaf: boolean): void {
     const final = lstatSync(path);
     if (!final.isDirectory() || final.isSymbolicLink()
       || (privateLeaf && (final.uid !== process.getuid!() || (final.mode & 0o077)))) throw new Error();
+    if (privateLeaf) checkMacAcl(path);
     // Root-controlled OS aliases (/tmp and /var on macOS) are not user-controlled redirects.
     for (let entry = path; ; entry = dirname(entry)) {
       const stat = lstatSync(entry);
@@ -81,6 +97,7 @@ export function readRemoteFile(path: string): string | null {
     const stat = fstatSync(fd);
     if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid!() || (stat.mode & 0o077)
       || stat.size > REMOTE_LIMITS.storeBytes) throw new Error();
+    checkMacAcl(path);
     const bytes = Buffer.alloc(REMOTE_LIMITS.storeBytes + 1);
     let size = 0;
     while (size < bytes.length) { const count = readSync(fd, bytes, size, bytes.length - size, size); if (!count) break; size += count; }
@@ -98,8 +115,14 @@ export function writeRemoteFile(path: string, text: string, sync = fsyncSync): v
   const temporary = join(dirname(path), `.write-${crypto.randomUUID()}`);
   const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try {
-    try { writeFileSync(fd, text, "utf8"); sync(fd); } finally { closeSync(fd); }
+    try {
+      try { checkMacAcl(temporary); }
+      catch { throw remoteError("unsafe_remote_storage", "Cannot safely publish messaging state: temporary file ACL privacy could not be confirmed."); }
+      writeFileSync(fd, text, "utf8"); sync(fd);
+    } finally { closeSync(fd); }
     renameSync(temporary, path);
+    try { checkMacAcl(path); }
+    catch { throw remoteError("remote_storage_unknown", "Messaging state was replaced, but its ACL privacy and crash durability could not be confirmed; inspect state and permissions before explicit recovery."); }
     syncRemoteDirectory(dirname(path), sync);
   } finally { if (remotePathExists(temporary)) unlinkSync(temporary); }
 }

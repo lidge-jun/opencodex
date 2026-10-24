@@ -11,6 +11,10 @@ import { handleCompanionCommand } from "../../src/cli/companion";
 import { handleConfigCommand } from "../../src/cli/config-command";
 import { planServiceCommand } from "../../src/service/cli";
 import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
+import type { UsageCompareDeps } from "../../src/cli/usage-compare";
+import { createLocalAttestationProof, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
+import { LOCAL_MANAGEMENT_NONCE_HEADER } from "../../src/lib/local-management-capability";
+import { managementPrincipal, requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";
 import { repoPath } from "../helpers/repo-root";
 
 const envKeys = ["HOME", "USERPROFILE", "OPENCODEX_HOME", "CODEX_HOME", "OPENCODEX_ADMIN_AUTH_TOKEN"] as const;
@@ -99,18 +103,30 @@ describe("operation capability workflows use existing handlers", () => {
   test("usage compare reads current then previous equal windows", async () => {
     expect(capability("usage compare").routes).toEqual([{ method: "GET", path: "/api/usage" }]);
     const requests: string[] = [];
-    const deps = {
+    const runtime = { pid: 4242, port: 10100, hostname: "127.0.0.1", attestationSecret: "A".repeat(43) };
+    const auth: ManagementAuthState = { available: true, token: "workflow-fixture-admin", source: "environment", sessions: new Map(), pairingGrants: new Map() };
+    const deps: UsageCompareDeps = {
       baseUrl: "http://capability.invalid",
       now: () => Date.UTC(2026, 9, 15, 15, 30, 0),
-      fetchImpl: async (input: RequestInfo | URL) => {
+      readRuntime: () => ({ ...runtime }),
+      findLiveProxy: async () => ({ ...runtime, source: "runtime" }),
+      fetchImpl: async (input, init) => {
         const url = new URL(String(input));
         requests.push(url.pathname + url.search);
+        const req = new Request(input, init);
+        expect(url.origin).toBe(`http://${runtime.hostname}:${runtime.port}`);
+        for (const header of ["authorization", "cookie", "x-opencodex-api-key"]) expect(req.headers.has(header)).toBe(false);
+        expect(requireManagementAuth(req, auth, undefined, runtime)).toBeNull();
+        expect(managementPrincipal(req, auth, undefined, runtime)).toBe("local-read-capability");
         return Response.json({
           customWindow: true,
           since: Number(url.searchParams.get("since")),
           until: Number(url.searchParams.get("until")),
           summary: { requests: 1, totalTokens: 1, estimatedCostUsd: 1 },
-        });
+        }, { headers: {
+          [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(runtime.attestationSecret,
+            req.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER)!, runtime.pid, runtime.port)!,
+        } });
       },
     };
     expect(await handleObserveCommand(["usage", "compare", "--range", "today", "--json"], deps)).toBe(0);

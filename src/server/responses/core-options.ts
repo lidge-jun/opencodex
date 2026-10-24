@@ -128,6 +128,11 @@ export interface HandleResponsesOptions {
    * which is why it refused the whole env_key flow instead of serving it.
    */
   admission?: DataPlaneAdmission;
+  /**
+   * Internal caller identity captured before Combo strips provisional credentials. An existing
+   * holder with no principal preserves keyless replay; never populate it from client data.
+   */
+  replayPrincipal?: Readonly<{ clientPrincipalId: string | undefined }>;
   /** Called at most once after the complete client body is read and accepted for dispatch. */
   onRequestBodyRead?: () => void;
   /** Internal handoff for retry wrappers that must reuse the already-accounted request body. */

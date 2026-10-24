@@ -49,7 +49,8 @@ and is cached for five seconds. Loopback and unkeyed requests have no device sco
 | Subagent model fallback, `src/codex/subagent-model-fallback.ts` | `applySubagentModelFallback`, before the spawn's model is rewritten; the caller in `src/server/responses/request-prepare.ts` returns the refusal | — | `unavailable`, 503 |
 | Main-account hard-lock fallback, `src/server/responses/main-hard-lock-routing.ts` | before the body is rewritten; `FallbackRefusedError` carries the refusal to `request-prepare.ts` | — | `hard_lock`, 429 |
 
-A refused hop never contacts the fallback target and leaves the request body untouched.
+A refused hop never contacts its refused destination. Hard-lock pre-admission refuses before
+rewriting the body; its first-dispatch check can refuse after that rewrite.
 
 The combo and routing-profile sites classify a hop by resolved destinations: both ends pass through
 `routeConcreteModel`, so provider aliases and `blockedModelRedirects` are applied, and the end a hop
@@ -62,6 +63,12 @@ combo, account namespace or concrete target through `previewRouteModel`, and a r
 its declared candidates (any candidate on another provider makes a provider hop) without running the
 evaluator, which would open `routing-history.sqlite` under `OPENCODEX_HOME`. The profile's own
 dispatch still evaluates it.
+
+That pre-admission destination is not necessarily the first dispatch: a random combo picks again.
+A hard-lock rewrite therefore checks the actual first combo destination in `core-combo.ts` against
+the locked OpenAI source, with `trigger: hard_lock`. A prior provider-hop admission cannot authorize
+a same-provider model hop when model fallback is off. The combo records an allowed first hop after
+its send-budget reservation.
 
 ## Refusal contract
 
@@ -88,9 +95,10 @@ opt-in per device"); OpenCodex never acts on it and keeps answering `home_unreac
 ## State and surfaces
 
 Every guarded hop, taken or refused, is recorded in a 20-entry in-memory ring (`recentFallbackEvents`).
-A refusal is recorded when it is decided; an allowed hop only when its site calls `commit()` after the
-dispatch is admitted (the combo send-budget reservation passed, a profile candidate was not locally
-skipped), so the ring never names a target that was not contacted. Each event carries
+A refusal is recorded when it is decided; an allowed hop only when its site calls `commit()` at its
+admission boundary (body rewrite, combo send-budget reservation, or accepted profile selection).
+`taken` records that guard admission, not an upstream contact or a billed send; later preparation,
+authentication or dispatch may still refuse. Each event carries
 time, site, route, kind, from, to, trigger, outcome, deciding scope and the device id. No body, key,
 account id, label or email. `src/routing/fallback-state.ts` builds the `ocx.fallback/1` view and applies
 the one scoped write.

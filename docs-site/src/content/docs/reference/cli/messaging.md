@@ -233,9 +233,11 @@ Crash mutation locks fail closed and need operator recovery;
 the wrapper never guesses that an old lock is abandoned.
 State and recovery-journal publication sync the file and containing directory before dependent
 remote work; journal removal also syncs its directory. `remote_storage_unknown` (exit 3) means
-the storage change's crash durability could not be confirmed: inspect state before explicit
-recovery rather than automatically retrying. A safely readable journal with malformed JSON or
-schema does not block peer removal, but is retained for operator recovery; unsafe storage and
+the storage change's crash durability could not be confirmed. On macOS, an ACL refusal or probe
+failure after file replacement also reports this code: the new state is already visible, but its
+ACL privacy and crash durability are unconfirmed. Inspect state and permissions before explicit
+recovery rather than automatically retrying or rolling back. A safely readable journal with malformed
+JSON or schema does not block peer removal, but is retained for operator recovery; unsafe storage and
 failure to invalidate a matching journal still refuse removal.
 
 The foreground owner shares finite connection/request/helper/buffer limits across

@@ -6,6 +6,7 @@ import type { DecisionQuotaWindow } from "../providers/quota-decision-snapshot";
 import { readLoadedDecisionKeyQuota, readLoadedDecisionQuotaPool } from "../lib/decision-quota-sink";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
 import { providerCodexAccountMode } from "../providers/registry";
+import { isAntigravityArgonIdentity } from "../providers/antigravity-quota-identity";
 import { NATIVE_RESERVE_MODEL } from "../codex/catalog/native-models";
 import { isSelectableCodexPoolAccount, MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
 import { JEV_QUOTA_DEFAULT_TIERS, jevQuotaRank, jevQuotaTier, type JevQuotaTier, type ResolvedJevQuotaTiers, type JevQuotaDecisionSummary } from "./jev-quota-config";
@@ -18,11 +19,18 @@ export interface JevQuotaSignal {
 }
 /** Build the signal used when evidence is missing, stale or invalid; it ties healthy. */
 const unknown = (): JevQuotaSignal => ({ tier: "unknown" });
+/** Antigravity quota buckets are metered per model family; Gemini and Claude/3P draw from separate counters. */
+function antigravityFamily(model: string): DecisionQuotaWindow["family"] {
+  const id = model.toLowerCase();
+  if (isAntigravityArgonIdentity(id)) return undefined;
+  return id.startsWith("gemini-") ? "gem" : id.startsWith("claude-") ? "cla" : undefined;
+}
 /** Reduce decision quota windows to the worst applicable window for a model, ignoring cold, stale, future, invalid or reset-expired rows. */
 export function jevQuotaSignalFromWindows(windows: readonly DecisionQuotaWindow[] | undefined, model: string, now: number, tiers = JEV_QUOTA_DEFAULT_TIERS): JevQuotaSignal {
   let worst: DecisionQuotaWindow | undefined;
   for (const row of windows ?? []) {
-    if (!["5h", "weekly", "monthly"].includes(row.window) && anthropicModelFamily(model)?.toLowerCase() !== row.window) continue;
+    if (row.family !== undefined) { if (row.family !== antigravityFamily(model)) continue; }
+    else if (!["5h", "weekly", "monthly"].includes(row.window) && anthropicModelFamily(model)?.toLowerCase() !== row.window) continue;
     if (!Number.isFinite(now) || now < 0 || !Number.isFinite(row.observedAt) || row.observedAt < 0 || row.observedAt > now
       || now - row.observedAt > JEV_QUOTA_SIGNAL_MAX_AGE_MS || !Number.isFinite(row.percent) || row.percent < 0 || row.percent > 100
       || row.resetAt !== undefined && (!Number.isFinite(row.resetAt) || row.resetAt < 0 || row.resetAt <= now)) continue;

@@ -80,6 +80,7 @@ import {
   createResponsesItemIdPayloadRewrite,
   repairResponsesJsonItemIds,
 } from "../responses-item-id-repair";
+import { createResponsesPhaseInferenceBlockRewrite } from "../responses-phase-inference";
 import {
   payloadRewriteAsBlockRewrite,
   composeSsePayloadRewrites,
@@ -850,6 +851,9 @@ export async function deliverPassthroughResponse(
           : undefined,
         snapshotRepairEnabled
           ? createResponsesSnapshotBlockRewrite(nativeExchange.outboundRequestBody, translatorBudget)
+          : undefined,
+        route.provider.messagePhaseInference === true
+          ? createResponsesPhaseInferenceBlockRewrite(translatorBudget)
           : undefined,
         responseEffects.plaintextV2AgentMessageToolNames.size > 0
           ? payloadRewriteAsBlockRewrite(createPlaintextV2AgentMessageCallRestoreRewrite(
