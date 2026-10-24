@@ -4,6 +4,12 @@ Qoder follows the shared [client-integration ownership contract](integrations.md
 
 ## Qoder settings ownership
 
+Qoder CN is an independent `qoder-cn` client. Its settings live under `QODERCN_CONFIG_DIR`,
+defaulting to `~/.qoder-cn`; it shares the Qoder wire schema and fragment ownership, but
+never falls back to the Global edition. The edition paths are resolved in
+`src/clients/config-export/agent-clients.ts`.
+
+
 Qoder IDE / qodercli uses JSON at `settings.json` under `QODER_CONFIG_DIR`, default `~/.qoder`;
 `qoderHomeDir` resolves that directory once for export, writing and detection, and refuses a
 relative override. The Qoder exporter in

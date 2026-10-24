@@ -203,6 +203,9 @@ export type DroidReasoningDefaults = Record<string, string>;
 
 export type ExportClientId =
   | "qoder"
+  | "qoder-cn"
+  | "workbuddy"
+  | "workbuddy-ai"
   | "opencode"
   | "pi"
   | "omp"
@@ -262,6 +265,8 @@ export interface ExportClientSpec {
    * reasoning as the Grok managed block's non-loopback refusal.
    */
   loopbackOnly: boolean;
+  /** Refuse apply/refresh without blocking status, disable or Undo. Pure and value-free. */
+  validateApply?: (ctx: ExportContext) => string | null;
   /**
    * True when the destination file may carry comments and trailing commas
    * even though `format` is "json" and serialization stays pretty JSON.

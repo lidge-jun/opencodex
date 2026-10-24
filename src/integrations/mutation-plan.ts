@@ -132,6 +132,9 @@ export const DYNAMIC_SEGMENT = "*";
  */
 const CLIENT_MANAGED_PATHS = {
   qoder: [["providers", OPENCODE_PROVIDER_ID], ["modelConfigs", "customModels", DYNAMIC_SEGMENT]],
+  "qoder-cn": [["providers", OPENCODE_PROVIDER_ID], ["modelConfigs", "customModels", DYNAMIC_SEGMENT]],
+  workbuddy: [["models", DYNAMIC_SEGMENT], [DYNAMIC_SEGMENT]],
+  "workbuddy-ai": [["models", DYNAMIC_SEGMENT], [DYNAMIC_SEGMENT]],
   opencode: [["provider", OPENCODE_PROVIDER_ID], ["providers", OPENCODE_PROVIDER_ID]],
   pi: [["providers", OPENCODE_PROVIDER_ID]],
   "gentle-shell": [["providers", OPENCODE_PROVIDER_ID]],
@@ -1002,6 +1005,10 @@ export function observeIntegration(
   const record = stored && stored.clientId === clientId && stored.configPath === configPath
     ? stored
     : null;
+  if (operation !== "disable") {
+    const refusal = exportSpec.validateApply?.({ ...exportContextOf(input), document: parsed });
+    if (refusal) return { failed: observationFailure("unsafe", "unsafe", refusal) } as const;
+  }
   const contribution = buildIntegrationContribution(input, effective, parsed, record);
   if (clientId === "droid" && input.models.length > 0 && contribution.fragments.length === 0 && !record) {
     return { failed: observationFailure("unsafe", "unsafe", "Factory Droid has no addressable models in the selected catalog") } as const;
