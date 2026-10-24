@@ -10,6 +10,7 @@ import { KEY_LOGIN_PROVIDERS, validateApiKey } from "../../src/oauth/key-provide
 import { deriveInitProviders, deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { routeModel } from "../../src/router";
+import { candidateCapabilityEvidence } from "../../src/routing/capability";
 import { startServer } from "../../src/server";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
@@ -171,6 +172,18 @@ describe("AI Stupid Level text-only contract for pinned models", () => {
       expect(route.provider.inputModalities).toEqual(["text"]);
       expect(requiresVisionPreprocessing(candidate, route.provider, route.modelId, route.providerName)).toBe(true);
     }
+  });
+
+  test("a same-named custom destination does not inherit the text-only declaration", () => {
+    const custom: OcxConfig = {
+      port: 10100, defaultProvider: "aistupidlevel",
+      providers: { aistupidlevel: { adapter: "openai-chat", baseUrl: "https://relay.example.test/v1", apiKey: "test-key" } },
+    };
+    const route = routeModel(custom, `aistupidlevel/${PINNED}`);
+    expect(route.provider.baseUrl).toBe("https://relay.example.test/v1");
+    expect(route.provider.inputModalities).toBeUndefined();
+    expect(requiresVisionPreprocessing(custom, route.provider, route.modelId, route.providerName)).toBe(false);
+    expect(candidateCapabilityEvidence(custom, "aistupidlevel", PINNED).image).toBeUndefined();
   });
 
   test("an image sent to a pinned model never reaches the router", async () => {
