@@ -715,12 +715,34 @@ export function resolveStatusPid(
  * unused", but startupHealthSummary already renders both as AT RISK with a
  * remedy command, and `custom-remote` is a deliberate operator choice. Warning
  * on all four would teach operators to skip the line that matters.
+ *
+ * A connected client (hub client or Remote Link Child) needs a different remedy (#7563): its
+ * runtime never writes Codex routing on start, so `ocx start` cannot re-point it — with the
+ * proxy up it only answers "already running". `ocx sync --restart-codex` writes the routing
+ * and restarts Codex. A client whose proxy is also down is told to start it first, because
+ * nothing else in the not-running report mentions that its routing is native.
  */
 export function unusedProxyWarningLines(input: {
   proxyUp: boolean;
   routingKind: StartupHealth["routingKind"];
+  connectedClient?: { transport: "hub" | "link"; serviceInstalled: boolean };
 }): string[] {
-  if (!input.proxyUp || input.routingKind !== "native") return [];
+  if (input.routingKind !== "native") return [];
+  const client = input.connectedClient;
+  if (client) {
+    const peer = client.transport === "link" ? "the Home" : "the hub";
+    if (input.proxyUp) {
+      return [
+        "⚠️  Codex routing is native — this client's proxy is unused.",
+        `   Codex requests go to OpenAI, not ${peer}. Re-point with: ocx sync --restart-codex`,
+      ];
+    }
+    return [
+      `⚠️  Codex routing is native, so Codex requests go to OpenAI, not ${peer}.`,
+      `   Start this client's proxy with '${client.serviceInstalled ? "ocx service start" : "ocx start"}', then re-point with: ocx sync --restart-codex`,
+    ];
+  }
+  if (!input.proxyUp) return [];
   return [
     "⚠️  Codex routing is native — the running proxy is unused.",
     "   Codex requests go to OpenAI, not this proxy. Re-point with: ocx start",
@@ -746,11 +768,47 @@ export function unusedProxyWarningLines(input: {
 export function deadProxyRoutingAdviceLines(input: {
   proxyUp: boolean;
   routingKind: StartupHealth["routingKind"];
+  /** #7563: on a connected client nothing but `ocx sync` writes the routing back after a restore. */
+  connectedClient?: boolean;
 }): string[] {
   if (input.proxyUp || input.routingKind !== "opencodex-local") return [];
   return [
     "Codex is still pointed at this proxy, so sign-in and model requests both fail while it is down.",
     "To hand Codex back to its own account and endpoints without starting anything: ocx restore",
+    ...(input.connectedClient ? ["After a restore, 'ocx sync --restart-codex' points Codex back at this client."] : []),
+  ];
+}
+
+type StatusRoutingView = Pick<CliStatusJson, "proxy" | "startup" | "remoteHub" | "connection">;
+
+export function statusProxyUp(json: StatusRoutingView): boolean {
+  return json.remoteHub.connected && json.connection.transport === "link"
+    ? json.proxy.health.ok : Boolean(json.proxy.pid || json.proxy.health.ok);
+}
+
+/** `unusedProxyWarningLines` for the human `ocx status` report, role taken from the report itself. */
+export function statusUnusedProxyLines(json: StatusRoutingView): string[] {
+  return unusedProxyWarningLines({
+    proxyUp: statusProxyUp(json),
+    routingKind: json.startup.routingKind,
+    ...(json.remoteHub.connected ? { connectedClient: {
+      transport: json.connection.transport === "link" ? "link" as const : "hub" as const,
+      serviceInstalled: json.startup.serviceInstalled && !json.startup.serviceConflict,
+    } } : {}),
+  });
+}
+
+/** `deadProxyRoutingAdviceLines` for the not-running half of the human `ocx status` report. */
+export function statusDeadProxyLines(json: StatusRoutingView): string[] {
+  return [
+    json.startup.routingKind === "native"
+      ? "↳ Not running — Claude requests will fail with connection errors."
+      : "↳ Not running — Codex/Claude requests will fail with connection errors.",
+    ...deadProxyRoutingAdviceLines({
+      proxyUp: false,
+      routingKind: json.startup.routingKind,
+      connectedClient: json.remoteHub.connected,
+    }),
   ];
 }
 

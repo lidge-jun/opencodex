@@ -279,6 +279,12 @@ between providers, and each move starts with a cold provider prompt cache. `sess
 opt-in setting per JEV Combo, off by default, that keeps a client session on the target JEV chose
 for it while the session stays active:
 
+In the dashboard, open the JEV Combo editor's **Decision method** section and enable
+**Keep a session on its decided target**, then set **Idle window (ms)** and save. The range is
+60000–86400000 ms (1 minute–24 hours); newly enabled pins start at 60000 ms. Disable the checkbox
+and save to turn pinning off. Invalid or empty enabled windows block saving; failed saves keep
+your edits for retry. Older responses without this setting leave it omitted until you change it.
+
 ```bash
 ocx combo set jev-auto --session-pin 20m --json
 ```

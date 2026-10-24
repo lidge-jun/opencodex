@@ -63,7 +63,10 @@ children automatically nor guarantees faster execution.
 `GET/PUT /api/v2` retains its existing `maxConcurrentThreadsPerSession` units: with `enabled: false`, N means N
 children; with `enabled: true`, N+1 includes the primary thread. The GUI subtracts one for display
 and adds one on save only when that global flag is enabled. Catalog-selected v2 in hybrid mode
-does not change those API units. An unset limit leaves the default to the native runtime.
+does not change those API units. A stored V2 total of 1 displays zero children in both the
+selector and folded summary; new child-limit edits still require at least 1. Both the child
+input and converted API value must be safe integers. PUT rejects unsafe API limits with 400
+before toggles or configuration writes. An unset limit leaves the default to the native runtime.
 New sessions consume limit changes; a long-running App host may need a normal restart.
 
 `src/codex/features.ts` reads and writes the canonical `[agents].max_concurrent_threads_per_session`

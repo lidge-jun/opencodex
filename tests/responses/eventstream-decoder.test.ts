@@ -123,6 +123,50 @@ describe("eventstream-decoder", () => {
 		expect(crc32(enc.encode("hello")) >>> 0).toBe(0x3610a686);
 	});
 
+	test("crc32 retains IEEE vectors and unsigned 32-bit seed coercion", () => {
+		const bytes = enc.encode("123456789");
+		expect(crc32(new Uint8Array())).toBe(0);
+		expect(crc32(bytes)).toBe(0xcbf43926);
+		// Seeded reference values from Python's zlib.crc32, independent of the encoder.
+		for (const [seed, expected] of [
+			[1, 0xdc8f2d65], [0x12345678, 0x01f4807b], [0xffffffff, 0xd202d277],
+			[-1, 0xd202d277], [0x100000001, 0xdc8f2d65], [1.9, 0xdc8f2d65],
+			[Number.NaN, 0xcbf43926], [Number.POSITIVE_INFINITY, 0xcbf43926],
+		]) expect(crc32(bytes, seed)).toBe(expected);
+	});
+
+	test("crc32 continues a seeded checksum across every split including empty views", () => {
+		const bytes = enc.encode("123456789");
+		for (let split = 0; split <= bytes.length; split++) {
+			const prefix = crc32(bytes.subarray(0, split), 0x12345678);
+			expect(crc32(bytes.subarray(split), prefix)).toBe(0x01f4807b);
+		}
+		expect(crc32(new Uint8Array(), 0xffffffff)).toBe(0xffffffff);
+	});
+
+	test("crc32 checks only the supplied Uint8Array or Buffer view", () => {
+		for (const bytes of [enc.encode("before123456789after"), Buffer.from("before123456789after")]) {
+			const view = bytes.subarray(6, 15);
+			expect(crc32(view)).toBe(0xcbf43926);
+			bytes[0] ^= 0xff;
+			bytes[bytes.length - 1] ^= 0xff;
+			expect(crc32(view)).toBe(0xcbf43926);
+		}
+	});
+
+	test("encoder and offset-view decoder agree with an independent wire fixture", () => {
+		// Big-endian AWS eventstream frame; both CRCs were generated with Python zlib.
+		const frame = Buffer.from("0000001b000000069b71dccf01780700017968656c6c6f7b877b7b", "hex");
+		expect(encodeMessage({ x: "y" }, enc.encode("hello"))).toEqual(new Uint8Array(frame));
+		const padded = Buffer.concat([Buffer.from([0xff, 0xff]), frame, Buffer.from([0xff])]);
+		const view = padded.subarray(2, 2 + frame.length);
+		const message = decodeMessage(view);
+		expect(message.headers).toEqual({ x: "y" });
+		expect(dec.decode(message.payload)).toBe("hello");
+		view[view.length - 5] ^= 0xff;
+		expect(() => decodeMessage(view)).toThrow(/message CRC mismatch/);
+	});
+
 	test("cancels the underlying reader on early consumer termination (no orphaned read)", async () => {
 		let cancelled = false;
 		let pulls = 0;

@@ -50,7 +50,7 @@ and is cached for five seconds. Loopback and unkeyed requests have no device sco
 | Main-account hard-lock fallback, `src/server/responses/main-hard-lock-routing.ts` | before the body is rewritten; `FallbackRefusedError` carries the refusal to `request-prepare.ts` | — | `hard_lock`, 429 |
 
 A refused hop never contacts its refused destination. Hard-lock pre-admission refuses before
-rewriting the body; its first-dispatch check can refuse after that rewrite.
+rewriting the body; its first combo dispatch or profile selection can refuse after that rewrite.
 
 The combo and routing-profile sites classify a hop by resolved destinations: both ends pass through
 `routeConcreteModel`, so provider aliases and `blockedModelRedirects` are applied, and the end a hop
@@ -69,6 +69,13 @@ A hard-lock rewrite therefore checks the actual first combo destination in `core
 the locked OpenAI source, with `trigger: hard_lock`. A prior provider-hop admission cannot authorize
 a same-provider model hop when model fallback is off. The combo records an allowed first hop after
 its send-budget reservation.
+
+For a hard-lock profile rewrite, `src/server/responses/request-prepare.ts` checks the actual first
+ranked destination against the original OpenAI model with `trigger: hard_lock`. A declared provider
+hop does not admit a same-provider model hop when model fallback is off. The guard records an allowed
+selection when it is accepted; later authentication or preparation can still refuse it.
+`tests/codex-integration/main-account-hard-lock-profile-dispatch.test.ts` covers refusal and allowed
+dispatch with a synthetic caller-owned credential and a fetch stub.
 
 ## Refusal contract
 

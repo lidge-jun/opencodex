@@ -199,12 +199,12 @@ export const THREAD_OPTION_SET = new Set(THREAD_OPTIONS);
  * units: the [agents] keys (v1/base/hybrid, enabled:false) count child agents, while
  * the V2 storage counts the root agent's own slot too (total = children + 1). The
  * control always presents the logical child count, so only the V2-total case translates
- * across the root slot — the same boundary v2TotalLimitToV1ChildLimit /
- * v1ChildLimitToV2TotalLimit keep in src/codex/features.ts. A stored V2 total of 1
- * (root only) has no representable child count >= 1 and clamps to 1, matching upstream.
+ * across the root slot. A stored V2 total of 1 is root-only and displays zero
+ * children, even though new child-limit edits must be at least 1. This display
+ * conversion is independent of the backend's V2-to-V1 migration clamp.
  */
 export function threadLimitToChildCount(limit: number, v2Enabled: boolean): number {
-  return v2Enabled ? Math.max(1, limit - 1) : limit;
+  return v2Enabled ? Math.max(0, limit - 1) : limit;
 }
 
 export function childCountToThreadLimit(children: number, v2Enabled: boolean): number {

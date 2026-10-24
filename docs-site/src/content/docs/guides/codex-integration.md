@@ -407,6 +407,10 @@ Root keys such as `openai_base_url`, `model_provider`, and `model_catalog_json` 
 first `[table]` header. The injector guarantees that placement, removes its own stale/duplicate
 copies, and never overwrites a user-owned root `openai_base_url`; if one exists, sync updates the
 catalog but reports that routing was not injected.
+
+Sync and restore also leave a root `model_context_window` in place, since OpenCodex never writes
+that key. Codex uses it instead of each model's catalog window, capped at that model's maximum
+window, so delete it yourself if you want each model to report its own window.
 :::
 
 ## Shared model catalog
