@@ -350,6 +350,8 @@ profiles** remains a separate bulk action and is not bound to one combined previ
 
 ## What to expect, honestly
 
+If a generated managed path cannot be represented safely, that client reports an unsafe status and its preview refuses the operation. Attempts to apply, overwrite or disable return HTTP 409 without changing the configuration. Other clients remain available.
+
 **Managed configuration files are limited to 4 MiB (4,194,304 UTF-8 bytes).**
 The shared integration reader refuses larger files as unsafe to read, and the writer
 refuses a merged configuration that exceeds the same limit with `write_failed`, leaving

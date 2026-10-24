@@ -89,7 +89,7 @@ for (const model of ["k3[1m]", "k3,other"]) {
   });
 }
 
-test("a typed selector refusal reports unsafe status and authorizes no preview or mutation", async () => {
+for (const operation of ["apply", "overwrite", "disable"] as const) for (const surface of ["preview", "mutation"] as const) test(`a typed selector refusal stays unsafe in ${operation} ${surface}`, async () => {
   const path = qoderConfigPath({}, home);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({ theme: "user-owned" }));
@@ -105,10 +105,14 @@ test("a typed selector refusal reports unsafe status and authorizes no preview o
     expect(await (await api("/qoder")).json()).toMatchObject({
       state: "unsafe", reason: "unresolvable-path", installed: true, configPath: path,
     });
-    const preview = await api("/preview", { clientId: "qoder", operation: "apply" });
-    expect(preview.status).toBeGreaterThanOrEqual(400);
-    for (const enabled of [true, false]) {
-      expect((await api("/qoder", { enabled })).status).toBeGreaterThanOrEqual(400);
+    if (surface === "preview") {
+      const preview = await api("/preview", { clientId: "qoder", operation });
+      expect(preview.status).toBe(200);
+      expect(await preview.json()).toMatchObject({ canApply: false, willChange: false, state: "unsafe", refusalReason: "unsafe" });
+    } else {
+      const mutation = await api("/qoder", { enabled: operation !== "disable", overwriteConflict: operation === "overwrite" });
+      expect(mutation.status).toBe(409);
+      expect(await mutation.json()).toMatchObject({ code: "integration_unsafe", reason: "unsafe", state: "unsafe" });
     }
     expect(witness()).toBe(before);
     expect(persisted).toBe(0);
@@ -132,11 +136,24 @@ test("Qoder catalogs with selector-hostile IDs support status, preview and apply
   expect(written).not.toHaveProperty("modelConfigs");
 });
 
-test("unexpected contribution errors still propagate instead of becoming unsafe status", () => {
+test("unexpected contribution errors still propagate instead of becoming unsafe refusals", async () => {
+  mkdirSync(dirname(qoderConfigPath({}, home)), { recursive: true });
+  expect((await api()).status).toBe(200);
   const error = new Error("unexpected builder failure");
   const builder = spyOn(EXPORT_CLIENTS.qoder, "buildContribution").mockImplementation(() => { throw error; });
   try {
     expect(() => readIntegrationState({ clientId: "qoder", config, port: 10100, models: [], home, env: {}, store })).toThrow(error);
+    const before = witness();
+    const preview = await api("/preview", { clientId: "qoder", operation: "apply" });
+    expect(preview.status).toBe(500);
+    expect(await preview.json()).toMatchObject({ code: "integration_internal_error", error: error.message });
+    for (const enabled of [true, false]) {
+      const mutation = await api("/qoder", { enabled });
+      expect(mutation.status).toBe(500);
+      expect(await mutation.json()).toMatchObject({ code: "integration_internal_error", error: error.message });
+    }
+    expect(witness()).toBe(before);
+    expect(persisted).toBe(0);
   } finally {
     builder.mockRestore();
   }

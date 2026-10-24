@@ -22,8 +22,8 @@ which rows collide, and rows an ownership record still names are left to the ref
 Rows for other providers or other models stay untouched and never conflict.
 Because the provider catalog needs no array selector, model IDs containing `,` or `]` are
 ordinary Qoder models. The shared reader still reports any contribution that raises
-`UnrepresentableSelectorError` as `unsafe` / `unresolvable-path` while preview and mutation
-refuse it, so a later selector-bearing fragment cannot fail the whole status collection.
+`UnrepresentableSelectorError` as `unsafe` / `unresolvable-path`; preview returns `canApply: false`
+and mutations refuse with HTTP 409, so a later selector-bearing fragment cannot fail the whole status collection.
 
 > Decision record: [ADR-7512](../decisions/ADR-7512-qoder-selector-status.md)
 
