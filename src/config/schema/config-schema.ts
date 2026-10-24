@@ -8,6 +8,7 @@ import { nativeReasoningRetentionSchema } from "./native-reasoning-retention";
 import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
+import { fallbackPolicySchema } from "./fallback-policy";
 import {
   agentTaskRecoverySchema,
   catalogAutoRefreshSchema,
@@ -241,6 +242,8 @@ export const configSchema = z.object({
   // A malformed fallback section disables only the reroute, never the lock's refusal
   // behavior; the management write boundary still rejects the bad value.
   codexMainAccountHardLockFallback: mainAccountHardLockFallbackSchema.optional().catch(undefined),
+  // OCX-11: a malformed section reads as absent, which keeps today's fallback behavior.
+  fallback: fallbackPolicySchema.optional().catch(undefined),
   // #2999: a malformed hand edit falls back to auto detection rather than rejecting the config.
   nativeMainRefresh: z.enum(["codex", "opencodex"]).optional().catch(undefined),
   // Future versions remain opaque through passthrough-compatible whole-config saves.

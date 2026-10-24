@@ -66,11 +66,12 @@ function launch(authenticated = false, status = 200, override: Partial<OcxConfig
   proxy = startServer(0);
 }
 
-function send(stream = false, headers: Record<string, string> = {}, invalid = false, signal?: AbortSignal) {
+function send(stream = false, headers: Record<string, string> = {}, invalid = false, signal?: AbortSignal,
+  model = "mock/echo", authenticated = true) {
   return fetch(`http://127.0.0.1:${proxy!.port}/v1/chat/completions`, { method: "POST", signal, headers: {
-    "content-type": "application/json", authorization: "Bearer fixture-data-key", origin,
+    "content-type": "application/json", ...(authenticated ? { authorization: "Bearer fixture-data-key" } : {}), origin,
     "x-opencodex-request-id": "caller-controlled", ...headers,
-  }, body: JSON.stringify({ model: "mock/echo", stream, messages: invalid ? null : [{ role: "user", content: "fixture question" }] }) });
+  }, body: JSON.stringify({ model, stream, messages: invalid ? null : [{ role: "user", content: "fixture question" }] }) });
 }
 
 async function durableRow(response: Response, expectedStatus: number) {
@@ -113,6 +114,14 @@ test("concurrent replies with identical upstream completion IDs have distinct hi
 test("handler-recorded invalid request has a history ID", async () => {
   launch();
   await durableRow(await send(false, {}, true), 400);
+});
+
+test("Reserve vision-helper refusal has its history ID", async () => {
+  launch(false, 200, { codexDesktopAuthless: true, defaultProvider: "openai", providers: {
+    openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward", codexAccountMode: "direct" },
+  } });
+  await durableRow(await send(false, { "x-opencodex-vision-describe": "1" }, false, undefined, "openai/gpt-reserve", false), 400);
 });
 
 test("upstream HTTP error has a history ID", async () => {

@@ -5,6 +5,7 @@ import { encodeMessage } from "../../src/lib/eventstream-decoder";
 import { parseRequest } from "../../src/responses/parser";
 import { buildToolBridgeMaps } from "../../src/server/responses";
 import type { OcxProviderConfig } from "../../src/types";
+import { TOOL_WIRE_DRIVERS } from "../helpers/adapter-conformance/wire-drivers";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const PATCH = `*** Begin Patch
@@ -177,7 +178,9 @@ describe("registry-derived buffered tool conformance", () => {
         expect(["openai-responses", "azure", "azure-openai"]).toContain(adapterId);
         continue;
       }
-      const response = bufferedResponse(contract.wire);
+      const response = adapterId === "workbuddy-ai"
+        ? TOOL_WIRE_DRIVERS["openai-chat"].streamingToolCall!("apply_patch", JSON.stringify({ input: PATCH }))
+        : bufferedResponse(contract.wire);
       expect(response, `${adapterId}:${contract.wire}`).toBeDefined();
       if (!response) continue;
       covered += 1;

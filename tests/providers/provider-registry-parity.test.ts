@@ -45,7 +45,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper", "opengateway", "tokenlab", "modelflare",
-  "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
+  "xiaomi", "xiaomi-mimo", "kilo", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
   "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun", "claude-cli",
 ];
 
@@ -62,6 +62,22 @@ describe("provider registry parity", () => {
   test("registry ids are unique", () => {
     const ids = PROVIDER_REGISTRY.map(entry => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("deprecated entries stay resolvable but are hidden from every new-provider surface", () => {
+    const deprecated = PROVIDER_REGISTRY.filter(entry => entry.deprecated);
+    expect(deprecated.length).toBeGreaterThan(0);
+    const presets = deriveProviderPresets();
+    const featured = deriveFeaturedProviderIds();
+    const keyLogins = Object.keys(deriveKeyLoginMap());
+    const initProviders = buildInitProviders();
+    for (const entry of deprecated) {
+      expect(providerConfigSeed(entry).adapter).toBe(entry.adapter);
+      expect(presets.find(preset => preset.id === entry.id)).toBeUndefined();
+      expect(featured).not.toContain(entry.id);
+      expect(keyLogins).not.toContain(entry.id);
+      expect(initProviders.find(provider => provider.id === entry.id)).toBeUndefined();
+    }
   });
 
   test("every field carried by the shipped registry has a model-id role classification", () => {
@@ -306,6 +322,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noPenaltyModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].preserveReasoningContentModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].openaiChatEofTolerance).toBe(true);
+    expect(KEY_LOGIN_PROVIDERS.moonshot.foldDeveloperRoleToSystem).toBe(true);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-coder"]).toBe(262_144);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);
@@ -540,7 +557,7 @@ describe("provider registry parity", () => {
       liveModels: false,
       models: [
         "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-        "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
+        "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
       ],
       modelInputModalities: {
         "qwen3.8-max": ["text", "image"],
@@ -560,8 +577,8 @@ describe("provider registry parity", () => {
         "deepseek-v4-pro": 393_216,
       },
       noVisionModels: expect.arrayContaining(["qwen3.7-max", "deepseek-v4-pro", "glm-5.2"]),
-      // Beijing is the Personal Edition roster: the Team-only 0813 snapshot and the
-      // still-phantom glm-5.3-flash must stay out of this preset's models list.
+      // Beijing retains Personal curation; 0813 is now listed on Personal too.
+      // The still-phantom glm-5.3-flash stays out of this preset.
       // glm-5.3 itself joined the plan on 260917 and is Personal-entitled (probed 260918).
 
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
@@ -985,10 +1002,10 @@ describe("provider registry parity", () => {
   test("Kimi coding aliases preserve model context and capability parity", () => {
     // 260921: the picker AND every preset metadata list seed only ids the subscription
     // endpoint still serves (live /coding/v1/models: kimi-for-coding[-highspeed], k3,
-    // k3-256k). Seeding a retired id in a metadata list would re-arm the model-rename
+    // k3-256k, and since 261024 k3.1-pro[-highspeed]). Seeding a retired id in a metadata list would re-arm the model-rename
     // migration on every boot (#5066); saved rows still naming one are repaired by
     // MODEL_RENAMES instead.
-    const codingModels = ["k3", "k3[1m]", "k3-256k", "kimi-for-coding"];
+    const codingModels = ["k3", "k3[1m]", "k3-256k", "k3.1-pro", "k3.1-pro-highspeed", "kimi-for-coding"];
     const parityLists = [
       "noReasoningModels",
       "noTemperatureModels",
@@ -1008,7 +1025,8 @@ describe("provider registry parity", () => {
       for (const modelId of codingModels) {
         // 260921: kimi-for-coding (K2.8 Preview) shares the verified 1M ceiling with k3[1m];
         // all other ids stay at the 256K standard window.
-        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" || modelId === "kimi-for-coding" ? 1_048_576 : 262_144);
+        // 261024: k3.1-pro[-highspeed] list context_length 1048576 live (flat 1M).
+        expect(entry?.modelContextWindows?.[modelId]).toBe(["k3[1m]", "k3.1-pro", "k3.1-pro-highspeed", "kimi-for-coding"].includes(modelId) ? 1_048_576 : 262_144);
       }
       for (const field of parityLists) {
         // Every preset list is live-id only: kimi-for-coding must be there, the retired
@@ -1032,7 +1050,8 @@ describe("provider registry parity", () => {
       expect(entry?.noReasoningModels).not.toContain("k3[1m]");
       expect(entry?.modelReasoningEfforts?.k3).toEqual(["low", "high", "max"]);
       expect(entry?.modelReasoningEfforts?.["k3[1m]"]).toEqual(["low", "high", "max"]);
-      for (const modelId of ["k3", "k3[1m]", "k3-256k"]) {
+      // K3.1 Pro is thinking-only and shares K3's low/high/max ladder (default max).
+      for (const modelId of ["k3", "k3[1m]", "k3-256k", "k3.1-pro", "k3.1-pro-highspeed"]) {
         expect(entry?.noReasoningModels).not.toContain(modelId);
         expect(entry?.modelReasoningEfforts?.[modelId]).toEqual(["low", "high", "max"]);
         expect(entry?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
@@ -1402,7 +1421,6 @@ describe("provider registry parity", () => {
     expect(featured).toEqual([
       "openai", "xai", "command-code", "orcarouter-oauth", "anthropic", "anthropic2", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio",
-      "mimo-free",
     ]);
 
     const presets = deriveProviderPresets();
@@ -1822,7 +1840,7 @@ describe("free-provider directory isolation", () => {
       { provider: "opencode-go", model: "deepseek-v4.1-flash", flash: true },
       { provider: "opencode-go", model: "deepseek-v4-flash", flash: true },
       { provider: "volcengine-coding-plan", model: "deepseek-v4-flash", flash: true },
-      { provider: "alibaba-token-plan-intl", model: "deepseek-v4-flash", flash: true },
+      { provider: "alibaba-token-plan-intl", model: "deepseek-v4.1-flash-1017", flash: true },
     ];
 
     for (const { provider, model, flash } of cases) {

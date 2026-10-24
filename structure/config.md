@@ -1,8 +1,8 @@
 # Config Surface
 Pasted GCP JSON persists only as `gcp-sa:<account>` references in one pool transaction in `src/providers/api-keys.ts`; post-commit deletion follows [Vertex credential markers](providers/google.md#vertex-credential-markers).
 `src/config/schema/leaf-validators.ts` accepts only boolean `apiKeys[].allowMeteredComboTargets`; malformed entries are dropped rather than promoted. `src/types/config.ts` and combo validation define optional boolean target `metered`, normalized false when omitted, and optional per-combo `allowMeteredTargets` (default false, literal boolean validation shared by config schema and management API). Explicit consent is required under the [combo runtime contract](runtime.md#request-local-target-compatibility). Model-price overrides follow the [pricing contract](pricing.md). Quota activation reuses the existing next-reset fields without adding a polling configuration key. See the [quota activation contract](providers/openai-tiers.md#public-provider-contract). `src/types/config.ts` defines `anthropicAccountPool.routes` as ordered model rules. `src/oauth/anthropic-model-routes.ts` validates bounded names, full case-sensitive globs and stored account IDs; `src/config/diagnostics.ts` rejects malformed candidate writes. Load retains a malformed hand edit so unrelated providers survive, while the enabled Anthropic selector refuses it locally before dispatch. Saved rules remain inert when the pool is disabled; affinity is process-local. Request logs use only the rule’s 1-based `route:#<n>` position, never its configured name. `src/cli/hub-disable.ts` removes interdependent hub/loopback/role/hostname settings through `mutatePersistedConfig` and `validateConfigCandidate` in one commit. Top-level deletion intent uses `src/config/rebase-provenance.ts` and authoritative disk provenance in `src/config/live-reconcile.ts` to preserve removed hub bindings through later live saves, `src/config/live-topology.ts` keeps an independent active-topology baseline and merges desired next-start settings into a separate persistence projection, retaining actual socket identity and live hub/client topology during guarded saves and OAuth disk adoption. Client connections and runtimeRole remain one topology unit through connect/disconnect, including fresh disk-only connections. Disk additions/value updates and deletions all survive repeated saves without changing active topology. `src/config/api-key-reconcile.ts` merges key rows by stable ID under the existing save lock; either side's revocation defeats stale edits while disjoint names and rotations merge; unchanged live key membership/order adopts persisted ordering. `tests/config/hub-disable-live-save.test.ts` exercises disable followed by live key creation, rename, rotation, unrelated settings and repeated saves. Saved API keys have no immutable enrollment marker; explicit exact-ID revocation preserves all unselected keys.
-
-JEV `decisionQuotaSignals` and partial `decisionQuotaTiers` use the shared validator and sparse preserve/clear/strategy-switch contract in [loaded advisory quota](providers/jev-decision.md#loaded-advisory-quota). Native reasoning retention follows [its optional configuration contract](transports/native-reasoning-retention.md#configuration-and-management). Native function-result injection follows [the separate opt-in control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
+The WorkBuddy AI account row pins its adapter and origin under the [WorkBuddy contract](providers/workbuddy.md).
+JEV `decisionQuotaSignals` and partial `decisionQuotaTiers` use the shared validator and sparse preserve/clear/strategy-switch contract in [loaded advisory quota](providers/jev-decision.md#loaded-advisory-quota); the opt-in JEV `sessionPin` follows the same contract under [session pin](providers/jev-decision.md#session-pin). Native reasoning retention follows [its optional configuration contract](transports/native-reasoning-retention.md#configuration-and-management). Native function-result injection follows [the separate opt-in control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
@@ -182,8 +182,8 @@ env_key = "OPENCODEX_API_AUTH_TOKEN"
 ```
 
 Root TOML keys must be written before the first `[table]`. Re-injection strips the stale form of
-both shapes — opencodex blocks, injected root base-url overrides, stale root context-window
-overrides, and stale catalog paths — before rewriting, so switching between forms leaves no residue.
+both shapes — opencodex blocks, injected root base-url overrides, and stale catalog paths — before
+rewriting, so switching between forms leaves no residue. A root context-window override is user-owned.
 
 The `name` field is the only presentation value in that table, and `codexProviderDisplayName`
 chooses it (default `OpenCodex Proxy`). `resolveCodexProviderDisplayName` in
@@ -206,12 +206,12 @@ reading prose as configuration; formatted doctor paths pass through user-path re
 
 > Decision record: [ADR-0017](decisions/ADR-0017-config-injection.md)
 
-Native Codex sub-agent defaults are a separate, explicit opt-in. When
-`syncCodexSubagentDefaults` is true and `injectionModel` is set, injection writes marker-owned
-`agents.default_subagent_model` and, when configured,
-`agents.default_subagent_reasoning_effort`. Unmarked values are user-owned and must never be
-overwritten. Disabling the option and fallback restore remove only marker-owned values; journal
-restore must preserve later user edits while stripping those managed values.
+Native Codex sub-agent defaults are a separate, explicit opt-in. When `syncCodexSubagentDefaults`
+is true and `injectionModel` is set, injection writes marker-owned `agents.default_subagent_model`
+and, when configured, `agents.default_subagent_reasoning_effort`, and journals the values it wrote.
+Unmarked values, and marked values that differ from that record (#7425), are user-owned and never
+overwritten; the stale marker is dropped. Disabling and fallback restore remove only owned values.
+Snapshot restore rechecks default ownership after hash matches; root `model_context_window` is never written or stripped.
 
 An injection whose OpenCodex config explicitly selects the v1 multi-agent surface also
 reconciles Codex's higher-precedence global `features.multi_agent_v2` override to disabled before

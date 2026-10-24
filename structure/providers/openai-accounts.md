@@ -37,6 +37,7 @@ preserving a stale one would block every later migration.
 
 ## Model and wire identity
 
+Account-list rows retain each registered `slotId` and `slotKind`; optional `upstreamAccountKey` is a versioned HMAC of the ChatGPT account ID and user claim under the local administrator token. Native identity comes from the owned observation without passive credential reads; missing or conflicting claims omit the key, the native key needs one token that claims both the matching account and the user (an `auth.json` `account_id` alone, or account and user claims split across the ID and access tokens, omit it), Pool rows need the access token's matching account claim, and token rotation changes it. No raw identity or credential is serialized.
 The optional [native reasoning retention policy](../transports/native-reasoning-retention.md#runtime-boundary) can permit reasoning ciphertext forwarding across a known model or account change on the same canonical ChatGPT destination. It does not change account selection, entitlement, cache isolation, continuation-id ownership or uploaded-file retention; cross-account acceptance is not guaranteed.
 
 Native Spark membership and its model-specific request/tool exceptions are removed; the shared
@@ -250,23 +251,23 @@ restored from the Accounts picker or Codex Auth through gated recovery: missing 
 from the canonical preset, disabled canonical rows are re-enabled without replacing saved mode or
 model settings, and noncanonical `openai` rows never receive that recovery path.
 
-`GET /api/codex-auth/accounts?refresh=1` treats missing main credentials, HTTP 401, and allowlisted
-terminal 403 codes as `needsReauth`; generic permission failures remain non-terminal, and a
-successful main usage refresh clears the runtime mark.
+Account listing and explicit refresh return stored pool accounts without creating a missing native `CODEX_HOME`; an unchecked main observation leaves credential/reauth state unchanged. When the native home is accessible, `GET /api/codex-auth/accounts?refresh=1` treats missing main credentials, HTTP 401 responses with a known terminal code, unrecognized HTTP 401 responses when the access token is not verifiably live, and allowlisted terminal 403 responses as `needsReauth`; successful refresh clears the runtime mark.
+Generic quota permission failures remain non-terminal; missing-home fallback requires proven absence, so non-directory homes, dangling links, and parent directories that cannot be traversed still fail closed for both default and explicit home paths. Native-profile context resolution validates OpenCodex storage before the native home, so unsafe storage fails closed even when that home is absent; credential operations retain their strict claim requirements.
 
 `src/codex/chatgpt-refresh-failure.ts` classifies token-endpoint failures for both stored-pool
 and native-main refresh. Exact structured terminal codes apply only to authentication-error
 statuses; HTTP 429/5xx and malformed responses remain transient. Description-only OAuth 400
-compatibility never overrides a structured code. Endpoint diagnostics contain fixed outcome,
-HTTP status and an allowlisted code, never provider descriptions or credential material. Pool
-refresh errors retain that same safe status/code metadata without changing cooldown classification.
+compatibility never overrides a structured code. Endpoint diagnostics contain fixed outcome, HTTP
+status, an allowlisted code and (pool only) the account's durable `p<hex6>` label, never descriptions
+or credential material. Pool refresh errors keep that status/code without changing cooldown class.
 Once a stored-pool record carries the persisted terminal verdict (`lastCodexValidationTerminal`
 with a failed status), `auth-api/pool-quota-probe.ts` answers passive quota reads with that
 `refresh_failed` reauthentication result instead of spending the dead grant again. Passive reads
 are GET listings including `?refresh=1`, dashboard quota polls, priming, and recovery probes. An
 explicit `POST /api/codex-auth/accounts/refresh` from any principal, a post-reset readback, and
 source-linked credentials still probe, and any credential write or completed validation clears
-the verdict.
+the verdict. The token guardian's pool sweep (`src/oauth/token-guardian.ts`) skips those records
+with the same source-linked exemption instead of re-posting the grant every backoff window.
 
 A native-main refusal is stored by physical auth path and refresh-grant fingerprint in a bounded
 process-local set (64 oldest-first entries). Ordinary quarantine clears and successful usage polls

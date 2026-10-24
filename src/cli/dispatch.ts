@@ -437,6 +437,32 @@ const commandRunners: Record<string, CommandRunner> = {
           }
         }
         await handleConnectedSyncCatalogWrite(result, restartScope);
+        if (result.applyRecordFailed) {
+          console.error("The Home's Codex settings were applied, but the apply record could not be written; the client runtime was not restarted. Run 'ocx sync' again.");
+          process.exitCode = 1;
+        }
+        // OCX-6: a link Child's runtime must have started after the apply it serves under.
+        if (link && result.appliedRecord) {
+          const { applyRestartMessage, restartRuntimeAfterApply } = await import("./link-apply-restart");
+          const { sameClientConnectionOwner } = await import("../client/state");
+          const applied = clientState.value;
+          const outcome = await restartRuntimeAfterApply(result.appliedRecord, {
+            restart: startWhenStopped => deps.handleProxyRestart(startWhenStopped),
+            recoveryStart: recovering => deps.handleRestartStartWhenStopped(recovering),
+            connectionUnchanged: () => {
+              const current = readClientConnectionState();
+              return current.kind === "connected" && sameClientConnectionOwner(current.value, applied)
+                && current.value.link?.linkId === applied.link?.linkId;
+            },
+          });
+          const message = applyRestartMessage(outcome);
+          if (outcome.kind === "failed" || outcome.kind === "connection-changed") {
+            console.error(message);
+            process.exitCode = 1;
+          } else {
+            console.log(message);
+          }
+        }
         // `process.exitCode` rather than a literal 0, for the same reason every other
         // runner does it (tests/cli/cli-transport-honesty.test.ts): the catalog-write helper
         // drives app-server restarts, and one of those recording a failure must not be
@@ -875,6 +901,10 @@ const commandRunners: Record<string, CommandRunner> = {
   effort: async deps => {
     const { handleEffortCommand } = await import("./effort");
     return await handleEffortCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
+  },
+  fallback: async deps => {
+    const { handleFallbackCommand } = await import("./fallback");
+    return await handleFallbackCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   agent: async deps => {
     const { handleAgentCommand } = await import("./agent");

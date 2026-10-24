@@ -95,6 +95,7 @@ export interface ManagementRoute {
 /** Every reachable management route. */
 export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management-api
+  { method: "GET", path: "/api/stop", module: "server/management-api", mutates: false },
   { method: "POST", path: "/api/stop", module: "server/management-api", mutates: true },
   // codex/auth-api
   { method: "GET", path: "/api/codex-auth/preserve-signed-in", module: "codex/auth-api/routes", mutates: false },
@@ -370,6 +371,9 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "GET", path: "/api/provider-context-caps", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/provider-presets", module: "server/management/provider-routes", mutates: false },
   { method: "GET", path: "/api/provider-quotas", module: "server/management/provider-routes", mutates: false },
+  { method: "GET", path: "/api/quota-pool", module: "server/management/quota-pool-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The ocx.quota-pool/1 read is a machine contract GOAT consumes over management and the link relay; the CLI shows the same caches through ocx provider quota and ocx account.", owner: "ocx-1 quota pool", ownerDoc: "structure/quota-pool.md" } },
+  { method: "GET", path: "/api/fallback", module: "server/management/fallback-routes", mutates: false },
+  { method: "PUT", path: "/api/fallback", module: "server/management/fallback-routes", mutates: true },
   { method: "GET", path: "/api/provider-request-pacing", module: "server/management/provider-key-pacing-routes", mutates: false },
   { method: "GET", path: "/api/providers", module: "server/management/provider-routes", mutates: false },
   { method: "PATCH", path: "/api/providers", module: "server/management/provider-routes", mutates: true },

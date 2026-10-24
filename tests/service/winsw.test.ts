@@ -238,17 +238,17 @@ describe("winsw install flow", () => {
 
 describe("service backend CLI parsing", () => {
   test("install --native selects the native backend", () => {
-    expect(parseServiceArgs(["install", "--native"])).toEqual({ sub: "install", backend: "native", invalid: [] });
+    expect(parseServiceArgs(["install", "--native"])).toEqual({ sub: "install", backend: "native", invalid: [], json: false });
   });
 
   test("bare service defaults to install with no backend override", () => {
-    expect(parseServiceArgs([])).toEqual({ sub: "install", backend: null, invalid: [] });
+    expect(parseServiceArgs([])).toEqual({ sub: "install", backend: null, invalid: [], json: false });
   });
 
   test("restart is its own verb: parsed like repair, no backend flag, no admin path", () => {
     // `restart` used to alias `repair`; since repair became a no-op on a healthy launchd job,
     // `restart` carries its own verb so the darwin path can kickstart the unchanged job.
-    expect(parseServiceArgs(["restart"])).toEqual({ sub: "restart", backend: null, invalid: [] });
+    expect(parseServiceArgs(["restart"])).toEqual({ sub: "restart", backend: null, invalid: [], json: false });
   });
 
   test("--scheduler and unknown flags are recognized separately", () => {

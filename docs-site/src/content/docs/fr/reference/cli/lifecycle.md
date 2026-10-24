@@ -141,7 +141,7 @@ Vérifie l’identité du proxy actif. La sortie destinée aux utilisateurs indi
 
 ### `ocx ready [--json] [--wait [--timeout <seconds>]]`
 
-Vérifie l’état de préparation après synchronisation au moyen du point de terminaison non authentifié `GET /readyz`. Il renvoie `200` lorsque le service est prêt, ou `503` avec `Retry-After: 1` pour les états `pending` et terminal `failed`. Son identité HTTP expurgée est `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}`. `protocol` est la version courante du protocole distant du hub, `minimumClientProtocol` la plus ancienne version cliente compatible et `managementUrl` l’origine canonique de gestion visible par le navigateur. Les anciens proxys dépourvus de `/readyz` échouent de manière sûre avec l’état `unreachable` ; `/healthz` mesure la disponibilité du processus, et non son état de préparation.
+Vérifie l’état de préparation après synchronisation au moyen du point de terminaison non authentifié `GET /readyz`. Il renvoie `200` lorsque le service est prêt, ou `503` avec `Retry-After: 1` pour les états `pending` et terminal `failed`. Son identité HTTP expurgée est `{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}`. `protocol` est la version courante du protocole distant du hub, `minimumClientProtocol` la plus ancienne version cliente compatible et `managementUrl` l’origine canonique de gestion visible par le navigateur. Les anciens proxys dépourvus de `/readyz` échouent de manière sûre avec l’état `unreachable` ; `/healthz` mesure la disponibilité du processus, et non son état de préparation.
 
 Par défaut, la commande effectue une seule sonde. Avec `--wait`, elle interroge le service jusqu’à ce qu’il soit prêt ou jusqu’à l’expiration du délai, mais s’arrête immédiatement si elle observe l’état terminal `failed`. Le délai par défaut est de 45 secondes. `--timeout <seconds>` exige `--wait` et accepte un entier positif compris entre 1 et 300. La sortie JSON de la CLI est `{ready, status, pid, port}`, où `status` vaut `ready`, `pending`, `failed` ou `unreachable`. Les codes de sortie sont 0 si le service est prêt ; 1 s’il n’est pas prêt, reste en attente, échoue, dépasse le délai ou est inaccessible ; et 64 si les arguments sont invalides.
 
@@ -154,6 +154,8 @@ La section **OAuth reliability** indique si le stockage des identifiants est acc
 ## Synchronisation du catalogue
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
+
+> **Enfant Remote Link :** `ocx sync` applique aussi les réglages Codex du Home et, si le runtime client a démarré avant cette application, le redémarre même sans option de redémarrage. Si le redémarrage échoue, l'ancien runtime continue de servir et la commande se termine avec un code non nul. Les champs correspondants de `ocx status --json` et `ocx link status --json` sont décrits dans [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity) (en anglais).
 
 Un redémarrage explicitement demandé a également lieu après une modification de `config.toml` validée et enregistrée, même si les octets du catalogue et du cache restent identiques. Une opération sans changement de configuration, un refus, une validation préalable ou une écriture annulée ne le déclenche pas. Sans option de redémarrage, sync ne redémarre jamais Codex automatiquement.
 

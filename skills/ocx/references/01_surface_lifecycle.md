@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 13.
+Declared capabilities: 14.
 
 ### `ocx codex-provider`
 
@@ -49,6 +49,7 @@ Drives no management route.
 | `--json` | boolean | Emit the status envelope as JSON. |
 
 - Reads /healthz plus local config; drives no management API route.
+- --json includes install: {method: bun|npm|pnpm|mise|source|standalone|unknown, evidence: {basis, mise?, error?}} from the updater's install detector.
 
 ### `ocx resolve`
 
@@ -98,6 +99,27 @@ State-changing: yes. JSON mode: `none`.
 | `--restart-desktop-app` | boolean | Deprecated alias of --restart-codex. |
 
 - The Aside refresh uses the live server; other catalog synchronization also performs local work.
+
+### `ocx stop`
+
+Usage: `ocx stop [--json]`
+
+Stop the proxy; preserve connected-client integrations, restore native Codex config for standalone owners.
+
+State-changing: yes. JSON mode: `envelope`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/stop` |
+| POST | `/api/stop` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit one structured stop summary; human output moves to stderr. |
+
+- Connected clients verify runtime preservation support before stopping; unavailable or unsupported live targets refuse without stopping the service. Proven-stopped clients remain successful when the manager is inactive.
+- Siblings and connected clients preserve shared integrations. Standalone owners restore native Codex configuration and remove the managed Grok block.
+- JSON uses ocx-stop/1 and retains the same exit codes: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).
 
 ### `ocx service install`
 
@@ -171,15 +193,20 @@ Drives no management route.
 
 ### `ocx service status`
 
-Usage: `ocx service status`
+Usage: `ocx service status [--json]`
 
 Inspect local service-manager status.
 
-State-changing: no. JSON mode: `none`.
+State-changing: no. JSON mode: `payload`.
 
 Drives no management route.
 
-- Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API or JSON mode.
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the passive service status document as JSON. |
+
+- Local OS service manager: macOS launchd, Linux systemd, Windows Task Scheduler or WinSW. No management API.
+- --json is passive: schemaVersion 1 with installed, running, enabled, viable, stale, conflict, backend (launchd|systemd|schtasks|winsw|none), label, serving {probed, ok, port}, summary, logPath, ownershipLease and desktopLogin. It starts, stops, installs and repairs nothing.
 - Backend options apply only to install; other verbs use the installed backend.
 
 ### `ocx service uninstall`

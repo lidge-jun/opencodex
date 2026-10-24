@@ -4,6 +4,7 @@ import type { OcxConfig } from "../types";
 import { captureExplicitOpenAiCallerAuth, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
 import { isProxyAdmissionSecret, type DataPlaneAdmission, type DataPlaneAdmissionOptions } from "./auth-cors";
 import { resolveAudioAdmission } from "./audio-upstream";
+import { authorizationCredential } from "../lib/authorization-scheme";
 
 export const AUDIO_WEBSOCKET_PROTOCOL = "opencodex-audio";
 const KEY_PROTOCOL_PREFIX = "opencodex-key.";
@@ -61,7 +62,7 @@ export function resolveAudioClient(
       : null;
   }
   const credential = admission.source === "dedicated" ? headers.get("x-opencodex-api-key")
-    : admission.source === "x-api-key" ? headers.get("x-api-key") : headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+    : admission.source === "x-api-key" ? headers.get("x-api-key") : authorizationCredential(headers);
   const owner = admission.kind === "configured"
     ? JSON.stringify(["configured", admission.keyId])
     : JSON.stringify(["environment", createHash("sha256").update(credential?.trim() ?? "").digest("hex")]);

@@ -46,6 +46,42 @@ Pour une liste v2, l'éligibilité a trois états : une entrée estampillée `"
 sans champ `multi_agent_version` est admissible. Une valeur explicite `"v1"` est exclue, car elle indique
 que le modèle appartient à l’autre surface de collaboration.
 
+## Modèles annoncés par `spawn_agent`
+
+Codex liste au plus cinq modèles dans la description de l'outil `spawn_agent`, et il les choisit lui-même : il trie les lignes du catalogue visibles dans le sélecteur par `priority` croissante et garde les cinq premières. La liste de la page **Subagents** (`subagentModels`) n'agit sur cette sélection qu'en donnant à ses modèles les priorités les plus basses, dans l'ordre de la liste (`0` à `4` sans sélecteurs de compte). Elle ne limite pas la sélection à ces modèles.
+
+Si vous mettez en avant un à quatre modèles, Codex complète les emplacements restants avec les lignes suivantes par priorité. Vous n'avez pas choisi ces lignes, et le tableau de bord n'indique pas lesquelles sont retenues. Elles dépendent du catalogue :
+
+| Catalogue | Lignes qui complètent les emplacements restants |
+| --- | --- |
+| Sans sélecteurs de compte Codex | Les autres lignes routées `provider/model`. Elles partagent toutes la priorité `5` et apparaissent donc par nom de fournisseur, puis par identifiant de modèle, dans l'ordre alphabétique. Les lignes GPT natives non mises en avant ont une priorité d'au moins `100` plus le nombre d'identifiants mis en avant ; elles viennent donc après. |
+| Avec sélecteurs de compte Codex | Les lignes natives qualifiées par compte (`<selector>/<native-model>`), placées juste après les lignes mises en avant. Les lignes routées non mises en avant passent à la priorité `1005` et viennent après elles. |
+
+Par exemple, sans sélecteurs de compte et avec cette liste :
+
+```json
+{ "subagentModels": ["xai/grok-4.5", "anthropic/claude-sonnet-5"] }
+```
+
+| Emplacement | Modèle | Priorité | Raison |
+| ---: | --- | ---: | --- |
+| 1 | `xai/grok-4.5` | `0` | Première entrée de la liste |
+| 2 | `anthropic/claude-sonnet-5` | `1` | Deuxième entrée de la liste |
+| 3 | `deepseek/deepseek-v4-flash` | `5` | Première ligne routée restante dans l'ordre alphabétique |
+| 4 | `google/gemini-3-pro` | `5` | Ligne routée suivante |
+| 5 | `moonshot/kimi-k3` | `5` | Ligne routée suivante |
+| 6+ | `zai/glm-5.2`, puis les lignes GPT natives | `5`, puis `102` | Hors des cinq |
+
+Avec une liste vide, opencodex ne fixe aucune priorité et les cinq suivent les priorités normales du catalogue.
+
+Les emplacements complétés sont des annonces ordinaires : l'agent principal peut choisir l'un de ces modèles. La liste n'est pas non plus une liste d'autorisation : Codex accepte un modèle du catalogue hors des cinq lorsque l'agent principal le nomme exactement. Pour contrôler ce que Codex annonce :
+
+- Mettez cinq modèles en avant. Une liste complète ne laisse aucun emplacement à compléter.
+- Désactivez un modèle que vous ne voulez jamais voir proposé, ou retirez-le des `selectedModels` de son fournisseur. Un modèle désactivé ou non sélectionné quitte le sélecteur et ne peut pas compléter un emplacement.
+- `modelPickerOrder` modifie les priorités que Codex utilise pour trier. Une liste uniquement routée déplace les lignes listées non mises en avant à `1000` et au-delà ; les lignes routées non listées complètent donc les emplacements en premier. Une liste qui contient un identifiant natif nu ordonne tout le sélecteur, lignes mises en avant comprises : les lignes listées passent en premier et occupent les emplacements annoncés avant toute ligne non listée. Voir [Model ordering](/guides/model-ordering/).
+
+En v2, Codex écarte les lignes épinglées `"disabled"` avant de prendre les cinq ; le reste fonctionne de la même façon. La liste des consignes v2 d'opencodex (`{{roster}}`) ne nomme que les modèles configurés présents parmi les cinq : les modèles de complément apparaissent dans la description de l'outil Codex, jamais dans les consignes d'opencodex. Codex lit le catalogue au démarrage d'une session ; une modification de la liste s'applique donc aux nouvelles sessions.
+
 ## Modèle et efforts de délégation
 
 La **délégation de sous-agent** du tableau de bord contrôle trois paramètres associés :
@@ -238,6 +274,10 @@ un décompte partiel positif avant de passer un dépassement de modèle ou d'eff
 
 Il peut être masqué par le sélecteur, en dehors de la limite d'affichage de cinq modèles, absent du catalogue ou épinglé
 à la v1. Une valeur de surface `"v2"`, `null` ou absente est admissible ; une valeur explicite `"v1"` ne l’est pas.
+
+### Pourquoi `spawn_agent` liste-t-il des modèles que je n'ai pas mis en avant ?
+
+Codex remplit jusqu'à cinq emplacements annoncés à partir du catalogue, par priorité. Avec moins de cinq modèles mis en avant, les lignes suivantes occupent les emplacements restants ; voir la section « Modèles annoncés par `spawn_agent` » ci-dessus.
 
 ### Les changements de mode affectent-ils les sessions en cours ?
 

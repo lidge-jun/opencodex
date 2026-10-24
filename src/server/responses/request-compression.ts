@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { constants, gzipSync, zstdCompressSync } from "node:zlib";
+import { constants, zstdCompressSync } from "node:zlib";
 import type { OcxConfig } from "../../types";
 
 /**
@@ -49,13 +49,18 @@ export function currentUpstreamRequestCompression(): UpstreamRequestCompression 
   return resolveUpstreamRequestCompression(boundConfig?.upstreamRequestCompression);
 }
 
-// ArrayBuffer-backed, which is what node:zlib returns and what a fetch BodyInit accepts.
+// ArrayBuffer-backed bytes, accepted by fetch without another input conversion.
 type CodedBytes = Buffer<ArrayBuffer>;
-type Compressor = (mode: Exclude<UpstreamRequestCompression, "off">, bytes: Buffer) => CodedBytes;
+type Compressor = (mode: Exclude<UpstreamRequestCompression, "off">, body: string) => CodedBytes;
 
-const defaultCompressor: Compressor = (mode, bytes) => mode === "gzip"
-  ? gzipSync(bytes, { level: 1 }) as CodedBytes
-  : zstdCompressSync(bytes, { params: { [constants.ZSTD_c_compressionLevel]: 3 } }) as CodedBytes;
+const defaultCompressor: Compressor = (mode, body) => {
+  if (mode === "gzip") {
+    // Native string input avoids a full-body UTF-8 Buffer; only view the coded output as a Buffer.
+    const bytes = Bun.gzipSync(body, { level: 1 });
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
+  return zstdCompressSync(Buffer.from(body, "utf8"), { params: { [constants.ZSTD_c_compressionLevel]: 3 } }) as CodedBytes;
+};
 
 let compressor: Compressor = defaultCompressor;
 let maxBodyBytes = MAX_COMPRESSIBLE_BODY_BYTES;
@@ -90,7 +95,7 @@ export function compressUpstreamRequestBody(
   const size = Buffer.byteLength(body, "utf8");
   if (size < MIN_COMPRESSIBLE_BODY_BYTES || size > maxBodyBytes) return null;
   try {
-    return { body: compressor(mode, Buffer.from(body, "utf8")), encoding: mode };
+    return { body: compressor(mode, body), encoding: mode };
   } catch {
     // Deliberately silent: the error could only describe the body, and identity is still correct.
     return null;

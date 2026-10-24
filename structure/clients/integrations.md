@@ -125,6 +125,8 @@ client registry + export context
   -> ownership record + operation journal
 ```
 
+A generated contribution that raises `UnrepresentableSelectorError` produces an `unsafe` / `unresolvable-path` status for that client. The shared reader and mutation observer catch only that typed refusal: preview returns an unsafe plan with `canApply: false`, and mutations return the existing unsafe refusal (HTTP 409). Other clients in the status collection remain visible, and unexpected construction errors still propagate.
+
 Status and mutation must use the same classifier. A special case added only to a status endpoint
 would be misleading because refresh or disable could still reject the same file; a special case
 added only to a writer would let a mutation bypass the state users saw.
@@ -291,6 +293,8 @@ Hermes exports include `session_affinity_header: session-id` on the entire OpenC
 independent of the model roster. This is a header name: Hermes generates the conversation-scoped
 value. No static session identifier or protocol switch is emitted, and upstream header-forwarding
 rules remain unchanged. Hermes must support the documented per-provider affinity option to use it.
+Changing `session_affinity_header` to `x-hermes-conversation-id` configures a log-only correlation
+fallback, removing native session affinity and lane scoping; `session-id` remains the generated default.
 
 `src/integrations/ownership-policy.ts` recognizes exactly one predecessor: an owned Hermes block
 without this setting. The block may remain unchanged or have gained only the supported value; after

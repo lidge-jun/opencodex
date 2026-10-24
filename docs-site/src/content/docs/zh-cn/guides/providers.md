@@ -52,7 +52,9 @@ shipped v1 配置自动迁移到 marker 2 的单一选项行。原配置只保�
 
 [`retryOn429`](/zh-cn/reference/configuration/)（同 key 的 429 重试）仅适用于 API-key 提供商
 （`authMode: "key"`）。OAuth、forward 与本地预设均被排除——同一 token 绝不可重放，本地运行时
-也没有需要保留的远程 key。仅在配置后启用，默认关闭；配置了对象即启用，除非 `enabled: false`。
+也没有需要保留的远程 key。除文档中说明的特定目标默认值外，此功能需手动启用。规范的 Mistral Chat 在现有的按请求发送额度内使用耐心重试策略（6 次重放，10 秒回退间隔）。显式的 `retryOn429` 设置（包括 `enabled: false`）优先。Mistral 预设还会默认转发传入的 prompt 缓存 key；`promptCacheKey: false` 可关闭转发。缓存亲和性会提高复用几率，但不保证命中缓存，也不会消除 token 吞吐量限制。
+
+Mistral 的 Studio 和 Vibe 密钥共用同一个 API-key 提供商。密钥类型和套餐额度见 [Mistral 的 API 密钥文档](https://docs.mistral.ai/admin/identity-access/api-keys)；代理不会根据密钥推断订阅等级。对所有模型，上游显式给出的 `Retry-After` 截止时间会在同一凭据与模型的调用之间共享。没有重试时间的 429，在有效的每分钟计数器显示容量已耗尽，或被拒查询的实测成本超过剩余 token 但仍在公布的完整额度内时，可能触发保守的 60 秒恢复等待。这是本地恢复策略，并非对服务端重置时间的精确预测。正常流量下从不预测下一次查询的缓存或成本。等待结束后发送一次恢复探测；成功即恢复正常流量。缺失、格式错误、零授权、月度额度已耗尽或超过完整额度的依据，不会凭空推断重置，也不会压缩历史。`requestPacing: { "enabled": false }` 或 `retryOn429: { "respectRetryAfter": false }` 可关闭共享节流。对于同一密钥的重放，若 Mistral 的重试时间超过 `retryOn429.maxIntervalMs`，代理会返回 429 及重试提示，而不会提前重放。启用轮询（round-robin）密钥选择时，排队的请求会重新检查密钥冷却并为替代密钥获取节流容量；输出前的密钥拒绝可以在该请求现有的发送上限内切换到健康的密钥恢复。上下文窗口和按模型的压缩偏好保持独立。
 
 ## 1. ChatGPT 登录（forward / 透传）
 
@@ -186,6 +188,23 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 由于回滚依赖快照，当会话存储已存在但无法捕获时（文件不可读、架构不匹配、令牌选择有歧义），当 `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` 将导入路径指向与活动 CLI 存储不同的位置时，或当主 CLI 数据库没有可识别的令牌行时，**添加账户**会拒绝将 `kiro-cli` 登出。请修复或删除常规 `kiro-cli` 数据路径下的损坏数据库，并取消仅用于导入的选择器后重试。对于完全没有现有 `kiro-cli` 会话的机器，不受影响。
 
+### WorkBuddy AI 订阅
+
+`workbuddy-ai` 将国际版 WorkBuddy AI 订阅作为 OpenCodex 的模型来源。在 Providers 中选择
+**WorkBuddy AI** 并登录，或运行 `ocx login workbuddy-ai`，然后完成浏览器授权。
+授权最多等待五分钟；令牌保存在 OpenCodex 中并按需刷新。无需安装 WorkBuddy 客户端，
+也不会读取或修改客户端凭据。多个账户及其团队身份由现有 OAuth 账户管理流程隔离。
+
+登录后从账号实时模型目录选择 `workbuddy-ai/<model-id>`。模型发现不可用时可使用
+`workbuddy-ai/default-model`。支持流式输出、工具调用和非流式客户端；概览和账户页显示剩余积分、已用/总量、基础及赠送积分，
+并在可查询时显示下一批非每日积分的到期时间。刷新读取当前账户的账单汇总；查询失败不会
+显示为零。积分仅用于展示，不会因付费积分耗尽而禁用仍可用的免费模型。
+
+这是参考 [Magpie WorkBuddy 插件](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy)
+实现的非官方订阅协议。上游的客户端通道或账号限制会原样拒绝请求，不会改写代理身份提示词
+绕过限制。实际可用性取决于账号、地区、模型权限和上游 API。本功能独立于 CodeBuddy CLI
+API Key 提供商，也不负责让 WorkBuddy 桌面客户端使用 OpenCodex 模型。
+
 ### DeepSeek Account (DSH)
 
 `dsh-account` 是一个实验性的、优先导入已有凭据的账户提供商，用于复用已安装并登录的 DeepSeek Harness (DSH) Desktop 应用程序的认证凭据。
@@ -199,7 +218,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 104 个预设：84 个密钥预设、16 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 105 个预设：84 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -254,7 +273,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | 智谱 AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
 | [BigModel Coding Plan — Responses (静态模型列表)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
-| Qwen Cloud | Token plan（默认）: `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` · 按量付费: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 或自定义 |
+| Qwen Cloud | Token plan（默认）: `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · 按量付费: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 或自定义 |
 | 腾讯云 Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | 火山方舟 · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
@@ -274,6 +293,12 @@ Sionic 提供的 `deepseek/deepseek-v4.1-flash-ultrafast` 和
 [OpenGateway 控制台](https://opengateway.ai/api-keys)创建密钥，再运行
 `ocx provider add opengateway` 或在控制台选择 **OpenGateway**。Chat 请求使用配置的
 Bearer 密钥；公开模型列表不能验证密钥有效性。
+在 Responses 协议中，OpenGateway 拒绝重放原生自定义工具调用，因此预设会在发送前将代码模式的 `exec` 等 Codex 自定义工具转换为函数工具。
+工具结果内容数组以文本发送，图像保留在配对的工具结果组之后。不支持的结果部分（包括拒绝和不透明内容）会在发送前以明确的客户端输入错误拒绝。
+图像细节 `original` 映射为网关接受的 `high`；图像字节保持不变。
+原生 Responses 路由还会在将纯文本空补全作为成功返回之前进行检查。
+输出预算耗尽时返回带 `max_output_tokens` 的 `incomplete`；代理不会增加请求的预算。仍有预算且可安全重放的空补全，可在现有发送上限内重试一次。显式设置 `emptyCompletionRetry: false` 或 `OCX_EMPTY_COMPLETION_RETRY=0` 可关闭该重试。出现文本、拒绝、工具活动或未知流事件时不会重放，并保留原始流。此保护不改变其他提供商及其重试默认值。
+重放要求显式 `store: false`、完整输入且仅含客户端执行的工具；声明了 `web_search` 等托管工具时，即使未观察到工具事件也不会自动重放。
 
 MiniMax 和 MiniMax (CN) 的提供商卡片也会在配置的密钥有有效 Coding Plan 时显示用量。
 仪表盘读取 5 小时窗口，以及套餐提供时的每周窗口；这些仅用于展示，不会改变模型路由。

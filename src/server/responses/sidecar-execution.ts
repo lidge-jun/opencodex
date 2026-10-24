@@ -51,7 +51,7 @@ import { namespacedToolName } from "../../types";
 import { providerFetch } from "./fetch-helpers";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
-import { normalizeLogConversationId } from "../request-log-conversation";
+import { assignNativeLogConversationId, normalizeLogConversationId } from "../request-log-conversation";
 import { attemptAccountChanged } from "../request-log-account-rotation";
 import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
@@ -592,9 +592,7 @@ export async function executeResponsesSidecars(
         // Cursor may assign _cursorConversationId inside the image loop's first runTurn;
         // backfill so Logs can filter/total that opening request (parity with the normal
         // runTurn branch).
-        if (!logCtx.conversationId && parsed._cursorConversationId) {
-          logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
-        }
+        assignNativeLogConversationId(logCtx, normalizeLogConversationId(parsed._cursorConversationId));
         transportState.bindKeyUsageFromBridge(usage);
       },
       on429: rotateSidecarProviderOn429,

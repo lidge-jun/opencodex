@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix, win32 } from "node:path";
 import { scopeTranspilerCacheToRuntime, TRANSPILER_CACHE_ENV } from "../../src/lib/bun-transpiler-cache-scope.mjs";
 import { durableBunChildEnv, durableBunRuntime } from "../../src/lib/bun-runtime";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -42,23 +42,67 @@ describe("launcher transpiler cache scope", () => {
     expect(scopeTranspilerCacheToRuntime(posix, "1.4.2", join, "linux")).toBe(posix);
   });
 
-  test("an already scoped cache is re-scoped in place, never nested", () => {
+  test("a scoped cache stays beneath the configured path, never escaping to a sibling", () => {
     const scoped = (cache: string, version: string) =>
-      scopeTranspilerCacheToRuntime({ [TRANSPILER_CACHE_ENV]: cache }, version, join)[TRANSPILER_CACHE_ENV];
-    expect(scoped(join("/cache", "bun-1.4.2"), "1.4.2")).toBe(join("/cache", "bun-1.4.2"));
-    expect(scoped(join("/cache", "bun-1.4.2"), "1.5.0")).toBe(join("/cache", "bun-1.5.0"));
-    expect(scoped(join("/cache", "bun-1.4.2") + "/", "1.4.2")).toBe(join("/cache", "bun-1.4.2"));
-    expect(scoped("C:\\cache\\bun-1.4.2", "1.4.2")).toBe(join("C:\\cache", "bun-1.4.2"));
-    // A directory that merely starts with bun- but is not a version stays a parent.
-    expect(scoped(join("/cache", "bun-cache"), "1.4.2")).toBe(join("/cache", "bun-cache", "bun-1.4.2"));
-    // Root-level scopes keep their root, with or without a trailing separator.
-    expect(scoped("/bun-1.4.2/", "1.5.0")).toBe(join("/", "bun-1.5.0"));
-    expect(scoped("/bun-1.4.2", "1.5.0")).toBe(join("/", "bun-1.5.0"));
-    expect(scoped("C:\\bun-1.4.2\\", "1.5.0")).toBe(join("C:\\", "bun-1.5.0"));
-    // Relative and drive-relative scopes re-scope too; a name merely ending in bun-<v> does not.
-    expect(scoped("bun-1.4.2", "1.5.0")).toBe(join(".", "bun-1.5.0"));
-    expect(scoped(scoped(".", "1.5.0")!, "1.5.0")).toBe(join(".", "bun-1.5.0"));
-    expect(scoped("xbun-1.4.2", "1.5.0")).toBe(join("xbun-1.4.2", "bun-1.5.0"));
+      scopeTranspilerCacheToRuntime({ [TRANSPILER_CACHE_ENV]: cache }, version, posix.join, "linux")[TRANSPILER_CACHE_ENV];
+    // The same runtime reaches the same warm directory: the path is kept unchanged.
+    expect(scoped("/cache/bun-1.4.2", "1.4.2")).toBe("/cache/bun-1.4.2");
+    expect(scoped("/cache/bun-1.4.2/", "1.4.2")).toBe("/cache/bun-1.4.2/");
+    expect(scoped("/a/b/bun-1.4.2", "1.4.2")).toBe("/a/b/bun-1.4.2");
+    // A version change nests beneath the configured path. A version-shaped basename is an
+    // ordinary directory name, not provenance: the parent is never handed to the sibling.
+    expect(scoped("/cache/bun-1.4.2", "1.5.0")).toBe("/cache/bun-1.4.2/bun-1.5.0");
+    expect(scoped("/cache/bun-9.9.9", "1.4.2")).toBe("/cache/bun-9.9.9/bun-1.4.2");
+    expect(scoped("/bun-1.4.2", "1.5.0")).toBe("/bun-1.4.2/bun-1.5.0");
+    expect(scoped("/bun-1.4.2/", "1.5.0")).toBe("/bun-1.4.2/bun-1.5.0");
+    expect(scoped("bun-1.4.2", "1.5.0")).toBe("bun-1.4.2/bun-1.5.0");
+    // A chain of changed versions nests inward; an independent launch configured with the
+    // original base still lands one level down.
+    expect(scoped(scoped("/cache", "1.4.2")!, "1.5.0")).toBe("/cache/bun-1.4.2/bun-1.5.0");
+    expect(scoped(scoped(scoped("/cache", "1.4.2")!, "1.5.0")!, "1.4.2"))
+      .toBe("/cache/bun-1.4.2/bun-1.5.0/bun-1.4.2");
+    expect(scoped("/cache", "1.4.2")).toBe("/cache/bun-1.4.2");
+    // A directory that merely contains a bun- name fragment stays an ordinary parent.
+    expect(scoped("/cache/bun-cache", "1.4.2")).toBe("/cache/bun-cache/bun-1.4.2");
+    expect(scoped("xbun-1.4.2", "1.5.0")).toBe("xbun-1.4.2/bun-1.5.0");
+    // POSIX names are case-sensitive and "\" is an ordinary character there.
+    expect(scoped("/cache/BUN-1.4.2", "1.4.2")).toBe("/cache/BUN-1.4.2/bun-1.4.2");
+    expect(scoped("/cache\\bun-1.4.2", "1.4.2")).toBe("/cache\\bun-1.4.2/bun-1.4.2");
+    // Roots have no leaf to match and gain the version child directly.
+    expect(scoped("/", "1.5.0")).toBe("/bun-1.5.0");
+  });
+
+  test("Windows scoping folds leaf case and both separators, preserving path form", () => {
+    const scoped = (cache: string, version: string) =>
+      scopeTranspilerCacheToRuntime({ [TRANSPILER_CACHE_ENV]: cache }, version, win32.join, "win32")[TRANSPILER_CACHE_ENV];
+    expect(scoped("C:\\cache\\bun-1.4.2", "1.4.2")).toBe("C:\\cache\\bun-1.4.2");
+    // The same directory on a case-insensitive filesystem, so the leaf still matches.
+    expect(scoped("C:\\cache\\BUN-1.4.2", "1.4.2")).toBe("C:\\cache\\BUN-1.4.2");
+    expect(scoped("C:/cache/bun-1.4.2", "1.4.2")).toBe("C:/cache/bun-1.4.2");
+    // A version change nests beneath the configured path, never beside it.
+    expect(scoped("C:\\cache\\bun-1.4.2", "1.5.0")).toBe("C:\\cache\\bun-1.4.2\\bun-1.5.0");
+    expect(scoped("C:\\cache\\bun-9.9.9", "1.4.2")).toBe("C:\\cache\\bun-9.9.9\\bun-1.4.2");
+    // Roots, UNC shares and drive-relative paths keep their form.
+    expect(scoped("C:\\", "1.5.0")).toBe("C:\\bun-1.5.0");
+    expect(scoped("/", "1.5.0")).toBe(win32.join("/", "bun-1.5.0"));
+    expect(scoped("\\\\server\\share", "1.5.0")).toBe("\\\\server\\share\\bun-1.5.0");
+    expect(scoped("\\\\server\\share\\bun-1.5.0", "1.5.0")).toBe("\\\\server\\share\\bun-1.5.0");
+    // join("C:", x) would produce the drive root "C:\\x"; drive-relative stays relative.
+    expect(scoped("C:", "1.5.0")).toBe("C:bun-1.5.0");
+    expect(scoped("C:bun-1.5.0", "1.5.0")).toBe("C:bun-1.5.0");
+    expect(scoped("C:bun-1.4.2", "1.5.0")).toBe("C:bun-1.4.2\\bun-1.5.0");
+  });
+
+  test("no marker-style variable forgery changes where the cache is scoped", () => {
+    // The scope comes from the configured path alone. A marker-looking entry, forged or
+    // stale, must neither suppress nesting nor redirect the cache elsewhere.
+    const env = {
+      [TRANSPILER_CACHE_ENV]: "/cache/bun-9.9.9",
+      OCX_TRANSPILER_CACHE_SCOPED: "/elsewhere",
+    };
+    const result = scopeTranspilerCacheToRuntime(env, "1.4.2", posix.join, "linux");
+    expect(result[TRANSPILER_CACHE_ENV]).toBe("/cache/bun-9.9.9/bun-1.4.2");
+    expect(result.OCX_TRANSPILER_CACHE_SCOPED).toBe("/elsewhere");
   });
 
   test("prerelease and build metadata versions are accepted, oversized ones are not", () => {
