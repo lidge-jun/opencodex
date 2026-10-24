@@ -293,36 +293,54 @@ test("private closing handshake creates no timer after a remote close", () => {
   });
 });
 
-test("private closing handshake drops its observer when optional terminate is unavailable", () => {
-  withClosingSession(({ session, socket, timers, expire }) => {
-    socket.open(); socket.terminate = undefined;
-    session.dispose(); expire();
+test("private closing handshake adds no observer or timer without optional terminate", () => {
+  for (const mode of ["stall", "throw"] as const) withClosingSession(({ session, socket, timers, unrefs, changes }) => {
+    socket.open(); socket.terminate = undefined; socket.closeMode = mode;
+    session.dispose();
     expect(socket.closeCalls).toBe(1);
     expect(timers.size).toBe(0);
     expect(socket.closeListeners.size).toBe(0);
+    expect(unrefs()).toBe(0);
+    expect(changes()).toBe(1);
   });
 });
 
-test("private closing handshake tears down a real Bun peer when graceful close does nothing", async () => {
-  // Inject only the broken close operation; socket ownership and forceful teardown are real.
+test.each(["dispose", "release"] as const)("private %s closes a real peer that withholds its close reply", async mode => {
+  // A raw peer accepts the upgrade and reads Close, but deliberately never answers it.
+  // Keep the native client's close and terminate operations intact on both Bun versions.
   const keys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"];
   const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
   for (const key of keys) delete process.env[key];
-  let server: ReturnType<typeof Bun.serve> | undefined;
+  let listener: ReturnType<typeof Bun.listen> | undefined;
   let session: CodexWsSession | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let resolvePeerClosed!: () => void;
   const peerClosed = new Promise<void>(resolve => { resolvePeerClosed = resolve; });
+  let headers = Buffer.alloc(0), closeFrame = Buffer.alloc(0), upgraded = false;
   try {
-    server = Bun.serve({
+    listener = Bun.listen({
       hostname: "127.0.0.1", port: 0,
-      fetch(req, server) {
-        if (server.upgrade(req)) return;
-        return new Response(null, { status: 400 });
+      socket: {
+        data(socket, data) {
+          if (!upgraded) {
+            headers = Buffer.concat([headers, data]);
+            const boundary = headers.indexOf("\r\n\r\n");
+            if (boundary < 0) return;
+            const key = /^Sec-WebSocket-Key:\s*(.+)\r?$/im.exec(headers.subarray(0, boundary).toString())?.[1]?.trim();
+            if (!key) { socket.end("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"); return; }
+            const accept = new Bun.CryptoHasher("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+            upgraded = true;
+            socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
+              + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
+            data = headers.subarray(boundary + 4);
+          }
+          closeFrame = Buffer.concat([closeFrame, data]);
+        },
+        end(socket) { socket.end(); resolvePeerClosed(); },
+        close() { resolvePeerClosed(); },
       },
-      websocket: { message() {}, close() { resolvePeerClosed(); } },
     });
-    session = new CodexWsSession(`ws://127.0.0.1:${server.port}`, {});
+    session = new CodexWsSession(`ws://127.0.0.1:${listener.port}`, {});
     const socket = session.socket;
     await new Promise<void>((resolve, reject) => {
       const cleanup = () => {
@@ -337,20 +355,23 @@ test("private closing handshake tears down a real Bun peer when graceful close d
       timer = setTimeout(onError, watchdogMs(3000));
     });
     expect(session.reserve()).toBe(true);
-    let closeCalls = 0;
-    socket.close = () => { closeCalls++; };
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("disposed private socket left its peer open")), watchdogMs(3000));
     });
-    session.dispose();
+    if (mode === "release") session.release("fixture-completed");
+    else session.dispose();
+    expect(session.closed).toBe(true);
+    expect(session.busy).toBe(false);
+    expect(session.reserve()).toBe(false);
     await Promise.race([peerClosed, deadline]);
-    expect(closeCalls).toBe(1);
+    expect(closeFrame.length).toBeGreaterThanOrEqual(2);
+    expect(closeFrame[0]! & 0x0f).toBe(0x08);
     expect(socket.readyState).toBe(3);
   } finally {
     clearTimeout(timer);
     session?.dispose();
     try { (session?.socket as (WebSocket & { terminate?: () => void }) | undefined)?.terminate?.(); } catch { /* fixture teardown */ }
-    await server?.stop(true);
+    listener?.stop(true);
     for (const key of keys) {
       if (saved[key] === undefined) delete process.env[key];
       else process.env[key] = saved[key];

@@ -12,6 +12,11 @@ function closeSessionSocket(socket: WebSocket & { terminate?: () => void }, imme
     return;
   }
   if (socket.readyState === 3) return;
+  if (typeof socket.terminate !== "function") {
+    // A close observer cannot force teardown without the optional native method.
+    try { socket.close(); } catch { /* best-effort graceful teardown */ }
+    return;
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const cleanup = (): void => {
     if (timer !== undefined) clearTimeout(timer);
