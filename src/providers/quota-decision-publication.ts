@@ -35,6 +35,17 @@ export function providerDecisionWindows(quota: ProviderQuota): DecisionQuotaWind
   }
   return windows;
 }
+/** Antigravity family buckets: Gem/Cla are 5h counters, "(Weekly)" their weekly pair; per-model rows and other groups are display-only. */
+export function antigravityDecisionWindows(quota: ProviderQuota): DecisionQuotaWindow[] {
+  const windows: DecisionQuotaWindow[] = [];
+  for (const row of Array.isArray(quota.customWindows) ? quota.customWindows : []) {
+    const match = typeof row?.label === "string" && row.modelId === undefined ? /^(Gem|Cla)( \(Weekly\))?$/.exec(row.label) : null;
+    if (!match || !Number.isFinite(row.percent)) continue;
+    windows.push({ window: match[2] ? "weekly" : "5h", family: match[1] === "Gem" ? "gem" : "cla", percent: row.percent,
+      observedAt: quota.updatedAt, ...(row.resetAt !== undefined ? { resetAt: row.resetAt } : {}) });
+  }
+  return windows;
+}
 /** Publish decision windows for one Anthropic pool account, bound to its credential generation; a null quota publishes no windows. */
 export function publishAnthropicDecisionQuota(id: string, generation: string, quota: ProviderQuota | null, partial = false): void {
   if (!decisionQuotaSinkActive()) return;

@@ -51,7 +51,7 @@ export interface LocalManagementReadRequestDeps extends LocalManagementReadDeps 
  */
 export async function fetchBoundLocalManagementRead(
   target: LiveProxy,
-  path: LocalManagementReadPath,
+  path: LocalManagementReadPath | `${LocalManagementReadPath}?${string}`,
   deps: LocalManagementReadRequestDeps = {},
 ): Promise<LocalManagementReadResult> {
   if (
@@ -89,6 +89,8 @@ export async function fetchBoundLocalManagementRead(
     const timeoutMs = deps.timeoutMs ?? 4_000;
     const url = `http://${probeHostname(target.hostname)}:${target.port}${path}`;
     const init: RequestInit = {
+      redirect: "error",
+      credentials: "omit",
       headers: {
         [LOCAL_MANAGEMENT_EXPECTED_PID_HEADER]: String(target.pid),
         [LOCAL_MANAGEMENT_NONCE_HEADER]: nonce,

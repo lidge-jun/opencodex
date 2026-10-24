@@ -4,7 +4,7 @@ import { jevQuotaTier, jevQuotaRank, normalizeJevQuotaTiers, normalizeJevQuotaSu
 import { jevQuotaSignalFromWindows, jevQuotaSignalForTarget, jevQuotaPoolSignal, JEV_QUOTA_SIGNAL_MAX_AGE_MS, JEV_QUOTA_INSTRUCTION } from "../../src/combos/jev-quota";
 import { bindRawCodexDecisionResets, providerDecisionWindows, publishCodexDecisionQuota } from "../../src/providers/quota-decision-publication";
 import { publishDecisionAccountQuota, publishDecisionQuotaRoster, publishDecisionKeyQuota, invalidateDecisionKeyQuotas, setDecisionAccountUsable, type DecisionQuotaWindow } from "../../src/providers/quota-decision-snapshot";
-import { boundedJevQuotaPayload } from "../../src/combos/jev-quota-route";
+import { boundedJevQuotaPayload, jevQuotaCandidates } from "../../src/combos/jev-quota-route";
 import { buildJevState, buildJevRouteQuestion, JEV_API_URL, resolveJevDecision, type JevCandidate } from "../../src/combos/jev";
 import { resolveJevComboDecision } from "../../src/combos/jev-dispatch";
 import { buildJevModelPrompt, JEV_MODEL_INSTRUCTIONS } from "../../src/combos/jev-model-backend";
@@ -72,7 +72,12 @@ describe("loaded quota evidence", () => {
       config.providers.anthropic = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "oauth" };
       config.anthropicAccountPool = { enabled: true };
       config.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "pool" };
-      for (const provider of ["p", "anthropic", "openai"]) expect(jevQuotaSignalForTarget(config, provider, "a", now).tier).toBe("unknown");
+      config.providers["google-antigravity"] = { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" };
+      config.providers.renamed = { ...config.providers["google-antigravity"], googleMode: "cloud-code-assist" };
+      for (const provider of ["p", "anthropic", "openai", "google-antigravity", "renamed"]) expect(jevQuotaSignalForTarget(config, provider, "gemini-alias", now).tier).toBe("unknown");
+      const native = candidates.map(row => ({ ...row, quotaIdentity: { provider: "renamed", model: "claude-gemini-preview" } }));
+      expect(jevQuotaCandidates({ config, body: {}, candidates: native, fallback, now: () => now, decisionQuotaSignals: true }).map(row => row.quota?.tier)).toEqual(["unknown", "unknown"]);
+      expect(jevQuotaCandidates({ config, body: {}, candidates: native, fallback, decisionQuotaSignals: false })).toBe(native);
       for (const spy of spies) expect(spy).not.toHaveBeenCalled();
     } finally { spies.forEach(spy => spy.mockRestore()); }
   });

@@ -86,11 +86,47 @@ test("ssh stderr is classified by its retry policy", () => {
   const cases = [
     ["Permission denied (publickey).", "auth"],
     ["Host key verification failed.", "hostkey"],
-    ["Error: remote port forwarding failed for listen port 20100", "forward"],
+    ["Error: remote port forwarding failed for listen port 20100", "remote_forward"],
+    ["bind [127.0.0.1]:20100: Address already in use", "forward"],
+    ["channel_setup_fwd_listener_tcpip: cannot listen to port: 20100\nCould not request local forwarding.", "forward"],
     ["ssh: connect to host x port 22: Connection refused", "network"],
     ["unexpected diagnostic", "unknown"],
   ] as const;
   for (const [stderr, expected] of cases) expect(classifySshStderr(stderr)).toBe(expected);
+});
+
+test("a remote forward refused by the peer fails the link as forward and keeps the finer cause", () => {
+  const failed = reduceTunnel({ kind: "connected", since: 0 }, { type: "exit", now: 1_000, stderrClass: "remote_forward" }, () => 0.5, POLICY);
+  expect(failed).toEqual({ kind: "failed", since: 1_000, reason: "forward", retryAt: 61_000, inFlight: false, detail: "remote_forward_conflict" });
+  const retry = reduceTunnel(failed, { type: "spawn", now: 61_000 }, () => 0.5, POLICY);
+  // The port was released meanwhile; a network exit of the retry drops the stale detail.
+  expect(reduceTunnel(retry, { type: "exit", now: 61_500, stderrClass: "network" }, () => 0.5, POLICY))
+    .toEqual({ kind: "failed", since: 1_000, reason: "timeout", retryAt: 181_500, inFlight: false, retries: 1 });
+  expect(reduceTunnel(retry, { type: "exit", now: 61_500, stderrClass: "remote_forward" }, () => 0.5, POLICY))
+    .toEqual({ kind: "failed", since: 1_000, reason: "forward", retryAt: 181_500, inFlight: false, retries: 1, detail: "remote_forward_conflict" });
+});
+
+test("each failed retry doubles the delay up to five minutes, and a link that never heals is still retried", () => {
+  let state: TunnelState = reduceTunnel({ kind: "connected", since: 0 }, { type: "exit", now: 0, stderrClass: "remote_forward" }, () => 0.5, POLICY);
+  const delays: number[] = [];
+  let last = 0;
+  for (let now = 0; now <= 24 * HOUR_MS; now += 1_000) {
+    if (!dueForSpawn(state, now)) continue;
+    delays.push(now - last);
+    state = reduceTunnel(state, { type: "spawn", now }, () => 0.5, POLICY);
+    state = reduceTunnel(state, { type: "exit", now, stderrClass: "remote_forward" }, () => 0.5, POLICY);
+    last = now;
+  }
+  expect(delays.slice(0, 5)).toEqual([60_000, 120_000, 240_000, 300_000, 300_000]);
+  expect(Math.max(...delays)).toBe(300_000);
+  // About 12 attempts an hour at the cap, for as long as the link stays down.
+  expect(delays.length).toBeGreaterThan(24 * 11);
+  expect(state).toMatchObject({ kind: "failed", since: 0, reason: "forward", detail: "remote_forward_conflict" });
+  // Connecting resets the cadence: the next failure starts at a minute again.
+  const healed = reduceTunnel(reduceTunnel(state, { type: "spawn", now: 25 * HOUR_MS }, () => 0.5, POLICY), { type: "ready", now: 25 * HOUR_MS }, () => 0.5, POLICY);
+  expect(healed).toEqual({ kind: "connected", since: 25 * HOUR_MS });
+  expect(reduceTunnel(healed, { type: "exit", now: 26 * HOUR_MS, stderrClass: "forward" }, () => 0.5, POLICY))
+    .toMatchObject({ retryAt: 26 * HOUR_MS + 60_000 });
 });
 
 test("the client policy retries timeout and forward after a minute and auth after five minutes, never a host key", () => {
@@ -119,16 +155,16 @@ test("a retry runs while the link still reads failed, connects on ready and fall
   let state = reduceTunnel(failed, { type: "spawn", now: 60_100 }, () => 0.5, POLICY);
   expect(state).toEqual({ ...failed, inFlight: true });
   expect(dueForSpawn(state, 10 * HOUR_MS)).toBe(false);
-  // A transient exit of the retry keeps the original failure time and waits another minute.
+  // A transient exit of the retry keeps the original failure time and waits twice as long.
   state = reduceTunnel(state, { type: "exit", now: 61_000, stderrClass: "network" }, () => 0.5, POLICY);
-  expect(state).toEqual({ kind: "failed", since: 100, reason: "timeout", retryAt: 121_000, inFlight: false });
+  expect(state).toEqual({ kind: "failed", since: 100, reason: "timeout", retryAt: 181_000, inFlight: false, retries: 1 });
   // A hung retry is not timed out by the reducer; ssh's own keepalive bounds it.
-  state = reduceTunnel(state, { type: "spawn", now: 121_000 }, () => 0.5, POLICY);
-  expect(reduceTunnel(state, { type: "tick", now: 121_000 + 10 * FAILED_AFTER_MS }, () => 0.5, POLICY)).toBe(state);
-  expect(reduceTunnel(state, { type: "ready", now: 122_000 }, () => 0.5, POLICY)).toEqual({ kind: "connected", since: 122_000 });
+  state = reduceTunnel(state, { type: "spawn", now: 181_000 }, () => 0.5, POLICY);
+  expect(reduceTunnel(state, { type: "tick", now: 181_000 + 10 * FAILED_AFTER_MS }, () => 0.5, POLICY)).toBe(state);
+  expect(reduceTunnel(state, { type: "ready", now: 182_000 }, () => 0.5, POLICY)).toEqual({ kind: "connected", since: 182_000 });
   // A retry that meets a changed host key stops retrying.
-  expect(reduceTunnel(state, { type: "exit", now: 122_000, stderrClass: "hostkey" }, () => 0.5, POLICY))
-    .toEqual({ kind: "failed", since: 100, reason: "hostkey" });
+  expect(reduceTunnel(state, { type: "exit", now: 182_000, stderrClass: "hostkey" }, () => 0.5, POLICY))
+    .toEqual({ kind: "failed", since: 100, reason: "hostkey", retries: 2 });
 });
 
 test("auth retries reach the Home's sshd at most 12 times in any hour", () => {

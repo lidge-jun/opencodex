@@ -8,7 +8,11 @@ import { delimiter, dirname, join } from "node:path";
 import { npmInvocation } from "../../src/update/npm-invocation.mjs";
 
 import { scanCodexAppServerProcesses } from "../../src/codex/app-server-processes";
-import type { CodexCliInstallReport } from "../../src/codex/cli-install-provenance";
+import {
+  inspectCodexCliInstall,
+  type CodexCliInstallProvenanceDeps,
+  type CodexCliInstallReport,
+} from "../../src/codex/cli-install-provenance";
 import {
   CODEX_CLI_REGISTRY,
   codexCliUpdatePlanId,
@@ -18,6 +22,15 @@ import {
   type CodexCliUpdatePlanDeps,
   type CodexCliUpdateTarget,
 } from "../../src/codex/cli-update-plan";
+import {
+  VIRTUAL_BACKING_BINARY,
+  VIRTUAL_BACKING_MANIFEST,
+  VIRTUAL_ENTRYPOINT,
+  VIRTUAL_MANIFEST,
+  VIRTUAL_MANIFEST_TEXT,
+  virtualInspectionDeps,
+  virtualManagedNpmGlobal,
+} from "../helpers/codex-cli-content-fs";
 
 const REGISTRY_INTEGRITY = `sha512-${Buffer.alloc(64, 7).toString("base64")}`;
 
@@ -41,6 +54,7 @@ const MANAGED: CodexCliInstallReport = Object.freeze({
   reason: "managed_npm_global",
   location: "<npm-global>/@openai/codex",
   installDigest: "a".repeat(64),
+  installContentDigest: "c".repeat(64),
   packageVersion: "1.0.0",
   shim: { status: "not-tracked", backingKind: null },
   evidence: ["package_manifest", "global_npm_layout"],
@@ -157,6 +171,63 @@ describe("Codex CLI update dry-run plan", () => {
     expect(plan.planId).toBeNull();
   });
 
+  test("an install whose observed content could not be bound is refused before the registry query", async () => {
+    // The plan id promises the observed file set; a managed install whose
+    // manifest, entrypoint or backing could not be read under held identity
+    // cannot produce one, and no registry request should be spent finding out.
+    let queries = 0;
+    const plan = await createCodexCliUpdatePlan(planDeps({
+      inspect: async () => report({ installContentDigest: null }),
+      resolveTarget: () => { queries += 1; return RESOLVED; },
+    }));
+    expect(plan.applicable).toBe(false);
+    expect(plan.refusal).toBe("install_content_unverified");
+    expect(plan.planId).toBeNull();
+    expect(queries).toBe(0);
+    expect(plan.session.state).toBe("not-evaluated");
+  });
+
+  test("a real inspection reports the content digest the plan binds", async () => {
+    // The real provenance inspection runs against a virtual POSIX npm-global
+    // install; only the registry target and the process scan are stubbed.
+    const target: CodexCliUpdateTarget = { kind: "resolved", version: "2.0.0", integrity: "sha512-AAAA" };
+    const baselineFs = virtualManagedNpmGlobal();
+    let requested: CodexCliInstallProvenanceDeps | null = null;
+    const baseline = await applicablePlan({
+      resolveTarget: () => target,
+      inspect: (d) => { requested = d; return inspectCodexCliInstall({ ...d, ...virtualInspectionDeps(baselineFs) }); },
+    });
+    // The plan is the one caller that pays the bounded content read.
+    expect(requested?.observeInstallContent).toBe(true);
+    for (const [path, replacement] of [
+      // Same-length byte changes only: the installed version stays "1.2.3" so
+      // every mutation leaves the plan applicable and only the bound bytes differ.
+      [VIRTUAL_MANIFEST, VIRTUAL_MANIFEST_TEXT.replace("synthetic", "synthetiC")],
+      [VIRTUAL_ENTRYPOINT, "#!/usr/bin/env node\n// synthetic fixture altered!!!\n"],
+      [VIRTUAL_BACKING_BINARY, "synthetic-native-backing-v2\n"],
+    ] as const) {
+      const mutated = virtualManagedNpmGlobal();
+      const sizeBefore = mutated.readFile(path).length;
+      mutated.setBytes(path, replacement);
+      expect(mutated.readFile(path).length).toBe(sizeBefore);
+      const plan = await createCodexCliUpdatePlan(planDeps({
+        resolveTarget: () => target,
+        inspect: (d) => inspectCodexCliInstall({ ...d, ...virtualInspectionDeps(mutated) }),
+      }));
+      expect(plan.applicable).toBe(true);
+      expect(plan.planId).not.toBe(baseline.planId);
+    }
+    // A missing backing must never produce the same plan: it refuses outright.
+    const broken = virtualManagedNpmGlobal();
+    broken.remove(VIRTUAL_BACKING_MANIFEST);
+    broken.remove(VIRTUAL_BACKING_BINARY);
+    const refused = await createCodexCliUpdatePlan(planDeps({
+      resolveTarget: () => target,
+      inspect: (d) => inspectCodexCliInstall({ ...d, ...virtualInspectionDeps(broken) }),
+    }));
+    expect(refused.refusal).toBe("install_content_unverified");
+  });
+
   test("an unreadable process table defers instead of reading as no live session", async () => {
     const plan = await createCodexCliUpdatePlan(planDeps({ scanProcesses: () => ({ kind: "unavailable" }) }));
     expect(plan.refusal).toBe("blocked_process_state_unknown");
@@ -199,6 +270,8 @@ describe("Codex CLI update plan identity", () => {
       // Two install roots sharing the redacted "<path>/codex" display location
       // must still produce different plans.
       { inspect: async () => report({ installDigest: "b".repeat(64) }) },
+      // Same install root and version, different observed content.
+      { inspect: async () => report({ installContentDigest: "d".repeat(64) }) },
     ];
     for (const variant of variants) {
       const plan = await applicablePlan(variant);
@@ -209,7 +282,7 @@ describe("Codex CLI update plan identity", () => {
   test("an applicable plan binds only the declared evidence, excluding session state", async () => {
     // Independently computed SHA-256 vector for MANAGED + RESOLVED, schema 1.
     // Binding session state (or any undeclared field) changes this fixed oracle.
-    expect((await applicablePlan()).planId).toBe("65ce26ec550cbcd82dda68f0c86a0b4c");
+    expect((await applicablePlan()).planId).toBe("b569dd23df14dd7ef69b11ab95692d98");
   });
 
   test("the id contains only the explicitly bound evidence", () => {
@@ -218,11 +291,12 @@ describe("Codex CLI update plan identity", () => {
       provenance: "npm-global" as const,
       installedVersion: "1.0.0",
       installDigest: "a".repeat(64),
+      installContentDigest: "c".repeat(64),
       channel: "latest" as const,
       targetVersion: "1.1.0",
       targetIntegrity: "sha512-AAAA",
     };
-    const expected = "65ce26ec550cbcd82dda68f0c86a0b4c";
+    const expected = "b569dd23df14dd7ef69b11ab95692d98";
     expect(codexCliUpdatePlanId(bound)).toBe(expected);
     const withSession = { ...bound, session: { state: "active", matches: 1 } };
     expect(codexCliUpdatePlanId(withSession)).toBe(expected);
@@ -474,15 +548,29 @@ describe("registry configuration isolation", () => {
     };
   }
 
-  test("the bound launcher snapshot supplies npm's PATH and PATHEXT, not the ambient ones", () => {
+  test("the bound launcher snapshot supplies executable and transport trust inputs", () => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
-    const boundEnv = markerBoundEnv();
-    const target = resolveCodexCliUpdateTarget("latest", spawn, boundEnv);
-    expect(target.kind).toBe("resolved");
-    for (const call of calls) {
-      const env = call.options.env as NodeJS.ProcessEnv;
-      expect(env.PATH).toBe(boundEnv.PATH);
-      expect(env.PATHEXT).toBe(boundEnv.PATHEXT);
+    const boundEnv = { ...markerBoundEnv(), HTTPS_PROXY: "http://trusted-proxy", NODE_EXTRA_CA_CERTS: "/trusted/ca.pem" };
+    const previous = { HTTPS_PROXY: process.env.HTTPS_PROXY, ALL_PROXY: process.env.ALL_PROXY,
+      NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS };
+    try {
+      process.env.HTTPS_PROXY = "http://project-dotenv-proxy";
+      process.env.ALL_PROXY = "http://project-dotenv-fallback";
+      process.env.NODE_EXTRA_CA_CERTS = "/project/dotenv-ca.pem";
+      expect(resolveCodexCliUpdateTarget("latest", spawn, boundEnv).kind).toBe("resolved");
+      for (const call of calls) {
+        const env = call.options.env as NodeJS.ProcessEnv;
+        expect(env.PATH).toBe(boundEnv.PATH);
+        expect(env.PATHEXT).toBe(boundEnv.PATHEXT);
+        expect(env.HTTPS_PROXY).toBe(boundEnv.HTTPS_PROXY);
+        expect(env.ALL_PROXY).toBeUndefined();
+        expect(env.NODE_EXTRA_CA_CERTS).toBe(boundEnv.NODE_EXTRA_CA_CERTS);
+      }
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 
@@ -601,8 +689,8 @@ describe("registry configuration isolation", () => {
         for (const [key, value] of Object.entries(sentinels)) {
           // Match case-insensitively: the child env is a plain object, so a
           // Windows-normalized casing must not make a supported channel look absent.
-          const entry = Object.entries(env).find(([name]) => name.toLowerCase() === key.toLowerCase());
-          expect(entry?.[1]).toBe(value);
+          const entry = env[key] ?? Object.entries(env).find(([name]) => name.toLowerCase() === key.toLowerCase())?.[1];
+          expect(entry).toBe(value);
         }
       }
     } finally {
@@ -693,7 +781,7 @@ describe("registry configuration isolation", () => {
     expect(refused.kind).toBe("unresolved");
   });
 
-  test("npm cache and log state stay inside the owned temporary root", () => {
+  test("npm and Node caches and logs stay inside the owned temporary root", () => {
     const { calls, spawn } = capturingSpawn(RESOLVE_OUTPUTS);
     const target = resolveCodexCliUpdateTarget("latest", spawn);
     expect(target.kind).toBe("resolved");
@@ -703,6 +791,50 @@ describe("registry configuration isolation", () => {
       // The cache root (and therefore npm's _logs directory beneath it) must live
       // inside the owned isolation dir, not under an ambient ~/.npm.
       expect(cachePath(call)).toBe(join(cwd, "npm-cache"));
+      expect((call.options.env as NodeJS.ProcessEnv).NODE_COMPILE_CACHE).toBe(join(cwd, "node-compile-cache"));
+    }
+  });
+
+  test("real npm startup through the resolver seam cannot recreate an ambient Node compile cache", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-update-node-cache-"));
+    const home = join(root, "home"), temporaryRoot = join(root, "temp"), ambientCache = join(root, "ambient-cache");
+    const previous = process.env.NODE_COMPILE_CACHE;
+    let isolatedDir = "", observedCache: string | undefined, calls = 0;
+    try {
+      fs.mkdirSync(home); fs.mkdirSync(temporaryRoot);
+      process.env.NODE_COMPILE_CACHE = ambientCache;
+      const spawn = ((bin: string, args: string[], options: Record<string, unknown>) => {
+        const field = queriedField({ args } as CapturedCall);
+        if (calls++ === 0) {
+          isolatedDir = options.cwd as string;
+          const env = { ...(options.env as NodeJS.ProcessEnv), HOME: home, USERPROFILE: home,
+            TMPDIR: temporaryRoot, TMP: temporaryRoot, TEMP: temporaryRoot };
+          // Keep production argv/env/cwd; --version exercises npm startup without a registry call.
+          // cmd's last argument is one outer-quoted command, so append inside that quote.
+          const probeArgs = options.windowsVerbatimArguments
+            ? [...args.slice(0, 3), args[3]!.slice(0, -1) + ' --version --offline"']
+            : [...args, "--version", "--offline"];
+          for (const key of Object.keys(env)) if (key.toLowerCase() === "node_disable_compile_cache") delete env[key];
+          const result = spawnSync(bin, probeArgs, { ...options, env,
+            timeout: 15_000, windowsHide: true, encoding: "utf8" });
+          expect(result.error).toBeUndefined(); expect(result.status, result.stderr).toBe(0);
+          expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+          observedCache = env.NODE_COMPILE_CACHE;
+        }
+        // Only registry evidence is synthetic; npm startup above is real.
+        return { status: 0, stdout: RESOLVE_OUTPUTS[field as keyof typeof RESOLVE_OUTPUTS] ?? "", stderr: "" };
+      }) as never;
+      expect(resolveCodexCliUpdateTarget("latest", spawn).kind).toBe("resolved");
+      expect(calls).toBe(3);
+      expect(existsSync(isolatedDir)).toBe(false);
+      expect(readdirSync(temporaryRoot)).toEqual([]);
+      expect(existsSync(ambientCache)).toBe(false);
+      expect(readdirSync(home)).toEqual([]);
+      expect(observedCache).toBe(join(isolatedDir, "node-compile-cache"));
+    } finally {
+      if (previous === undefined) delete process.env.NODE_COMPILE_CACHE;
+      else process.env.NODE_COMPILE_CACHE = previous;
+      rmSync(root, { recursive: true });
     }
   });
 
@@ -782,7 +914,7 @@ describe("registry configuration isolation", () => {
       // Anything npm persisted was inside the owned root and is removed with it;
       // the disposable HOME stays completely empty (no ~/.npm, no ~/.npmrc, no _logs).
       for (const name of ownedDuringRun) {
-        expect(["package.json", "ocx-update.npmrc", "ocx-update-global.npmrc", "npm-cache"].includes(name)).toBe(true);
+        expect(["package.json", "ocx-update.npmrc", "ocx-update-global.npmrc", "npm-cache", "node-compile-cache"].includes(name)).toBe(true);
       }
       expect(existsSync(cwd)).toBe(false);
       expect(readdirSync(fakeHome)).toEqual([]);

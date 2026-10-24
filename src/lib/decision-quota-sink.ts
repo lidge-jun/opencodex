@@ -18,6 +18,10 @@ import type { CodexAccountCredentialRecord } from "../types";
 
 export type DecisionPoolRead = readonly { id: string; usable: boolean; windows?: readonly DecisionQuotaWindow[] }[];
 export interface MainDecisionRow { generation: number; usable: boolean }
+/** Opaque, process-local producer receipt; only the active snapshot can validate it. */
+export interface AntigravityQuotaReceipt { readonly kind: "antigravity" }
+export interface AntigravityQuotaObservation { name: string; provider: OcxProviderConfig; receipt: AntigravityQuotaReceipt; windows: readonly DecisionQuotaWindow[] }
+export interface DecisionKeyObservation { name: string; provider: OcxProviderConfig; windows: readonly DecisionQuotaWindow[] }
 
 export interface DecisionQuotaSink {
   observeKeyCredential(reference: string, resolved: string | undefined): void;
@@ -32,6 +36,8 @@ export interface DecisionQuotaSink {
   mainRosterChanged(row: MainDecisionRow | undefined): void;
   readKeyQuota(name: string, provider: OcxProviderConfig): readonly DecisionQuotaWindow[] | undefined;
   readPool(provider: string): DecisionPoolRead | undefined;
+  captureAntigravityReceipt(name: string, provider: OcxProviderConfig, id: string, generation: string): AntigravityQuotaReceipt | undefined;
+  replaceCollectedQuotas(keys: readonly DecisionKeyObservation[], oauth: readonly AntigravityQuotaObservation[]): void;
 }
 
 let sink: DecisionQuotaSink | undefined;
@@ -71,6 +77,10 @@ export function notifyCodexStoreLoaded(store: Readonly<Record<string, CodexAccou
 export function notifyMainRosterChanged(row: () => MainDecisionRow | undefined): void { forward(s => s.mainRosterChanged(row())); }
 export function readLoadedDecisionKeyQuota(name: string, provider: OcxProviderConfig): readonly DecisionQuotaWindow[] | undefined { return read(s => s.readKeyQuota(name, provider)); }
 export function readLoadedDecisionQuotaPool(provider: string): DecisionPoolRead | undefined { return read(s => s.readPool(provider)); }
+/** Capture from the producer's already-loaded credential, never from a decision read. */
+export function captureAntigravityQuotaReceipt(name: string, provider: OcxProviderConfig, id: string, generation: string): AntigravityQuotaReceipt | undefined { return read(s => s.captureAntigravityReceipt(name, provider, id, generation)); }
+/** Accepted collector atomically replaces its key/instance evidence set. */
+export function replaceCollectedDecisionQuotas(keys: readonly DecisionKeyObservation[], oauth: readonly AntigravityQuotaObservation[]): void { forward(s => s.replaceCollectedQuotas(keys, oauth)); }
 
 /** Test-only: drop any registration a previous test left behind. */
 export function resetDecisionQuotaSinkForTests(): void { sink = undefined; }

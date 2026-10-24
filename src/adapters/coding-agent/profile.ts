@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { posix, win32 } from "node:path";
 
 /**
  * One region-isolated official coding-agent CLI target (§三十一).
@@ -45,6 +45,26 @@ export interface CodingAgentProviderProfile {
 /** Test seam: report the resolved path of a candidate executable, or undefined. */
 export type WhichFn = (candidate: string) => string | undefined;
 
+/** Test seams for {@link whichFromPath}; production reads the live process environment. */
+export interface PathLookupDeps {
+  env?: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+  exists?: (path: string) => boolean;
+}
+
+/**
+ * Windows extension order inside ONE PATH directory. A native image comes before a batch
+ * dispatcher with the same stem, matching the system's own PATHEXT order (.EXE before .BAT/.CMD).
+ * A `.cmd` re-parses argv through cmd.exe and whatever it forwards to, and a vendor dispatcher
+ * that hops through PowerShell drops empty-string arguments (#7518).
+ */
+const WINDOWS_PATH_EXTENSIONS = [".exe", ".cmd", ".bat", ""] as const;
+
+/** A `.cmd`/`.bat` target: launched through cmd.exe rather than as a native image. */
+export function isBatchDispatcher(path: string): boolean {
+  return /\.(?:cmd|bat)$/i.test(path);
+}
+
 const binaryCache = new Map<string, string>();
 
 /** Reset the discovery cache (tests, or an explicit provider re-check). */
@@ -52,17 +72,26 @@ export function clearCodingAgentBinaryCache(): void {
   binaryCache.clear();
 }
 
-/** Default PATH scan: return the first existing executable path for a candidate name. */
-export function whichFromPath(candidate: string): string | undefined {
-  const pathVar = process.env.PATH ?? "";
+/**
+ * Default PATH scan: return the first existing executable path for a candidate name.
+ *
+ * PATH order owns the choice between directories: an earlier directory wins even when a later one
+ * holds a native build of the same name. Only inside the winning directory does a same-stem `.exe`
+ * beat the `.cmd` beside it.
+ */
+export function whichFromPath(candidate: string, deps: PathLookupDeps = {}): string | undefined {
+  const platform = deps.platform ?? process.platform;
+  const exists = deps.exists ?? existsSync;
+  const pathApi = platform === "win32" ? win32 : posix;
+  const pathVar = (deps.env ?? process.env).PATH ?? "";
   if (!pathVar) return undefined;
-  const extensions = process.platform === "win32" ? [".cmd", ".exe", ".bat", ""] : [""];
-  for (const dir of pathVar.split(delimiter)) {
+  const extensions = platform === "win32" ? WINDOWS_PATH_EXTENSIONS : [""];
+  for (const dir of pathVar.split(pathApi.delimiter)) {
     if (!dir) continue;
     for (const ext of extensions) {
-      const full = join(dir, `${candidate}${ext}`);
+      const full = pathApi.join(dir, `${candidate}${ext}`);
       try {
-        if (existsSync(full)) return full;
+        if (exists(full)) return full;
       } catch {
         // An unreadable PATH entry must not abort discovery; skip it.
       }
@@ -73,24 +102,33 @@ export function whichFromPath(candidate: string): string | undefined {
 
 /**
  * Discover the CLI executable BEFORE a request is sent (§二十六), so a missing CLI is a clear
- * pre-flight error rather than a mid-turn ENOENT. Only positive hits are cached (§三十): a CLI
- * installed after startup is found on the next turn instead of being masked by a cached negative.
+ * pre-flight error rather than a mid-turn ENOENT.
+ *
+ * Candidates are the profile's own names for one CLI, in preference order. The first native hit
+ * wins, so a vendor layout that puts a `qodercn.cmd` dispatcher and the real `qoderclicn.exe` on
+ * PATH launches the executable (#7518). When every hit is a batch dispatcher, the first one is
+ * returned and the turn decides whether it can carry the arguments.
+ *
+ * Only native hits are cached (§三十). A miss or a dispatcher-only result is resolved again on the
+ * next turn, so a CLI or native build installed after startup is picked up without a restart.
  */
 export function resolveCodingAgentBinary(
   profile: CodingAgentProviderProfile,
   which: WhichFn = whichFromPath,
 ): string | undefined {
+  const cached = binaryCache.get(profile.providerId);
+  if (cached) return cached;
+  let dispatcher: string | undefined;
   for (const candidate of profile.binaryCandidates) {
-    const cacheKey = `${profile.providerId}:${candidate}`;
-    const cached = binaryCache.get(cacheKey);
-    if (cached) return cached;
     const resolved = which(candidate);
-    if (resolved) {
-      binaryCache.set(cacheKey, resolved);
+    if (!resolved) continue;
+    if (!isBatchDispatcher(resolved)) {
+      binaryCache.set(profile.providerId, resolved);
       return resolved;
     }
+    dispatcher ??= resolved;
   }
-  return undefined;
+  return dispatcher;
 }
 
 /**
