@@ -14,11 +14,12 @@ import { connect } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
-import { startServer } from "../../src/server";
+import { startServer, waitForFailedStartRollback } from "../../src/server";
 import { runListenerShutdown } from "../../src/server/lifecycle";
 import {
   AuxiliaryListenerBindError,
   findAvailablePort,
+  isAddrInUse,
   PortUnavailableError,
   setEphemeralPortAllocatorForTests,
 } from "../../src/server/ports";
@@ -73,6 +74,41 @@ async function startLoopbackTestServer(loopbackPort: number) {
   return startServer(publicPort);
 }
 
+/** Fresh auxiliary draws one hub start may take; see startHubIngressServer. */
+const AUXILIARY_PORT_DRAWS = 3;
+
+/**
+ * Start a hub whose public listener the kernel assigns atomically, and read its port back.
+ *
+ * These cases used to probe a public port on 127.0.0.1, release it, and later bind it on the
+ * config's 0.0.0.0. Anything that took the port in between made startServer throw EADDRINUSE
+ * for a listener the case never asserted on (macOS lane=all run 39786507816, shard 3/3). Port 0
+ * has no such window, so the public listener no longer has a probe at all.
+ *
+ * The management and data-loopback listeners cannot do the same: config requires them to name
+ * a concrete 1-65535 port before startServer runs, so a draw can still be taken before the
+ * server binds it. That outcome is not timing-dependent: startServer reports it as an
+ * AuxiliaryListenerBindError naming the listener, with the bind's EADDRINUSE as its cause, and
+ * only that verdict earns a fresh draw. Every other failure, including a wrong listener or a
+ * non-EADDRINUSE bind error, still fails the case on its first occurrence.
+ */
+async function startHubIngressServer(
+  configFor: (managementPort: number, loopbackPort: number) => OcxConfig,
+): Promise<{ server: ReturnType<typeof startServer>; managementPort: number; loopbackPort: number }> {
+  for (let draw = 1; ; draw += 1) {
+    const managementPort = await freePort();
+    const loopbackPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });
+    saveConfig(configFor(managementPort, loopbackPort));
+    try {
+      return { server: startServer(0), managementPort, loopbackPort };
+    } catch (error) {
+      await waitForFailedStartRollback(error);
+      const auxiliaryPortTaken = error instanceof AuxiliaryListenerBindError && isAddrInUse(error.cause);
+      if (!auxiliaryPortTaken || draw >= AUXILIARY_PORT_DRAWS) throw error;
+    }
+  }
+}
+
 function firstNonLoopbackIPv4(): string | null {
   for (const entries of Object.values(networkInterfaces())) {
     for (const entry of entries ?? []) {
@@ -121,10 +157,7 @@ afterEach(() => {
 
 describe("hub management ingress", () => {
   test("binds only loopback and serves GUI plus authenticated management routes", async () => {
-    const managementPort = await freePort();
-    const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });
-    saveConfig(hubIngressConfig(managementPort));
-    const server = startServer(publicPort);
+    const { server, managementPort } = await startHubIngressServer(managementPort => hubIngressConfig(managementPort));
     try {
       const page = await fetch(`http://127.0.0.1:${managementPort}/`, {
         headers: { Host: "hub.example.test", "Tailscale-User-Login": "alice@example.test" },
@@ -158,9 +191,7 @@ describe("hub management ingress", () => {
   }, SERVER_BUDGET_MS);
 
   test("client export through management ingress names the public bound port and ingress refuses inference", async () => {
-    const managementPort = await freePort();
-    const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });
-    saveConfig({
+    const { server, managementPort } = await startHubIngressServer(managementPort => ({
       ...hubIngressConfig(managementPort),
       port: 0,
       unauthenticatedLoopbackListener: { enabled: false },
@@ -174,8 +205,7 @@ describe("hub management ingress", () => {
           models: ["static-model"],
         },
       },
-    });
-    const server = startServer(publicPort);
+    }));
     const base = `http://127.0.0.1:${managementPort}`;
     const headers = {
       Host: "hub.example.test",
@@ -199,10 +229,7 @@ describe("hub management ingress", () => {
   }, SERVER_BUDGET_MS);
 
   test("default-denies every data, health, readiness, WebSocket, and unknown-static route", async () => {
-    const managementPort = await freePort();
-    const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });
-    saveConfig(hubIngressConfig(managementPort));
-    const server = startServer(publicPort);
+    const { server, managementPort } = await startHubIngressServer(managementPort => hubIngressConfig(managementPort));
     const base = `http://127.0.0.1:${managementPort}`;
     try {
       const denied: Array<{ path: string; headers?: Record<string, string> }> = [
@@ -249,11 +276,8 @@ describe("hub management ingress", () => {
   });
 
   test("normal shutdown closes public, data-loopback, and management listeners", async () => {
-    const managementPort = await freePort();
-    const loopbackPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: managementPort });
-    const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: loopbackPort });
-    saveConfig(hubIngressConfig(managementPort, loopbackPort));
-    const server = startServer(publicPort);
+    const { server, managementPort, loopbackPort } = await startHubIngressServer(hubIngressConfig);
+    const publicPort = server.port!;
     await server.stop(true);
     for (const port of [publicPort, loopbackPort, managementPort]) {
       const rebound = Bun.serve({ port, hostname: "127.0.0.1", fetch: () => new Response("ok") });
