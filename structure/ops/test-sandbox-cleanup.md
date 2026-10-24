@@ -11,6 +11,13 @@ and a null token, bounds UTF-16 decoding, and frees the allocation even when the
 with a bounded SID read, `LocalFree` and `CloseHandle` on every exit. A cold PowerShell start
 cannot breach the lookup budget on x64 because no child process starts (#7544).
 Unsupported FFI retains the bounded trusted PowerShell helper; native API failures refuse.
+`src/lib/windows-native-principal.ts` reuses that token reader for the ACL identity pair and
+translates its live SID with `LookupAccountSidW`, preserving native UTF-16 account/domain names.
+The async resolver runs native work in `src/lib/windows-native-principal-worker.ts`; callers have
+independent monotonic deadlines while one shared job stays owned through Worker closure. Expired
+results do not enter the identity cache or the ACL timeout memo. The sync resolver rejects an
+elapsed budget before caching; unsupported architectures retain the trusted PowerShell helper.
+Token, SID allocation and DLL cleanup finish before the Worker posts its result and exits.
 `USERPROFILE` and `LOCALAPPDATA` never choose this root. Runtime canonicalization/reparse checks
 and the Bun test lock's required ACL hardening remain separate admission checks.
 
@@ -72,6 +79,7 @@ one promise. After teardown starts only the lifecycle's own abort reason is abso
 error, including a foreign AbortError, still fails its case. Callers settle that lifecycle before
 draining producers/reaps and restoring or removing a home. The helper does not replace
 fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
+The response-state stalled-runner child proves queue settlement while its synthetic runner remains held, then releases and drains that work before removing its home.
 
 `tests/helpers/fixture-teardown.ts` owns management-auth, OAuth live-update, Codex quota-auto-refresh
 case roots (`tests/codex-integration/codex-quota-auto-refresh.test.ts`), and Anthropic instance

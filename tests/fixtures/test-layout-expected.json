@@ -1395,6 +1395,7 @@
   "management-desktop-compatibility-runtime-routes.test.ts": "server",
   "management-desktop-compatibility-settings.test.ts": "server",
   "optional-desktop-upstream.test.ts": "lib",
+  "windows-native-principal.test.ts": "windows",
   "opaque-proxy-tunnel.test.ts": "lib",
   "opaque-proxy-tunnel-protocol.test.ts": "lib",
   "server-desktop-compatibility-startup.test.ts": "server",
