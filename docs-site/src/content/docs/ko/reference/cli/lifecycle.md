@@ -56,6 +56,8 @@ ocx start --socks5-off
 
 연결된 hub 클라이언트나 Remote Link Child에서는 성공한 API 종료를 포함해 `ocx stop`이 연결 소유의 Codex 라우팅, 모델 카탈로그와 Grok 설정을 보존합니다. `ocx start`는 라우팅을 다시 주입하지 않고 보존한 설정으로 서비스를 재개합니다. Codex를 자체 계정으로 돌리려면 `ocx disconnect`를, 이미 기본 라우팅으로 복원했다면 다시 연결하려고 `ocx sync --restart-codex`를 실행하세요.
 
+보존 기능을 확인할 수 없는 오래된 일반 프록시는 서비스나 프로세스를 중지하기 전에 거절합니다. 런타임을 관리하는 앱이나 서비스에서 업데이트·재시작한 뒤 다시 시도하세요.
+
 ### `ocx restart`
 
 프록시가 실행 중이면 확인된 정확한 PID와 포트에 in-place 재시작을 요청하고, 정상 드레인을

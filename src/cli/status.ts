@@ -781,10 +781,15 @@ export function deadProxyRoutingAdviceLines(input: {
 
 type StatusRoutingView = Pick<CliStatusJson, "proxy" | "startup" | "remoteHub" | "connection">;
 
+export function statusProxyUp(json: StatusRoutingView): boolean {
+  return json.remoteHub.connected && json.connection.transport === "link"
+    ? json.proxy.health.ok : Boolean(json.proxy.pid || json.proxy.health.ok);
+}
+
 /** `unusedProxyWarningLines` for the human `ocx status` report, role taken from the report itself. */
 export function statusUnusedProxyLines(json: StatusRoutingView): string[] {
   return unusedProxyWarningLines({
-    proxyUp: Boolean(json.proxy.pid || json.proxy.health.ok),
+    proxyUp: statusProxyUp(json),
     routingKind: json.startup.routingKind,
     ...(json.remoteHub.connected ? { connectedClient: {
       transport: json.connection.transport === "link" ? "link" as const : "hub" as const,

@@ -1,7 +1,84 @@
 import { restoreNativeCodexAsync } from "../codex/inject";
 import type { RetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
-import type { ClientConnectionState } from "../client/state";
+import { readClientConnectionState, type ClientConnectionState } from "../client/state";
+import { readPid, readRuntimePort } from "../config/process-state";
+import { configuredAdminToken } from "../lib/admin-secrets";
+import { readBoundedResponseBody } from "../lib/bounded-body";
+import { gracefulStopHost, isProcessAlive, ProxyOwnershipRefusedError } from "../lib/process-control";
+import { findLiveProxy, proveLiveProxyOwnedByHome } from "../server/proxy-liveness";
+import type { StartExitTeardown } from "./dispatch";
+import type { StopOutcome } from "./stop-report";
+
+/** Re-read ownership when an ordinary runtime actually exits, including after API drain. */
+export function preserveConnectedClientRoutingOnExit(teardown: StartExitTeardown): StartExitTeardown {
+  return readClientConnectionState().kind === "connected"
+    ? { ...teardown, restoreNativeCodex: false, stripGrokConfig: false }
+    : teardown;
+}
+
+type ConnectedStopTarget = { pid: number; port: number; hostname?: string };
+const CONNECTED_STOP_PROBE_MS = 2000;
+const unsupportedConnectedStop = () => new ProxyOwnershipRefusedError(
+  "Connected-client stop refused: this runtime cannot prove it preserves connection-owned integrations. Keep it running and update/restart it through its supervisor, then retry; use 'ocx disconnect' only if you intend to release those integrations.",
+  "connected_client_stop_unsupported",
+);
+
+/** A positive, PID-bound contract is required; old and new builds may share a version. */
+export async function assertConnectedClientStopSupported(target: ConnectedStopTarget | null): Promise<void> {
+  if (!target) throw unsupportedConnectedStop();
+  if (!isProcessAlive(target.pid)) return; // A manager may already have ended this exact target.
+  const origin = `http://${gracefulStopHost(target.hostname)}:${target.port}`;
+  const signal = AbortSignal.timeout(CONNECTED_STOP_PROBE_MS);
+  const probe = async (path: string, authenticated: boolean): Promise<Record<string, unknown> | null> => {
+    try {
+      const headers: Record<string, string> = {};
+      if (authenticated) {
+        const token = configuredAdminToken(process.env.OPENCODEX_HOME?.trim() || undefined, process.env);
+        if (token) headers["x-opencodex-api-key"] = token;
+      }
+      const response = await fetch(`${origin}${path}`, { method: "GET", headers, redirect: "error", signal });
+      if (!response.ok) { void response.body?.cancel().catch(() => {}); return null; }
+      const body = await readBoundedResponseBody(response, { maxBytes: 4096, signal, fatalUtf8: true });
+      if (body.truncated) return null;
+      const parsed: unknown = JSON.parse(body.text);
+      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+    } catch { return null; }
+  };
+  const health = await probe("/healthz", false);
+  // The native machine listener has always preserved integrations on signal and 404s /api/stop.
+  if (health?.service === "opencodex" && health.role === "client" && health.pid === target.pid) return;
+  const capability = await probe("/api/stop", true);
+  if (capability?.schema === "ocx-stop-capabilities/1"
+    && capability.pid === target.pid && capability.connectedClientOwnership === true) return;
+  throw unsupportedConnectedStop();
+}
+
+/** Fail before either service-manager path, including a manager that cascades process exit. */
+export async function preflightConnectedClientStop(approved?: ConnectedStopTarget): Promise<StopOutcome | null> {
+  try {
+    let target = approved;
+    if (!target) {
+      const pid = readPid();
+      const runtime = pid ? readRuntimePort(pid) : null;
+      if (pid && runtime && isProcessAlive(pid)) target = { ...runtime, pid };
+      else {
+        const live = await findLiveProxy({ acceptPackageTreeFenced: true });
+        if (!live?.pid || await proveLiveProxyOwnedByHome(live) !== "proven") throw unsupportedConnectedStop();
+        target = { ...live, pid: live.pid };
+      }
+    }
+    if (!isProcessAlive(target.pid)) throw unsupportedConnectedStop();
+    await assertConnectedClientStopSupported(target);
+    return null;
+  } catch {
+    const error = unsupportedConnectedStop();
+    console.error(error.message);
+    process.exitCode = 1;
+    return { ok: false, summary: { schema: "ocx-stop/1", ok: false, outcome: "failed", exitCode: 1,
+      runtimeDown: false, service: "absent", proxy: "ownership-refused", sharedTeardown: "skipped", message: error.message } };
+  }
+}
 
 /**
  * The line `ocx stop` prints in place of the shared teardown on a connected client, or null

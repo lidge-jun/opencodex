@@ -15,6 +15,11 @@ import type { ManagementPrincipal } from "./management-auth";
 
 export type GrokStripResult = { ok: boolean; changed: boolean; message: string };
 
+/** Read-only promise covering API teardown and the CLI runtime's signal/manager exit cleanup. */
+export function stopCapabilities() {
+  return { schema: "ocx-stop-capabilities/1", connectedClientOwnership: true, pid: process.pid };
+}
+
 export type StopTeardownIo = {
   /** Does the nonce this request carries name a readable obligation on disk? */
   ownsReceipt?: (nonce: string | null) => boolean;

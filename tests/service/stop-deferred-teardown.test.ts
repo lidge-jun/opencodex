@@ -52,7 +52,7 @@ function restoreResult(success: boolean): CodexNativeRestoreResult {
 
 function connectClient(transport: "hub" | "link") {
   const serverUrl = transport === "link" ? "http://127.0.0.1:10200" : "https://hub.example.test";
-  writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", client: {
+  writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
     serverUrl, managementUrl: serverUrl, managementTransport: "direct", transport,
     ...(transport === "link" ? { link: { tunnelPort: 10200, linkId: "lnk_0123456789abcdef" } } : {}),
     selectedClients: ["codex"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client",
@@ -63,6 +63,9 @@ function connectClient(transport: "hub" | "link") {
 async function runParentStop(options: {
   receipt: boolean; response: unknown; restore: CodexNativeRestoreResult; status?: number; clientTransport?: "hub" | "link";
   serverTeardown?: boolean; json?: boolean;
+  clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
+  managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
+  nativeSignal?: boolean; apiFailure?: boolean;
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
@@ -78,15 +81,62 @@ async function runParentStop(options: {
   const reportPath = join(home, "parent-stop-result.json");
   expect(existsSync(reportPath), child.stderr).toBe(true);
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
-    calls: { killed: number; native: number; grok: number; cleared: number; exited: number };
+    calls: { killed: number; native: number; grok: number; cleared: number; exited: number; service: number };
+    probes: string[];
     urls: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
-  expect(report.urls, child.stderr).toHaveLength(1);
+  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
 describe("parent CLI shared teardown completion", () => {
+  for (const clientServer of ["legacy", "unknown", "wrong-pid", "malformed", "oversized", "unauthorized", "redirect", "body-timeout"] as const) {
+    test(`connected stop refuses ${clientServer} preservation before service or POST`, async () => {
+      const outcome = await runParentStop({ receipt: true, clientTransport: "link", clientServer, json: true,
+        response: { success: true, sharedTeardown: "performed" }, restore: restoreResult(true) });
+      expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, cleared: 0 });
+      expect(outcome.nonce).toBeUndefined();
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false, sharedTeardown: "skipped" });
+      expect(outcome.stderr).toContain("ocx disconnect");
+      expect(outcome.exitCode).toBe(1);
+    });
+  }
+  for (const mode of ["tracked", "orphan", "guarded"] as const) {
+    test(`connected ${mode} stop refuses an old server before a cascading manager`, async () => {
+      const outcome = await runParentStop({ receipt: true, clientTransport: "hub", clientServer: "legacy", json: true,
+        orphan: mode === "orphan", guarded: mode === "guarded", managerCascades: true,
+        response: { success: true, sharedTeardown: "performed" }, restore: restoreResult(true) });
+      expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, cleared: 0 });
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, sharedTeardown: "skipped" });
+      expect(outcome.exitCode).toBe(1);
+    });
+  }
+  test("actual startup exit cleanup preserves freshly connected routing after a signal or API exit", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "link", exitCleanup: true,
+      response: null, restore: restoreResult(true) });
+    expect(outcome.calls).toMatchObject({ native: 0, grok: 0, service: 0, cleared: 0, killed: 0 });
+    expect(outcome.exitCode).toBe(0);
+  });
+  test("ordinary startup exit cleanup retains native and Grok restoration", async () => {
+    const outcome = await runParentStop({ receipt: true, exitCleanup: true, response: null, restore: restoreResult(true) });
+    expect(outcome.calls).toMatchObject({ native: 1, grok: 1, service: 0 });
+    expect(outcome.exitCode).toBe(0);
+  });
+  test("PID-identified native client keeps the 404 to signal path", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "link", nativeSignal: true, json: true,
+      status: 404, response: { error: "not found" }, restore: restoreResult(true) });
+    expect(outcome.calls).toMatchObject({ service: 1, killed: 1, native: 0, grok: 0 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
+    expect(outcome.exitCode).toBe(0);
+  });
+  test("full preservation capability permits signal fallback after an API failure", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "hub", nativeSignal: true, json: true,
+      serverTeardown: true, apiFailure: true, status: 503, response: { error: "unavailable" }, restore: restoreResult(true) });
+    expect(outcome.calls).toMatchObject({ service: 1, killed: 1, native: 0, grok: 0 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
+    expect(outcome.exitCode).toBe(0);
+  });
   // #7563: nothing on a connected client writes its Codex routing, catalog or Grok block back
   // on start, so a stop that tore them down left them torn down.
   for (const clientTransport of ["link", "hub"] as const) {
@@ -100,7 +150,7 @@ describe("parent CLI shared teardown completion", () => {
       expect(outcome.exitCode, outcome.stderr).toBe(0);
     });
 
-    test(`a ${clientTransport} client stop leaves the connection's integrations and claims no receipt`, async () => {
+    test(`a ${clientTransport} native client stop leaves the connection's integrations and claims no receipt`, async () => {
       const outcome = await runParentStop({ receipt: true, clientTransport,
         response: { error: "not found" }, status: 404, restore: restoreResult(true) });
       expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
@@ -300,6 +350,18 @@ describe("stopProxyGracefully deferral flag", () => {
 });
 
 describe("performStopTeardown", () => {
+  test("GET stop capability is bound to the server PID and leaves shared state alone", async () => {
+    connectClient("link");
+    const before = readFileSync(join(home, "config.json"), "utf8");
+    const { handleManagementAPI } = await import("../../src/server/management-api");
+    const url = new URL("http://127.0.0.1:10100/api/stop");
+    const response = await handleManagementAPI(new Request(url, { headers: { Host: "127.0.0.1:10100" } }), url, {
+      port: 10100, providers: {}, defaultProvider: "openai",
+    } as never);
+    expect(response?.status).toBe(200);
+    expect(await response!.json()).toEqual({ schema: "ocx-stop-capabilities/1", connectedClientOwnership: true, pid: process.pid });
+    expect(readFileSync(join(home, "config.json"), "utf8")).toBe(before);
+  });
   for (const transport of ["hub", "link"] as const) {
     test(`persisted ${transport} ownership precedes receipt deferral and leaves its receipt intact`, async () => {
       connectClient(transport);

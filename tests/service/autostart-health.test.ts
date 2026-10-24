@@ -482,6 +482,12 @@ describe("routing visibility (#2411)", () => {
     expect(nativeDown).toContain("Claude requests will fail with connection errors");
     expect(nativeDown).not.toContain("Codex/Claude requests will fail");
     expect(nativeDown).not.toContain("Codex is still pointed at this proxy");
+    const staleLink = view(true, "link", "native", false);
+    staleLink.proxy.pid = 99;
+    expect(statusUnusedProxyLines(staleLink).join("\n")).toContain("'ocx service start'");
+    const staleHub = view(true, "hub", "native", false);
+    staleHub.proxy.pid = 99;
+    expect(statusUnusedProxyLines(staleHub).join("\n")).not.toContain("'ocx service start'");
   });
 
   // #5261: setup writes routing that outlives the session and then ends on a success line.
