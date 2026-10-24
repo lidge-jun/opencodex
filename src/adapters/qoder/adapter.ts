@@ -102,12 +102,14 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
   let closed = false;
   let boundaries: { offset: number; event: AdapterEvent }[] = [];
   let boundaryChars = 0;
+  let textCarry = "";
 
   const refuse = (reason: string): void => {
     if (closed) return;
     closed = true;
     boundaries = [];
     boundaryChars = 0;
+    textCarry = "";
     emit({
       type: "error",
       message: qoderScaffoldErrorMessage(reason),
@@ -153,7 +155,8 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
   const forwardEvent = (event: AdapterEvent): void => {
     // A vendor prefix can still turn a replay marker into ordinary prose. Keep
     // its event cuts until the vendor filter resolves it instead of flushing it.
-    if (textFilter.pendingTextLength > 0) {
+    const offset = textFilter.pendingTextLength + textCarry.length;
+    if (offset > 0) {
       const size = event.type === "thinking_delta" ? event.thinking.length : JSON.stringify(event).length;
       if (boundaryChars + size > MAX_PENDING_BOUNDARY_CHARS
         || boundaries.length >= MAX_PENDING_BOUNDARY_EVENTS) {
@@ -162,10 +165,10 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
       }
       boundaryChars += size;
       const last = boundaries.at(-1);
-      if (last?.offset === textFilter.pendingTextLength
+      if (last?.offset === offset
         && last.event.type === "thinking_delta" && event.type === "thinking_delta") {
         last.event = { type: "thinking_delta", thinking: last.event.thinking + event.thinking };
-      } else boundaries.push({ offset: textFilter.pendingTextLength, event });
+      } else boundaries.push({ offset, event });
       return;
     }
     if (settleText() && (event.type !== "thinking_delta" || event.thinking)) emit(event);
@@ -178,7 +181,10 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
     let at = 0;
     for (const boundary of queued) {
       // A suppressed prefix contributes no text; surviving prefixes keep their offsets.
-      const end = text ? boundary.offset : 0;
+      let end = text ? Math.min(text.length, Math.max(at, boundary.offset)) : 0;
+      const before = text.charCodeAt(end - 1), after = text.charCodeAt(end);
+      // A scalar completed by a later input belongs before events between its halves.
+      if (before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff) end++;
       forwardText(text.slice(at, end), refuseOnMatch);
       if (closed || !settleText(refuseOnMatch)) return;
       if (boundary.event.type !== "thinking_delta" || boundary.event.thinking) emit(boundary.event);
@@ -187,23 +193,42 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
     if (!closed) forwardText(text.slice(at), refuseOnMatch);
   };
 
+  const prepareText = (text: string, terminal = false): string => {
+    let complete = textCarry + text;
+    textCarry = "";
+    const last = complete.charCodeAt(complete.length - 1);
+    if (!terminal && last >= 0xd800 && last <= 0xdbff) {
+      textCarry = complete.slice(-1);
+      complete = complete.slice(0, -1);
+    }
+    return complete.toWellFormed();
+  };
+
+  const pushText = (text: string, refuseOnMatch = true): string | null => {
+    let at = 0;
+    while (boundaries.length && at < text.length) {
+      const width = text.codePointAt(at)! > 0xffff ? 2 : 1;
+      const cleaned = textFilter.push(text.slice(at, at + width));
+      at += width;
+      if (cleaned.fail) {
+        if (refuseOnMatch) refuse(cleaned.fail);
+        return cleaned.fail;
+      }
+      // A pending vendor suffix is one marker prefix, starting with its only
+      // '<'. Its first release resolves the entire suffix and its saved cuts.
+      if (cleaned.text || textFilter.pendingTextLength === 0) drainBoundaries(cleaned.text, refuseOnMatch);
+      if (closed) return null;
+    }
+    const cleaned = textFilter.push(text.slice(at));
+    if (cleaned.text) forwardText(cleaned.text, refuseOnMatch);
+    if (cleaned.fail && refuseOnMatch) refuse(cleaned.fail);
+    return cleaned.fail;
+  };
+
   return (event: AdapterEvent): void => {
     if (closed) return;
     if (event.type === "text_delta") {
-      let at = 0;
-      while (boundaries.length && at < event.text.length) {
-        const width = event.text.codePointAt(at)! > 0xffff ? 2 : 1;
-        const cleaned = textFilter.push(event.text.slice(at, at + width));
-        at += width;
-        if (cleaned.fail) { refuse(cleaned.fail); return; }
-        // A pending vendor suffix is one marker prefix, starting with its only
-        // '<'. Its first release resolves the entire suffix and all saved cuts.
-        if (cleaned.text || textFilter.pendingTextLength === 0) drainBoundaries(cleaned.text);
-        if (closed) return;
-      }
-      const cleaned = textFilter.push(event.text.slice(at));
-      if (cleaned.text) forwardText(cleaned.text);
-      if (cleaned.fail) refuse(cleaned.fail);
+      if (event.text) pushText(prepareText(event.text));
       return;
     }
     if (event.type === "thinking_delta") {
@@ -213,6 +238,7 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
       return;
     }
     if (event.type === "done" || event.type === "error" || event.type === "incomplete") {
+      const carryFailure = textCarry ? pushText(prepareText("", true), false) : null;
       const tail = textFilter.flush();
       const reasoning = thinkingFilter.flush();
       drainBoundaries(tail.text, false);
@@ -222,7 +248,7 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
       if (reasoning.text && !replayFilter.matched && !replayFilter.unverifiedMarker) {
         emit({ type: "thinking_delta", thinking: reasoning.text });
       }
-      const fail = tail.fail ?? reasoning.fail
+      const fail = carryFailure ?? tail.fail ?? reasoning.fail
         ?? (replayFilter.matched || replayFilter.unverifiedMarker ? "replayed tool envelope" : null);
       // A vendor error already carries the better explanation for why the turn ended;
       // only a terminal that claims success is replaced.

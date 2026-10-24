@@ -470,6 +470,66 @@ describe("Qoder replay envelope refusal (#7517)", () => {
     expect(events.at(-1)?.type).toBe("done");
   });
 
+  for (const prefix of ["", "a <"]) for (const character of ["😀", "𠀀"]) test(`joins split input ${character} after ${JSON.stringify(prefix)}`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: prefix });
+    guard({ type: "thinking_delta", thinking: "Before." });
+    guard({ type: "text_delta", text: character[0]! });
+    guard({ type: "thinking_delta", thinking: "Between." });
+    guard({ type: "heartbeat" });
+    guard({ type: "text_delta", text: "" });
+    guard({ type: "text_delta", text: character[1]! + " suffix" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe(prefix + character + " suffix");
+    for (const event of events) if (event.type === "text_delta") expect(event.text.isWellFormed()).toBe(true);
+    const scalar = events.findIndex(event => event.type === "text_delta" && event.text.includes(character));
+    expect(scalar).toBeGreaterThan(events.findIndex(event => event.type === "thinking_delta" && event.thinking === "Before."));
+    expect(scalar).toBeLessThan(events.findIndex(event => event.type === "thinking_delta" && event.thinking === "Between."));
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("deferred events stay after a joined scalar and before a fresh replay block", () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "\uD83D" });
+    guard({ type: "thinking_delta", thinking: "A" });
+    guard({ type: "tool_call_start", id: "call_1", name: "exec" });
+    guard({ type: "thinking_delta", thinking: "B" });
+    guard({ type: "text_delta", text: "\uDE00[Tool Result]\nprivate-fixture" });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe("😀");
+    expect(events.map(event => event.type)).toEqual(["text_delta", "thinking_delta", "tool_call_start", "thinking_delta", "error"]);
+    expect(JSON.stringify(events)).not.toContain("private-fixture");
+    expect(events.at(-1)).toMatchObject({ type: "error", code: QODER_SCAFFOLD_ERROR_CODE });
+  });
+
+  for (const terminal of ["done", "incomplete", "error"] as const) test(`settles an unpaired high before ${terminal}`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    guard({ type: "text_delta", text: "a <\uD83D" });
+    guard({ type: "thinking_delta", thinking: "Reasoning." });
+    const end: AdapterEvent = terminal === "done" ? { type: "done", stopReason: "stop" }
+      : terminal === "incomplete" ? { type: "incomplete", reason: "max_output_tokens" }
+      : { type: "error", message: "original vendor error", status: 429 };
+    guard(end);
+    expect(textOf(events)).toBe("a <�");
+    for (const event of events) if (event.type === "text_delta") expect(event.text.isWellFormed()).toBe(true);
+    expect(events.at(-1)).toEqual(end);
+    expect(events.at(-2)).toEqual({ type: "thinking_delta", thinking: "Reasoning." });
+  });
+
+  for (const [chunks, expected] of [
+    [["\uDE00"], "�"], [["\uD83D", "x"], "�x"], [["\uD83D", "\uD83D", "\uDE00"], "�😀"],
+  ] as const) test(`replaces unpaired input ${JSON.stringify(chunks)}`, () => {
+    const { events, emit } = collect();
+    const guard = guardQoderScaffolding(emit);
+    for (const text of chunks) guard({ type: "text_delta", text });
+    guard({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe(expected);
+    for (const event of events) if (event.type === "text_delta") expect(event.text.isWellFormed()).toBe(true);
+  });
+
   test("pending boundaries never release split vendor tool markup", () => {
     const { events, emit } = collect();
     const guard = guardQoderScaffolding(emit);
@@ -482,10 +542,10 @@ describe("Qoder replay envelope refusal (#7517)", () => {
     expect(JSON.stringify(events)).not.toContain("private-fixture");
   });
 
-  for (const terminal of ["done", "incomplete", "error"] as const) test(`withholds held reasoning when draining an envelope before ${terminal}`, () => {
+  for (const suffix of ["<", "\uD83D"]) for (const terminal of ["done", "incomplete", "error"] as const) test(`withholds held reasoning when draining an envelope with ${JSON.stringify(suffix)} before ${terminal}`, () => {
     const { events, emit } = collect();
     const guard = guardQoderScaffolding(emit);
-    guard({ type: "text_delta", text: "```text\n[Tool Result]\npayload<" });
+    guard({ type: "text_delta", text: "```text\n[Tool Result]\npayload" + suffix });
     guard({ type: "thinking_delta", thinking: "<s" });
     const end: AdapterEvent = terminal === "done" ? { type: "done", stopReason: "stop" }
       : terminal === "incomplete" ? { type: "incomplete", reason: "max_output_tokens" }
@@ -496,11 +556,11 @@ describe("Qoder replay envelope refusal (#7517)", () => {
     expect(events.at(-1)).toMatchObject(terminal === "error" ? end : { type: "error", code: QODER_SCAFFOLD_ERROR_CODE, retryable: false });
   });
 
-  for (const overflow of ["characters", "events"] as const) {
-    test(`bounds deferred boundary ${overflow} without releasing held content`, () => {
+  for (const prefix of ["<s", "\uD83D"]) for (const overflow of ["characters", "events"] as const) {
+    test(`bounds deferred boundary ${overflow} after ${JSON.stringify(prefix)} without releasing held content`, () => {
       const { events, emit } = collect();
       const guard = guardQoderScaffolding(emit);
-      guard({ type: "text_delta", text: "<s" });
+      guard({ type: "text_delta", text: prefix });
       if (overflow === "characters") guard({ type: "thinking_delta", thinking: "private-fixture".repeat(10_000) });
       else for (let index = 0; index < 2_000; index++) guard({ type: "tool_call_end" });
       guard({ type: "done", stopReason: "stop" });

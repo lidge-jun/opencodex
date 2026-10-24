@@ -51,6 +51,22 @@ function fakeChild(frames: string[], options: { parked?: boolean; exitCode?: num
 }
 
 describe("qoder adapter", () => {
+  test("joins escaped surrogate halves from separate JSONL frames", async () => {
+    const frames = [
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "a <\uD83D" } } },
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "Reasoning." } } },
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "\uDE00" } } },
+      { type: "result", subtype: "success", is_error: false, result: "" },
+    ].map(frame => JSON.stringify(frame) + "\n");
+    const events: AdapterEvent[] = [];
+    await createQoderAdapter(provider(), { which: () => "/bin/qoder", spawn: () => fakeChild(frames) })
+      .runTurn!(parsed(), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
+    const text = events.filter((event): event is Extract<AdapterEvent, { type: "text_delta" }> => event.type === "text_delta");
+    expect(text.map(event => event.text).join("")).toBe("a <😀");
+    for (const event of text) expect(event.text.isWellFormed()).toBe(true);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
   test.each([false, true])("unfinished repeated-ID blocks are bounded before a terminal frame (already emitted=%s)", async alreadyEmitted => {
     const id = "same_call";
     const name = "mcp__opencodex__probe_echo";
