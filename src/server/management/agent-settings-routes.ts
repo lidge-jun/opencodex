@@ -1516,10 +1516,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         visionSidecar: sidecarAnthropicPoolOptions(config, { ...helperVision, backend: helperVisionBackend }, helperParent),
       },
       ...(webSearchOverride && Object.keys(webSearchOverride).length > 0
-        ? { webSearchSidecar: { backend: webSearchOverride.backend, model: webSearchOverride.model, ...(webSearchOverride.anthropicInstance ? { anthropicInstance: webSearchOverride.anthropicInstance } : {}) } }
+        ? { webSearchSidecar: { enabled: webSearchOverride.enabled, backend: webSearchOverride.backend, model: webSearchOverride.model, ...(webSearchOverride.anthropicInstance ? { anthropicInstance: webSearchOverride.anthropicInstance } : {}) } }
         : {}),
       ...(visionOverride && Object.keys(visionOverride).length > 0
-        ? { visionSidecar: { backend: visionOverride.backend, model: visionOverride.model, ...(visionOverride.anthropicInstance ? { anthropicInstance: visionOverride.anthropicInstance } : {}) } }
+        ? { visionSidecar: { enabled: visionOverride.enabled, backend: visionOverride.backend, model: visionOverride.model, ...(visionOverride.anthropicInstance ? { anthropicInstance: visionOverride.anthropicInstance } : {}) } }
         : {}),
       fastMode: config.fastMode,
       forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
@@ -1673,6 +1673,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const section = body[field];
       if (section === undefined || section === null) continue;
       if (!isPlainObject(section)) return jsonResponse({ error: `${field} must be an object or null` }, 400);
+      if (section.enabled !== undefined && typeof section.enabled !== "boolean") {
+        return jsonResponse({ error: `${field}.enabled must be a boolean` }, 400);
+      }
       // Both overrides now speak their full unions (roadmap 060 web, 170
       // vision revised). Vision's third arm is "routed" (loopback through the
       // proxy's own router), never exa: exa is not an LLM, and accepting an
@@ -1760,8 +1763,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       // The per-field validation above guarantees vision only ever carries the two-member
       // union; the cast is the loop's shared-shape compromise, not a wider write path.
-      const requested = section as { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | null; model?: string; anthropicInstance?: AnthropicInstanceId | null };
+      const requested = section as { enabled?: boolean; backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa" | null; model?: string; anthropicInstance?: AnthropicInstanceId | null };
       const override = { ...next[field] } as NonNullable<OcxClaudeCodeConfig[typeof field]>;
+      if (requested.enabled !== undefined) override.enabled = requested.enabled;
       if (requested.anthropicInstance === null) delete override.anthropicInstance;
       else if (isAnthropicInstanceId(requested.anthropicInstance)) override.anthropicInstance = requested.anthropicInstance;
       if (requested.backend === null) delete override.backend;
