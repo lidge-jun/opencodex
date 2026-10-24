@@ -70,7 +70,7 @@ const POLICY =
 const STRUCTURE_DOC = "structure/providers/chat-compat.md";
 const ENGLISH_REFERENCE = "docs-site/src/content/docs/reference/configuration/providers.md";
 const ENGLISH_GUIDE = "docs-site/src/content/docs/guides/claude-code.md";
-const LOCALES = ["fr", "ja", "ko", "ru", "tr", "zh-cn", "zh-tw"] as const;
+const LOCALES = ["es", "fr", "ja", "ko", "ru", "tr", "zh-cn", "zh-tw"] as const;
 
 const referencePage = (locale: string): string =>
   "docs-site/src/content/docs/" + locale + "/reference/configuration/providers.md";

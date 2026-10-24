@@ -726,7 +726,6 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Umans AI · Neuralwatt | `https://api.code.umans.ai` · `https://api.neuralwatt.com/v1` |
 | Mistral | `https://api.mistral.ai/v1` |
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
-
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
 | Chutes | `https://llm.chutes.ai/v1` |

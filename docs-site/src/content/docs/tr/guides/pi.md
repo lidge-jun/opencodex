@@ -3,13 +3,7 @@ title: "Pi Entegrasyonu"
 description: "Inflection Pi ve hafif sohbet modellerini OpenCodex üzerinden bağlama rehberi."
 ---
 
-Pi reads its providers from a single global JSON file rather than environment
-variables, so
-opencodex does not launch it. Instead, `ocx export` serializes the `opencodex`
-provider block —
-base URL, model list, and the env reference Pi interpolates — and you merge it
-into your own
-config.
+Pi, sağlayıcılarını tek bir genel JSON dosyasından okur. opencodex Pi’yi başlatmaz; `ocx export`, temel URL, model listesi ve gizli olmayan yerel anahtar yer tutucusunu içeren `opencodex` sağlayıcı bloğunu üretir. Bu bloğu mevcut yapılandırmanızla birleştirin.
 
 ## Quickstart
 
@@ -17,12 +11,15 @@ Start the proxy, then print the config:
 
 ```bash
 ocx start
+```
+
+Bu işlemi çalışır durumda bırakın. İkinci bir terminalde yapılandırmayı yazdırın:
+
+```bash
 ocx export --client pi
 ```
 
-The output leads with the JSON, then prints the destination path, the merge
-warning, the env
-export line, and how many models carry authoritative context limits.
+JSON’dan sonra hedef yol, birleştirme uyarısı, loopback kullanım ipucu ve doğrulanmış bağlam sınırları olan model sayısı yazdırılır. Bu dışa aktarım yalnızca kimlik doğrulamasız loopback proxy’sini destekler; uzak erişim kimlik doğrulamasını yapılandırmaz.
 
 ```json
 {
@@ -30,7 +27,7 @@ export line, and how many models carry authoritative context limits.
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "compat": {
         "sendSessionAffinityHeaders": true,
         "supportsDeveloperRole": false
@@ -89,34 +86,7 @@ provider or changing model visibility, and merge the new block over the old one.
 
 ## The admission key
 
-Two different keys are easy to confuse here, and only the first one appears in
-this file:
-
-| Key | What it is | Where it lives |
-| --- | --- | --- |
-| Proxy admission key | opencodex's own credential, generated on the dashboard's **API** tab | referenced by `apiKey` as `$OPENCODEX_API_KEY`; the value stays in your environment |
-| Provider key | your Anthropic / OpenAI / OpenRouter key | opencodex's own config, per [Providers](/guides/providers/) |
-
-The exported config carries only the reference, never a secret. Pi interpolates
-a bare `$NAME`, so
-the variable is:
-
-```bash
-export OPENCODEX_API_KEY=<your key>
-```
-
-That name is Pi's alone. opencode uses a different variable
-(`OPENCODEX_OPENCODE_API_KEY`, in `{env:…}` form) — see the [opencode
-guide](/guides/opencode/).
-
-**A loopback proxy needs no key at all.** opencodex binds `127.0.0.1` by default
-and authenticates
-nothing there, so the `$OPENCODEX_API_KEY` reference is inert and you can leave
-the variable unset.
-It matters only when `hostname` is set beyond loopback, which is also the case
-where the proxy
-refuses to start without a token — see [Remote
-access](/tr/reference/configuration/server/#uzaktan-erişim).
+Dışa aktarılan `apiKey`, gizli olmayan `opencodex-loopback` yer tutucusudur. Anahtar için ortam değişkeni dışa aktarmanız gerekmez. Dışa aktarıcı yalnızca kimlik doğrulamasız loopback proxy’sine izin verir; uzak veya token ile korunan proxy’leri reddeder. Sağlayıcı kimlik bilgileri [Sağlayıcılar](/tr/guides/providers/) sayfasında açıklanan opencodex yapılandırmasında kalır. Üst sağlayıcının anahtarını bu Pi bloğuna koymayın. Uzak erişim için proxy erişim kimlik doğrulamasını destekleyen bir entegrasyon kullanın. Yer tutucuyu değiştirmek Pi için uzak dışa aktarımı etkinleştirmez.
 
 ## Model metadata
 

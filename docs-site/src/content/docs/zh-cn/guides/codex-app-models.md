@@ -117,7 +117,7 @@ fast_mode = true
 
 ## 子代理选择
 
-Codex 会按 `priority` 升序对选择器可见的目录条目排序，并把前五个作为 `spawn_agent` 模型 override 暴露出来。仪表盘 Subagents 页面最多可以选择并保存五个裸原生 id 或路由 `provider/model` id。手动设置的 `subagentModels` 也支持账户限定的 `<selector>/<native-openai-model>` id，但仪表盘不会提供这些精确 id；保存该页面会用仪表盘中可见的选项替换整个列表。opencodex 会按所选顺序分配较低的目录 priority；启用账户限定的选择器行时，裸原生选择会展开为 selector-qualified 分组。其他模型仍然可以通过精确 id 调用。
+Codex 会按 `priority` 升序对选择器可见的目录条目排序，并把前五个作为 `spawn_agent` 模型 override 暴露出来。仪表盘 Subagents 页面最多可以选择并保存五个裸原生 id 或路由 `provider/model` id。手动设置的 `subagentModels` 也支持账户限定的 `<selector>/<native-openai-model>` id。保存列表时，仪表盘会保留这些已保存的精确 id，包括当前目录中已不可用的模型。opencodex 会按所选顺序分配较低的目录 priority；启用账户限定的选择器行时，裸原生选择会展开为 selector-qualified 分组。其他模型仍然可以通过精确 id 调用。
 
 精选模型列表与 Dashboard 的 **Sub-agent delegation** 选择彼此独立。它只决定 Codex 先提供哪些 override；它不会自己选择模型，也不会触发委派。
 

@@ -47,7 +47,7 @@ still depends on upstream support for your account.
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` stamps every catalog model as v1; `v2` stamps every model as v2. `default` restores upstream pins (Sol/Terra v2, Luna v1) and otherwise follows the native `multi_agent_v2` flag. Applies to new sessions. |
 | `keepNativeChatGptOnV1?` | `boolean` | `false` | When `multiAgentMode` is `"v2"`, disable the global V2 override, stamp ChatGPT-native rows as v1, and keep routed rows on v2. Codex resolves the global override before catalog pins, so both parts are required for a ChatGPT parent to spawn routed children without backend-encrypted tasks ([#92](https://github.com/lidge-jun/opencodex/issues/92)). Ignored in `v1` and `default`. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers only bare native and routed ids and omits exact account-qualified choices when it saves; use `ocx agent subagents set` or edit the configuration for exact choices. After the [one-time Astra upgrade](#astra-roster-upgrade), an explicit empty list is preserved. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Up to five bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` ids featured first in the sub-agent picker. The dashboard offers bare native and routed ids as new choices and preserves already-configured exact account-qualified ids when saving, including ids unavailable in the current catalog. To add a new exact account-qualified id, use `ocx agent subagents set` or edit the configuration. After the [one-time Astra upgrade](#astra-roster-upgrade), an explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored v2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Replaces the built-in v2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
@@ -172,13 +172,13 @@ on a mid-thread model switch.
 ```json
 {
   "multiAgentMode": "v2",
-  "subagentModels": ["gpt-5.5", "anthropic/claude-sonnet-5"],
-  "injectionModel": "gpt-5.5",
+  "subagentModels": ["gpt-6.1-sol", "anthropic/claude-sonnet-5"],
+  "injectionModel": "gpt-6.1-sol",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.6-luna"],
+  "subagentModelFallback": ["gpt-6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.6-luna"]
+    "gpt-6.1-sol": ["gpt-6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"

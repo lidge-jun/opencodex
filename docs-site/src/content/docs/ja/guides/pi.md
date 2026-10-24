@@ -3,7 +3,7 @@ title: 円周率
 description: Pi からルーティングされたモデルを使用します。ocx エクスポートは、実行中のプロキシに接続された Pi の models.json のカスタム プロバイダー ブロックを書き込みます。
 ---
 
-Pi は環境変数ではなく単一のグローバル JSON ファイルからプロバイダーを読み取るため、opencodex はそれを起動しません。代わりに、`ocx export` は `opencodex` プロバイダー ブロック (ベース URL、モデル リスト、Pi が補間する環境参照) をシリアル化し、それを独自の設定にマージします。
+Pi は単一のグローバル JSON ファイルからプロバイダーを読み込みます。opencodex は Pi を起動せず、`ocx export` でベース URL、モデル一覧、秘密ではないローカルキーのプレースホルダーを含む `opencodex` プロバイダーブロックを出力します。そのブロックを既存の設定にマージしてください。
 
 ## クイックスタート
 
@@ -11,10 +11,15 @@ Pi は環境変数ではなく単一のグローバル JSON ファイルから�
 
 ```bash
 ocx start
+```
+
+このプロセスを実行したまま、別のターミナルで設定を表示します。
+
+```bash
 ocx export --client pi
 ```
 
-出力は JSON で始まり、宛先パス、マージ警告、env エクスポート行、および権威コンテキスト制限を持つモデルの数を出力します。
+JSON に続いて、保存先、マージに関する警告、ループバックでの使用方法、確定したコンテキスト上限を持つモデル数が表示されます。このエクスポートは認証不要のループバックプロキシ専用で、リモートアクセスの認証は設定しません。
 
 ```json
 {
@@ -22,7 +27,7 @@ ocx export --client pi
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "compat": {
         "sendSessionAffinityHeaders": true,
         "supportsDeveloperRole": false
@@ -68,22 +73,7 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # or redirect the b
 
 ## アドミッションキー
 
-ここでは 2 つの異なるキーが混同されやすいため、このファイルには最初のキーのみが表示されます。
-
-|キー |それは何ですか |それが住んでいる場所 |
-| --- | --- | --- |
-|プロキシ アドミッション キー | opencodex 自身の認証情報。ダッシュボードの **API** タブで生成されます。 `apiKey` では `$OPENCODEX_API_KEY` として参照されます。値は環境内に残ります。
-|プロバイダーキー | Anthropic / OpenAI / OpenRouter キー | opencodex 独自の設定、[プロバイダー](/guides/providers/) ごと |
-
-エクスポートされた設定には参照のみが含まれ、シークレットは含まれません。 Pi は裸の `$NAME` を補間するため、変数は次のようになります。
-
-```bash
-export OPENCODEX_API_KEY=<your key>
-```
-
-その名前はパイだけです。 opencode は別の変数 (`OPENCODEX_OPENCODE_API_KEY`、`{env:…}` 形式) を使用します。[オープンコードガイド](/guides/opencode/) を参照してください。
-
-**ループバック プロキシにはキーはまったく必要ありません。** opencodex はデフォルトで `127.0.0.1` をバインドし、そこでは何も認証しないため、`$OPENCODEX_API_KEY` 参照は不活性であり、変数を設定しないままにすることができます。これは、`hostname` がループバックを超えて設定されている場合にのみ問題になります。これは、プロキシがトークンなしでの開始を拒否する場合でもあります。[リモートアクセス](/ja/reference/configuration/server/#リモートアクセス) を参照してください。
+出力される `apiKey` は秘密ではないプレースホルダー `opencodex-loopback` です。キー用の環境変数をエクスポートする必要はありません。エクスポーターは認証不要のループバックプロキシだけを許可し、リモートまたはトークンで保護されたプロキシを拒否します。プロバイダーの認証情報は [プロバイダー](/ja/guides/providers/) に示す opencodex の設定内に保持されます。Pi のこのブロックに上流プロバイダーのキーを入れないでください。リモート接続にはプロキシへのアクセス認証に対応した別の連携を使ってください。プレースホルダーを変えても Pi のリモートエクスポートは有効になりません。
 
 ## モデルのメタデータ
 

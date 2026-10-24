@@ -105,14 +105,11 @@ behavior.
 
 ## Remote and LAN binds
 
-The default loopback bind does not require an API token. A non-loopback bind, such as `0.0.0.0`,
-requires `OPENCODEX_API_AUTH_TOKEN`; the proxy refuses to start without it. Set the variable before
-`ocx start`, or before `ocx service install` so the service receives it:
+Normal loopback model routes do not require a data token. A non-loopback bind, such as `0.0.0.0`, requires a data-admission credential, resolved from `OPENCODEX_API_AUTH_TOKEN`, `OCX_API_TOKEN_FILE`, or the owner-only `service-api-token` file. `ocx service install` can provision that file when absent. If supplying an environment token, set it before `ocx start` or `ocx service install`:
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx service install
 ```
 
-Clients must then authenticate their management and model requests. Read the remote-access rules in
-[Configuration](/reference/configuration/) before exposing opencodex beyond the local machine.
+Model requests use data-plane authentication. Management uses an independent credential: `OPENCODEX_ADMIN_AUTH_TOKEN` or the generated admin token in a hardened file; a data token does not grant management access. The dashboard follows the session and access rules in [Management API](/reference/management-api/#authentication-model). Never give the admin token to a model client. Read [Remote access](/reference/configuration/server/#remote-access) before exposing the proxy beyond the local machine.

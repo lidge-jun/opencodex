@@ -3,7 +3,7 @@ title: Pi
 description: 使用 Pi 的任何路由模型 — ocx export 會為 Pi 的 models.json 寫入自訂供應商區塊，連接到執行中的代理。
 ---
 
-Pi 從單一全域 JSON 檔案而非環境變數讀取其供應商，因此 opencodex 不會啟動它。相反地，`ocx export` 序列化 `opencodex` 供應商區塊 — base URL、模型清單，以及 Pi 會插入的環境參考 — 然後你將其合併到自己的設定中。
+Pi 從單一全域 JSON 檔案讀取供應商。opencodex 不會啟動 Pi；`ocx export` 輸出 `opencodex` 供應商區塊，包含基底 URL、模型清單及非機密的本機金鑰預留位置。請將此區塊合併到現有設定。
 
 ## 快速入門
 
@@ -11,10 +11,15 @@ Pi 從單一全域 JSON 檔案而非環境變數讀取其供應商，因此 open
 
 ```bash
 ocx start
+```
+
+讓此程序繼續執行。在另一個終端機中輸出設定：
+
+```bash
 ocx export --client pi
 ```
 
-輸出以 JSON 開頭，接著印出目標路徑、合併警告、環境匯出行，以及有多少模型帶有權威的上下文限制。
+JSON 之後會顯示目的地路徑、合併警告、回環使用提示，以及具有已確認內容視窗限制的模型數量。此匯出僅支援不需驗證的回環代理，不會設定遠端存取驗證。
 
 ```json
 {
@@ -22,7 +27,7 @@ ocx export --client pi
     "opencodex": {
       "baseUrl": "http://127.0.0.1:10100/v1",
       "api": "openai-completions",
-      "apiKey": "$OPENCODEX_API_KEY",
+      "apiKey": "opencodex-loopback",
       "compat": {
         "sendSessionAffinityHeaders": true,
         "supportsDeveloperRole": false
@@ -69,23 +74,7 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # 或重導逐字�
 
 ## 認證金鑰
 
-這裡有兩種不同的 key 容易混淆，且只有第一個出現在此檔案中：
-
-| Key | 是什麼 | 位於何處 |
-| --- | --- | --- |
-| 代理認證 key | opencodex 自身的憑證，在儀表板的 **API** 分頁產生 | 由 `apiKey` 以 `$OPENCODEX_API_KEY` 參照；值留在你的環境中 |
-| 供應商 key | 你的 Anthropic / OpenAI / OpenRouter key | opencodex 自身的設定，見[供應商](/zh-tw/guides/providers/) |
-
-匯出的設定僅帶有參照，絕不帶金鑰。Pi 會插入裸 `$NAME`，因此該變數為：
-
-```bash
-export OPENCODEX_API_KEY=<your key>
-```
-
-該名稱是 Pi 專屬的。opencode 使用不同的變數
-（`OPENCODEX_OPENCODE_API_KEY`，採 `{env:…}` 形式）— 見 [opencode 指南](/zh-tw/guides/opencode/)。
-
-**回送代理完全不需要 key。** opencodex 預設綁定 `127.0.0.1` 且在那裡不認證任何東西，因此 `$OPENCODEX_API_KEY` 參照是無效的，你可以讓變數未設定。它只在 `hostname` 設定到回送以外時才重要，這也是代理在沒有 token 時拒絕啟動的情況 — 見[遠端存取](/zh-tw/reference/configuration/server/#遠端存取)。
+匯出的 `apiKey` 是非機密預留值 `opencodex-loopback`，不需要匯出金鑰環境變數。匯出器只允許不需驗證的回環代理，會拒絕遠端代理或受權杖保護的代理。供應商憑證保留在 opencodex 設定中，請參閱[供應商](/zh-tw/guides/providers/)；不要把上游供應商金鑰放入此 Pi 區塊。遠端存取應使用支援代理存取憑證的整合。修改預留值不會啟用 Pi 遠端匯出。
 
 ## 模型後設資料
 

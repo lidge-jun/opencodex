@@ -10,9 +10,7 @@ what is actually happening and what you can do about it, honestly.
 
 ## Root cause: upstream Bun runtime issues
 
-opencodex bundles the Bun runtime (currently **1.3.14**). The memory growth is
-driven by known upstream Bun issues, not by JavaScript-level leaks in the
-proxy:
+Older OpenCodex versions bundled Bun **1.3.14**. The issue table below records the investigation as of July 23, 2026; it is historical evidence, not a statement of current upstream issue status. The current package bundles Bun **1.4.2**, and the stream-capability gate recognizes stable Bun 1.4.0 or newer as carrying the async-pull cancellation fix. This does not prove that every source of Windows memory growth is resolved.
 
 | Bun issue | State (checked 2026-07-23) |
 |---|---|
@@ -20,15 +18,11 @@ proxy:
 | [#32111](https://github.com/oven-sh/bun/issues/32111) — crash when a client aborts an async-pull stream | Fix [PR #32120](https://github.com/oven-sh/bun/pull/32120) merged 2026-06-21; not assumed present in 1.3.14. Note: this crash is **not Windows-specific** (it also reproduced on macOS/Linux) |
 | [PR #31654](https://github.com/oven-sh/bun/pull/31654) — `node:net` socket handle leak | Still **open** upstream |
 
-On Windows, opencodex must keep streaming responses on a conservative code
-path to avoid the #32111 crash, and that path is the one most exposed to the
-backpressure issue: a slow or stalled client can leave the runtime buffering
-upstream data in native memory that JavaScript cannot bound.
+On older runtimes, Windows used the conservative tee path to avoid the async-pull cancellation crash; a slow client could still leave native buffering that JavaScript cannot bound. With the current stable runtime, Windows `auto` selects the bounded eager relay when no client rewrite is needed. An explicit `legacy-tee` keeps the old path. On macOS, `auto` still keeps tee and eager relay requires explicit opt-in. Inspect the selected runtime and actual stream-mode decision before diagnosing memory growth.
 
 ## What opencodex does today
 
-Bounded mitigation and visibility — **not a fix**. On the bundled 1.3.14
-runtime the leak itself remains an upstream problem:
+Bounded mitigation and visibility help diagnose retention; they do not establish that every memory-growth report is fixed:
 
 - **Memory watchdog** — the proxy samples its own memory every minute and logs a
   rate-limited warning when observed memory crosses 4 GiB. Observed memory is
@@ -37,7 +31,7 @@ runtime the leak itself remains an upstream problem:
   retention.
 - **`ocx doctor`** — a "Memory / runtime" section shows the *service*
   process's Bun version, RSS, external/ArrayBuffers counters, JS-heap context,
-  and stream-mode decision. On the bundled Bun 1.3.14 runtime, `heapUsed` /
+  and stream-mode decision. On older Bun 1.3.14 runtimes, `heapUsed` /
   `jscHeap` alone are not a leak discriminator; compare observed memory with
   `responseState` and repeated samples before assigning an app-level leak.
 - **`GET /api/system/memory`** — the same data over the authenticated
@@ -97,11 +91,7 @@ runtime the leak itself remains an upstream problem:
 
   For a scriptable snapshot of the complete authenticated payload, run
   `ocx observe memory --json`; the CLI forwards the same response-state fields.
-- **A gated alternative stream path** — a bounded single-reader relay that
-  removes the unbounded buffering shape entirely. On Windows it becomes the
-  default automatically once a bundled Bun release verifiably carries the
-  #32111 fix; today it is opt-in only (see below). On macOS it stays opt-in
-  even after such a release — flipping macOS `auto` is a separate decision.
+- **A gated alternative stream path** — a bounded single-reader relay. On Windows, `auto` selects it when the supported runtime and response shape permit; explicit `legacy-tee` preserves the tee path. On macOS, `auto` stays on tee and `eager-relay` remains opt-in. Check the actual decision for the selected runtime.
 
 Catalog metadata reads use the selected runtime's last confirmed bundled catalog.
 Cold or changed selections refresh through asynchronous version/model probes, so
@@ -120,22 +110,11 @@ restart it.
 
 ## Your options
 
-1. **Wait for a bundled runtime update.** Once a Bun release verifiably
-   carries the fixes, opencodex will bump the bundled runtime and the safer
-   stream path turns on automatically on Windows (macOS keeps requiring the
-   explicit opt-in below).
+1. **Check the selected runtime and actual stream decision.** The current package bundles Bun 1.4.2 and the capability gate accepts stable releases from 1.4.0. Windows `auto` can already select bounded eager relay when applicable; another bundled update is not required to enable it. An explicit `legacy-tee` selection preserves tee. This does not prove every source of memory growth is fixed.
 
 2. **Run a Bun runtime you trust with `OPENCODEX_BUN_PATH`.** Set the variable before launching `ocx` from that shell, then run `ocx service repair` to bake the selected runtime into the service definition. A later project `.env` does not change selection; changing the environment alone does not update an installed service.
 
-3. **Opt into the bounded relay with `streamMode: "eager-relay"`.** Two ways:
-   edit `config.json` (add `"streamMode": "eager-relay"`), or call the
-   management API — a `PUT /api/settings` with `{"streamMode":"eager-relay"}`
-   applies to new turns without a restart. **Crash risk warning:** on Bun
-   1.3.14 this uses the stream shape affected by #32111, which can crash the
-   process mid-stream (on any OS, not just Windows). The service manager will
-   restart it, but in-flight requests fail. `"legacy-tee"` pins the current
-   default. On Windows, `"auto"` (default) lets the runtime gate decide. On
-   macOS, `"auto"` always stays on tee; explicit `"eager-relay"` is the opt-in.
+3. **Select the bounded relay with `streamMode: "eager-relay"`.** Edit `config.json` (add `"streamMode": "eager-relay"`) or call `PUT /api/settings` with `{"streamMode":"eager-relay"}`; the API change applies to new turns without a restart. The Bun 1.3.14 crash warning is historical: that release used the stream shape affected by #32111 on any OS, interrupting in-flight requests even when the service restarted. `"legacy-tee"` explicitly forces the old tee path. On Windows, `"auto"` uses the runtime gate and response conditions; on macOS, `"auto"` stays on tee and `"eager-relay"` is the opt-in.
 
 If you try any of these on a real Windows workload, please report the before
 and after `ocx doctor` memory sections on

@@ -68,7 +68,9 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
 6. For routed models with a hosted `web_search` tool, `web-search/` exposes a synthetic function,
    executes the real search through the configured backend (the OpenAI/ChatGPT sidecar or Anthropic),
    feeds results back to the routed model, and repeats within the configured loop limit. This loop
-   supports only the standard HTTP path; adapters that implement `runTurn`, such as Cursor, bypass it.
+   uses the fetch-based path for ordinary HTTP adapters. Adapters that implement `runTurn`,
+   including Cursor, use the separate `runTurnWebSearchLoop` in
+   `server/responses/run-turn-execution.ts` when the search plan is eligible.
 7. `bridge/sse.ts` / `bridge/response-json.ts` produces Responses SSE or JSON. `server/request-log.ts` and `usage/` collect terminal
    status, latency, provider/model labels, and best-effort token usage without changing the response.
 
@@ -133,9 +135,12 @@ single non-streaming response object from the same events.
 `server/management/*.ts`. Its `/api/*` routes cover safe config/settings,
 provider CRUD and key pools, model selection/context caps/v2 controls, catalog sync, diagnostics and
 debug logs, usage and quotas, sidecar settings, updates, generated client API keys, OAuth login/status/
-logout and account selection, Codex account management, and graceful stop. `server/auth-cors.ts`
-requires `OPENCODEX_API_AUTH_TOKEN` for both `/api/*` and `/v1/*` when the proxy binds beyond
-loopback; configured `corsAllowOrigins` entries extend the local-origin allowlist.
+logout and account selection, Codex account management, and graceful stop. Management access to
+`/api/*` uses the separate `OPENCODEX_ADMIN_AUTH_TOKEN` or generated admin token; the dashboard
+uses management sessions. Model admission on `/v1/*` uses data-plane credentials, such as
+`OPENCODEX_API_AUTH_TOKEN` or configured client API keys. `server/auth-cors.ts` requires a data
+credential when binding beyond loopback; a model token does not grant management access.
+Configured `corsAllowOrigins` entries extend the local-origin allowlist.
 
 OAuth implementations live in `oauth/`; access tokens are loaded or refreshed immediately before a
 routed call, while `oauth/token-guardian.ts` can proactively refresh only providers whose policy

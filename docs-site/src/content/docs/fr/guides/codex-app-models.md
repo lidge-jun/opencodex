@@ -219,8 +219,7 @@ Codex trie les entrées visibles du sélecteur par `priority` croissante et prop
 remplacements de modèle pour `spawn_agent`. La page **Sous-agents** du tableau de bord permet de choisir et
 d'enregistrer jusqu'à cinq identifiants natifs non qualifiés ou identifiants routés `provider/model`.
 `subagentModels`, lorsqu'il est configuré manuellement, accepte aussi les identifiants qualifiés par compte
-`<selector>/<native-openai-model>`, mais le tableau de bord ne propose pas ces identifiants exacts ; enregistrer
-la page remplace la liste par les choix visibles dans le tableau de bord. opencodex attribue des priorités de
+`<selector>/<native-openai-model>`. Le tableau de bord conserve ces identifiants exacts lors de l’enregistrement de la liste, même si les modèles ne sont plus disponibles dans le catalogue actuel. opencodex attribue des priorités de
 catalogue basses dans l'ordre choisi. Lorsque les lignes qualifiées par compte sont activées, les sélections
 natives non qualifiées s'étendent en groupes qualifiés par sélecteur. Les autres modèles restent accessibles
 par leur identifiant exact.

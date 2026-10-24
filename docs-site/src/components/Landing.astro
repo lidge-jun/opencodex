@@ -24,7 +24,7 @@ import SiteJsonLd from './SiteJsonLd.astro';
 import { GITHUB_URL, getStarCount, formatStarCount } from '../data/github-stars';
 
 interface Props {
-	locale?: 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr';
+	locale?: 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr' | 'es';
 }
 const { locale } = Astro.props;
 
@@ -118,8 +118,95 @@ const fr = {
 	'Star on GitHub, {count} stars': 'Ajouter une étoile sur GitHub, {count} étoiles',
 } as const;
 
+const es: Record<keyof typeof fr, string> = {
+	"Install": "Instalar",
+	"Start the proxy": "Iniciar el proxy",
+	"Inject a provider into Codex": "Inyectar un proveedor en Codex",
+	"Codex now routes through ocx": "Codex ahora se conecta a través de ocx",
+	"Getting Started": "Primeros pasos",
+	"Installation": "Instalación",
+	"Quickstart": "Inicio rápido",
+	"How It Works": "Cómo funciona",
+	"Agent Quickstart": "Inicio rápido para agentes",
+	"Guides": "Guías",
+	"Providers": "Proveedores",
+	"Model Routing": "Enrutamiento de modelos",
+	"Combos": "Combos",
+	"Codex Integration": "Integración con Codex",
+	"Codex App Model Picker": "Selector de modelos de Codex App",
+	"Sidecars: Search & Vision": "Sidecars: búsqueda y visión",
+	"Image Bridge": "Puente de imágenes",
+	"Video Bridge": "Puente de video",
+	"Web Dashboard": "Dashboard web",
+	"Sub-agent Surface": "Interfaz de subagentes",
+	"Reference": "Referencia",
+	"Configuration": "Configuración",
+	"Adapters": "Adaptadores",
+	"Architecture": "Arquitectura",
+	"Proxy API Formats": "Formatos de API del proxy",
+	"Management API": "API de administración",
+	"Project": "Proyecto",
+	"Contributing": "Cómo contribuir",
+	"Run ": "Ejecuta ",
+	" on any LLM.": " con cualquier LLM.",
+	"opencodex is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.": "opencodex es un proxy local para Codex y Claude Code que usa un solo puerto. Convierte cada formato de protocolo para cualquier proveedor, con streaming, llamadas a herramientas, razonamiento e imágenes en ambas direcciones. No requiere parches en los clientes.",
+	"Get Started": "Comenzar",
+	"Supported providers": "Proveedores compatibles",
+	"40+ providers": "Más de 40 proveedores",
+	"The opencodex dashboard — live proxy status, routed providers, and available models": "Dashboard de opencodex: estado del proxy en tiempo real, proveedores enrutados y modelos disponibles",
+	"Install. Start. Codex, rerouted.": "Instala. Inicia. Codex, con otro proveedor.",
+	"Install.": "Instala.",
+	"Start.": "Inicia.",
+	"Codex, rerouted.": "Codex, con otro proveedor.",
+	"Full quickstart": "Inicio rápido completo",
+	"Watch Codex run on a routed model.": "Mira cómo Codex ejecuta un modelo enrutado.",
+	"Codex App running a task on a routed non-OpenAI model": "Codex App ejecuta una tarea con un modelo enrutado de otro proveedor distinto de OpenAI",
+	"One task, streamed end to end through opencodex.": "Una tarea, transmitida de extremo a extremo a través de opencodex.",
+	"One proxy, the whole surface.": "Un proxy para todas las funciones.",
+	"Any provider": "Cualquier proveedor",
+	"Five adapters cover Anthropic Messages, Google Gemini, Azure, the OpenAI Responses passthrough, and every OpenAI-compatible Chat Completions endpoint — 40+ built-in providers.": "Cinco adaptadores cubren Anthropic Messages, Google Gemini, Azure, el paso directo de OpenAI Responses y cualquier endpoint de Chat Completions compatible con OpenAI. Más de 40 proveedores integrados.",
+	"OAuth or API key": "OAuth o clave API",
+	"Log in with your xAI, Anthropic, or Kimi account — auto-refreshed — forward your ChatGPT login, or paste a key.": "Inicia sesión con tu cuenta de xAI, Anthropic o Kimi, con renovación automática; reenvía tu sesión de ChatGPT o pega una clave API.",
+	"ChatGPT account pool": "Grupo de cuentas ChatGPT",
+	"Existing threads keep their account; new sessions auto-route to the lowest-usage healthy one after quota refresh.": "Los hilos existentes conservan su cuenta. Tras actualizar las cuotas, las sesiones nuevas se asignan automáticamente a la cuenta disponible con menor uso.",
+	"Native in the model picker": "Nativo en el selector de modelos",
+	"Routed models show up in Codex App with reasoning effort levels, next to the native ones.": "Los modelos enrutados aparecen en la aplicación Codex con niveles de esfuerzo de razonamiento, junto a los nativos.",
+	"Codex App model picker with reasoning effort levels": "Selector de modelos de Codex App con niveles de esfuerzo de razonamiento",
+	"Sub-agents": "Subagentes",
+	"Pin up to five routed or native models for Codex spawn_agent, and switch the v1 / base / v2 surface globally.": "Fija hasta cinco modelos enrutados o nativos para spawn_agent de Codex y cambia globalmente entre las interfaces v1, base y v2.",
+	"ocx claude launches Claude Code against the same port — every routed model in the /model picker, auto-context up to 1M, roster sub-agents, and your claude.ai login stays active.": "ocx claude inicia Claude Code en el mismo puerto: todos los modelos enrutados aparecen en /model, con contexto automático de hasta 1M y subagentes del listado. Tu sesión de claude.ai permanece activa.",
+	"Claude Code running a routed model through opencodex — gpt-5.6-luna-medium active in the status bar": "Claude Code ejecutando un modelo enrutado a través de opencodex — gpt-5.6-luna-medium activo en la barra de estado",
+	"Search & vision sidecars": "Sidecars de búsqueda y visión",
+	"Give non-OpenAI models real web search and image understanding through a gpt-5.6-luna sidecar.": "Añade búsqueda web y comprensión de imágenes a los modelos de otros proveedores mediante un sidecar gpt-5.6-luna.",
+	"ocx init writes a provider into your Codex config and shares one model catalog with Codex CLI, TUI, App, and SDK. ocx stop restores native Codex cleanly.": "ocx init escribe un proveedor en tu configuración de Codex y comparte el catálogo con Codex CLI, TUI, App y SDK. ocx stop detiene el proxy o su servicio administrado y restaura la configuración nativa de Codex.",
+	"Documentation map": "Mapa de la documentación",
+	"Explore the docs": "Explorar la documentación",
+	"opencodex is an independent community project, not affiliated with or endorsed by OpenAI, Anthropic, or any other provider. Some providers may restrict accounts that route traffic through third-party proxies — review each provider’s Terms of Service before connecting.": "opencodex es un proyecto comunitario independiente, sin afiliación ni respaldo de OpenAI, Anthropic u otros proveedores. Algunos proveedores pueden restringir las cuentas que enrutan tráfico a través de proxies de terceros. Revisa los términos de servicio de cada proveedor antes de conectarte.",
+	"Desktop beta": "Desktop beta",
+	"Other platforms": "Otras plataformas",
+	"Download": "Descargar",
+	"Download for macOS": "Descargar para macOS",
+	"Download for Windows": "Descargar para Windows",
+	"Download for Linux": "Descargar para Linux",
+	"Download OpenCodex": "Descargar OpenCodex",
+	"The desktop app bundles the proxy, the dashboard and a tray. Beta.": "La aplicación de escritorio incluye el proxy, el dashboard y una bandeja. Versión beta.",
+	"Universal · Apple Silicon and Intel · macOS 13+ · .dmg": "Universal · Apple Silicon e Intel · macOS 13+ · .dmg",
+	"Installer not code-signed yet": "El instalador aún no tiene firma de código",
+	".deb package": "Paquete .deb",
+	"Recommended for your system": "Recomendado para tu sistema",
+	"Prefer the terminal?": "¿Prefieres la terminal?",
+	"Installation guide": "Guía de instalación",
+	"All releases and checksums": "Todas las versiones y sumas de comprobación",
+	"Desktop app guide": "Guía de la aplicación de escritorio",
+	"Code signing policy": "Política de firma de código",
+	"Desktop App": "Aplicación de escritorio",
+	"Latest release": "La última versión",
+	"Star on GitHub": "Dar una estrella en GitHub",
+	"Star on GitHub, {count} stars": "Dar una estrella en GitHub, {count} estrellas",
+};
+
 const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
-	locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
+	locale === 'es' ? es[en] : locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
 
 const starCount = await getStarCount();
 const starLocale = locale || 'en';

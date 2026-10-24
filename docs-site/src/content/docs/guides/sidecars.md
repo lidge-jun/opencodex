@@ -10,12 +10,13 @@ Anthropic OAuth provider; web search can additionally use stored Grok OAuth thro
 whole turn.
 
 :::note[Automatic backend selection]
-Explicit `backend` config wins. The two sidecars default differently when `backend` is unset:
-**web search** always defaults to `openai` — `anthropic` runs only when explicitly configured.
-**Vision** defaults to `anthropic` if an enabled Anthropic OAuth provider has an active account not
-marked `needsReauth`, otherwise `openai`. Explicit `anthropic` without that credential fails
-closed. Explicit `xai` requires a usable stored Grok OAuth account and does not fall back. `openai`
-requires both ChatGPT login auth and an enabled `forward` provider.
+Explicit `backend` configuration wins. When it is unset, each sidecar has its own default:
+**Web search** defaults to `openai`; `anthropic` and `xai` run only when explicitly configured.
+The web-search `xai` backend requires a usable stored Grok OAuth account and does not fall back.
+**Vision** defaults to `anthropic` when an enabled Anthropic OAuth provider has an active account
+not marked `needsReauth`, otherwise `openai`. Explicit `anthropic` without that credential fails
+closed. Vision accepts only `openai`, `anthropic` and `routed`; eligible xAI vision models use
+`routed`. For either sidecar, `openai` requires ChatGPT login auth and an enabled `forward` provider.
 :::
 
 ### Additional web-search backends (explicit-only)

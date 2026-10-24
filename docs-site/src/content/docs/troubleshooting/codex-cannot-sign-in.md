@@ -52,9 +52,20 @@ back, `ocx restore back` re-points Codex at the proxy.
 
 **Or bring the proxy back instead:**
 
+In one terminal, start the foreground proxy and leave that terminal open:
+
 ```bash
 ocx start
+```
+
+In a second terminal, confirm that `ocx ready --json` reports `ready: true` before installing the service. Then repeat the checks to verify the resulting service:
+
+```bash
+ocx ready --json
+ocx status --json
 ocx service install   # keep it running across restarts
+ocx ready --json
+ocx status --json
 ```
 
 `ocx status` reports whether the proxy is answering and whether Codex is

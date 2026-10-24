@@ -251,9 +251,7 @@ sıralar ve ilk beşini `spawn_agent` model geçersiz kılmaları olarak bildiri
 Kontrol paneli Alt Ajanlar sayfası en fazla beş yalın yerel kimliği veya
 yönlendirilen `provider/model` kimliğini seçip kaydedebilir. Manuel olarak
 yapılandırılan `subagentModels` ayrıca hesap nitelikli
-`<seçici>/<yerel-openai-modeli>` kimliklerini de kabul eder, ancak kontrol
-paneli bu tam kimlikleri sunmaz; sayfayı kaydetmek listenin yerine kontrol
-panelinde görünen seçenekleri koyar. opencodex seçilen sırada düşük katalog
+`<selector>/<native-openai-model>` kimliklerini de kabul eder. Kontrol paneli, geçerli katalogda bulunmayan modeller dahil, kaydedilmiş bu tam kimlikleri listeyi kaydederken korur. opencodex seçilen sırada düşük katalog
 öncelikleri atar; hesap nitelikli seçici satırları etkinleştirildiğinde yalın
 yerel seçimler seçici nitelikli gruplara genişler. Diğer modeller tam kimlikle
 çağrılabilir durumda kalır.

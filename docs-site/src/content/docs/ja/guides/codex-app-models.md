@@ -104,7 +104,7 @@ fast_mode = true
 
 ## サブエージェントの選択
 
-Codex は、ピッカーに表示されるカタログ エントリを `priority` の昇順で並べ替え、最初の 5 つを `spawn_agent` モデル オーバーライドとしてアドバタイズします。ダッシュボードの Subagents ページでは、bare native id または routed `provider/model` id を最大 5 つ選択して保存できます。手動で設定した `subagentModels` は account-qualified `<selector>/<native-openai-model>` id も受け付けますが、ダッシュボードにはこれらの exact id が表示されません。ページを保存すると、リストはダッシュボードに表示される選択肢で置き換えられます。opencodex は選択順に低いカタログ priority を割り当てます。account-qualified picker 行が有効な場合、bare native の選択は selector-qualified グループに展開されます。他のモデルは引き続き正確な ID で呼び出すことができます。
+Codex は、ピッカーに表示されるカタログ エントリを `priority` の昇順で並べ替え、最初の 5 つを `spawn_agent` モデル オーバーライドとしてアドバタイズします。ダッシュボードの Subagents ページでは、bare native id または routed `provider/model` id を最大 5 つ選択して保存できます。手動で設定した `subagentModels` は account-qualified `<selector>/<native-openai-model>` id も受け付けます。ダッシュボードは、現在のカタログにないモデルも含め、保存済みの正確な id をリストの保存時にも保持します。opencodex は選択順に低いカタログ priority を割り当てます。account-qualified picker 行が有効な場合、bare native の選択は selector-qualified グループに展開されます。他のモデルは引き続き正確な ID で呼び出すことができます。
 
 注目モデルのリストは、ダッシュボードの **サブエージェント委任** の選択とは別のものです。 Codex が提供するものを最初にオーバーライドするものを制御します。モデルを選択したり、委任をトリガーしたりすることはありません。
 

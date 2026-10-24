@@ -98,11 +98,14 @@ bun run build
 
 GitHub Actions intentionally stay small:
 
-- **Cross-platform CI** (`.github/workflows/ci.yml`) runs on pull requests and `main` pushes that
-  touch runtime, tests, package, script, TypeScript, or workflow files. Its Bun matrix covers Linux,
-  Windows, and macOS with install, typecheck, tests, privacy scan, a release-helper build smoke, GUI
-  build, and `ocx help`. A second three-OS lane proves npm global install works without a separately
-  installed Bun by using the package's bundled runtime.
+- **Cross-platform CI** (`.github/workflows/ci.yml`) runs the fast Ubuntu subset on pull requests.
+  Release-line pushes to `main`/`preview` and `workflow_dispatch` run the selected non-PR jobs,
+  subject to path filters and lane selection; pushes to `dev` do not run the full suite.
+  The full `platform-windows` test job runs only on the nightly schedule or through
+  `workflow_dispatch` with the default or `all` lane, not on release-line pushes.
+  The platform jobs cover install, typecheck, tests, privacy scan, a release-helper build smoke,
+  GUI build, and `ocx help`. A separate npm-global smoke matrix checks installation with the
+  package's bundled runtime; its Windows smoke is distinct from the full Windows test job.
 - **Release** (`.github/workflows/release.yml`) is manual. It does not act as a second full CI
   pipeline; before dry-run or publish it requires the exact release commit (`GITHUB_SHA`) to already
   have a successful Cross-platform CI run.
@@ -161,9 +164,9 @@ description.
 
 - Target **`dev`**. Do not open feature or fix pull requests against **`main`**.
 - Branch from the current **`dev`** tip, not from **`main`**. The required **`enforce-target`** check rejects heads whose merge base sits on the **`main`** tip while the branch is far behind the pull request base (the failure mode seen in #644).
-- Write a real description: a **Summary** of what changed and why, plus a **Test plan** (or equivalent substance). Empty bodies, placeholder-only text, and descriptions that use escaped `\n` instead of real line breaks fail the check.
+- Complete the repository template's `Summary`, `Verification`, and `Checklist` sections: explain what changed and why, and document the test plan and results. Empty bodies, placeholder-only text, and descriptions that use escaped `\n` instead of real line breaks fail the check.
 - If the pull request changes files under `gui/`, include a screenshot of the UI change in the description; the `enforce-target` check re-runs on description edits until the screenshot is present. Drag the image into the description editor rather than committing it: an image on your branch rides the squash merge into `dev`. Maintainers uploading from the command line use the `pr-assets` branch and link by commit SHA.
-- Workflow changes in this repository use **`pull_request_target`**. Updated enforcement logic applies only after the workflow is promoted to the repository default branch — the same operational caveat documented in #631.
+- The trusted `enforce-target` and `label` workflows use **`pull_request_target`**, so their updated enforcement logic applies only after promotion to the repository default branch, as documented in #631. Cross-platform CI uses **`pull_request`**; its changes take effect on the pull request base branch.
 
 ## Project maintainers
 

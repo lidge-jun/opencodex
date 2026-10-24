@@ -154,8 +154,7 @@ DeepSeek 與 Volcengine Ark 歸類為 `false`），而未分類的自訂 gateway
 
 Codex 會按 `priority` 升序排列選擇器中可見的目錄條目，並將前五個顯示為 `spawn_agent` 模型
 override。儀表板的 Subagents 頁面可以選擇並儲存最多五個裸原生 id 或路由的 `provider/model`
-id。手動設定的 `subagentModels` 也接受帳號限定的 `<selector>/<native-openai-model>` id，但
-儀表板不提供這些精確 id；儲存頁面時會把列表替換為儀表板可見的選擇。opencodex 會按所選順序
+id。手動設定的 `subagentModels` 也接受帳號限定的 `<selector>/<native-openai-model>` id。儲存列表時，儀表板會保留這些已儲存的精確 id，包括目前目錄中已無法使用的模型。opencodex 會按所選順序
 賦予較低的目錄 priority；啟用帳號限定選擇器列時，裸原生選擇會展開為選擇器限定群組。其他模型
 仍可透過精確 id 直接呼叫。
 

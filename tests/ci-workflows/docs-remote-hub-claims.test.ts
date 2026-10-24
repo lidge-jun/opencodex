@@ -31,7 +31,7 @@ import { repoPath } from "../helpers/repo-root";
 
 const GUIDE = repoPath("docs-site/src/content/docs/guides/remote-hub.md");
 const KO_GUIDE = repoPath("docs-site/src/content/docs/ko/guides/remote-hub.md");
-const TRANSLATED = ["ko", "ja", "zh-cn", "zh-tw", "fr", "ru", "tr"] as const;
+const TRANSLATED = ["es", "ko", "ja", "zh-cn", "zh-tw", "fr", "ru", "tr"] as const;
 const LOCALE_GUIDES: ReadonlyArray<readonly [string, string]> = [
   ["en", GUIDE],
   ...TRANSLATED.map(locale => [locale, repoPath(`docs-site/src/content/docs/${locale}/guides/remote-hub.md`)] as const),

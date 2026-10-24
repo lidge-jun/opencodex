@@ -1,0 +1,75 @@
+---
+title: "Cómo funciona"
+description: "El ciclo de vida completo de la solicitud opencodex — analiza, enruta, adapta, puente y flujo."
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Codex habla el OpenAI **Responses API**. opencodex acepta `POST /v1/responses` sobre HTTP con Eventos enviados por servidor, además de una actualización opt-in WebSocket en la misma ruta. Traduce la solicitud al formato de cable de su proveedor y la respuesta a Responses eventos, por lo que Codex nunca sabe que no está hablando con OpenAI.
+
+```
+            ┌──────────────────────────── opencodex ────────────────────────────┐
+            │                                                                     │
+ Codex ──▶  │  parser ──▶ router ──▶ [vision] ──▶ adapter ──▶ provider           │  ──▶ Codex
+ (/v1/      │     │          │          │            │           │                │   (SSE / WS)
+  responses)│   OcxParsed  provider   describe    buildRequest  parseStream       │
+            │   Request    +adapter   images       + fetch      AdapterEvent[]    │
+            │                                          │           │              │
+            │                                  [web-search loop]  bridge ─▶ SSE   │
+            └─────────────────────────────────────────────────────────────────────┘
+```
+
+![Enrutamiento multicuenta de Codex: los hilos existentes conservan la cuenta de ChatGPT y las sesiones nuevas pueden actualizar la cuota y elegir una cuenta disponible con menor uso.](../../../../assets/multi-auth-routing.svg)
+
+<a id="codex-auth-account-selection"></a>
+
+## Codex selección de cuenta de autenticación
+
+Cuando el proveedor seleccionado es el passthrough ChatGPT / Codex, opencodex puede elegir una cuenta de grupo almacenada antes de que la solicitud se reenvíe aguas arriba. La regla se divide intencionalmente:
+
+- **Los identificadores de hilo existentes mantienen la afinidad.** Un subproceso está vinculado a la generación de cuenta que lo inició, por lo que una sesión larga de SSH, tmux o móvil Codex sigue usando una cuenta en lugar de reequilibrarse a mitad de la conversación.
+- **Las sesiones nuevas pueden reequilibrarse.** Para un nuevo hilo, opencodex selecciona entre las cuentas elegibles usando `accountPoolStrategy` (`quota` por defecto, o `round-robin` / `fill-first`). La estrategia `quota` compara el uso conocido a través de las ventanas 5h, semanal y 30d y puede cambiar a una cuenta de menor uso cuando la cuenta activa cruza `autoSwitchThreshold`. Las cuentas en tiempo de reutilización o que necesitan una nueva autenticación se omiten independientemente de la estrategia.
+- **Señales de cuota y fallo de alimentación de enrutamiento.** El panel de control puede forzar una actualización de cuota con `GET /api/codex-auth/accounts?refresh=1`; las respuestas ascendentes exitosas capturan encabezados de cuota, 429 ponen una cuenta en tiempo de reutilización y 401/403 la marca para su reautenticación.
+- **Las ventanas que ruedan ociosas se pueden activar a tiempo.** En **Configuración avanzada**, un control de activación automática por defecto cambia las ventanas de 5 horas y semanales compatibles para todas las cuentas principales y agregadas actuales juntas. Las configuraciones mixtas se muestran explícitamente; habilitar solo se aplica a las ventanas reportadas y deshabilitar también borra las ventanas obsoletas habilitadas. Los cambios usan escrituras de configuración individual: se muestra un fallo parcial después de leer de nuevo el estado guardado, y **Reintentar** completa la acción de activación o desactivación original. Las cuentas recién agregadas no se aceptan automáticamente. En el modo Pool, en el reinicio, opencodex reutiliza su solicitud de calentamiento de cuenta mínima no almacenada a través de la cuenta exacta cuya ventana vence, une las ventanas simultáneas en una solicitud y persiste de manera duradera ambas marcas de tiempo de reinicio para evitar el trabajo duplicado después de los reinicios. Se saltan las cuentas pausadas y las cuentas que requieren reautenticación. La activación captura encabezados de cuota de respuesta exitosos; los tiempos de reinicio conocidos se comprueban localmente cada minuto sin consultas de cuota periódicas, incluso cuando el uso en caché es antiguo o el proxy se reinicia. Solo los tiempos de reinicio que faltan necesitan una consulta de metadatos después de la protección de frescura de cinco minutos. El descubrimiento no resuelto y las activaciones fallidas reintentan después de 5, 10, 20, 40, luego como máximo cada 60 minutos; estos retardos de reintento se restablecen en el reinicio del proxy. Los encabezados de respuesta exitosos siembran la siguiente ventana sin una consulta adicional cuando esté disponible. Las actualizaciones del panel de control y el sondeo opcional de reinicio-notificación permanecen independientes. Los límites de reinicio observados se conservan en los reinicios hasta que se completen, por lo que una marca de tiempo de ventana inactiva en movimiento no puede borrar una activación pendiente. La actualización de metadatos utiliza la recuperación de autenticación limitada existente; una inferencia 401 marca la credencial rechazada para la reautenticación en lugar de gastar repetidamente reintentos en ella. Las fallas solo registran una etiqueta de cuenta opaca y una razón de solo estado. Esto es independiente del enrutamiento de la ventana de reinicio: el enrutamiento elige una cuenta para el trabajo entrante, mientras que la activación envía una solicitud a una cuenta específica solo después de su propio reinicio.
+
+**Pauta de consulta:** La recuperación de bloqueo de la cuenta principal espera el restablecimiento de bloqueo conocido, luego consulta para confirmar la recuperación; el tiempo solo nunca desbloquea la cuenta. Sin un restablecimiento futuro, la recuperación en segundo plano utiliza un retroceso de 5/10/20/40/60 minutos mientras la cuenta permanece bloqueada. En el modo Pool, las consultas ordinarias de uso principal/de grupo comparten el retroceso de fallas (5, 10, 20, 40, luego 60 minutos) para fallas de transporte, fallas que no son de auth HTTP y 200 cuerpos inutilizables, incluidas las actualizaciones forzadas; `Retry-After` puede extender esa espera. El manejo de autenticación 401/403 existente permanece sin cambios. Solo el uso utilizable borra el retroceso; las consultas simultáneas de la misma clave comparten el resultado establecido de una lectura. Las credenciales reemplazadas tienen un estado de reintento separado, y las instantáneas obsoletas nunca se marcan como nuevas. Estos retrasos son locales de proceso; las actualizaciones forzadas principales fuera del modo Pool conservan su comportamiento independiente.
+
+**Nota de degradación:** Antes de ejecutar una versión anterior, quite solo `nextFiveHourResetAt` y `nextWeeklyResetAt` de la configuración de activación automática. Los lectores más antiguos rechazan estos nuevos campos y pueden deshabilitar todo el bloque de configuración de activación.
+
+<a id="sub-agent-model-selection"></a>
+
+## Selección del modelo de subagente
+
+En una instalación nueva, `subagentModels` ofrece `gpt-6-astra`, `gpt-6.1-sol` y `gpt-6-luna` en el selector de subagentes de Codex. El panel permite reordenar o sustituir hasta cinco entradas por modelos nativos o enrutados. Las opciones `injectionModel` e `injectionEffort` describen preferencias de modelo y esfuerzo en la guía redactada por el proxy; siguen siendo recomendaciones salvo que se active la sincronización de valores nativos. Consulta [Configuración de agentes](/es/reference/configuration/agents/) para las reglas de guía v1/v2 y la sincronización.
+
+<a id="the-lifecycle"></a>
+
+## El ciclo de vida
+
+<Steps>
+
+1. **Análisis** - `responses/parser.ts` valida la solicitud con un esquema de Zod (`responses/schema.ts`) y la reduce a un mensaje interno `OcxParsedRequest`: solicitud del sistema, una lista de mensajes normalizados (texto, imágenes, llamadas de herramientas, resultados de herramientas), las definiciones de herramientas, opciones de generación y banderas de características como `_webSearch` (se solicitó una búsqueda web alojada) y `_structuredOutput` (se estableció un esquema JSON / JSON -object `text.format`). Las imágenes se conservan como partes de contenido real, nunca alineadas como texto base64.
+
+2. **Enrutamiento** — `router.ts` resuelve el modelo en este orden: perfil de enrutamiento configurado → selector exacto de cuenta de Codex → identificador o alias de Combo configurado → `provider/model` explícito → modelo nativo de OpenAI sin prefijo (`gpt-`, `o1-`/`o3-`/`o4-`) → `defaultModel` de un proveedor → prefijos integrados (`claude-`, `llama-`/`mixtral-`/`gemma-`) → `models[]` de un proveedor → `defaultProvider`. Consulta [Enrutamiento de modelos](/es/guides/model-routing/).
+
+3. **Autenticar** - para un proveedor `oauth`, opencodex se intercambia en un token de acceso fresco y actualizado automáticamente como la clave portadora, de modo que los adaptadores existentes se autentican sin cambios. Para las cuentas de grupo ChatGPT / Codex, `codex/auth-context.ts` resuelve primero la cuenta y el adaptador de paso se niega a continuar si la credencial de grupo requerida no está disponible.
+
+4. **Sidecar de visión (opcional)** - si el modelo enrutado aparece en `provider.noVisionModels` y la solicitud lleva una imagen, opencodex describe cada imagen con el sidecar de visión ChatGPT configurado y la reemplaza con texto, por lo que un modelo de solo texto todavía puede razonar al respecto. Véase [Sidecares](/es/guides/sidecars/).
+
+5. **Camino rápido de paso**: si el adaptador es un paso Responses (`openai-responses` o `azure-openai`), opencodex mantiene el cuerpo Responses, aplica enrutamiento dirigido y reescribe la compatibilidad, luego retransmite la respuesta del proveedor sin convertirlo a través de `AdapterEvent` s.
+
+6. **Sidecar de búsqueda web (opcional)** — si Codex solicita la herramienta alojada `web_search` y el modelo enrutado no es de OpenAI, opencodex expone una función sintética `web_search` y ejecuta el modelo en un pequeño bucle de agente. Las búsquedas reales se realizan mediante `gpt-5.6-luna` de forma predeterminada, con tu sesión de ChatGPT, y los resultados se incorporan como respuestas de la herramienta.
+
+7. **Compacto (cuando se solicita)** - Codex v1 llama `POST /v1/responses/compact`; v2 agrega un `compaction_trigger` a un giro Responses. Las rutas de paso nativas se compactan aguas arriba, mientras que un modelo enrutado se ejecuta como un resumen sin herramientas y devuelve la forma de historial de reemplazo que espera Codex.
+
+8. **Adaptar** — en los demás casos, `buildRequest()` del adaptador elegido construye la solicitud HTTP al proveedor (URL, encabezados y cuerpo) en su formato nativo. opencodex envía esa solicitud mediante `fetch`.
+
+9. **Puente** - el adaptador `parseStream()` (o `parseResponse()`) produce `AdapterEvent` s interno (texto, razonamiento, inicio/delta/fin de llamada de herramienta, hecho, error). `bridge.ts` convierte ese flujo en Responses SSE eventos - `response.output_text.delta`, `response.reasoning_summary_text.delta`, `response.function_call_arguments.delta`, `response.completed`, y así sucesivamente. El transporte opcional WebSocket envía las mismas cargas útiles de eventos que los marcos de texto.
+
+</Steps>
+
+<a id="why-a-proxy-and-not-a-codex-fork"></a>
+
+## ¿Por qué un proxy y no una bifurcación Codex?
+
+Codex codifica el Responses API. Al traducir en el límite del protocolo, opencodex funciona con el Codex **CLI, App, y SDK** sin cambios, sobrevive a las actualizaciones Codex y le permite cambiar de proveedor por solicitud sin tocar el propio Codex. La traducción es bidireccional y fiel a la transmisión: resúmenes de razonamiento, MCP espacios de nombres de herramientas, herramientas de forma libre (`apply_patch`) y `tool_search` descubrimiento de todo el viaje de ida y vuelta correctamente. Consulte el [Referencia de arquitectura](/es/reference/architecture/) para el mapeo evento por evento.

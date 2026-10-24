@@ -139,8 +139,8 @@ catalog. Re-run `ocx export` after you add a provider or change model visibility
 Alternatively, [enable the managed integration](/guides/integrations/): `ocx sync` safely
 refreshes its already-owned blocks, leaving hand-edited or removed blocks untouched.
 
-Once merged, export the admission key before launching opencode — unless the proxy is on loopback,
-where none is needed:
+Once merged, export the admission key before launching opencode if the inference listener requires
+authentication. A listener bound only to loopback does not require it:
 
 ```bash
 export OPENCODEX_OPENCODE_API_KEY=<your key>
@@ -177,8 +177,10 @@ The real value is passed only through the child process environment.
 `OPENCODEX_API_AUTH_TOKEN` takes precedence, then the hardened service token file, then
 a configured API key — which is what a non-loopback bind requires.
 
-A loopback bind (`127.0.0.1`, the default) authenticates nothing, so the `{env:…}` reference is
-inert and you can leave the variable unset. It matters only when `hostname` is set beyond loopback;
+A listener bound to loopback (`127.0.0.1`, the default) does not require a data-plane key, even
+when client API keys are configured, so the `{env:…}` reference can remain unset for that listener.
+A loopback URL alone does not establish this: a public listener bound to `0.0.0.0` still requires
+an accepted key when reached through `127.0.0.1`. Export the key when `hostname` is set beyond loopback;
 see [Remote access](/reference/configuration/server/#remote-access). This admission key is opencodex's
 own, and is unrelated to the upstream provider keys configured under
 [Providers](/guides/providers/).

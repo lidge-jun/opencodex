@@ -371,8 +371,8 @@ Ultra Fast increases usage/cost, and Codex's own feature requirements still appl
 Codex sorts picker-visible catalog entries by ascending `priority` and advertises the first five as
 `spawn_agent` model overrides. The dashboard Subagents page can select and save up to five bare
 native ids or routed `provider/model` ids. Manually configured `subagentModels` also accepts
-account-qualified `<selector>/<native-openai-model>` ids, but the dashboard does not offer those
-exact ids; saving the page replaces the list with dashboard-visible choices. opencodex assigns low
+account-qualified `<selector>/<native-openai-model>` ids. The dashboard retains these exact saved
+ids, including models missing from the current catalog, when saving the roster. opencodex assigns low
 catalog priorities in the selected order; when account-qualified picker rows are enabled, bare native selections
 expand into selector-qualified groups. Other models remain callable by exact id.
 

@@ -6,9 +6,12 @@ description: How OpenCodex signs its Windows binaries through SignPath Foundatio
 OpenCodex is moving its Windows downloads, the standalone `ocx.exe` and the desktop installer
 `OpenCodex-<version>-windows-x64.msi`, to Authenticode code signing through
 [SignPath Foundation](https://signpath.org). A signed file tells Windows, SmartScreen and antivirus
-products who published it and that nobody changed it after the build, which is what stops
-unsigned-binary false positives like the one reported in
+products who published it and that nobody changed it after the build. Signing can reduce
+unsigned-binary warnings and false positives like the one reported in
 [#7207](https://github.com/lidge-jun/opencodex/issues/7207).
+It does not guarantee SmartScreen acceptance or prove that a file is safe:
+[Microsoft explains](https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation)
+that newly signed binaries can still trigger reputation warnings.
 
 Signing is rolling out. The release workflow is wired, and SignPath is validating it with a test
 certificate. Until the production certificate is issued, Windows release files stay unsigned, and

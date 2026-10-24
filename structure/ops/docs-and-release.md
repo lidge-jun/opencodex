@@ -69,7 +69,7 @@ the persisted values/default, initial refusal, non-direct repair withholding, di
 behavior, and content-free diagnostics. English and all translated copies change together.
 
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is
-served at the site root, with French under `/fr`, Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, Japanese under `/ja`, and Turkish under `/tr`. `docs-site/astro.config.mjs` is the locale source of truth.
+served at the site root, with Spanish under `/es`, French under `/fr`, Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, Japanese under `/ja`, and Turkish under `/tr`. `docs-site/astro.config.mjs` is the locale source of truth.
 
 Internal links are checked in two places. `docs-site/src/integrations/internal-links.mjs` runs inside the
 Astro build, so the CI `docs` job and Deploy Docs both refuse a site whose generated HTML carries an
@@ -87,11 +87,11 @@ sidebar and either add localized copies or intentionally accept Starlight fallba
 
 Provider preset totals are recounted from the current registry when a preset lands. The
 documented split is 105 total: 84 key-based, 17 OAuth, three local, and one default
-ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
-quickstarts carry the same counts.
+ChatGPT-forward preset. The English provider guide, every translated copy, and every locale's
+quickstart carry the same counts.
 
-That recount is no longer a manual obligation. Seventeen places restate these numbers and sixteen
-of them drifted once already — the English guide reached 95 while every translation and every
+That recount is no longer a manual obligation. These numbers are repeated across the guides and
+quickstarts and drifted once already — the English guide reached 95 while every translation and every
 quickstart, the English one included, still said 94. Both numbers read as plausible, so nothing
 caught it. `tests/ci-workflows/docs-provider-preset-counts.test.ts` now derives the total and the
 key-based split from `PROVIDER_REGISTRY` and asserts them against each page, so the next preset
@@ -118,7 +118,7 @@ sharing a model-name fragment remain distinct from current Codex-native support.
 The Remote Hub guide distinguishes selected-runtime readiness from general runtime diagnostics;
 `tests/cli/cli-connect-readiness.test.ts` exercises that boundary and general status's single discovery pass with isolated executable fixtures.
 
-The provider guide's OrcaRouter login section in English and all seven translated sources follows
+The provider guide's OrcaRouter login section in English and every translated source follows
 the [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
 64 KiB of valid UTF-8 JSON and one 30-second deadline covering headers and body. These are login
 limits, so the public guide does not apply them to inference payloads.

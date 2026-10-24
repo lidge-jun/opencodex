@@ -734,7 +734,7 @@ on the node; use a narrower supported removal command when unrelated mappings ex
 tailscale serve status
 tailscale serve reset
 ocx config set hub.managementIngress '{"enabled":false}'
-ocx service repair
+ocx service restart
 ```
 
 For a container rollback, retain both named state volumes and their mappings. An older image

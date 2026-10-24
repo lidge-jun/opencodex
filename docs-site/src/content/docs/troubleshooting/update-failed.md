@@ -17,10 +17,7 @@ and, afterwards, a folder next to the package that cannot be deleted because `bu
 
 ## What state you are in
 
-The updater stops the proxy, installs the new version into a separate staging folder, checks it,
-and only then swaps it in. When the install step fails, the swap never happens: the previous version
-stays installed and runnable, and the updater restarts the previous background service (or the
-previous proxy) before it exits. You do not need to reinstall to get back to a working proxy.
+The updater stops the proxy it owns, installs and verifies the new version in a separate staging folder, and only then swaps it in. If installation fails, no swap occurs: the previous version remains installed and runnable. Before exiting, the updater attempts to restore the previous service or proxy if it stopped it and still has authority to do so. If recovery cannot be verified, it reports that manual review is needed rather than starting a second proxy owned elsewhere. Reinstallation is not required merely to recover the previous package.
 
 Check that with:
 
