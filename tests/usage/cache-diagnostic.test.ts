@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { captureCodexAffinityDiagnostic } from "../../src/codex/affinity-debug";
 import { codexPoolAffinityKey } from "../../src/codex/auth-context";
-import { codexLineageScopeKey } from "../../src/codex/lineage";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests, setDebugSettings } from "../../src/lib/debug-settings";
 import {
@@ -26,6 +25,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 let testDir = "";
 let previousHome: string | undefined;
 let previousDebug: string | undefined;
+const TEST_PRINCIPAL = "synthetic-authenticated-admission-principal";
 
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -119,12 +119,13 @@ function turn(
     affinityMove?: string;
     affinityReason?: string;
     protocol?: CacheDiagnosticFinalFacts["protocol"];
+    principal?: string | null;
   } = {},
 ): void {
   const headers = new Headers(options.headers ?? (options.session === null ? {} : {
     session_id: options.session ?? "test-session",
   }));
-  const draft = observeInbound(inbound, headers);
+  const draft = observeInbound(inbound, headers, "caller", options.principal === null ? undefined : options.principal ?? TEST_PRINCIPAL);
   observeOutbound(inbound, outbound, options.outboundHeaders ?? headers);
   appendFinalCacheDiagnostic({
     requestId: `turn-${recordsIfPresent()}`,
@@ -370,30 +371,35 @@ describe("cache diagnostic", () => {
     for (const secret of ["key-a", "key-b", "account-a", "account-b", "unrelated"]) expect(text).not.toContain(secret);
   });
 
-  test("isolates identical sessions by authenticated caller without serializing caller evidence", () => {
+  test("isolates identical sessions by trusted admission, never by mutable caller headers", () => {
     process.env.OPENCODEX_CACHE_DEBUG = "1";
-    const a = new Headers({ session_id: "shared-session", authorization: "Bearer synthetic-caller-a" });
-    const b = new Headers({ session_id: "shared-session", authorization: "Bearer synthetic-caller-b" });
-    const local = new Headers({ session_id: "shared-session" });
+    const headers = new Headers({ session_id: "shared-session", authorization: "Bearer test-upstream" });
+    const a = "synthetic-admission-a";
+    const b = "synthetic-admission-b";
     const body = { input: [message("same")], prompt_cache_key: "shared-key" };
-    for (const headers of [a, b, local, a, b, local]) {
-      turn(body, body, { headers, account: headers === a ? "account-a" : headers === b ? "account-b" : "local-account" });
+    for (const principal of [a, b, null, a, b, null]) {
+      turn(body, body, { headers, principal, account: "same-upstream-account" });
     }
     const rows = diagnosticRecords();
-    for (const row of rows.slice(0, 3)) {
+    for (const row of [rows[0], rows[1]]) {
       expect(row.continuation.inbound.status).toBe("first");
       expect(row.continuation.outbound.status).toBe("first");
       expect(row.continuation.account).toBe("first");
     }
-    for (const row of rows.slice(3)) {
+    for (const row of [rows[3], rows[4]]) {
       expect(row.continuation.inbound.status).toBe("equal");
       expect(row.continuation.outbound.status).toBe("equal");
       expect(row.continuation.account).toBe("equal");
     }
+    for (const row of [rows[2], rows[5]]) {
+      expect(row.continuation.inbound).toEqual({ status: "uncomparable", reason: "missing-observation" });
+      expect(row.continuation.outbound).toEqual({ status: "uncomparable", reason: "missing-observation" });
+      expect(row.continuation.account).toBe("uncomparable");
+      expect(row.prefix.comparison.status).toBe("equal");
+    }
     const text = readFileSync(cacheDiagnosticPath(), "utf8");
-    for (const headers of [a, b, local]) {
-      const scope = codexLineageScopeKey(headers);
-      if (headers.has("authorization")) expect(text).not.toContain(headers.get("authorization")!);
+    expect(text).not.toContain(headers.get("authorization")!);
+    for (const scope of [a, b]) {
       expect(text).not.toContain(scope);
       expect(text).not.toContain(tagCacheDiagnosticValue("caller-scope", scope));
     }
@@ -578,7 +584,7 @@ describe("cache diagnostic", () => {
   test("missing observations stay unknown on later turns and unsupported shapes do not compare equal", () => {
     process.env.OPENCODEX_CACHE_DEBUG = "1";
     const headers = new Headers({ session_id: "partial-observation" });
-    const draft = observeInbound({ input: "same" }, headers);
+    const draft = observeInbound({ input: "same" }, headers, "caller", TEST_PRINCIPAL);
     append("inbound-only", draft);
     turn({ input: "same" }, undefined, { headers });
     const next = diagnosticRecords().at(-1)!;
@@ -604,7 +610,7 @@ describe("cache diagnostic", () => {
     expect(missing.continuation.promptCacheKey).toEqual({ inbound: "uncomparable", outbound: "uncomparable" });
     const headers = new Headers({ session_id: "inbound-only" });
     const body = { input: "same" };
-    append("inbound-only", observeInbound(body, headers));
+    append("inbound-only", observeInbound(body, headers, "caller", TEST_PRINCIPAL));
     const partial = diagnosticRecords().at(-1)!;
     expect(partial.session.inboundHeaders?.session_id.present).toBe(true);
     expect(partial.session.outboundHeaders).toBeUndefined();
@@ -624,8 +630,8 @@ describe("cache diagnostic", () => {
     const headers = new Headers({ session_id: "overlapping-turns" });
     const early = { input: [message("first")] };
     const later = { input: [message("first"), message("second")] };
-    const earlyDraft = observeInbound(early, headers);
-    const laterDraft = observeInbound(later, headers);
+    const earlyDraft = observeInbound(early, headers, "caller", TEST_PRINCIPAL);
+    const laterDraft = observeInbound(later, headers, "caller", TEST_PRINCIPAL);
     observeOutbound(early, early, headers);
     observeOutbound(later, later, headers);
     append("later-request", laterDraft);

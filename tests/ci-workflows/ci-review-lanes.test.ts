@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
@@ -408,6 +408,12 @@ describe("Windows and nightly CI contracts", () => {
   test.skipIf(process.platform === "win32" || !Bun.which("git"))("Windows diff scan considers only added src/tests markers and fails closed without a parent", () => {
     const scenarios = [
       { path: "src/example.ts", before: "plain\n", after: "WIN32\n", expected: "true" },
+      // An added spawnSync line is Windows-sensitive by content, outside the path filter too (#7468).
+      { path: "tests/update/example-host-guard.test.ts", before: "plain\n", after: "const original = Bun.spawnSync;\n", expected: "true" },
+      // Process-signal code behaves differently on Windows (kill("SIGTERM") is TerminateProcess), #7484/#7502.
+      { path: "src/server/example-restart.ts", before: "plain\n", after: 'child.kill("SIGTERM");\n', expected: "true" },
+      { path: "tests/server/example-restart.test.ts", before: "plain\n", after: "expect(child.signalCode).toBe(\"SIGKILL\");\n", expected: "true" },
+      { path: "src/lib/example-stop.ts", before: "plain\n", after: "process.kill(pid, 0);\n", expected: "true" },
       { path: "tests/example.ts", before: "plain\n", after: "ordinary\n", expected: "false" },
       { path: "src/example.ts", before: "powershell\nplain\n", after: "plain\n", expected: "false" },
       { path: "docs/example.md", before: "plain\n", after: "pwsh\n", expected: "false" },
@@ -437,13 +443,19 @@ describe("Windows and nightly CI contracts", () => {
         commit();
         if (!scenario.orphan) { writeFileSync(path, scenario.after ?? scenario.before); commit(); }
         const output = join(directory, "output");
+        const summary = join(directory, "summary");
         const result = spawnSync("bash", [repoPath("scripts", "ci", "windows-sensitive-diff.sh")], {
           cwd: directory, encoding: "utf8", timeout: 5_000,
-          env: { ...process.env, EVENT_NAME: scenario.event ?? "pull_request", PATH_SELECTED: scenario.selected ?? "false", GITHUB_OUTPUT: output },
+          env: { ...process.env, EVENT_NAME: scenario.event ?? "pull_request", PATH_SELECTED: scenario.selected ?? "false", GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary },
         });
         expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(scenario.status ?? 0);
         if (scenario.expected) expect(readFileSync(output, "utf8")).toBe(`windows=${scenario.expected}\n`);
+        // A Windows-sensitive pull request gets a non-blocking notice and summary line, and nothing
+        // else does; the PR still never runs the Windows shards (AGENTS.md CI policy).
+        const notice = (scenario.event ?? "pull_request") === "pull_request" && scenario.expected === "true";
+        expect(result.stdout.includes("::notice title=Windows-sensitive::")).toBe(notice);
+        expect(existsSync(summary) && readFileSync(summary, "utf8").includes("lane=all")).toBe(notice);
       } finally { rmSync(directory, { recursive: true, force: true }); }
     }
   }, 30_000);

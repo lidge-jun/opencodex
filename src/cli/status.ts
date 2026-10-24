@@ -36,6 +36,8 @@ export type { ListenTarget } from "./status-probes";
 import { checkProxyHealth, probeUncleanExitState, type ListenTarget } from "./status-probes";
 import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
+import { collectAppliedCodexSettingsStatus, type CliAppliedCodexSettingsStatus } from "./status-codex-settings";
+import { installDetectionStatus, type InstallDetectionStatus } from "./status-install";
 
 /**
  * The state of the data-plane admission secret the SERVICE will use. State only -- never the value.
@@ -118,6 +120,8 @@ export type CliRemoteHubStatus = {
 
 export type CliStatusJson = {
   mainAccountHardLock?: CodexMainAccountPolicyHealth;
+  /** OCX-11 fallback state; see src/cli/status-fallback.ts. */
+  fallback?: import("./status-fallback").StatusFallback;
   schemaVersion: 1;
   /**
    * This machine's topology role, named rather than inferred (#4236).
@@ -229,8 +233,10 @@ export type CliStatusJson = {
    */
   versionSkew: VersionSkew;
   cliCommand: CliPathDiagnostics;
+  /** Installer ownership from the updater's detector (OCX-10); additive, `schemaVersion` stays 1. */
+  install: InstallDetectionStatus;
   startupSource: "live" | "local" | "local-supervision-override";
-};
+} & CliAppliedCodexSettingsStatus;
 
 export type CliStatusView = {
   json: CliStatusJson;
@@ -853,12 +859,22 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
   const mainAccountHardLock = options.mainAccountPolicy && live
     ? (await (await import("../oauth/health")).fetchCodexHealthFromLiveProxy(undefined, async () => live)).mainAccountHardLock
     : undefined;
+  // Same `--json`-only gate as the hard-lock read above: the human report stays one probe.
+  const fallback = options.mainAccountPolicy
+    ? await (await import("./status-fallback")).collectStatusFallback(config, {
+      live: Boolean(live), linkChild: config.client?.transport === "link",
+      deps: { findLiveProxy: async () => live },
+    })
+    : undefined;
   const pidFile = readPid();
   // Preserve an authoritative null from orphan/legacy liveness — do not restore pidFile.
   const pid = resolveStatusPid(live, pidFile);
   // No extra request: findLiveProxy's identity probe already parsed and validated the
   // healthz body, so the version came back with the liveness result.
   const versionSkew = computeVersionSkew(packageVersion(), live?.version);
+  // OCX-6: what this machine applied and, on a Child, when its runtime started. Additive and
+  // always present (null when unknown), so `schemaVersion` stays 1.
+  const appliedCodexSettings = await collectAppliedCodexSettingsStatus(config, live);
   const listen = live
     ? {
       port: live.port,
@@ -1005,6 +1021,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
     healthLabel: formatCliStatusHealthLabel(health.label, cliCommand, remoteHub.connected),
     json: {
       ...(mainAccountHardLock ? { mainAccountHardLock } : {}),
+      ...(fallback ? { fallback } : {}),
       schemaVersion: 1,
       runtimeRole: config.runtimeRole ?? "standalone",
       proxy: {
@@ -1067,7 +1084,9 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
       // print it under the wrong heading (#2701).
       versionSkew,
       cliCommand,
+      install: installDetectionStatus(),
       startupSource,
+      ...appliedCodexSettings,
     },
   };
 }

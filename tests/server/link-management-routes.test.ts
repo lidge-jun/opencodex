@@ -285,9 +285,30 @@ describe("link management routes", () => {
     // `ocx link status` validates the admin-token answer key by key, so it gains neither field.
     const admin = await call("/api/link/status", "GET", undefined, h.deps, "admin-token", true, null, true, standalone);
     expect(Object.keys(await admin!.json()).sort()).toEqual(["child", "links", "listener", "role"]);
+    const compat = await call("/api/link/status?compatibility=1", "GET", undefined, h.deps, "admin-token", true, null, true, standalone);
+    expect(Object.keys(await compat!.json()).sort()).toEqual(["child", "links", "listener", "local", "role"]);
     expect(h.events).toEqual([]);
     expect(standalone.apiKeys).toEqual([]);
     expect(h.store.links).toEqual([]);
+  });
+
+  test("status with compatibility=1 maps each Home link to its observed peer verdict", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-peer-status-"));
+    const h = harness();
+    const linked: LinkStore = { version: 1, listenerPort: 18181, links: [{ id: "lnk_0123456789abcdef", alias: "child", direction: "client-initiated",
+      hostKeyFingerprint: null, tunnelPort: 2200, apiKeyId: "key-link", createdAt: "2026-10-22T00:00:00.000Z" }] };
+    const asked: string[] = [];
+    const deps = { ...h.deps, readLinkStore: () => linked, linkListener: () => ({ ...h.listener, peerObservation: (id: string) => {
+      asked.push(id);
+      return { observed: { relayAuth: "2", reported: false, version: null, features: null, observedAt: "2026-10-22T00:00:01.000Z" }, refused: null };
+    } }) } as ManagementApiDeps;
+    const response = await call("/api/link/status?compatibility=1", "GET", undefined, deps, "admin-token", true, null, true, h.config);
+    const body = await response!.json() as { role: string; links: Array<{ peer?: { compatibility: string; relayAuth: string | null } }> };
+    expect(body.role).toBe("home");
+    expect(asked).toEqual(["lnk_0123456789abcdef"]);
+    expect(body.links[0]!.peer).toMatchObject({ compatibility: "compatible", relayAuth: "2" });
+    const plain = await call("/api/link/status", "GET", undefined, deps, "admin-token", true, null, true, { ...h.config } as OcxConfig);
+    expect((await plain!.json() as { links: Array<Record<string, unknown>> }).links[0]).not.toHaveProperty("peer");
   });
 
   test("confirm-host keeps the parsed remote version to a bounded semver shape", async () => {

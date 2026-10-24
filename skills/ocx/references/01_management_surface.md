@@ -28,10 +28,10 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [lifecycle](01_surface_lifecycle.md) | 13 |
 | [providers-models](01_surface_providers-models.md) | 49 |
 | [accounts](01_surface_accounts.md) | 42 |
-| [agents-routing](01_surface_agents-routing.md) | 62 |
+| [agents-routing](01_surface_agents-routing.md) | 67 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 96 |
-| [access-remote](01_surface_access-remote.md) | 32 |
+| [access-remote](01_surface_access-remote.md) | 33 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -82,6 +82,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx link reconnect`
 
 [State-changing task](01_surface_access-remote.md#ocx-link-reconnect)
+
+### `ocx link cleanup`
+
+[Read-oriented task](01_surface_access-remote.md#ocx-link-cleanup)
 
 ### `ocx remote-workspace pair`
 
@@ -750,6 +754,26 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx agent sidecar vision`
 
 [State-changing task](01_surface_agents-routing.md#ocx-agent-sidecar-vision)
+
+### `ocx fallback`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-fallback)
+
+### `ocx fallback off`
+
+[State-changing task](01_surface_agents-routing.md#ocx-fallback-off)
+
+### `ocx fallback on`
+
+[State-changing task](01_surface_agents-routing.md#ocx-fallback-on)
+
+### `ocx fallback clear`
+
+[State-changing task](01_surface_agents-routing.md#ocx-fallback-clear)
+
+### `ocx fallback local`
+
+[State-changing task](01_surface_agents-routing.md#ocx-fallback-local)
 
 ### `ocx effort`
 
@@ -1473,6 +1497,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 356
-- of those, state-changing: 217
+- declared capabilities: 362
+- of those, state-changing: 221
 - head-resolved invocations: 2

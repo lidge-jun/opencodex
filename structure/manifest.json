@@ -405,6 +405,15 @@
       ]
     },
     {
+      "path": "data-planes/chat-reasoning-details.md",
+      "tier": 3,
+      "title": "Anthropic Thinking Signatures on the Chat Wire",
+      "scope": "The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429).",
+      "documents": [
+        "src/chat/reasoning-details.ts"
+      ]
+    },
+    {
       "path": "data-planes/protocol-paths.md",
       "tier": 3,
       "title": "Protocol Paths",
@@ -497,7 +506,11 @@
         "src/combos/",
         "src/server/",
         "src/usage/",
-        "src/lib/decision-quota-sink.ts"
+        "src/lib/decision-quota-sink.ts",
+        "src/providers/antigravity-quota-identity.ts",
+        "src/providers/quota-decision-antigravity.ts",
+        "src/providers/quota-decision-snapshot.ts",
+        "src/providers/quota-decision-publication.ts"
       ]
     },
     {
@@ -510,6 +523,21 @@
         "src/providers/anthropic-billing-ownership.ts",
         "src/providers/anthropic-billing-recovery.ts",
         "src/providers/request-pacing.ts"
+      ]
+    },
+    {
+      "path": "providers/workbuddy.md",
+      "tier": 4,
+      "title": "WorkBuddy AI Subscription",
+      "scope": "Browser login, account-bound refresh and catalogs, fixed-origin Chat transport, tool continuity and display-only credit balances.",
+      "documents": [
+        "src/oauth/workbuddy.ts",
+        "src/providers/workbuddy.ts",
+        "src/providers/workbuddy-models.ts",
+        "src/providers/workbuddy-credit-balance.ts",
+        "src/providers/quota/workbuddy.ts",
+        "src/adapters/workbuddy.ts",
+        "src/adapters/workbuddy-schema.ts"
       ]
     },
     {
@@ -712,6 +740,34 @@
         "src/routing/history/",
         "src/server/",
         "src/usage/"
+      ]
+    },
+    {
+      "path": "quota-pool.md",
+      "tier": 5,
+      "title": "Quota Pool Producer",
+      "scope": "The passive GET /api/quota-pool read GOAT consumes (ocx.quota-pool/1): sources, window mapping, absent-not-zero, and the install identity behind homeId and accountRef.",
+      "documents": [
+        "src/quota-pool/",
+        "src/server/management/quota-pool-routes.ts"
+      ]
+    },
+    {
+      "path": "fallback-policy.md",
+      "tier": 3,
+      "title": "Fallback Policy",
+      "scope": "OCX-11 fallback off: what is a model or provider fallback (and what intra-pool rotation is not), scope precedence, the guarded hop sites, the fallback_refused and home_unreachable contracts, and the ocx.fallback/1 state.",
+      "documents": [
+        "src/routing/",
+        "src/types/",
+        "src/config/",
+        "src/client/",
+        "src/server/",
+        "src/cli/",
+        "src/codex/",
+        "src/combos/",
+        "src/remote/",
+        "gui/"
       ]
     },
     {
@@ -924,6 +980,13 @@
       "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery.",
       "documents": [
         "src/link/",
+        "src/client/link-home.ts",
+        "src/client/link-parity-reporter.ts",
+        "src/client/runtime-restart.ts",
+        "src/cli/link-apply-restart.ts",
+        "src/cli/status-codex-settings.ts",
+        "src/server/index/link-management.ts",
+        "src/server/management/link-routes.ts",
         "src/lib/gui-pair-intent.ts",
         "src/lib/windows-owner-acl.ts",
         "src/server/gui-pair-delivery.ts"

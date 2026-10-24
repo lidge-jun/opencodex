@@ -206,7 +206,7 @@ takdirde 1 ile çıkar, bu da onu servis probları için uygun hale getirir.
 Kimliği doğrulanmamış `GET /readyz` uç noktası aracılığıyla senkronizasyon
 sonrası hazırlığı kontrol edin. Hazır olduğunda `200` veya `pending` ve terminal
 `failed` için `Retry-After: 1` ile `503` döndürür. Temizlenmiş HTTP kimliği
-`{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl}` şeklindedir. `protocol` hub'ın güncel uzak protokolünü, `minimumClientProtocol` uyumlu en düşük istemci protokolünü ve `managementUrl` tarayıcıya görünen kanonik yönetim origin'ini belirtir. `/readyz` içermeyen
+`{service, version, uptime, pid, port, status, protocol, minimumClientProtocol, managementUrl, features}` şeklindedir. `protocol` hub'ın güncel uzak protokolünü, `minimumClientProtocol` uyumlu en düşük istemci protokolünü ve `managementUrl` tarayıcıya görünen kanonik yönetim origin'ini belirtir. `/readyz` içermeyen
 eski proxy'ler `unreachable` olarak kapalı başarısız olur; `/healthz` hazırlık
 değil, ayrı bir canlılıktır. Komut varsayılan olarak bir prob gerçekleştirir;
 `--wait`, hazır olana veya zaman aşımına kadar yoklar, ancak terminal `failed`
@@ -237,6 +237,8 @@ Doctor asla kimlik bilgilerini değiştirmez veya onarımlar uygulamaz.
 ## Katalog senkronizasyonu
 
 ### `ocx sync [--restart-codex] [--restart-app-server-only]`
+
+> **Remote Link Child:** `ocx sync` Home'un Codex ayarlarını da uygular ve istemci çalışma zamanı bu uygulamadan önce başlamışsa, yeniden başlatma bayrağı olmadan da onu yeniden başlatır. Yeniden başlatma başarısız olursa önceki çalışma zamanı hizmet vermeye devam eder ve komut sıfırdan farklı bir kodla çıkar. `ocx status --json` ve `ocx link status --json` içindeki ilgili alanlar için [Remote Link apply parity](/reference/cli/lifecycle/#remote-link-apply-parity) (İngilizce) bölümüne bakın.
 
 Açıkça istenen yeniden başlatma, katalog ve önbellek baytları değişmese bile `config.toml` değişikliği başarıyla kaydedildikten sonra da çalışır. Yalnızca yapılandırmayı işleyen bir işlem değişiklik yapmadığında, reddedildiğinde, ön kontrolde kaldığında veya yazma geri alındığında yeniden başlatma tetiklenmez. Yeniden başlatma bayrağı olmadan sync, Codex’i otomatik olarak yeniden başlatmaz.
 

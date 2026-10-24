@@ -62,6 +62,11 @@ to `requestedModel` is how you get a wrong answer about which provider served it
 One configured provider per line. Each object has the same fields as an item in the
 `configured` array from `ocx provider list --json`; the `registryCount` summary is omitted.
 
+Each row has `active`: `false` when this device is linked to a Home (a Remote Link Child or a
+Hub-mode client), so the row is local configuration the Home's providers shadow; `true` when the
+row actually serves. Rows carry no credential values: `baseUrl` drops embedded userinfo and masks
+credential-shaped query values.
+
 ## `ocx logs history --json`
 
 The management page: `entries[]`, `hasMore`, optional `nextCursor`, and `index` (schema version,

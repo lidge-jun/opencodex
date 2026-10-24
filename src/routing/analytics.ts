@@ -11,7 +11,7 @@
  * sample for the full history.
  */
 
-import type { PersistedUsageEntry } from "../usage/log";
+import { normalizePersistedUsageRow, type PersistedUsageEntry } from "../usage/log";
 import { computeEntryCost } from "../usage/summary";
 import { openRequestHistoryIndex, requestHistoryDb } from "./history/indexer";
 
@@ -141,8 +141,7 @@ function classifyRow(row: ScannedRow): "success" | "failure" | "cancelled" {
 
 function parseEntry(rowJson: string): PersistedUsageEntry | null {
   try {
-    const parsed = JSON.parse(rowJson) as PersistedUsageEntry;
-    return parsed && typeof parsed === "object" && typeof parsed.requestId === "string" ? parsed : null;
+    return normalizePersistedUsageRow(JSON.parse(rowJson)) ?? null;
   } catch {
     return null;
   }

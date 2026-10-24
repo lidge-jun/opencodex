@@ -121,7 +121,17 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
-HTTP owners in `src/server/responses/core.ts`, `src/server/chat-completions.ts` and `src/server/claude-messages.ts` pass the request abort signal to `src/lib/translator-budget.ts`. An aborted request releases its owned translator budget even when its response body is never consumed. Abort finalization changes accounting only; the transport keeps ownership of producer cancellation and response terminal precedence. Explicit body cancellation also releases the budget before awaiting upstream reader cancellation. EOF and read errors share the same idempotent finalizer, which removes its abort listener. Responses lifetime wrapping in `src/server/responses/core-lifetime.ts` preserves native, eager-relay, preinspected-response, run-turn and nonreplayable markers, including through an outer serving-account lease. `tests/adapters/translator-budget-lifetime.test.ts` holds cancellation pending and covers abort before wrapping, abort after wrapping, explicit cancellation, marker preservation and successful EOF.
+The Chat adapter's decoded carry contains only an unfinished line after each drain.
+A network fragment with no newline retains the carry's already-counted UTF-8 size
+instead of splitting and re-encoding the entire growing line. The append and
+residual overlap reservations remain in their original order, including the
+otherwise redundant reservation, so existing cap failures and high-water accounting
+are unchanged. A fragment containing a newline drains through the existing parser.
+Unicode decoder boundaries, CRLF handling, EOF, terminal repairs and call ordering
+retain their contracts. `tests/adapters/openai/openai-chat-parallel-stream.test.ts`
+covers fragmented work scaling and the Unicode/EOF boundary cases.
+
+HTTP owners in `src/server/responses/core.ts`, `src/server/chat-completions.ts` and `src/server/claude-messages.ts` pass the request abort signal to `src/lib/translator-budget.ts`. An aborted request releases its owned translator budget even when its response body is never consumed. Abort finalization changes accounting only; the transport keeps ownership of producer cancellation and response terminal precedence. Explicit body cancellation also releases the budget before awaiting upstream reader cancellation. EOF and read errors share the same idempotent finalizer, which removes its abort listener. Responses lifetime wrapping in `src/server/responses/core-lifetime.ts` preserves native, eager-relay, preinspected-response, run-turn and nonreplayable markers, including through an outer serving-account lease. Both budget and account-lease finalization also carry replay-refusal provenance with `carryReplayRefusal`: deferred logging distinguishes synthetic transport-ambiguous refusals from genuine upstream 429 rate limits without changing the client response or replay policy. `tests/responses/responses-translated-reset.test.ts` covers attribution through each wrapper and their composition. `tests/adapters/translator-budget-lifetime.test.ts` holds cancellation pending and covers abort before wrapping, abort after wrapping, explicit cancellation, marker preservation and successful EOF.
 
 Disposed budgets ignore late call, reservation, charge and observation work; reservations created before disposal cannot resurrect per-turn or aggregate counters. The same Bun contract checks both accounting scopes before any producer cancellation and while an explicit cancellation is pending. Every producer must honor its transport abort link; disposed accounting does not provide a byte cap to work that outlives its request.
 
@@ -138,6 +148,11 @@ cancellation or consumer closure; a buffer-limit failure terminates without anot
 `src/server/sse-payload-rewrite.ts` shares an incremental block buffer with native Chat. It scans
 only new input plus a three-character delimiter prefix and counts consumed blocks rather than
 remaining suffixes. CR, LF and CRLF share partial-event, injection/drop and EOF behavior.
+After an unsuccessful delimiter search, fragments without CR or LF cannot create a delimiter;
+the buffer advances its scan cursor without passing the growing carry to the regex again.
+Queued appends retain scan eligibility until drained. This adds no payload buffer or budget operation.
+Surrogate-boundary accounting caches the final code unit from each fragment rather than indexing
+the growing carry. A failed scan retains that boundary; emptying or clearing the buffer resets it.
 Output admission precedes its single UTF-8 encoding;
 failed enqueue and cancellation release the reservation without re-entering a disposed rewrite.
 Old/new buffer overlap remains charged against the same translator cap.

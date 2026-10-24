@@ -73,6 +73,7 @@ import {
 } from "./gui-session";
 import { hasLocalDesktopSnapshotCapability } from "./local-desktop-snapshot-auth";
 import { hasLocalAccountSwitchCapability } from "./local-account-switch-auth";
+import { authorizationCredential } from "../lib/authorization-scheme";
 export type { GuiSessionBootstrap, GuiSessionRequestContext } from "./gui-session";
 
 const LOCAL_READ_REPLAY_LIMIT = 256;
@@ -545,7 +546,7 @@ function hasGuiPairCapability(
 
 function requestManagementCredential(req: Request): string | null {
   return req.headers.get("x-opencodex-api-key")?.trim()
-    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim()
+    || authorizationCredential(req.headers)
     || null;
 }
 

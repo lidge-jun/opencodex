@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { OcxConfig } from "../types";
 import { canonicalGuiBrowserOrigin, standaloneGuiPairingOrigin } from "../lib/gui-pair-capability";
+import { authorizationCredential } from "../lib/authorization-scheme";
 import {
   isAllowedManagementOrigin,
   isApiAuthRequired,
@@ -409,7 +410,7 @@ function isPairingTransportPermitted(origin: string): boolean {
 
 function requestCredential(req: Request): string | null {
   return req.headers.get("x-opencodex-api-key")?.trim()
-    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim()
+    || authorizationCredential(req.headers)
     || null;
 }
 

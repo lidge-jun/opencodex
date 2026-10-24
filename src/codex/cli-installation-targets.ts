@@ -141,10 +141,14 @@ export async function deriveCodexCliInstallationInput(
 
   // The npm cmd-shim itself prefers %dp0%\node.exe before falling back to PATH.
   let node = win32.join(prefix, "node.exe");
-  if (await exists(node) !== true) {
+  const localNode = await exists(node);
+  if (localNode === false) {
     const resolved = await scanPath("node.exe", snapshot.path, null, exists);
     if (!resolved) return { kind: "unavailable", reason: "toolchain_unresolved" };
     node = resolved;
+  } else if (localNode !== true) {
+    // A refused local probe is not proof of absence and must not fall through to PATH.
+    return { kind: "unavailable", reason: "toolchain_unresolved" };
   }
   const npmCli = win32.join(win32.dirname(node), "node_modules", "npm", "bin", "npm-cli.js");
   if (await exists(npmCli) !== true) return { kind: "unavailable", reason: "toolchain_unresolved" };

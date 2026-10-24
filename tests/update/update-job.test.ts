@@ -23,6 +23,7 @@ import {
 } from "../../src/update/job";
 import { checkUpdatePackageIntegrity, updateCommand, updateCommandStr } from "../../src/update/index";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { HOST_FREE_RECOVERY_IO, withoutHostProcesses } from "../helpers/update-recovery-host-free";
 
 type SpawnResult = { status: number | null; stdout: string };
 function fakeSpawn(result: SpawnResult): typeof import("node:child_process").spawnSync {
@@ -920,7 +921,8 @@ describe("GUI update execution decisions", () => {
     const prev = process.env.OCX_BAKE_PORT;
     delete process.env.OCX_BAKE_PORT;
     try {
-      await restartAfterUpdateForTests(job, { port: 18765, hostname: "127.0.0.1" }, {
+      await withoutHostProcesses(() => restartAfterUpdateForTests(job, { port: 18765, hostname: "127.0.0.1" }, {
+        ...HOST_FREE_RECOVERY_IO,
         serviceInstalledFn: () => true,
         serviceViableFn: () => true,
         // The service-recovery gate now asks the port before skipping the direct-start
@@ -938,7 +940,7 @@ describe("GUI update execution decisions", () => {
           bakeDuringInstall.push(process.env.OCX_BAKE_PORT ?? "");
           return { status: 0 };
         },
-      });
+      }));
       expect(waited).toEqual([{ port: 18765, hostname: "127.0.0.1" }]);
       expect(bakeDuringInstall).toEqual(["18765"]);
       expect(process.env.OCX_BAKE_PORT).toBeUndefined();
@@ -967,7 +969,8 @@ describe("GUI update execution decisions", () => {
     const prevService = process.env.OCX_SERVICE;
     delete process.env.OCX_SERVICE;
     try {
-      await restartAfterUpdateForTests(job, { port: 19999, hostname: "127.0.0.1" }, {
+      await withoutHostProcesses(() => restartAfterUpdateForTests(job, { port: 19999, hostname: "127.0.0.1" }, {
+        ...HOST_FREE_RECOVERY_IO,
         serviceInstalledFn: () => true,
         serviceViableFn: () => false,
         waitForPort: async () => true,
@@ -975,7 +978,7 @@ describe("GUI update execution decisions", () => {
         spawnStart: (_job, _installer, port) => {
           spawned.push({ port: port ?? 0 });
         },
-      });
+      }));
       // The fallback must fire: direct proxy start instead of throwing.
       expect(spawned).toEqual([{ port: 19999 }]);
     } finally {
@@ -1011,7 +1014,8 @@ describe("GUI update execution decisions", () => {
     const prevService = process.env.OCX_SERVICE;
     process.env.OCX_SERVICE = "1";
     try {
-      await restartAfterUpdateForTests(job, { port: 19998, hostname: "127.0.0.1" }, {
+      await withoutHostProcesses(() => restartAfterUpdateForTests(job, { port: 19998, hostname: "127.0.0.1" }, {
+        ...HOST_FREE_RECOVERY_IO,
         platform: "win32",
         serviceInstalledFn: () => true,
         serviceViableFn: () => true,
@@ -1025,7 +1029,7 @@ describe("GUI update execution decisions", () => {
         spawnStart: (_job, _installer, port) => {
           spawned.push({ port: port ?? 0 });
         },
-      });
+      }));
       // The refresh ran, and it ran the non-registering subcommand.
       expect(ranService.length).toBe(1);
       expect(ranService[0]).toContain("repair");
@@ -1055,7 +1059,8 @@ describe("GUI update execution decisions", () => {
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
 
-    await expect(restartAfterUpdateForTests(job, { port: 19010, hostname: "127.0.0.1" }, {
+    await expect(withoutHostProcesses(() => restartAfterUpdateForTests(job, { port: 19010, hostname: "127.0.0.1" }, {
+      ...HOST_FREE_RECOVERY_IO,
       platform: "win32",
       serviceInstalledFn: () => true,
       serviceViableFn: () => true,
@@ -1063,7 +1068,7 @@ describe("GUI update execution decisions", () => {
       runService: () => ({ status: null, signal: "SIGTERM", timedOut: true }),
       spawnStart: (_job, _installer, port) => { spawned.push(port ?? 0); },
       probeProxy: async () => false,
-    })).rejects.toThrow(/state unknown.*refusing a competing direct start/i);
+    }))).rejects.toThrow(/state unknown.*refusing a competing direct start/i);
     expect(spawned).toEqual([]);
     const log = readUpdateJob(job.id)?.log.join("\n") ?? "";
     expect(log).toContain("refusing a competing direct start");
@@ -1089,7 +1094,8 @@ describe("GUI update execution decisions", () => {
     const prevService = process.env.OCX_SERVICE;
     delete process.env.OCX_SERVICE;
     try {
-      await restartAfterUpdateForTests(job, { port: 19100, hostname: "127.0.0.1" }, {
+      await withoutHostProcesses(() => restartAfterUpdateForTests(job, { port: 19100, hostname: "127.0.0.1" }, {
+        ...HOST_FREE_RECOVERY_IO,
         serviceInstalledFn: () => true,
         // Installed but stale/missing assets — the status line users see after a dead update.
         serviceViableFn: () => false,
@@ -1098,7 +1104,7 @@ describe("GUI update execution decisions", () => {
         spawnStart: (_job, _installer, port) => {
           spawned.push({ port: port ?? 0 });
         },
-      });
+      }));
       expect(spawned).toEqual([{ port: 19100 }]);
       expect(readUpdateJob(job.id)?.log.some(line =>
         line.includes("not viable") && line.includes("direct proxy start"),
@@ -1127,11 +1133,12 @@ describe("GUI update execution decisions", () => {
       log: [],
     };
     writeFileSync(updateJobPath(job.id), JSON.stringify(job));
-    const ok = await finishGuiUpdateRestart(
+    const ok = await withoutHostProcesses(() => finishGuiUpdateRestart(
       job,
       { port: 10100, hostname: "127.0.0.1", oldPid: 501 },
       "npm",
       {
+        ...HOST_FREE_RECOVERY_IO,
         // No Background Service installed — interactive dashboard update must still recover.
         serviceInstalledFn: () => false,
         serviceViableFn: () => false,
@@ -1144,7 +1151,7 @@ describe("GUI update execution decisions", () => {
         now: () => now,
         sleepMs: async (ms) => { now += ms; },
       },
-    );
+    ));
     expect(ok).toBe(true);
     expect(restartCalls).toBe(1);
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("skipping redundant restart"))).toBe(false);
@@ -1898,7 +1905,8 @@ describe("service recovery is health-gated, not viability-gated", () => {
     const prevService = process.env.OCX_SERVICE;
     delete process.env.OCX_SERVICE;
     try {
-      await restartAfterUpdateForTests(healthGateJob(id), { port: 18765, hostname: "127.0.0.1" }, {
+      await withoutHostProcesses(() => restartAfterUpdateForTests(healthGateJob(id), { port: 18765, hostname: "127.0.0.1" }, {
+        ...HOST_FREE_RECOVERY_IO,
         serviceInstalledFn: () => true,
         runService: () => ({ status: 0 }),
         waitForPort: async () => true,
@@ -1906,7 +1914,7 @@ describe("service recovery is health-gated, not viability-gated", () => {
         sleepMs: async ms => { now += ms; },
         now: () => now,
         ...io,
-      });
+      }));
     } finally {
       if (prevService === undefined) delete process.env.OCX_SERVICE;
       else process.env.OCX_SERVICE = prevService;

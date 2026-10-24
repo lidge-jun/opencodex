@@ -809,6 +809,10 @@ export function normalizeRoutedCatalogEntry(
   delete entry.multi_agent_version;
   delete entry.multi_agent_reasoning_effort;
   delete entry.use_responses_lite;
+  // Codex 0.164 sends positional `configuration_update` effort items only for rows declaring this
+  // and freezes the request-level effort for the context window. A routed provider never
+  // negotiated that contract, so a row cloned from a GPT-6 template must not inherit it.
+  delete entry.supports_reasoning_effort_updates;
   delete entry.supports_websockets;
   // Routed rows cloned from native templates must not inherit OpenAI-only experimental context
   // delivery. Codex reads the flag as "this model accepts experimental context history" and drives

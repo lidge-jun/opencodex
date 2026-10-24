@@ -58,7 +58,7 @@ without running handlers is not covered by this forwarding mechanism.
 systemd unit. State and ownership resolve from those captured bytes. Each present regular file contributes SHA-256 content and bigint device, inode, size, nanosecond mtime/ctime,
 mode, uid and gid. The opened descriptor must be regular and match device/inode before any read. Each record is limited to 1 MiB, read in bounded chunks with growth beyond that limit
 refused. Descriptor stats bracket the read; a final pathname stat must agree. Symlinks, inconsistent reads, malformed state, unreadable candidates and membership drift
-refuse. Canonical directory aliases remain equivalent. Lock, PID and runtime records are excluded.
+refuse. Homes compare canonical path plus exact bigint `dev:ino` (`fileId`); rounded doubles merge NTFS ids above 2^53. Aliases stay equivalent. Lock, PID and runtime records are excluded.
 
 `src/cli/update-restart.ts` requires known versions and a detached POSIX target with PID-1
 parent, no ownership claim and no client/sibling role. An installed record without a claim
@@ -574,7 +574,7 @@ waits for its replacement to answer, exits 1 when it never did, and falls back t
 when the listener recorded none. A supervised process (`OCX_SERVICE=1`) never spawns and exits 1
 for its supervisor. Coverage: `tests/server/restart-replacement.test.ts`,
 `tests/cli/cli-restart-handoff.test.ts`, `tests/server/system-restart.test.ts` and
-`tests/clients/client-runtime.test.ts`.
+`tests/clients/client-runtime.test.ts`. The client runtime's bound restart (OCX-6) keeps serving when its replacement fails, so it alone passes `notReady: "terminate"`: an unready replacement is stopped and `not_ready` returns only after its exit is observed (`tests/server/restart-replacement-not-ready.test.ts`; contract in [Remote Link](../remote-link.md)).
 
 A process the desktop app spawned spawns no replacement at all. The app sets
 `OCX_DESKTOP_SUPERVISED=1` on its sidecar; `handleStart` consumes it with the other start markers and

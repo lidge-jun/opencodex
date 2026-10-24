@@ -28,6 +28,22 @@ test("physical home identity detects same-path directory replacement", () => {
   renameSync(h.config, h.config + "-old"); mkdirSync(h.config);
   expect(() => checkHome(captured)).toThrow();
 });
+test("file ids beyond double precision still distinguish a replaced directory", () => {
+  // NTFS ids carry the MFT sequence in the high bits; a replacement directory often gets the
+  // neighbouring MFT index, and above 2^53 a double cannot tell the two ids apart.
+  home();
+  const original = 2n ** 58n + 4096n;
+  expect(Number(original + 1n)).toBe(Number(original));
+  let ino = original;
+  const deps = {
+    statDirectory: () => ({ dev: 7n, ino, isDirectory: () => true }),
+    supervision: { stat: () => ({ isFile: () => true, mode: 0o100755 }), platform: "darwin" as const, run: () => ({ status: 113, stdout: "", stderr: "" }) },
+  };
+  const captured = readUpdateRestartHome(deps);
+  expect(() => assertUpdateRestartHome(captured, Date.now() + 5000, deps)).not.toThrow();
+  ino = original + 1n;
+  expect(() => assertUpdateRestartHome(captured, Date.now() + 5000, deps)).toThrow("update_restart_home_changed");
+});
 test("canonical aliases identify the same directory", () => {
   const h = home(); const captured = readUpdateRestartHome();
   const alias = join(h.root, "alias"); symlinkSync(h.config, alias, process.platform === "win32" ? "junction" : "dir");

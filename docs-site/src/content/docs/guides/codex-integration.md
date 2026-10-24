@@ -142,7 +142,7 @@ to restore the default upstream WebSocket selection. This setting does not chang
 client-facing `websockets` switch or the ChatGPT account used for the request. Native
 mid-turn steering and injection need upstream WebSocket and are unavailable while it is off.
 
-**Reasoning usage metadata (pending next release).** For HTTP/SSE clients on the canonical
+**Reasoning usage metadata (2.90.0 and later).** For HTTP/SSE clients on the canonical
 ChatGPT route, the upstream WebSocket relay preserves an actual `x-reasoning-included`
 connection-response header when the Bun runtime exposes it, including on a reused connection.
 This tells Codex that the server's reported usage already includes earlier reasoning. Metadata
@@ -954,7 +954,12 @@ debug keys, created at process start and never persisted, so tags compare only w
 - `prefix.comparison` compares the observed inbound and outbound projections. `continuation`
   compares each side with the previous finalized request having the same complete nonempty inbound
   session-header identity, authenticated caller scope, protocol, model, and config directory. The
-  caller scope is used only in private in-memory lookup keys, never serialized. Provider changes do not reset this
+  caller scope comes from the authenticated admission captured before Chat/Messages bridging, not
+  from rewritten upstream headers. It is used only in private in-memory lookup keys, never serialized.
+  The same admitted key has the same scope across supported authentication headers; different keys
+  remain isolated. Without an authenticated admission identity (including unauthenticated loopback),
+  continuation comparisons are `uncomparable`; per-request inbound/outbound comparisons remain available.
+  Provider changes do not reset this
   comparison; prompt-key and explicit account-label changes are reported separately. Outbound-only
   session identifiers and prompt-cache keys never supply a missing correlation identity.
 - Comparisons report `first`, `equal`, `append-only`, `different`, `truncated`, or `uncomparable`.
@@ -1034,6 +1039,22 @@ A pinned account (an account-qualified model) is retried but never moved. Once a
 has reached Codex the turn is never sent again. If every attempt is declined, Codex receives
 the same error it would have received without the retries. Native compact requests move to
 another Pool account on a server error in the same way.
+
+### Runtime agent instances (Codex 0.164+)
+
+Codex 0.164 can sign each request with a runtime agent assertion when
+`features.runtime_agent_instances` is enabled (it is off by default). opencodex supports one of
+its two modes:
+
+- `mode = "dual_header"` keeps the normal `Authorization: Bearer` credential and adds an
+  `x-openai-agent-assertion` header. opencodex treats the request exactly as before. The assertion
+  is forwarded only when the turn goes to ChatGPT Direct with your own credential. It is removed
+  when a Pool account, a stored main credential, a routed provider, or a sidecar serves the request,
+  because it belongs to the credential Codex sent.
+- `mode = "assertion_only"` replaces the bearer with `Authorization: AgentAssertion <jwt>`.
+  opencodex refuses these requests with HTTP 400 and error code `agent_assertion_unsupported`.
+  It never substitutes a Pool or provider credential for the assertion, and it never forwards or
+  logs the assertion. Use `dual_header`, or turn the feature off, when Codex runs through opencodex.
 
 ### Codex autostart shim
 

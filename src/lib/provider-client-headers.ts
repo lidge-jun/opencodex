@@ -21,6 +21,7 @@ const BLOCKED_FORWARDED_CLIENT_HEADERS = new Set([
   "api-key",
   "x-goog-api-key",
   "x-oai-attestation",
+  "x-openai-agent-assertion",
 ]);
 
 const ALLOWED_FORWARDED_CLIENT_HEADERS = new Set([

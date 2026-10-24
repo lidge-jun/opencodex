@@ -87,6 +87,16 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.","A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.","Always emits {linkId} JSON."],
   },
   {
+    command: ["link","cleanup"],
+    summary: "Find Windows Remote Link Children and explain how to move them to Hub mode.",
+    routes: [],
+    flags: [{"name":"--link-id","value":"string","summary":"Check only this link."},{"name":"--json","value":"boolean","summary":"Emit {links, changed:false} as JSON."}],
+    mutates: false,
+    json: "payload",
+    usage: "ocx link cleanup [--link-id <id>] [--json]",
+    details: ["Runs on the Home from its local link store. Asks each Home-initiated Child for uname -s over the link's pinned SSH trust; a Windows answer (Git Bash, MSYS, Cygwin, cmd or PowerShell) is reported with recovery steps.","Never revokes, disconnects or edits a link. A Windows Child needs ocx disconnect on itself, then ocx link revoke --force --yes on the Home, then ocx hub invite and ocx connect."],
+  },
+  {
     command: ["remote-workspace","pair"],
     summary: "Enroll this executor with one Hub using a one-time code from stdin and locally approved roots.",
     routes: [],
@@ -156,7 +166,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{ name: "--json", value: "boolean", summary: "Emit the status envelope as JSON." }],
     mutates: false,
     json: "envelope",
-    details: ["Reads /healthz plus local config; drives no management API route."],
+    details: ["Reads /healthz plus local config; drives no management API route.", "--json includes install: {method: bun|npm|pnpm|mise|source|standalone|unknown, evidence: {basis, mise?, error?}} from the updater's install detector."],
   },
   {
     command: ["resolve"],
@@ -225,7 +235,10 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the provider list as JSON."},{"name":"--jsonl","value":"boolean","summary":"Emit one configured provider per JSON line."}],
     mutates: false,
     json: "envelope",
-    details: ["Local config and registry read, not GET /api/providers. --json and --jsonl are mutually exclusive."],
+    details: [
+      "Local config and registry read, not GET /api/providers. --json and --jsonl are mutually exclusive.",
+      "Each configured row carries active: false while this device is linked to a Home (a Remote Link Child or a Hub-mode client), whose providers serve instead; true when the row serves. Credential values are never printed.",
+    ],
     usage: "ocx provider list [--json|--jsonl]",
   },
   {

@@ -2,7 +2,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { codexConversationIdentity, codexLineageScopeKey } from "../codex/lineage";
+import { codexConversationIdentity } from "../codex/lineage";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import type { CacheTelemetryProvenance } from "./log";
@@ -257,6 +257,7 @@ export function observeInbound(
   body: unknown,
   headers: Headers,
   source: PromptCacheKeySource = "caller",
+  admissionPrincipal?: string,
 ): CacheDiagnosticDraft {
   if (!isCacheDiagnosticEnabled()) return {};
   try {
@@ -269,7 +270,9 @@ export function observeInbound(
       prefix: { inbound: prefixFingerprint(body) },
       accountAffinity: { inbound: accountAffinityKey(headers) },
     };
-    callerScopes.set(draft, tag("cache-debug:caller-scope", codexLineageScopeKey(headers)));
+    // Admission owns caller identity; bridges may remove or replace Authorization.
+    // No trusted principal (including unauthenticated loopback) means no history join.
+    if (admissionPrincipal) callerScopes.set(draft, tag("cache-debug:caller-scope", admissionPrincipal));
     if (body && typeof body === "object") bodyDrafts.set(body, draft);
     return draft;
   } catch {
@@ -408,7 +411,7 @@ export function appendFinalCacheDiagnostic(facts: CacheDiagnosticFinalFacts): vo
 const CACHE_DIAGNOSTIC_HOOK = Symbol.for("opencodex.cache-diagnostic.v1");
 interface CacheDiagnosticHooks {
   enabled(): boolean;
-  observeInbound(body: unknown, headers: Headers, source: PromptCacheKeySource): CacheDiagnosticDraft;
+  observeInbound(body: unknown, headers: Headers, source: PromptCacheKeySource, admissionPrincipal?: string): CacheDiagnosticDraft;
   rebind(body: unknown, draft: CacheDiagnosticDraft | undefined): void;
   finalize(facts: CacheDiagnosticFinalFacts): void;
 }

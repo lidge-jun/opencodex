@@ -4,6 +4,7 @@ import * as os from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
+import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { getConfigDir } from "../config";
 import type { OAuthController, OAuthCredentials } from "./types";
 
@@ -107,6 +108,7 @@ function getDeviceId(): string {
     if ((e as { code?: string })?.code !== "ENOENT") throw e;
   }
   const id = randomUUID().replace(/-/g, "");
+  assertNotRealHomeUnderTest(getConfigDir());
   recordOwnedConfigPath(getConfigDir(), p);
   if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true });
   writeFileSync(p, id + "\n", { mode: 0o600 });

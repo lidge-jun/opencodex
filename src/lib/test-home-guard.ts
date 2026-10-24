@@ -13,14 +13,15 @@
  * 1. It must be INERT in production. Guessing "am I a test?" from ecosystem variables
  *    like NODE_ENV would brick `NODE_ENV=test ocx ...` for a user who did nothing
  *    wrong — worse than the bug it prevents. Arming requires OCX_TEST_HOME_GUARD=1,
- *    which only this repository's test preload sets.
+ *    which this repository's test preload sets, or a process whose entry module is a
+ *    Bun test file (see {@link isBunTestFileProcess}); no production entrypoint is one.
  * 2. It must fail CLOSED for code nobody has written yet. So it denies ONE path — the
  *    captured production home — instead of allow-listing known-good test directories.
  *    An allowlist would have to be opted into, and the test that forgets is exactly
  *    how this incident happened.
  */
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -109,8 +110,71 @@ export function protectedClaudeConfigDirsForTests(): readonly string[] {
   return PROTECTED_CLAUDE_TREES.map(tree => tree.path);
 }
 
+/**
+ * The file names Bun's test runner discovers: `.test`, `_test`, `.spec` or `_spec` before a
+ * JS/TS extension. Under `bun test`, `Bun.main` names the test file being evaluated, in the
+ * main runner and in `--parallel` workers alike. Every production entrypoint — the CLI, the
+ * service daemon, the compiled sidecar (`/$bunfs/...`), a release script — has a different name.
+ */
+const BUN_TEST_FILE = /[._](?:test|spec)\.[cm]?[jt]sx?$/i;
+
+/**
+ * Whether this process runs a Bun test file as its entry module.
+ *
+ * This exists for the run that never loads `tests/preload.ts`. Bun resolves `bunfig.toml` from
+ * the CURRENT WORKING DIRECTORY, so `cd /tmp && bun test <repo>/tests/x.test.ts` skips the
+ * preload: HOME stays real, OPENCODEX_HOME stays unset, and before this check the guard stayed
+ * down, so an OAuth save landed in the developer's real `~/.opencodex/auth.json` (#7407).
+ * Bun exposes no runner flag, and NODE_ENV=test is both settable by users and overridable by the
+ * runner's caller, so the entry file's name is the one signal that production never carries.
+ *
+ * A file passed by explicit path under a non-test name (`bun test ./scratch.ts`) is not
+ * recognised; every repository suite is a `*.test.ts`, the only name `tests/test-layout.test.ts` admits.
+ *
+ * The converse also holds: `bun run ./something.test.ts` arms, because nothing distinguishes it
+ * from the runner. That is accepted. Requiring NODE_ENV=test as well would exempt every developer
+ * whose shell exports another NODE_ENV (`bun test` keeps an existing value), reopening #7407;
+ * the cost of the false positive is a refused real-home write from a script named like a test.
+ */
+export function isBunTestFileProcess(): boolean {
+  const main = (globalThis as { Bun?: { main?: unknown } }).Bun?.main;
+  const entry = typeof main === "string" ? main : process.argv[1];
+  return typeof entry === "string" && BUN_TEST_FILE.test(basename(entry));
+}
+
+/**
+ * Armed when the preload (or a harness) set OCX_TEST_HOME_GUARD=1, or when this process runs a
+ * Bun test file and nobody set the flag. An explicit OCX_TEST_HOME_GUARD=0 is how a test case
+ * exercises the production branch of a guarded call, so it disarms even inside a test file.
+ */
 export function isTestHomeGuardArmed(): boolean {
-  return process.env[GUARD_ENV] === "1";
+  const flag = process.env[GUARD_ENV];
+  if (flag === "1") return true;
+  if (flag === "0") return false;
+  return isBunTestFileProcess();
+}
+
+/**
+ * A test process that armed through its entry file publishes the flag, so the CLI and helper
+ * processes it spawns — whose own entry is not a test file — inherit the arming instead of
+ * writing the real home they also inherited. Runs at import, which in such a run happens before
+ * any test body. A production process never matches, so it never reaches the assignment. Any value
+ * but the explicit "0" opt-out is normalised, because an empty or stray value arms this process by
+ * name but would leave a non-test child, which cannot match by name, disarmed.
+ */
+if (process.env[GUARD_ENV] !== "0" && process.env[GUARD_ENV] !== "1" && isBunTestFileProcess()) {
+  process.env[GUARD_ENV] = "1";
+}
+
+/**
+ * Appended to a refusal when no preload ran, because the fix there is different: the test did
+ * not forget OPENCODEX_HOME, the whole run started from a directory without bunfig.toml.
+ */
+function missingPreloadHint(): string {
+  if (process.env.OCX_TEST_PRELOAD_PID !== undefined) return "";
+  return " This test process did not load tests/preload.ts — Bun reads bunfig.toml from the "
+    + "current working directory — so nothing was sandboxed. Run bun test from the repository "
+    + "root, or pass --preload <repo>/tests/preload.ts.";
 }
 
 /**
@@ -144,7 +208,8 @@ export function assertNotRealHomeUnderTest(dir: string): void {
   throw new Error(
     `refusing to write the real OpenCodex home (${PROTECTED_HOME}) from a test process. `
     + "Point OPENCODEX_HOME at a temp directory for this test, or inject persistence "
-    + "instead of calling the global writer (see devlog 260730_codex_rs_upstream_v2_live_handoff/070).",
+    + "instead of calling the global writer (see devlog 260730_codex_rs_upstream_v2_live_handoff/070)."
+    + missingPreloadHint(),
   );
 }
 
@@ -177,7 +242,8 @@ export function assertNotRealCodexHomeUnderTest(dir: string): void {
   throw new Error(
     `refusing to write the real Codex home (${PROTECTED_CODEX_HOME}) from a test process. `
     + "Point CODEX_HOME at a temp directory for this test before writing Codex files "
-    + "(auth.json, the catalog, models_cache.json, the journal or config.toml).",
+    + "(auth.json, the catalog, models_cache.json, the journal or config.toml)."
+    + missingPreloadHint(),
   );
 }
 
@@ -351,12 +417,13 @@ export function protectedRemovalReason(target: string): string | null {
 /**
  * Throw before a removal that would reach a protected tree.
  *
- * Deliberately NOT gated on {@link isTestHomeGuardArmed}. Arming happens in `tests/preload.ts`,
- * which Bun loads from the `bunfig.toml` it finds in the CURRENT WORKING DIRECTORY — so a run
- * started outside the repository arms nothing, leaves OPENCODEX_HOME unset, and resolves the
- * developer's real home. That unarmed run is precisely the one that caused the incident, so the
- * refusal has to hold without it. Nothing in production calls this; the callers are test
- * helpers, where the only cost of an unconditional check is a path comparison.
+ * Deliberately NOT gated on {@link isTestHomeGuardArmed}. `tests/preload.ts` is loaded from the
+ * `bunfig.toml` Bun finds in the CURRENT WORKING DIRECTORY, so a run started outside the
+ * repository leaves OPENCODEX_HOME unset and resolves the developer's real home. Such a run now
+ * arms through its test-file entry, but a helper launched as a plain script does not, and the
+ * incident was exactly this unsandboxed shape, so the refusal has to hold without arming.
+ * Nothing in production calls this; the callers are test helpers, where the only cost of an
+ * unconditional check is a path comparison.
  */
 export function assertRemovalOutsideProtectedTrees(target: string): void {
   const reason = protectedRemovalReason(target);
