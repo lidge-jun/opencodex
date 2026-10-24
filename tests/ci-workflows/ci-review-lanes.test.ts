@@ -166,10 +166,21 @@ describe("CI review lanes", () => {
     const scopedCondition = "github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'";
     // platform-macos is native-gated and pinned to the native condition above,
     // so it must not be read against this ci-only condition.
-    for (const jobName of ["test", "storage-policy", "gates", "keyring-smoke", "docker-smoke"]) {
+    for (const jobName of ["test", "storage-policy", "gates"]) {
       const job = ci.jobs?.[jobName] as { needs?: string; if?: string } | undefined;
       expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
       expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);
+    }
+    // The two smoke jobs keep the ci scope and, on a pull request only, also need their
+    // own narrow filter. Every other event still requests them unconditionally.
+    for (const [jobName, output] of [["keyring-smoke", "keyring"], ["docker-smoke", "docker"]] as const) {
+      const job = ci.jobs?.[jobName] as { needs?: string; if?: string } | undefined;
+      expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
+      expect(`${jobName}:${job?.if}`).toBe(
+        `${jobName}:github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.${output} == 'true')`,
+      );
+      expect((ci.jobs?.changes as { outputs?: Record<string, string> } | undefined)?.outputs?.[output])
+        .toBe(`\${{ steps.narrow.outputs.${output} }}`);
     }
     const macosControlIf = ci.jobs?.["macos-control"] as { needs?: string; if?: string } | undefined;
     expect(macosControlIf?.needs).toBe("changes");
@@ -182,12 +193,12 @@ describe("CI review lanes", () => {
     };
     // These job conditions use boolean operators and lowercase string comparisons.
     // Evaluate the checked-in expressions, rather than a second implementation of them.
-    const enabled = (job: string, event: string, lane: string, scope = "true", packaging = "true", native = "true", windows = "false") => {
+    const enabled = (job: string, event: string, lane: string, scope = "true", packaging = "true", native = "true", windows = "false", smoke = "true") => {
       const condition = ci.jobs[job]!.if ?? "true";
       const evaluate = new Function("github", "needs", `return (${condition});`);
       return evaluate(
         { event_name: event, event: { inputs: { lane } } },
-        { changes: { outputs: { ci: scope, packaging, native, windows } } },
+        { changes: { outputs: { ci: scope, packaging, native, windows, docker: smoke, keyring: smoke } } },
       );
     };
     for (const [event, lane, windows, control] of [
@@ -209,6 +220,14 @@ describe("CI review lanes", () => {
       for (const job of ["test", "gates", "storage-policy", "api-usage", "keyring-smoke", "docker-smoke"]) {
         expect(enabled(job, event, lane)).toBe(true);
         expect(enabled(job, event, lane, "false")).toBe(event !== "pull_request");
+      }
+      // A pull request whose diff misses the smoke filters skips both smoke jobs; any
+      // other event still runs them, which is what keeps them on the release push run.
+      for (const job of ["keyring-smoke", "docker-smoke"]) {
+        expect(enabled(job, event, lane, "true", "true", "true", "false", "false")).toBe(event !== "pull_request");
+      }
+      for (const job of ["test", "gates", "storage-policy", "api-usage"]) {
+        expect(enabled(job, event, lane, "true", "true", "true", "false", "false")).toBe(true);
       }
       // macOS jobs never run on a pull request; they run after merge, on push.
       for (const job of ["platform-macos", "widget"]) {
@@ -281,6 +300,7 @@ describe("CI review lanes", () => {
           CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: packaging,
           CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
           CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false",
+          CHANGES_DOCKER: "true", CHANGES_KEYRING: "true",
         },
         deadlineMs: 5_000,
       });
@@ -394,6 +414,7 @@ describe("Windows and nightly CI contracts", () => {
         CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: "true",
         CHANGES_DESKTOP: "false", CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
         CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false",
+        CHANGES_DOCKER: "false", CHANGES_KEYRING: "false",
         ...(windows === undefined ? {} : { CHANGES_WINDOWS: windows }),
       };
       const result = spawnSync("bash", ["-c", `set -u\n${slice}\necho "WIN=$(expected_for platform-windows)"\necho "CTL=$(expected_for macos-control)"`], {
