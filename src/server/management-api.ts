@@ -411,6 +411,11 @@ export async function handleManagementAPI(
   }
   if (routed) return routed;
 
+  if (url.pathname === "/api/stop" && req.method === "GET") {
+    const response = jsonResponse((await import("./stop-teardown")).stopCapabilities(), 200, req, config);
+    response.headers.set("Cache-Control", "no-store");
+    return response;
+  }
   if (url.pathname === "/api/stop" && req.method === "POST") {
     const { installedServiceRespawnRisk, stopServiceIfInstalledDetailed, isServiceOwnershipError } = await import("../service");
     // `ocx stop` performs its own shared teardown AFTER verifying the scheduler did not
