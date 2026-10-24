@@ -1002,10 +1002,10 @@ describe("provider registry parity", () => {
   test("Kimi coding aliases preserve model context and capability parity", () => {
     // 260921: the picker AND every preset metadata list seed only ids the subscription
     // endpoint still serves (live /coding/v1/models: kimi-for-coding[-highspeed], k3,
-    // k3-256k). Seeding a retired id in a metadata list would re-arm the model-rename
+    // k3-256k, and since 261024 k3.1-pro[-highspeed]). Seeding a retired id in a metadata list would re-arm the model-rename
     // migration on every boot (#5066); saved rows still naming one are repaired by
     // MODEL_RENAMES instead.
-    const codingModels = ["k3", "k3[1m]", "k3-256k", "kimi-for-coding"];
+    const codingModels = ["k3", "k3[1m]", "k3-256k", "k3.1-pro", "k3.1-pro-highspeed", "kimi-for-coding"];
     const parityLists = [
       "noReasoningModels",
       "noTemperatureModels",
@@ -1025,7 +1025,8 @@ describe("provider registry parity", () => {
       for (const modelId of codingModels) {
         // 260921: kimi-for-coding (K2.8 Preview) shares the verified 1M ceiling with k3[1m];
         // all other ids stay at the 256K standard window.
-        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" || modelId === "kimi-for-coding" ? 1_048_576 : 262_144);
+        // 261024: k3.1-pro[-highspeed] list context_length 1048576 live (flat 1M).
+        expect(entry?.modelContextWindows?.[modelId]).toBe(["k3[1m]", "k3.1-pro", "k3.1-pro-highspeed", "kimi-for-coding"].includes(modelId) ? 1_048_576 : 262_144);
       }
       for (const field of parityLists) {
         // Every preset list is live-id only: kimi-for-coding must be there, the retired
@@ -1049,7 +1050,8 @@ describe("provider registry parity", () => {
       expect(entry?.noReasoningModels).not.toContain("k3[1m]");
       expect(entry?.modelReasoningEfforts?.k3).toEqual(["low", "high", "max"]);
       expect(entry?.modelReasoningEfforts?.["k3[1m]"]).toEqual(["low", "high", "max"]);
-      for (const modelId of ["k3", "k3[1m]", "k3-256k"]) {
+      // K3.1 Pro is thinking-only and shares K3's low/high/max ladder (default max).
+      for (const modelId of ["k3", "k3[1m]", "k3-256k", "k3.1-pro", "k3.1-pro-highspeed"]) {
         expect(entry?.noReasoningModels).not.toContain(modelId);
         expect(entry?.modelReasoningEfforts?.[modelId]).toEqual(["low", "high", "max"]);
         expect(entry?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");

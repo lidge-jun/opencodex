@@ -246,6 +246,25 @@ describe("i18n locale contracts", () => {
   });
 });
 
+test("Turkish connection and usage scope copy never falls back to English", () => {
+  // Key parity alone missed the English copies originally shipped on these surfaces.
+  // These namespaces contain interface prose, not model IDs or product names.
+  const keys = (Object.keys(en) as (keyof typeof en)[]).filter(key =>
+    key.startsWith("connection.")
+    || key.startsWith("usage.source.")
+    || key.startsWith("usage.scope.")
+    || key === "usage.hubOffline",
+  );
+  expect(keys.length).toBeGreaterThan(0);
+  const untranslated = keys.filter(key => DICTS.tr[key] === en[key]);
+  expect(untranslated).toEqual([]);
+});
+
+test("Turkish request pacing describes spacing requests rather than accelerating them", () => {
+  expect(DICTS.tr["pws.completion.request_pacing"]).toContain("İstek aralığı");
+  expect(DICTS.tr["pws.completion.request_pacing"]).not.toContain("hızlandırma");
+});
+
 test("Portuguese status, reference time, home navigation and Remote Link roles retain their meaning", () => {
   expect(DICTS.pt["pws.allSystemsOk"]).toBe("Tudo funcionando normalmente");
   expect(DICTS.pt["lab.col.asOf"]).toBe("Data de referência");

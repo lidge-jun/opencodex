@@ -245,6 +245,8 @@ type GateInputs = {
   docs: string;
   structure: string;
   lane: string;
+  docker?: string;
+  keyring?: string;
 };
 
 const PR_WITHOUT_NATIVE: GateInputs = {
@@ -255,6 +257,8 @@ const PR_WITHOUT_NATIVE: GateInputs = {
   docs: "false",
   structure: "false",
   lane: "",
+  docker: "true",
+  keyring: "true",
 };
 
 function gateEnvironment(inputs: GateInputs, results: Record<string, string>): Record<string, string> {
@@ -266,6 +270,8 @@ function gateEnvironment(inputs: GateInputs, results: Record<string, string>): R
     CHANGES_PACKAGING: inputs.packaging,
     CHANGES_DOCS: inputs.docs,
     CHANGES_STRUCTURE: inputs.structure,
+    CHANGES_DOCKER: inputs.docker ?? "false",
+    CHANGES_KEYRING: inputs.keyring ?? "false",
     LANE: inputs.lane,
     // `needs` serializes as an object per job, and the gate reads
     // `.value.result` out of it. Passing a flat name-to-string map makes jq
@@ -503,5 +509,34 @@ describe("the aggregate gate", () => {
     const withPackaging = runGate({ ...PR_WITHOUT_NATIVE, packaging: "true" }, {});
     expect(withPackaging.expectations["npm-global-smoke"]).toBe("requested");
     expect(withPackaging.expectations["keyring-smoke"]).toBe("requested");
+  });
+
+  test.skipIf(cannotRunGate)("drops the smoke jobs from a pull request that misses their filters, and only there", () => {
+    const narrow = { ...PR_WITHOUT_NATIVE, docker: "false", keyring: "false" };
+    const { expectations } = runGate(narrow, {});
+    expect(expectations["docker-smoke"]).toBe("not-requested");
+    expect(expectations["keyring-smoke"]).toBe("not-requested");
+    for (const name of ["test", "storage-policy", "api-usage", "gates"]) {
+      expect(`${name}:${expectations[name]}`).toBe(`${name}:requested`);
+    }
+    // Each filter selects only its own job.
+    const dockerOnly = runGate({ ...narrow, docker: "true" }, {}).expectations;
+    expect([dockerOnly["docker-smoke"], dockerOnly["keyring-smoke"]]).toEqual(["requested", "not-requested"]);
+    const keyringOnly = runGate({ ...narrow, keyring: "true" }, {}).expectations;
+    expect([keyringOnly["docker-smoke"], keyringOnly["keyring-smoke"]]).toEqual(["not-requested", "requested"]);
+    // An out-of-scope pull request stays out of scope even when a smoke filter matched.
+    const outOfScope = runGate({ ...narrow, ci: "false", docker: "true", keyring: "true" }, {}).expectations;
+    expect([outOfScope["docker-smoke"], outOfScope["keyring-smoke"]]).toEqual(["not-requested", "not-requested"]);
+    // Push, dispatch and schedule ignore the smoke filters: the release gate reads the push run.
+    for (const eventName of ["push", "workflow_dispatch", "schedule"]) {
+      const other = runGate({ ...narrow, eventName }, {}).expectations;
+      expect(`${eventName}:${other["docker-smoke"]}:${other["keyring-smoke"]}`).toBe(`${eventName}:requested:requested`);
+    }
+    // Results consistent with the narrowed expectations pass; a smoke job that ran anyway fails by name.
+    const consistent = Object.fromEntries(Object.keys(jobs)
+      .filter(name => name !== "ci")
+      .map(name => [name, expectations[name] === "requested" ? "success" : "skipped"]));
+    expect(runGate(narrow, consistent).bad).toBe("");
+    expect(runGate(narrow, { ...consistent, "docker-smoke": "success" }).bad).toContain("docker-smoke");
   });
 });

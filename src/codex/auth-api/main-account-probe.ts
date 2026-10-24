@@ -23,7 +23,7 @@ import type { AdmissionLease } from "../../lib/admission";
 import { nonEmptyPlan } from "./runtime-config";
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { WHAM_REQUEST_TIMEOUT_MS } from "../quota-recovery-timing";
-import { withNativeMainCredentialClaim, isNativeMainClaimUnavailable } from "./http";
+import { withNativeMainCredentialClaim, isNativeMainObservationUnavailable } from "./http";
 import { readMainAuthErrorCode, currentQuotaDispatchSequence, nextQuotaDispatchSequence, isQuotaDispatchCurrent, publishQuotaDispatch } from "./pool-quota-probe";
 
 /**
@@ -198,7 +198,7 @@ export async function fetchMainAccountInfoAttempt(
     try {
       return await withNativeMainCredentialClaim(operation);
     } catch (error) {
-      if (isNativeMainClaimUnavailable(error)) {
+      if (isNativeMainObservationUnavailable(error)) {
         return {
           info: EMPTY_MAIN_ACCOUNT_INFO,
           credentialChecked: false,

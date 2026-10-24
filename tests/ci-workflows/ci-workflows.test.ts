@@ -5253,6 +5253,15 @@ describe("GitHub Actions hardening", () => {
 
   test("React Doctor workflow is SHA-pinned, engine-pinned, gating, and read-only", async () => {
     const workflow = await readText(".github/workflows/react-doctor.yml");
+    // Pull requests scan only when gui/ (the scanned directory) or this workflow changes;
+    // the main push trend scan stays unfiltered.
+    const triggers = (Bun.YAML.parse(workflow) as {
+      on?: { pull_request?: { types?: string[]; paths?: string[] }; push?: { branches?: string[]; paths?: string[] } };
+    }).on;
+    expect(triggers?.pull_request?.types).toEqual(["opened", "synchronize", "reopened", "ready_for_review"]);
+    expect(triggers?.pull_request?.paths).toEqual(["gui/**", ".github/workflows/react-doctor.yml"]);
+    expect(workflow).toContain("directory: gui");
+    expect(triggers?.push).toEqual({ branches: ["main"] });
 
     expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
     expect(workflow).toContain("millionco/react-doctor@01820bb4fd4d0a4aebcd8df2b2a143a098649cb2");

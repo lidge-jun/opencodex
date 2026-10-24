@@ -15,7 +15,7 @@ import {
   setPlatformForTests,
 } from "../../src/lib/windows-secret-acl";
 import { setAsyncWindowsPrincipalRunnerForTests } from "../../src/lib/windows-user-principal";
-import { removeTreeWithRetry } from "./remove-tree";
+import { removeTreeAfterBackgroundWork } from "./remove-tree";
 
 type Mode = "principal" | "icacls";
 
@@ -41,20 +41,33 @@ setPlatformForTests("win32");
 setResponseSpillAsyncAclAttemptBudgetForTests(100);
 setResponseStateByteCapForTests(1_024);
 
+let release!: () => void;
+let runnerCalls = 0;
+const held = new Promise<{ success: boolean; exitCode: number; timedOut: boolean; stdout: string }>(resolve => {
+  release = () => resolve({ success: false, exitCode: 1, timedOut: false, stdout: "" });
+});
 if (mode === "principal") {
-  setAsyncWindowsPrincipalRunnerForTests(() => new Promise(() => {}));
+  setAsyncWindowsPrincipalRunnerForTests(() => { runnerCalls++; return held; });
   setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
 } else {
-  setAsyncIcaclsRunnerForTests(() => new Promise(() => {}));
+  // This case owns the stalled icacls boundary; identity startup must not consume its budget first.
+  setAsyncWindowsPrincipalRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false,
+    stdout: "S-1-5-21-111-222-333-1001\nFIXTURE\\user" }));
+  setAsyncIcaclsRunnerForTests(() => { runnerCalls++; return held; });
 }
 
-rememberLarge(`resp_never_settling_${mode}_first`);
-rememberLarge(`resp_never_settling_${mode}_second`);
-await awaitResponseSpillPublicationTailForTests();
-
-console.log(JSON.stringify({
-  settled: true,
-  pending: pendingResponseSpillMetricsForTests(),
-  metrics: responseStateMetrics(),
-}));
-removeTreeWithRetry(home);
+try {
+  rememberLarge(`resp_never_settling_${mode}_first`);
+  rememberLarge(`resp_never_settling_${mode}_second`);
+  await awaitResponseSpillPublicationTailForTests();
+  if (runnerCalls === 0) throw new Error(`The ${mode} stall was not reached.`);
+  console.log(JSON.stringify({
+    settled: true,
+    pending: pendingResponseSpillMetricsForTests(),
+    metrics: responseStateMetrics(),
+  }));
+} finally {
+  // Keep the runner unresolved until queue settlement is proved; then release owned work before removal.
+  release();
+  await removeTreeAfterBackgroundWork(home);
+}
