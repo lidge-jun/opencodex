@@ -56,8 +56,9 @@ preset 通常同時省略 `authMode` 與 `apiKey`。
 
 [`retryOn429`](/zh-tw/reference/configuration/) 的 same-key 429 replay 只適用於 API-key provider
 （`authMode: "key"`）。OAuth、forward 與 local preset 都被排除：它們的 credential 絕不能在同一 token
-上重播，而 local runtime 也沒有 remote key 可保留。此功能為 opt-in；未設定時關閉，物件存在時預設
-啟用，除非明確設為 `enabled: false`。
+上重播，而 local runtime 也沒有 remote key 可保留。除了文件記載的特定目的地預設值之外，此功能為 opt-in。標準 Mistral Chat 會在既有的整個請求傳送額度內使用耐心的重試策略（6 次 replay，10 秒備援間隔）。明確的 `retryOn429` 設定（包括 `enabled: false`）優先。Mistral preset 也會預設轉送提供的 prompt cache key；`promptCacheKey: false` 可停用轉送。快取親和性能提高重用機會，但不保證快取命中，也不會移除 token 吞吐量限制。
+
+Mistral 的 Studio 與 Vibe key 共用同一個 API-key provider。key 類型與方案額度請見 [Mistral 的 API key 文件](https://docs.mistral.ai/admin/identity-access/api-keys)；proxy 不會從 key 推斷訂閱等級。對所有模型，上游明確給出的 `Retry-After` 期限會在同一 credential 與模型的呼叫之間共用。沒有重試時間的 429，在有效的每分鐘計數器顯示容量已耗盡，或被拒查詢的實測成本超過剩餘 token 但仍在公告的完整額度內時，可能啟動保守的 60 秒復原等待。這是本地復原策略，並非對伺服器重設時間的精確預測。正常流量從不預測下一次查詢的快取或成本。等待後會執行一次復原探測；成功即恢復一般流量。缺少、格式錯誤、零授權、月額度已耗盡或超過完整額度的依據，不會憑空推斷重設，也不會壓縮歷史。`requestPacing: { "enabled": false }` 或 `retryOn429: { "respectRetryAfter": false }` 可停用共用節流。對於同一 key 的 replay，若 Mistral 的重試時間超過 `retryOn429.maxIntervalMs`，proxy 會回傳 429 與重試提示，而不會提早 replay。啟用 round-robin key 選擇時，排隊中的請求會重新檢查 key 冷卻並為替代 key 取得節流容量；輸出前的 key 拒絕可在該請求既有的送出上限內改用健康的 key 復原。context window 與各模型的壓縮偏好維持獨立。
 
 ## 1. ChatGPT 登入（forward / passthrough）
 
@@ -336,6 +337,12 @@ Sionic 提供的 `deepseek/deepseek-v4.1-flash-ultrafast` 與
 [OpenGateway 控制台](https://opengateway.ai/api-keys)建立金鑰，再執行
 `ocx provider add opengateway` 或在控制台選擇 **OpenGateway**。Chat 請求使用設定的
 Bearer 金鑰；公開模型清單無法驗證金鑰有效性。
+在 Responses 協定中，OpenGateway 拒絕 replay 原生自訂工具呼叫，因此 preset 會在傳送前將程式碼模式的 `exec` 等 Codex 自訂工具轉換為函式工具。
+工具結果內容陣列以文字傳送，圖片保留在配對的工具結果群組之後。不支援的結果部分（包括拒絕與不透明內容）會在傳送前以明確的用戶端輸入錯誤拒絕。
+圖片細節 `original` 對應為閘道接受的 `high`；圖片位元組維持不變。
+原生 Responses 路由也會在將純文字空完成以成功回傳之前先檢查。
+輸出預算耗盡時回傳帶 `max_output_tokens` 的 `incomplete`；proxy 不會提高請求的預算。仍有預算且可安全 replay 的空完成，可在既有傳送上限內重試一次。明確設定 `emptyCompletionRetry: false` 或 `OCX_EMPTY_COMPLETION_RETRY=0` 可停用此重試。出現文字、拒絕、工具活動或未知串流事件時不會 replay，並保留原始串流。此保護不會改變其他 provider 及其重試預設值。
+Replay 需要明確的 `store: false`、完整輸入且僅含用戶端執行的工具；宣告了 `web_search` 等託管工具時，即使未觀察到工具事件也不會自動 replay。
 
 **OpenCode Zen**（`opencode-zen`）使用 [opencode.ai/auth](https://opencode.ai/auth) 核發的 API key 存取 `https://opencode.ai/zen/v1`。免費模型可能遇到每分鐘約 15–20 次請求的短時間速率限制（社群測量；OpenCode 未公布 RPM）。速率限制 429 缺少 `Retry-After` 時，opencodex 會加入說明與合成的 `Retry-After`；有效的上游 header 優先。同 key 重試仍須透過 [`retryOn429`](/zh-tw/reference/configuration/) 啟用。
 
