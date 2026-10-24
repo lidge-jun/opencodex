@@ -138,6 +138,11 @@ export class QoderScaffoldFilter {
   /** Open reminder blocks; only the closer that unwinds the last one ends suppression. */
   private suppressDepth = 0;
 
+  /** Unpublished marker-prefix characters; excludes suppressed block content. */
+  get pendingTextLength(): number {
+    return this.pending.length;
+  }
+
   push(chunk: string): ScaffoldFilterResult {
     if (this.failed || !chunk) return { text: "", fail: null };
     let cleared = "";
