@@ -39,8 +39,10 @@ The generic writer runs unchanged with that store, an explicit target (`resolved
 second profile is busy while another profile's write is in flight, never joined to it.
 
 `hermesProfileBoundary` pins the `profiles` directory and the profile home by device and inode when the
-scope is created, and checks again in the writer's synchronous `guard` (restore: the last step of
-`revalidate`) immediately before any write. It refuses a directory replaced by a link or junction, a
+scope is created. `guardedHermesProfileStore` re-checks it synchronously on every store access, and the
+writer re-checks it immediately before any write: apply, overwrite and disable through the synchronous
+`guard`, restore through `restoreGuard` (restore ignores `guard`, the background-refresh admission
+hook, in `src/integrations/writer.ts`). It refuses a directory replaced by a link or junction, a
 profile tombstoned meanwhile, a linked ownership store, and an existing record naming a different
 `config.yaml`. The last rule keeps a same-named profile under a different Hermes root from taking over
 ownership after `HERMES_HOME` moves: it reports `hermes_profile_owner_mismatch` until the profile is

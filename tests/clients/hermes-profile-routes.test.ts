@@ -344,7 +344,7 @@ describe("Hermes profile scope boundaries (#7674 audit)", () => {
 });
 
 describe("Hermes profile boundaries at the last step (#7674 audit round 2)", () => {
-  test("restore runs the synchronous guard after revalidation and honors its refusal", async () => {
+  test("restore runs its synchronous restoreGuard after revalidation and honors its refusal", async () => {
     expect((await api("/api/client-integrations/hermes?profile=coder", json("PUT", { enabled: true }))).status).toBe(200);
     const applied = readFileSync(coderConfig(), "utf8");
     const opId = profileStore("coder").listOperations("hermes")[0]!.opId;
@@ -356,12 +356,17 @@ describe("Hermes profile boundaries at the last step (#7674 audit round 2)", () 
       opId, confirmDrift: false,
     }, {
       revalidate: async () => { order.push("revalidate"); return null; },
+      // The background-refresh guard stays ignored by restore; restoreGuard is the restore hook.
       guard: () => {
         order.push("guard");
+        return null;
+      },
+      restoreGuard: () => {
+        order.push("restoreGuard");
         return { ok: false, reason: "unsafe", state: "unsafe", clientId: "hermes", message: "boundary moved" };
       },
     });
-    expect(order).toEqual(["revalidate", "guard"]);
+    expect(order).toEqual(["revalidate", "restoreGuard"]);
     expect(result).toMatchObject({ ok: false, message: "boundary moved" });
     expect(readFileSync(coderConfig(), "utf8")).toBe(applied);
   });

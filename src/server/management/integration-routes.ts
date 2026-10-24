@@ -984,7 +984,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
         () => restoreIntegrationCoordinated(restoreInput, {
           lockSeams: integrationMutationTestHooks?.lockSeams,
           ...(restoreGuard ? { revalidate: restoreGuard.revalidate } : {}),
-          guard: () => hermesBoundaryRefusal(ctx),
+          restoreGuard: () => hermesBoundaryRefusal(ctx),
         }),
       );
       const restoreStale = restoreGuard?.response();
