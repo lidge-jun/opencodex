@@ -184,6 +184,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 
 ### Kiro 認証情報の取り込み
 
+ダッシュボードでは **AWS IAM Identity Center** を選び、組織の AWS アクセスポータル URL と SSO リージョンを入力すると、CLI や SSH を使わずにアカウントを追加できます。ブラウザーでデバイスコードを承認し、複数の Kiro プロファイルがある場合は保存するものを選択します。以下の CLI 手順は **Kiro CLI** の選択肢に適用されます。
+
 Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL https://cli.kiro.dev/install | bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1' | iex` でインストールしてから、先に `kiro-cli login` でサインインしてください。`kiro-cli` セッションがない場合、`ocx login kiro` は貼り付けたアクセストークンまたは `KIRO_ACCESS_TOKEN` 環境変数にフォールバックします。
 
 通常の `ocx login kiro` 取り込みは CLI の SQLite データベースを読み取り専用で開き、データベース、WAL、SHM を変更しません。

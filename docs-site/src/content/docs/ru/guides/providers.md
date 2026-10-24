@@ -196,6 +196,8 @@ Inline JSON и лишние позиционные аргументы откло
 
 ### Импорт учётных данных Kiro
 
+В панели выберите **AWS IAM Identity Center**, укажите URL портала доступа AWS и регион SSO организации. Подтвердите код устройства в браузере и выберите профиль Kiro для сохранения, если их несколько. CLI и SSH не требуются. Инструкции CLI ниже относятся к варианту **Kiro CLI**.
+
 Для входа Kiro требуется Kiro CLI: в Unix установите его командой `curl -fsSL https://cli.kiro.dev/install | bash`, в Windows PowerShell — `irm 'https://cli.kiro.dev/install.ps1' | iex`, затем сначала выполните `kiro-cli login`. Если сессии `kiro-cli` нет, `ocx login kiro` использует вставленный токен доступа или переменную окружения `KIRO_ACCESS_TOKEN`.
 
 Обычный импорт `ocx login kiro` открывает базу SQLite CLI только для чтения и не изменяет базу, WAL или SHM.

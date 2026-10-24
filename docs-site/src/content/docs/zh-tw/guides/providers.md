@@ -217,6 +217,8 @@ Reauthenticate。Codex pool 帳號不是那些 provider 之一，但 `ocx login 
 
 ### Kiro credential 匯入
 
+在儀表板選擇 **AWS IAM Identity Center**，輸入組織的 AWS 存取入口網站 URL 和 SSO 區域，即可新增帳號，無需 CLI 或 SSH。在瀏覽器核准裝置代碼後，如有多個 Kiro 設定檔，請選擇要儲存的設定檔。以下 CLI 步驟適用於 **Kiro CLI** 選項。
+
 Kiro 登入預期存在 Kiro CLI。Unix 可用 `curl -fsSL https://cli.kiro.dev/install | bash` 安裝；Windows
 PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；接著以 `kiro-cli login` 登入。若沒有
 `kiro-cli` session，`ocx login kiro` 會 fallback 到貼上的 access token 或 `KIRO_ACCESS_TOKEN` 環境變數。

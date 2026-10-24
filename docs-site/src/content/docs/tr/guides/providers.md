@@ -280,6 +280,8 @@ referansında [`ocx status` / `ocx doctor`](/tr/reference/cli/) bölümüne bak�
 
 ### Kiro kimlik bilgisi içe aktarma
 
+Panelde **AWS IAM Identity Center** seçeneğini seçip kuruluşunuzun AWS erişim portalı URL’sini ve SSO bölgesini girin. Tarayıcıda cihaz kodunu onaylayın ve birden fazla Kiro profili varsa kaydedilecek profili seçin. CLI veya SSH gerekmez. Aşağıdaki CLI adımları **Kiro CLI** seçeneği içindir.
+
 Kiro oturum açma Kiro CLI'yı bekler: Unix'te `curl -fsSL
 https://cli.kiro.dev/install | bash` ile kurun; Windows PowerShell'de `irm
 'https://cli.kiro.dev/install.ps1' | iex` kullanın; ardından `kiro-cli login`

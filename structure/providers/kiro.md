@@ -12,7 +12,7 @@ provider capabilities below; see [Responses compatibility](../transports/respons
 
 ## Kiro CLI executable resolution
 
-Native device login is an add-only Kiro account path for Builder ID, Google, and GitHub.
+Native device login is an add-only Kiro account path for AWS IAM Identity Center, Builder ID, Google, and GitHub.
 It uses fixed Kiro authorization hosts, guarded outbound POSTs, and a bounded process-local
 flow table. A flow ID is returned only at start; status and cancellation require that ID and
 the same management principal kind. Polling follows the server's interval, and only an exact
@@ -25,6 +25,20 @@ hyphen characters. Completed flow results are consumed once, terminal entries ex
 Explicit reauth rotates login identity, while token
 refresh preserves it. A first-account config-publication failure compensates the new slot
 through the existing receipt ownership check.
+
+IAM starts also require an HTTPS `*.awsapps.com/start` portal and a commercial AWS SSO region.
+`src/oauth/kiro-iam-identity-center.ts` validates them before registration. The hub sends the portal
+as an OIDC argument, never fetches it, and uses the selected region's fixed AWS OIDC host.
+After approval, bounded `ListAvailableProfiles` pagination queries the AWS CLI's US East and Frankfurt
+service endpoints. A single profile is selected automatically; several profiles produce a live
+`select-profile` state containing only ARN, name and region. A selection POST to `/api/oauth/login`
+supplies the provider, flow ID and an ARN from that flow's list; it requires the same principal.
+`GetUsageLimits` resolves this grant's user email for the selected profile before persistence.
+The credential stores its SSO region, profile API region and client registration together.
+Two users sharing an organization ARN append distinct slots without a duplicate-profile warning;
+an already stored user/profile pair still receives the existing duplicate warning. Selection never
+changes the active account. Cancellation, expiry and the active-flow cap also cover profile selection.
+Staged grants remain private and are cleared on every terminal outcome.
 
 Forced and add-account login spawn the local CLI, so `resolveKiroCliExecutable` in
 `src/oauth/kiro-credentials.ts` decides which file runs with credential-flow arguments. The

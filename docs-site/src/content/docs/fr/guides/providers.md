@@ -255,6 +255,8 @@ dans le pool de comptes, ce que fait aussi le pool de comptes Codex du tableau d
 
 ### Importation des identifiants Kiro
 
+Dans le tableau de bord, choisissez **AWS IAM Identity Center**, puis indiquez l’URL du portail d’accès AWS et la région SSO de votre organisation. Autorisez le code d’appareil dans votre navigateur et choisissez le profil Kiro à enregistrer si plusieurs sont proposés. Aucun CLI ni accès SSH n’est nécessaire. Les instructions CLI ci-dessous concernent le choix **Kiro CLI**.
+
 La connexion Kiro nécessite la CLI Kiro : sous Unix, installez-la avec `curl -fsSL https://cli.kiro.dev/install | bash` ;
 sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1' | iex`, puis connectez-vous avec `kiro-cli login`.
 En l'absence de session `kiro-cli`, `ocx login kiro` se rabat sur un jeton d'accès collé ou sur la variable

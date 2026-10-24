@@ -321,7 +321,7 @@ ocx logout <provider>
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. `k3.1-pro` and `k3.1-pro-highspeed` (K3.1 Pro) are also listed: 1M-token context, thinking-only on the same ladder (default `max`). Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
 | `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | The dashboard Login and Add account buttons offer Builder ID, Google, GitHub device login, or Kiro CLI. Native device login adds an account without signing `kiro-cli` out. The Kiro CLI choice imports or starts a CLI session; its Add account workflow temporarily switches the CLI account and restores it on cancellation or failure. |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | The dashboard Login and Add account buttons offer AWS IAM Identity Center, Builder ID, Google, GitHub device login, or Kiro CLI. Native device login adds an account without signing `kiro-cli` out. The Kiro CLI choice imports or starts a CLI session; its Add account workflow temporarily switches the CLI account and restores it on cancellation or failure. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth over the Cloud Code Assist wire. Live discovery uses CCA's authenticated `v1internal:fetchAvailableModels` endpoint and publishes the agent models available to the signed-in account; the maintained catalog remains the fallback. |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport with an opt-in HTTP/1.1 compatibility path, and account-filtered model discovery. |
 | `zed` | `zed` | `https://cloud.zed.dev` | Experimental Zed Hosted AI bridge. Uses Zed's native-app RSA callback, exchanges the account token for a short-lived hosted-inference token, and discovers the account's live roster. |
@@ -624,7 +624,19 @@ Other messages, statuses, and AWS SSO responses do not trigger this desktop-spec
 
 ### Kiro credential import
 
-The dashboard offers native Builder ID, Google, and GitHub device login without Kiro CLI.
+The dashboard offers native AWS IAM Identity Center, Builder ID, Google, and GitHub device login without Kiro CLI.
+
+For an organization account, choose **AWS IAM Identity Center**, enter your AWS access portal URL
+(for example `https://example.awsapps.com/start`) and the region where your organization configured
+IAM Identity Center. Open the verification link in your own browser, enter the displayed code,
+and authorize the account. The hub completes the grant; no SSH session or browser callback to
+the hub is required. If AWS lists several Kiro profiles, choose the profile to save. With one
+profile the account is saved automatically. The SSO region and the selected profile's API region
+are kept separately. Profile discovery checks AWS's US East and Frankfurt service regions.
+The signed-in user's email is resolved from AWS for the selected profile before saving; users
+sharing one organization profile keep separate account credentials. Cancellation or expiry before
+the credential write saves no account. Native login adds a slot and keeps the existing selection.
+
 The Kiro CLI choice and `ocx login kiro` import path use the CLI: on Unix, install it with `curl -fsSL https://cli.kiro.dev/install | bash`;
 on Windows PowerShell, use `irm 'https://cli.kiro.dev/install.ps1' | iex`; then sign in with `kiro-cli login`.
 Without a `kiro-cli` session, `ocx login kiro` falls
@@ -661,7 +673,7 @@ an ambiguous token selection), when `KIROCLI_DB_PATH` / `KIRO_CLI_DB_FILE` redir
 from the live CLI store, or when an existing primary CLI database has no recognized token row.
 Repair or remove the unreadable database under the normal `kiro-cli` data path, unset those import
 selectors, then retry. Signing in from a machine with no existing `kiro-cli` session is unaffected.
-The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or Builder ID hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success. Google and GitHub approval completes when Kiro reports `authorized` (or the legacy `approved` status) with valid tokens and a profile ARN.
+The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or regional AWS device-SSO hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success. Google and GitHub approval completes when Kiro reports `authorized` (or the legacy `approved` status) with valid tokens and a profile ARN.
 The account list marks Kiro accounts excluded from automatic selection with a reason, when available.
 
 ### DeepSeek Account (DSH)

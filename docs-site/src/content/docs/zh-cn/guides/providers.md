@@ -177,6 +177,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 
 ### Kiro 凭据导入
 
+在仪表盘选择 **AWS IAM Identity Center**，输入组织的 AWS 访问门户 URL 和 SSO 区域，即可添加账户，无需 CLI 或 SSH。在浏览器批准设备代码后，如有多个 Kiro 配置文件，请选择要保存的配置文件。下面的 CLI 步骤适用于 **Kiro CLI** 选项。
+
 Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/install | bash` 安装；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然后先运行 `kiro-cli login`。如果没有 `kiro-cli` 会话，`ocx login kiro` 会回退到粘贴的访问令牌或 `KIRO_ACCESS_TOKEN` 环境变量。
 
 普通的 `ocx login kiro` 导入会以只读方式打开 CLI SQLite 数据库，不修改数据库、WAL 或 SHM。

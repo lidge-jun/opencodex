@@ -187,6 +187,8 @@ cat accounts.json | ocx account import google-antigravity --format cockpit-tools
 
 ### Kiro 자격 증명 가져오기
 
+대시보드에서 **AWS IAM Identity Center**를 선택하고 조직의 AWS 액세스 포털 URL과 SSO 리전을 입력하면 CLI나 SSH 없이 계정을 추가할 수 있습니다. 브라우저에서 기기 코드를 승인하고 Kiro 프로필이 여러 개면 저장할 프로필을 선택하세요. 아래 CLI 설명은 **Kiro CLI** 선택 항목에 해당합니다.
+
 Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL https://cli.kiro.dev/install | bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1' | iex`로 설치한 뒤 먼저 `kiro-cli login`으로 로그인하세요. `kiro-cli` 세션이 없으면 `ocx login kiro`는 붙여 넣은 액세스 토큰이나 `KIRO_ACCESS_TOKEN` 환경 변수로 폴백합니다.
 
 일반 `ocx login kiro` 가져오기는 CLI SQLite 데이터베이스를 읽기 전용으로 열며 데이터베이스, WAL, SHM을 수정하지 않습니다.
