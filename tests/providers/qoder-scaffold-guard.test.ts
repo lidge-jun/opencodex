@@ -470,16 +470,18 @@ describe("Qoder replay envelope refusal (#7517)", () => {
     expect(JSON.stringify(events)).not.toContain("private-fixture");
   });
 
-  test("an upstream error survives envelope recognition while draining pending boundaries", () => {
+  for (const terminal of ["done", "incomplete", "error"] as const) test(`withholds held reasoning when draining an envelope before ${terminal}`, () => {
     const { events, emit } = collect();
     const guard = guardQoderScaffolding(emit);
     guard({ type: "text_delta", text: "```text\n[Tool Result]\npayload<" });
-    guard({ type: "thinking_delta", thinking: "Reasoning." });
-    const error: AdapterEvent = { type: "error", message: "original vendor error", status: 429 };
-    guard(error);
+    guard({ type: "thinking_delta", thinking: "<s" });
+    const end: AdapterEvent = terminal === "done" ? { type: "done", stopReason: "stop" }
+      : terminal === "incomplete" ? { type: "incomplete", reason: "max_output_tokens" }
+      : { type: "error", message: "original vendor error", status: 429 };
+    guard(end);
     expect(textOf(events)).toBe("```text\n");
     expect(events.some(event => event.type === "thinking_delta")).toBe(false);
-    expect(events.at(-1)).toEqual(error);
+    expect(events.at(-1)).toMatchObject(terminal === "error" ? end : { type: "error", code: QODER_SCAFFOLD_ERROR_CODE, retryable: false });
   });
 
   for (const overflow of ["characters", "events"] as const) {

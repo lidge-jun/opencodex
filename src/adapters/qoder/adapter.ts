@@ -217,7 +217,9 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
       if (closed) return;
       const replayTail = replayFilter.finish();
       if (replayTail && !replayFilter.unverifiedMarker) emit({ type: "text_delta", text: replayTail });
-      if (reasoning.text) emit({ type: "thinking_delta", thinking: reasoning.text });
+      if (reasoning.text && !replayFilter.matched && !replayFilter.unverifiedMarker) {
+        emit({ type: "thinking_delta", thinking: reasoning.text });
+      }
       const fail = tail.fail ?? reasoning.fail
         ?? (replayFilter.matched || replayFilter.unverifiedMarker ? "replayed tool envelope" : null);
       // A vendor error already carries the better explanation for why the turn ended;
