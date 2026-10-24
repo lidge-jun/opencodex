@@ -2,7 +2,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CODEX_AFFINITY_DEBUG_SAFE_HEADERS } from "../codex/affinity-debug";
+import { codexConversationIdentity } from "../codex/lineage";
 import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import type { CacheTelemetryProvenance } from "./log";
@@ -10,6 +10,8 @@ import type { CacheTelemetryProvenance } from "./log";
 const CACHE_DEBUG_KEY = randomBytes(32);
 const MAX_BLOCKS = 128;
 const MAX_DRAFTS = 512;
+const SESSION_HEADERS = ["session_id", "session-id", "thread-id", "x-session-id"] as const;
+type SessionHeaders = Record<typeof SESSION_HEADERS[number], TaggedPresence>;
 export const CACHE_DEBUG_MAX_LINES = 200;
 export const CACHE_DEBUG_KEEP_LINES = 100;
 
@@ -20,11 +22,24 @@ export interface PrefixFingerprint {
   instructions: TaggedSequence;
   tools: TaggedSequence;
   messages: TaggedSequence;
+  unsupported?: true;
 }
+type PrefixSection = "instructions" | "tools" | "messages";
+export type PrefixComparison =
+  | { status: "first" | "equal" }
+  | { status: "append-only" | "different" | "truncated"; section: PrefixSection; index: number }
+  | { status: "uncomparable"; reason: "missing-session" | "missing-observation" | "unsupported-shape" };
 export interface CacheDiagnosticDraft {
   promptCacheKey?: { inbound?: TaggedPresence; outbound?: TaggedPresence };
-  session?: { inboundHeader?: TaggedPresence; outboundHeader?: TaggedPresence };
+  session?: {
+    inboundHeader?: TaggedPresence;
+    outboundHeader?: TaggedPresence;
+    inboundHeaders?: SessionHeaders;
+    outboundHeaders?: SessionHeaders;
+  };
   prefix?: { inbound?: PrefixFingerprint; outbound?: PrefixFingerprint };
+  /** The shared Pool key derivation's result, not a binding lookup or selection decision. */
+  accountAffinity?: { inbound?: TaggedPresence; outbound?: TaggedPresence };
 }
 
 export interface CacheDiagnosticFinalFacts {
@@ -49,6 +64,16 @@ export interface CacheDiagnosticFinalFacts {
 
 const drafts = new Map<string, CacheDiagnosticDraft>();
 const bodyDrafts = new WeakMap<object, CacheDiagnosticDraft>();
+// Internal only: neither the caller principal nor its tag belongs in the diagnostic record.
+const callerScopes = new WeakMap<object, string>();
+interface PreviousObservation {
+  prefix?: CacheDiagnosticDraft["prefix"];
+  promptCacheKey?: CacheDiagnosticDraft["promptCacheKey"];
+  account: TaggedPresence;
+}
+// Finalization order, process-local only. Keys include the diagnostic destination so changing
+// OPENCODEX_HOME cannot join histories. Neither keys nor values retain raw session/account data.
+const previousObservations = new Map<string, PreviousObservation>();
 
 export function isCacheDiagnosticEnabled(): boolean {
   return process.env.OPENCODEX_CACHE_DEBUG === "1";
@@ -79,14 +104,27 @@ function taggedPresence(value: unknown, domain: string, source?: PromptCacheKeyS
   return { present: true, tag: tag(domain, value), ...(source ? { source } : {}) };
 }
 
-function sessionPresence(headers: Headers | HeadersInit): TaggedPresence {
+function accountAffinityKey(headers: HeadersInit): TaggedPresence {
+  // codexPoolAffinityKey is exactly this read-only identity projection. Import its leaf
+  // derivation, not auth-context (which brings credential resolution and routing with it).
+  // Parent-only inputs may consult existing TTL-bounded lineage; this call records nothing.
   const normalized = headers instanceof Headers ? headers : new Headers(headers);
-  const values = CODEX_AFFINITY_DEBUG_SAFE_HEADERS.flatMap(name => {
+  return taggedPresence(codexConversationIdentity(normalized)?.conversationKey, "cache-debug:codex-pool-affinity-key");
+}
+
+function sessionHeaders(headers: HeadersInit): SessionHeaders {
+  const normalized = headers instanceof Headers ? headers : new Headers(headers);
+  return Object.fromEntries(SESSION_HEADERS.map(name => {
     const value = normalized.get(name);
-    return value === null ? [] : [[name, value] as const];
-  });
-  return values.length === 0
-    ? { present: false }
+    return [name, value === null ? { present: false } : {
+      present: true, tag: tag("cache-debug:session-header", value),
+    }];
+  })) as SessionHeaders;
+}
+
+function sessionPresence(headers: SessionHeaders): TaggedPresence {
+  const values = SESSION_HEADERS.filter(name => headers[name].present).map(name => [name, headers[name].tag]);
+  return values.length === 0 ? { present: false }
     : { present: true, tag: tag("cache-debug:session-headers", canonicalJson(values)) };
 }
 
@@ -102,25 +140,21 @@ function sequence(blocks: unknown[], domain: string): TaggedSequence {
 
 function requestBlocks(body: Record<string, unknown>): { instructions: unknown[]; messages: unknown[] } {
   const instructions = body.instructions;
-  // The spread is load-bearing: an array-valued instructions field must be copied, never
-  // aliased, because the pushes below would otherwise mutate the live request body that
-  // the adapter is about to serialize upstream.
-  const instructionRows = instructions === undefined || instructions === null
-    ? [] : Array.isArray(instructions) ? [...instructions] : [instructions];
-  const input = Array.isArray(body.input) ? body.input : Array.isArray(body.messages) ? body.messages : [];
-  const messages: unknown[] = [];
-  for (const block of input) {
-    if (block && typeof block === "object" && !Array.isArray(block)) {
-      const row = block as Record<string, unknown>;
-      if (row.role === "system" || row.role === "developer") {
-        const content = row.content;
-        instructionRows.push(...(Array.isArray(content) ? content : [content]));
-        continue;
-      }
-    }
-    messages.push(block);
+  // Build fresh rows: pushes below must never mutate an array-valued instructions field
+  // in the live request body. Include the source so moving text between fields is visible.
+  const instructionRows: unknown[] = instructions === undefined || instructions === null
+    ? [] : (Array.isArray(instructions) ? instructions : [instructions])
+      .map(content => ({ source: "instructions", content }));
+  if (body.system !== undefined && body.system !== null) {
+    instructionRows.push(...(Array.isArray(body.system) ? body.system : [body.system])
+      .map(content => ({ source: "system", content })));
   }
-  return { instructions: instructionRows, messages };
+  const input = typeof body.input === "string" ? [body.input]
+    : Array.isArray(body.input) ? body.input : Array.isArray(body.messages) ? body.messages : [];
+  // Keep every input/messages row in wire order, including system/developer updates.
+  // Extracting those roles into instructions misclassifies a genuine tail append as a
+  // top-level prefix rewrite. Whole-row tags still detect role, position and content edits.
+  return { instructions: instructionRows, messages: input };
 }
 
 export function prefixFingerprint(body: unknown): PrefixFingerprint {
@@ -128,30 +162,91 @@ export function prefixFingerprint(body: unknown): PrefixFingerprint {
     ? body as Record<string, unknown> : {};
   const tools = Array.isArray(record.tools) ? record.tools : [];
   const blocks = requestBlocks(record);
+  const unsupported = !body || typeof body !== "object" || Array.isArray(body)
+    || (record.input !== undefined && typeof record.input !== "string" && !Array.isArray(record.input))
+    || (record.messages !== undefined && !Array.isArray(record.messages))
+    || (record.tools !== undefined && !Array.isArray(record.tools));
   return {
     instructions: sequence(blocks.instructions, "cache-debug:prefix:instructions"),
     tools: sequence(tools, "cache-debug:prefix:tools"),
     messages: sequence(blocks.messages, "cache-debug:prefix:messages"),
+    ...(unsupported ? { unsupported: true as const } : {}),
   };
 }
 
-function firstDivergence(inbound: PrefixFingerprint, outbound: PrefixFingerprint):
-  { section: "instructions" | "tools" | "messages"; index: number } | undefined {
+function comparePrefixes(before?: PrefixFingerprint, after?: PrefixFingerprint): PrefixComparison {
+  if (!before || !after) return { status: "uncomparable", reason: "missing-observation" };
+  if (before.unsupported || after.unsupported) return { status: "uncomparable", reason: "unsupported-shape" };
   for (const section of ["instructions", "tools", "messages"] as const) {
-    const before = inbound[section].tags;
-    const after = outbound[section].tags;
-    const compared = Math.min(before.length, after.length);
+    const left = before[section];
+    const right = after[section];
+    const compared = Math.min(left.tags.length, right.tags.length);
     for (let index = 0; index < compared; index += 1) {
-      if (before[index] !== after[index]) return { section, index };
+      if (left.tags[index] !== right.tags[index]) return { status: "different", section, index };
     }
-    if (inbound[section].count !== outbound[section].count) return { section, index: compared };
+    // A hidden difference here could precede any difference in later sections. Do not
+    // infer equality, append-only, or an exact first divergence from an unobserved tail.
+    if (compared < Math.min(left.count, right.count)) return { status: "truncated", section, index: compared };
+    if (left.count !== right.count) {
+      // Only message-tail growth is append-only. Growing instructions/tools changes the
+      // cache prefix before the conversation even when all existing section tags match.
+      return { status: section === "messages" && right.count > left.count ? "append-only" : "different", section, index: compared };
+    }
   }
-  return undefined;
+  return { status: "equal" };
+}
+
+type PresenceComparison = "first" | "equal" | "changed" | "uncomparable";
+function comparePresence(before?: TaggedPresence, after?: TaggedPresence): PresenceComparison {
+  if (!before || !after) return "uncomparable";
+  return before.present === after.present && before.tag === after.tag ? "equal" : "changed";
+}
+
+function continuation(facts: CacheDiagnosticFinalFacts, draft: CacheDiagnosticDraft, account: TaggedPresence) {
+  const headers = draft.session?.inboundHeaders;
+  // Diagnostic correlation ONLY, not the account affinity identity or proof of a binding.
+  // All available inbound identifiers participate. Do not use prompt_cache_key (which may
+  // legitimately rotate), synthesized outbound IDs, or unrelated affinity headers as identity.
+  const identity = headers && SESSION_HEADERS.filter(name => headers[name].present
+    && headers[name].tag !== tag("cache-debug:session-header", ""))
+    .map(name => [name, headers[name].tag]);
+  const callerScope = callerScopes.get(draft);
+  const key = identity?.length && callerScope ? tag("cache-debug:history", canonicalJson([
+    getConfigDir(), callerScope, facts.protocol, facts.model, identity,
+  ])) : undefined;
+  const previous = key ? previousObservations.get(key) : undefined;
+  const compare = (side: "inbound" | "outbound"): PrefixComparison => {
+    if (!identity?.length) return { status: "uncomparable", reason: "missing-session" };
+    if (!callerScope) return { status: "uncomparable", reason: "missing-observation" };
+    const current = draft.prefix?.[side];
+    if (!current) return { status: "uncomparable", reason: "missing-observation" };
+    if (current.unsupported) return { status: "uncomparable", reason: "unsupported-shape" };
+    return previous ? comparePrefixes(previous.prefix?.[side], current) : { status: "first" };
+  };
+  const presence = (side: "inbound" | "outbound"): PresenceComparison => !key || !draft.promptCacheKey?.[side] ? "uncomparable"
+    : !previous ? "first" : comparePresence(previous.promptCacheKey?.[side], draft.promptCacheKey?.[side]);
+  const result = {
+    inbound: compare("inbound"),
+    outbound: compare("outbound"),
+    promptCacheKey: { inbound: presence("inbound"), outbound: presence("outbound") },
+    account: !key ? "uncomparable" : !previous ? "first" : comparePresence(previous.account, account),
+  };
+  if (key) {
+    previousObservations.delete(key);
+    previousObservations.set(key, {
+      prefix: { ...draft.prefix }, promptCacheKey: { ...draft.promptCacheKey }, account,
+    });
+    while (previousObservations.size > MAX_DRAFTS) previousObservations.delete(previousObservations.keys().next().value!);
+  }
+  return result;
 }
 
 export function observe(requestId: string, observation: Partial<CacheDiagnosticDraft>): CacheDiagnosticDraft {
+  if (!isCacheDiagnosticEnabled()) return {};
   const draft = drafts.get(requestId) ?? {};
   Object.assign(draft, observation);
+  const callerScope = callerScopes.get(observation);
+  if (callerScope) callerScopes.set(draft, callerScope);
   drafts.delete(requestId);
   drafts.set(requestId, draft);
   while (drafts.size > MAX_DRAFTS) drafts.delete(drafts.keys().next().value!);
@@ -162,16 +257,22 @@ export function observeInbound(
   body: unknown,
   headers: Headers,
   source: PromptCacheKeySource = "caller",
+  admissionPrincipal?: string,
 ): CacheDiagnosticDraft {
   if (!isCacheDiagnosticEnabled()) return {};
   try {
     const record = body && typeof body === "object" && !Array.isArray(body)
       ? body as Record<string, unknown> : {};
+    const inboundHeaders = sessionHeaders(headers);
     const draft: CacheDiagnosticDraft = {
       promptCacheKey: { inbound: taggedPresence(record.prompt_cache_key, "cache-debug:prompt-cache-key", source) },
-      session: { inboundHeader: sessionPresence(headers) },
+      session: { inboundHeader: sessionPresence(inboundHeaders), inboundHeaders },
       prefix: { inbound: prefixFingerprint(body) },
+      accountAffinity: { inbound: accountAffinityKey(headers) },
     };
+    // Admission owns caller identity; bridges may remove or replace Authorization.
+    // No trusted principal (including unauthenticated loopback) means no history join.
+    if (admissionPrincipal) callerScopes.set(draft, tag("cache-debug:caller-scope", admissionPrincipal));
     if (body && typeof body === "object") bodyDrafts.set(body, draft);
     return draft;
   } catch {
@@ -208,8 +309,10 @@ export function observeOutbound(
       outbound.source = inboundKey.source;
     }
     (draft.promptCacheKey ??= {}).outbound = outbound;
-    (draft.session ??= {}).outboundHeader = sessionPresence(headers);
+    const outboundHeaders = sessionHeaders(headers);
+    Object.assign(draft.session ??= {}, { outboundHeader: sessionPresence(outboundHeaders), outboundHeaders });
     (draft.prefix ??= {}).outbound = prefixFingerprint(outboundBody);
+    (draft.accountAffinity ??= {}).outbound = accountAffinityKey(headers);
   } catch {
     /* diagnostics must never affect request handling */
   }
@@ -236,8 +339,11 @@ export function appendFinalCacheDiagnostic(facts: CacheDiagnosticFinalFacts): vo
     drafts.delete(facts.requestId);
     const inboundKey = draft.promptCacheKey?.inbound;
     const outboundKey = draft.promptCacheKey?.outbound;
-    const inboundPrefix = draft.prefix?.inbound ?? prefixFingerprint(undefined);
-    const outboundPrefix = draft.prefix?.outbound ?? prefixFingerprint(undefined);
+    const inboundPrefix = draft.prefix?.inbound;
+    const outboundPrefix = draft.prefix?.outbound;
+    const comparison = comparePrefixes(inboundPrefix, outboundPrefix);
+    // Only explicit account facts are evidence; never infer an account from provider text.
+    const account = taggedPresence(facts.accountLogLabel, "cache-debug:account-log-label");
     const record = {
       version: 1 as const,
       ts: Date.now(),
@@ -251,23 +357,33 @@ export function appendFinalCacheDiagnostic(facts: CacheDiagnosticFinalFacts): vo
         outbound: outboundKey ?? { present: false },
         ...(inboundKey?.present && outboundKey?.present ? { equal: inboundKey.tag === outboundKey.tag } : {}),
       },
+      accountAffinity: {
+        derivation: "codexConversationIdentity",
+        evidence: "derived-key-not-binding",
+        // Missing observation stays omitted, distinct from an observed absent key.
+        ...draft.accountAffinity,
+      },
       session: {
+        purpose: "diagnostic-correlation-only",
         inboundHeader: draft.session?.inboundHeader ?? { present: false },
         outboundHeader: draft.session?.outboundHeader ?? { present: false },
+        inboundHeaders: draft.session?.inboundHeaders,
+        outboundHeaders: draft.session?.outboundHeaders,
       },
       prefix: {
         inbound: inboundPrefix,
         outbound: outboundPrefix,
-        ...(firstDivergence(inboundPrefix, outboundPrefix)
-          ? { firstDivergentBlock: firstDivergence(inboundPrefix, outboundPrefix) }
-          : {}),
+        comparison,
+        ...(comparison.status === "different" || comparison.status === "append-only"
+          ? { firstDivergentBlock: { section: comparison.section, index: comparison.index } } : {}),
       },
+      continuation: continuation(facts, draft, account),
       route: {
         provider: facts.provider,
         model: facts.model,
-        ...(facts.accountLogLabel
-          ? { accountTag: tag("cache-debug:account-log-label", facts.accountLogLabel) }
-          : {}),
+        ...(account.present ? { accountTag: account.tag } : {}),
+        // Preserve reported route labels, never infer key presence or an actual binding
+        // from them: even `new_bind` can be reported when no affinity key was derived.
         ...(facts.affinityMove ? { affinityMove: facts.affinityMove } : {}),
         ...(facts.affinityReason ? { affinityReason: facts.affinityReason } : {}),
       },
@@ -295,7 +411,7 @@ export function appendFinalCacheDiagnostic(facts: CacheDiagnosticFinalFacts): vo
 const CACHE_DIAGNOSTIC_HOOK = Symbol.for("opencodex.cache-diagnostic.v1");
 interface CacheDiagnosticHooks {
   enabled(): boolean;
-  observeInbound(body: unknown, headers: Headers, source: PromptCacheKeySource): CacheDiagnosticDraft;
+  observeInbound(body: unknown, headers: Headers, source: PromptCacheKeySource, admissionPrincipal?: string): CacheDiagnosticDraft;
   rebind(body: unknown, draft: CacheDiagnosticDraft | undefined): void;
   finalize(facts: CacheDiagnosticFinalFacts): void;
 }
