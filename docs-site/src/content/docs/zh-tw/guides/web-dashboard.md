@@ -60,7 +60,7 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 | **啟動安全** | 顯示注入的 Codex 路由能否在重啟後繼續工作，並分別顯示服務、launcher shim 狀態和準確的修復命令。 |
 | **Windows 托盤** | 安裝使用者登入托盤，一鍵控制代理啟動、停止、重啟、面板和狀態。托盤不是代理重啟服務。 |
 | **Codex 自動啟動** | 允許已安裝的 Codex launcher shim 執行 `ocx ensure`。此開關不會安裝 shim 或後臺服務。 |
-| **Providers** | 新增、編輯、啟用/停用、刪除 provider，並在支援時管理 OAuth 帳號池和 API key 池。 |
+| **Providers** | 新增、編輯、啟用/停用、刪除 provider，並在支援時管理 OAuth 帳號池和 API key 池。額度重新整理會略過暫停的 OAuth 帳號與停用的 API key；這些被略過的列即使沒有快取讀值，仍會顯示不可用，但不影響重新整理結果。當未暫停的 OAuth 帳號或已啟用且支援額度讀取的 API key 讀值不可用時，重新整理會回報失敗。 |
 | **Add provider** | 分頁上方的單一搜尋框可同時搜尋帳號、免費、本機、付費四個分頁。搜尋時選取的分頁不會跳轉，結果依分頁分組並顯示數量。本機執行環境（Ollama、vLLM、LM Studio、LiteLLM）有專屬分頁，過長的說明會截斷為兩行，點擊即可查看全文。 |
 | **Codex Auth** | 新增 ChatGPT/Codex 池帳號，選擇下一 session 的帳號，重新整理 5h / 每週 / 30d 配額，啟用或停用配額自動切換，設定其 1–100% 閾值和臨時故障 failover。 |
 | **Subagents** | 在 `spawn_agent` override 列表中置頂最多五個原生或路由模型。 |

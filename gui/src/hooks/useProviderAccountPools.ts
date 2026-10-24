@@ -251,7 +251,10 @@ export function useProviderAccountPools(deps: {
                 accounts: mergeQuotaRows(enriched, current[provider]?.accounts ?? [], true),
               },
             });
-            return !enriched.some(row => row.quotaUnavailable === true);
+            // Paused accounts are intentionally skipped; keep their row state without
+            // failing refreshes that successfully probed another quota-capable account.
+            const refreshable = enriched.filter(row => row.paused !== true && supportsQuotaRead(row));
+            return !refreshable.some(row => row.quotaUnavailable === true);
           } catch {
             if (!currentQuota()) return false;
             setAccountSets(current => currentQuota() && current[provider] ? {
@@ -311,7 +314,8 @@ export function useProviderAccountPools(deps: {
             setKeyPools(current => currentQuota() ? { ...current, [name]: currentRoster()
               ? mergeQuotaRows(enriched, current[name] ?? [], true)
               : mergeLateQuotaRows(current[name] ?? [], enriched) } : current);
-            return !enriched.some(row => row.quotaUnavailable === true);
+            const refreshable = enriched.filter(row => row.disabled !== true && supportsQuotaRead(row));
+            return !refreshable.some(row => row.quotaUnavailable === true);
           } catch {
             if (currentQuota()) setKeyPools(current => currentQuota()
               ? { ...current, [name]: unavailableQuotaRows(current[name] ?? [], rows) } : current);
