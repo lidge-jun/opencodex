@@ -30,6 +30,18 @@ const HYGIENE_BLOCK_RE = new RegExp(
   `^[ \\t]*${HYGIENE_BLOCK_START}[ \\t]*\\n([\\s\\S]*?)\\n[ \\t]*${HYGIENE_BLOCK_END}[ \\t]*$`,
   "m"
 );
+/**
+ * Whole-line delimiter matchers, the same shape HYGIENE_BLOCK_RE anchors on.
+ * A block is only read when each delimiter occurs on exactly one line: a
+ * changed filename can contain newlines, so an echoed path can add delimiter
+ * lines, and an ambiguous block must never be cut at the first one.
+ */
+const HYGIENE_BLOCK_START_LINE_RE = new RegExp(`^[ \\t]*${HYGIENE_BLOCK_START}[ \\t]*$`, "gm");
+const HYGIENE_BLOCK_END_LINE_RE = new RegExp(`^[ \\t]*${HYGIENE_BLOCK_END}[ \\t]*$`, "gm");
+
+function countDelimiterLines(text, pattern) {
+  return (text.match(pattern) ?? []).length;
+}
 
 function inlineCode(value) {
   const text = String(value);
@@ -121,9 +133,17 @@ function buildGateCommentBody(state, opts) {
  * `null` when the comment has none. The gate rebuilds its body from scratch
  * every run, so without this round-trip a hygiene update from the separate
  * hygiene workflow would be silently dropped on the next gate write.
+ * An ambiguous block (a delimiter on more than one line) reads as `null`, so
+ * the gate drops it on rebuild instead of re-wrapping a truncated section.
  */
 function extractHygieneSection(body) {
   if (typeof body !== "string") return null;
+  if (
+    countDelimiterLines(body, HYGIENE_BLOCK_START_LINE_RE) !== 1 ||
+    countDelimiterLines(body, HYGIENE_BLOCK_END_LINE_RE) !== 1
+  ) {
+    return null;
+  }
   const match = body.match(HYGIENE_BLOCK_RE);
   if (!match) return null;
   return match[1]
@@ -155,6 +175,32 @@ function withHygieneSection(body, hygieneLines) {
 
   // No existing block: append one at the end.
   return `${base.replace(/\s+$/, "")}\n\n## Hygiene\n\n${block}\n`;
+}
+
+/**
+ * The text the hygiene workflow last wrote for this pull request: the hygiene
+ * block of the first bot comment carrying GATE_MARKER, or the standalone
+ * hygiene comment while that gate comment has no block yet (the gate never
+ * absorbs the standalone one). An ambiguous gate block yields `null`; later
+ * comments are never searched for a more convenient candidate.
+ */
+function authoritativeHygieneSection(comments) {
+  const bot = (comments ?? []).filter(
+    comment => comment?.user?.login === "github-actions[bot]" && typeof comment.body === "string"
+  );
+  const gate = bot.find(comment => comment.body.includes(GATE_MARKER));
+  if (gate) {
+    const section = extractHygieneSection(gate.body);
+    if (section !== null) return section;
+    if (
+      countDelimiterLines(gate.body, HYGIENE_BLOCK_START_LINE_RE) > 0 ||
+      countDelimiterLines(gate.body, HYGIENE_BLOCK_END_LINE_RE) > 0
+    ) {
+      return null;
+    }
+  }
+  const standalone = bot.find(comment => comment !== gate && comment.body.includes(HYGIENE_MARKER));
+  return standalone ? standalone.body : null;
 }
 
 function descriptionFailureLines(reason) {
@@ -327,6 +373,7 @@ module.exports = {
   buildGateCommentBody,
   extractHygieneSection,
   withHygieneSection,
+  authoritativeHygieneSection,
   descriptionFailureLines,
   buildFailureSections,
   failureSummary,

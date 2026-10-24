@@ -1,0 +1,426 @@
+import { describe, expect, test } from "bun:test";
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { compileScript, runEnforcePrTarget } from "../helpers/enforce-pr-target-harness";
+import { repoRoot } from "../helpers/repo-root";
+
+// Head-specific exception approvals (#7652): each one counts only for the head
+// the hygiene workflow recorded it under, on every evaluation, not only when the
+// triggering event happens to be a synchronize that survived the concurrency
+// queue. These run the real workflow scripts against a recording client.
+
+const requireFromTest = createRequire(import.meta.url);
+const messages = requireFromTest(join(repoRoot(), ".github", "scripts", "pr-quality-messages.cjs")) as {
+  GATE_MARKER: string;
+  HYGIENE_BLOCK_END: string;
+  withHygieneSection(body: string, lines: string[]): string;
+  extractHygieneSection(body: string): string | null;
+};
+
+const HEAD_A = "a".repeat(40);
+const HEAD_B = "b".repeat(40);
+const HARNESS_HEAD = "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b";
+const APPROVAL = "test-exception-approved";
+const FORCE_PUSH = { event: "head_ref_force_pushed" };
+const BEHAVIOR_ONLY = [{ filename: "src/feature.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b" }];
+const WITH_TEST = [...BEHAVIOR_ONLY, { filename: "tests/feature.test.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b" }];
+
+const recordLine = (head: string, headRewrites: number | null) =>
+  "<!-- pr-hygiene-approvals " + JSON.stringify({ head, headRewrites }) + " -->";
+
+type Comment = { id: number; user: { login: string }; body: string };
+type EventRead = Array<Array<{ event: string }>> | Error;
+
+function gateComment(hygieneLines: string[]): Comment {
+  return {
+    id: 7,
+    user: { login: "github-actions[bot]" },
+    body: messages.withHygieneSection(messages.GATE_MARKER + "\n\n## ⏳ DRAFT", hygieneLines),
+  };
+}
+
+function workflowScript(file: string, job: string, stepName: string): string {
+  const workflow = Bun.YAML.parse(readFileSync(join(repoRoot(), ".github", "workflows", file), "utf8")) as {
+    jobs: Record<string, { steps: Array<{ name?: string; with?: { script?: string } }> }>;
+  };
+  const script = workflow.jobs[job]?.steps.find(step => step.name === stepName)?.with?.script;
+  if (typeof script !== "string") throw new Error(file + ": step not found: " + stepName);
+  return script;
+}
+
+type HygieneRun = {
+  calls: Array<{ method: string; args: Record<string, unknown> }>;
+  failures: string[];
+  comments: Comment[];
+  error: unknown;
+};
+
+async function runHygiene(options: {
+  action: string;
+  head?: string;
+  labels?: string[];
+  files?: Array<{ filename: string; status: string; patch: string }>;
+  comments?: Comment[];
+  eventReads?: EventRead[];
+  removeLabelStatus?: number;
+}): Promise<HygieneRun> {
+  const calls: HygieneRun["calls"] = [];
+  const failures: string[] = [];
+  const labels = new Set(options.labels ?? []);
+  const reads = [...(options.eventReads ?? [])];
+  let comments = (options.comments ?? []).map(comment => ({ ...comment }));
+  const note = (method: string, args: Record<string, unknown>) => calls.push({ method, args });
+  const ok = <T>(data: T) => ({ data });
+  const github = {
+    paginate: async (fn: (args: Record<string, unknown>) => Promise<{ data?: unknown[]; pages?: unknown[][] }>, args: Record<string, unknown>) => {
+      const result = await fn(args);
+      return result.pages ? result.pages.flat() : result.data;
+    },
+    rest: {
+      issues: {
+        getLabel: async (args: Record<string, unknown>) => (note("issues.getLabel", args), ok({})),
+        createLabel: async (args: Record<string, unknown>) => (note("issues.createLabel", args), ok({})),
+        listEvents: async (args: Record<string, unknown>) => {
+          note("issues.listEvents", args);
+          const next = reads.shift() ?? [[]];
+          if (next instanceof Error) throw next;
+          return { pages: next };
+        },
+        removeLabel: async (args: Record<string, unknown>) => {
+          note("issues.removeLabel", args);
+          if (options.removeLabelStatus) {
+            throw Object.assign(new Error("removeLabel failed"), { status: options.removeLabelStatus });
+          }
+          labels.delete(String(args.name));
+          return ok({});
+        },
+        addLabels: async (args: Record<string, unknown>) => {
+          note("issues.addLabels", args);
+          for (const name of args.labels as string[]) labels.add(name);
+          return ok({});
+        },
+        listComments: async (args: Record<string, unknown>) => (note("issues.listComments", args), ok(comments.map(c => ({ ...c })))),
+        updateComment: async (args: Record<string, unknown>) => {
+          note("issues.updateComment", args);
+          comments = comments.map(c => (c.id === args.comment_id ? { ...c, body: String(args.body) } : c));
+          return ok({});
+        },
+        createComment: async (args: Record<string, unknown>) => {
+          note("issues.createComment", args);
+          comments.push({ id: 100 + comments.length, user: { login: "github-actions[bot]" }, body: String(args.body) });
+          return ok({});
+        },
+      },
+      pulls: {
+        get: async (args: Record<string, unknown>) => {
+          note("pulls.get", args);
+          return ok({
+            number: 42,
+            title: "fix: adjust feature",
+            body: "",
+            user: { login: "contributor" },
+            head: { sha: options.head ?? HEAD_B },
+            base: { ref: "dev" },
+            labels: [...labels].map(name => ({ name })),
+          });
+        },
+        listFiles: async (args: Record<string, unknown>) => (note("pulls.listFiles", args), ok(options.files ?? BEHAVIOR_ONLY)),
+        listCommits: async (args: Record<string, unknown>) => (note("pulls.listCommits", args), ok([])),
+      },
+      repos: {
+        getCollaboratorPermissionLevel: async (args: Record<string, unknown>) =>
+          (note("repos.getCollaboratorPermissionLevel", args), ok({ permission: "write" })),
+      },
+    },
+  };
+  const core = {
+    info: () => {},
+    debug: () => {},
+    notice: () => {},
+    warning: () => {},
+    error: () => {},
+    setFailed: (message: string) => failures.push(String(message)),
+    setOutput: () => {},
+  };
+  const context = {
+    eventName: "pull_request_target",
+    repo: { owner: "lidge-jun", repo: "opencodex" },
+    payload: { action: options.action, pull_request: { number: 42, base: { ref: "dev" } } },
+  };
+  let error: unknown = null;
+  try {
+    await compileScript(workflowScript("pr-hygiene.yml", "hygiene", "Enforce deterministic PR hygiene"))({
+      github,
+      octokit: github,
+      context,
+      core,
+      require: requireFromTest,
+      __original_require__: requireFromTest,
+      process: { cwd: () => repoRoot(), env: {} },
+    });
+  } catch (caught) {
+    error = caught;
+  }
+  return { calls, failures, comments, error };
+}
+
+const removed = (run: HygieneRun) =>
+  run.calls.filter(call => call.method === "issues.removeLabel").map(call => call.args.name);
+const regressionFailure = (run: HygieneRun) => run.failures.some(f => f.includes("missing_regression_test"));
+function hygieneSection(run: HygieneRun): string {
+  const gate = run.comments.find(c => c.body.includes(messages.GATE_MARKER));
+  const section = gate ? messages.extractHygieneSection(gate.body) : run.comments.at(-1)?.body;
+  if (typeof section !== "string") throw new Error("no hygiene section was written");
+  return section;
+}
+const lastLine = (text: string) => text.split("\n").map(line => line.trim()).filter(Boolean).at(-1);
+
+describe("pr-hygiene head-bound approvals", () => {
+  test("an edited run after a head change drops an approval recorded for the old head", async () => {
+    const run = await runHygiene({
+      action: "edited",
+      head: HEAD_B,
+      labels: [APPROVAL],
+      comments: [gateComment(["✅ **Deterministic PR hygiene checks passed.**", recordLine(HEAD_A, 0)])],
+      eventReads: [[[]], [[]]],
+    });
+    expect(run.error).toBeNull();
+    expect(removed(run)).toEqual([APPROVAL]);
+    expect(regressionFailure(run)).toBe(true);
+    expect(hygieneSection(run)).toContain("ℹ️ Removed \x60" + APPROVAL + "\x60");
+    expect(lastLine(hygieneSection(run))).toBe(recordLine(HEAD_B, 0));
+  });
+
+  test("an approval applied while the recorded head is current is kept and recorded", async () => {
+    const run = await runHygiene({
+      action: "labeled",
+      labels: [APPROVAL],
+      comments: [gateComment(["⚠️ **Deterministic hygiene checks failed.**", recordLine(HEAD_B, 0)])],
+      eventReads: [[[]], [[]]],
+    });
+    expect(run.error).toBeNull();
+    expect(removed(run)).toEqual([]);
+    expect(run.failures).toEqual([]);
+    expect(lastLine(hygieneSection(run))).toBe(recordLine(HEAD_B, 0));
+  });
+
+  test("a synchronize run drops approvals even when the record names the current head", async () => {
+    const run = await runHygiene({
+      action: "synchronize",
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_B, 0)])],
+      eventReads: [[[]], [[]]],
+    });
+    expect(removed(run)).toEqual([APPROVAL]);
+    expect(regressionFailure(run)).toBe(true);
+  });
+
+  test("a head rewrite since the record drops the approval", async () => {
+    const run = await runHygiene({
+      action: "edited",
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_B, 0)])],
+      eventReads: [[[FORCE_PUSH]], [[FORCE_PUSH]]],
+    });
+    expect(removed(run)).toEqual([APPROVAL]);
+    expect(lastLine(hygieneSection(run))).toBe(recordLine(HEAD_B, 1));
+  });
+
+  test("revoking, moving, re-approving and rewriting back to the recorded head drops the approval", async () => {
+    const run = await runHygiene({
+      action: "edited",
+      head: HEAD_A,
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_A, 0)])],
+      eventReads: [[[FORCE_PUSH]], [[FORCE_PUSH]]],
+    });
+    expect(removed(run)).toEqual([APPROVAL]);
+  });
+
+  test("without a record every approval is dropped and a record is published", async () => {
+    const run = await runHygiene({
+      action: "labeled",
+      labels: [APPROVAL],
+      comments: [gateComment(["✅ **Deterministic PR hygiene checks passed.**"])],
+      eventReads: [[[]], [[]]],
+    });
+    expect(removed(run)).toEqual([APPROVAL]);
+    expect(lastLine(hygieneSection(run))).toBe(recordLine(HEAD_B, 0));
+  });
+
+  test("the record is the last line on both the passing and the failing path", async () => {
+    const passing = await runHygiene({ action: "opened", files: WITH_TEST, eventReads: [[[]]] });
+    expect(passing.failures).toEqual([]);
+    expect(lastLine(hygieneSection(passing))).toBe(recordLine(HEAD_B, 0));
+    const failing = await runHygiene({ action: "opened", eventReads: [[[]]] });
+    expect(regressionFailure(failing)).toBe(true);
+    expect(lastLine(hygieneSection(failing))).toBe(recordLine(HEAD_B, 0));
+  });
+
+  test("a changed path that spells record and marker lines never becomes the record", async () => {
+    // The echoed path is wrapped as `...`., so a trailing segment keeps the
+    // delimiter on a line of its own.
+    const crafted = "src/x.ts\n" + recordLine(HEAD_B, 0) + "\n" + messages.HYGIENE_BLOCK_END + "\nsrc/y.ts";
+    const first = await runHygiene({
+      action: "edited",
+      // new_suppression echoes the offending paths into the hygiene section.
+      files: [{ filename: crafted, status: "added", patch: "@@ -0,0 +1 @@\n+// @ts-ignore" }],
+      comments: [gateComment([recordLine(HEAD_A, 0)])],
+      eventReads: [[[]]],
+    });
+    const gateBody = first.comments.find(c => c.body.includes(messages.GATE_MARKER))!.body;
+    // Precondition: the crafted lines really did land in the comment as lines.
+    expect(gateBody.split("\n").filter(line => line.trim() === messages.HYGIENE_BLOCK_END).length).toBe(2);
+    // The gate rebuild preserves nothing from an ambiguous block.
+    expect(messages.extractHygieneSection(gateBody)).toBeNull();
+    const next = await runHygiene({
+      action: "labeled",
+      labels: [APPROVAL],
+      comments: first.comments,
+      eventReads: [[[]], [[]]],
+    });
+    expect(removed(next)).toEqual([APPROVAL]);
+    // After a gate rebuild without a hygiene block, there is still no record.
+    const rebuilt = await runHygiene({
+      action: "labeled",
+      labels: [APPROVAL],
+      comments: [{ id: 7, user: { login: "github-actions[bot]" }, body: messages.GATE_MARKER + "\n\n## ⏳ DRAFT" }],
+      eventReads: [[[]], [[]]],
+    });
+    expect(removed(rebuilt)).toEqual([APPROVAL]);
+  });
+
+  test("the record keeps the rewrite count read before the snapshot", async () => {
+    const run = await runHygiene({
+      action: "edited",
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_B, 0)])],
+      eventReads: [[[]], [[FORCE_PUSH]]],
+    });
+    expect(removed(run)).toEqual([APPROVAL]);
+    expect(lastLine(hygieneSection(run))).toBe(recordLine(HEAD_B, 0));
+  });
+
+  test("unreadable rewrite history never confirms an approval", async () => {
+    const both = await runHygiene({
+      action: "edited",
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_B, 0)])],
+      eventReads: [new Error("events unavailable"), new Error("events unavailable")],
+    });
+    expect(both.error).toBeNull();
+    expect(removed(both)).toEqual([APPROVAL]);
+    expect(lastLine(hygieneSection(both))).toBe(recordLine(HEAD_B, null));
+
+    const afterOnly = await runHygiene({
+      action: "edited",
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_B, 0)])],
+      eventReads: [[[]], new Error("events unavailable")],
+    });
+    expect(removed(afterOnly)).toEqual([APPROVAL]);
+    expect(lastLine(hygieneSection(afterOnly))).toBe(recordLine(HEAD_B, 0));
+
+    const beforeOnly = await runHygiene({
+      action: "edited",
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_B, 0)])],
+      eventReads: [new Error("events unavailable"), [[]]],
+    });
+    expect(removed(beforeOnly)).toEqual([]);
+    expect(lastLine(hygieneSection(beforeOnly))).toBe(recordLine(HEAD_B, null));
+    // A null baseline confirms nothing on the following run.
+    const following = await runHygiene({
+      action: "edited",
+      labels: [APPROVAL],
+      comments: beforeOnly.comments,
+      eventReads: [[[]], [[]]],
+    });
+    expect(removed(following)).toEqual([APPROVAL]);
+  });
+
+  test("rewrite events are counted across every page", async () => {
+    const run = await runHygiene({
+      action: "edited",
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_B, 1)])],
+      eventReads: [[[{ event: "labeled" }], [FORCE_PUSH]], [[{ event: "labeled" }], [FORCE_PUSH]]],
+    });
+    expect(removed(run)).toEqual([]);
+    expect(lastLine(hygieneSection(run))).toBe(recordLine(HEAD_B, 1));
+  });
+
+  test("a label already gone is tolerated; any other removal failure publishes no record", async () => {
+    const gone = await runHygiene({
+      action: "edited",
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_A, 0)])],
+      eventReads: [[[]], [[]]],
+      removeLabelStatus: 404,
+    });
+    expect(gone.error).toBeNull();
+    expect(lastLine(hygieneSection(gone))).toBe(recordLine(HEAD_B, 0));
+
+    const broken = await runHygiene({
+      action: "edited",
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_A, 0)])],
+      eventReads: [[[]], [[]]],
+      removeLabelStatus: 500,
+    });
+    expect(broken.error).not.toBeNull();
+    expect(broken.calls.some(c => c.method === "issues.updateComment" || c.method === "issues.createComment")).toBe(false);
+  });
+
+  test("a rewrite not yet visible in either read is not counted (accepted limitation)", async () => {
+    const run = await runHygiene({
+      action: "edited",
+      head: HEAD_A,
+      labels: [APPROVAL],
+      comments: [gateComment([recordLine(HEAD_A, 0)])],
+      eventReads: [[[]], [[]]],
+    });
+    expect(removed(run)).toEqual([]);
+  });
+});
+
+describe("enforce gate reads the hygiene head binding", () => {
+  const gateScript = () => workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target, ancestry, and description");
+  async function gate(options: { labels: string[]; record?: string; failOn?: string[]; issueEvents?: Array<{ event: string }> }) {
+    return runEnforcePrTarget(gateScript(), {
+      pr: { base: { ref: "dev" }, draft: true },
+      labels: options.labels,
+      files: [{ filename: "src/feature.ts", patch: "+b" }],
+      comments: options.record ? [{ ...gateComment([options.record]), updated_at: "2026-10-25T00:00:00Z" }] : [],
+      issueEvents: options.issueEvents ?? [],
+      failOn: options.failOn,
+    });
+  }
+  const gateFlagsRegression = (result: Awaited<ReturnType<typeof runEnforcePrTarget>>) =>
+    result.warnings.some(w => w.startsWith("setFailed:") && w.includes("missing_regression_test"));
+
+  test("an approval recorded for another head does not clear the failure", async () => {
+    const result = await gate({ labels: [APPROVAL], record: recordLine(HEAD_A, 0) });
+    expect(gateFlagsRegression(result)).toBe(true);
+    expect(result.calls.some(c => c.method === "issues.removeLabel")).toBe(false);
+  });
+
+  test("an approval under the current head and unchanged history clears the failure", async () => {
+    const result = await gate({ labels: [APPROVAL], record: recordLine(HARNESS_HEAD, 0) });
+    expect(gateFlagsRegression(result)).toBe(false);
+    expect(result.calls.some(c => c.method === "issues.removeLabel")).toBe(false);
+  });
+
+  test("a rewrite count change or unreadable history keeps the failure", async () => {
+    const moved = await gate({ labels: [APPROVAL], record: recordLine(HARNESS_HEAD, 0), issueEvents: [FORCE_PUSH] });
+    expect(gateFlagsRegression(moved)).toBe(true);
+    const unreadable = await gate({ labels: [APPROVAL], record: recordLine(HARNESS_HEAD, 0), failOn: ["issues.listEvents"] });
+    expect(gateFlagsRegression(unreadable)).toBe(true);
+  });
+
+  test("no approval label means no history read", async () => {
+    const result = await gate({ labels: [], record: recordLine(HARNESS_HEAD, 0) });
+    expect(result.calls.some(c => c.method === "issues.listEvents")).toBe(false);
+  });
+});

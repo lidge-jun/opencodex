@@ -15,6 +15,7 @@ const {
   buildGateCommentBody,
   extractHygieneSection,
   withHygieneSection,
+  authoritativeHygieneSection,
   descriptionFailureLines,
   buildFailureSections,
   failureSummary,
@@ -419,5 +420,40 @@ describe("hygiene section round-trip", () => {
     assert.ok(afterGateSecond.includes("⚠️ **Deterministic hygiene checks failed.**"));
     assert.equal(afterGateSecond.split(HYGIENE_BLOCK_START).length - 1, 1);
     assert.equal(afterGateSecond.split(HYGIENE_BLOCK_END).length - 1, 1);
+  });
+});
+
+describe("authoritative hygiene section", () => {
+  const bot = { login: "github-actions[bot]" };
+  const block = (lines) =>
+    `${HYGIENE_BLOCK_START}\n${HYGIENE_MARKER}\n\n${lines.join("\n")}\n\n${HYGIENE_BLOCK_END}`;
+
+  it("reads nothing from a block whose delimiters repeat on whole lines", () => {
+    const body = [GATE_MARKER, HYGIENE_BLOCK_START, "a", HYGIENE_BLOCK_END, "b", HYGIENE_BLOCK_END].join("\n");
+    assert.equal(extractHygieneSection(body), null);
+    const twoStarts = [GATE_MARKER, HYGIENE_BLOCK_START, HYGIENE_BLOCK_START, "a", HYGIENE_BLOCK_END].join("\n");
+    assert.equal(extractHygieneSection(twoStarts), null);
+  });
+
+  it("prefers the gate comment's block over a standalone hygiene comment", () => {
+    const comments = [
+      { user: bot, body: `${HYGIENE_MARKER}\n\nstandalone` },
+      { user: bot, body: `${GATE_MARKER}\n\n${block(["from gate"])}` },
+    ];
+    assert.equal(authoritativeHygieneSection(comments), "from gate");
+  });
+
+  it("falls back to the standalone comment only while the gate comment has no block", () => {
+    const standalone = { user: bot, body: `${HYGIENE_MARKER}\n\nstandalone` };
+    assert.equal(authoritativeHygieneSection([{ user: bot, body: GATE_MARKER }, standalone]), standalone.body);
+    assert.equal(authoritativeHygieneSection([standalone]), standalone.body);
+    const ambiguous = { user: bot, body: [GATE_MARKER, HYGIENE_BLOCK_START, "a", HYGIENE_BLOCK_END, HYGIENE_BLOCK_END].join("\n") };
+    assert.equal(authoritativeHygieneSection([ambiguous, standalone]), null);
+  });
+
+  it("ignores comments not written by the workflow bot", () => {
+    const human = { user: { login: "contributor" }, body: `${GATE_MARKER}\n\n${block(["forged"])}` };
+    assert.equal(authoritativeHygieneSection([human]), null);
+    assert.equal(authoritativeHygieneSection(undefined), null);
   });
 });

@@ -229,7 +229,11 @@ jobs:
             );
             const {
               collectDeterministicHygieneFailures,
+              countHeadRewrites,
               HYGIENE_FAILURE_HINTS,
+              needsHeadRewriteCount,
+              parseApprovalRecord,
+              reconcileHeadBoundApprovals,
             } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-hygiene.cjs"),
             );
@@ -266,6 +270,7 @@ jobs:
               inlineCode,
               buildGateCommentBody,
               extractHygieneSection,
+              authoritativeHygieneSection,
               buildFailureSections,
               failureSummary,
               buildStaleNotice,
@@ -812,7 +817,32 @@ jobs:
             // the Hygiene comment section, but Ready / review-ready must not
             // clear while those checks fail. Re-assess here from the same
             // trusted scripts so the gate cannot race ahead of hygiene.
-            const labelNames = (pr.labels ?? []).map(label => label.name);
+            const liveLabelNames = (pr.labels ?? []).map(label => label.name);
+            // Head-bound exception approvals count only under the head binding
+            // the hygiene workflow recorded. This gate reads that record and
+            // never removes labels or writes it.
+            const approvalInput = {
+              labels: liveLabelNames,
+              headSha: pr.head?.sha,
+              record: parseApprovalRecord(authoritativeHygieneSection(comments)),
+              eventAction: context.payload.action,
+            };
+            let headRewriteCount = null;
+            if (needsHeadRewriteCount(approvalInput)) {
+              try {
+                headRewriteCount = countHeadRewrites(await github.paginate(
+                  github.rest.issues.listEvents,
+                  { owner, repo, issue_number: pull_number, per_page: 100 }
+                ));
+              } catch (error) {
+                core.warning(`Could not read head rewrite history: ${error.message}`);
+              }
+            }
+            const { stale: staleApprovals } = reconcileHeadBoundApprovals({
+              ...approvalInput,
+              headRewriteCount,
+            });
+            const labelNames = liveLabelNames.filter(name => !staleApprovals.includes(name));
             // Same inputs the hygiene workflow feeds the carry-attribution
             // assessor. Both gates must reach the same verdict or Ready can
             // clear while hygiene is still red.
