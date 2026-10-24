@@ -862,6 +862,11 @@ describe("resolveCodexRuntime", () => {
     const deps = { env: { PATH: "" }, discoverAlternatives: false };
 
     try {
+      // This checks cache/persistence equality, not discovery of a host-installed Codex.
+      setCodexRuntimeResolveCacheForTests({
+        runtime: { command: "codex", version: null, source: "fallback" },
+        failures: [],
+      }, deps);
       const cached = resolveCodexRuntime(deps);
       expect(cached.runtime.source).toBe("fallback");
       setCodexRuntimeResolveCacheForTests({
