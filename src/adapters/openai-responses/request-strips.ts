@@ -24,7 +24,7 @@ export function stripProviderInputItemMetadata(body: unknown): unknown {
     input ??= [...body.input];
     input[index] = next;
   }
-  return repairUrlCitationAnnotations(input ? { ...body, input } : body);
+  return input ? { ...body, input } : body;
 }
 
 function isUrlCitationIndex(value: unknown): value is number {
