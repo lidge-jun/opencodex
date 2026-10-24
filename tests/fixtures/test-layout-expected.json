@@ -1343,6 +1343,7 @@
   "codex-ws-handshake.test.ts": "responses", "codex-ws-handshake-validation.test.ts": "responses",
   "ws-upstream-socks5.test.ts": "responses",
   "ws-upstream.test.ts": "responses",
+  "xai-additional-tools.test.ts": "providers/xai",
   "xai-client.test.ts": "images",
   "xai-empty-catalog-tool-choice.test.ts": "providers/xai",
   "xai-no-stop.test.ts": "providers/xai",

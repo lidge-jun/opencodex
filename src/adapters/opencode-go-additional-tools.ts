@@ -20,13 +20,32 @@ export function isOpenCodeGoResponsesUrl(responseUrl: string): boolean {
     && !destination.href.includes("?") && !destination.href.includes("#");
 }
 
-/** Console Go accepts public tools but rejects the private additional_tools input wrapper. */
-export function normalizeOpenCodeGoAdditionalTools(
+const XAI_RESPONSES_HOSTS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
+
+/**
+ * True when the Responses target is an official xAI endpoint (public API or Grok CLI proxy).
+ */
+export function isXaiResponsesUrl(responseUrl: string): boolean {
+  let destination: URL;
+  try {
+    destination = new URL(responseUrl);
+  } catch {
+    return false;
+  }
+  return destination.protocol === "https:"
+    && XAI_RESPONSES_HOSTS.has(destination.hostname.toLowerCase())
+    && (destination.port === "" || destination.port === "443");
+}
+
+/**
+ * Promotes client-loaded `additional_tools` input items into top-level `tools` and strips
+ * the wrapper from `input`. Required for gateways whose Rust/OpenAI-strict deserializer
+ * rejects unknown items in the `input` array.
+ */
+export function promoteResponsesAdditionalTools(
   body: unknown,
-  responseUrl: string,
   replayPrefixLength = 0,
 ): unknown {
-  if (!isOpenCodeGoResponsesUrl(responseUrl)) return body;
   if (!isRecord(body) || !Array.isArray(body.input)) return body;
   // Do not replace a malformed top-level catalog with a partial promoted one.
   if (body.tools !== undefined && !Array.isArray(body.tools)) return body;
@@ -41,7 +60,7 @@ export function normalizeOpenCodeGoAdditionalTools(
     if (isRecord(item) && item.type === "additional_tools" && Array.isArray(item.tools)) {
       changed = true;
       // Replayed wrappers are conversation history, not authority for the current request.
-      // Go cannot accept the wrapper itself, so remove it without promoting its catalog.
+      // Gateways cannot accept the wrapper itself, so remove it without promoting its catalog.
       if (index < currentTurnStart) continue;
       // Custom/search/namespace lowering already owns identity and deduplication. This pass
       // only moves declarations, including hosted tools that intentionally have no name.
@@ -51,4 +70,14 @@ export function normalizeOpenCodeGoAdditionalTools(
     }
   }
   return changed ? { ...body, input, tools: [...(body.tools ?? []), ...promoted] } : body;
+}
+
+/** Console Go accepts public tools but rejects the private additional_tools input wrapper. */
+export function normalizeOpenCodeGoAdditionalTools(
+  body: unknown,
+  responseUrl: string,
+  replayPrefixLength = 0,
+): unknown {
+  if (!isOpenCodeGoResponsesUrl(responseUrl)) return body;
+  return promoteResponsesAdditionalTools(body, replayPrefixLength);
 }

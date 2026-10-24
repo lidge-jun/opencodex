@@ -433,6 +433,13 @@ export interface OcxProviderConfig {
    * items instead of blanking it the way the ChatGPT backend requires; proxy-minted
    * `ocxr1` envelopes are still stripped because no upstream can decrypt them.
    */
+  /**
+   * Whether to promote Codex Desktop's `additional_tools` input items into top-level `tools`
+   * and strip the wrapper from `input`. Enabled automatically for OpenCode Go and xAI
+   * (`api.x.ai` and `cli-chat-proxy.grok.com`); other strict gateways that return HTTP 422
+   * for unknown item types in `input` can opt in here.
+   */
+  promoteAdditionalTools?: boolean;
   preserveResponsesReasoningContent?: boolean;
   /**
    * Whether to preserve Codex-private `input[].id` on `store: false` requests.
