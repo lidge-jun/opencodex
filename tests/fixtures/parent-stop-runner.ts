@@ -30,6 +30,13 @@ if (options.proxyProbePort) {
   if (control.via !== "proxy") throw new Error("proxy environment control was not intercepted");
   const { assertConnectedClientStopSupported } = await import("../../src/cli/stop-restore");
   await assertConnectedClientStopSupported({ pid: process.pid, port: options.proxyProbePort, hostname: "127.0.0.1" });
+  const { stopProxyGracefully } = await import("../../src/lib/process-control");
+  const { directLocalHttpFetch } = await import("../../src/server/direct-local-http");
+  const result = await stopProxyGracefully(process.pid, {
+    runtimeEndpoint: { port: options.proxyProbePort, hostname: "127.0.0.1" },
+    fetchFn: directLocalHttpFetch, waitExit: () => true,
+  });
+  if (result !== true) throw new Error("direct stop request failed");
   console.log(JSON.stringify({ ok: true, control: control.via }));
   process.exit(0);
 }
@@ -145,7 +152,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     probes.push(url);
     if (init.redirect !== "error") return unexpected("redirectable compatibility probe");
     if (url.endsWith("/healthz")) {
-      if (init.headers && Object.keys(init.headers).length) return unexpected("credential on health probe");
+      if (new Headers(init.headers).has("x-opencodex-api-key")) return unexpected("credential on health probe");
       return Response.json({ service: "opencodex", version: "2.93.0", pid: fakePid,
         ...(!options.serverTeardown && !options.clientServer ? { role: "client" } : {}) });
     }
@@ -174,7 +181,10 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 // Only the real proxy-environment mode above exercises TCP; other cases inject responses.
 const direct = await import("../../src/server/direct-local-http");
 mock.module("../../src/server/direct-local-http", () => ({ ...direct,
-  directLocalHttpFetch: (input: string | URL | Request, init?: RequestInit) => globalThis.fetch(input, init),
+  directLocalHttpFetch: async (input: string | URL | Request, init?: RequestInit) => {
+    if (!alive && String(input).endsWith("/healthz")) throw Object.assign(new Error("fixture listener closed"), { code: "ECONNREFUSED" });
+    return globalThis.fetch(input, { ...init, method: init?.method ?? "GET", redirect: "error" });
+  },
 }));
 
 process.argv = [process.execPath, "ocx", "stop", ...(options.json ? ["--json"] : [])];

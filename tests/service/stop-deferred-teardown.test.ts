@@ -100,11 +100,12 @@ describe("parent CLI shared teardown completion", () => {
     const token = "ocx-test-stop-proof-token";
     const reply = (request: Request) => {
       const path = new URL(request.url).pathname;
+      if (request.method === "POST") return Response.json({ success: true, sharedTeardown: "not-owned" });
       return Response.json(path === "/healthz" ? { service: "opencodex", pid: childPid }
         : { schema: "ocx-stop-capabilities/1", connectedClientOwnership: true, pid: childPid });
     };
     const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
-      targetPaths.push(new URL(request.url).pathname);
+      targetPaths.push(`${request.method} ${new URL(request.url).pathname}`);
       const auth = request.headers.get("x-opencodex-api-key");
       if (auth) targetTokens.push(auth);
       return reply(request);
@@ -134,8 +135,8 @@ describe("parent CLI shared teardown completion", () => {
       expect(JSON.parse(stdout)).toEqual({ ok: true, control: "proxy" });
       expect(proxyPaths).toEqual(["/__proxy-control"]);
       expect(proxyTokens).toEqual([]);
-      expect(targetPaths).toEqual(["/healthz", "/api/stop"]);
-      expect(targetTokens).toEqual([token]);
+      expect(targetPaths).toEqual(["GET /healthz", "GET /api/stop", "POST /api/stop"]);
+      expect(targetTokens).toEqual([token, token]);
     } finally {
       if (watchdog) clearTimeout(watchdog);
       if (child && child.exitCode === null) { child.kill(); await child.exited; }

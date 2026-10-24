@@ -127,6 +127,7 @@ import { inspectGuardedManagerTarget, observeGuardedManagerStopped } from "../se
 import { summarizeStopRun, type StopOutcome, type StopRunRecord } from "./stop-report";
 import { runCli } from "./root";
 import { isProcessAlive, ProxyOwnershipRefusedError, refusalNextStep, stopProxy } from "../lib/process-control";
+import { directLocalHttpFetch } from "../server/direct-local-http";
 import { startupDataPlaneToken } from "../lib/service-secrets";
 import { assertNotAdminToken, diagnoseService, isServiceOwnershipError, proxyStillLiveAfterStop, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatePaths, serviceStatusSummary, stopServiceIfInstalledDetailed, uninstallServiceIfInstalled, uninstallServiceDetailed } from "../service";
 import { acquireOwnershipMutationLease } from "../service/ownership-mutation-lease.mjs";
@@ -995,8 +996,6 @@ async function handleRestartStartWhenStopped(recoveringLiveRestart = false): Pro
     return restartStartOutcome(false, child, error);
   }
 }
-
-
 async function handleStop(approval?: StopApproval) {
   const lease = acquireOwnershipMutationLease(serviceStatePaths());
   try {
@@ -1151,6 +1150,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     if (connectedClientSkip) await assertConnectedClientStopSupported(exact ? { ...exact, pid } : null);
     claimTeardown(exact ?? configuredEndpoint(), exact ? "exact" : "guessed");
     const graceful = await stopProxy(pid, {
+      fetchFn: connectedClientSkip ? directLocalHttpFetch as typeof fetch : undefined,
       deferSharedTeardownNonce: teardownNonce,
       // Only an exact endpoint may direct the request; the configured fallback is a guess
       // good enough to record an obligation against, not to POST a stop to.
