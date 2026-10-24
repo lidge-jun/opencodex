@@ -15,7 +15,12 @@ import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { parseDataUrl } from "./image";
 import { createAdapterPhysicalSend } from "./physical-send";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
-import { MODEL_NOT_IN_PLAN_CODE, MODEL_NOT_IN_PLAN_REFUSAL_MARKER } from "../lib/errors";
+import {
+  isVerifiedModelNotInPlanResponse,
+  markVerifiedModelNotInPlanResponse,
+  MODEL_NOT_IN_PLAN_CODE,
+  MODEL_NOT_IN_PLAN_REFUSAL_MARKER,
+} from "../lib/errors";
 import { CommandCodeToolTextFilter, type CommandCodeDeclaredTools } from "./command-code-tool-text";
 import { EMPTY_COMMAND_CODE_PROJECT_CONTEXT, loadCommandCodeProjectContext } from "./command-code-project-context";
 
@@ -538,8 +543,6 @@ function requestWithoutReasoningEffort(request: AdapterRequest): AdapterRequest 
 const COMMAND_CODE_PLAN_REFUSAL = /^MODEL_NOT_IN_PLAN(?::|$)/;
 /** A model id the message may quote; anything else is described without repeating it. */
 const DISPLAYABLE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
-/** Responses this adapter built from a plan refusal, so the effort repair below leaves them alone. */
-const planRefusals = new WeakSet<Response>();
 
 /**
  * Fixed client copy for a plan refusal. The upstream detail is never quoted: it is free text this
@@ -582,7 +585,8 @@ async function normalizeCommandCodePlanRefusal(
     const refusal = new Response(JSON.stringify({ error: {
       type: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE, message: commandCodePlanRefusalMessage(modelId),
     } }), { status: 400, statusText: "Bad Request", headers });
-    planRefusals.add(refusal);
+    // Identity is the provenance dispatch, combo and policy fallback check; the header is diagnostic.
+    markVerifiedModelNotInPlanResponse(refusal);
     return refusal;
   } catch (error) {
     if (signal?.aborted && error === signal.reason) throw error;
@@ -758,7 +762,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         await send({ url: request.url, dispatch: physical => fetchCommandCode(request, ctx, physical) }), creditRefusalRotates, modelId, ctx?.abortSignal,
       );
       // A plan refusal is final for this model: no effort downgrade can change the plan.
-      if (response.ok || planRefusals.has(response)) return response;
+      if (response.ok || isVerifiedModelNotInPlanResponse(response)) return response;
       const currentEffort = (() => {
         try { return (JSON.parse(request.body) as { params?: { reasoning_effort?: unknown } }).params?.reasoning_effort; } catch { return undefined; }
       })();

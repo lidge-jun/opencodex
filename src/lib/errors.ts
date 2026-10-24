@@ -30,32 +30,17 @@ export const UNDECLARED_TOOL_CALL_ERROR_CODE = "undeclared_tool_call";
  * Wire code for a provider's model-scoped plan refusal (#7684): the account's plan does not
  * include the requested model. It travels as a 400 so Codex ends the turn instead of
  * reconnecting through its retry budget on the upstream 403, and the shared formatter keeps it so
- * combo and policy fallback can hop past the one refused target. A body code is not trusted on
- * its own; {@link isModelNotInPlanRefusal} also requires the marker the adapter set.
+ * combo and policy fallback can hop past the one refused target. Neither the body code nor the
+ * marker header is trusted: an upstream can send both. Only object identity is provenance.
  */
 export const MODEL_NOT_IN_PLAN_CODE = "model_not_in_plan";
-/** `x-opencodex-refusal` value an adapter sets on the plan refusal it normalized. */
+/** Diagnostic `x-opencodex-refusal` value on the adapter's refusal; never read as provenance. */
 export const MODEL_NOT_IN_PLAN_REFUSAL_MARKER = "model-not-in-plan";
 
-/** True for an adapter-normalized plan refusal: a 400 whose marker header and body code agree. */
-export function isModelNotInPlanRefusal(response: Response, bodyCode: string | null | undefined): boolean {
-  return response.status === 400 && bodyCode === MODEL_NOT_IN_PLAN_CODE
-    && response.headers.get("x-opencodex-refusal") === MODEL_NOT_IN_PLAN_REFUSAL_MARKER;
-}
-
 /**
- * Whether a code names the plan refusal in any spelling combo failover folds into it (case,
- * surrounding space, hyphens). The trust gate has to match the same set, or an unmarked
- * `MODEL_NOT_IN_PLAN` would pass the gate and still be read as the hop code downstream.
- */
-export function namesModelNotInPlanCode(code: string | null | undefined): boolean {
-  return typeof code === "string" && code.trim().toLowerCase().replaceAll("-", "_") === MODEL_NOT_IN_PLAN_CODE;
-}
-
-/**
- * Client envelopes `formatErrorResponse` built from a verified plan refusal. The envelope's body
- * code cannot prove provenance -- native passthrough returns an upstream body unchanged -- so
- * policy fallback reads this in-memory marker, the same way it reads non-replayability.
+ * Responses this process built as a verified plan refusal: the Command Code adapter's normalized
+ * refusal, and the client envelope `formatErrorResponse` built from one. Owned wrappers carry
+ * membership the way they carry non-replayability; a wrapper that drops it fails closed (no hop).
  */
 const verifiedPlanRefusalResponses = new WeakSet<Response>();
 
@@ -65,6 +50,20 @@ export function markVerifiedModelNotInPlanResponse(response: Response): void {
 
 export function isVerifiedModelNotInPlanResponse(response: Response): boolean {
   return verifiedPlanRefusalResponses.has(response);
+}
+
+/** True for a verified plan refusal that still carries the canonical code in its 400 body. */
+export function isModelNotInPlanRefusal(response: Response, bodyCode: string | null | undefined): boolean {
+  return response.status === 400 && bodyCode === MODEL_NOT_IN_PLAN_CODE && verifiedPlanRefusalResponses.has(response);
+}
+
+/**
+ * Whether a code names the plan refusal in any spelling combo failover folds into it (case,
+ * surrounding space, hyphens). The trust gate has to match the same set, or an unmarked
+ * `MODEL_NOT_IN_PLAN` would pass the gate and still be read as the hop code downstream.
+ */
+export function namesModelNotInPlanCode(code: string | null | undefined): boolean {
+  return typeof code === "string" && code.trim().toLowerCase().replaceAll("-", "_") === MODEL_NOT_IN_PLAN_CODE;
 }
 
 /** First nonblank string across the canonical upstream error paths, in priority order. */

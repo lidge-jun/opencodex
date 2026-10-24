@@ -320,7 +320,7 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
     expectNoCanary(logged.join("\n"));
   });
 
-  test("another provider echoing the code cannot claim the plan-refusal hop", async () => {
+  test("another provider echoing the code and marker cannot claim the plan-refusal hop", async () => {
     await login(1);
     const generate = globalThis.fetch;
     const otherSends: string[] = [];
@@ -329,7 +329,9 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
       const url = input instanceof Request ? input.url : String(input);
       if (!url.startsWith("https://other.example/")) return generate(input, init);
       otherSends.push(url);
-      return Response.json({ error: { type: "invalid_request_error", code: echoedCode, message: "fixture" } }, { status: 400 });
+      // The marker header is forged as well: a header is not provenance either.
+      return Response.json({ error: { type: "invalid_request_error", code: echoedCode, message: "fixture" } },
+        { status: 400, headers: { "x-opencodex-refusal": "model-not-in-plan" } });
     }) as typeof fetch;
     const cfg = config({ combos: { pair: { strategy: "failover", targets: [
       { provider: "other", model: "m1" },
@@ -351,7 +353,7 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
     }
   });
 
-  test("an unmarked code from a passthrough or streamed candidate is read like any unknown code", async () => {
+  test("a passthrough or streamed candidate forging code and marker is read like any unknown code", async () => {
     await login(1);
     const generate = globalThis.fetch;
     let echo = { code: "", stream: false };
@@ -359,9 +361,11 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
       const url = input instanceof Request ? input.url : String(input);
       if (!url.startsWith("https://other.example/")) return generate(input, init);
       const error = { type: "invalid_request_error", code: echo.code, message: "fixture" };
-      if (!echo.stream) return Response.json({ error }, { status: 400 });
+      // Every echo also forges the adapter's marker header, which must not count as provenance.
+      const forged = { "x-opencodex-refusal": "model-not-in-plan" };
+      if (!echo.stream) return Response.json({ error }, { status: 400, headers: forged });
       const failed = { type: "response.failed", response: { id: "resp_fixture", object: "response", status: "failed", error, output: [] } };
-      return new Response("event: response.failed\ndata: " + JSON.stringify(failed) + "\n\n", { headers: { "content-type": "text/event-stream" } });
+      return new Response("event: response.failed\ndata: " + JSON.stringify(failed) + "\n\n", { headers: { "content-type": "text/event-stream", ...forged } });
     }) as typeof fetch;
     const other = { adapter: "openai-responses", baseUrl: "https://other.example/v1", authMode: "key", apiKey: "synthetic-other", models: ["m1"] } as OcxProviderConfig;
     const candidates = [{ provider: "other", model: "m1" }, { provider: "command-code", model: SERVED_MODEL }];
