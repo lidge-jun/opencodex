@@ -195,9 +195,9 @@ export function candidateCapabilityEvidence(
     ? ["text"]
     : (modelRecordValue(provider?.modelInputModalities, modelId)
       ?? modelRecordValue(registryEntry?.modelInputModalities, modelId)
-      // Provider-wide declaration, for ids the per-model maps do not list.
+      // Provider-wide declaration, for ids the per-model maps do not list. Read from the
+      // provider only: a name-only registry lookup would apply it to a custom destination.
       ?? provider?.inputModalities
-      ?? registryEntry?.inputModalities
       ?? catalogRow?.inputModalities
       ?? (isNative ? nativeInputModalities(modelId) : undefined));
   const image = Array.isArray(modalities)

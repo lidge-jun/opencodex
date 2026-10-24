@@ -31,6 +31,7 @@ export interface DerivedKeyLoginProvider {
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
   modelInputModalities?: Record<string, string[]>;
+  inputModalities?: string[];
   modelMaxInputTokens?: Record<string, number>;
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
