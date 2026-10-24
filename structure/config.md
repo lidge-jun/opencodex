@@ -210,8 +210,8 @@ Native Codex sub-agent defaults are a separate, explicit opt-in. When `syncCodex
 is true and `injectionModel` is set, injection writes marker-owned `agents.default_subagent_model`
 and, when configured, `agents.default_subagent_reasoning_effort`, and journals the values it wrote.
 Unmarked values, and marked values that differ from that record (#7425), are user-owned and never
-overwritten; the stale marker is dropped. Disabling and fallback restore remove only owned values;
-journal restore keeps later user edits. Injection never writes or strips root `model_context_window`.
+overwritten; the stale marker is dropped. Disabling and fallback restore remove only owned values.
+Snapshot restore rechecks default ownership after hash matches; root `model_context_window` is never written or stripped.
 
 An injection whose OpenCodex config explicitly selects the v1 multi-agent surface also
 reconciles Codex's higher-precedence global `features.multi_agent_v2` override to disabled before

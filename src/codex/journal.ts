@@ -9,7 +9,7 @@ import { hasInjectedCodexRouting } from "./injected-marker";
 import { configWriteLockFailureMessage, withConfigWriteLockHeld } from "./config-write-lock";
 import type { LockHandle } from "./config-write-lock";
 import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
-import type { WrittenSubagentDefaults } from "./subagent-defaults";
+import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
 
 /**
  * Exported so that anything reasoning ABOUT the journal points at the journal.
@@ -116,6 +116,17 @@ function sha256(content: string | null): string | null {
   return content === null ? null : createHash("sha256").update(content).digest("hex");
 }
 
+function defaultOwnershipAllowsSnapshot(journal: Journal, config: string | null): boolean {
+  const written = parseInjectedSubagentDefaults(journal.injectedSubagentDefaults);
+  if (!written || config === null) return true;
+  // A first-injection hash may match after a later managed write. If the newer ownership
+  // evidence preserves a value that bare markers would remove, use field-level restore.
+  // An ambiguous transform likewise cannot authorize replaying the whole snapshot.
+  const byRecord = transformManagedSubagentDefaults(config, null, written);
+  const byMarker = transformManagedSubagentDefaults(config, null);
+  return byRecord.ok && byMarker.ok && byRecord.content === byMarker.content;
+}
+
 function compareJournalState(journal: Journal, config: string | null, profile: string | null) {
   const originalConfig = Buffer.from(journal.originalConfig, "base64").toString("utf-8");
   const originalProfile = journal.originalProfile === null
@@ -130,7 +141,10 @@ function compareJournalState(journal: Journal, config: string | null, profile: s
     originalProfile,
     configAlreadyOriginal,
     profileAlreadyOriginal,
-    configUnchanged: configAlreadyOriginal || (configHashKnown && sha256(config) === journal.injectedConfigHash),
+    configUnchanged: configAlreadyOriginal || (
+      configHashKnown && sha256(config) === journal.injectedConfigHash
+      && defaultOwnershipAllowsSnapshot(journal, config)
+    ),
     profileUnchanged: profileAlreadyOriginal || (profileHashKnown && sha256(profile) === (journal.injectedProfileHash ?? null)),
     unverified: (!configHashKnown && !configAlreadyOriginal) || (!profileHashKnown && !profileAlreadyOriginal),
   };
@@ -285,7 +299,10 @@ export function journaledInjectedCatalogPath(): string | null {
  * record. The journal is read from disk, so only string values for the two known keys count.
  */
 export function journaledInjectedSubagentDefaults(options: { readOnly?: boolean } = {}): WrittenSubagentDefaults | null {
-  const recorded: unknown = readJournal(options.readOnly !== true)?.injectedSubagentDefaults;
+  return parseInjectedSubagentDefaults(readJournal(options.readOnly !== true)?.injectedSubagentDefaults);
+}
+
+function parseInjectedSubagentDefaults(recorded: unknown): WrittenSubagentDefaults | null {
   if (typeof recorded !== "object" || recorded === null) return null;
   const written: WrittenSubagentDefaults = {};
   for (const key of ["default_subagent_model", "default_subagent_reasoning_effort"] as const) {

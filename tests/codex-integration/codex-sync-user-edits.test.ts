@@ -17,12 +17,12 @@ import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
 
-const managedConfig = (injectionModel: string) => ({
+const managedConfig = (injectionModel: string, injectionEffort = "high") => ({
   port: 10100,
   providers: {},
   defaultProvider: "openai",
   injectionModel,
-  injectionEffort: "high",
+  injectionEffort,
   syncCodexSubagentDefaults: true,
 });
 
@@ -89,8 +89,8 @@ function inSandbox(body: string): unknown {
   return parsed.out;
 }
 
-const sync = (injectionModel: string) =>
-  "return inject.injectCodexConfig(10100, " + JSON.stringify(managedConfig(injectionModel)) + ", { catalogPath: null });";
+const sync = (injectionModel: string, injectionEffort = "high") =>
+  "return inject.injectCodexConfig(10100, " + JSON.stringify(managedConfig(injectionModel, injectionEffort)) + ", { catalogPath: null });";
 
 describe("ocx sync preserves user edits in config.toml (#7425)", () => {
   test("a user's root model_context_window survives repeated sync and restore", () => {
@@ -139,6 +139,50 @@ describe("ocx sync preserves user edits in config.toml (#7425)", () => {
     inSandbox("return inject.removeCodexConfig();");
     const restored = Bun.TOML.parse(readFileSync(configPath, "utf8")).agents as Record<string, unknown>;
     expect(restored.default_subagent_model).toBe("user/picked-model");
+  });
+});
+
+describe.each(["restoreNativeCodex", "restoreNativeCodexAsync"] as const)("%s respects the latest default ownership evidence", restore => {
+  test.each(["model", "effort"] as const)("preserves a user-edited %s even when bytes match the first injection", field => {
+    const key = field === "model" ? "default_subagent_model" : "default_subagent_reasoning_effort";
+    const firstValue = field === "model" ? "gpt-5.6-sol" : "high";
+    const nextValue = field === "model" ? "gpt-5.6-luna" : "low";
+    writeFileSync(configPath, 'model = "gpt-5.5"\n');
+    inSandbox(sync("gpt-5.6-sol"));
+    const firstInjected = readFileSync(configPath, "utf8");
+    inSandbox(sync(field === "model" ? nextValue : "gpt-5.6-sol", field === "effort" ? nextValue : "high"));
+    const journal = JSON.parse(readFileSync(join(codexHome, "opencodex-journal.json"), "utf8"));
+    expect(journal.injectedSubagentDefaults[key]).toBe(nextValue);
+    writeFileSync(configPath, readFileSync(configPath, "utf8")
+      .replace(`${key} = ${JSON.stringify(nextValue)}`, `${key} = ${JSON.stringify(firstValue)}`));
+    expect(readFileSync(configPath, "utf8")).toBe(firstInjected);
+
+    const result = inSandbox("return inject." + restore + "();") as {
+      success: boolean; artifacts: { config: { action: string } };
+    };
+    expect(result.success).toBe(true);
+    const restored = readFileSync(configPath, "utf8");
+    const agents = Bun.TOML.parse(restored).agents as Record<string, unknown> | undefined;
+    expect(agents?.[key]).toBe(firstValue);
+    expect(result.artifacts.config.action).toBe("owned-fields-stripped");
+    expect(restored).not.toContain(MANAGED_SUBAGENT_DEFAULT_MARKER + "\n" + key);
+    expect(restored).not.toContain("openai_base_url");
+  });
+
+  test("restores the exact snapshot after managed defaults legitimately cycle back", () => {
+    const original = 'model = "gpt-5.5"\n';
+    writeFileSync(configPath, original);
+    inSandbox(sync("gpt-5.6-sol"));
+    const firstInjected = readFileSync(configPath, "utf8");
+    inSandbox(sync("gpt-5.6-luna", "low"));
+    inSandbox(sync("gpt-5.6-sol"));
+    expect(readFileSync(configPath, "utf8")).toBe(firstInjected);
+    const result = inSandbox("return inject." + restore + "();") as {
+      success: boolean; artifacts: { config: { action: string } };
+    };
+    expect(result.success).toBe(true);
+    expect(result.artifacts.config.action).toBe("journal-restored");
+    expect(readFileSync(configPath, "utf8")).toBe(original);
   });
 });
 

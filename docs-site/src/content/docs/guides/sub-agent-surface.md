@@ -192,7 +192,8 @@ The default-off `syncCodexSubagentDefaults` option is separate from guidance. Wh
 active Codex routing, sync or restart can write the selected values as marker-owned
 `[agents] default_subagent_model` and `default_subagent_reasoning_effort` entries in Codex TOML.
 opencodex updates or removes only fields bearing its markers. If you edit a managed value in place,
-the next sync keeps your value, drops the marker, and treats the field as yours from then on. If
+the next sync keeps your value, drops the marker, and treats the field as yours from then on.
+Restore also keeps those edits when they recreate previously injected file contents. If
 either target field is user-owned, the pair is left unchanged rather than partially written;
 ambiguous TOML is rejected without a write. External provider managers and user-owned root
 routing also remain authoritative.
