@@ -487,10 +487,12 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
             for (const field of ["model", "smallFastModel"] as const) {
               if (claudeCode[field]) claudeCode[field] = migrateAgentReference(claudeCode[field]);
             }
-            if (claudeCode.tierModels) {
-              claudeCode.tierModels = Object.fromEntries(
-                Object.entries(claudeCode.tierModels).map(([tier, model]) => [tier, migrateAgentReference(model)]),
-              );
+            for (const field of ["tierModels", "tierRoutes"] as const) {
+              if (claudeCode[field]) {
+                claudeCode[field] = Object.fromEntries(
+                  Object.entries(claudeCode[field]).map(([tier, model]) => [tier, migrateAgentReference(model)]),
+                );
+              }
             }
             if (claudeCode.modelMap) {
               claudeCode.modelMap = Object.fromEntries(

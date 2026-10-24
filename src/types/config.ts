@@ -86,6 +86,8 @@ export interface OcxClaudeCodeConfig {
   smallFastModel?: string;
   /** Inbound model id remaps: exact id first, then date-stripped (`-\d{8}$`). */
   modelMap?: Record<string, string>;
+  /** Opt-in routes for bare Claude model tiers, after modelMap and explicit classifier routes. */
+  tierRoutes?: { opus?: string; sonnet?: string; haiku?: string; fable?: string };
   /**
    * Explicit classifier model for Claude Code Auto Mode safety checks (e.g. "RelayA/claude-opus-5").
    * When unset, bare classifier requests check modelMap, then same-provider affinity from

@@ -36,7 +36,7 @@ function configuredClassifierRoute(cc?: OcxClaudeCodeConfig): string | undefined
   return undefined;
 }
 
-/** Alias first, then modelMap: exact id, then date-suffix-stripped (`-\d{8}$`), then classifier affinity/config, else passthrough. */
+/** Aliases, exact/date-stripped modelMap, explicit classifier route, tier route, then passthrough. */
 export function resolveInboundModel(model: string, cc?: OcxClaudeCodeConfig): string {
   // Defensive: Desktop/CLI strip the [1m] context-variant marker client-side, but a
   // leaking build must not break alias decode (devlog 138 — the 1M signal is the
@@ -73,6 +73,11 @@ export function resolveInboundModel(model: string, cc?: OcxClaudeCodeConfig): st
     const configured = configuredClassifierRoute(cc);
     if (configured) return configured;
   }
+  // Only bare native tier ids participate. Qualified routes and aliases select a destination.
+  const tierMatch = /^claude-(?:(opus|sonnet|haiku|fable)(?:-\d+(?:[.-]\d+)*|-latest)?|\d+(?:[.-]\d+)*-(opus|sonnet|haiku|fable)(?:-\d{8}|-latest)?)$/.exec(model);
+  const tier = (tierMatch?.[1] ?? tierMatch?.[2]) as keyof NonNullable<OcxClaudeCodeConfig["tierRoutes"]> | undefined;
+  const target = tier ? cc?.tierRoutes?.[tier] : undefined;
+  if (typeof target === "string" && target.length > 0 && !/\s/.test(target)) return target;
   return model;
 }
 

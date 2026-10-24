@@ -408,7 +408,15 @@ export const configSchema = z.object({
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });
   } else if (claudeCode) {
-    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown };
+    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown; tierRoutes?: unknown };
+    if (claude.tierRoutes !== undefined) {
+      const route = z.string().min(1).regex(/^\S+$/).optional();
+      const parsed = z.object({ opus: route, sonnet: route, haiku: route, fable: route }).strict().safeParse(claude.tierRoutes);
+      if (!parsed.success) ctx.addIssue({
+        code: "custom", path: ["claudeCode", "tierRoutes"],
+        message: "tierRoutes must contain only opus, sonnet, haiku or fable with non-empty routes without whitespace",
+      });
+    }
     if (claude.desktopMode !== undefined && claude.desktopMode !== "first-party" && claude.desktopMode !== "gateway") {
       ctx.addIssue({ code: "custom", path: ["claudeCode", "desktopMode"], message: "desktopMode must be \"first-party\" or \"gateway\"" });
     }
