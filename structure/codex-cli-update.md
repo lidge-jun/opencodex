@@ -46,7 +46,9 @@ Selection observation uses the runtime resolver with provenance's bounded no-fol
 Its child environment drops npm configuration overrides, named Node startup/output controls,
 the `LD_*`/`DYLD_*` loader families and the OpenSSL startup configuration and
 provider/engine search variables; proxy settings and `NODE_EXTRA_CA_CERTS` remain supported.
-Distinct npm config files, cache and logs stay under the owned temporary root with best-effort
+Ambient NODE_COMPILE_CACHE is replaced with an owned path inside the isolation directory because
+npm's own enableCompileCache() otherwise recreates a default cache outside that directory.
+Distinct npm config files, npm/Node caches and logs stay under the owned temporary root with best-effort
 cleanup; a cleanup error does not replace the computed plan/refusal. The POSIX update
 scan includes all readable users by default, retaining an explicitly injected UID scope.
 Linux per-process `status`/`cmdline` read failures invalidate a complete observation except for `ENOENT`

@@ -72,7 +72,13 @@ export class UsageRelayController {
         || !Number.isSafeInteger(envelope.sequence) || Number(envelope.sequence) <= 0))) { stream?.exclude(); return null; }
     const original = envelope ? envelope.usage : parsed;
     if (!object(original) || original.account_id !== this.account.id || original.user_id !== this.account.userId
-      || original.plan_type !== this.account.plan) { stream?.exclude(); return null; }
+      || original.plan_type !== this.account.plan) {
+      if (object(original) && [[original.account_id, this.account.id], [original.user_id, this.account.userId],
+        [original.plan_type, this.account.plan]].some(([actual, expected]) => typeof actual === 'string' && actual.length > 0 && actual !== expected)) {
+        this.activation.invalidateIdentity();
+      }
+      stream?.exclude(); return null;
+    }
     const rate = original.rate_limit;
     if (!object(rate) || typeof rate.allowed !== 'boolean' || typeof rate.limit_reached !== 'boolean') {
       stream?.exclude(); return null;

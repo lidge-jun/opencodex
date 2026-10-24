@@ -68,7 +68,7 @@ describe("home_unreachable answers", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "m", input: "hello" }),
       }), { tunnelPort: 41001, admissionKey: "fixture-link-key", linkId: "lnk_0123456789abcdef", apiKeyId: "key_link" }, {
-        tunnel: { connected: () => true, pending: () => false, waitForConnected: async () => true },
+        tunnel: { connected: () => ({ kind: "match" }), pending: () => false, waitForConnected: async () => true },
         fetchImpl: (async () => { throw new LinkRelayAuthenticationError(unrecognized); }) as unknown as typeof fetch,
       });
       expect(response.status).toBe(503);

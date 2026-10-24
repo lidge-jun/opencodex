@@ -885,14 +885,15 @@ describe("headless GUI parity CLI", () => {
 
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
-      for (const args of [
-        ["--decision-provider", "ollama-tev1"],
-        ["--strategy", "jev", "--decision-timeout", "999"],
-        ["--decision-timeout", "5000"],
-      ]) {
+      // Without --strategy the stored strategy decides (#7579), so only the read may precede the refusal.
+      for (const [args, methods] of [
+        [["--decision-provider", "ollama-tev1"], ["GET"]],
+        [["--strategy", "jev", "--decision-timeout", "999"], []],
+        [["--decision-timeout", "5000"], ["GET"]],
+      ] as const) {
         const rejected = fakeRuntime();
         expect(await handleComboCommand(["set", "demo", "--targets", "a/m1", ...args], rejected.deps)).toBe(2);
-        expect(rejected.requests).toEqual([]);
+        expect(rejected.requests.map(request => request.method)).toEqual([...methods]);
       }
     } finally {
       errorSpy.mockRestore();
@@ -914,6 +915,8 @@ describe("headless GUI parity CLI", () => {
     const runtime = fakeRuntime(req => req.method === "GET" ? {
       combos: [{
         id: "deep",
+        strategy: "failover",
+        stickyLimit: 1,
         defaultEffort: "max",
         defaultEffortMode: "force",
         targets: [{ provider: "ark", model: "old-model" }],

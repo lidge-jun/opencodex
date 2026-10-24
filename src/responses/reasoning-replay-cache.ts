@@ -143,8 +143,9 @@ function tupleForServingIdentity(
 
 function keyFor(callId: string, scope: OcxReasoningReplayScopeRef | undefined): string | undefined {
   const identity = tupleForIdentity(scope?.current);
-  if (!nonEmpty(callId) || !nonEmpty(scope?.clientThreadId) || !identity) return undefined;
+  if (!nonEmpty(callId) || !nonEmpty(scope?.clientPrincipalId) || !nonEmpty(scope.clientThreadId) || !identity) return undefined;
   return JSON.stringify([
+    scope.clientPrincipalId,
     scope.clientThreadId,
     ...identity,
     callId,
@@ -166,18 +167,21 @@ function sweepExpiredServingIdentities(at: number): void {
 
 function servingIdentityFor(
   scope: OcxReasoningReplayScopeRef | undefined,
-): { threadId: string; identity: string } | undefined {
+): { key: string; identity: string } | undefined {
   const threadId = scope?.clientThreadId;
   const identityTuple = tupleForServingIdentity(scope?.current);
   if (!nonEmpty(threadId) || !identityTuple) return undefined;
-  return { threadId, identity: JSON.stringify(identityTuple) };
+  // Preserve physical safeguards for keyless callers in a separate namespace. A caller's
+  // thread name cannot select an authenticated principal's serving or rejection history.
+  const key = JSON.stringify([nonEmpty(scope?.clientPrincipalId) ? scope.clientPrincipalId : null, threadId]);
+  return { key, identity: JSON.stringify(identityTuple) };
 }
 
 function opaqueBlobRejectionKeyFor(
   scope: OcxReasoningReplayScopeRef | undefined,
 ): string | undefined {
   const current = servingIdentityFor(scope);
-  return current ? JSON.stringify([current.threadId, current.identity]) : undefined;
+  return current ? JSON.stringify([current.key, current.identity]) : undefined;
 }
 
 function deleteOpaqueBlobRejection(key: string): void {
@@ -224,7 +228,7 @@ export function reasoningReplayServingIdentityChange(
   if (!current) return undefined;
   const at = now();
   sweepExpiredServingIdentities(at);
-  const previous = servingIdentities.get(current.threadId);
+  const previous = servingIdentities.get(current.key);
   if (previous === undefined || previous.identity === current.identity) return undefined;
   const before = JSON.parse(previous.identity) as ReasoningReplayIdentityTuple;
   const after = JSON.parse(current.identity) as ReasoningReplayIdentityTuple;
@@ -254,7 +258,7 @@ export function reasoningReplayItemStoreChanged(
   if (!current) return false;
   const at = now();
   sweepExpiredServingIdentities(at);
-  const previous = servingIdentities.get(current.threadId);
+  const previous = servingIdentities.get(current.key);
   if (previous === undefined || previous.identity === current.identity) return false;
   const storeOwner = (identity: string): string => {
     const [, destination, , , credential] = JSON.parse(identity) as ReasoningReplayIdentityTuple;
@@ -271,16 +275,16 @@ export function commitReasoningReplayServingIdentity(
   if (!current) return;
   const at = now();
   sweepExpiredServingIdentities(at);
-  const previous = servingIdentities.get(current.threadId);
-  const { threadId, identity } = current;
-  const bytes = Buffer.byteLength(JSON.stringify([threadId, identity]), "utf8");
+  const previous = servingIdentities.get(current.key);
+  const { key, identity } = current;
+  const bytes = Buffer.byteLength(JSON.stringify([key, identity]), "utf8");
   if (bytes > MAX_TOTAL_BYTES) {
-    deleteServingIdentity(threadId);
+    deleteServingIdentity(key);
     return;
   }
 
-  if (previous) deleteServingIdentity(threadId);
-  servingIdentities.set(threadId, { identity, bytes, at });
+  if (previous) deleteServingIdentity(key);
+  servingIdentities.set(key, { identity, bytes, at });
   servingIdentityTotalBytes += bytes;
   while (
     (servingIdentityTotalBytes > MAX_TOTAL_BYTES || servingIdentities.size > MAX_ENTRIES)
@@ -517,13 +521,13 @@ export function reasoningReplayKeyCredentialIdentity(
   return reasoningReplayCredentialIdentity("key", apiKey, provider.headers);
 }
 
-/** Replace only the holder snapshot so parsed-request copies observe rotations. */
+/** Bind physical identity independently of the principal required for plaintext cache access. */
 export function bindReasoningReplayScope(
   scope: OcxReasoningReplayScopeRef | undefined,
   identity: OcxReasoningReplayIdentity | undefined,
 ): void {
   if (!scope) return;
-  if (!identity || !keyFor("binding-check", { ...scope, current: identity })) {
+  if (!identity || !nonEmpty(scope.clientThreadId) || !tupleForIdentity(identity)) {
     delete scope.current;
     return;
   }

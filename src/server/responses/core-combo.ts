@@ -68,7 +68,7 @@ import {
 import { codexAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
 import { isGenericFailoverProvider, rotateGenericOAuthAccountOn429 } from "../../oauth/generic-account-failover";
 import { codexQuotaScopeForModel, getCodexQuotaHealthSnapshot } from "../../codex/routing";
-import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import type { AgentTaskRecoveryFailureReason } from "./agent-task-recovery";
 import {
   agentTaskRecoveryConfig,
@@ -103,6 +103,7 @@ import type { ResponsesTerminalStatus } from "../../bridge";
 import { beginRequestAttempt, sealRequestAttemptIdentity, finishRequestAttempt } from "../request-log";
 import { rememberComboForLane } from "./combo-session-recall";
 import { COMBO_TOOL_LOOP_PIN_REASON, toolLoopPinnedPick } from "./combo-tool-loop-pin";
+import { JEV_SESSION_PIN_ROUTE_REASON, jevSessionPinScope } from "./jev-session-pin";
 import { runTurnAdapterSseResponses } from "./core-lifetime";
 import { normalizePersistedJevDecision } from "../../usage/jev-stats";
 import {
@@ -119,6 +120,7 @@ import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo
 import { createJevModelInvoker } from "./jev-model-invoke";
 import { comboRequestedEffortLabel } from "./combo-requested-effort";
 import { clientWireOf } from "../inference/client-wire";
+import { resolveContextPrincipal } from "../auth-cors";
 
 /**
  * Sends one combo target may run on its own before the ladder moves on. A target is a whole
@@ -382,6 +384,10 @@ export async function executeComboResponses(
   if (!combo) {
     return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
   }
+  // Resolve against the original request once; every bridge candidate receives the same trusted
+  // result after its provisional Authorization is removed, including an explicitly keyless result.
+  const replayPrincipal = options.replayPrincipal
+    ?? { clientPrincipalId: resolveContextPrincipal(req, config, options.admission) };
   // PF-07: present only for a Chat combo with `nativeChatCombos` on; otherwise every child
   // takes the bridge below exactly as before.
   const protocolLanes = createComboProtocolLanes({
@@ -458,6 +464,7 @@ export async function executeComboResponses(
       const unavailable = mandatoryResponsesReasoningReplayUnavailable({
         body,
         clientThreadId: reasoningReplayConversationId,
+        clientPrincipalId: replayPrincipal.clientPrincipalId,
         providerName: route.providerName,
         provider: route.provider,
         adapterName: route.provider.adapter,
@@ -600,6 +607,10 @@ export async function executeComboResponses(
     eligible: targetEligible,
     now: initialNow,
   });
+  // Opt-in JEV session pin (#7525); override routes neither read nor write it, like the lane recall.
+  const jevPin = options.compactionRoutingOverride || options.mainHardLockFallbackOverride
+    ? undefined
+    : jevSessionPinScope({ combo, comboId, admission: options.admission, lane: sessionLaneIdFromRequest(req.headers) });
 
   if (unreadableEncryptedAgentTask && !pick) {
     pick = await pickWithWait({ now: initialNow });
@@ -674,8 +685,13 @@ export async function executeComboResponses(
         : null,
     };
     const decisionStartedAt = Date.now();
+    const pinReuse = jevPin?.reuse(
+      choices.map(choice => choice.candidate),
+      combo.decisionQuotaSignals === true ? { config, tiers: combo.decisionQuotaTiers } : undefined,
+    );
     let decision: JevDecision;
-    try {
+    if (pinReuse?.decision) decision = pinReuse.decision;
+    else try {
       decision = await resolveJevComboDecision({
         body,
         candidates: choices.map(choice => choice.candidate),
@@ -709,6 +725,7 @@ export async function executeComboResponses(
         latencyMs: Math.max(0, Date.now() - decisionStartedAt),
       };
     }
+    if (pinReuse?.released) decision = { ...decision, pinReason: pinReuse.released };
     jevDecision = decision;
     const selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
@@ -729,6 +746,8 @@ export async function executeComboResponses(
         : {}),
       ...(decision.usage ? { usage: decision.usage } : {}),
       ...(decision.quota ? { quota: decision.quota } : {}),
+      ...(decision.pinned ? { pinned: true } : {}),
+      ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
     });
     console.debug("[combo] JEV decision", {
       backend: decision.backend,
@@ -736,6 +755,7 @@ export async function executeComboResponses(
       effort: decision.effort,
       gate: decision.gate,
       latencyMs: decision.latencyMs,
+      ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
       ...(decision.confidence !== undefined ? { confidence: decision.confidence } : {}),
       ...(decision.chosenProbability !== undefined
         ? { chosenProbability: decision.chosenProbability }
@@ -748,7 +768,7 @@ export async function executeComboResponses(
   const decision = comboRouteDecisionTrace(config, comboId, pick, requestedModel);
   const selectedReason = options.memoryModelPhase
     ? memoryModelRouteReason(options.memoryModelPhase)
-    : toolLoopPin ? COMBO_TOOL_LOOP_PIN_REASON : undefined;
+    : toolLoopPin ? COMBO_TOOL_LOOP_PIN_REASON : jevDecision?.pinned ? JEV_SESSION_PIN_ROUTE_REASON : undefined;
   logCtx.routeDecision = selectedReason
     ? { ...decision, selected: { ...decision.selected, reason: selectedReason } }
     : decision;
@@ -835,6 +855,22 @@ export async function executeComboResponses(
     // The physical destination after provider aliases and blockedModelRedirects: hops are
     // classified by where the request really goes, not by the selector the combo names.
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+    // The hard-lock rewrite may have previewed a different random pick. Enforce this actual
+    // first destination against the locked source, after aliases and redirects resolve.
+    if (firstComboTarget && options.mainHardLockFallbackOverride) {
+      const hop = guardFallbackHop(config, {
+        site: "combo",
+        route: `combo/${comboId}`,
+        aliases: [requestedModel],
+        from: { provider: OPENAI_CODEX_PROVIDER_ID, model: options.mainHardLockFallbackOverride.sourceModel },
+        to: { provider: targetRoute.providerName, model: targetRoute.modelId },
+        trigger: "hard_lock",
+        admission: options.admission,
+      });
+      if (!hop.ok) return hop.response;
+      const declaredCommit = pendingHopCommit;
+      pendingHopCommit = declaredCommit ? () => { declaredCommit(); hop.commit(); } : hop.commit;
+    }
     // OCX-11: every later dispatch after a failure is a hop when the target changed. One check
     // here covers the ordinary failover pick and the recovery picks alike.
     if (!firstComboTarget && lastFailure && lastFailedTarget) {
@@ -991,6 +1027,7 @@ export async function executeComboResponses(
           && provider && provider.disabled !== true
           && currentCombo?.targets.some(target => targetKey(target) === targetKey(completedTarget))) {
           rememberComboForLane(sessionLaneIdFromRequest(req.headers), comboId, completedTarget, model, writerGeneration);
+          jevPin?.complete(targetKey(completedTarget), initialJevDecision, writerGeneration);
         }
         options.onResponseComplete?.(model);
       },
@@ -1003,6 +1040,8 @@ export async function executeComboResponses(
         if (childLog.terminalIncompleteReason !== undefined) logCtx.terminalIncompleteReason = childLog.terminalIncompleteReason;
         if (childLog.terminalErrorCode !== undefined) logCtx.terminalErrorCode = childLog.terminalErrorCode;
         if (childLog.upstreamError !== undefined) logCtx.upstreamError = childLog.upstreamError;
+        // A committed stream that ends failed is a target failure too; incomplete is an answer.
+        if (status === "failed") jevPin?.forget();
         options.onNativePassthroughTerminal?.(status);
       },
     });
@@ -1042,6 +1081,7 @@ export async function executeComboResponses(
         },
       }) : await requestDispatchers.handleResponses(childRequest, config, childLog, {
         ...options,
+        replayPrincipal,
         // A bridge child is a concrete route; the native source belongs to this loop only.
         ...(options.protocolSource ? { protocolSource: undefined } : {}),
         // After the spread: the child must run on THIS target's ladder, not on the holder the
@@ -1076,6 +1116,7 @@ export async function executeComboResponses(
         retainCancelledAttempt();
         return clientCancelledResponse();
       }
+      jevPin?.forget();
       finishRequestAttempt(attempt, 502, Date.now() - started, childLog.usage);
       throw error;
     }
@@ -1100,6 +1141,7 @@ export async function executeComboResponses(
           retainCancelledAttempt();
           return clientCancelledResponse();
         }
+        jevPin?.forget();
         finishRequestAttempt(attempt, 502, Date.now() - started, childLog.usage);
         throw error;
       }
@@ -1156,6 +1198,7 @@ export async function executeComboResponses(
         retainCancelledAttempt();
         return clientCancelledResponse();
       }
+      jevPin?.forget();
       finishRequestAttempt(attempt, 502, Date.now() - started, childLog.usage);
       throw error;
     }
@@ -1187,6 +1230,8 @@ export async function executeComboResponses(
     }
     attemptRetained = true;
     lastFailure = failure.response;
+    // A real target failure ends the session pin; the next turn is decided afresh (#7525).
+    jevPin?.forget();
     if (!quotaFailure && (lastFailure.status === 429 || lastFailure.status === 402)) {
       quotaFailure = lastFailure;
       quotaFailedChildLog = childLog;

@@ -24,6 +24,66 @@ export function stripProviderInputItemMetadata(body: unknown): unknown {
     input ??= [...body.input];
     input[index] = next;
   }
+  return repairUrlCitationAnnotations(input ? { ...body, input } : body);
+}
+
+function isUrlCitationIndex(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+/** Coerce a replayed citation index to a non-negative safe integer, falling back to 0. */
+function repairUrlCitationIndex(value: unknown): number {
+  if (isUrlCitationIndex(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const index = Number(value);
+    if (isUrlCitationIndex(index)) return index;
+  }
+  return 0;
+}
+
+/**
+ * OpenAI Responses requires `title` (string) and integer `start_index`/`end_index` on every
+ * `url_citation` annotation of a replayed `output_text` part. History written by an older bridge
+ * (title omitted when the search source had none) or a lossy client otherwise fails every later
+ * request carrying it, most visibly remote compaction, with a deterministic HTTP 400
+ * (`Missing required parameter: input[N].content[M].annotations[K].title`).
+ * Repair only those fields on `url_citation` annotations of assistant message content; other
+ * annotation types, unknown keys and every other item are untouched. Copy on write: an already
+ * valid body is returned by reference.
+ */
+export function repairUrlCitationAnnotations(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let input: unknown[] | undefined;
+  for (let itemIndex = 0; itemIndex < body.input.length; itemIndex += 1) {
+    const item = body.input[itemIndex];
+    if (!isPlainObject(item) || !Array.isArray(item.content)) continue;
+    let content: unknown[] | undefined;
+    for (let partIndex = 0; partIndex < item.content.length; partIndex += 1) {
+      const part = item.content[partIndex];
+      if (!isPlainObject(part) || part.type !== "output_text" || !Array.isArray(part.annotations)) continue;
+      let annotations: unknown[] | undefined;
+      for (let annIndex = 0; annIndex < part.annotations.length; annIndex += 1) {
+        const ann = part.annotations[annIndex];
+        if (!isPlainObject(ann) || ann.type !== "url_citation") continue;
+        const titleOk = typeof ann.title === "string";
+        const startOk = isUrlCitationIndex(ann.start_index);
+        const endOk = isUrlCitationIndex(ann.end_index);
+        if (titleOk && startOk && endOk) continue;
+        const next: Record<string, unknown> = { ...ann };
+        if (!titleOk) next.title = typeof ann.url === "string" ? ann.url : "";
+        if (!startOk) next.start_index = repairUrlCitationIndex(ann.start_index);
+        if (!endOk) next.end_index = repairUrlCitationIndex(ann.end_index);
+        annotations ??= [...part.annotations];
+        annotations[annIndex] = next;
+      }
+      if (!annotations) continue;
+      content ??= [...item.content];
+      content[partIndex] = { ...part, annotations };
+    }
+    if (!content) continue;
+    input ??= [...body.input];
+    input[itemIndex] = { ...item, content };
+  }
   return input ? { ...body, input } : body;
 }
 

@@ -150,6 +150,11 @@ when the ordinary rate limit is exhausted. Their original snapshots disarm Apply
 Reserve schemas pass unchanged. Neither observation nor correction changes entitlement state.
 Later exhaustion does not resume that trial; it requires another explicit activation.
 Pending response checks from the previous generation cannot emit a correction after recovery.
+An explicit non-empty foreign account, user or plan in a usage record invalidates the trial,
+clears its observation and outputs, and excludes that stream from refresh. A failed fresh
+activation identity check also invalidates the current trial. A verification result from an
+older binding or generation cannot invalidate a newer trial. Resuming correction requires
+another matched exhaustion observation and explicit activation; native cache refresh remains unconfirmed.
 Native identity verification also binds an opaque reader-local credential generation from a stable file-stat/content snapshot. Replacement, token rotation and A-to-B-to-A restoration invalidate pending identity checks and response correction; they require a fresh observation runtime. Neither credential hashes nor tokens appear in public status. `tests/clients/desktop-compatibility-native-identity.test.ts` exercises delayed verification and build-check races with synthetic auth files.
 Fresh identity checks, generation changes, unknown schemas and elapsed deadlines refuse
 correction. `usage-sse-controller.ts` preserves event metadata and original sequence IDs;
