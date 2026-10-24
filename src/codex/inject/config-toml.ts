@@ -479,24 +479,6 @@ export function stripExistingModelProvider(content: string): string {
   return bom + sourceText(lines.filter((_, index) => !drop.has(index)));
 }
 
-/**
- * Drop ROOT-level `model_context_window` overrides (keys before the first table header). Codex
- * treats this root key as a global override that wins over the per-model catalog values, so a stale
- * `model_context_window = 1000000` makes every model (e.g. gpt-5.5) report a 1M window. User-owned
- * compaction limits do not alter the advertised context window and must survive reinjection.
- */
-export function stripRootContextWindowOverrides(content: string): string {
-  const { bom, lines, rootEnd } = rootSourceLines(content);
-  const drop = new Set<number>();
-  for (let index = 0; index < rootEnd; index++) {
-    if (!lines[index]!.structural || rootAssignmentKey(lines[index]!.text) !== "model_context_window") continue;
-    const assignment = sourceAssignmentSpan(lines, index, rootEnd);
-    if (!assignment) throw new Error("Cannot safely rewrite an incomplete model_context_window assignment.");
-    for (let at = index; at < assignment.end; at++) drop.add(at);
-  }
-  return bom + sourceText(lines.filter((_, index) => !drop.has(index)));
-}
-
 export function stripRootRoutedModel(content: string): string {
   const { bom, lines, rootEnd } = rootSourceLines(content);
   return bom + sourceText(lines.filter((line, index) => index >= rootEnd || !line.structural

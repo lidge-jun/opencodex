@@ -1,4 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  JEV_SESSION_PIN_TTL_MIN_MS,
+  JEV_SESSION_PIN_TTL_MAX_MS,
+  normalizeJevSessionPin,
+  type JevSessionPinConfig,
+} from "../../../src/combos/jev-session-pin-config";
 import { JEV_DECISION_ISSUE_LABEL_KEYS, jevDecisionServiceOptions } from "../combo-workspace-data";
 import { type TKey, useT } from "../i18n/shared";
 import {
@@ -16,6 +22,7 @@ export type JevDecisionPatch = {
   decisionProvider?: string | null;
   decisionModel?: string | null;
   decisionTimeoutMs?: number | null;
+  sessionPin?: JevSessionPinConfig | null;
 };
 
 type DecisionTestResult =
@@ -46,6 +53,7 @@ export function ComboJevDecisionSection({
   decisionProvider,
   decisionModel,
   decisionTimeoutMs,
+  sessionPin,
   disabled,
   onChange,
 }: {
@@ -59,11 +67,13 @@ export function ComboJevDecisionSection({
   decisionProvider: string | null;
   decisionModel: string | null;
   decisionTimeoutMs: number | null;
+  sessionPin?: JevSessionPinConfig | null;
   disabled?: boolean;
   onChange: (patch: JevDecisionPatch) => void;
 }) {
   const t = useT();
   const method = jevDecisionMethod({ decisionProvider, decisionModel });
+  const pinInvalid = sessionPin != null && !normalizeJevSessionPin(sessionPin);
   const servers = useMemo(
     () => jevDecisionServiceOptions(providers, decisionProvider).filter(option => option.id !== null),
     [providers, decisionProvider],
@@ -269,6 +279,49 @@ export function ComboJevDecisionSection({
             max: JEV_DECISION_TIMEOUT_MAX_MS,
           })}
         </p>
+      </div>
+
+      <div className="cwi-field" style={{ marginTop: 8 }}>
+        <label htmlFor={`${idPrefix}-session-pin`}>
+          <input
+            id={`${idPrefix}-session-pin`}
+            type="checkbox"
+            checked={sessionPin != null}
+            disabled={disabled}
+            aria-describedby={`${idPrefix}-session-pin-hint`}
+            onChange={(e) => onChange({ sessionPin: e.target.checked ? { ttlMs: JEV_SESSION_PIN_TTL_MIN_MS } : null })}
+          /> {t("cws.jev.sessionPin")}
+        </label>
+        <p id={`${idPrefix}-session-pin-hint`} className="muted text-label">
+          {t("cws.jev.sessionPinHint", { min: JEV_SESSION_PIN_TTL_MIN_MS, max: JEV_SESSION_PIN_TTL_MAX_MS })}
+        </p>
+        {sessionPin != null && <>
+          <label htmlFor={`${idPrefix}-session-pin-ttl`}>{t("cws.jev.sessionPinTtl")}</label>
+          <input
+            id={`${idPrefix}-session-pin-ttl`}
+            className="input mono"
+            type="number"
+            inputMode="numeric"
+            min={JEV_SESSION_PIN_TTL_MIN_MS}
+            max={JEV_SESSION_PIN_TTL_MAX_MS}
+            step={1}
+            value={sessionPin.ttlMs || ""}
+            disabled={disabled}
+            aria-invalid={pinInvalid || undefined}
+            aria-describedby={pinInvalid ? `${idPrefix}-session-pin-hint ${idPrefix}-session-pin-error` : `${idPrefix}-session-pin-hint`}
+            onChange={(e) => {
+              if (e.target.value === "") {
+                onChange({ sessionPin: { ttlMs: 0 } });
+                return;
+              }
+              const ttlMs = Number(e.target.value);
+              onChange({ sessionPin: { ttlMs: Number.isFinite(ttlMs) ? ttlMs : 0 } });
+            }}
+          />
+          {pinInvalid && <p id={`${idPrefix}-session-pin-error`} className="notice-err text-label" role="alert">
+            {t("cws.err.invalidSessionPin", { min: JEV_SESSION_PIN_TTL_MIN_MS, max: JEV_SESSION_PIN_TTL_MAX_MS })}
+          </p>}
+        </>}
       </div>
 
       <div className="cwi-jev-decision-test" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 8 }}>

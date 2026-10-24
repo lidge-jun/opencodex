@@ -175,6 +175,14 @@ kullanılamadığında atlanır):
 
 ### `ocx account list [provider] [--json] [--all]`
 
+Kayıtlı ChatGPT havuz hesapları, yerel Codex ana dizini olmayan makinelerde de listelenebilir;
+buna pano ve hesap yenileme işlemleri dahildir. Listeleme, Codex ana dizini oluşturmaz ve yerel ana
+hesabın oturumunu kapatmaz. Codex istemci entegrasyonunu devre dışı bırakmak, mevcut bir yerel oturumun
+kota gözlemini devre dışı bırakmaz. Açıkça belirtilmiş geçersiz `CODEX_HOME` yolları yine yapılandırma
+hatası döndürür. Güvenli olmayan `OPENCODEX_HOME` depolaması, yerel Codex ana dizini eksik olsa bile
+hata döndürür. Varsayılan Codex ana dizini yolu çözümlenirken dosyalar, hedefi bulunmayan sembolik
+bağlantılar ve geçiş yapılamayan üst dizinler de hataya neden olur.
+
 Bir sağlayıcı olmadan Codex havuzunu, OAuth hesaplarını ve yapılandırılmış API
 anahtarı havuzlarını listeler. `--all` bulunmadıkça boş sağlayıcılar atlanır.
 Bir sağlayıcı ile yalnızca bu kimlik bilgisi ailesini listeler. İnsan çıktısı
