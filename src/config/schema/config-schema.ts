@@ -31,6 +31,7 @@ import {
   apiKeyEntrySchema,
   asideProfileSyncSchema,
   clientIntegrationsSchema,
+  opencodeClientExportSchema,
   CODEX_ACCOUNT_NAMESPACE_ACCOUNT_ID_COLLISION_ERROR,
   codexAccountNamespacesSchema,
   modelPinnedEffortsSchema,
@@ -266,6 +267,9 @@ export const configSchema = z.object({
   // value degrades to undefined, which simply raises the notice again.
   multiAgentSurfaceAdvisoryVersion: z.number().int().nonnegative().optional().catch(undefined),
   clientIntegrations: clientIntegrationsSchema.optional().catch(undefined),
+  // Opt-in opencode-side export timeouts; a malformed block degrades to undefined so opencode
+  // keeps its native waits rather than failing the parse and hiding valid providers/accounts.
+  opencodeClientExport: opencodeClientExportSchema.optional().catch(undefined),
   // A malformed profile policy must not fall back to legacy all-profile activation.
   asideProfileSync: asideProfileSyncSchema.optional().catch({ allProfiles: false }),
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),

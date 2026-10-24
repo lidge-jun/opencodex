@@ -58,6 +58,8 @@ import {
   responsesSseToAnthropicSse,
 } from "../claude/outbound";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
+import { isLocalUpstream } from "../lib/local-upstream";
+import { resolveConnectTimeoutMs } from "../stall-timeout";
 import {
   CLAUDE_NATIVE_THINKING,
   type ClaudeThinkingProjection,
@@ -358,7 +360,9 @@ async function anthropicNativePassthrough(
   const result = await fetchWithHeaderDeadline(
     `${base}${pathname}${search}`,
     { method: "POST", headers, body: JSON.stringify(body) },
-    config.connectTimeoutMs ?? 200_000,
+    // Local Anthropic-compatible endpoints (a self-hosted base URL) disable the header deadline
+    // when the operator sets none, so a slow local prefill is not cut before the first header.
+    resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(base) }),
     req.signal,
   );
   if (result.kind === "timeout") {

@@ -313,6 +313,43 @@ describe("storedPoolReplayDispatchNotifier", () => {
     const executor = pacedExecutor({ pacing: async () => {} });
     expect(storedPoolReplayDispatchNotifier(executor.wrapped, undefined)).toBe(executor.wrapped);
   });
+
+  // The header deadline that cut large local-model prompts: resolveConnectTimeoutMs hands a
+  // non-positive budget for a local upstream with no explicit connectTimeoutMs, and the helper
+  // must then arm no header clock so a slow prefill is bounded only by the caller's abort signal.
+  describe("non-positive header budget arms no deadline", () => {
+    const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+    async function capturedSignal(timeoutMs: number): Promise<AbortSignal> {
+      let seen!: AbortSignal;
+      const executor = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        seen = init!.signal as AbortSignal;
+        // Stay open long enough that a positive budget would elapse mid-flight.
+        await delay(40);
+        return new Response("ok");
+      }) as typeof fetch;
+      await fetchWithHeaderTimeout("https://local.test/v1/responses", { method: "POST" }, new AbortController().signal, timeoutMs, false, executor);
+      return seen;
+    }
+
+    test.each([0, -1])("budget %s never aborts the composed signal on its own", async timeoutMs => {
+      const signal = await capturedSignal(timeoutMs);
+      await delay(30);
+      expect(signal.aborted).toBe(false);
+    });
+
+    test("a positive budget still arms the header clock", async () => {
+      let seen!: AbortSignal;
+      const executor = (async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        seen = init!.signal as AbortSignal;
+        await delay(40);
+        return new Response("ok");
+      }) as typeof fetch;
+      await fetchWithHeaderTimeout("https://public.test/v1/responses", { method: "POST" }, new AbortController().signal, 5, false, executor).catch(() => {});
+      await delay(30);
+      expect(seen.aborted).toBe(true);
+    });
+  });
   test.each([false, true])("notification failure releases the slot (pre-acquired=%s)", async preAcquired => {
     let releases = 0, sends = 0;
     const slot = { leased: true, bodyTracked: false, released: false, release() { releases += 1; } };

@@ -79,6 +79,7 @@ export type {
   OcxCustomModel,
   OcxApiKeyEntry,
   OcxClientIntegrationsConfig,
+  OcxOpencodeClientExportConfig,
   OcxConfigRebaseProvenance,
   OcxHubConfig,
   OcxRemoteGuiConfig,

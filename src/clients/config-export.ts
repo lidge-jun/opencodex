@@ -132,6 +132,18 @@ export interface OpencodeProviderConnection {
   baseURL: string;
   apiKey?: string;
   headers?: Record<string, string>;
+  /**
+   * opencode's own client-side wait for the proxy's first response header, in ms, or `false`
+   * to disable it. Emitted only when `opencodeClientExport.headerTimeoutMs` is set. opencode's
+   * default is 300000 (5 min); a slow local model's prompt prefill behind a non-streaming turn
+   * can exceed it, so the proxy sends no bytes and opencode's header wait fires ("Timed out
+   * waiting for response headers").
+   */
+  headerTimeout?: number | false;
+  /** opencode's wait between streamed response chunks (ms) or `false`; emitted from `chunkTimeoutMs`. */
+  chunkTimeout?: number | false;
+  /** opencode's whole-request bound (ms) or `false`; emitted from `timeoutMs`. opencode has no default. */
+  timeout?: number | false;
 }
 
 /** opencode V1 provider block: `npm` + `options`. */
@@ -709,6 +721,17 @@ export function raycastConfigPath(env: OpencodeLaunchEnv = process.env, home: st
 /** Endpoint plus admission, identical for the V1 `options` and V2 `settings` field. */
 function opencodeProviderConnection(baseURL: string, config: OcxConfig): OpencodeProviderConnection {
   const options: OpencodeProviderConnection = { baseURL };
+  // Opt-in opencode-side timeout overrides. Omitted by default so opencode keeps its native
+  // header/chunk waits for every upstream routed through the proxy (current V2 defaults the
+  // header wait to 5 min and the longer chunk wait to 15 min, but this repo pins no opencode
+  // release); a user fronting a slow local model sets these to extend or disable the wait that
+  // otherwise cuts a long prefill.
+  const timeouts = config.opencodeClientExport;
+  if (timeouts) {
+    if (timeouts.headerTimeoutMs !== undefined) options.headerTimeout = timeouts.headerTimeoutMs;
+    if (timeouts.chunkTimeoutMs !== undefined) options.chunkTimeout = timeouts.chunkTimeoutMs;
+    if (timeouts.timeoutMs !== undefined) options.timeout = timeouts.timeoutMs;
+  }
   // Non-loopback binds accept proxy admission only via x-opencodex-api-key so Authorization
   // stays free for Codex Direct upstream credentials when applicable.
   if (shouldInjectApiAuthHeader(config)) {

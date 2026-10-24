@@ -81,10 +81,14 @@ export function idleDeadline(idleMs: number, onIdle: () => void): IdleDeadline {
 export function clearableDeadline(timeoutMs: number, parent?: AbortSignal): ClearableDeadline {
   const deadline = new AbortController();
   const timeoutReason = new DOMException("Timeout elapsed", "TimeoutError");
-  let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
-    timer = undefined;
-    if (!deadline.signal.aborted) deadline.abort(timeoutReason);
-  }, timeoutMs);
+  // A non-positive budget disables the deadline: the caller asked for no header clock (e.g. a
+  // local upstream whose prefill can stay silent for minutes). Only `parent` can then abort.
+  let timer: ReturnType<typeof setTimeout> | undefined = timeoutMs > 0
+    ? setTimeout(() => {
+        timer = undefined;
+        if (!deadline.signal.aborted) deadline.abort(timeoutReason);
+      }, timeoutMs)
+    : undefined;
   const signal = parent ? AbortSignal.any([parent, deadline.signal]) : deadline.signal;
 
   return {

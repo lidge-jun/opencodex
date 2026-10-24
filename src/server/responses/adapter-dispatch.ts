@@ -12,6 +12,7 @@ import { transientSendCapFor } from "./request-send-budget";
 import { isNonReplayableResponse, isSameTargetRetryHold } from "../../lib/upstream-retry";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isLocalUpstream } from "../../lib/local-upstream";
+import { resolveConnectTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -257,16 +258,19 @@ export async function prepareAdapterExchange(
         ?? formatErrorResponse(502, "upstream_error", "GitHub Copilot Auto negotiation failed.");
     }
   };
-  const connectMs = config.connectTimeoutMs ?? 200_000;
-  // Bridge stall budget (seconds of silence before upstream_stall_timeout); the retry backoff
-  // heartbeat interval is derived from it so the watchdog is always fed during deliberate waits.
-  const stallTimeoutMs = typeof config.stallTimeoutSec === "number" && Number.isFinite(config.stallTimeoutSec) && config.stallTimeoutSec > 0
-    ? Math.floor(config.stallTimeoutSec * 1000)
-    : 300_000;
   // Where this exchange dials. Local upstreams (loopback / private / `.local` / `.lan`) are
   // operator-trusted and often CPU-bound, so an unset stall budget resolves to disabled for them.
   // Key/OAuth rotation re-resolves credentials, never the origin, so the routed baseUrl is stable.
   const localUpstream = isLocalUpstream(route.provider.baseUrl);
+  // Header-arrival deadline. A local upstream with no explicit budget disables it: a large prompt
+  // can hold the connection silent through minutes of prefill before the first response header.
+  const connectMs = resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream });
+  // Bridge stall budget (seconds of silence before upstream_stall_timeout); the retry backoff
+  // heartbeat interval is derived from it so the watchdog is always fed during deliberate waits.
+  // Local-aware like the SSE translator: a local upstream with no explicit budget resolves to 0
+  // (disabled) so the body-inactivity guard does not abort a slow prefill (the "client
+  // disconnected" cut a large local prompt hit at the flat 300s default).
+  const stallTimeoutMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
   transportState.activeAdapter = transportState.adapter;
   const antigravityPoolActivated = route.providerName === "google-antigravity"
     && isGenericOAuthFailoverEnabled(config, route.providerName);

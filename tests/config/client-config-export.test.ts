@@ -25,6 +25,7 @@ import {
 import { buildOpencodeProviderBlockFromCatalog, opencodeCatalogFromProxyRows, opencodeGlobalConfigPath } from "../../src/cli/opencode";
 import { exportModelsFromProxyRows } from "../../src/cli/export-command";
 import type { OcxConfig } from "../../src/types";
+import { configSchema } from "../../src/config/schema/config-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import * as facade from "../../src/clients/config-export";
 import { OPENCODE_PROVIDER_BLOCK_DEFAULT_CONFIG as leafDefaultConfig } from "../../src/clients/config-export/constants";
@@ -785,6 +786,45 @@ describe("hub-resolved Fast exports", () => {
     const remote = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ hostname: "0.0.0.0" }));
     expect(remote.v1.options).toEqual({ baseURL: BASE_URL, headers: { "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF } });
     expect(remote.v2.settings).toEqual(remote.v1.options);
+  });
+
+  test("opencodeClientExport timeouts are omitted by default and emitted into both blocks when set", () => {
+    const off = opencodeProviderBlocks(BASE_URL, [eligible], cfg({ fastRows: false }));
+    for (const conn of [off.v1.options, off.v2.settings]) {
+      expect(conn).not.toHaveProperty("headerTimeout");
+      expect(conn).not.toHaveProperty("chunkTimeout");
+      expect(conn).not.toHaveProperty("timeout");
+    }
+    const full = opencodeProviderBlocks(BASE_URL, [eligible], cfg({
+      fastRows: false,
+      opencodeClientExport: { headerTimeoutMs: false, chunkTimeoutMs: 1_800_000, timeoutMs: 3_600_000 },
+    } as Partial<OcxConfig>));
+    const expected = { baseURL: BASE_URL, apiKey: OPENCODE_API_KEY_ENV_REF, headerTimeout: false, chunkTimeout: 1_800_000, timeout: 3_600_000 };
+    expect(full.v1.options).toEqual(expected);
+    expect(full.v2.settings).toEqual(expected);
+
+    // A partial block emits only the fields the operator set.
+    const partial = opencodeProviderBlocks(BASE_URL, [eligible], cfg({
+      fastRows: false,
+      opencodeClientExport: { headerTimeoutMs: false },
+    } as Partial<OcxConfig>));
+    expect(partial.v1.options).toEqual({ baseURL: BASE_URL, apiKey: OPENCODE_API_KEY_ENV_REF, headerTimeout: false });
+    expect(partial.v2.settings).toEqual(partial.v1.options);
+  });
+
+  test("configSchema keeps valid opencodeClientExport timeouts and degrades malformed per-field values", () => {
+    const base = { port: 10100, defaultProvider: "mock", providers: { mock: { adapter: "openai-chat", baseUrl: "https://api.example.com/v1" } } };
+    const valid = configSchema.parse({ ...base, opencodeClientExport: { headerTimeoutMs: false, chunkTimeoutMs: 1_800_000, timeoutMs: 3_600_000 } });
+    expect(valid.opencodeClientExport).toEqual({ headerTimeoutMs: false, chunkTimeoutMs: 1_800_000, timeoutMs: 3_600_000 });
+
+    // A malformed per-field value is dropped (opencode keeps its native wait) without failing the
+    // whole parse or taking the sibling fields down with it.
+    const salvaged = configSchema.parse({ ...base, opencodeClientExport: { headerTimeoutMs: "nope", chunkTimeoutMs: -5, timeoutMs: 600_000 } });
+    expect(salvaged.opencodeClientExport).toEqual({ timeoutMs: 600_000 });
+
+    // An entirely malformed block degrades to undefined rather than rejecting the config.
+    const dropped = configSchema.parse({ ...base, opencodeClientExport: 42 });
+    expect(dropped.opencodeClientExport).toBeUndefined();
   });
 
   test("each generation owns its modalities map, so an edit to one cannot move the other", () => {

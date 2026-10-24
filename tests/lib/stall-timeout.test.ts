@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_STALL_TIMEOUT_SEC, resolveStallTimeoutMs, resolveStallTimeoutSec } from "../../src/stall-timeout";
+import { DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_STALL_TIMEOUT_SEC, MIN_JSON_BODY_READ_MS, resolveConnectTimeoutMs, resolveJsonBodyReadTimeoutMs, resolveStallTimeoutMs, resolveStallTimeoutSec } from "../../src/stall-timeout";
 
 describe("resolveStallTimeoutSec", () => {
   test("defaults to 300 seconds for a public upstream when unset", () => {
@@ -56,5 +56,66 @@ describe("resolveStallTimeoutMs", () => {
     expect(resolveStallTimeoutMs(0, { localUpstream: true })).toBe(0);
     // Guards treat a non-positive budget as "arm no clock"; the resolver must hand them exactly 0.
     expect(resolveStallTimeoutMs(undefined, { localUpstream: true })).toBe(0);
+  });
+});
+
+describe("resolveConnectTimeoutMs", () => {
+  test("defaults to the 200s header deadline for a public upstream", () => {
+    expect(resolveConnectTimeoutMs(undefined)).toBe(DEFAULT_CONNECT_TIMEOUT_MS);
+    expect(resolveConnectTimeoutMs(undefined)).toBe(200_000);
+    expect(resolveConnectTimeoutMs(undefined, { localUpstream: false })).toBe(200_000);
+  });
+
+  test("disables the header deadline for a local upstream when unset", () => {
+    // A large prompt can hold a local model (LM Studio/Ollama) silent for minutes during prefill;
+    // an unset budget must resolve to disabled so the header clock never cuts a healthy turn.
+    expect(resolveConnectTimeoutMs(undefined, { localUpstream: true })).toBe(0);
+  });
+
+  test("an explicit value wins verbatim for local and public alike", () => {
+    expect(resolveConnectTimeoutMs(45_000)).toBe(45_000);
+    expect(resolveConnectTimeoutMs(45_000, { localUpstream: true })).toBe(45_000);
+    // Fractional budgets ceil to at least 1ms, matching the stall resolver's shape.
+    expect(resolveConnectTimeoutMs(0.4)).toBe(1);
+    expect(resolveConnectTimeoutMs(0.4, { localUpstream: true })).toBe(1);
+  });
+
+  test("an explicit non-positive value disables everywhere", () => {
+    expect(resolveConnectTimeoutMs(0)).toBe(0);
+    expect(resolveConnectTimeoutMs(0, { localUpstream: false })).toBe(0);
+    expect(resolveConnectTimeoutMs(-5)).toBe(0);
+    expect(resolveConnectTimeoutMs(-5, { localUpstream: true })).toBe(0);
+  });
+
+  test("non-finite falls back to the destination default", () => {
+    expect(resolveConnectTimeoutMs(Number.NaN)).toBe(200_000);
+    expect(resolveConnectTimeoutMs(Number.POSITIVE_INFINITY)).toBe(200_000);
+    expect(resolveConnectTimeoutMs(Number.NaN, { localUpstream: true })).toBe(0);
+  });
+});
+
+describe("resolveJsonBodyReadTimeoutMs", () => {
+  test("disables the body-read budget for a local upstream when unset", () => {
+    // The regression this guards: a local upstream resolves connect to 0, and the JSON reader used
+    // to derive its budget from that as Math.max(0, 5000) = 5s, cutting a slow local body. The
+    // body-read budget must follow the stall clock instead and resolve to disabled for local.
+    expect(resolveJsonBodyReadTimeoutMs(undefined, { localUpstream: true })).toBe(0);
+  });
+
+  test("a public upstream keeps a positive budget floored at the minimum", () => {
+    // Unset public stall is 300s, already above the floor.
+    expect(resolveJsonBodyReadTimeoutMs(undefined)).toBe(DEFAULT_STALL_TIMEOUT_SEC * 1_000);
+    expect(resolveJsonBodyReadTimeoutMs(undefined, { localUpstream: false })).toBe(300_000);
+    // A small explicit stall still gives the reader at least the floor to deliver a buffered body.
+    expect(resolveJsonBodyReadTimeoutMs(1)).toBe(MIN_JSON_BODY_READ_MS);
+    expect(resolveJsonBodyReadTimeoutMs(2)).toBe(MIN_JSON_BODY_READ_MS);
+    // A larger explicit stall wins over the floor.
+    expect(resolveJsonBodyReadTimeoutMs(30)).toBe(30_000);
+  });
+
+  test("an explicit zero stall disables the body-read budget everywhere", () => {
+    expect(resolveJsonBodyReadTimeoutMs(0)).toBe(0);
+    expect(resolveJsonBodyReadTimeoutMs(0, { localUpstream: false })).toBe(0);
+    expect(resolveJsonBodyReadTimeoutMs(-1, { localUpstream: true })).toBe(0);
   });
 });

@@ -384,6 +384,28 @@ export interface OcxClientIntegrationsConfig {
   "claude-desktop"?: boolean;
 }
 
+/**
+ * Opt-in opencode-side request timeouts written into the generated opencode provider block
+ * (both the V1 `options` and V2 `settings` connection objects). Each maps to the matching
+ * opencode `settings` field and accepts a number of milliseconds or `false` to disable that wait.
+ *
+ * Omitted by default: opencode keeps its native header and chunk waits for every upstream reached
+ * through the proxy (current V2 defaults the header wait to 5 minutes and the longer chunk wait to
+ * 15 minutes; this repo pins no opencode release). The knob exists because the generated
+ * `opencodex` provider multiplexes all upstreams under one block and opencode's timeouts are
+ * provider-wide, so a user fronting a slow local model (whose prompt prefill behind a non-streaming
+ * turn can exceed the header wait before the proxy emits a byte) can raise or disable the wait
+ * without touching the safety net for anyone else only by setting it here.
+ */
+export interface OcxOpencodeClientExportConfig {
+  /** opencode `settings.headerTimeout`: client wait for the proxy's first response header (ms), or false to disable. */
+  headerTimeoutMs?: number | false;
+  /** opencode `settings.chunkTimeout`: wait between streamed response chunks (ms), or false to disable. */
+  chunkTimeoutMs?: number | false;
+  /** opencode `settings.timeout`: whole-request bound (ms), or false. opencode applies no default. */
+  timeoutMs?: number | false;
+}
+
 export interface OcxConfigRebaseProvenance {
   version: 1;
   deletedTopLevelKeys: string[];
@@ -665,6 +687,13 @@ export interface OcxConfig {
    * one key at a time rather than widening a shared union.
    */
   clientIntegrations?: OcxClientIntegrationsConfig;
+  /**
+   * Opt-in opencode-side request timeouts emitted into the generated opencode provider block.
+   * Omitted by default (opencode keeps its native header/chunk waits). Set `headerTimeoutMs` to
+   * extend or disable the header wait that otherwise cuts a slow local model's prompt prefill.
+   * See {@link OcxOpencodeClientExportConfig}.
+   */
+  opencodeClientExport?: OcxOpencodeClientExportConfig;
   /** Aside account-backed profile synchronization; individual overrides survive bulk refresh. */
   asideProfileSync?: {
     allProfiles?: boolean;
@@ -1024,7 +1053,14 @@ export interface OcxConfig {
    * response.incomplete. Default 300. Min 1.
    */
   stallTimeoutSec?: number;
-  /** Connect timeout (ms) for upstream fetch — covers DNS, TCP, TLS, and response header. Default 200000. */
+  /**
+   * Connect timeout (ms) for upstream fetch — the deadline from dispatch until the upstream
+   * returns its first response header (covers DNS, TCP, TLS, and the header wait; NOT the body
+   * stream that follows, which is governed by stallTimeoutSec). Set 0 (or any non-positive value)
+   * to disable it entirely. When unset, a public upstream defaults to 200000, while a local
+   * upstream (loopback / private / `.local` / `.lan`) disables it — a local model's prompt prefill
+   * can hold the connection silent for minutes on a large prompt before the first header arrives.
+   */
   connectTimeoutMs?: number;
   /** Graceful shutdown drain timeout (ms). Active turns are aborted after this deadline. Default 5000. */
   shutdownTimeoutMs?: number;

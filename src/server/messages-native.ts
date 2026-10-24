@@ -122,6 +122,8 @@ import {
   type RequestLogContext,
 } from "./request-log";
 import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
+import { isLocalUpstream } from "../lib/local-upstream";
+import { resolveConnectTimeoutMs, resolveJsonBodyReadTimeoutMs } from "../stall-timeout";
 import { anthropicBillingPhysicalFetch } from "../providers/anthropic-billing-ownership";
 import { rotateAnthropicBillingKeyOnResponse } from "../providers/anthropic-billing-recovery";
 import { linkAbortSignal } from "./responses/core-lifetime";
@@ -424,7 +426,13 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     streamTurnRegistered = false;
     unregisterTurn(upstream);
   };
-  const connectMs = config.connectTimeoutMs ?? 200_000;
+  // Header-arrival deadline. A local Anthropic-compatible upstream with no explicit budget
+  // disables it so a large prompt's silent prefill is not cut before the first response header.
+  const localUpstream = isLocalUpstream(route.provider.baseUrl);
+  const connectMs = resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream });
+  // Non-streaming JSON body-read budget. Independent of the header deadline above: it follows the
+  // stall clock, so a local upstream streaming a buffered JSON body over many seconds is not cut.
+  const jsonBodyReadMs = resolveJsonBodyReadTimeoutMs(config.stallTimeoutSec, { localUpstream });
   // An OAuth route is served by the account the existing OAuth selection commits now, at
   // dispatch; the token lives on this lane's provider copy only, never on the shared route.
   let oauthBinding: NativeOAuthBinding | undefined;
@@ -959,8 +967,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     read = await readBoundedResponseBody(response, {
       signal: upstream.signal,
       maxBytes: MAX_NATIVE_MESSAGES_JSON_BYTES,
-      totalTimeoutMs: Math.max(connectMs, 5_000),
-      inactivityTimeoutMs: Math.max(connectMs, 5_000),
+      totalTimeoutMs: jsonBodyReadMs,
+      inactivityTimeoutMs: jsonBodyReadMs,
     });
   } catch (error) {
     cleanupAbort();

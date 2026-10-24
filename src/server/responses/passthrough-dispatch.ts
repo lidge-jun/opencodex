@@ -20,6 +20,7 @@ import { transientSendCapFor } from "./request-send-budget";
 import { renewMainQuotaDispatchForAttempt } from "../../codex/main-account-cache";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { isLocalUpstream } from "../../lib/local-upstream";
+import { resolveConnectTimeoutMs } from "../../stall-timeout";
 import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
 import { imageGenToolCallAliases } from "../responses-image-gen-repair";
 import { rememberResponseState, isBodyNonPersistable } from "../../responses/state";
@@ -746,7 +747,10 @@ export async function preparePassthroughExchange(
     // whose cancel() aborts the upstream — preventing leaked connections (RC2, passthrough path).
     const upstream = new AbortController();
     const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal ?? req.signal);
-    const connectMs = config.connectTimeoutMs ?? 200_000;
+    // Header-arrival deadline. A local upstream (loopback / private / `.local` / `.lan`) with no
+    // explicit budget disables it: a large prompt can hold the connection silent through minutes of
+    // prefill before the first response header arrives. See resolveConnectTimeoutMs.
+    const connectMs = resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(route.provider.baseUrl) });
     /**
      * This leg's transient-5xx ladder cap, from the provider's own `transientRetryOn5xx`.
      *
