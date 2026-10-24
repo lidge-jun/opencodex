@@ -40,7 +40,7 @@ import {
   emittedFastWire,
 } from "../../providers/fastwire";
 import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { scrubOcxCompactionItems, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
+import { repairUrlCitationAnnotations, scrubOcxCompactionItems, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
 import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
@@ -315,7 +315,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       outBody = repairLegacyDottedToolCallNames(outBody);
       // Shared HTTP/WS outbound projection, including concrete combo/fallback destinations.
       if (isOpenAiOperatedResponsesDestination(provider)) {
-        outBody = stripProviderInputItemMetadata(outBody);
+        outBody = repairUrlCitationAnnotations(stripProviderInputItemMetadata(outBody));
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         if (provider.preserveResponsesMessageMetadata !== true) {

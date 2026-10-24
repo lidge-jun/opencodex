@@ -445,7 +445,7 @@ picker, so the catalog and the wire agree; a rung the upstream then refuses is r
 error rather than replayed without the effort, because the operator asked for it. The flag is part
 of the compatibility behavior record for the same reason as above.
 
-The shared Responses path follows the [bounded multipart recovery contract](subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
+The shared Responses path follows the [bounded multipart recovery contract](subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged. Ordinary requests and native compact apply the [destination-specific citation projection](transports/responses-citations.md) independently of provider metadata stripping.
 ## Hosted-search continuation binding
 > Decision record: [ADR-6930](decisions/ADR-6930-hosted-search-continuation-binding.md)
 > Decision record: [ADR-6931](decisions/ADR-6931-lite-hosted-search-opt-in.md)
