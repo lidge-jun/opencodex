@@ -83,6 +83,7 @@ import { handleClaudeDesktopPickerRoutes } from "./management/claude-desktop-pic
 import { handleDesktopCompatibilityRoutes } from "./management/desktop-compatibility-routes";
 import { handleDesktopCompatibilityRuntimeRoutes } from "./management/desktop-compatibility-runtime-routes";
 import { handleDesktopCompatibilitySettingsRoutes } from "./management/desktop-compatibility-settings-routes";
+import { handleCodexCliUpdateRoutes } from "./management/codex-cli-update-routes";
 import { handleCursorIntegrationRoutes } from "./management/cursor-integration-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal, ManagementSessionControl } from "./management-auth";
@@ -384,6 +385,7 @@ export async function handleManagementAPI(
     ??     (await handleDesktopCompatibilityRoutes(ctx))
     ??     (await handleDesktopCompatibilityRuntimeRoutes(ctx))
     ??     (await handleDesktopCompatibilitySettingsRoutes(ctx))
+    ??     (await handleCodexCliUpdateRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleCodexPromptRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))

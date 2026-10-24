@@ -308,7 +308,7 @@ The probe uses a child-specific PATH and startup bypass; read-only config diagno
 Overlay diagnosis keeps `runnable` (owned executable wrapper/current binding and usable native launcher) separate from `active` (the selected PATH command is this wrapper); `healthy` requires both. Failed PATH inspection is unverified, not active.
 Explicit `codex-shim install` (`src/cli/dispatch.ts`) refuses with nonzero exit; a runnable overlay succeeds even while inactive, prints activation guidance, and receives no green readiness claim until active and free of routing/proxy warnings. Healthy existing Windows shims still succeed.
 
-Codex CLI update inspection is split from mutation. `system codex-cli-update check` makes no
+Codex CLI update inspection is split from the [explicit POSIX apply contract](codex-cli-update.md#explicit-posix-apply). `system codex-cli-update check` makes no
 package-registry request and reads bounded provenance evidence for the configured launcher candidate, npm ownership layout,
 package metadata, and shim binding. The proof-bound launcher snapshot does not attest successful Codex execution;
 POSIX selection is attested when the runtime resolver selects the same canonical environment candidate without executing it. A linked npm-global manifest can then establish managed ownership; persisted candidates stay unattested.
