@@ -43,6 +43,8 @@ The agents/routing leaf declares local `message sessions` and `message send`, pl
 
 ## Generated operating reference
 
+The stop declaration in `src/cli/capabilities-observe-system.ts` covers the read-only preservation preflight and shutdown methods at `/api/stop`, both declared in `src/server/management/route-registry.ts`. Discovery and generated help describe the existing `ocx stop [--json]` envelope and ownership exceptions; the declaration grants no shutdown authority. [Runtime](runtime.md) owns refusal, absence and teardown semantics.
+
 `scripts/generate-ocx-skill-surface.ts` renders the compact `skills/ocx/references/01_management_surface.md` index and eight flat domain chapters from the same capability data. The index retains canonical fragment forwarders and links to complete chapter entries. Counts derive from declarations; grouping does not choose runtime dispatch or grant authority. Unknown roots and duplicate anchors are rejected rather than silently omitted.
 
 Generated flag-table cells escape literal pipes, backslashes and line breaks, and absent value types render as empty cells. Rendered Markdown regressions verify that enum choices stay in the meaning cell.
