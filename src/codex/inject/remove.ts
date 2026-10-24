@@ -15,12 +15,13 @@ import {
   journaledInjectedOpenaiBaseUrl,
   journaledInjectedRealtimeWsBaseUrl,
   journaledInjectedRootWebSearch,
+  journaledInjectedSubagentDefaults,
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../paths";
 import { getCodexHome } from "../paths";
 import { codexHomeIsAbsent } from "../codex-home-owner";
-import { transformManagedSubagentDefaults } from "../subagent-defaults";
+import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../subagent-defaults";
 import {
   applyEol,
   dominantEol,
@@ -93,6 +94,7 @@ function stripOpencodexConfigResult(
   journaledRealtimeWsBaseUrl: string | null = null,
   journaledRootWebSearch: string | null = null,
   journaledReplacedWebSearch: string | null = null,
+  journaledSubagentDefaults: WrittenSubagentDefaults | null = null,
 ): StripOpencodexConfigResult {
   let out = content;
   const hadRootOcxProvider =
@@ -129,7 +131,8 @@ function stripOpencodexConfigResult(
   // Routed root model ids (`model = "provider/slug"`) only make sense while the proxy serves
   // them — strip on both the legacy re-tag form and the Design B injected-base-url form.
   if (hadRootOcxProvider || hadInjectedBaseUrl) out = stripRootRoutedModel(out);
-  const managedDefaults = transformManagedSubagentDefaults(out, null);
+  // A marked value the user edited after injection is theirs (#7425) and survives restore.
+  const managedDefaults = transformManagedSubagentDefaults(out, null, journaledSubagentDefaults);
   if (managedDefaults.ok) out = managedDefaults.content;
   out = stripOpencodexCatalogPath(out);
   return {
@@ -246,6 +249,7 @@ export function removeCodexConfig(
     journaledRealtimeWsBaseUrl,
     journaledRootWebSearch,
     journaledReplaced,
+    journaledInjectedSubagentDefaults(),
   );
   // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
   // afterwards would find nothing.
