@@ -79,6 +79,7 @@ one promise. After teardown starts only the lifecycle's own abort reason is abso
 error, including a foreign AbortError, still fails its case. Callers settle that lifecycle before
 draining producers/reaps and restoring or removing a home. The helper does not replace
 fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
+The response-state stalled-runner child proves queue settlement while its synthetic runner remains held, then releases and drains that work before removing its home.
 
 `tests/helpers/fixture-teardown.ts` owns management-auth, OAuth live-update, Codex quota-auto-refresh
 case roots (`tests/codex-integration/codex-quota-auto-refresh.test.ts`), and Anthropic instance
