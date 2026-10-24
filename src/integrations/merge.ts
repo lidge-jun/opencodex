@@ -62,6 +62,14 @@ export class InvalidSelectorError extends Error {
   }
 }
 
+/** A generated contribution cannot name its exact owned array element. */
+export class UnrepresentableSelectorError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnrepresentableSelectorError";
+  }
+}
+
 function validConjunctionCriteria(criteria: readonly SelectorCriterion[]): boolean {
   return criteria.length >= 2 && criteria.every(criterion => (
     SELECTOR_FIELD.test(criterion.field)

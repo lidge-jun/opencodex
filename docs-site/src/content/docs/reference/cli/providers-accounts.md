@@ -674,6 +674,13 @@ changes Orca files, or changes the active pool account.
 
 ### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
+Stored ChatGPT pool accounts remain listable on hosts without a native Codex home, including in the
+dashboard and on account refresh. Listing does not create a Codex home or sign out the native main
+account. Disabling the Codex client integration does not disable an existing native login's quota
+observation; invalid explicit `CODEX_HOME` paths still report a configuration error. Unsafe
+`OPENCODEX_HOME` storage reports an error even when the native Codex home is missing.
+Default-home resolution also reports errors for files, dangling links, and parent directories that cannot be traversed.
+
 Without a provider, lists the Codex pool, OAuth accounts, and configured API-key pools. Empty
 providers are skipped unless `--all` is present. With a provider, lists only that credential family.
 Human output uses `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`; a manually chosen Codex row is marked
@@ -690,6 +697,14 @@ returns:
 ```text
 { accounts: AccountRow[], notes: string[] }
 ```
+
+Codex JSON rows include `slotId` (the registered `id`) and `slotKind` (`native-main` or
+`pool`). When the proxy can verify both the upstream account and user identity, it also
+includes `upstreamAccountKey` (`uai1_` followed by 64 lowercase hexadecimal characters).
+Equal keys within the `openai` provider identify slots for the same upstream user; keep
+each slot and its quota state separately. The key is local to this installation and can
+change when its administrator token rotates. If it is absent, do not infer a match from
+masked email or quota values. Raw upstream IDs, user claims and credentials are not listed.
 
 An empty provider listing names the next command in human output and JSON `notes`:
 `ocx account login <provider>` for OAuth/Codex, or `ocx account add-key <provider>`

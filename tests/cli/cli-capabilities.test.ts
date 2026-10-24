@@ -71,6 +71,18 @@ describe("capability table is a checked data graph", () => {
     expect(CAPABILITIES.some(c => c.command[0] === "capabilities")).toBe(true);
   });
 
+  test("stop discovery covers preservation preflight and shutdown with its JSON envelope", () => {
+    const stop = capabilitiesForRoute("/api/stop");
+    expect(stop.map(capabilityInvocation)).toEqual(["ocx stop"]);
+    expect(stop[0]?.routes).toEqual([
+      { method: "GET", path: "/api/stop" },
+      { method: "POST", path: "/api/stop" },
+    ]);
+    expect(stop[0]?.mutates).toBe(true);
+    expect(stop[0]?.json).toBe("envelope");
+    expect(stop[0]?.usage).toBe("ocx stop [--json]");
+  });
+
   test("logs follow does not claim to imply JSONL output", () => {
     const logs = CAPABILITIES.find(c => c.command.length === 1 && c.command[0] === "logs");
     const follow = logs?.flags.find(flag => flag.name === "--follow");
@@ -213,7 +225,6 @@ const UNDECLARED_ROUTES_2026_08_28: readonly string[] = [
   "PATCH /api/oauth/accounts/pool",
   "POST /api/codex-auth/accounts",
   "POST /api/model-discovery/acknowledge",
-  "POST /api/stop",
   "POST /api/system/restart",
   "POST /api/windows-tray",
   "PUT /api/codex-auth/failover",

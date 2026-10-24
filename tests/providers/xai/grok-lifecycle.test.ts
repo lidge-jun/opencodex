@@ -111,9 +111,10 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("isServiceOwnershipError(err)");
     expect(stopFn).toContain("ownershipBlocked = true");
     // Ownership is one reason to skip the restore; others are an inherited obligation whose
-    // proxy could not be confirmed down (#3008) and a sibling runtime, whose shared client
-    // routing belongs to the live proxy it ran beside.
-    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling;");
+    // proxy could not be confirmed down (#3008), a sibling runtime, whose shared client
+    // routing belongs to the live proxy it ran beside, and a connected client, whose routing,
+    // catalog and Grok config belong to its connection and are never written back on start (#7563).
+    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
     expect(stopFn).toContain("if (!restoreBlocked) {");
     expect(stopFn).toContain("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)");
     expect(restoreFn).toContain("restoreNativeCodexAsync()");

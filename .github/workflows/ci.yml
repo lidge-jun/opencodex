@@ -233,6 +233,10 @@ jobs:
       # skipping the check it selects.
       setup_action: ${{ steps.narrow.outputs.setup_action }}
       remote_helper: ${{ steps.narrow.outputs.remote_helper }}
+      # Pull-request scope for the two smoke jobs that used to ride the whole ci filter.
+      # Push, dispatch and schedule run both regardless; see the docker/keyring filters.
+      docker: ${{ steps.narrow.outputs.docker }}
+      keyring: ${{ steps.narrow.outputs.keyring }}
       # Whether this pull request needs the nine Windows shards: the windows path
       # filter below OR an added src/tests line naming a Windows marker. Computed
       # by scripts/ci/windows-sensitive-diff.sh, which validates its input and
@@ -388,6 +392,43 @@ jobs:
             # real only on macOS and Windows, so its job lints and tests the crate on all three.
             remote_helper:
               - 'native/remote-workspace-helper/**'
+            # docker-smoke and keyring-smoke on a pull request. Both used to run on every PR the
+            # ci filter matched, which is nearly all of them, while each proves something narrow:
+            # the image builds, starts and survives recreation with its volume; the OS keyring
+            # binding creates, reads and deletes a secret. A pull request now runs each only when
+            # its own inputs move. Push to main/preview, workflow_dispatch and the nightly still
+            # request both unconditionally, so the release gate's push run always carries them.
+            # ci.yml is listed so an edit to either job verifies itself. The setup action is left to
+            # its own setup-action job, as the docs and structure filters leave it.
+            docker:
+              - 'Dockerfile'
+              - 'compose.yaml'
+              - '.dockerignore'
+              - 'docker/**'
+              - 'scripts/ci/docker-smoke.ts'
+              - 'scripts/generate-compatibility-version.ts'
+              - 'scripts/model-metadata.source.json'
+              # The image's final RUN imports version.ts to prove the generated compatibility
+              # manifest; these four files are its whole module closure (Bun.build metafile).
+              - 'src/routing/compatibility/version.ts'
+              - 'src/lab/digest.ts'
+              - 'src/lab/conformance/digest.ts'
+              - 'src/lab/conformance/jcs.ts'
+              - 'src/cli/index.ts'
+              - 'package.json'
+              - 'bun.lock'
+              - 'tsconfig.json'
+              - 'gui/package.json'
+              - 'gui/bun.lock'
+              - '.github/workflows/ci.yml'
+            # scripts/keyring-smoke.ts imports only src/lib/keyring-native.ts; the native binding
+            # itself arrives through package.json and bun.lock.
+            keyring:
+              - 'src/lib/keyring-native.ts'
+              - 'scripts/keyring-smoke.ts'
+              - 'package.json'
+              - 'bun.lock'
+              - '.github/workflows/ci.yml'
             # Paths whose change selects the nine Windows suite shards on a pull
             # request. These carry the Windows service, update, shim, intercept,
             # ACL and process code, and the harness every Windows shard runs.
@@ -532,9 +573,11 @@ jobs:
         env:
           SETUP_ACTION: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.setup_action }}
           REMOTE_HELPER: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.remote_helper }}
+          DOCKER_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.docker }}
+          KEYRING_SCOPE: ${{ github.event_name == 'schedule' && 'true' || steps.filter.outputs.keyring }}
         run: |
           set -euo pipefail
-          for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER"; do
+          for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER" "docker=$DOCKER_SCOPE" "keyring=$KEYRING_SCOPE"; do
             case "${pair#*=}" in
               true|false)
                 printf '%s\n' "$pair" >> "$GITHUB_OUTPUT"
@@ -1148,7 +1191,7 @@ jobs:
   keyring-smoke:
     name: keyring ${{ matrix.name }}
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.keyring == 'true')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 8
     strategy:
@@ -1211,7 +1254,7 @@ jobs:
   docker-smoke:
     name: docker smoke
     needs: changes
-    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.docker == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -1729,6 +1772,8 @@ jobs:
           CHANGES_STRUCTURE: ${{ needs.changes.outputs.structure }}
           CHANGES_SETUP_ACTION: ${{ needs.changes.outputs.setup_action }}
           CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
+          CHANGES_DOCKER: ${{ needs.changes.outputs.docker }}
+          CHANGES_KEYRING: ${{ needs.changes.outputs.keyring }}
           CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
           CHANGES_DESKTOP: ${{ needs.changes.outputs.desktop }}
           CHANGES_WINDOWS: ${{ needs.changes.outputs.windows }}
@@ -1785,6 +1830,16 @@ jobs:
           if [ "$CHANGES_REMOTE_HELPER" = "true" ]; then
             remote_helper=requested
           fi
+          # docker-smoke and keyring-smoke follow the ci scope, narrowed on a pull request to
+          # their own filters. Mirrors their `if:` exactly, like desktop_shell above.
+          docker=$scoped
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_DOCKER" != "true" ]; then
+            docker=not-requested
+          fi
+          keyring=$scoped
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_KEYRING" != "true" ]; then
+            keyring=not-requested
+          fi
           # privacy-gate runs exactly where `gates` (scoped) does not, on every
           # pull request the ci filter declines. Deriving it from `scoped` keeps
           # the two scans complementary here as they are in the jobs' own
@@ -1823,8 +1878,10 @@ jobs:
           expected_for() {
             case "$1" in
               changes|select-windows-runner) echo requested ;;
-              test|storage-policy|api-usage|gates|keyring-smoke|docker-smoke)
+              test|storage-policy|api-usage|gates)
                 echo "$scoped" ;;
+              docker-smoke) echo "$docker" ;;
+              keyring-smoke) echo "$keyring" ;;
               platform-macos|widget)
                 echo "$native" ;;
               desktop-shell) echo "$desktop_shell" ;;
