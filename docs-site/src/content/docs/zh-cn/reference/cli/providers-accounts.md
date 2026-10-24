@@ -149,6 +149,12 @@ OAuth 账号会显示为 `Account N`，而 plan/label 列会在 plan、屏蔽后
 
 ### `ocx account list [provider] [--json] [--all] [--quota [--refresh]]`
 
+即使主机上没有原生 Codex 主目录，保存的 ChatGPT 池账号仍可列出，包括在仪表盘中和刷新账号时。
+查询列表不会创建 Codex 主目录，也不会退出原生主账号。禁用 Codex 客户端集成不会停止
+观测已有原生登录的配额；显式设置的 `CODEX_HOME` 路径无效时，仍会报告配置错误。
+如果 `OPENCODEX_HOME` 存储不安全，即使没有原生 Codex 主目录，也会报告错误。
+解析默认 Codex 主目录路径时，如果该路径是文件、目标不存在的符号链接，或父目录无法遍历，也会报告错误。
+
 不指定提供方时，会列出 Codex 池、OAuth 账号和已配置的 API 密钥池。除非提供
 `--all`，否则会跳过空的提供方。指定提供方时，只列出该凭据家族。人类可读输出
 使用 `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`；手动选中的 Codex 行会标记为 `selected`。
