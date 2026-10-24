@@ -454,24 +454,27 @@ async function* parseKiroAttemptEvents(
     };
   };
 
+  // A real tool call and the private final-answer call can share one turn, in either order. The
+  // turn then continues through the real tools, so the final answer is dropped: it is held until
+  // the stream ends and is never relayed, which makes the drop invisible to the client. A second
+  // completion call, a completion call in `disabled` mode and a malformed completion stay errors.
+  const noteDroppedCompletion = (): void => {
+    console.warn("[kiro] dropped the private final-answer call; the turn also carried a real tool call");
+  };
+
   const classifyTool = (
     tool: { id: string; name: string; chunks: string[]; completion: boolean },
   ): AdapterEvent | undefined => {
     if (tool.name !== KIRO_COMPLETION_TOOL_NAME) {
       tool.completion = false;
-      return completionAnswer !== undefined || completionCalls > 0
-        ? protocolTerminal("Kiro returned a real tool call alongside a private final answer")
-        : undefined;
+      return undefined;
     }
     if (mode === "disabled") {
       return protocolTerminal("Kiro returned the reserved private final-answer tool while explicit completion was disabled");
     }
     tool.completion = true;
-    if (completionAnswer !== undefined || completionCalls > 0) {
+    if (completionCalls > 0) {
       return protocolTerminal("Kiro returned more than one private final-answer tool call", true);
-    }
-    if (sawRealTool) {
-      return protocolTerminal("Kiro returned a private final answer alongside a real tool call");
     }
     return undefined;
   };
@@ -575,18 +578,20 @@ async function* parseKiroAttemptEvents(
       if (completionCalls > 1) {
         return { events: [], terminal: protocolTerminal("Kiro returned more than one private final-answer tool call", true) };
       }
-      if (sawRealTool) {
-        return { events: [], terminal: protocolTerminal("Kiro returned a private final answer alongside a real tool call") };
-      }
       const answer = parseCompletion(tool.chunks);
       if (answer instanceof Error) return { events: [], terminal: protocolTerminal(answer.message, true) };
+      if (sawRealTool) {
+        noteDroppedCompletion();
+        return { events: [] };
+      }
       completionAnswer = answer;
       return { events: [] };
     }
-    if (completionAnswer !== undefined || completionCalls > 0) {
-      return { events: [], terminal: protocolTerminal("Kiro returned a real tool call alongside a private final answer") };
-    }
     sawRealTool = true;
+    if (completionAnswer !== undefined) {
+      completionAnswer = undefined;
+      noteDroppedCompletion();
+    }
     const restored = nameMap?.get(tool.name) ?? tool.name;
     return {
       events: [
