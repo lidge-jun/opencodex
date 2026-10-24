@@ -85,12 +85,13 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal at the adapter", () => {
       expect(response.status).toBe(400);
       expect(response.headers.get("x-opencodex-refusal")).toBe("model-not-in-plan");
       expect(response.headers.get("x-opencodex-upstream-status")).toBe("403");
-      const error = JSON.parse(text).error;
-      expect(error.type).toBe("invalid_request_error");
-      expect(error.code).toBe("model_not_in_plan");
-      expect(error.message).toContain('"' + REFUSED_MODEL + '"');
-      expect(error.message).toContain("MODEL_NOT_IN_PLAN");
-      expect(error.message).toContain("will not succeed");
+      // The whole body, so no upstream detail can ride along outside the canaries.
+      expect(JSON.parse(text)).toEqual({ error: {
+        type: "invalid_request_error",
+        code: "model_not_in_plan",
+        message: "Command Code refused the model \"" + REFUSED_MODEL + "\": this account's plan does not include it (MODEL_NOT_IN_PLAN). "
+          + "Choose a model the plan includes or change the Command Code plan; retrying this request will not succeed.",
+      } });
       expectNoCanary(text);
     }
   });
@@ -403,6 +404,14 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
     const second = await responses(cfg, "combo/pair");
     expect(second.response.status, second.body).toBe(200);
     expect(sends.map(send => send.model)).toEqual([SERVED_MODEL]);
+
+    // Streamed, the verified refusal must reach the same fallback through the stream wrappers.
+    clearComboTargetCooldowns();
+    sends = [];
+    const streamed = await responses(cfg, "combo/pair", true);
+    expect(streamed.response.status, streamed.body).toBe(200);
+    expect(streamed.body).toContain("response.completed");
+    expect(sends.map(send => send.model)).toEqual([REFUSED_MODEL, SERVED_MODEL]);
     expectNoCanary(logged.join("\n"));
   });
 
@@ -513,6 +522,12 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
 
     const result = await responses(cfg, "policy/daily");
     expect(result.response.status, result.body).toBe(200);
+    expect(sends.map(send => send.model)).toEqual([REFUSED_MODEL, SERVED_MODEL]);
+
+    sends = [];
+    const streamed = await responses(cfg, "policy/daily", true);
+    expect(streamed.response.status, streamed.body).toBe(200);
+    expect(streamed.body).toContain("response.completed");
     expect(sends.map(send => send.model)).toEqual([REFUSED_MODEL, SERVED_MODEL]);
     expectNoCanary(logged.join("\n"));
   });
