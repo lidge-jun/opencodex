@@ -24,6 +24,10 @@ Rotation among the accounts or API keys of **one provider pool** for the same mo
 It is how a pool absorbs a rate-limited account, and it keeps working whatever you set here. Retrying
 the same target, and transport fallbacks that keep the same target, are not fallbacks either.
 
+When a main-account hard lock routes to a profile, its first selected destination also follows these
+switches. Allowing provider fallback does not allow a different model on the same provider when model
+fallback is off, even if that profile also contains another provider.
+
 ## Turn fallback off
 
 ```bash
