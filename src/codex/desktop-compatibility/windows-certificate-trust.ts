@@ -9,6 +9,26 @@ export type DesktopCertificateTrust = "trusted" | "not-trusted" | "unknown";
 export type TrustOperation = "inspect" | "trust" | "remove";
 export type CertificateTrustRunner = (operation: TrustOperation, certificateDer: string, fingerprint: string) => Promise<DesktopCertificateTrust>;
 
+/** Public status is an interactive read; a store that cannot answer within it reports `unknown`. */
+export const TRUST_INSPECT_DEADLINE_MS = 10_000;
+/** A mutation may wait on the user's certificate prompt. */
+export const TRUST_CHANGE_DEADLINE_MS = 120_000;
+
+/** The slice of `child_process.execFile` the runner uses, so a deadline breach can be driven without a real store. */
+export type TrustCommandExec = (
+  file: string,
+  args: string[],
+  options: { timeout: number; maxBuffer: number; windowsHide: boolean; encoding: "utf8" },
+  callback: (error: Error | null, stdout: string) => void,
+) => { stdin?: { on(event: "error", listener: () => void): unknown; end(chunk: string): unknown } | null };
+
+export type PowerShellTrustRunnerOptions = {
+  inspectDeadlineMs?: number;
+  platform?: NodeJS.Platform;
+  exec?: TrustCommandExec;
+  resolvePowerShell?: () => string;
+};
+
 const SCRIPT = [
   "$ErrorActionPreference='Stop'",
   "$inputData=[Console]::In.ReadToEnd()|ConvertFrom-Json",
@@ -31,18 +51,32 @@ const SCRIPT = [
   "}finally{$store.Close();$store.Dispose();$cert.Dispose()}",
 ].join("\n");
 
-const run: CertificateTrustRunner = (operation, certificateDer, fingerprint) => {
-  if (process.platform !== "win32") return Promise.resolve("unknown");
-  if (operation !== "inspect" && isTestHomeGuardArmed()) return Promise.resolve("unknown");
-  return new Promise(resolve => {
-    const child = execFile(resolveTrustedWindowsPowerShellExe(), ["-NoProfile", "-NonInteractive", "-Command", SCRIPT], {
-      timeout: operation === "inspect" ? 10_000 : 120_000, maxBuffer: 4096, windowsHide: true, encoding: "utf8",
-    }, (error, stdout) => resolve(!error && (stdout.trim() === "trusted" || stdout.trim() === "not-trusted")
-      ? stdout.trim() as DesktopCertificateTrust : "unknown"));
-    child.stdin?.on("error", () => { /* completion and readback decide the result */ });
-    child.stdin?.end(JSON.stringify({ operation, certificate: certificateDer, fingerprint }));
-  });
-};
+/**
+ * The real CurrentUser Root runner. Any failure, including a deadline breach, is `unknown`, which
+ * never authorizes a write. The options exist so a test can replay this exact call with a cold-start
+ * deadline and can drive a breach deterministically; production uses the defaults.
+ */
+export function createPowerShellCertificateTrustRunner({
+  inspectDeadlineMs = TRUST_INSPECT_DEADLINE_MS,
+  platform = process.platform,
+  exec = execFile as unknown as TrustCommandExec,
+  resolvePowerShell = resolveTrustedWindowsPowerShellExe,
+}: PowerShellTrustRunnerOptions = {}): CertificateTrustRunner {
+  return (operation, certificateDer, fingerprint) => {
+    if (platform !== "win32") return Promise.resolve("unknown");
+    if (operation !== "inspect" && isTestHomeGuardArmed()) return Promise.resolve("unknown");
+    return new Promise(resolve => {
+      const child = exec(resolvePowerShell(), ["-NoProfile", "-NonInteractive", "-Command", SCRIPT], {
+        timeout: operation === "inspect" ? inspectDeadlineMs : TRUST_CHANGE_DEADLINE_MS, maxBuffer: 4096, windowsHide: true, encoding: "utf8",
+      }, (error, stdout) => resolve(!error && (stdout.trim() === "trusted" || stdout.trim() === "not-trusted")
+        ? stdout.trim() as DesktopCertificateTrust : "unknown"));
+      child.stdin?.on("error", () => { /* completion and readback decide the result */ });
+      child.stdin?.end(JSON.stringify({ operation, certificate: certificateDer, fingerprint }));
+    });
+  };
+}
+
+const run = createPowerShellCertificateTrustRunner();
 
 /** Public status cannot create a certificate, decrypt a key or alter OS trust. */
 export async function inspectWindowsCertificateTrust(certPem: string, expectedFingerprint: string, runner: CertificateTrustRunner = run): Promise<DesktopCertificateTrust> {
