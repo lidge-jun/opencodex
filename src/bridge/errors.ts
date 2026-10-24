@@ -12,6 +12,7 @@ import {
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
+  MODEL_NOT_IN_PLAN_CODE,
   SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
   type OcxErrorPayload,
@@ -54,6 +55,9 @@ export function formatErrorResponse(
   // survives so the Anthropic translator can classify it instead of folding it into a
   // retryable overload (and so clients see the SSE path's rejection identity).
   if (options?.code === UNDECLARED_TOOL_CALL_ERROR_CODE) error.code = options.code;
+  // A plan refusal keeps its code for the same reason: policy fallback reads it from this
+  // envelope to move on to the next candidate. Callers pass it only for a verified refusal.
+  if (options?.code === MODEL_NOT_IN_PLAN_CODE) error.code = options.code;
   // Only the allowlisted transport verdicts survive this formatter. Do not forward
   // arbitrary provider codes, and preserve the existing cyber-policy precedence.
   const replayBlocked = error.code !== CYBER_POLICY_ERROR_CODE

@@ -26,6 +26,23 @@ export const SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE = "spend_ledger_storage_unava
  */
 export const UNDECLARED_TOOL_CALL_ERROR_CODE = "undeclared_tool_call";
 
+/**
+ * Wire code for a provider's model-scoped plan refusal (#7684): the account's plan does not
+ * include the requested model. It travels as a 400 so Codex ends the turn instead of
+ * reconnecting through its retry budget on the upstream 403, and the shared formatter keeps it so
+ * combo and policy fallback can hop past the one refused target. A body code is not trusted on
+ * its own; {@link isModelNotInPlanRefusal} also requires the marker the adapter set.
+ */
+export const MODEL_NOT_IN_PLAN_CODE = "model_not_in_plan";
+/** `x-opencodex-refusal` value an adapter sets on the plan refusal it normalized. */
+export const MODEL_NOT_IN_PLAN_REFUSAL_MARKER = "model-not-in-plan";
+
+/** True for an adapter-normalized plan refusal: a 400 whose marker header and body code agree. */
+export function isModelNotInPlanRefusal(response: Response, bodyCode: string | null | undefined): boolean {
+  return response.status === 400 && bodyCode === MODEL_NOT_IN_PLAN_CODE
+    && response.headers.get("x-opencodex-refusal") === MODEL_NOT_IN_PLAN_REFUSAL_MARKER;
+}
+
 /** First nonblank string across the canonical upstream error paths, in priority order. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;

@@ -105,8 +105,10 @@ import { isFixedCodexAccount } from "./core-codex-account";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
 import {
   isCyberPolicyCode,
+  isModelNotInPlanRefusal,
   CYBER_POLICY_FALLBACK_MESSAGE,
   CYBER_POLICY_ERROR_CODE,
+  MODEL_NOT_IN_PLAN_CODE,
   SEND_BUDGET_EXHAUSTED_CODE,
 } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
@@ -1968,6 +1970,7 @@ export async function prepareAdapterExchange(
         message,
         {
           ...(normalized.cyberPolicy ? { code: CYBER_POLICY_ERROR_CODE } : {}),
+          ...(isModelNotInPlanRefusal(upstreamResponse, normalized.code) ? { code: MODEL_NOT_IN_PLAN_CODE } : {}),
           ...(retryAfter !== undefined ? { retryAfter } : {}),
         },
       );

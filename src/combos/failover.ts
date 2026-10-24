@@ -843,7 +843,9 @@ export function comboFailureDecision(
   const failureCode = normalizedFailureCode(options?.code || error.code);
   // The input-modality refusal is the same kind of verdict: this route cannot read the turn's
   // media, and a later target may. Its 400 would otherwise end the chain as invalid_request_error.
-  if (["model_not_found", "model_unavailable", "unsupported_model", "unsupported_input_modality"].includes(failureCode)) {
+  // So is a plan refusal (#7684): this account's plan excludes THIS model, and it cools only the
+  // refused target because `comboFailureCooldownScope` reads a 400 as target-scoped.
+  if (["model_not_found", "model_unavailable", "unsupported_model", "unsupported_input_modality", "model_not_in_plan"].includes(failureCode)) {
     return "hop";
   }
   if (modelRefusal === "refusal") return "hop";

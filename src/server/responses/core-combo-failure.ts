@@ -11,6 +11,8 @@ import {
   isCyberPolicyMessage,
   CYBER_POLICY_ERROR_CODE,
   CYBER_POLICY_FALLBACK_MESSAGE,
+  isModelNotInPlanRefusal,
+  MODEL_NOT_IN_PLAN_CODE,
 } from "../../lib/errors";
 import { normalizeUpstreamErrorText } from "./core-errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
@@ -73,6 +75,9 @@ export async function consumeComboFailure(
       if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
         classificationText = normalized.safeText;
         upstreamCode = codexAccountModelRefusalHardStopCode(response.status, body.text) ?? normalized.code;
+        // Only the adapter's own normalized refusal may claim the plan-refusal hop; another
+        // upstream echoing the code keeps the meaning it had before, which was none.
+        if (upstreamCode === MODEL_NOT_IN_PLAN_CODE && !isModelNotInPlanRefusal(response, upstreamCode)) upstreamCode = undefined;
         upstreamMessage = normalized.message;
         upstreamType = normalized.type;
       }
