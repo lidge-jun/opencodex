@@ -1,4 +1,5 @@
 {
+  "codex-sync-user-edits.test.ts": "codex-integration",
   "codex-stored-main-duplicate.test.ts": "codex-integration",
   "codex-account-slot-identity.test.ts": "codex-integration",
   "codex-pool-caller-fallback-policy.test.ts": "codex-integration",

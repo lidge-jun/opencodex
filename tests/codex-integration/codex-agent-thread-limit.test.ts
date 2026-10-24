@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { getAgentsMaxThreads, getLogicalMaxThreads, getMaxConcurrentThreads, hasAgentsMaxThreads, transitionMultiAgentV2 } from "../../src/codex/features";
@@ -145,6 +145,65 @@ describe("canonical [agents] thread-limit compatibility", () => {
 });
 
 describe("canonical management API thread limits", () => {
+  test.each([Number.MAX_SAFE_INTEGER + 1, 1e20])("unsafe API limit %s returns 400 before combined mutations", async limit => {
+    const original = "[features.multi_agent_v2]\nenabled = false\n\n[agents]\nmax_concurrent_threads_per_session = 16\n";
+    const path = fixtureConfig(original);
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    const ocxHome = mkdtempSync(join(tmpdir(), "ocx-unsafe-limit-"));
+    process.env.CODEX_HOME = dirname(path);
+    process.env.OPENCODEX_HOME = ocxHome;
+    const config = { providers: [], multiAgentMode: "v1" } as never;
+    let toggles = 0;
+    let convergences = 0;
+    try {
+      const request = new Request("http://localhost/api/v2", {
+        method: "PUT", headers: { Host: "localhost", "content-type": "application/json" },
+        body: JSON.stringify({ enabled: true, multiAgentMode: "v2", agentsEnabled: true, maxConcurrentThreadsPerSession: limit }),
+      });
+      const response = await handleManagementAPI(request, new URL(request.url), config, {
+        toggleCodexMultiAgentV2: () => { toggles++; },
+        createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences++; }),
+      });
+      expect(response?.status).toBe(400);
+      expect(await response?.json()).toEqual({ error: "body.maxConcurrentThreadsPerSession must be a safe integer >= 1" });
+      expect(toggles).toBe(0);
+      expect(convergences).toBe(0);
+      expect(config).toEqual({ providers: [], multiAgentMode: "v1" });
+      expect(readFileSync(path, "utf8")).toBe(original);
+      expect(readdirSync(dirname(path))).toEqual(["config.toml"]);
+      expect(readdirSync(ocxHome)).toEqual([]);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+    }
+  });
+
+  test.each([false, true])("API accepts the largest safe backend limit with V2 enabled=%s", async enabled => {
+    const path = fixtureConfig(`[features.multi_agent_v2]\nenabled = ${enabled}\n`);
+    const oldCodexHome = process.env.CODEX_HOME;
+    const oldOcxHome = process.env.OPENCODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-safe-limit-"));
+    let toggles = 0;
+    try {
+      const request = new Request("http://localhost/api/v2", {
+        method: "PUT", headers: { Host: "localhost", "content-type": "application/json" },
+        body: JSON.stringify({ maxConcurrentThreadsPerSession: Number.MAX_SAFE_INTEGER }),
+      });
+      const response = await handleManagementAPI(request, new URL(request.url), { providers: [] } as never, {
+        toggleCodexMultiAgentV2: () => { toggles++; }, createManagementConvergeCodex: catalogConvergenceFactory(),
+      });
+      expect(response?.status).toBe(200);
+      expect(await response?.json()).toMatchObject({ enabled, maxConcurrentThreadsPerSession: Number.MAX_SAFE_INTEGER });
+      expect(getLogicalMaxThreads(path)).toBe(Number.MAX_SAFE_INTEGER);
+      expect(toggles).toBe(0);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
+    }
+  });
+
   test("hybrid GET and limit-only PUT use canonical agents storage without enabling global V2", async () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\nmax_concurrent_threads_per_session = 17\n\n[agents]\nmax_concurrent_threads_per_session = 16\n");
     const oldCodexHome = process.env.CODEX_HOME;
