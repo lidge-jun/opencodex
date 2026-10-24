@@ -44,7 +44,8 @@ jobs:
         github.event.label.name == 'test-exception-approved' ||
         github.event.label.name == 'suppression-approved' ||
         github.event.label.name == 'generated-change-approved' ||
-        github.event.label.name == 'dependency-change-approved'))
+        github.event.label.name == 'dependency-change-approved' ||
+        github.event.label.name == 'attribution-approved'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
