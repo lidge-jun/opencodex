@@ -225,6 +225,9 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/signed-in-identity.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
+| `src/codex/windows-cli-child-native.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-cli-child-pipe.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-cli-child.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/combos/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/companion/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`companion.md`](companion.md) |
 | `src/compatibility/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) |

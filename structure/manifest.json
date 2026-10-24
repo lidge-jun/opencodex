@@ -176,6 +176,9 @@
       "scope": "Content-bound planning and explicit POSIX apply with isolated npm, artifact validation, installation leases and readback.",
       "documents": [
         "src/codex/cli-update-plan.ts",
+        "src/codex/windows-cli-child.ts",
+        "src/codex/windows-cli-child-native.ts",
+        "src/codex/windows-cli-child-pipe.ts",
         "src/codex/cli-update-apply.ts",
         "src/codex/cli-update-job.ts",
         "src/codex/cli-update-job-execution.ts",

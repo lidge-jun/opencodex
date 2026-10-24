@@ -99,6 +99,44 @@ A completed Windows read-only plan has a deterministic ID and `applicable: false
 `refusal: windows_apply_disabled`; active/unknown sessions still refuse earlier.
 The independent Windows apply entrypoint remains refused before inspection or lease creation.
 
+## Independent Windows child lifetime primitive
+
+`src/codex/windows-cli-child.ts` supplies an opt-in Windows x64 child owner, with native ABI/handle
+ownership in `src/codex/windows-cli-child-native.ts` and overlapped output in
+`src/codex/windows-cli-child-pipe.ts`. No plan, installer, pack or version consumer imports it yet;
+Windows apply remains disabled. ARM64 is unsupported.
+
+It starts only an explicit drive-absolute `.exe` plus argv: `CreateProcessW(CREATE_SUSPENDED)`,
+assignment to an unnamed non-inheritable Job, then `ResumeThread`. There is no PID reopen,
+shell, breakaway fallback, process-count limit or kill-on-close limit. Assignment/resume failures
+reap the original suspended primary before user code; failed termination retains an unknown owner.
+`STARTUPINFOEXW` and an explicitly rooted attribute buffer whitelist exactly the three owned,
+inheritable stdio handles with `bInheritHandles=TRUE`. Parent read/event/Job/process/thread handles
+are not inheritable, and parent copies of the stdio ends close before any await. This is forward
+isolation from unrelated inheritable handles, not reverse protection from a foreign unrestricted
+`CreateProcess(TRUE)` while those stdio handles are temporarily inheritable.
+
+The output pipe uses an unpredictable name, a protected current-token-user DACL, remote-client
+rejection, and a real overlapped read buffer/event. Cancellation retains that memory until native
+completion settles; neither `PeekNamedPipe` nor a Worker script URL is used. Captured bytes are
+decoded together as UTF-8. Installer output is discarded; pack captures 1 MiB and continues draining
+excess without termination. Neither policy adds an overall deadline or running-abort kill. Version
+alone has the existing 16 KiB, 8 second deadline and 1 second reap policy and may terminate its Job.
+A termination acknowledgment, timeout, I/O error, failed wait/query or PID absence is not terminal.
+The original primary handle must signal and a successful Job accounting query must report zero
+active processes; exit code 259 is valid once that handle signals. Output still drains after Job
+emptiness. Normal `CreateProcess` descendants are covered; WMI-created processes are not claimed.
+Unknown results retain the owner and all lease/staging obligations. Setup failures with no process
+use `cleanupUnstartedWindowsChild` to settle any connect operation and release only owned handles.
+
+The current `packArtifact` reads `packed.exitCode` without adopting `packed.terminal`, and apply's
+`started` flag is set only at the installer. Consumer integration therefore requires adopting lifetime
+and lease/staging retention before **every** spawn, including pack, before enabling Windows apply.
+The npm `--fetch-timeout=120000` remains a separate fetch policy, not a process lifetime deadline.
+`tests/codex-integration/codex-cli-windows-child.test.ts` exercises actual owned native fixtures,
+including overlapping whitelist isolation, stdout-free descendants, incompatible nested Jobs,
+pre-user-code failures, byte caps, cancellation settlement, wait/query failures and version reaping.
+
 ## Explicit POSIX apply
 
 `src/cli/codex-cli-update.ts` accepts `apply --plan-id <32 lowercase hex> --yes` with optional JSON output.
