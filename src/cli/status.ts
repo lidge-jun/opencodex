@@ -795,11 +795,16 @@ export function statusUnusedProxyLines(json: StatusRoutingView): string[] {
 
 /** `deadProxyRoutingAdviceLines` for the not-running half of the human `ocx status` report. */
 export function statusDeadProxyLines(json: StatusRoutingView): string[] {
-  return deadProxyRoutingAdviceLines({
-    proxyUp: false,
-    routingKind: json.startup.routingKind,
-    connectedClient: json.remoteHub.connected,
-  });
+  return [
+    json.startup.routingKind === "native"
+      ? "↳ Not running — Claude requests will fail with connection errors."
+      : "↳ Not running — Codex/Claude requests will fail with connection errors.",
+    ...deadProxyRoutingAdviceLines({
+      proxyUp: false,
+      routingKind: json.startup.routingKind,
+      connectedClient: json.remoteHub.connected,
+    }),
+  ];
 }
 
 /**

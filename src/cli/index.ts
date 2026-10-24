@@ -1432,7 +1432,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       console.error("   The obligation is preserved; retry once the proxy is confirmed stopped.");
     }
   }
-  if (nativeRestoreHandledByProxy && !stoppingSibling) record.sharedTeardown = "performed-by-proxy";
+  if (nativeRestoreHandledByProxy && !stoppingSibling && !connectedClientSkip) record.sharedTeardown = "performed-by-proxy";
   if (stoppingSibling) console.log(`↩️  Client routing stays on the proxy at port ${siblingOfPort}; this sibling had no shared teardown to run.`);
   if (connectedClientSkip) console.log(connectedClientSkip);
   const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;
@@ -1759,7 +1759,6 @@ async function handleStatus() {
     console.log(`   ${line}`);
   }
   if (!(status.json.proxy.pid || status.json.proxy.health.ok)) {
-    console.log("   ↳ Not running — Codex/Claude requests will fail with connection errors.");
     // The service summary a few lines below already tells a registered-but-not-serving
     // user to repair. Printing "install the persistent service" unconditionally
     // contradicted it in the same report, and install re-registers: UAC on Windows and a

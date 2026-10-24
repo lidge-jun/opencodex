@@ -476,6 +476,12 @@ describe("routing visibility (#2411)", () => {
     expect(statusUnusedProxyLines(view(false, undefined, "native", true)).join("\n")).toContain("Re-point with: ocx start");
     expect(statusDeadProxyLines(view(true, "link", "opencodex-local", false)).join("\n")).toContain("ocx sync --restart-codex");
     expect(statusDeadProxyLines(view(false, undefined, "opencodex-local", false)).join("\n")).not.toContain("ocx sync");
+    const routedDown = statusDeadProxyLines(view(true, "link", "opencodex-local", false)).join("\n");
+    expect(routedDown).toContain("Codex/Claude requests will fail with connection errors");
+    const nativeDown = statusDeadProxyLines(view(true, "link", "native", false)).join("\n");
+    expect(nativeDown).toContain("Claude requests will fail with connection errors");
+    expect(nativeDown).not.toContain("Codex/Claude requests will fail");
+    expect(nativeDown).not.toContain("Codex is still pointed at this proxy");
   });
 
   // #5261: setup writes routing that outlives the session and then ends on a success line.

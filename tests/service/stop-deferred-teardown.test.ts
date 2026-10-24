@@ -50,9 +50,21 @@ function restoreResult(success: boolean): CodexNativeRestoreResult {
   } as unknown as CodexNativeRestoreResult;
 }
 
+function connectClient(transport: "hub" | "link") {
+  const serverUrl = transport === "link" ? "http://127.0.0.1:10200" : "https://hub.example.test";
+  writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", client: {
+    serverUrl, managementUrl: serverUrl, managementTransport: "direct", transport,
+    ...(transport === "link" ? { link: { tunnelPort: 10200, linkId: "lnk_0123456789abcdef" } } : {}),
+    selectedClients: ["codex"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client",
+    tokenFingerprint: "a".repeat(64), protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
+  } }));
+}
+
 async function runParentStop(options: {
   receipt: boolean; response: unknown; restore: CodexNativeRestoreResult; status?: number; clientTransport?: "hub" | "link";
+  serverTeardown?: boolean; json?: boolean;
 }) {
+  if (options.clientTransport) connectClient(options.clientTransport);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
     cwd: repoPath(),
     env: { ...process.env, OPENCODEX_HOME: home },
@@ -78,6 +90,16 @@ describe("parent CLI shared teardown completion", () => {
   // #7563: nothing on a connected client writes its Codex routing, catalog or Grok block back
   // on start, so a stop that tore them down left them torn down.
   for (const clientTransport of ["link", "hub"] as const) {
+    test(`a successful ${clientTransport} API stop preserves integrations and reports skipped JSON`, async () => {
+      const outcome = await runParentStop({ receipt: true, clientTransport, serverTeardown: true, json: true,
+        response: null, restore: restoreResult(true) });
+      expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
+      expect(outcome.nonce).toBeUndefined();
+      expect(outcome.calls).toMatchObject({ native: 0, grok: 0, cleared: 0 });
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
+      expect(outcome.exitCode, outcome.stderr).toBe(0);
+    });
+
     test(`a ${clientTransport} client stop leaves the connection's integrations and claims no receipt`, async () => {
       const outcome = await runParentStop({ receipt: true, clientTransport,
         response: { error: "not found" }, status: 404, restore: restoreResult(true) });
@@ -278,6 +300,39 @@ describe("stopProxyGracefully deferral flag", () => {
 });
 
 describe("performStopTeardown", () => {
+  for (const transport of ["hub", "link"] as const) {
+    test(`persisted ${transport} ownership precedes receipt deferral and leaves its receipt intact`, async () => {
+      connectClient(transport);
+      const { claimPendingTeardown, readPendingTeardown } = await import("../../src/config/pending-teardown");
+      const receipt = claimPendingTeardown(ENDPOINT, "exact");
+      let restored = 0;
+      let stripped = 0;
+      for (const query of ["", `?deferSharedTeardown=1&teardownNonce=${receipt.nonce}`]) {
+        const body = await performStopTeardown(new URL(`http://127.0.0.1:10100/api/stop${query}`), {
+          restoreNativeCodex: async () => { restored++; return restoreResult(true); },
+          stripGrok: () => { stripped++; return { ok: true, changed: true, message: "stripped" }; },
+        });
+        expect(body).toMatchObject({ success: true, sharedTeardown: "not-owned" });
+        expect(body.message).toContain("ocx disconnect");
+      }
+      expect(restored).toBe(0);
+      expect(stripped).toBe(0);
+      expect(readPendingTeardown(receipt.nonce).state).toBe("valid");
+    });
+  }
+
+  test("a hub server without a client connection still restores its own integrations", async () => {
+    writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "hub" }));
+    let restored = 0;
+    let stripped = 0;
+    const body = await performStopTeardown(new URL("http://127.0.0.1:10100/api/stop"), {
+      restoreNativeCodex: async () => { restored++; return restoreResult(true); },
+      stripGrok: () => { stripped++; return { ok: true, changed: true, message: "stripped" }; },
+    });
+    expect(body).toMatchObject({ success: true, sharedTeardown: "performed" });
+    expect([restored, stripped]).toEqual([1, 1]);
+  });
+
   test("an ordinary stop restores native Codex and strips the Grok fence", async () => {
     let restored = 0;
     let stripped = 0;
