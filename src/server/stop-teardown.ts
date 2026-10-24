@@ -15,6 +15,11 @@ import type { ManagementPrincipal } from "./management-auth";
 
 export type GrokStripResult = { ok: boolean; changed: boolean; message: string };
 
+/** Read-only promise covering API teardown and the CLI runtime's signal/manager exit cleanup. */
+export function stopCapabilities() {
+  return { schema: "ocx-stop-capabilities/1", connectedClientOwnership: true, pid: process.pid };
+}
+
 export type StopTeardownIo = {
   /** Does the nonce this request carries name a readable obligation on disk? */
   ownsReceipt?: (nonce: string | null) => boolean;
@@ -25,7 +30,7 @@ export type StopTeardownIo = {
 export type StopTeardownBody = {
   success: boolean;
   message: string;
-  /** `not-owned`: a sibling instance, whose shared client routing belongs to the live owner. */
+  /** `not-owned`: shared routing belongs to a live sibling owner or a client connection. */
   sharedTeardown: "deferred" | "performed" | "not-owned";
 };
 
@@ -78,6 +83,16 @@ export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Pr
   // Restoring here would replay the live owner's journal and strip its Grok fence.
   if (siblingOfLivePort() !== null) {
     return { success: true, message: `Proxy stopping. ${siblingSkipMessage()}`, sharedTeardown: "not-owned" };
+  }
+  // A connection owns its integrations across stop/start, even for a successful API stop.
+  // This is persisted authority, not a caller's request to skip an obligation it owns.
+  const connection = (await import("../client/state")).readClientConnectionState();
+  if (connection.kind === "connected") {
+    return {
+      success: true,
+      message: "Proxy stopping; connection-owned Codex routing, catalog and Grok config preserved. Run `ocx disconnect` to release them.",
+      sharedTeardown: "not-owned",
+    };
   }
   const ownsReceipt = io.ownsReceipt ?? deferralMatchesReceipt;
   if (deferralHonored(url, ownsReceipt)) {

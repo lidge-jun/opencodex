@@ -342,7 +342,8 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   split evenly across the three tiers. Fewer are anchored at the top, the dearest frontier and each cheaper
   one a tier lower, so one is frontier and two are standard and frontier; fast is the tier left empty,
   which keeps a standard role on the cheaper model. Unpriced, unmapped models are never proposed. A role
-  gets the lowest sufficient tier, then the lowest price. Effort binds to ladder positions of the chosen
+  gets the lowest sufficient tier, then the lowest price, then the model it already uses when that model is
+  in the tie, then picker order. Effort binds to ladder positions of the chosen
   model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
   for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or
   replace `model_reasoning_effort` through the same span-preserving editor as `model`, located by
