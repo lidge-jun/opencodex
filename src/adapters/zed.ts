@@ -5,6 +5,7 @@ import type { AnthropicCacheRetention } from "./anthropic/cache-retention";
 import { createGoogleAdapter } from "./google";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
+import { liftZedAdditionalTools, translateZedOpenAiStream } from "./zed-openai-stream";
 import { createAdapterPhysicalSend } from "./physical-send";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { createTranslatorBudget, releaseTranslatedEvent, retainTranslatedEvent, type TranslatorBudget } from "../lib/translator-budget";
@@ -64,6 +65,27 @@ function delegateProvider(provider: OcxProviderConfig, zedProvider: ZedProvider)
 function forceStreaming(parsed: OcxParsedRequest): OcxParsedRequest {
   const rawBody = isRecord(parsed._rawBody) ? { ...parsed._rawBody, stream: true } : parsed._rawBody;
   return { ...parsed, stream: true, _rawBody: rawBody };
+}
+
+/**
+ * Promote the current turn's additional_tools before the Responses delegate repairs input.
+ * Repair can drop a replayed reasoning item and slide the wrapper under the original prefix
+ * length, which then hides the current catalog. The caller's raw body stays untouched.
+ */
+function promoteOpenAiToolsBeforeRepair(parsed: OcxParsedRequest): OcxParsedRequest {
+  if (!isRecord(parsed._rawBody)) return forceStreaming(parsed);
+  const raw = parsed._rawBody;
+  const copy: Record<string, unknown> = { ...raw, stream: true };
+  if (Array.isArray(raw.input)) {
+    copy.input = raw.input.map(item => (
+      isRecord(item) && item.type === "additional_tools" && Array.isArray(item.tools)
+        ? { ...item, tools: [...item.tools] }
+        : item
+    ));
+  }
+  if (Array.isArray(raw.tools)) copy.tools = [...raw.tools];
+  liftZedAdditionalTools(copy, parsed._replayPrefixLen ?? 0);
+  return { ...parsed, stream: true, _rawBody: copy };
 }
 
 function providerFromCatalog(catalog: Awaited<ReturnType<typeof resolveZedModels>> | undefined, model: string): ZedProvider {
@@ -256,7 +278,8 @@ export function createZedAdapter(provider: OcxProviderConfig, cacheRetention?: A
      ...(incoming?.providerFetch ? { providerFetch: incoming.providerFetch } : {}),
      ...(incoming?.abortSignal ? { abortSignal: incoming.abortSignal } : {}),
     };
-    const built = await selected.buildRequest(forceStreaming(parsed), safeIncoming);
+    const delegateParsed = zedProvider === "open_ai" ? promoteOpenAiToolsBeforeRepair(parsed) : forceStreaming(parsed);
+    const built = await selected.buildRequest(delegateParsed, safeIncoming);
     let providerRequest: unknown;
     try { providerRequest = JSON.parse(built.body) as unknown; } catch { throw new Error("Zed delegate produced an invalid request body"); }
     if (zedProvider === "google" && isRecord(providerRequest)) delete providerRequest.safetySettings;
@@ -313,6 +336,12 @@ export function createZedAdapter(provider: OcxProviderConfig, cacheRetention?: A
           ? { ...item, role: "system" }
           : item,
       );
+    }
+    if (zedProvider === "open_ai") {
+      // Codex carries this turn's client tools in a private additional_tools input item.
+      // Zed rejects that variant, so promote the current turn and drop every wrapper
+      // before the built-in tool filter runs.
+      liftZedAdditionalTools(providerRequest, parsed._replayPrefixLen ?? 0);
     }
     if (zedProvider === "open_ai" && Array.isArray(providerRequest.tools)) {
       // Zed's Responses decoder supports function/custom tools, not Codex's built-in web_search.
@@ -410,7 +439,11 @@ export function createZedAdapter(provider: OcxProviderConfig, cacheRetention?: A
         headers: { "Content-Type": "text/event-stream" },
       });
       try {
-        yield* delegate.adapter.parseStream(translated, budget);
+        // The Responses passthrough parser only keeps compaction text. Zed is not a
+        // passthrough route, so function and custom calls have to be translated or
+        // Codex ends the turn on the first sentence.
+        if (delegate.provider === "open_ai") yield* translateZedOpenAiStream(translated.body, budget);
+        else yield* delegate.adapter.parseStream(translated, budget);
       } finally {
         // Some delegates only unlock their reader when a collector stops early.
         try { await translated.body?.cancel(); } catch { /* already closed/errored */ }
