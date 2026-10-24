@@ -1088,6 +1088,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   annotateEmptyToolOutputs: "editor",
   supportsServiceTier: "editor",
   modelSupportsServiceTier: "editor",
+  promoteAdditionalTools: "editor",
   preserveResponsesReasoningContent: "editor",
   preserveResponsesInputItemIds: "editor",
   preserveResponsesMessageMetadata: "editor",

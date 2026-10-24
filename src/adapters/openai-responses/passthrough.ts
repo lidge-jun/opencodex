@@ -360,7 +360,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           isOpenCodeGoResponsesUrl(url)
           || isXaiResponsesDestination(provider)
           || isXaiResponsesUrl(url)
-          || (provider as { promoteAdditionalTools?: boolean }).promoteAdditionalTools === true
+          || provider.promoteAdditionalTools === true
         ) {
           outBody = promoteResponsesAdditionalTools(outBody, parsed._replayPrefixLen);
         }

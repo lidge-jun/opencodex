@@ -1,3 +1,4 @@
+import { providerConfigSchema } from "../../../src/config/schema/leaf-validators";
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createProductionAdapter } from "../../../src/adapters/openai-responses";
 import {
@@ -124,9 +125,15 @@ describe("xAI Responses additional_tools promotion", () => {
       ],
     };
 
-    const { body } = build(customProvider as unknown as OcxProviderConfig, raw);
+    const { body } = build(customProvider, raw);
     expect(body.input).toEqual([{ type: "message", role: "user", content: "custom query" }]);
     expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
+  });
+
+  test("providerConfigSchema validates promoteAdditionalTools as optional boolean", () => {
+    expect(providerConfigSchema.safeParse({ adapter: "openai-responses", baseUrl: "https://example.com/v1", promoteAdditionalTools: true }).success).toBe(true);
+    expect(providerConfigSchema.safeParse({ adapter: "openai-responses", baseUrl: "https://example.com/v1", promoteAdditionalTools: false }).success).toBe(true);
+    expect(providerConfigSchema.safeParse({ adapter: "openai-responses", baseUrl: "https://example.com/v1", promoteAdditionalTools: "true" }).success).toBe(false);
   });
 
   test("unapproved custom provider without flag leaves input untouched", () => {
