@@ -23,9 +23,11 @@ setDefaultTimeout(30_000);
 const GENERATE_URL = "https://api.commandcode.ai/alpha/generate";
 const REFUSED_MODEL = "google/gemini-4-argon";
 const SERVED_MODEL = "deepseek/deepseek-v4-flash";
-// Synthetic canaries: none of these may reach a client body or a log line.
+// Synthetic canaries: none of these may reach a client body or a log line. The key canary is
+// unlabelled on purpose -- secret redaction does not recognize it, so only dropping the upstream
+// detail keeps it out.
 const ACCOUNT_CANARY = "acct_canary_7f3e91";
-const KEY_CANARY = "sk-canary-SYNTHETIC00000000000000";
+const KEY_CANARY = "plain-key-canary-7f3e91";
 const MISLEADING_DETAIL = "Fixture Argon available in Pro and above plans (account " + ACCOUNT_CANARY
   + ", key " + KEY_CANARY + ", unsupported reasoning effort, quota exhausted)";
 const COMPLETED = [
