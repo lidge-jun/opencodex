@@ -110,3 +110,8 @@ Independent review via GOAT task (codex/gpt-6.1-sol, high), each round at the ex
   where `model_not_in_plan` made Codex CLI 0.163.0 reconnect (6 sends). It now ends as `invalid_prompt`
   with `retryable: false` and the same copy (1 send), via `sidecarLoopTerminalEvent`.
 - CodeRabbit (tests): whole-body assertion and positive streamed combo/policy fallbacks.
+- r7 MUSTFIX: on Chat inbound the later-iteration `invalid_prompt` arrived without a numeric status,
+  and both the streamed projection and the buffered collector inferred 502 `server_error` from the
+  wording. `src/chat/outbound.ts` now treats every `isTerminalRefusalCode` code as a 400-class
+  verdict that keeps its code (the existing cyber-policy rule, generalized).
+- CodeRabbit (tests): the sidecar route test asserts the injected `web_search` function tool.

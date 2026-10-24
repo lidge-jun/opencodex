@@ -555,6 +555,44 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
     expectNoCanary(combo.body + policy.body + direct.body + logged.join("\n"));
   });
 
+  test("Chat answers a later sidecar-iteration refusal as a client error in both modes", async () => {
+    await login(1);
+    const cfg = config({ webSearchSidecar: { backend: "exa", exaApiKey: "fixture-exa" } } as Partial<OcxConfig>);
+    let generate = 0;
+    // Iteration one asks for the sidecar search (which fails: the fixture refuses the search
+    // host); iteration two is the verified refusal inside the already committed stream.
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== GENERATE_URL) throw new Error("Unexpected fixture request: " + url);
+      generate += 1;
+      if (generate % 2 === 0) return planRefusal();
+      return new Response([
+        JSON.stringify({ type: "tool-call", toolCallId: "call_1", toolName: "web_search", input: { query: "fixture" } }),
+        JSON.stringify({ type: "finish", finishReason: "tool-calls" }),
+      ].join("\n") + "\n");
+    }) as typeof fetch;
+    const chat = (stream: boolean) => handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "command-code/" + REFUSED_MODEL, stream, tools: [{ type: "web_search" }],
+        messages: [{ role: "user", content: "hello" }] }),
+    }), cfg, { model: "", provider: "" });
+
+    const buffered = await chat(false);
+    const bufferedBody = await buffered.text();
+    expect(buffered.status, bufferedBody).toBe(400);
+    expect(JSON.parse(bufferedBody).error).toMatchObject({ type: "invalid_request_error", code: "invalid_prompt" });
+    expect(bufferedBody).toContain("MODEL_NOT_IN_PLAN");
+
+    const streamed = await chat(true);
+    const streamedBody = await streamed.text();
+    const errorFrame = streamedBody.split("\n").filter(line => line.startsWith("data: {"))
+      .map(line => JSON.parse(line.slice(6))).find(frame => frame.error)?.error;
+    expect(errorFrame, streamedBody).toMatchObject({ type: "invalid_request_error", code: "invalid_prompt" });
+    expect(errorFrame.message).toContain("MODEL_NOT_IN_PLAN");
+    expect(generate).toBe(4);
+    expectNoCanary(bufferedBody + streamedBody + logged.join("\n"));
+  });
+
   test("a routing policy moves on to its next candidate", async () => {
     await login(1);
     const cfg = config({ routingProfiles: { daily: { candidates: [
