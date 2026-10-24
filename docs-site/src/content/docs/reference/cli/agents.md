@@ -1164,8 +1164,12 @@ can then establish `managed: true` when it proves ownership and, if a candidate 
 and `selectionAttested`. Inspecting the configured candidate requires a trusted published-launcher context;
 a direct Bun/source launch has no such proof, ignores ambient and persisted candidate state, and may report
 `candidate_unavailable` on POSIX. On Windows x64, a proof-captured absolute standard npm `codex.cmd`
-can be managed when held local handles bind its package, prefix-local Node/npm and the first in-prefix
-platform backing. Other Windows layouts remain deferred or unmanaged. Windows never consults persisted state, so a run
+can be managed when held local handles bind its package, a held-bound Node/npm toolchain — prefix-local
+when present, otherwise the captured-PATH pair anchored to the launcher architecture — and the first
+in-prefix platform backing. Other Windows layouts remain deferred or unmanaged. A `managed` Windows result classifies
+the observed installation layout only: the bound Node/npm is the updater's read-only metadata toolchain, never a claim
+about which interpreter a later `codex.cmd` invocation resolves, while inspection and planning stay read-only; applicability and confirmed apply are decided separately.
+Windows never consults persisted state, so a run
 with no captured environment candidate reports `windows_inspection_deferred` rather than `candidate_unavailable`:
 the command cannot observe whether a Codex CLI is installed, so it reports the deferral instead of asserting
 that no candidate exists. The command does not execute Codex or a package manager, repair a shim,
@@ -1183,8 +1187,9 @@ ocx system codex-cli-update plan --channel latest --json
 
 Run through the published Node launcher with the intended `CODEX_CLI_PATH` in the shell environment.
 The plan requires an attested npm-global installation and a linked package manifest version.
-Windows supports only an explicit absolute standard npm `codex.cmd` with prefix-local Node/npm;
-PATH-only selection, separate-prefix Node, OpenCodex autostart wrappers and global/vendor fallback stay deferred.
+Windows supports only an explicit absolute standard npm `codex.cmd` with a held-bound Node/npm toolchain —
+prefix-local when present, otherwise the captured-PATH pair anchored to the launcher architecture;
+PATH-only selection, OpenCodex autostart wrappers and global/vendor fallback stay deferred.
 It queries the official npm registry for an exact version, SHA-512 integrity and same-origin tarball,
 using the launcher's captured PATH and isolated temporary npm configuration, cache and logs. Proxy
 settings and `NODE_EXTRA_CA_CERTS` remain supported; cleanup is best-effort. No Codex command runs.
@@ -1193,25 +1198,32 @@ An applicable plan reports `applicable: true` and a deterministic `planId` bindi
 installation-root/content digests, installed version, channel and exact main/platform artifacts. The plan is never
 persisted. It refuses downgrades, already-current versions, active Codex sessions and incomplete
 process observation. Supported Windows metadata queries use the observed Node/npm under matching
-held handles. A completed Windows read-only plan reports a deterministic ID, `applicable: false`
-and `refusal: windows_apply_disabled`; active/unknown sessions still refuse earlier. Unsupported
+held handles. Windows x64 can be applicable only for a bounded npm prefix with verified
+write authority; other observed prefixes retain `windows_apply_disabled`. Active/unknown sessions still refuse earlier. Unsupported
 Windows layouts return `windows_inspection_deferred` before registry/process queries.
 A refusal exits 0: inspect `applicable` and `refusal`. The printed install argv is indicative; this
-command installs nothing, changes no application state and never signals a session. Windows apply
-remains disabled, and a plan ID alone is not installation authorization: apply requires separate explicit confirmation.
+command installs nothing, changes no application state and never signals a session.
+A plan ID alone is not installation authorization: apply requires separate explicit confirmation.
 
-#### Confirmed POSIX Codex CLI apply and job status
+#### Confirmed Codex CLI apply and job status
 
 ```bash
 ocx system codex-cli-update apply --plan-id <32-hex> --yes --request-id <stable-key> --json
 ocx system codex-cli-update status <job-id> --json
 ```
 
-Apply supports only the selected, managed, non-shim npm-global CLI on Linux/macOS. It revalidates the
+Apply supports the selected, managed, non-shim npm-global CLI on Linux/macOS and the restricted
+Windows x64 npm layout. It revalidates the
 approved plan under an installation lease, verifies the exact main/platform archives, installs them
 offline with lifecycle scripts disabled, and checks installed files and the selected CLI's version.
 Existing Codex sessions are never stopped; active or unknown process observations refuse the update.
-Windows apply, shim repair, native apps and other installation managers remain unsupported.
+Windows supports shared prefixes with verified ACLs and no reparse paths. Observation includes
+unrelated packages and shims, capped at 4,096 entries, 512 MiB total and 384 MiB per file. Their
+bytes and identities must be preserved. Larger or unsafe prefixes, ARM64, shim repair, native apps
+and other installation managers remain unsupported. Unknown child lifetime or incomplete handle cleanup retains staging and
+the installation lease; do not retry by deleting its lock. Readback includes auxiliary files,
+new/absent backing roots and npm's hidden lockfile. `not_applied` means scoped installation state
+was observed unchanged, not that npm performed no I/O anywhere.
 
 Apply exits 0 only for an `applied` job; `not_applied`, `refused`, `ambiguous` and pending duplicate jobs
 exit 1, including with `--json`. Status reads the

@@ -55,7 +55,7 @@
  * empirical cross-user proof.
  */
 import { randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Library, Symbols } from "bun:ffi";
 import { getConfigDir } from "../config";
@@ -542,7 +542,7 @@ async function acquireLock(ctx: Ctx, prepared: Prepared): Promise<HeldLock> {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new CodexCliJobStoreBusyError();
     throw error;
   }
-  const lockDir = keep(ctx, relOpen(ctx, prepared.jobdir, CODEX_CLI_JOB_STORE_LOCK, true,
+  const lockDir = keep(ctx, relOpen(ctx, prepared.jobdir, prepared.lock.slice(prepared.dir.length + 1), true,
     ACCESS_DIR_WRITE, SHARE_DIR));
   const lockIdentity = inspect(ctx, lockDir, true);
   const ownerPath = join(prepared.lock, "owner.json");
@@ -599,6 +599,89 @@ export interface WindowsJobStoreIo {
   readStore(): Promise<string | null>;
   /** Atomically publish a replacement ledger body. */
   writeStore(body: string): Promise<void>;
+}
+
+/** Separate installation authority. It does not use the job ledger or repair existing ACLs.
+ * Directory pins allow npm's writes but deny replacement of the prefix/ancestry.
+ * The serving account and kernel-equivalent principals remain inside the trust boundary.
+ */
+export async function openWindowsCliApplyAuthority(prefix: string, acquire: boolean) {
+  assertNotRealHomeUnderTest(prefix);
+  const { ffi, kernel, nt } = await loadNative();
+  const ctx: Ctx = { ffi, kernel, nt, pins: new PinSet() };
+  let held: HeldLock | undefined;
+  let transferred = false;
+  let closed = false;
+  try {
+    // The prefix is an ancestry pin, not a writable store directory. A write-access
+    // pin would prevent the ordinary deny-write installation snapshot from opening
+    // it, even though npm's child-file writes do not require that access on our pin.
+    const chain = pinChain(ctx, prefix, ACCESS_READ);
+    if (chain.length < 2) throw unsafe();
+    const prefixDepth = chain.length, prefixPin = chain.at(-1)!;
+    let parent = prefixPin.handle, path = prefix;
+    for (const component of ["node_modules", "@openai"]) {
+      path = join(path, component);
+      const handle = relOpen(ctx, parent, component, true, ACCESS_READ, SHARE_DIR);
+      chain.push({ path, handle, inspection: inspect(ctx, handle, true) });
+      parent = handle;
+    }
+    const entries: WindowsAclEntry[] = chain.map((entry, index) => ({ path: entry.path, directory: true,
+      policy: index >= prefixDepth - 2 ? "write-private" : "trusted-ancestry" }));
+    const verifyHeld = async () => {
+      for (const entry of chain) if (!sameIdentity(entry.inspection, inspect(ctx, entry.handle, true))) throw unsafe();
+      await verifyAcl(entries);
+      if (held && (!sameIdentity(held.dirIdentity, inspect(ctx, held.dir, true))
+        || !sameIdentity(held.ownerIdentity, inspect(ctx, held.owner, false))
+        || !readAll(ctx, held.owner, Buffer.byteLength(held.record)).equals(Buffer.from(held.record)))) throw unsafe();
+    };
+    const verify = async () => { if (closed) throw unsafe(); await verifyHeld(); if (closed) throw unsafe(); };
+    await verify();
+    const lock = join(prefix, ".ocx-codex-cli-apply.lock");
+    if (acquire) held = await acquireLock(ctx, { config: prefix, dir: prefix, file: "", lock,
+      jobdir: prefixPin.handle });
+    let stage: { path: string; handle: bigint; identity: StoreInspection } | undefined;
+    transferred = true;
+    return {
+      lock,
+      verify,
+      async createStaging(): Promise<string> {
+        if (closed || !held || stage) throw unsafe();
+        await verify();
+        const path = join(lock, "stage");
+        mkdirSync(path);
+        const handle = relOpen(ctx, held.dir, "stage", true, ACCESS_READ, SHARE_DIR);
+        stage = { path, handle, identity: inspect(ctx, handle, true) };
+        await hardenSecretDirAsync(path, { required: true });
+        await verifyAcl([{ path, directory: true, policy: "private" }]);
+        if (closed) throw unsafe();
+        return path;
+      },
+      async removeStaging(): Promise<void> {
+        if (closed || !stage) throw unsafe();
+        await verify();
+        if (!sameIdentity(stage.identity, inspect(ctx, stage.handle, true))) throw unsafe();
+        await verifyAcl([{ path: stage.path, directory: true, policy: "private" }]);
+        if (closed) throw unsafe();
+        ctx.pins.release(stage.handle, kernel);
+        // Ancestors remain pinned and all writers are within the verified trust boundary.
+        rmSync(stage.path, { recursive: true });
+        stage = undefined;
+      },
+      async release(): Promise<boolean> {
+        if (closed) return false;
+        closed = true;
+        try { await verifyHeld(); if (held) releaseLock(ctx, held); }
+        finally { ctx.pins.closeAll(kernel); }
+        return !acquire || !existsSync(lock);
+      },
+    };
+  } finally { if (!transferred) ctx.pins.closeAll(kernel); }
+}
+
+export async function windowsCliApplyPrefixSupported(prefix: string): Promise<boolean> {
+  try { const guard = await openWindowsCliApplyAuthority(prefix, false); return await guard.release(); }
+  catch { return false; }
 }
 
 /**

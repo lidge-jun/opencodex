@@ -25,7 +25,7 @@ export interface CodexCliApplyResult {
   readonly verificationPid: number | null;
   readonly cleanupErrors: readonly CodexCliApplyCleanupError[];
 }
-export type CodexCliApplyCleanupError = "lease_release_unverified" | "lease_release_exception" | "staging_cleanup_failed";
+export type CodexCliApplyCleanupError = "lease_release_unverified" | "lease_release_exception" | "staging_cleanup_failed" | "child_cleanup_failed";
 /** Every cleanup phase is attempted even if another fails. Preserve the
  * computed readback outcome and expose path-free cleanup uncertainty separately.
  */
@@ -40,6 +40,8 @@ export function cleanupCodexCliApply(lease: { release(): boolean } | null, stagi
 }
 interface VersionResult { readonly terminal: boolean; readonly ok: boolean; readonly pid: number | null }
 export interface CodexCliApplyDeps extends CodexCliUpdatePlanDeps {
+  /** Trusted native fault-injection seam; never supplied by a request DTO. */
+  readonly startWindowsChild?: typeof import("./windows-cli-child").startWindowsCliChild;
   readonly signal?: AbortSignal;
   readonly temporaryRoot?: string;
   readonly fetchArtifact?: (artifact: CodexCliArtifact, signal?: AbortSignal) => Promise<Buffer>;
@@ -132,7 +134,7 @@ function freshInspection(deps: CodexCliApplyDeps): CodexCliInstallProvenanceDeps
   return { ...inspection, selectedCommand: observeCodexCliSelectedCommand(inspection) };
 }
 
-/** POSIX non-shim only. No restart, kill, automatic retry or rollback. */
+/** POSIX non-shim transaction; Windows dispatches to its separately owned native transaction. */
 export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDeps = {}): Promise<CodexCliApplyResult> {
   let installedVersion: string | null = null;
   let targetVersion: string | null = null;
@@ -147,7 +149,10 @@ export async function applyCodexCliUpdate(planId: string, deps: CodexCliApplyDep
     output = { outcome, reason, planId, installedVersion, targetVersion, installerExitCode: exitCode, leaseRetained: keepLease, verificationPid, cleanupErrors: [] };
   try {
     if (!/^[0-9a-f]{32}$/.test(planId)) return result("refused", "invalid_plan_id");
-    if ((deps.platform ?? process.platform) === "win32") return result("refused", "windows_apply_disabled");
+    if ((deps.platform ?? process.platform) === "win32") {
+      const { applyWindowsCodexCliUpdate } = await import("./cli-update-windows-apply");
+      return applyWindowsCodexCliUpdate(planId, deps);
+    }
     if (deps.signal?.aborted) return result("refused", "cancelled");
     const inspect = deps.inspect ?? inspectCodexCliInstall;
     const first = await inspect(freshInspection(deps));

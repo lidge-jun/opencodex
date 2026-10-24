@@ -10,6 +10,8 @@ import { CODEX_CLI_TRANSPORT_ENV_KEYS } from "../update/codex-cli-update-launch-
 import { CODEX_CLI_REGISTRY, isSha512Integrity, codexCliArtifactSetAsync, codexCliArtifactSetDigest, type CodexCliArtifactSet } from "./cli-update-artifacts";
 export { CODEX_CLI_REGISTRY } from "./cli-update-artifacts";
 import { windowsCodexCliPlanEvidence, withWindowsCodexCliPlanToolchain } from "./cli-windows-plan-provenance";
+import { windowsCliApplyPrefixSupported } from "./cli-update-job-store-windows";
+import { windowsInstallNamespaceSupported } from "./cli-update-windows-observation";
 import {
   inspectCodexCliInstall,
   type CodexCliInstallKind,
@@ -677,12 +679,17 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     return refusedPlan("blocked_active_session", report, channel, target, Object.freeze({ state: "active" as const, matches }));
   }
 
+  const applicable = platform !== "win32" || (!!windowsEvidence && windowsEvidence.arch === "x64"
+    && target.artifacts?.platform === "win32" && target.artifacts.arch === "x64"
+    && process.platform === "win32" && process.arch === "x64"
+    && windowsInstallNamespaceSupported(windowsEvidence.prefix)
+    && await windowsCliApplyPrefixSupported(windowsEvidence.prefix));
   return Object.freeze({
     schemaVersion: CODEX_CLI_UPDATE_SCHEMA_VERSION,
     package: CODEX_CLI_PACKAGE,
     channel,
-    applicable: platform !== "win32",
-    refusal: platform === "win32" ? "windows_apply_disabled" : null,
+    applicable,
+    refusal: applicable ? null : "windows_apply_disabled",
     planId: codexCliUpdatePlanId({
       platform,
       provenance: report.provenance,

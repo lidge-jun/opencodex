@@ -1,3 +1,4 @@
 {
+  "codex-cli-update-windows-apply.test.ts": "codex-integration",
   "windows-codex-cli-job-store.test.ts": "windows"
 }
