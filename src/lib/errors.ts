@@ -43,6 +43,15 @@ export function isModelNotInPlanRefusal(response: Response, bodyCode: string | n
     && response.headers.get("x-opencodex-refusal") === MODEL_NOT_IN_PLAN_REFUSAL_MARKER;
 }
 
+/**
+ * Whether a code names the plan refusal in any spelling combo failover folds into it (case,
+ * surrounding space, hyphens). The trust gate has to match the same set, or an unmarked
+ * `MODEL_NOT_IN_PLAN` would pass the gate and still be read as the hop code downstream.
+ */
+export function namesModelNotInPlanCode(code: string | null | undefined): boolean {
+  return typeof code === "string" && code.trim().toLowerCase().replaceAll("-", "_") === MODEL_NOT_IN_PLAN_CODE;
+}
+
 /** First nonblank string across the canonical upstream error paths, in priority order. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;

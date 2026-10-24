@@ -324,11 +324,12 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
     await login(1);
     const generate = globalThis.fetch;
     const otherSends: string[] = [];
+    let echoedCode = "";
     globalThis.fetch = (async (input, init) => {
       const url = input instanceof Request ? input.url : String(input);
       if (!url.startsWith("https://other.example/")) return generate(input, init);
       otherSends.push(url);
-      return Response.json({ error: { type: "invalid_request_error", code: "model_not_in_plan", message: "fixture" } }, { status: 400 });
+      return Response.json({ error: { type: "invalid_request_error", code: echoedCode, message: "fixture" } }, { status: 400 });
     }) as typeof fetch;
     const cfg = config({ combos: { pair: { strategy: "failover", targets: [
       { provider: "other", model: "m1" },
@@ -336,11 +337,18 @@ describe("Command Code MODEL_NOT_IN_PLAN refusal through dispatch", () => {
     ] } } } as Partial<OcxConfig>);
     cfg.providers.other = { adapter: "openai-chat", baseUrl: "https://other.example/v1", authMode: "key", apiKey: "synthetic-other", models: ["m1"] };
 
-    const result = await responses(cfg, "combo/pair");
-    expect(result.response.status, result.body).toBe(400);
-    expect(JSON.parse(result.body).error.code).not.toBe("model_not_in_plan");
-    expect(otherSends.length).toBeGreaterThan(0);
-    expect(sends).toEqual([]);
+    // Every spelling combo failover folds into the hop code, including the ones it normalizes.
+    for (const spelling of ["model_not_in_plan", "MODEL_NOT_IN_PLAN", "model-not-in-plan", " Model-Not-In-Plan "]) {
+      echoedCode = spelling;
+      otherSends.length = 0;
+      sends = [];
+      clearComboTargetCooldowns();
+      const result = await responses(cfg, "combo/pair");
+      expect(result.response.status, spelling + ": " + result.body).toBe(400);
+      expect(JSON.parse(result.body).error.code).not.toBe("model_not_in_plan");
+      expect(otherSends.length, spelling).toBeGreaterThan(0);
+      expect(sends, spelling).toEqual([]);
+    }
   });
 
   test("a routing policy moves on to its next candidate", async () => {
