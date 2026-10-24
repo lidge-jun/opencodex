@@ -38,3 +38,13 @@ unauthenticated loopback listener decide the exported URL. Owned-catalog refresh
 `/api/sync` and catalog refresh includes Qoder. CLI help, Dashboard export rows, integration
 tabs and preview-path validation register the same Qoder client; the managed path templates live in
 `src/integrations/mutation-plan.ts` and the builder in `src/clients/config-export/qoder.ts`.
+
+## Qoder assistant-text replay guard
+
+Qoder's assistant text passes through the vendor-scaffolding guard and then the existing `src/lib/tool-envelope-echo-filter.ts` line/fence recognizer.
+A replayed tool envelope or an unverified marker released by its bounded fence hold terminates with non-retryable `vendor_scaffold_detected` (502), without publishing that envelope or a later successful terminal; when the marker is recognized only while flushing before an upstream `error` terminal, the envelope is still withheld and that error is forwarded unchanged.
+Whole-line result/error markers and tool-call line prefixes are recognized across deltas; ordinary marker prose and closed fenced examples keep the shared recognizer's semantics.
+Thinking retains the existing vendor-scaffolding guard. Tool events are not interpreted as text, but every non-heartbeat event ends the current text block.
+Text the recognizer still holds is settled first, so a tool event never overtakes earlier prose and is never published after an envelope it completes, and the next text block is scanned from a line start.
+
+> Decision record: [ADR-7517](../decisions/ADR-7517-qoder-replay-envelope.md)
