@@ -12,7 +12,7 @@ bun install
 bun run setup:hooks  # 기존 관리형 pre-push·post-merge 제거
 bun run dev:proxy    # 개발 모드 프록시 API
 bun run dev:gui      # 대시보드 dev 서버(다른 터미널)
-bun run typecheck    # bun x tsc --noEmit
+bun run typecheck    # bun check --no-script --noEmit
 bun run test        # 전체 테스트 스위트 (기본)
 ```
 
@@ -121,7 +121,7 @@ Go 네이티브 포트를 담당했던 `dev2-go`는 정리했고, 두 라인을 
 
 ## 컨벤션
 
-- **ES Modules 전용**(`import`/`export`), TypeScript, `strict` 모드. `bun x tsc --noEmit`을 깨끗하게
+- **ES Modules 전용**(`import`/`export`), TypeScript, `strict` 모드. `bun run typecheck`을 깨끗하게
   유지하세요.
 - **파일당 최대 약 500줄** — 책임별로 나누세요. 단일 `index.ts` 뒤에 작고 집중된 모듈을 둔
   `web-search/`와 `vision/` 사이드카가 좋은 예입니다.

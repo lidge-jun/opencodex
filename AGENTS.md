@@ -195,7 +195,7 @@ it binds you regardless of which mechanism is within reach.
 
 ```bash
 bun install
-bun run typecheck      # bun x tsc --noEmit (strict)
+bun run typecheck      # bun check --no-script --noEmit (strict)
 bun run test:changed   # import-graph tests against the resolved `dev` merge base
 bun run test           # full tests/ suite (default before review)
 bun run lint:gui       # GUI eslint
