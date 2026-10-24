@@ -6,6 +6,7 @@ import { readPid, readRuntimePort } from "../config/process-state";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { gracefulStopHost, isProcessAlive, ProxyOwnershipRefusedError } from "../lib/process-control";
+import { directLocalHttpFetch } from "../server/direct-local-http";
 import { findLiveProxy, proveLiveProxyOwnedByHome } from "../server/proxy-liveness";
 import type { StartExitTeardown } from "./dispatch";
 import type { StopOutcome } from "./stop-report";
@@ -37,7 +38,8 @@ export async function assertConnectedClientStopSupported(target: ConnectedStopTa
         const token = configuredAdminToken(process.env.OPENCODEX_HOME?.trim() || undefined, process.env);
         if (token) headers["x-opencodex-api-key"] = token;
       }
-      const response = await fetch(`${origin}${path}`, { method: "GET", headers, redirect: "error", signal });
+      const response = await directLocalHttpFetch(`${origin}${path}`, { method: "GET", headers, redirect: "error", signal },
+        { timeoutMs: CONNECTED_STOP_PROBE_MS });
       if (!response.ok) { void response.body?.cancel().catch(() => {}); return null; }
       const body = await readBoundedResponseBody(response, { maxBytes: 4096, signal, fatalUtf8: true });
       if (body.truncated) return null;

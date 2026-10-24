@@ -21,7 +21,18 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   exitCleanup?: boolean;
   nativeSignal?: boolean;
   apiFailure?: boolean;
+  proxyProbePort?: number;
 };
+if (options.proxyProbePort) {
+  // Deliberately bypass every fixture mock for the real proxy-environment regression.
+  const origin = `http://127.0.0.1:${options.proxyProbePort}`;
+  const control = await fetch(`${origin}/__proxy-control`, { signal: AbortSignal.timeout(2000) }).then(r => r.json());
+  if (control.via !== "proxy") throw new Error("proxy environment control was not intercepted");
+  const { assertConnectedClientStopSupported } = await import("../../src/cli/stop-restore");
+  await assertConnectedClientStopSupported({ pid: process.pid, port: options.proxyProbePort, hostname: "127.0.0.1" });
+  console.log(JSON.stringify({ ok: true, control: control.via }));
+  process.exit(0);
+}
 const home = process.env.OPENCODEX_HOME!;
 const endpoint = { hostname: "127.0.0.1", port: 10100 };
 const fakePid = 4242;
@@ -159,6 +170,12 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   if (!options.nativeSignal && (options.status ?? 200) !== 409) alive = false;
   return Response.json(body, { status: options.status ?? 200 });
 }) as typeof fetch;
+
+// Only the real proxy-environment mode above exercises TCP; other cases inject responses.
+const direct = await import("../../src/server/direct-local-http");
+mock.module("../../src/server/direct-local-http", () => ({ ...direct,
+  directLocalHttpFetch: (input: string | URL | Request, init?: RequestInit) => globalThis.fetch(input, init),
+}));
 
 process.argv = [process.execPath, "ocx", "stop", ...(options.json ? ["--json"] : [])];
 if (options.exitCleanup) {

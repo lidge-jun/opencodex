@@ -91,6 +91,57 @@ async function runParentStop(options: {
 }
 
 describe("parent CLI shared teardown completion", () => {
+  test("preservation probes bypass environment proxies without exposing the admin token", async () => {
+    const targetPaths: string[] = [];
+    const proxyPaths: string[] = [];
+    const proxyTokens: string[] = [];
+    const targetTokens: string[] = [];
+    let childPid = 0;
+    const token = "ocx-test-stop-proof-token";
+    const reply = (request: Request) => {
+      const path = new URL(request.url).pathname;
+      return Response.json(path === "/healthz" ? { service: "opencodex", pid: childPid }
+        : { schema: "ocx-stop-capabilities/1", connectedClientOwnership: true, pid: childPid });
+    };
+    const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      targetPaths.push(new URL(request.url).pathname);
+      const auth = request.headers.get("x-opencodex-api-key");
+      if (auth) targetTokens.push(auth);
+      return reply(request);
+    } });
+    const proxy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      proxyPaths.push(path);
+      const auth = request.headers.get("x-opencodex-api-key");
+      if (auth) proxyTokens.push(auth);
+      return path === "/__proxy-control" ? Response.json({ via: "proxy" }) : reply(request);
+    } });
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const env = { ...process.env, OPENCODEX_HOME: home, OPENCODEX_ADMIN_AUTH_TOKEN: token };
+      delete env.NO_PROXY; delete env.no_proxy;
+      for (const key of ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]) {
+        env[key] = `http://127.0.0.1:${proxy.port}`;
+      }
+      child = Bun.spawn([process.execPath, fixturePath("parent-stop-runner.ts")], {
+        cwd: repoPath(), env, stdin: new Blob([JSON.stringify({ proxyProbePort: target.port })]), stdout: "pipe", stderr: "pipe",
+      });
+      childPid = child.pid;
+      watchdog = setTimeout(() => child?.kill(), 8000);
+      const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(exitCode, stderr).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({ ok: true, control: "proxy" });
+      expect(proxyPaths).toEqual(["/__proxy-control"]);
+      expect(proxyTokens).toEqual([]);
+      expect(targetPaths).toEqual(["/healthz", "/api/stop"]);
+      expect(targetTokens).toEqual([token]);
+    } finally {
+      if (watchdog) clearTimeout(watchdog);
+      if (child && child.exitCode === null) { child.kill(); await child.exited; }
+      await target.stop(true); await proxy.stop(true);
+    }
+  });
   for (const clientServer of ["legacy", "unknown", "wrong-pid", "malformed", "oversized", "unauthorized", "redirect", "body-timeout"] as const) {
     test(`connected stop refuses ${clientServer} preservation before service or POST`, async () => {
       const outcome = await runParentStop({ receipt: true, clientTransport: "link", clientServer, json: true,
