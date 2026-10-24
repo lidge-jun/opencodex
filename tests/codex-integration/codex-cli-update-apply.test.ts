@@ -416,7 +416,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
       // original generation's late completion.
       const configDir = join(f.home, "ocx");
       const restartPlanId = "b".repeat(32);
-      const oldOwner = admitCodexCliUpdateJob({ requestId: "server-restart-owner-unknown-01", planId: restartPlanId, confirmed: true, configDir });
+      const oldOwner = await admitCodexCliUpdateJob({ requestId: "server-restart-owner-unknown-01", planId: restartPlanId, confirmed: true, configDir });
       oldOwnerWork = runCodexCliUpdateJob(oldOwner.job.jobId, oldOwner.generation, () => new Promise(resolve => {
         finishOldOwner = () => resolve({ outcome: "applied", reason: "verified_target", planId: restartPlanId,
           installedVersion: "1.0.0", targetVersion: "1.1.0", installerExitCode: 0, leaseRetained: false,
@@ -441,7 +441,7 @@ describe.skipIf(!posix)("Codex CLI private-prefix POSIX apply", () => {
       }
       finishOldOwner?.();
       const lateResult = await oldOwnerWork;
-      const staleWrite = finishCodexCliUpdateJob(oldOwner.job.jobId, oldOwner.generation, 1,
+      const staleWrite = await finishCodexCliUpdateJob(oldOwner.job.jobId, oldOwner.generation, 1,
         { outcome: "refused", reason: "late_result", planId: restartPlanId, installedVersion: null,
           targetVersion: null, installerExitCode: null, leaseRetained: false, verificationPid: null,
           cleanupErrors: [] }, configDir);

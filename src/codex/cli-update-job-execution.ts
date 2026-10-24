@@ -13,6 +13,11 @@ export const CODEX_CLI_JOB_CLEANUP_ERRORS: ReadonlySet<string> = new Set(["lease
 export class CodexCliJobStoreBusyError extends Error {
   constructor() { super("job_store_busy"); }
 }
+/** Durable ledger bounds and names shared by the POSIX and Windows store backends. */
+export const CODEX_CLI_JOB_STORE_DIR = "codex-cli-update-jobs";
+export const CODEX_CLI_JOB_STORE_FILE = "jobs.json";
+export const CODEX_CLI_JOB_STORE_LOCK = "admission.lock";
+export const CODEX_CLI_JOB_STORE_MAX_BYTES = 256 * 1024;
 export class CodexCliJobResultPersistenceError extends Error {
   constructor(readonly result: CodexCliApplyResult) { super("job_result_persistence_failed"); }
 }
@@ -29,7 +34,7 @@ export async function retryCodexCliJobStoreOperation<T>(operation: () => T,
   delay: (milliseconds: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
   persistence = false): Promise<T> {
   for (let attempt = 0; ; attempt++) {
-    try { return operation(); }
+    try { return await operation(); }
     catch (error) {
       const transientIo = persistence && ["EIO", "ENOSPC", "EBUSY", "EAGAIN", "EINTR", "EMFILE", "ENFILE"]
         .includes((error as NodeJS.ErrnoException)?.code ?? "");
@@ -39,20 +44,20 @@ export async function retryCodexCliJobStoreOperation<T>(operation: () => T,
   }
 }
 interface JobWork {
-  begin(): number;
-  finish(revision: number, result: CodexCliApplyResult): CodexCliUpdateJobDto | null;
-  read(): CodexCliUpdateJobDto | null;
-  release(): void;
+  begin(): number | Promise<number>;
+  finish(revision: number, result: CodexCliApplyResult): CodexCliUpdateJobDto | null | Promise<CodexCliUpdateJobDto | null>;
+  read(): CodexCliUpdateJobDto | null | Promise<CodexCliUpdateJobDto | null>;
+  release(): void | Promise<void>;
 }
 /** Execution and persistence are separate ownership phases. */
 export async function runCodexCliUpdateJobWork(run: () => Promise<CodexCliApplyResult>, work: JobWork): Promise<CodexCliUpdateJobDto | null> {
   let released = false;
   try {
     let revision: number;
-    try { revision = await retryCodexCliJobStoreOperation(() => work.begin()); }
+    try { revision = await retryCodexCliJobStoreOperation(async () => work.begin()); }
     catch {
-      work.release(); released = true;
-      try { return work.read(); }
+      await work.release(); released = true;
+      try { return await work.read(); }
       catch (error) {
         const code = error instanceof Error ? error.message : "";
         throw new Error(["unsafe_store", "invalid_store", "unsupported_store"].includes(code) ? code : "job_state_unavailable");
@@ -66,7 +71,7 @@ export async function runCodexCliUpdateJobWork(run: () => Promise<CodexCliApplyR
         verificationPid: null, cleanupErrors: [] };
     }
     try {
-      return await retryCodexCliJobStoreOperation(() => work.finish(revision, result) ?? work.read(), undefined, true);
+      return await retryCodexCliJobStoreOperation(async () => (await work.finish(revision, result)) ?? (await work.read()), undefined, true);
     } catch { throw new CodexCliJobResultPersistenceError(result); }
-  } finally { if (!released) work.release(); }
+  } finally { if (!released) await work.release(); }
 }
