@@ -1,4 +1,4 @@
-import { fixturePath } from "../helpers/repo-root";
+import { fixturePath, repoPath } from "../helpers/repo-root";
 import { expect, test } from "bun:test";
 import { resolve } from "node:path";
 import {
@@ -42,6 +42,29 @@ test("Claude runtime keeps the CLI on the Hub and emits its answer", async () =>
 
 const piPath = process.env.OCX_PI_BIN;
 const piTest = piPath ? test : test.skip;
+
+test.each([
+  ["exit-before-ack", "Pi RPC exited with code 7"],
+  ["malformed-before-ack", "JSON"],
+  ["extension-before-ack", "synthetic extension failure"],
+  ["extension-after-ack", "synthetic extension failure"],
+  ["rejected", "synthetic rejection"],
+  ["success", null],
+  ["settle-before-ack", null],
+] as const)("Pi prompt observes both RPC lifetimes: %s", async (mode, expected) => {
+  const child = Bun.spawn([
+    process.execPath, fixturePath("pi-prompt-lifetime.ts"),
+    repoPath("src/remote-control/workspace-pi-runtime.ts"), mode,
+  ], { stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  ]);
+  expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+  const result = JSON.parse(stdout);
+  if (expected === null) expect(result.error).toBeNull();
+  else expect(result.error).toContain(expected);
+  expect(result.unhandled).toEqual([]);
+});
 
 piTest("real Pi RPC starts with only the explicit Remote Workspace extension", async () => {
   if (!piPath) return;

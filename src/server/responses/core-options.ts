@@ -49,6 +49,8 @@ export interface ConsumedComboFailure {
    * marker, so the combo loop reads it here and stops instead of sending the turn to a later target.
    */
   nonReplayable?: boolean;
+  /** The failed attempt was an adapter-normalized plan refusal; only this grants its combo hop. */
+  verifiedPlanRefusal?: boolean;
 }
 
 
