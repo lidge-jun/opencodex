@@ -11,7 +11,8 @@ async function fixture(handler: ((req: IncomingMessage, res: ServerResponse) => 
   options: Partial<PickerListenerOptions> = {}) {
   const ca = createLocalInterceptCa();
   const leaf = issueLocalInterceptLeaf(ca, ["claude.ai"]);
-  const earlyReplies: Array<{ requestComplete: boolean; flushed: boolean }> = [];
+  const earlyReplies: Array<{ requestComplete: boolean; flushed: boolean; receivedBodyBytes: number }> = [];
+  const earlyHeaders = Promise.withResolvers<void>();
   // A wire-level origin sends the reply and FIN while continuing to drain input. Bun's HTTP
   // server also tears down unfinished requests; overriding destroySoon alone does not prevent
   // that reset racing ahead of the reply on Windows with a buffered upload.
@@ -24,13 +25,15 @@ async function fixture(handler: ((req: IncomingMessage, res: ServerResponse) => 
       headers += chunk.toString("latin1");
       const end = headers.indexOf("\r\n\r\n");
       if (end < 0) return;
-      replied = true;
       const early = headers.startsWith("POST /early ");
       const body = early ? "early" : "ordinary";
       const length = /\r\ncontent-length: (\d+)\r\n/i.exec(headers.slice(0, end + 2));
       const requestBody = headers.slice(end + 4);
+      if (early) earlyHeaders.resolve();
+      if (early && requestBody.length === 0) return;
+      replied = true;
       const observation = { requestComplete: length ? requestBody.length >= Number(length[1])
-        : requestBody.endsWith("0\r\n\r\n"), flushed: false };
+        : requestBody.endsWith("0\r\n\r\n"), flushed: false, receivedBodyBytes: requestBody.length };
       if (early) earlyReplies.push(observation);
       socket.once("finish", () => { observation.flushed = true; });
       socket.end(`HTTP/1.1 ${early ? "413 Payload Too Large" : "200 OK"}\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`);
@@ -54,12 +57,12 @@ async function fixture(handler: ((req: IncomingMessage, res: ServerResponse) => 
     const session = connect(`https://127.0.0.1:${relay.port}`, { ca: ca.certPem, servername: "claude.ai" });
     session.on("error", () => session.destroy()); clients.push(session); return session;
   };
-  const h1 = (path: string, method = "GET", headers: Record<string, string> = {}) => {
-    const req = request({ host: "127.0.0.1", port: relay.port, servername: "claude.ai", ca: ca.certPem,
+  const h1 = (path: string, method = "GET", headers: Record<string, string> = {}, port = relay.port) => {
+    const req = request({ host: "127.0.0.1", port, servername: "claude.ai", ca: ca.certPem,
       rejectUnauthorized: true, agent: h1Agent, path, method, headers: { Host: "claude.ai", ...headers } });
     clients.push(req); return req;
   };
-  return { logs, h2, h1, relay, earlyReplies,
+  return { logs, h2, h1, relay, earlyReplies, earlyHeaders: earlyHeaders.promise, originPort: address.port,
     async close() {
       const closed = clients.map(client => client.destroyed ? Promise.resolve() : observeClose(client));
       await relay.close();
@@ -374,8 +377,26 @@ bounded("h2 cancellation releases aggregate admission once without weakening the
   } finally { await wait(f.close()); }
 });
 
+bounded("early-fin origin waits for the first body byte after separate headers", async wait => {
+  const f = await fixture("early-fin");
+  let upload: ClientRequest | undefined;
+  try {
+    // Address the actual TLS origin directly so flushHeaders guarantees a header-only event.
+    upload = f.h1("/early", "POST", { "Content-Length": String(32 * 1024 * 1024) }, f.originPort);
+    const result = h1Result(upload);
+    const closed = observeSocketClose(upload);
+    upload.flushHeaders();
+    await wait(f.earlyHeaders);
+    expect(f.earlyReplies).toEqual([]);
+    upload.write("x");
+    expect(await wait(result)).toEqual({ status: 413, text: "early" });
+    await wait(closed);
+    expect(f.earlyReplies).toEqual([{ requestComplete: false, flushed: true, receivedBodyBytes: 1 }]);
+  } finally { upload?.destroy(); await wait(f.close()); }
+});
+
 for (const protocol of ["h1", "h2"] as const) {
-  // "buffered" answers early while 4 MiB of an advertised 32 MiB body is still queued.
+  // "buffered" writes 4 MiB of an advertised 32 MiB body; the origin replies after input starts.
   for (const input of protocol === "h1" ? ["small", "buffered"] as const : ["small"] as const)
   bounded(`${protocol} early upstream response closes ${input === "buffered" ? "a buffered" : "an"} unfinished upload without losing the reply`, async wait => {
     const f = await fixture(input === "buffered" ? "early-fin" : (req, res) => {
@@ -398,7 +419,11 @@ for (const protocol of ["h1", "h2"] as const) {
       upload.write(input === "buffered" ? Buffer.alloc(4 * 1024 * 1024, 0x61) : "x");
       expect(await wait(result)).toEqual({ status: 413, text: "early" });
       await wait(closed);
-      if (input === "buffered") expect(f.earlyReplies).toEqual([{ requestComplete: false, flushed: true }]);
+      if (input === "buffered") {
+        expect(f.earlyReplies).toEqual([{ requestComplete: false, flushed: true, receivedBodyBytes: expect.any(Number) }]);
+        expect(f.earlyReplies[0]!.receivedBodyBytes).toBeGreaterThan(0);
+        expect(f.earlyReplies[0]!.receivedBodyBytes).toBeLessThan(32 * 1024 * 1024);
+      }
       if (protocol === "h2") expect((upload as ClientHttp2Stream).rstCode).toBe(constants.NGHTTP2_NO_ERROR);
       expect(await wait(normalH2(session))).toEqual({ status: 200, text: "ordinary" });
     } finally { await wait(f.close()); }
