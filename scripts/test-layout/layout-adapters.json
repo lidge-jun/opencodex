@@ -1,4 +1,5 @@
 {
   "google-vertex-key-project.test.ts": "adapters/google",
-  "provider-quota-abliteration.test.ts": "providers"
+  "provider-quota-abliteration.test.ts": "providers",
+  "command-code-plan-denial.test.ts": "providers"
 }

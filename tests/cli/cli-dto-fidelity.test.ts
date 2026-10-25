@@ -193,6 +193,35 @@ describe("#2703 the projection does not strip the 5h window", () => {
   });
 });
 
+describe("Codex account identity projection", () => {
+  test("keeps validated join keys and slot identities while accepting older servers", async () => {
+    const key = `uai1_${"a".repeat(64)}`;
+    const fetchImpl = (async (url: string | URL | Request) => Response.json(
+      String(url).includes("/api/codex-auth/active")
+        ? { activeCodexAccountId: "__main__" }
+        : { accounts: [
+          { id: "__main__", slotId: "__main__", slotKind: "native-main", upstreamAccountKey: key },
+          { id: "pool-a", slotId: "pool-a", slotKind: "pool", upstreamAccountKey: key },
+          { id: "pool-b", slotId: "other-slot", upstreamAccountKey: key },
+          { id: "pool-legacy" },
+          { id: "pool-object", slotId: "pool-object", upstreamAccountKey: { toString: null, valueOf: null } },
+          { id: "pool-array", slotId: "pool-array", upstreamAccountKey: [key] },
+        ] },
+    )) as unknown as typeof fetch;
+    const { fetchCodexRows } = await import("../../src/cli/account-api");
+    const result = await fetchCodexRows({ baseUrl: "http://127.0.0.1:10100", fetchImpl },
+      "http://127.0.0.1:10100");
+    expect(result.rows.map(row => [row.slotId, row.slotKind, row.upstreamAccountKey])).toEqual([
+      ["__main__", "native-main", key],
+      ["pool-a", "pool", key],
+      ["pool-b", "pool", undefined],
+      ["pool-legacy", "pool", undefined],
+      ["pool-object", "pool", undefined],
+      ["pool-array", "pool", undefined],
+    ]);
+  });
+});
+
 describe("#2705 access key usage columns", () => {
   async function listOutput(payload: Record<string, unknown>): Promise<string> {
     const { handleAccessCommand } = await import("../../src/cli/access");

@@ -142,6 +142,20 @@ async function pickOption(label: string) {
 }
 const lastPut = () => v2Puts.at(-1);
 
+async function applyCustomLimit(value: string) {
+  await pickOption("Custom…");
+  const input = container.querySelector<HTMLInputElement>('input[aria-label="Sub-agent limit"]')!;
+  expect(input).not.toBeNull();
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new testWindow.Event("input", { bubbles: true }) as unknown as Event);
+    input.dispatchEvent(new testWindow.Event("change", { bubbles: true }) as unknown as Event);
+  });
+  const apply = [...container.querySelectorAll<HTMLButtonElement>(".models-v2-detail-row button")]
+    .find(node => node.textContent === "Apply")!;
+  await act(async () => { apply.click(); });
+}
+
 const subagentRadios = () => [
   ...container.querySelectorAll<HTMLButtonElement>(
     '[role="radiogroup"][aria-label="Sub-agent"] button[role="radio"]'),
@@ -194,6 +208,58 @@ test("full v2 presents children (stored total minus the root slot) and PUTs tota
 
   await pickOption("32");
   expect(lastPut()).toEqual({ maxConcurrentThreadsPerSession: 33 });
+});
+
+test("root-only V2 displays zero children and a custom one-child edit sends total two", async () => {
+  testWindow.localStorage.setItem("ocx.models.settingsOpen.v1", "1");
+  v2Body = { enabled: true, multiAgentMode: "v2", maxConcurrentThreadsPerSession: 1 };
+  await mount();
+  expect(limitSelect()!.textContent).toBe("0");
+  await applyCustomLimit("1");
+  expect(v2Puts).toEqual([{ maxConcurrentThreadsPerSession: 2 }]);
+  expect(limitSelect()!.textContent).toBe("1");
+});
+
+test("the folded root-only V2 summary displays zero children", async () => {
+  v2Body = { enabled: true, multiAgentMode: "v2", maxConcurrentThreadsPerSession: 1 };
+  await mount();
+  const chip = container.querySelector('.models-settings-kv[data-item="threads"]');
+  expect(chip?.querySelector(".models-settings-v")?.textContent).toBe("0");
+});
+
+test.each([
+  [false, "v1", false],
+  [false, "v2", true],
+] as const)("%s global flag / %s surface / hybrid %s keeps a one-child edit in child units", async (enabled, multiAgentMode, keepNativeChatGptOnV1) => {
+  testWindow.localStorage.setItem("ocx.models.settingsOpen.v1", "1");
+  v2Body = { enabled, multiAgentMode, keepNativeChatGptOnV1, maxConcurrentThreadsPerSession: 16 };
+  await mount();
+  await applyCustomLimit("1");
+  expect(v2Puts).toEqual([{ maxConcurrentThreadsPerSession: 1 }]);
+});
+
+test.each([
+  [false, Number.MAX_SAFE_INTEGER + 1],
+  [true, Number.MAX_SAFE_INTEGER + 1],
+  [true, Number.MAX_SAFE_INTEGER],
+] as const)("global V2 %s rejects unsafe child/backend limit %s without a PUT", async (enabled, value) => {
+  testWindow.localStorage.setItem("ocx.models.settingsOpen.v1", "1");
+  v2Body = { enabled, multiAgentMode: enabled ? "v2" : "v1", maxConcurrentThreadsPerSession: 16 };
+  await mount();
+  await applyCustomLimit(String(value));
+  expect(v2Puts).toHaveLength(0);
+  expect(container.textContent).toContain("Sub-agent limit must be an integer >= 1");
+});
+
+test.each([
+  [false, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+  [true, Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER],
+] as const)("global V2 %s accepts largest safe child limit %s as backend %s", async (enabled, children, total) => {
+  testWindow.localStorage.setItem("ocx.models.settingsOpen.v1", "1");
+  v2Body = { enabled, multiAgentMode: enabled ? "v2" : "v1", maxConcurrentThreadsPerSession: 16 };
+  await mount();
+  await applyCustomLimit(String(children));
+  expect(v2Puts).toEqual([{ maxConcurrentThreadsPerSession: total }]);
 });
 
 test("the V2 conflict warning identifies canonical agents limits as well as the legacy alias", async () => {

@@ -366,6 +366,10 @@ Regression coverage lives in `tests/codex-integration/codex-quota-parser-parity.
 `tests/codex-integration/main-account-hard-lock-policy.test.ts`,
 `tests/usage/quota-reset-observation.test.ts`, and `tests/usage/quota-reset-seen-store.test.ts`.
 
+Codex pool display capacity in `src/providers/codex-capacity.ts` calibrates the observed Business Premium plan
+`self_serve_business_prolite` at five Standard-seat units. This estimate does not drive routing or create a
+missing five-hour window; unknown plans keep the conservative baseline and are counted in `unknownPlanAccounts`.
+
 `codexMainAccountHardLock` is a local admission policy that is **on by default** since #5694, at
 short 90% and long `MAIN_ACCOUNT_HARD_LOCK_PERCENT` = 98%, overridden by ordered integer
 `codexMainAccountHardLockThresholds` in 80..100. The 5h/short and weekly windows each govern on

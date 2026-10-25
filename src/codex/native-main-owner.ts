@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { Database } from "bun:sqlite";
 
@@ -297,6 +297,32 @@ export function retainNativeMainOwner(
 export function nativeMainOwnerSnapshot(context: NativeProfileContext): NativeMainOwnerSnapshot | null {
   const entry = entries.get(context.homeId);
   return entry ? { ...entry.snapshot } : null;
+}
+
+/**
+ * Homes at or below `root` whose owner entry may still hold or reopen handles there.
+ *
+ * Conservative on purpose: besides a published database or side descriptor, an
+ * acquisition in flight (`drive`) holds its descriptor and database in locals until
+ * hardening returns, a pending retry timer will reopen them, and a detached entry is
+ * still closing. Removal code asks this before deleting a home. Windows refuses to
+ * delete a file SQLite holds open, so a removal that starts early fails with EBUSY
+ * only after its whole retry budget, without naming the owner.
+ */
+export function nativeMainOwnerHomesOpenAtOrBelow(root: string): string[] {
+  const fold = (path: string) => (process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path));
+  const base = fold(root);
+  const open: string[] = [];
+  const candidates = [
+    ...[...entries.values()].filter(entry => entry.database || entry.file || entry.drive || entry.timer),
+    ...detachedEntries,
+  ];
+  for (const entry of candidates) {
+    const suffix = relative(base, fold(entry.context.codexHome));
+    if (suffix === ".." || suffix.startsWith(`..${sep}`) || isAbsolute(suffix)) continue;
+    open.push(entry.context.codexHome);
+  }
+  return open;
 }
 
 export function assertNativeMainOwner(context: NativeProfileContext): void {

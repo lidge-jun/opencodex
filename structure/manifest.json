@@ -578,7 +578,8 @@
       "title": "OpenAI Provider Account Modes",
       "scope": "Pool/Direct account modes, API-key separation, and the public provider and quota contract.",
       "documents": [
-        "src/codex/"
+        "src/codex/",
+        "src/providers/codex-capacity.ts"
       ]
     },
     {
