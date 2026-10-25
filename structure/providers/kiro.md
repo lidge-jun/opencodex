@@ -24,6 +24,8 @@ or control characters, and a 2048-character limit; user codes use 4–32 plain a
 hyphen characters. Completed flow results are consumed once, terminal entries expire after
 60 seconds, and the table holds at most 16 entries. Capacity pruning evicts only terminal entries;
 pending approval and live profile selection are preserved. Terminal entries retain no config snapshot.
+Once the protected credential write accepts a commit, expiry preserves that flow until configuration
+publication settles; concurrent status and cancellation cannot turn an accepted write into an expired flow.
 Explicit reauth rotates login identity, while token
 refresh preserves it. A first-account config-publication failure compensates the new slot
 through the existing receipt ownership check.

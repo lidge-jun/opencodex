@@ -136,7 +136,7 @@ function terminal(flow: Flow, state: State, warning?: KiroDeviceView["warning"])
 function pruneFlows(): void {
   const now = clock();
   for (const [id, flow] of flows) {
-    if (live(flow) && now >= flow.deadline) terminal(flow, "expired");
+    if (live(flow) && now >= flow.deadline && !flow.commitAccepted) terminal(flow, "expired");
     if (flow.terminalAt !== undefined && now - flow.terminalAt >= TERMINAL_RETENTION_MS) forgetFlow(id);
   }
   while (flows.size >= MAX_KIRO_DEVICE_ENTRIES) {
@@ -148,7 +148,7 @@ function pruneFlows(): void {
 function owned(flowId: string, principal: KiroDevicePrincipal): Flow | undefined {
   const flow = flows.get(flowId);
   if (!flow || flow.ownerPrincipal !== principal) return undefined;
-  if (clock() >= flow.deadline) {
+  if (clock() >= flow.deadline && !flow.commitAccepted) {
     terminal(flow, "expired");
     forgetFlow(flowId);
     return undefined;

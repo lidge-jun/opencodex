@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cancelKiroDeviceLogin, kiroDeviceFlowCountForTests, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin } from "../../../src/oauth/kiro-device-login";
+import { cancelKiroDeviceLogin, kiroDeviceFlowCountForTests, selectKiroDeviceProfile, setKiroDevicePublishForTests, startKiroDeviceLogin, statusKiroDeviceLogin } from "../../../src/oauth/kiro-device-login";
 import { listKiroIamProfiles, parseKiroIamOptions } from "../../../src/oauth/kiro-iam-identity-center";
 import { getAccountSet } from "../../../src/oauth/store";
 import { authorization, kiroDeviceFixture, profileArn, response } from "../../helpers/kiro-device-fixture";
@@ -138,6 +138,29 @@ test("cancel and expiry while choosing a profile retain no credential", async ()
   fixture!.advance(600_000);
   expect(await selectKiroDeviceProfile(another.started.flowId, "gui-session", profileArn)).toBeNull();
   expect(getAccountSet("kiro")).toBeNull();
+});
+
+test.each(["status", "cancel"])("accepted IAM commits survive expiry during concurrent %s", async operation => {
+  transport("first@example.test", [profile, second]);
+  const { started } = await approved();
+  let release!: () => void;
+  let entered!: () => void;
+  const publishing = new Promise<void>(resolve => { release = resolve; });
+  const called = new Promise<void>(resolve => { entered = resolve; });
+  setKiroDevicePublishForTests(async () => { entered(); await publishing; });
+  const selecting = selectKiroDeviceProfile(started.flowId, "gui-session", second.arn);
+  await called;
+  fixture!.advance(600_000);
+  let concurrent;
+  try {
+    concurrent = operation === "status"
+      ? await statusKiroDeviceLogin(started.flowId, "gui-session")
+      : cancelKiroDeviceLogin(started.flowId, "gui-session");
+  } finally { release(); }
+  expect((await selecting)?.state).toBe("done");
+  expect(concurrent?.state).toBe(operation === "status" ? "select-profile" : "done");
+  expect((await statusKiroDeviceLogin(started.flowId, "gui-session"))?.state).toBe("done");
+  expect(getAccountSet("kiro")?.accounts).toHaveLength(1);
 });
 
 test("missing user identity and failed discovery never save an ambiguous organization account", async () => {
