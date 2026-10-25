@@ -928,6 +928,16 @@
       ]
     },
     {
+      "path": "ops/desktop-supervision.md",
+      "tier": 6,
+      "title": "Desktop Supervision",
+      "scope": "Durable Desktop ownership read, takeover-consent handling, live-supervision evidence, the Windows probe's trusted system-directory acquisition, and the supervision latch blocking contract consumed by service and update guards.",
+      "documents": [
+        "src/service/desktop-supervision.mjs",
+        "src/service/desktop-supervision.d.mts"
+      ]
+    },
+    {
       "path": "ops/service-logging.md",
       "tier": 6,
       "title": "Managed Service Logging",
