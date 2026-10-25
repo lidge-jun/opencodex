@@ -52,14 +52,25 @@ export function mismatchPhase(expectation: ClientSyncExpectation): ClientSyncMis
   return expectation.kind === "link" ? "child_link_mismatch" : "hub_client_mismatch";
 }
 
+function errorCode(error: unknown): unknown {
+  return error && typeof error === "object" && "code" in error ? (error as { code: unknown }).code : undefined;
+}
+
 /**
  * A lock the check needs is held: the apply lock by a link connect or another apply
- * (`link_apply_busy`), or the client lifecycle lock (`client_lifecycle_busy`). Before the check
- * ran, a pinned sync cannot know which connection it would serve, so it is refused as pending.
+ * (`link_apply_busy`), the client lifecycle lock (`client_lifecycle_busy`), or the config mutation
+ * lock by another config writer. Only real contention counts for the config lock, classified as in
+ * `src/config/mutation-lock.ts`; any other acquisition or storage failure stays itself. Before the
+ * check ran, a pinned sync cannot know which connection it would serve, so it is refused as pending.
  */
 export function isClientSyncLockBusy(error: unknown): boolean {
-  const code = error && typeof error === "object" && "code" in error ? (error as { code: unknown }).code : undefined;
-  return code === "link_apply_busy" || code === "client_lifecycle_busy";
+  const code = errorCode(error);
+  if (code === "link_apply_busy" || code === "client_lifecycle_busy") return true;
+  if (code !== "CONFIG_MUTATION_LOCK_UNAVAILABLE") return false;
+  const cause = (error as { cause?: unknown }).cause;
+  const causeCode = errorCode(cause);
+  return causeCode === "SQLITE_BUSY" || causeCode === "SQLITE_LOCKED"
+    || (cause instanceof Error && /database (?:is|table is) locked/i.test(cause.message));
 }
 
 /**

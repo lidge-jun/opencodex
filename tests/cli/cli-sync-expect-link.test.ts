@@ -9,11 +9,13 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { Database } from "bun:sqlite";
 import { dispatchCommand, type CliDispatchDeps } from "../../src/cli/dispatch";
 import * as connectApi from "../../src/client/connect";
 import { handleMachineApi } from "../../src/client/machine-api";
 import { markClientConnectPending } from "../../src/client/state";
 import { withClientLifecycle } from "../../src/client/lifecycle-lock";
+import { prepareConfigMutationDatabasePathForWrite } from "../../src/config/mutation-lock";
 import * as restartScope from "../../src/cli/restart-scope";
 import * as shimAutoRestore from "../../src/cli/codex-shim-autorestore";
 import { runCli } from "../../src/cli/root";
@@ -346,6 +348,54 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     // Released, the same Child matches and syncs.
     const free = await runSync(["sync", "--expect-link", LINK_ID]);
     expect(free.code).toBe(0);
+  });
+
+  test("a config writer holding the config lock is a pending refusal before the check, and itself after it", async () => {
+    writeClient({ transport: "link" });
+    const configBefore = readFileSync(join(root, "config.json"), "utf8");
+    const holder = new Database(prepareConfigMutationDatabasePathForWrite(), { create: true });
+    let held = false;
+    const hold = () => { holder.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE"); held = true; };
+    const free = () => { if (held) holder.exec("ROLLBACK"); held = false; };
+    try {
+      hold();
+      const link = await runSync(["sync", "--expect-link", LINK_ID]);
+      const key = await runSync(["sync", "--expect-hub-key", HUB_KEY_ID]);
+      expect([link.code, key.code]).toEqual([5, 5]);
+      expect(lastJson(link.errors)).toEqual({ phase: "child_link_mismatch", reason: "pending_operation" });
+      expect(lastJson(key.errors)).toEqual({ phase: "hub_client_mismatch", reason: "pending_operation" });
+      // Without an expectation the same contention stays the ordinary connected-sync failure.
+      const plain = await runSync(["sync"]);
+      expect(plain.code).toBe(1);
+      expect(plain.errors.join("\n")).not.toContain("pending_operation");
+      expect(link.localSyncCalls + key.localSyncCalls + plain.localSyncCalls).toBe(0);
+      free();
+      expect(readFileSync(join(root, "config.json"), "utf8")).toBe(configBefore);
+      expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(SENTINEL_CATALOG);
+
+      // Taken only after the check passed (during the Home catalog read), contention is a real
+      // failure of a sync that already knew its connection: exit 1, no refusal phase.
+      const connected = spyOn(connectApi, "syncConnectedClient").mockImplementation(async options =>
+        realSyncConnectedClient(options, isolatedDeps([], hold)));
+      const lateErrors: string[] = [];
+      const error = spyOn(console, "error").mockImplementation((...parts: unknown[]) => { lateErrors.push(parts.map(String).join(" ")); });
+      try {
+        const late = await dispatchCommand({ kind: "command", command: "sync", args: ["sync", "--expect-link", LINK_ID] }, {
+          args: ["sync", "--expect-link", LINK_ID], findLiveProxy: async () => null,
+        } as unknown as CliDispatchDeps);
+        expect(late).toBe(1);
+        expect(held).toBe(true);
+        expect(lateErrors.join("\n")).toContain("Config mutation already in progress");
+        expect(lateErrors.join("\n")).not.toContain("pending_operation");
+      } finally {
+        connected.mockRestore(); error.mockRestore();
+        free();
+      }
+      expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(SENTINEL_CATALOG);
+    } finally {
+      free();
+      holder.close();
+    }
   });
 
   test.each([

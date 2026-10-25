@@ -97,6 +97,16 @@ test carries no restart flag and stubs the restart helper.
    readiness fetch (deferred promise) and a real lifecycle lock; without the fix both fail.
 2. P3, **accepted**: PR body regains a standalone `## Verification` heading and `Closes #7694`.
 
+## PR review round 4 (codex/gpt-6.1-sol at 21166e1be, FAIL) — decisions
+
+1. Blocker, **accepted**: the check also needs the config mutation lock; a concurrent config writer
+   made acquisition throw `CONFIG_MUTATION_LOCK_UNAVAILABLE` (cause `SQLITE_BUSY`), which the
+   mapper ignored (exit 1, no phase). `isClientSyncLockBusy` now accepts that code when its cause
+   is busy/locked, with the classification `src/config/mutation-lock.ts` already uses; other
+   acquisition or storage failures stay themselves. Test: a real SQLite `BEGIN IMMEDIATE` holder
+   for both expectation kinds, an unpinned control (exit 1), and a holder taken after the check
+   (exit 1, "Config mutation already in progress"). Without the fix the case fails.
+
 ## Verification
 
 Red run of the new test on the unfixed tree, then: focused test files, `bun run typecheck`,
