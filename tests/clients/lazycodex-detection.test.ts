@@ -38,7 +38,16 @@ describe("detectLazyCodex", () => {
     expect(detectLazyCodex(codexHome)).toEqual({ detected: false, pluginEnabled: false, pluginInstalled: true });
   });
 
-  test("a plugin directory without the LazyCodex install receipt does not count", () => {
+  test("a marketplace-synced copy counts by its plugin manifest, without the npx receipt", () => {
+    writeFileSync(join(codexHome, "config.toml"), ENABLED);
+    const dir = join(codexHome, "plugins", "cache", "sisyphuslabs", "omo", "5.1.45");
+    mkdirSync(join(dir, ".codex-plugin"), { recursive: true });
+    writeFileSync(join(dir, ".codex-plugin", "plugin.json"), '{ "name": "omo", "version": "5.1.45" }');
+    mkdirSync(join(codexHome, "plugins", "cache", "sisyphuslabs", "omo", "5.1.44"), { recursive: true });
+    expect(detectLazyCodex(codexHome)).toEqual({ detected: true, pluginEnabled: true, pluginInstalled: true });
+  });
+
+  test("a plugin directory with neither the manifest nor the receipt does not count", () => {
     writeFileSync(join(codexHome, "config.toml"), ENABLED);
     mkdirSync(join(codexHome, "plugins", "cache", "sisyphuslabs", "omo", "5.1.1"), { recursive: true });
     expect(detectLazyCodex(codexHome).detected).toBe(false);
