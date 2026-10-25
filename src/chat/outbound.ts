@@ -19,6 +19,7 @@ import {
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
   isCyberPolicyMessage,
+  isTerminalRefusalCode,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
@@ -203,6 +204,10 @@ export function chatCompletionsStreamErrorPayload(
     // The guard's deterministic refusal keeps its wire identity past classifyError's
     // generic 5xx remap — same code the buffered Chat error and the SSE frame carry.
     classified.code = UNDECLARED_TOOL_CALL_ERROR_CODE;
+  } else if (isTerminalRefusalCode(details?.code)) {
+    // A terminal refusal (e.g. `invalid_prompt` for a plan refusal on a later sidecar iteration)
+    // is a client error; its code survives so the client sees the refusal, not a server fault.
+    classified.code = details!.code!;
   } else if (details?.code !== undefined && details.code !== null && !classified.code) {
     classified.code = details.code;
   }
@@ -230,7 +235,9 @@ export function chatCompletionsFailedResponse(error: Rec): { message: string; de
       code,
       ...(code === "translation_buffer_limit"
         ? { status: 502, type: "upstream_error" }
-        : { type, ...(code === CYBER_POLICY_ERROR_CODE ? { status: 400 } : {}) }),
+        // A terminal refusal code is a 400-class verdict; inferring status from its wording
+        // turned a permanent refusal into a retryable 502.
+        : { type, ...(isTerminalRefusalCode(code) ? { status: 400 } : {}) }),
     },
   };
 }
@@ -1059,7 +1066,7 @@ export async function collectChatCompletion(
           const code = typeof parsed.error.code === "string" ? parsed.error.code : null;
           const status = code === "translation_buffer_limit"
             ? 502
-            : code === CYBER_POLICY_ERROR_CODE || isCyberPolicyMessage(message)
+            : isTerminalRefusalCode(code) || isCyberPolicyMessage(message)
               ? 400
               : streamErrorStatus(message);
           const streamError = new ChatCompletionsStreamError(message, {

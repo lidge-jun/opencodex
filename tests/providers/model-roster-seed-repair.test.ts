@@ -239,3 +239,49 @@ describe("International roster refresh follows the saved destination", () => {
     }
   });
 });
+describe("Moonshot K3.1 Pro saved roster refresh", () => {
+  // The roster every install saved between the Kimi K3 seed (260717) and #7653. Frozen here on
+  // purpose: a later K2 retirement must not silently change what this refresh matches.
+  const before = ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
+  const added = ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"];
+  const moonshotConfig = (baseUrl: string | undefined, models: string[]) => ({ providers: { moonshot: {
+    adapter: "openai-chat", ...(baseUrl === undefined ? {} : { baseUrl }), models,
+    defaultModel: "kimi-k2.7-code",
+    modelContextWindows: { "kimi-k3": 1_048_576 },
+    modelDefaultReasoningEfforts: {},
+  } } } as unknown as OcxConfig);
+
+  test("refreshes an untouched seed on the International, China, and default destinations", () => {
+    // platform.kimi.ai and platform.kimi.com (China) both list kimi-k3.1-pro and -highspeed.
+    for (const baseUrl of [undefined, "https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1/"]) {
+      const first = projectStartupConfigRepairs(moonshotConfig(baseUrl, [...before]));
+      expect(first.changed).toBe(true);
+      const row = first.config.providers!.moonshot!;
+      expect(row.models).toEqual(PROVIDER_REGISTRY.find(entry => entry.id === "moonshot")!.models);
+      expect(row.models).toEqual(expect.arrayContaining(added));
+      expect(row.defaultModel).toBe("kimi-k2.7-code");
+      expect(row.baseUrl).toBe(baseUrl);
+      for (const id of added) {
+        expect(row.modelContextWindows![id]).toBe(1_048_576);
+        expect(row.modelDefaultReasoningEfforts![id]).toBe("max");
+      }
+      expect(row.modelContextWindows!["kimi-k3"]).toBe(1_048_576);
+      expect(projectStartupConfigRepairs(structuredClone(first.config)).changed).toBe(false);
+    }
+  });
+
+  test("leaves Custom destinations and hand-edited lists untouched", () => {
+    const cases: Array<[string | undefined, string[]]> = [
+      ["https://gateway.example.test/v1", [...before]],
+      ["https://api.moonshot.ai/v1", before.slice(1)],
+      ["https://api.moonshot.ai/v1", [...before, "kimi-custom"]],
+      ["https://api.moonshot.ai/v1", [...before].reverse()],
+    ];
+    for (const [baseUrl, models] of cases) {
+      const config = moonshotConfig(baseUrl, models);
+      const original = structuredClone(config);
+      expect(projectStaleModelRosters(config).changed).toBe(false);
+      expect(config).toEqual(original);
+    }
+  });
+});

@@ -64,6 +64,7 @@ let entries = new Map<string, StoredEntry>();
 let totalBytes = 0;
 let loaded = false;
 let persistChain: Promise<void> = Promise.resolve();
+let pendingPersist: Promise<void> | undefined;
 
 function storePath(): string {
   return join(getConfigDir(), STORE_FILE_NAME);
@@ -203,8 +204,12 @@ function prune(nowMs: number): void {
 }
 
 function persist(): Promise<void> {
-  persistChain = persistChain
+  // Mutations share a queued snapshot only until serialization starts. Arrivals during
+  // its write get a subsequent batch, without extending earlier callers' barriers.
+  if (pendingPersist) return pendingPersist;
+  const batch = persistChain
     .then(async () => {
+      if (pendingPersist === batch) pendingPersist = undefined;
       const snapshot = JSON.stringify({
         version: STORE_VERSION,
         entries: [...entries].map(([key, entry]) => ({ key, sig: entry.sig, savedAt: entry.savedAt })),
@@ -214,7 +219,9 @@ function persist(): Promise<void> {
     .catch(() => {
       // Best-effort persistence: the in-memory store still serves the running process.
     });
-  return persistChain;
+  pendingPersist = batch;
+  persistChain = batch;
+  return batch;
 }
 
 /**
@@ -331,6 +338,7 @@ export function resetThoughtSignatureReplayForTests(): void {
   totalBytes = 0;
   loaded = false;
   persistChain = Promise.resolve();
+  pendingPersist = undefined;
   cachedSalt = undefined;
   saltLoaded = false;
 }
