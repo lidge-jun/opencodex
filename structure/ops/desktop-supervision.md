@@ -184,4 +184,3 @@ extension's own container rather than a shared App Group, which ad-hoc signing c
 Bun targets and prepares the external binary plus dashboard resources used by
 Tauri. Generated files under desktop/src-tauri/binaries/ and
 desktop/src-tauri/resources/ remain ignored.
-
