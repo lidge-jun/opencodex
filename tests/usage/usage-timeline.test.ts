@@ -205,4 +205,52 @@ describe("usage timeline", () => {
     expect(make("max")?.total).toBe(2);
     expect(make("average")?.total).toBe(1.5);
   });
+
+  test.each(["max", "average"] as const)("folds a large request population with %s", aggregation => {
+    const query = parseTimelineQuery(new URLSearchParams(`hours=6&aggregation=${aggregation}`), now);
+    if ("error" in query) throw new Error(query.error);
+    const acc = createTimelineAccumulator(query);
+    for (let model = 0; model < 23; model++) {
+      acc.add(entry({ model: `kept-${model}`, totalTokens: 100 }));
+    }
+    // Each individual series fits an ordinary argument list; their folded population does not.
+    for (let model = 0; model < 28; model++) {
+      for (let index = 0; index < 40_000; index++) {
+        acc.add(entry({ requestId: `r-${index}`, model: `tail-${model}`, totalTokens: 1 + index % 2 }));
+      }
+    }
+    const result = acc.finish();
+    expect(result.series).toHaveLength(24);
+    const other = result.series.at(-1)!;
+    expect(other.id).toBe("other");
+    expect(other.total).toBe(aggregation === "max" ? 2 : 1.5);
+    expect(other.points.filter(value => value !== 0)).toEqual([other.total]);
+    expect(result.missingMeasurements).toBe(0);
+  });
+
+  test("a single large series does not spread request values onto the call stack", () => {
+    const query = parseTimelineQuery(new URLSearchParams("hours=6&aggregation=max"), now);
+    if ("error" in query) throw new Error(query.error);
+    const acc = createTimelineAccumulator(query);
+    for (let index = 0; index < 1_100_000; index++) {
+      acc.add(entry({ requestId: `r-${index}`, totalTokens: index % 17 }));
+    }
+    expect(acc.finish().series[0]?.total).toBe(16);
+  });
+
+  test.each(["max", "average"] as const)("folded %s combines same-model attempts before request weighting", aggregation => {
+    const query = parseTimelineQuery(new URLSearchParams(`hours=6&aggregation=${aggregation}`), now);
+    if ("error" in query) throw new Error(query.error);
+    const acc = createTimelineAccumulator(query);
+    for (let model = 0; model < 23; model++) {
+      acc.add(entry({ model: `kept-${model}`, totalTokens: 100 }));
+    }
+    acc.add(entry({ requestId: "retried", attempts: [attempt(10, 0), attempt(30, 1)] }));
+    for (let index = 0; index < 3; index++) {
+      acc.add(entry({ requestId: `small-${index}`, model: "small", totalTokens: 10 }));
+    }
+    const other = acc.finish().series.at(-1)!;
+    expect(other.id).toBe("other");
+    expect(other.total).toBe(aggregation === "max" ? 40 : 17.5);
+  });
 });

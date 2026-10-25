@@ -252,6 +252,43 @@ describe("bounded audit descriptors and privacy", () => {
     if (process.platform !== "win32") expect(auditLines()[1]).toEqual({ kept: true });
   });
 
+  test("compaction preserves complete UTF-8 byte views and drops an unterminated JSON row", () => {
+    const complete = Buffer.from(' \t{"note":"한😀�","bom":"\uFEFF"}\r\n{"escaped":"\\ud800"}\n');
+    const original = Buffer.concat([complete, Buffer.from('{"unterminated":true}')]);
+    writeFileSync(auditPath(), original, { mode: 0o600 });
+    if (process.platform === "win32") {
+      expect(appendUnderK()).toBe("skipped");
+      expect(readFileSync(auditPath()).equals(original)).toBe(true);
+      return;
+    }
+    expect(appendUnderK()).toBe("appended");
+    const output = readFileSync(auditPath());
+    expect(output.subarray(0, complete.length).equals(complete)).toBe(true);
+    expect(auditLines()).toHaveLength(3);
+    expect(auditLines().at(-1)).toMatchObject({ writer: "convergence" });
+  });
+
+  test("compaction rejects malformed UTF-8 and BOM-prefixed rows, then reads the next byte view", () => {
+    const malformed = [
+      [0xff], [0x80], [0xc2], [0xc0, 0xaf], [0xe2, 0x82],
+      [0xed, 0xa0, 0x80], [0xf4, 0x90, 0x80, 0x80],
+    ].map(bytes => Buffer.concat([Buffer.from('{"bad":"'), Buffer.from(bytes), Buffer.from('"}\n')]));
+    malformed.push(Buffer.from('\uFEFF{"bad":"bom"}\n'), Buffer.from('\uFEFF\uFEFF{"bad":"two boms"}\n'));
+    const kept = malformed.map((_bytes, index) => Buffer.from(`${JSON.stringify({ kept: index, text: "한😀�" })}\n`));
+    const original = Buffer.concat(malformed.flatMap((bytes, index) => [bytes, kept[index]!]));
+    writeFileSync(auditPath(), original, { mode: 0o600 });
+    if (process.platform === "win32") {
+      expect(appendUnderK()).toBe("skipped");
+      expect(readFileSync(auditPath()).equals(original)).toBe(true);
+      return;
+    }
+    expect(appendUnderK()).toBe("appended");
+    const prefix = Buffer.concat(kept);
+    expect(readFileSync(auditPath()).subarray(0, prefix.length).equals(prefix)).toBe(true);
+    expect(auditLines()).toHaveLength(kept.length + 1);
+    expect(auditLines().at(-1)).toMatchObject({ writer: "convergence" });
+  });
+
   test("fixed named projection excludes arbitrary properties and unknown writer/argv secrets", () => {
     const originalArgv = process.argv;
     const secret = "token-private-test-value";
@@ -353,6 +390,20 @@ describe("foreign refusal is K-held append only", () => {
       const before = statSync(auditPath());
       expect(refuseForeign()).toEqual({ kind: "unavailable", reason: "foreign-owner" });
       expect(readFileSync(auditPath(), "utf8")).toBe(bytes);
+      expect(statSync(auditPath()).mtimeMs).toBe(before.mtimeMs);
+    }
+  });
+
+  test("foreign appends refuse malformed UTF-8 and BOM-prefixed rows without rewriting bytes", () => {
+    foreignBinding();
+    for (const bytes of [
+      Buffer.from('{}\n\uFEFF{"bad":"bom"}\n'),
+      Buffer.concat([Buffer.from('{}\n{"bad":"'), Buffer.from([0xed, 0xa0, 0x80]), Buffer.from('"}\n')]),
+    ]) {
+      writeFileSync(auditPath(), bytes, { mode: 0o600 });
+      const before = statSync(auditPath());
+      expect(refuseForeign()).toEqual({ kind: "unavailable", reason: "foreign-owner" });
+      expect(readFileSync(auditPath()).equals(bytes)).toBe(true);
       expect(statSync(auditPath()).mtimeMs).toBe(before.mtimeMs);
     }
   });
