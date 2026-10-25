@@ -53,6 +53,16 @@ export function mismatchPhase(expectation: ClientSyncExpectation): ClientSyncMis
 }
 
 /**
+ * A lock the check needs is held: the apply lock by a link connect or another apply
+ * (`link_apply_busy`), or the client lifecycle lock (`client_lifecycle_busy`). Before the check
+ * ran, a pinned sync cannot know which connection it would serve, so it is refused as pending.
+ */
+export function isClientSyncLockBusy(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error ? (error as { code: unknown }).code : undefined;
+  return code === "link_apply_busy" || code === "client_lifecycle_busy";
+}
+
+/**
  * Pure verdict: null when the expectation holds. An unfinished disconnect wins over everything,
  * because it is already tearing down whichever connection the state still names. A connect only
  * starts from a disconnected machine, so its marker is consulted only there.

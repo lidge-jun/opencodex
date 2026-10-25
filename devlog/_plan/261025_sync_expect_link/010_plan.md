@@ -87,6 +87,16 @@ test carries no restart flag and stubs the restart helper.
    like an unpinned sync. Root-level tests added; without the fix 4 of 25 cases fail.
 2. Non-blocking, **accepted**: trailing blank lines at EOF removed (`git diff --check` clean).
 
+## Manager review at 7bfbd75a41 (MUST-FIX) — decisions
+
+1. P2, **accepted**: a link connect holds the apply lock across its network reads, so a pinned
+   sync failed acquiring it before its check and exited 1 without a phase. `withLinkApply` now
+   throws `LinkApplyBusyError` (`code: "link_apply_busy"`, same message); `syncConnectedClient`
+   maps that or `client_lifecycle_busy` raised before its check passed to
+   `ClientSyncExpectationError(..., "pending_operation")`. Tests hold a real link connect at its
+   readiness fetch (deferred promise) and a real lifecycle lock; without the fix both fail.
+2. P3, **accepted**: PR body regains a standalone `## Verification` heading and `Closes #7694`.
+
 ## Verification
 
 Red run of the new test on the unfixed tree, then: focused test files, `bun run typecheck`,

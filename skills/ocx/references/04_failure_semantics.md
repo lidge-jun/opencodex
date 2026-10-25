@@ -138,7 +138,7 @@ the lock that chooses the sync path, the machine is still connected to that link
 key. Otherwise they write nothing, never fall back to the local providers, exit 5, and end stderr
 with one JSON line: `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":"..."}`. Read
 the `phase`, not the exit code alone. `reason` is `disconnected`, `invalid_state`,
-`disconnect_pending`, `pending_operation` (key rotation or a connect in progress), `hub_client`,
+`disconnect_pending`, `pending_operation` (a key rotation, connect or other sync in progress), `hub_client`,
 `link_client`, `other_link` or `other_key`. Do not retry unchanged: re-read
 `ocx connect status --json` and decide whether this machine should follow that Home at all. A
 malformed, repeated or doubled flag exits 2 before anything is read. Older versions ignore the

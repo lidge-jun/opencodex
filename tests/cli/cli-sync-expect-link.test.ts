@@ -13,6 +13,7 @@ import { dispatchCommand, type CliDispatchDeps } from "../../src/cli/dispatch";
 import * as connectApi from "../../src/client/connect";
 import { handleMachineApi } from "../../src/client/machine-api";
 import { markClientConnectPending } from "../../src/client/state";
+import { withClientLifecycle } from "../../src/client/lifecycle-lock";
 import * as restartScope from "../../src/cli/restart-scope";
 import * as shimAutoRestore from "../../src/cli/codex-shim-autorestore";
 import { runCli } from "../../src/cli/root";
@@ -284,6 +285,67 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     expect(run.shimRepairs).toBe(1);
     expect(run.connectedCalls).toEqual([{ restartCodex: false, expect: expectation }]);
     expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(HOME_CATALOG);
+  });
+
+  test("a real link connect paused at its readiness read makes a pinned sync a pending refusal", async () => {
+    writeStandalone();
+    const configBefore = readFileSync(join(root, "config.json"), "utf8");
+    let reached!: () => void;
+    const atReadiness = new Promise<void>(resolve => { reached = resolve; });
+    let release!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const home = `http://127.0.0.1:${TUNNEL}`;
+    // The connect holds the apply lock from its first lock through its network reads.
+    const connecting = connectApi.connectClient({
+      serverUrl: home, managementUrl: home, managementTransport: "direct", transport: "link",
+      link: { tunnelPort: TUNNEL, linkId: LINK_ID },
+      credential: { kind: "link", apiKeyId: HUB_KEY_ID, key: KEY },
+      selectedClients: ["claude"], noSync: true,
+    } as Parameters<typeof connectApi.connectClient>[0], {
+      fetchImpl: (async () => {
+        reached();
+        await released;
+        return Response.json({
+          service: "opencodex", version: "0.0.0", uptime: 1, pid: 1, port: TUNNEL,
+          status: "pending", protocol: 1, minimumClientProtocol: 1, managementUrl: home,
+        }, { status: 503 });
+      }) as typeof fetch,
+      lifecycleLockDeps: isolatedDeps([]).lifecycleLockDeps,
+    });
+    const settled = connecting.then(() => "connected", (error: Error) => error.message);
+    await atReadiness;
+    const during = await runSync(["sync", "--expect-link", LINK_ID]);
+    expect(during.code).toBe(5);
+    expect(lastJson(during.errors)).toEqual({ phase: "child_link_mismatch", reason: "pending_operation" });
+    expect(during.localSyncCalls).toBe(0);
+    expect(during.discoveries).toBe(0);
+    expect(during.shimRepairs).toBe(0);
+    expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(SENTINEL_CATALOG);
+    release();
+    expect(await settled).toContain("hub is not ready");
+    // The connect rolled back and released the lock; the same command now reads the real state.
+    expect(readFileSync(join(root, "config.json"), "utf8")).toBe(configBefore);
+    const after = await runSync(["sync", "--expect-link", LINK_ID]);
+    expect(after.code).toBe(5);
+    expect(lastJson(after.errors)).toEqual({ phase: "child_link_mismatch", reason: "disconnected" });
+  });
+
+  test("a held client lifecycle lock refuses even a Child that would match, before its check", async () => {
+    writeClient({ transport: "link" });
+    const configBefore = readFileSync(join(root, "config.json"), "utf8");
+    const run = await withClientLifecycle(
+      () => runSync(["sync", "--expect-hub-key", HUB_KEY_ID]).then(async () => runSync(["sync", "--expect-link", LINK_ID])),
+      isolatedDeps([]).lifecycleLockDeps,
+    );
+    expect(run.code).toBe(5);
+    expect(lastJson(run.errors)).toEqual({ phase: "child_link_mismatch", reason: "pending_operation" });
+    expect(run.connectedCalls).toHaveLength(1);
+    expect(run.shimRepairs).toBe(0);
+    expect(readFileSync(join(root, "config.json"), "utf8")).toBe(configBefore);
+    expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(SENTINEL_CATALOG);
+    // Released, the same Child matches and syncs.
+    const free = await runSync(["sync", "--expect-link", LINK_ID]);
+    expect(free.code).toBe(0);
   });
 
   test.each([

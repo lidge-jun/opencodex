@@ -590,7 +590,7 @@ providers, exits **5**, and prints a human line followed by one JSON line as the
 | `disconnected` | Not connected to any Home or hub |
 | `invalid_state` | The client configuration or a connect marker cannot be read |
 | `disconnect_pending` | A disconnect has started and not finished |
-| `pending_operation` | A key rotation or a connect is in progress |
+| `pending_operation` | A key rotation, a connect, or another sync is in progress (including one that holds the locks this check needs) |
 | `hub_client` | `--expect-link` on a hub client |
 | `link_client` | `--expect-hub-key` on a Remote Link Child |
 | `other_link` / `other_key` | Connected, but to a different link or with a different key |

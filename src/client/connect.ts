@@ -74,7 +74,9 @@ import {
   assertNoClientDisconnectPending, assertClientConnectionUnchanged, sameClientConnectionOwner,
 } from "./state";
 import { assertClientCatalogCompatible, type CatalogCompatibilityDeps } from "./catalog-compatibility";
-import { assertClientSyncExpectation, type ClientSyncExpectation } from "./sync-expectation";
+import {
+  assertClientSyncExpectation, ClientSyncExpectationError, isClientSyncLockBusy, type ClientSyncExpectation,
+} from "./sync-expectation";
 import { overlayHomeCodexSettings } from "../link/codex-settings";
 import {
   clearHomeCodexSettingsRecord,
@@ -867,18 +869,33 @@ export async function syncConnectedClient(
   options: ConnectedSyncOptions = {},
   deps: ClientConnectDeps = {},
 ): Promise<ConnectedSyncResult> {
-  return withLinkApply(() => syncConnectedClientUnlocked(options, deps), deps.linkApplyLockPath);
+  let checked = false;
+  try {
+    return await withLinkApply(() => syncConnectedClientUnlocked(options, deps, () => { checked = true; }), deps.linkApplyLockPath);
+  } catch (error) {
+    // #7694: a pinned sync that cannot take a lock its check needs (a link connect holds the apply
+    // lock across its network reads) is refused as pending, with nothing written; it never surfaces
+    // as a generic failure the caller cannot tell from a broken sync.
+    if (options.expect && !checked && isClientSyncLockBusy(error)) {
+      throw new ClientSyncExpectationError(options.expect, "pending_operation");
+    }
+    throw error;
+  }
 }
 
 async function syncConnectedClientUnlocked(
   options: ConnectedSyncOptions = {},
   deps: ClientConnectDeps = {},
+  markChecked: () => void = () => {},
 ): Promise<ConnectedSyncResult> {
   if (siblingOfLivePort() !== null) throw new Error(siblingSkipMessage());
   const initial = withClientLifecycleSync(() => withConfigMutationLockSync(() => {
     // The expectation is checked by the read that selects this path; everything after is
     // compare-and-swapped against the connection it passed (#7694).
-    if (options.expect) assertClientSyncExpectation(options.expect);
+    if (options.expect) {
+      assertClientSyncExpectation(options.expect);
+      markChecked();
+    }
     assertNoClientDisconnectPending();
     const state = readClientConnectionState();
     if (state.kind !== "connected" || state.value.pendingOperation) throw new Error("client_sync_unavailable");
