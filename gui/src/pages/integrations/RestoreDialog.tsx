@@ -39,6 +39,7 @@ export default function RestoreDialog({
   onRestored,
   profileId,
   onReconcile,
+  hermesProfile,
 }: {
   apiBase: string;
   row: IntegrationJournalRow;
@@ -46,6 +47,8 @@ export default function RestoreDialog({
   onRestored: () => void;
   profileId?: number;
   onReconcile?: () => void;
+  /** The named Hermes profile whose history this row came from. */
+  hermesProfile?: string;
 }) {
   const t = useT();
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -65,6 +68,7 @@ export default function RestoreDialog({
   const [previewFailure, setPreviewFailure] = useState<string | null>(null);
   const [mutationFailure, setMutationFailure] = useState<string | null>(null);
   const scopedProfileId = row.clientId === "aside" ? profileId ?? row.profileId : undefined;
+  const scopedHermesProfile = row.clientId === "hermes" ? hermesProfile : undefined;
   const plan = boundPlan?.plan ?? null;
   const drift = plan?.foreignEdit === "drift";
 
@@ -140,10 +144,10 @@ export default function RestoreDialog({
     setStale(false);
     try {
       let confirmDrift = false;
-      let next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
+      let next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId, scopedHermesProfile);
       if (next.refusalReason === "drift_requires_confirm") {
         confirmDrift = true;
-        next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
+        next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId, scopedHermesProfile);
       }
       if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
       setBoundPlan({ plan: next, confirmDrift });
@@ -161,7 +165,7 @@ export default function RestoreDialog({
         setPreviewPending(false);
       }
     }
-  }, [apiBase, row.opId, scopedProfileId]);
+  }, [apiBase, row.opId, scopedProfileId, scopedHermesProfile]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => { void loadPreview(); }, 0);
@@ -188,6 +192,7 @@ export default function RestoreDialog({
         opId: row.opId,
         confirmDrift: attemptedConfirmDrift,
         profileId: scopedProfileId,
+        hermesProfile: scopedHermesProfile,
         binding: bindingFor(boundPlan.plan),
       });
       restoredRef.current = true;
@@ -211,7 +216,7 @@ export default function RestoreDialog({
             setPreviewPending(true);
             freshConfirmDrift = true;
             try {
-              fresh = await previewIntegrationRestore(apiBase, row.opId, freshConfirmDrift, controller.signal, scopedProfileId);
+              fresh = await previewIntegrationRestore(apiBase, row.opId, freshConfirmDrift, controller.signal, scopedProfileId, scopedHermesProfile);
             } finally {
               if (!controller.signal.aborted && generation === previewGenerationRef.current) {
                 previewAbortRef.current = null;

@@ -360,6 +360,17 @@ fragmented framing, header limits and explicit-route snapshot preservation.
 Explicit `http2` / `h2` pins reject before network I/O: this HTTP/1.1 tunnel cannot
 honor them and must not silently downgrade the provider contract.
 
+Response payload is delivered as bytes arrive, in raw slices of at most 64 KiB, rather than
+waiting to fill a slice or an entire declared HTTP chunk. The next pull validates a completed
+chunk's trailing CRLF before reading another chunk; premature EOF and malformed framing still
+error the body. Fixed-length completion releases the socket as soon as the declared bytes are
+queued, without requiring an extra consumer pull. Terminal reader cleanup discards unread bytes;
+only the successful SOCKS handshake preserves bytes for the next socket owner. Payload reads
+use existing byte views instead of accumulating an exact-length copy. Coding limits,
+certificate verification, proxy selection and upload ownership are unchanged.
+`tests/lib/socks5-tls-lifecycle.test.ts` also covers partial payloads, compressed SSE, delayed
+framing, truncation, cancellation and connection release.
+
 The upload and the answer are read together. One reader consumes the socket for the whole
 exchange, starting before the request body is finished, because a peer may answer a request it
 has not finished receiving and a caller's body stream may stall. Each body read and drain wait
