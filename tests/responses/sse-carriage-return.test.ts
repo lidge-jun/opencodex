@@ -86,3 +86,80 @@ describe("SSE line ending compatibility", () => {
     }
   });
 });
+
+describe("SSE bounded field prefix", () => {
+  test("classifies split field prefixes and resets classification for every line", async () => {
+    const wire = "data: first\r\nevent: next\ndata:  second\r: ping\rignored: value\ndata\n\ndata:tail";
+    const expected = [
+      { kind: "comment", comment: "ping" },
+      { kind: "event", event: "next", data: "first\n second\n" },
+      { kind: "event", data: "tail" },
+    ];
+    expect(await collect([wire])).toEqual(expected);
+    for (let split = 0; split <= wire.length; split++) {
+      expect(await collect([wire.slice(0, split), "", wire.slice(split)])).toEqual(expected);
+    }
+    expect(await collect([...wire])).toEqual(expected);
+  });
+
+  test("preserves a multibyte sixth character across all byte boundaries", async () => {
+    const bytes = new TextEncoder().encode("data:한🙂\r\ndata: 界\r\n\r\n");
+    for (let split = 0; split <= bytes.length; split++) {
+      const budget = createTranslatorBudget();
+      const source = new ReadableStream<Uint8Array>({ start(controller) {
+        controller.enqueue(bytes.subarray(0, split));
+        controller.enqueue(bytes.subarray(split));
+        controller.close();
+      } });
+      try {
+        const records = [];
+        for await (const record of decodeServerSentEvents(source, { translatorBudget: budget })) records.push(record);
+        expect(records).toEqual([{ data: "한🙂\n界" }]);
+        expect(budget.snapshot().currentBytes).toBe(0);
+      } finally { budget.dispose(); }
+    }
+  });
+
+  test("does not re-extract the prefix from the accumulated long line", async () => {
+    const payload = "x".repeat(256 * 1024);
+    const wire = `data: ${payload}\n\n`;
+    const chunks: string[] = [];
+    for (let offset = 0; offset < wire.length; offset += 512) chunks.push(wire.slice(offset, offset + 512));
+    const original = String.prototype.slice;
+    let growingPrefixReads = 0;
+    let records: Awaited<ReturnType<typeof collect>>;
+    // Count operations instead of using a wall-clock threshold. Always restore the
+    // prototype, including when decoding fails; these tests are not concurrent.
+    String.prototype.slice = function(this: string, start: number, end?: number): string {
+      if (start === 0 && end === 6 && this.length > 4096) growingPrefixReads++;
+      return original.call(this, start, end);
+    };
+    try { records = await collect(chunks); }
+    finally { String.prototype.slice = original; }
+    expect(records).toEqual([{ kind: "event", data: payload }]);
+    expect(growingPrefixReads).toBe(0);
+  });
+
+  test("a partially collected prefix still releases accounting when append admission fails", async () => {
+    const budget = createTranslatorBudget();
+    const reserve = budget.reserveTransient.bind(budget);
+    const failure = new Error("synthetic append admission failure");
+    budget.reserveTransient = (bytes, scope) => {
+      if (bytes > 256) throw failure;
+      return reserve(bytes, scope);
+    };
+    let cancelled = 0;
+    const source = new ReadableStream<Uint8Array>({ start(controller) {
+      for (const value of ["da", "ta:", " ", "x".repeat(128), "y".repeat(128)]) {
+        controller.enqueue(new TextEncoder().encode(value));
+      }
+    }, cancel() { cancelled++; } });
+    try {
+      const iterator = decodeServerSentEvents(source, { translatorBudget: budget });
+      await expect(iterator.next()).rejects.toBe(failure);
+      expect(budget.snapshot().currentBytes).toBe(0);
+      expect(cancelled).toBe(1);
+      expect(source.locked).toBe(false);
+    } finally { budget.dispose(); }
+  });
+});
