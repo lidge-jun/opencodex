@@ -1,6 +1,6 @@
 # ADR-7517 — decision recorded under "Coding-agent tool ownership"
 
-- Contract owner: [providers-and-adapters.md](../providers-and-adapters.md)
+- Contract owner: [qoder.md](../clients/qoder.md)
 
 ## Decision record
 
