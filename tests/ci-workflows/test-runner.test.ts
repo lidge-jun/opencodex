@@ -1624,17 +1624,38 @@ describe("bun test user lock", () => {
     writeFileSync(join(fixture.lockPath, "owner.json"), JSON.stringify(fixture.owner));
     let waited = false;
     let ownerProbes = 0;
+    const startedAt = Date.now();
+    let now = startedAt;
+    let freshOwnerObserved = false;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    // Leave the real scheduler and gate intact. If cached liveness suppresses
+    // the next identity probe, the existing real deadline still ends the wait.
+    const escapeAt = performance.now() + INTERNAL_DEADLINE_MS;
+    const escape = setInterval(() => {
+      if (performance.now() >= escapeAt) now = startedAt + 20;
+    }, 5);
     try {
       await expect(acquireTestRunLock({
         runId: "blocked", lockPath: fixture.lockPath, pollMs: 5, maxWaitMs: 20, env: queuedTestEnv,
-        onWait() { waited = true; },
+        onWait() { waited = true; now = Math.max(now, startedAt + 19); },
         processStartBatch: pids => new Map(pids.map(pid => {
-          if (pid === process.ppid) ownerProbes += 1;
+          if (pid === process.ppid) {
+            ownerProbes += 1;
+            if (waited) {
+              freshOwnerObserved = true;
+              now = startedAt + 20;
+            }
+          }
           return [pid, waited ? startA : startB];
         })),
       })).rejects.toThrow("timed out");
+      expect(freshOwnerObserved).toBe(true);
       expect(ownerProbes).toBeGreaterThan(1);
-    } finally { removeTreeWithRetry(fixture.root); }
+    } finally {
+      clearInterval(escape);
+      clock.mockRestore();
+      removeTreeWithRetry(fixture.root);
+    }
   });
 
   test("only ESRCH proves a PID dead", async () => {
