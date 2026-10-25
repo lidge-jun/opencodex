@@ -123,6 +123,17 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
+`src/lib/pinned-http.ts` pauses its socket response when the receiving Web Stream queue fills
+and resumes when the reader asks for more. For gzip and deflate, the final decoded queue also
+gates subsequent socket input even when the decoder would accept more coded bytes.
+The body inactivity timer pauses with local backpressure and re-arms when socket input resumes.
+Cancellation and abort still release a paused connection. Native socket and decoder buffers are
+separate from Web Stream queue accounting: one highly compressed input chunk can expand inside
+the decoder before backpressure stops further socket delivery. Existing coded/decoded `maxBytes`
+checks still apply, but this flow control is not a decoder-allocation or total process-memory ceiling.
+`tests/lib/pinned-http.test.ts` observes actual receiver delivery, repeated pauses, exact resumed
+bytes, pending-read timeouts and cancellation/error teardown.
+
 `src/lib/eventstream-decoder.ts` retains only an incomplete EventStream frame in a geometrically
 grown byte buffer. Fragmentation therefore requires linear aggregate copying; a complete frame in
 one source chunk keeps its source view. Storage grows with received bytes rather than an advertised
