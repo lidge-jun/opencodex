@@ -1,8 +1,8 @@
 import type { OcxConfig } from "../../types";
-import { resolveComboId } from "../../combos";
+import { getCombo, resolveComboId } from "../../combos";
 import { isBareOpenAiFamilyModel, previewRouteModel, routeConcreteModel } from "../../router";
 import { resolveChosenTarget } from "./shadow-target-availability";
-import { getRoutingProfile, resolvePolicyProfileId, type NormalizedRoutingProfile } from "../../routing/profile";
+import { getRoutingProfile, resolvePolicyProfileId } from "../../routing/profile";
 import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
 import {
   getMainAccountHardLockStatus,
@@ -12,7 +12,10 @@ import { codexQuotaScopeForModel } from "../../codex/routing/health-store";
 import { getEligiblePoolAccounts } from "../../codex/routing/selection";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { FallbackRefusedError, guardFallbackHop, type FallbackAdmission, type FallbackTarget } from "../../routing/fallback-policy";
+import {
+  FallbackRefusedError, fallbackDeviceIds, fallbackHopKind, guardFallbackHop, resolveFallbackPolicy,
+  type FallbackAdmission, type FallbackHop, type FallbackTarget,
+} from "../../routing/fallback-policy";
 /** Resolves to a synchronous ownership proof, or null when the caller does not own the locked main. */
 export type MainHardLockCallerCheck = (sourceModel: string) => Promise<(() => boolean) | null>;
 
@@ -111,8 +114,26 @@ export async function applyMainHardLockFallbackOverride(
   // Combos and policies keep their own dispatch admission and declared failover/evidence.
   // Other chosen targets must resolve now; a removed qualifier cannot become a default send.
   const policyId = resolvePolicyProfileId(config, fallback.model);
-  if (!isConfiguredComboSelector(config, fallback.model)
-    && !(policyId && getRoutingProfile(config, policyId))) {
+  const profile = policyId ? getRoutingProfile(config, policyId) : undefined;
+  const comboId = resolveComboId(config, fallback.model);
+  const combo = comboId ? getCombo(config, comboId) : undefined;
+  if (profile || combo) {
+    // Match the actual first guard's selector order. This neither picks nor filters a target.
+    const denied = allDeclaredTargetsDenied(config, profile?.candidates ?? combo!.targets, {
+      site: "hard-lock",
+      route: profile ? parsed.model : `combo/${comboId}`,
+      aliases: profile ? [`policy/${policyId}`] : [parsed.model],
+      from: { provider: OPENAI_CODEX_PROVIDER_ID, model: parsed.model },
+      trigger: "hard_lock", admission, ...(now !== undefined ? { now } : {}),
+    });
+    if (denied) {
+      // One refusal witness for an all-denied declaration, never a speculative taken event.
+      const hop = guardFallbackHop(config, denied);
+      if (!hop.ok) throw new FallbackRefusedError(hop.response);
+    }
+    // Mixed or unresolved declarations grant nothing: actual first/retry guards still decide.
+    // A selector rewrite is not a selected hop and reserves no send or taken event here.
+  } else {
     try {
       const target = resolveChosenTarget(fallback.model, model => previewRouteModel(config, model));
       if ("unavailable" in target) return null;
@@ -120,22 +141,17 @@ export async function applyMainHardLockFallbackOverride(
       // An unavailable target keeps the source lock's refusal without touching the body.
       return null;
     }
+    // Concrete targets keep their existing proactive admission at body rewrite.
+    const hop = guardFallbackHop(config, {
+      site: "hard-lock",
+      route: parsed.model,
+      from: { provider: OPENAI_CODEX_PROVIDER_ID, model: parsed.model },
+      to: hardLockTargetOf(config, fallback.model),
+      trigger: "hard_lock", admission, ...(now !== undefined ? { now } : {}),
+    });
+    if (!hop.ok) throw new FallbackRefusedError(hop.response);
+    hop.commit();
   }
-
-  // OCX-11: the reroute is a proactive model hop; refused, the request is answered with the
-  // fallback refusal and the body is left untouched.
-  const hop = guardFallbackHop(config, {
-    site: "hard-lock",
-    route: parsed.model,
-    from: { provider: OPENAI_CODEX_PROVIDER_ID, model: parsed.model },
-    to: hardLockTargetOf(config, parsed.model, fallback.model),
-    trigger: "hard_lock",
-    admission,
-    ...(now !== undefined ? { now } : {}),
-  });
-  if (!hop.ok) throw new FallbackRefusedError(hop.response);
-  // The rewrite is this site's admission: the body now names the fallback model.
-  hop.commit();
 
   parsed.raw.model = fallback.model;
   if (fallback.reasoningEffort !== undefined) {
@@ -151,17 +167,31 @@ export async function applyMainHardLockFallbackOverride(
 }
 
 /**
- * The hop's destination for the fallback policy, read from config only. A routing profile picks
- * its candidate from request-history evidence, and evaluating it here would open that index under
- * OPENCODEX_HOME just to classify the hop (on Windows the open handle then outlives the request's
- * home); the profile's own dispatch still evaluates it. Its declared candidates are classified
- * instead, as the hop the profile could take: a candidate on another provider makes it a provider
- * hop. Combos, account namespaces and concrete targets resolve from config alone.
+ * Pure policy feasibility over declared concrete destinations. Unknown resolution is not denial.
+ * No picker, history, cooldown, event or send-budget operation runs for individual candidates.
+ * The first denied hop is only a refusal witness once every declaration is known denied.
  */
-function hardLockTargetOf(config: OcxConfig, sourceModel: string, model: string): FallbackTarget {
-  const policyId = resolvePolicyProfileId(config, model);
-  const profile = policyId ? getRoutingProfile(config, policyId) : undefined;
-  if (profile) return profileHopTarget(config, sourceModel, profile);
+function allDeclaredTargetsDenied(
+  config: OcxConfig, targets: readonly FallbackTarget[], hop: Omit<FallbackHop, "to">,
+): FallbackHop | undefined {
+  const deviceIds = fallbackDeviceIds(config, hop.admission, hop.now);
+  const routes = [hop.route, ...(hop.aliases ?? [])];
+  let witness: FallbackHop | undefined;
+  for (const target of targets) {
+    let to: FallbackTarget;
+    try {
+      const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
+      to = { provider: route.providerName, model: route.modelId };
+    } catch { return undefined; }
+    const kind = fallbackHopKind(hop.from, to);
+    if (kind === null || resolveFallbackPolicy(config, { kind, routes, provider: hop.from.provider, deviceIds }).allowed) return undefined;
+    witness ??= { ...hop, to };
+  }
+  return witness;
+}
+
+/** Concrete and account-qualified targets retain the existing config-only resolution. */
+function hardLockTargetOf(config: OcxConfig, model: string): FallbackTarget {
   try {
     const route = previewRouteModel(config, model);
     return { provider: route.providerName, model: route.modelId };
@@ -169,18 +199,4 @@ function hardLockTargetOf(config: OcxConfig, sourceModel: string, model: string)
     const slash = model.indexOf("/");
     return slash > 0 ? { provider: model.slice(0, slash), model: model.slice(slash + 1) } : { provider: "", model };
   }
-}
-
-function profileHopTarget(config: OcxConfig, sourceModel: string, profile: NormalizedRoutingProfile): FallbackTarget {
-  const targets = profile.candidates.map((candidate): FallbackTarget => {
-    try {
-      const route = routeConcreteModel(config, candidate.provider + "/" + candidate.model);
-      return { provider: route.providerName, model: route.modelId };
-    } catch {
-      return { provider: candidate.provider, model: candidate.model };
-    }
-  });
-  return targets.find(target => target.provider !== OPENAI_CODEX_PROVIDER_ID)
-    ?? targets.find(target => target.model !== sourceModel)
-    ?? { provider: OPENAI_CODEX_PROVIDER_ID, model: sourceModel };
 }

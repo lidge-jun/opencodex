@@ -14,7 +14,7 @@ import {
   removeProfileSection,
   ensureRootWebSearchDisabled, ensureFastModeFeature, stripOpencodexCatalogPath,
   setRootModelCatalogPath,
-  stripExistingModelProvider, stripRootContextWindowOverrides,
+  stripExistingModelProvider,
 } from "../../src/codex/inject/config-toml";
 import { stripOpencodexConfig } from "../../src/codex/inject/remove";
 import { deriveCodexInjectionPlan } from "../../src/codex/inject/plan";
@@ -97,9 +97,12 @@ describe("structural root ownership and multiline preservation", () => {
     expect(parse(stripOpencodexConfig(owned))).toEqual({ user: {} });
   });
 
-  test("context override removal consumes the complete collection without touching its neighbor", () => {
+  test("injection keeps a user's multiline root context-window collection byte for byte", () => {
     const content = 'model_context_window = [\n1,\n2\n]\nmodel = "fixture-model"\n';
-    expect(parse(stripRootContextWindowOverrides(content))).toEqual({ model: "fixture-model" });
+    const plan = deriveCodexInjectionPlan(content, { config: undefined, routingTarget: target, catalogPathOption: null, journalReadOnly: true });
+    if (plan.kind !== "ok") throw new Error(plan.message);
+    expect(plan.content).toContain('model_context_window = [\n1,\n2\n]\n');
+    expect(parse(plan.content).model_context_window).toEqual([1, 2]);
   });
 
   test.each([
@@ -107,7 +110,7 @@ describe("structural root ownership and multiline preservation", () => {
     "9223372036854775807", "-9223372036854775808", "9_223_372_036_854_775_807",
     "-9_223_372_036_854_775_808", "0x7fff_ffff_ffff_ffff", "0o777777777777777777777",
     "0b111111111111111111111111111111111111111111111111111111111111111",
-  ])("value-free removal accepts a complete signed 64-bit integer (%s)", numeric => {
+  ])("value-free spans accept a complete signed 64-bit integer (%s)", numeric => {
     for (const eol of ["\n", "\r\n"]) for (const bom of ["", "\uFEFF"]) {
       const neighbor = `model = "fixture-model"${eol}# user comment${eol}[child]${eol}value = "keep"${eol}`;
       const key = numeric === "9007199254740992" || numeric === "9223372036854775807"
@@ -117,14 +120,6 @@ describe("structural root ownership and multiline preservation", () => {
       const source = rootSourceLines(content);
       expect(sourceAssignment(source.lines, 0, source.rootEnd)).toBeNull();
       expect(sourceAssignmentSpan(source.lines, 0, source.rootEnd)?.text).toBe(assignment);
-      expect(stripRootContextWindowOverrides(content)).toBe(bom + neighbor);
-      for (const requiresAdmissionToken of [false, true]) {
-        const plan = deriveCodexInjectionPlan(content, { config: undefined, routingTarget: { ...target, requiresAdmissionToken }, catalogPathOption: null, journalReadOnly: true });
-        expect(plan.kind).toBe("ok");
-        if (plan.kind !== "ok") throw new Error(plan.message);
-        expect(parse(plan.content).model).toBe("fixture-model");
-        expect(plan.baselineContent).toBe(content);
-      }
       expect(stripExistingModelProvider(content.replace("model_context_window", "model_provider"))).toBe(bom + neighbor);
       const webSearch = content.replace("model_context_window", "web_search");
       const off = ensureRootWebSearchDisabled(webSearch, true);
@@ -144,7 +139,6 @@ describe("structural root ownership and multiline preservation", () => {
     "[9007199254740992", '"""unclosed', "'''unclosed", "", "0x", "0b2",
   ])("value-free removal rejects invalid or incomplete integer assignments (%s)", value => {
     const content = `model_context_window = ${value}\nmodel = "fixture-model"\n`;
-    expect(() => stripRootContextWindowOverrides(content)).toThrow();
     expect(() => stripExistingModelProvider(content.replace("model_context_window", "model_provider"))).toThrow();
     expect(() => ensureRootWebSearchDisabled(content.replace("model_context_window", "web_search"), true)).toThrow();
   });

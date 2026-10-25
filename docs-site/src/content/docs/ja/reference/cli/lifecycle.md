@@ -28,7 +28,13 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-実行中のプロキシを (PID によって) 停止し、PID ファイルを削除して、ネイティブ Codex を復元します。マネージド バックグラウンド サービスがインストールされている場合、`ocx stop` はそれを最初に停止するため、プロキシを再起動できません。Web ダッシュボードの **停止** ボタンは同じ処理 (`POST /api/stop`) を実行しますが、Windows タスク スケジューラだけは例外です。タスク終了後もラッパーがプロキシを再起動しうるため、ダッシュボードは `respawnable_service` で拒否し、何も変更せずに `ocx stop` の実行を促します。
+実行中のプロキシを (PID によって) 停止し、PID ファイルを削除します。スタンドアロンの所有者ではネイティブ Codex を復元します。マネージド バックグラウンド サービスがインストールされている場合、`ocx stop` はそれを最初に停止するため、プロキシを再起動できません。Web ダッシュボードの **停止** ボタンは同じ処理 (`POST /api/stop`) を実行しますが、Windows タスク スケジューラだけは例外です。タスク終了後もラッパーがプロキシを再起動しうるため、ダッシュボードは `respawnable_service` で拒否し、何も変更せずに `ocx stop` の実行を促します。
+
+接続済みの hub クライアントまたは Remote Link Child では、`ocx stop`（成功した API 停止を含む）は接続が所有する Codex のルーティング、モデルカタログ、Grok 設定を保持します。`ocx start` はルーティングを再注入せず、その設定で再び処理します。Codex を自身のアカウントへ戻すには `ocx disconnect`、既にネイティブルーティングへ戻した後の再適用には `ocx sync --restart-codex` を使います。
+
+互換性を確認できない古い通常プロキシは、サービスやプロセスを停止する前に拒否されます。監視元からランタイムを更新・再起動して再試行してください。
+
+既に停止済みのクライアントでは、サービス管理側が非アクティブで、既知のローカル接続先にランタイムが存在しないことを確認してから、通常の未実行結果を返します。
 
 ### `ocx restart`
 
@@ -169,6 +175,8 @@ ocx status --json
 `--restart-app-server-only` は以前の狭い動作を復元します。現在のユーザーが所有する一致する app-server / code-mode-host プロセスにのみ `SIGTERM` を送り、デスクトップ アプリは起動したままにします (アクティブなターンは中断される可能性があります)。`--restart-codex` または `--restart-desktop-app` と同時に指定した場合は狭い範囲が優先されます。進行中の会話を失うことは取り返しがつかず、古いピッカーはそうではないからです。
 
 コマンドを Codex アプリ内から実行すると、再起動は切り離されたヘルパーに引き渡され、このセッションはアプリとともに終了します。
+
+**接続先を固定した同期。** `ocx sync --expect-link <linkId>`（Remote Link Child）と `ocx sync --expect-hub-key <apiKeyId>`（hub クライアント）は、このマシンがまだそのリンク、またはそのキーで接続している場合にのみ同期します。そうでなければ何も変更せず、ローカルのプロバイダーも同期せず、終了コード 5 で終了し、stderr の最後の行は `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}` になります。不正な形式または重複したフラグは終了コード 2 で終了します。詳細は[英語版リファレンス](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)を参照してください。
 
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 

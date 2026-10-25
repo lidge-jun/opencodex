@@ -140,6 +140,10 @@ the native passthrough there is no canonical Fast injection and no wire mapping:
 and `fastMode` injects nothing here. Resolved-Fast-policy injection applies only to routes that
 take the Chat -> Responses -> Chat bridge below. `parallel_tool_calls` is emitted only for providers opted into
 parallel tools (or pinned false by the existing provider opt-out contract).
+A `reasoning_details` entry carrying Anthropic state — the `anthropic-claude-v1` marker, or an
+unmarked `reasoning.text` whose signature passes the inbound spelling check — makes the request
+ineligible for native passthrough so its signature or redacted ciphertext cannot cross into
+another provider; the bridge keeps only the plaintext projection. Other provider formats retain their native wire shape.
 The native passthrough applies the [independent reasoning capability contract](../providers-and-adapters.md): explicit false declarations constrain their respective controls, and an empty strength ladder removes caller `reasoning_effort` without disabling a declared thinking switch. Unknown axes remain unclassified. The two Chat builders share the explicit wire policy after provider resolution:
 `reasoningWireFormat: "gateway-object"` projects the configured object shape, and a listed
 tool-bearing model omits reasoning effort on both paths. On a declared toggle wire, explicit `reasoning.enabled` wins, then caller raw `thinking`, then aliases/defaults; unknown or adaptive raw thinking shapes remain intact. With no applicable declaration, native raw reasoning forwarding stays unchanged. This guard does not alter the separate raw service-tier contract.

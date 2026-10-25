@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 13.
+Declared capabilities: 14.
 
 ### `ocx codex-provider`
 
@@ -84,6 +84,8 @@ Drives no management route.
 
 ### `ocx sync`
 
+Usage: `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--restart-codex] [--restart-app-server-only]`
+
 Synchronize client catalogs, including Aside profiles through the running server's mutation owner.
 
 State-changing: yes. JSON mode: `none`.
@@ -97,8 +99,32 @@ State-changing: yes. JSON mode: `none`.
 | `--restart-codex` | boolean | Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog, cache, or changed configuration write, on macOS, Linux and Windows. |
 | `--restart-app-server-only` | boolean | Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given. |
 | `--restart-desktop-app` | boolean | Deprecated alias of --restart-codex. |
+| `--expect-link` | string | Sync only when this machine is a connected Remote Link Child of this link id; otherwise exit 5 with nothing changed. |
+| `--expect-hub-key` | string | Sync only when this machine is a hub client connected with this API key id; otherwise exit 5 with nothing changed. |
 
 - The Aside refresh uses the live server; other catalog synchronization also performs local work.
+- --expect-link/--expect-hub-key are checked under the lock that selects the sync path. A mismatch writes nothing, never falls back to local providers, exits 5, and ends stderr with {"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}; reasons are disconnected, invalid_state, disconnect_pending, pending_operation, hub_client, link_client, other_link and other_key. Usage errors exit 2.
+
+### `ocx stop`
+
+Usage: `ocx stop [--json]`
+
+Stop the proxy; preserve connected-client integrations, restore native Codex config for standalone owners.
+
+State-changing: yes. JSON mode: `envelope`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/stop` |
+| POST | `/api/stop` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit one structured stop summary; human output moves to stderr. |
+
+- Connected clients verify runtime preservation support before stopping; unavailable or unsupported live targets refuse without stopping the service. Proven-stopped clients remain successful when the manager is inactive.
+- Siblings and connected clients preserve shared integrations. Standalone owners restore native Codex configuration and remove the managed Grok block.
+- JSON uses ocx-stop/1 and retains the same exit codes: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).
 
 ### `ocx service install`
 

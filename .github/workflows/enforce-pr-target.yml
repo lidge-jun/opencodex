@@ -44,7 +44,8 @@ jobs:
         github.event.label.name == 'test-exception-approved' ||
         github.event.label.name == 'suppression-approved' ||
         github.event.label.name == 'generated-change-approved' ||
-        github.event.label.name == 'dependency-change-approved'))
+        github.event.label.name == 'dependency-change-approved' ||
+        github.event.label.name == 'attribution-approved'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -229,7 +230,11 @@ jobs:
             );
             const {
               collectDeterministicHygieneFailures,
+              countHeadRewrites,
               HYGIENE_FAILURE_HINTS,
+              needsHeadRewriteCount,
+              parseApprovalRecord,
+              reconcileHeadBoundApprovals,
             } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-hygiene.cjs"),
             );
@@ -260,12 +265,13 @@ jobs:
             const {
               GATE_MARKER,
               READINESS_MARKER,
-              HYGIENE_MARKER,
-              HYGIENE_BLOCK_START,
-              HYGIENE_BLOCK_END,
               inlineCode,
               buildGateCommentBody,
               extractHygieneSection,
+              authoritativeHygieneSection,
+              withHygieneSection,
+              escapeControlCharacters,
+              isGateComment,
               buildFailureSections,
               failureSummary,
               buildStaleNotice,
@@ -337,13 +343,10 @@ jobs:
             );
 
             // One consolidated comment. The gate finds its own comment by the
-            // single GATE_MARKER; the legacy enforcer/readiness markers are
-            // matched only to migrate pre-consolidation PRs.
-            let gateComment = comments.find(
-              comment =>
-                comment.user?.login === "github-actions[bot]" &&
-                comment.body?.includes(GATE_MARKER)
-            );
+            // single GATE_MARKER its body starts with (a marker echoed inside
+            // another bot comment does not count); the legacy enforcer/readiness
+            // markers are matched only to migrate pre-consolidation PRs.
+            let gateComment = comments.find(isGateComment);
             let gateCommentId = gateComment?.id ?? null;
             const storedGateState = parseGateState(
               gateComment?.body,
@@ -437,13 +440,15 @@ jobs:
             async function upsertGateComment(state, opts) {
               let body = buildGateCommentBody(state, opts).join("\n");
               // The hygiene workflow writes its status into this same comment.
-              // Preserve whatever it left so a gate rebuild does not drop it.
+              // Preserve whatever it left so a gate rebuild does not drop it;
+              // it carries the approval record the next runs read. Appended
+              // unconditionally (a rebuilt body may not end in whitespace) and
+              // never through a replacement template.
               const existingHygiene = extractHygieneSection(gateComment?.body);
-              if (existingHygiene && !body.includes("pr-hygiene-block")) {
-                body = body.replace(
-                  /\s+$/,
-                  `\n\n## Hygiene\n\n${HYGIENE_BLOCK_START}\n${HYGIENE_MARKER}\n\n${existingHygiene}\n\n${HYGIENE_BLOCK_END}`
-                );
+              // Delimiter-aware: an echoed path that merely contains the marker
+              // text must not suppress the preservation.
+              if (existingHygiene && extractHygieneSection(body) === null) {
+                body = withHygieneSection(body, existingHygiene.split("\n"));
               }
               if (gateCommentId) {
                 // Skip the write when the rebuilt body matches what is already
@@ -747,6 +752,10 @@ jobs:
             const changedFiles = [];
             const changedFilePaths = [];
             let filesTruncated = true;
+            // The head the changed-file list was verified against; null when the
+            // head moved during the snapshot. Head-bound approvals are judged
+            // against the same head the files belong to.
+            let changedFilesHeadSha = null;
             for (let attempt = 0; attempt < 2; attempt += 1) {
               const { data: fileSnapshot } = await github.rest.pulls.get({
                 owner,
@@ -774,6 +783,8 @@ jobs:
                 core.warning(
                   "PR head moved during changed-file snapshot; treating file list as truncated."
                 );
+              } else {
+                changedFilesHeadSha = headShaForFiles;
               }
               changedFiles.length = 0;
               changedFiles.push(...listedFiles);
@@ -812,7 +823,37 @@ jobs:
             // the Hygiene comment section, but Ready / review-ready must not
             // clear while those checks fail. Re-assess here from the same
             // trusted scripts so the gate cannot race ahead of hygiene.
-            const labelNames = (pr.labels ?? []).map(label => label.name);
+            const liveLabelNames = (pr.labels ?? []).map(label => label.name);
+            // Head-bound exception approvals count only under the head binding
+            // the hygiene workflow recorded. This gate reads that record and
+            // never removes labels or writes it.
+            const approvalInput = {
+              labels: liveLabelNames,
+              // Files listed at another head than this run's PR snapshot
+              // confirm no approval.
+              headSha:
+                changedFilesHeadSha !== null && changedFilesHeadSha === pr.head?.sha
+                  ? changedFilesHeadSha
+                  : null,
+              record: parseApprovalRecord(authoritativeHygieneSection(comments)),
+              eventAction: context.payload.action,
+            };
+            let headRewriteCount = null;
+            if (needsHeadRewriteCount(approvalInput)) {
+              try {
+                headRewriteCount = countHeadRewrites(await github.paginate(
+                  github.rest.issues.listEvents,
+                  { owner, repo, issue_number: pull_number, per_page: 100 }
+                ));
+              } catch (error) {
+                core.warning(`Could not read head rewrite history: ${error.message}`);
+              }
+            }
+            const { stale: staleApprovals } = reconcileHeadBoundApprovals({
+              ...approvalInput,
+              headRewriteCount,
+            });
+            const labelNames = liveLabelNames.filter(name => !staleApprovals.includes(name));
             // Same inputs the hygiene workflow feeds the carry-attribution
             // assessor. Both gates must reach the same verdict or Ready can
             // clear while hygiene is still red.
@@ -1241,7 +1282,7 @@ jobs:
                 const hint = HYGIENE_FAILURE_HINTS[failure.code];
                 if (!hint) continue;
                 const paths = failure.paths?.length
-                  ? ` Paths: ${failure.paths.map(p => inlineCode(p)).join(", ")}.`
+                  ? ` Paths: ${failure.paths.map(p => inlineCode(escapeControlCharacters(p))).join(", ")}.`
                   : "";
                 actions.push(`Fix **${failure.code}** — ${hint}${paths}`);
               }

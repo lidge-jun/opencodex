@@ -28,7 +28,13 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-停止正在运行的代理（按 PID），移除 PID 文件，并恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘的 **Stop** 按钮在多数后端执行同样的操作（`POST /api/stop`），但 Windows 任务计划程序除外：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口，因此仪表盘会以 `respawnable_service` 拒绝、不做任何更改，并提示改用 `ocx stop`。
+停止正在运行的代理（按 PID），移除 PID 文件；独立运行的所有者还会恢复原生 Codex。如果安装了受管后台服务，`ocx stop` 还会先停止该服务，这样它就无法重新拉起代理。Web 仪表盘的 **Stop** 按钮在多数后端执行同样的操作（`POST /api/stop`），但 Windows 任务计划程序除外：任务结束后包装器仍可能重新拉起代理，只有运行在代理之外的 stop 才能在恢复客户端配置前确认这个重启窗口，因此仪表盘会以 `respawnable_service` 拒绝、不做任何更改，并提示改用 `ocx stop`。
+
+对于已连接的 hub 客户端或 Remote Link Child，`ocx stop`（包括成功的 API 停止）会保留连接所拥有的 Codex 路由、模型目录和 Grok 配置。`ocx start` 使用这些保留的配置恢复服务，不会重新注入路由。要让 Codex 回到自己的账户，请运行 `ocx disconnect`；若已恢复为原生路由，要重新应用连接路由，请运行 `ocx sync --restart-codex`。
+
+若旧版普通代理无法确认支持保留配置，命令会在停止服务或进程前拒绝操作。请通过管理该运行时的应用或服务更新并重启它，然后重试。
+
+对于已停止的客户端，命令会确认服务管理器未活动且已知本地端点没有运行时，然后返回正常的“未运行”结果。
 
 ### `ocx restart`
 
@@ -165,6 +171,8 @@ ocx status --json
 `--restart-app-server-only` 恢复以前的窄范围行为：仅向当前用户拥有、匹配的 app-server / code-mode-host 进程发送 `SIGTERM`，桌面应用保持运行（当前活跃会话仍可能被打断）。如果与 `--restart-codex` 或 `--restart-desktop-app` 一起使用，窄范围优先，因为丢失进行中的对话无法恢复，而过期的选择器可以。
 
 当命令在 Codex 应用内部运行时，重启会交给分离的 helper，当前会话会随应用一起结束。
+
+**指定来源的同步。** `ocx sync --expect-link <linkId>`（Remote Link Child）和 `ocx sync --expect-hub-key <apiKeyId>`（hub 客户端）只有在本机仍连接到该链接或使用该密钥时才会同步。否则不做任何更改，也不同步本地提供方，命令以退出码 5 结束，stderr 最后一行为 `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`。格式错误或重复的标志以退出码 2 结束。详情见[英文参考](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)。
 
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 

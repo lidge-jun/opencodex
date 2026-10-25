@@ -1,10 +1,10 @@
 /**
  * `application/vnd.amazon.eventstream` decoder.
  *
- * Ported from jawcode `packages/ai/src/providers/aws-eventstream.ts` (verbatim logic).
+ * Framing logic ported from jawcode `packages/ai/src/providers/aws-eventstream.ts`.
  * Foundational dependency for AWS-eventstream providers: kiro (CodeWhisperer
- * GenerateAssistantResponse) and amazon-bedrock (Converse). Self-contained — only
- * uses Buffer / DataView / TextDecoder (Bun + Node compatible).
+ * GenerateAssistantResponse) and amazon-bedrock (Converse). Checksums use Bun's
+ * native CRC32; framing uses Buffer / DataView / TextDecoder.
  *
  * Wire format (all integers big-endian):
  *
@@ -32,21 +32,9 @@ export interface EventStreamMessage {
 	payload: Uint8Array;
 }
 
-/** CRC32 (IEEE / zlib polynomial 0xEDB88320), matches `@aws-crypto/crc32`. */
-const CRC_TABLE = (() => {
-	const t = new Uint32Array(256);
-	for (let i = 0; i < 256; i++) {
-		let c = i;
-		for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-		t[i] = c >>> 0;
-	}
-	return t;
-})();
-
+/** Unsigned IEEE CRC32 over this byte view; the seed may continue a previous checksum. */
 export function crc32(bytes: Uint8Array, seed = 0): number {
-	let c = (seed ^ 0xffffffff) >>> 0;
-	for (let i = 0; i < bytes.length; i++) c = (CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8)) >>> 0;
-	return (c ^ 0xffffffff) >>> 0;
+	return Bun.hash.crc32(bytes, seed >>> 0);
 }
 
 /**
@@ -170,40 +158,96 @@ function bigIntFromBytes(b: Uint8Array): bigint {
 	return v;
 }
 
+function frameLength(bytes: Uint8Array): number {
+	const total = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, false);
+	if (total < MIN_MESSAGE_LEN) throw new Error(`eventstream: total length ${total} below minimum`);
+	if (total > MAX_MESSAGE_LEN) throw new Error(`eventstream: total length ${total} exceeds maximum`);
+	return total;
+}
+
+function validatePrelude(bytes: Uint8Array, total: number): void {
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	const headersLen = view.getUint32(4, false);
+	if (crc32(bytes.subarray(0, PRELUDE_LEN)) !== view.getUint32(8, false)) {
+		throw new Error("eventstream: prelude CRC mismatch");
+	}
+	if (headersLen > MAX_HEADERS_LEN) throw new Error(`eventstream: headers length ${headersLen} exceeds maximum`);
+	if (headersLen > total - MIN_MESSAGE_LEN) throw new Error("eventstream: headers length exceeds frame payload");
+}
+
 /**
  * Async generator that consumes a `ReadableStream<Uint8Array>` (a fetch response
  * body) and yields fully-framed messages, handling arbitrary chunk boundaries.
  */
 export async function* decodeEventStream(source: ReadableStream<Uint8Array>): AsyncGenerator<EventStreamMessage> {
 	const reader = source.getReader();
-	let buf: Uint8Array = new Uint8Array(0);
+	const empty = new Uint8Array(0);
+	let carry: Uint8Array = empty;
+	let used = 0;
+	let total = 0;
+	const append = (bytes: Uint8Array): void => {
+		if (bytes.length === 0) return;
+		const required = used + bytes.length;
+		if (required > carry.length) {
+			// The prelude is tiny; grow payload storage only as bytes actually arrive.
+			const capacity = Math.min(total || HEADER_BLOCK_OFFSET,
+				Math.max(required, carry.length < HEADER_BLOCK_OFFSET ? HEADER_BLOCK_OFFSET : Math.max(4096, carry.length * 2)));
+			const grown = new Uint8Array(capacity);
+			grown.set(carry.subarray(0, used));
+			carry = grown;
+		}
+		carry.set(bytes, used);
+		used = required;
+	};
 	try {
 		while (true) {
 			const { value, done } = await reader.read();
-			if (value && value.length > 0) buf = buf.length === 0 ? value : Buffer.concat([buf, value]);
 			let offset = 0;
-			while (buf.length - offset >= 4) {
-				const dv = new DataView(buf.buffer, buf.byteOffset + offset, buf.length - offset);
-				const total = dv.getUint32(0, false);
-				if (total < MIN_MESSAGE_LEN) throw new Error(`eventstream: total length ${total} below minimum`);
-				if (total > MAX_MESSAGE_LEN) throw new Error(`eventstream: total length ${total} exceeds maximum`);
-				if (buf.length - offset >= HEADER_BLOCK_OFFSET) {
-					const headersLen = dv.getUint32(4, false);
-					const preludeCrc = dv.getUint32(8, false);
-					const computedPreludeCrc = crc32(buf.subarray(offset, offset + PRELUDE_LEN));
-					if (computedPreludeCrc !== preludeCrc) throw new Error("eventstream: prelude CRC mismatch");
-					if (headersLen > MAX_HEADERS_LEN) throw new Error(`eventstream: headers length ${headersLen} exceeds maximum`);
+			while (value && offset < value.length) {
+				if (used === 0 && value.length - offset >= HEADER_BLOCK_OFFSET) {
+					const remaining = value.subarray(offset);
+					total = frameLength(remaining);
+					validatePrelude(remaining, total);
+					if (remaining.length >= total) {
+						// Complete frames borrow the source chunk without a working copy.
+						yield decodeMessage(remaining.subarray(0, total));
+						offset += total;
+						total = 0;
+						continue;
+					}
+					append(remaining);
+					offset = value.length;
+					continue;
 				}
-				if (buf.length - offset < total) break;
-				const frame = buf.subarray(offset, offset + total);
-				yield decodeMessage(frame);
-				offset += total;
+				if (used < 4) {
+					const end = Math.min(value.length, offset + 4 - used);
+					append(value.subarray(offset, end));
+					offset = end;
+					if (used < 4) continue;
+					total = frameLength(carry);
+				}
+				if (used < HEADER_BLOCK_OFFSET) {
+					const end = Math.min(value.length, offset + HEADER_BLOCK_OFFSET - used);
+					append(value.subarray(offset, end));
+					offset = end;
+					if (used < HEADER_BLOCK_OFFSET) continue;
+					validatePrelude(carry, total);
+				}
+				const end = Math.min(value.length, offset + total - used);
+				append(value.subarray(offset, end));
+				offset = end;
+				if (used === total) {
+					const frame = carry.subarray(0, used);
+					// A yielded payload owns this allocation; never overwrite it for a later frame.
+					carry = empty;
+					used = 0;
+					total = 0;
+					yield decodeMessage(frame);
+				}
 			}
-			if (offset > 0) buf = buf.slice(offset);
-			if (buf.length > MAX_MESSAGE_LEN) throw new Error(`eventstream: buffered frame exceeds maximum ${MAX_MESSAGE_LEN}`);
 			if (done) break;
 		}
-		if (buf.length > 0) throw new Error("eventstream: truncated message at end of stream");
+		if (used > 0) throw new Error("eventstream: truncated message at end of stream");
 	} finally {
 		// Early termination (consumer break/return, turn abort, or an HTTP/2 mid-body reset) can leave
 		// an in-flight `reader.read()` pending when this generator's `finally` runs. Releasing the lock

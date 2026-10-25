@@ -12,18 +12,21 @@
  * different account holding the secret or strands the file with no usable ACE.
  * When the SID cannot be resolved, the caller declines to touch the ACL at all.
  *
- * Budget caveat: callers pass their REMAINING harden budget, which becomes the
- * child process timeout. Trusted-executable resolution (a `GetSystemDirectoryW`
- * FFI call) and spawn setup happen before that timeout starts, and the async
- * timer only arms once `Bun.spawn` returns. Both are small in practice, but the
- * lookup is not bounded by the deadline to the microsecond. Tightening that
- * would mean passing an absolute deadline through the runner interface.
+ * Windows x64 reads SID and account name natively. The async path owns one
+ * Worker through closure, with a separate monotonic deadline per caller. A late
+ * result cannot enter the successful identity cache. The sync path checks elapsed
+ * time after its native call; synchronous FFI cannot be interrupted. Unsupported
+ * architectures retain the trusted, bounded PowerShell helper.
  */
 
 import { existsSync } from "node:fs";
 import { win32 as windowsPath } from "node:path";
 import { waitForSubprocessExit } from "./bounded-subprocess";
 import { decodeWindowsTextBytes } from "./windows-text";
+import {
+  resolveWindowsNativePrincipal, resolveWindowsNativePrincipalAsync,
+  type NativeWindowsPrincipal,
+} from "./windows-native-principal";
 
 import {
   resolveTrustedWindowsPowerShellExe,
@@ -31,7 +34,7 @@ import {
 } from "./windows-elevation";
 
 /**
- * Shared ceiling for a full effective-token identity lookup. PowerShell startup can
+ * Shared ceiling for a full effective-token identity lookup. Fallback PowerShell startup can
  * legitimately take several seconds on loaded desktops as well as CI, so every caller
  * that is not spending a smaller pre-existing deadline uses the same #2914-tested budget.
  */
@@ -133,11 +136,16 @@ export function windowsPrincipalPowerShellCommandForTests(): string[] {
 }
 
 function defaultWindowsPrincipalRunner(timeoutMs: number): WindowsPrincipalLookupResult {
+  const started = performance.now();
+  const native = nativeLookups.sync();
+  const remaining = timeoutMs - (performance.now() - started);
+  if (remaining <= 0) return { success: false, exitCode: null, timedOut: true, stdout: "" };
+  if (native) return nativeResult(native);
   const result = Bun.spawnSync(windowsPrincipalPowerShellCommand(), {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "ignore",
-    timeout: Math.max(1, timeoutMs),
+    timeout: Math.max(1, remaining),
     windowsHide: true,
   });
   return {
@@ -154,6 +162,11 @@ function defaultWindowsPrincipalRunner(timeoutMs: number): WindowsPrincipalLooku
 async function defaultAsyncWindowsPrincipalRunner(
   timeoutMs: number,
 ): Promise<WindowsPrincipalLookupResult> {
+  const started = performance.now();
+  const native = await nativeLookups.async(timeoutMs);
+  const remaining = timeoutMs - (performance.now() - started);
+  if (remaining <= 0) return { success: false, exitCode: null, timedOut: true, stdout: "" };
+  if (native) return nativeResult(native);
   const proc = Bun.spawn(windowsPrincipalPowerShellCommand(), {
     stdin: "ignore",
     stdout: "pipe",
@@ -164,7 +177,7 @@ async function defaultAsyncWindowsPrincipalRunner(
   // remove; this lookup holds no such path, and it runs during `ocx start`, where the composed
   // acceptance cases already measure real startups at up to 38.8s against a bounded watchdog.
   // Paying two extra seconds per timed-out resolution there buys nothing and costs margin.
-  const { exitCode, timedOut } = await waitForSubprocessExit(proc, timeoutMs, 0);
+  const { exitCode, timedOut } = await waitForSubprocessExit(proc, remaining, 0);
   // `.bytes()` rather than `.text()`, for the same reason as the sync runner above.
   const stdout: string | Uint8Array = !timedOut && proc.stdout
     ? await new Response(proc.stdout).bytes().catch(() => new Uint8Array())
@@ -180,6 +193,19 @@ async function defaultAsyncWindowsPrincipalRunner(
 let principalRunner: WindowsPrincipalRunner = defaultWindowsPrincipalRunner;
 let asyncPrincipalRunner: AsyncWindowsPrincipalRunner = defaultAsyncWindowsPrincipalRunner;
 let principalLocaleForTests: string | undefined;
+const defaultNativeLookups = { sync: resolveWindowsNativePrincipal, async: resolveWindowsNativePrincipalAsync };
+let nativeLookups = defaultNativeLookups;
+let defaultAsyncCallers = 0;
+function nativeResult(identity: NativeWindowsPrincipal): WindowsPrincipalLookupResult {
+  return { success: true, exitCode: 0, timedOut: false, stdout: `${identity.sid}\n${identity.name}` };
+}
+
+/** Boundary injection; undefined restores production. Existing runner overrides still win. */
+export function setNativeWindowsPrincipalLookupsForTests(next: typeof defaultNativeLookups | null): void {
+  if (asyncLookupInFlight || defaultAsyncCallers) throw new Error("Cannot replace a native lookup in flight.");
+  nativeLookups = next ?? defaultNativeLookups;
+  cachedIdentity = null;
+}
 
 /**
  * Decode child stdout the way the rest of this repository already decodes Windows
@@ -288,13 +314,16 @@ export function resolveCurrentWindowsPrincipal(timeoutMs: number): string {
   if (cachedIdentity) return `*${cachedIdentity.sid}`;
   if (syntheticPrincipalForTests) return syntheticPrincipalForTests;
   if (timeoutMs <= 0) throw identityError("had no remaining deadline");
+  const deadline = performance.now() + timeoutMs;
   let result: WindowsPrincipalLookupResult;
   try {
     result = principalRunner(timeoutMs);
   } catch {
     throw identityError("could not start");
   }
-  cachedIdentity = identityFromResult(result);
+  const identity = identityFromResult(result);
+  if (performance.now() >= deadline) throw identityError("timed out");
+  cachedIdentity = identity;
   return `*${cachedIdentity.sid}`;
 }
 
@@ -320,10 +349,9 @@ async function waitForExistingLookup(
 }
 
 /**
- * Async counterpart. Concurrent callers share one owned child lookup; a later
- * caller may exhaust its own budget without cancelling the lookup owned by the
- * first caller. The first caller owns that child and its process timeout; a
- * later, longer budget deliberately does not extend an already-running child.
+ * Native callers share one Worker with independent waits. Fallback/injected
+ * child runners retain the first caller's owned process timeout; later callers
+ * may exhaust their own wait without extending or cancelling that child.
  */
 export async function resolveCurrentWindowsPrincipalAsync(timeoutMs: number): Promise<string> {
   const overridden = hasAsyncRunnerOverride();
@@ -332,6 +360,22 @@ export async function resolveCurrentWindowsPrincipalAsync(timeoutMs: number): Pr
   // Same precedence rule as the sync path: an injected runner beats the synthetic.
   if (!overridden && syntheticPrincipalForTests) return syntheticPrincipalForTests;
   if (timeoutMs <= 0) throw identityError("had no remaining deadline");
+
+  // Native jobs own their Worker through close; each caller owns its own wait/cache admission.
+  // Keep the old first-owner child timeout contract for explicit runners and ARM64 fallback.
+  if (!overridden && process.platform === "win32" && process.arch === "x64") {
+    defaultAsyncCallers += 1;
+    try {
+      const deadline = performance.now() + timeoutMs;
+      let result: WindowsPrincipalLookupResult;
+      try { result = await defaultAsyncWindowsPrincipalRunner(timeoutMs); }
+      catch { throw identityError("could not complete the native lookup"); }
+      const identity = identityFromResult(result);
+      if (performance.now() >= deadline) throw identityError("timed out");
+      cachedIdentity = identity;
+      return `*${cachedIdentity.sid}`;
+    } finally { defaultAsyncCallers -= 1; }
+  }
 
   const lookup = (async (): Promise<string> => {
     let result: WindowsPrincipalLookupResult;
@@ -355,7 +399,7 @@ export async function resolveCurrentWindowsPrincipalAsync(timeoutMs: number): Pr
 export function setWindowsPrincipalRunnerForTests(
   runner: WindowsPrincipalRunner | null,
 ): void {
-  if (asyncLookupInFlight) {
+  if (asyncLookupInFlight || defaultAsyncCallers) {
     throw new Error("Cannot replace the Windows principal runner while a lookup is in flight.");
   }
   principalRunner = runner ?? defaultWindowsPrincipalRunner;
@@ -366,7 +410,7 @@ export function setWindowsPrincipalRunnerForTests(
 export function setAsyncWindowsPrincipalRunnerForTests(
   runner: AsyncWindowsPrincipalRunner | null,
 ): void {
-  if (asyncLookupInFlight) {
+  if (asyncLookupInFlight || defaultAsyncCallers) {
     throw new Error("Cannot replace the Windows principal runner while a lookup is in flight.");
   }
   asyncPrincipalRunner = runner ?? defaultAsyncWindowsPrincipalRunner;
@@ -386,7 +430,7 @@ export function setAsyncWindowsPrincipalRunnerForTests(
  * decodes after its runner resolves.
  */
 export function setWindowsPrincipalLocaleForTests(locale: string | null): void {
-  if (asyncLookupInFlight) {
+  if (asyncLookupInFlight || defaultAsyncCallers) {
     throw new Error("Cannot change the Windows principal locale while a lookup is in flight.");
   }
   principalLocaleForTests = locale ?? undefined;
@@ -395,7 +439,7 @@ export function setWindowsPrincipalLocaleForTests(locale: string | null): void {
 
 /** Test seam: clear only process-local principal state. */
 export function resetWindowsPrincipalForTests(): void {
-  if (asyncLookupInFlight) {
+  if (asyncLookupInFlight || defaultAsyncCallers) {
     throw new Error("Cannot reset the Windows principal while a lookup is in flight.");
   }
   cachedIdentity = null;

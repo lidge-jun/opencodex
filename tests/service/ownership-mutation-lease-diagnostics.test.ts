@@ -125,3 +125,48 @@ describe("ownership mutation lease diagnostic lookup (carry #6655)", () => {
     } finally { spawned.mockRestore(); }
   });
 });
+
+describe("ownership mutation lease release handles", () => {
+  test("release is one-shot, retains nested holders, and cannot release a successor", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-lease-release-generation-"));
+    const paths = [join(root, "service-state.json")];
+    const lock = `${paths[0]}.mutation.lock`;
+    const first = acquireOwnershipMutationLease(paths, { waitMs: 0 });
+    const nested = acquireOwnershipMutationLease(paths, { waitMs: 0 });
+    let successor: ReturnType<typeof acquireOwnershipMutationLease> | undefined;
+    try {
+      expect(nested.token).toBe(first.token);
+
+      const originalOwner = readdirSync(lock);
+      expect(originalOwner).toHaveLength(1);
+      first.release();
+      first.release();
+      expect(readdirSync(lock)).toEqual(originalOwner);
+      expect(JSON.parse(readFileSync(join(lock, originalOwner[0]!), "utf8")).token).toBe(first.token);
+
+      nested.release();
+      expect(existsSync(lock)).toBe(false);
+
+      successor = acquireOwnershipMutationLease(paths, { waitMs: 0 });
+      expect(successor.token).not.toBe(first.token);
+      const successorOwner = readdirSync(lock);
+      expect(successorOwner).toHaveLength(1);
+      const successorPath = join(lock, successorOwner[0]!);
+      const successorBytes = readFileSync(successorPath);
+      expect(JSON.parse(successorBytes.toString("utf8")).token).toBe(successor.token);
+
+      first.release();
+      expect(existsSync(lock)).toBe(true);
+      expect(readdirSync(lock)).toEqual(successorOwner);
+      expect(readFileSync(successorPath)).toEqual(successorBytes);
+
+      successor.release();
+      expect(existsSync(lock)).toBe(false);
+    } finally {
+      successor?.release();
+      nested.release();
+      first.release();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

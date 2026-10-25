@@ -202,10 +202,13 @@ export function createTimelineAccumulator(query: TimelineQuery): { add(entry: Pe
     const rows = [...series].map(([id, state]): { row: TimelineSeries; state: SeriesState } => {
       if (query.aggregation !== "sum") {
         for (const [bucket, requests] of state.requests) {
-          const values = [...requests.values()];
-          state.points[bucket] = query.aggregation === "max"
-            ? Math.max(...values)
-            : values.reduce((sum, value) => sum + value, 0) / values.length;
+          let sum = 0;
+          let max = -Infinity;
+          for (const value of requests.values()) {
+            sum += value;
+            max = Math.max(max, value);
+          }
+          state.points[bucket] = query.aggregation === "max" ? max : sum / requests.size;
         }
       }
       const total = state.points.reduce((sum, value) => sum + value, 0);
@@ -231,12 +234,19 @@ export function createTimelineAccumulator(query: TimelineQuery): { add(entry: Pe
         }
       } else {
         for (let index = 0; index < buckets; index += 1) {
-          const values = folded.flatMap(({ state }) => [...(state.requests.get(index)?.values() ?? [])]);
-          if (values.length > 0) {
-            otherPoints[index] = query.aggregation === "max"
-              ? Math.max(...values)
-              : values.reduce((sum, value) => sum + value, 0) / values.length;
+          let sum = 0;
+          let max = -Infinity;
+          let count = 0;
+          for (const { state } of folded) {
+            const requests = state.requests.get(index);
+            if (!requests) continue;
+            for (const value of requests.values()) {
+              sum += value;
+              max = Math.max(max, value);
+              count += 1;
+            }
           }
+          if (count > 0) otherPoints[index] = query.aggregation === "max" ? max : sum / count;
         }
       }
       kept.push({ id: "other", provider: "", model: "other", total: otherPoints.reduce((sum, value) => sum + value, 0), points: otherPoints });

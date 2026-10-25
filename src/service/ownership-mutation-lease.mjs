@@ -174,6 +174,18 @@ export function ownershipMutationLeaseStatusLine(statePaths, options = {}) {
     + `opencodex waits for it to start or change service state, and ${RECLAIM_HINT}.`;
 }
 
+function createLeaseHandle(path, generation, token, options) {
+  let released = false;
+  return {
+    token,
+    release: () => {
+      if (released) return;
+      released = true;
+      release(path, generation, options);
+    },
+  };
+}
+
 function reclaim(path, now, alive) {
   const observed = readOwner(path);
   const incomplete = observed ? null : readIncompleteOwner(path);
@@ -201,7 +213,7 @@ export function acquireOwnershipMutationLease(
   const nested = held.get(path);
   if (nested) {
     nested.depth += 1;
-    return { token: nested.snapshot.record.token, release: () => release(path, options) };
+    return createLeaseHandle(path, nested.generation, nested.snapshot.record.token, options);
   }
   const now = options.now ?? Date.now;
   const alive = options.processAlive ?? processAlive;
@@ -213,8 +225,9 @@ export function acquireOwnershipMutationLease(
     if (owner?.record.token === joinToken && alive(owner.record.pid)) {
       delegatedTokens.set(path, joinToken);
       if (envJoinToken === joinToken) delete process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
-      held.set(path, { depth: 1, snapshot: owner, delegated: true });
-      return { token: joinToken, release: () => release(path, options) };
+      const generation = {};
+      held.set(path, { depth: 1, snapshot: owner, delegated: true, generation });
+      return createLeaseHandle(path, generation, joinToken, options);
     }
     delegatedTokens.delete(path);
     if (envJoinToken === joinToken) delete process.env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
@@ -238,8 +251,9 @@ export function acquireOwnershipMutationLease(
       descriptor = null;
       const snapshot = readOwner(path);
       if (!snapshot || snapshot.record.token !== record.token) throw new Error("ownership mutation lease could not be verified");
-      held.set(path, { depth: 1, snapshot, delegated: false });
-      return { token: record.token, release: () => release(path, options) };
+      const generation = {};
+      held.set(path, { depth: 1, snapshot, delegated: false, generation });
+      return createLeaseHandle(path, generation, record.token, options);
     } catch (error) {
       if (descriptor !== null) { try { closeSync(descriptor); } catch { /* stale recovery owns uncertain cleanup */ } }
       if (madeDirectory) {
@@ -261,9 +275,9 @@ export function acquireOwnershipMutationLease(
   }
 }
 
-function release(path, options) {
+function release(path, generation, options) {
   const currentHeld = held.get(path);
-  if (!currentHeld) return;
+  if (!currentHeld || currentHeld.generation !== generation) return;
   currentHeld.depth -= 1;
   if (currentHeld.depth > 0) return;
   held.delete(path);
