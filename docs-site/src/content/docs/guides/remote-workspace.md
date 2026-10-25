@@ -167,6 +167,8 @@ to another computer or folder silently. If the Executor disconnects, the session
 
 Prompt submission acknowledges acceptance immediately; the dashboard polls the session for progress and completion. If the acknowledgement is lost, the draft remains visible with an unknown-submission notice. Check session progress before sending it again; the dashboard never retries a prompt automatically.
 
+If the Pi process exits or its extension fails while a turn is starting, the session reports the failure even if Pi has not acknowledged that turn yet.
+
 **Stop** remains available while a prompt is running. It interrupts the Hub coding-agent turn,
 cancels an active Executor command, and prevents a late response from reopening the stopped
 session.

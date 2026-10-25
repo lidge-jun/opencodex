@@ -169,6 +169,12 @@ API, the adapter removes item-level `extra_content` from the outgoing HTTP reque
 create. Native `/responses/compact` applies the same projection. The original history keeps the Google
 thought signature for later Google turns. Other Responses gateways retain their extensions.
 
+OpenAI-operated destinations receive replayed `url_citation` annotations with missing or invalid
+titles and indices repaired. This applies to ordinary HTTP/WebSocket requests and native
+`/responses/compact`. Custom gateways keep the original annotations even when
+`supportsNativeCompactEndpoint: true` enables native compaction. Citation repair leaves the
+client's stored history unchanged.
+
 The adapter preserves the incoming client's `User-Agent` as a fallback in both auth modes because
 some Responses-compatible providers use the Codex client fingerprint for compatibility behavior.
 An explicitly configured provider `User-Agent` remains authoritative regardless of header casing;
@@ -499,7 +505,8 @@ MiMo model Command Code serves.
   limits inform context windows, conservatively combined with shipped limits when evidence is partial.
   Accounts that have not served have no list evidence yet.
 - Participates in multi-account rotation. With two stored accounts, a request-rate refusal
-  cools the refused account briefly; an exact monthly-quota refusal on HTTP 400 or 429
+  cools the refused account briefly; an exact `MONTHLY_REQUEST_COUNT` or
+  `OVERAGE_REQUEST_LIMIT_EXCEEDED` refusal on HTTP 400 or 429
   excludes it until the observed reset or evidence expiry. A confirmed HTTP 403 suspension
   quarantines that account in process, while an ordinary 403 does not rotate. Reactive
   rotation remains available when `oauthAccountFailover.enabled` is false. Refusal-aware
