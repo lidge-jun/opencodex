@@ -7,6 +7,7 @@ import {
   reconcileStateGeneration,
   registerStateStore,
   registerStateSweepAfterTick,
+  stateSweepAfterTickRegistrationCountForTests,
   resetStateStoreSweeperForTests,
   setGenerationContextBuilder,
   startStateStoreSweeper,
@@ -680,5 +681,108 @@ describe("state-store sweeper", () => {
     expect(sweepDeadOcxStartProcessCache()).toBe(3);
     expect(probed).toEqual([42]);
     expect(ocxStartProcessCacheSizeForTests()).toBe(1);
+  });
+});
+
+describe("sweeper registration and timer ownership", () => {
+  function withClock(run: (timers: Array<{ tick(): void }>, cleared: unknown[]) => void) {
+    const timers: Array<{ tick(): void; unref(): void }> = [];
+    const cleared: unknown[] = [];
+    const setSpy = spyOn(globalThis, "setInterval").mockImplementation(((tick: () => void) => {
+      const timer = { tick, unref() {} };
+      timers.push(timer);
+      return timer;
+    }) as typeof setInterval);
+    const clearSpy = spyOn(globalThis, "clearInterval").mockImplementation((timer => {
+      cleared.push(timer);
+    }) as typeof clearInterval);
+    try { run(timers, cleared); }
+    finally {
+      stopStateStoreSweeper();
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+  }
+
+  test("an obsolete stop handle cannot stop the replacement sweep timer", () => {
+    withClock((timers, cleared) => {
+      const first = startStateStoreSweeper();
+      const second = startStateStoreSweeper();
+      expect(cleared).toEqual([timers[0]]);
+      first.stop();
+      first.stop();
+      expect(cleared).toEqual([timers[0]]);
+      second.stop();
+      second.stop();
+      expect(cleared).toEqual([timers[0], timers[1]]);
+    });
+  });
+
+  test("out-of-order detach unlinks displaced hooks and preserves the live predecessor", () => {
+    withClock(timers => {
+      const seen: string[] = [];
+      const older = registerStateSweepAfterTick({ name: "owner", afterTick: () => { seen.push("older"); } });
+      const middle = registerStateSweepAfterTick({ name: "owner", afterTick: () => { seen.push("middle"); } });
+      const newer = registerStateSweepAfterTick({ name: "owner", afterTick: () => { seen.push("newer"); } });
+      startStateStoreSweeper();
+      middle(); middle();
+      expect(stateSweepAfterTickRegistrationCountForTests()).toBe(2);
+      timers[0]!.tick();
+      newer();
+      expect(stateSweepAfterTickRegistrationCountForTests()).toBe(1);
+      timers[0]!.tick();
+      older(); newer(); middle();
+      expect(stateSweepAfterTickRegistrationCountForTests()).toBe(0);
+      timers[0]!.tick();
+      expect(seen).toEqual(["newer", "older"]);
+    });
+  });
+
+  test("replacement churn retains only the live owners, not historical tombstones", () => {
+    const older = registerStateSweepAfterTick({ name: "churn", afterTick() {} });
+    const detached: Array<() => void> = [];
+    let previous: (() => void) | undefined;
+    for (let index = 0; index < 256; index++) {
+      const current = registerStateSweepAfterTick({ name: "churn", afterTick() {} });
+      if (previous) { previous(); detached.push(previous); }
+      previous = current;
+      expect(stateSweepAfterTickRegistrationCountForTests()).toBe(2);
+    }
+    previous!();
+    expect(stateSweepAfterTickRegistrationCountForTests()).toBe(1);
+    for (const detach of detached) detach();
+    expect(stateSweepAfterTickRegistrationCountForTests()).toBe(1);
+    older();
+    expect(stateSweepAfterTickRegistrationCountForTests()).toBe(0);
+  });
+
+  test("self-detach restores the previous owner without preventing sibling callbacks", () => {
+    withClock(timers => {
+      const seen: string[] = [];
+      const older = registerStateSweepAfterTick({ name: "self", afterTick: () => { seen.push("older"); } });
+      const newer = registerStateSweepAfterTick({ name: "self", afterTick() { newer(); seen.push("newer"); } });
+      const sibling = registerStateSweepAfterTick({ name: "sibling", afterTick: () => { seen.push("sibling"); } });
+      startStateStoreSweeper();
+      timers[0]!.tick(); timers[0]!.tick();
+      expect(seen).toEqual(["newer", "sibling", "older", "sibling"]);
+      older(); sibling();
+      expect(stateSweepAfterTickRegistrationCountForTests()).toBe(0);
+    });
+  });
+
+  test("old detach handles after reset cannot resurrect hooks or detach a fresh owner", () => {
+    withClock(timers => {
+      const seen: string[] = [];
+      const older = registerStateSweepAfterTick({ name: "reset", afterTick: () => { seen.push("older"); } });
+      const newer = registerStateSweepAfterTick({ name: "reset", afterTick: () => { seen.push("newer"); } });
+      resetStateStoreSweeperForTests();
+      const fresh = registerStateSweepAfterTick({ name: "reset", afterTick: () => { seen.push("fresh"); } });
+      older(); newer(); older();
+      expect(stateSweepAfterTickRegistrationCountForTests()).toBe(1);
+      startStateStoreSweeper(); timers[0]!.tick();
+      expect(seen).toEqual(["fresh"]);
+      fresh();
+      expect(stateSweepAfterTickRegistrationCountForTests()).toBe(0);
+    });
   });
 });

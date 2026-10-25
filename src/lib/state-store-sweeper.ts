@@ -36,9 +36,9 @@ export interface StateStoreSweeperOptions {
 
 const registrations = new Map<string, StateStoreRegistration>();
 interface AfterTickRegistrationNode {
-  registration: StateSweepAfterTickRegistration;
+  registration: StateSweepAfterTickRegistration | null;
   previous: AfterTickRegistrationNode | null;
-  active: boolean;
+  next: AfterTickRegistrationNode | null;
 }
 
 const afterTickRegistrations = new Map<string, AfterTickRegistrationNode>();
@@ -62,20 +62,41 @@ export function registerStateStore(registration: StateStoreRegistration): () => 
 }
 
 export function registerStateSweepAfterTick(registration: StateSweepAfterTickRegistration): () => void {
+  const name = registration.name;
   const node: AfterTickRegistrationNode = {
     registration,
-    previous: afterTickRegistrations.get(registration.name) ?? null,
-    active: true,
+    previous: afterTickRegistrations.get(name) ?? null,
+    next: null,
   };
-  afterTickRegistrations.set(registration.name, node);
+  if (node.previous) node.previous.next = node;
+  afterTickRegistrations.set(name, node);
   return () => {
-    node.active = false;
-    if (afterTickRegistrations.get(registration.name) !== node) return;
-    let previous = node.previous;
-    while (previous && !previous.active) previous = previous.previous;
-    if (previous) afterTickRegistrations.set(registration.name, previous);
-    else afterTickRegistrations.delete(registration.name);
+    if (!node.registration) return;
+    // Unlink even a displaced owner immediately. Tombstones in the older-owner
+    // chain retain its callback (and captured config) until every newer owner exits.
+    const { previous, next } = node;
+    if (previous) previous.next = next;
+    if (next) next.previous = previous;
+    if (afterTickRegistrations.get(name) === node) {
+      if (previous) afterTickRegistrations.set(name, previous);
+      else afterTickRegistrations.delete(name);
+    }
+    // A caller can retain its idempotent detach function after invoking it.
+    // Do not let that handle retain either the callback or neighboring owners.
+    node.registration = null;
+    node.previous = null;
+    node.next = null;
   };
+}
+
+/** Test-only resource oracle: includes every reachable node, not just active callbacks. */
+export function stateSweepAfterTickRegistrationCountForTests(): number {
+  let count = 0;
+  for (const top of afterTickRegistrations.values()) {
+    let node: AfterTickRegistrationNode | null = top;
+    while (node) { count += 1; node = node.previous; }
+  }
+  return count;
 }
 
 function runCallbacks(
@@ -121,6 +142,7 @@ export function sweepLiveness(): StateSweepResult {
 
 function runAfterTickCallbacks(): void {
   for (const { registration } of afterTickRegistrations.values()) {
+    if (!registration) continue;
     try {
       registration.afterTick();
     } catch {
@@ -171,13 +193,17 @@ export function startStateStoreSweeper(
 ): { stop(): void } {
   stopStateStoreSweeper();
   const now = options.now ?? Date.now;
-  interval = setInterval(() => {
+  const ownedInterval = setInterval(() => {
     sweepExpired(now());
     sweepLiveness();
     runAfterTickCallbacks();
   }, options.intervalMs ?? STATE_SWEEP_INTERVAL_MS);
-  interval.unref?.();
-  return { stop: stopStateStoreSweeper };
+  interval = ownedInterval;
+  ownedInterval.unref?.();
+  return { stop() {
+    // An old server owner must not stop a newer owner's replacement timer.
+    if (interval === ownedInterval) stopStateStoreSweeper();
+  } };
 }
 
 export function stopStateStoreSweeper(): void {
