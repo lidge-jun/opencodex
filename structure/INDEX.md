@@ -74,6 +74,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 
 | Doc | Scope |
 | --- | --- |
+| [`quota-snapshots.md`](quota-snapshots.md) | Bounded write deferral and cancellation for Codex and provider account quota snapshots. |
 | [`providers/generic-account-pool.md`](providers/generic-account-pool.md) | Opt-in conversation ownership, request-local selection receipts and bounded release for generic OAuth pools. |
 | [`providers/anthropic-progress.md`](providers/anthropic-progress.md) | Opus 5.5 progress display, visible commentary, and exact signed-block replay. |
 | [`providers/anthropic-account-thresholds.md`](providers/anthropic-account-thresholds.md) | Account-owned usage thresholds, inheritance, routing boundaries and durable policy changes. |
@@ -216,6 +217,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/catalog/vendor-context.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/cli-update-plan.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
+| `src/codex/quota.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/signed-in-identity.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
 | `src/combos/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`fallback-policy.md`](fallback-policy.md) |
@@ -256,6 +258,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/plugins/` | [`ops/plugins.md`](ops/plugins.md) |
 | `src/protocols/` | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) |
 | `src/providers/` | [`runtime.md`](runtime.md)<br>[`subagents.md`](subagents.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md) |
+| `src/providers/account-quota-disk.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
 | `src/providers/anthropic-billing-ownership.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/anthropic-billing-recovery.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |
 | `src/providers/anthropic-billing-refusal.ts` | [`providers/anthropic-key-billing.md`](providers/anthropic-key-billing.md) |

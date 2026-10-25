@@ -407,6 +407,9 @@ failure surfaces as a named `PinnedHttpError`. Connection teardown belongs to th
 end early — a decode failure, an exceeded ceiling, a cancelled read; a response that completed
 is left to the HTTP agent, which may pool or destroy it.
 `tests/lib/pinned-http-content-coding.test.ts` covers both routes on the same payload.
+Pinned identity and decoded response delivery follow the
+[stream-buffer accounting contract](byte-accounting.md#stream-buffer-accounting), including
+socket backpressure and inactivity timing while the local reader is paused.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
