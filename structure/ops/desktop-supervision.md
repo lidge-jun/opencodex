@@ -22,7 +22,9 @@ comparison, all of which are defined by
 here. The shell does not read the record: resolving a claim means reading every state path and
 failing closed on an unreadable one, on a corrupt anchor and on paths that disagree, and a second
 weaker implementation of a question core already answers is the mistake this tree has made before.
-The bundled CLI answers ownership and takeover compatibility through `ocx resolve --json`.
+The bundled CLI answers ownership and takeover compatibility through `ocx resolve --json`
+(`desktop/src-tauri/src/resolve.rs`, inside the launch sequence that
+`desktop/src-tauri/src/startup.rs` drives).
 It also answers how the live runtime's version compares to the bundled CLI's
 (`versionSkew.relation`; future relation strings read as unknown without discarding the live answer), and the shell acts on the direction instead of reparsing the
 warning: `proxy-newer` makes a supported takeover a downgrade, so the run attaches as a
@@ -31,16 +33,17 @@ consent, an unreadable owner, a blocked takeover, a declined prompt, a recovery 
 the CLI's warning to its phase detail, and the consent panel shows it beside the subject.
 Unknown ownership never means "nobody owns it". A supported offer shows the endpoint, home
 and owner. After consent, the shell resolves again and refuses a changed answer without
-invoking stop. It passes the approved token, endpoint and PID to the CLI's opt-in guarded stop.
+invoking stop. It passes the approved token, endpoint and PID to the CLI's opt-in guarded
+stop (`desktop/src-tauri/src/runtime_stop.rs`).
 That command checks the evidence and manager-to-PID binding under its ownership mutation lease
 before action; it stops the manager or approved PID, waits within a bounded deadline for PID
 exit and endpoint silence, and only then requires definitive manager inactivity. A manager
 that remains active or becomes unreadable produces terminal `manager-still-active`, not a stop
 receipt. The shell also treats `approval-changed`, unreadable output and child timeout as
 terminal before its own silence wait or claim. Only parsed `stopped` or validated exit-79
-`history-incomplete` proceeds to the refused-probe receipt and `ocx service claim`, which
-rechecks the approved subject and compatibility. Declining attaches as a guest; a failed claim
-does not pretend a stopped runtime was restored.
+`history-incomplete` proceeds to the refused-probe receipt and `ocx service claim`
+(`desktop/src-tauri/src/claim.rs`), which rechecks the approved subject and compatibility.
+Declining attaches as a guest; a failed claim does not pretend a stopped runtime was restored.
 
 Live supervision is a third independent fact, alongside liveness and durable ownership.
 On macOS and Linux, the read-only probe verifies that the runtime's direct parent is
@@ -108,6 +111,11 @@ Service install, repair, start and restart refuse before mutation, including reg
 Update gates re-read supervision before stop, package replacement, restoration and recovery;
 they refuse even for a separate npm/Bun install. Use the app updater for its bundle, or quit
 Desktop before updating the CLI install. Service stop and uninstall remain available.
+`src/service/desktop-command-guard.ts` carries that refusal for `src/service/cli.ts`,
+`src/service/orchestration.ts` and `src/service/repair.ts`; the update lanes take the same
+latch in `src/update/index.ts` and `src/update/restart-ownership.ts`, the update-restart
+surface in `src/cli/update-restart.ts`, and stop guidance in
+`src/cli/desktop-runtime-guidance.ts`.
 These decisions follow [runtime ownership](../runtime.md#background-service-runtime-ownership).
 
 The bypass ledger classifies these guards as **early warning**, not enforcement:
@@ -167,20 +175,3 @@ enabled; entries disabled in the tray or Task Manager stay disabled.
 
 The macOS tray item and the macOS side of this migration judge the login item the way Startup
 safety does; see [Desktop Start at Login](../desktop-start-at-login.md).
-
-The WidgetKit extension in `app/` needs three things that Xcode's app-extension target
-would supply on its own, and SwiftPM has no such target: `@main` on
-`OpenCodexWidgetBundle`, the `-e _NSExtensionMain` linker entry, and
-`-application-extension` — the compiler spelling of `APPLICATION_EXTENSION_API_ONLY` — all
-in `app/Package.swift`. Any one missing yields a widget that never appears: without
-`@main` the linker drops the bundle and the extension registers with nothing to offer, and
-without the entry override ExtensionFoundation traps during bootstrap. Nothing observable
-distinguishes these from a working widget, because the bundle still builds, signs and
-registers. `com.apple.security.app-sandbox` is also mandatory — `pkd` refuses to register
-an unsandboxed plug-in at all — which is why the shell writes its snapshot into the
-extension's own container rather than a shared App Group, which ad-hoc signing cannot use.
-
-`desktop/scripts/prepare-sidecar.ts` maps Rust target triples to the standalone
-Bun targets and prepares the external binary plus dashboard resources used by
-Tauri. Generated files under desktop/src-tauri/binaries/ and
-desktop/src-tauri/resources/ remain ignored.

@@ -323,6 +323,11 @@ resolution and never probe beside the shared Bun or Node executable. Compiled in
 their asset root from the executable's canonical real path, so a symlinked launcher still finds
 the addon shipped with the real binary.
 
+`desktop/scripts/prepare-sidecar.ts` maps Rust target triples to the standalone
+Bun targets and prepares the external binary plus dashboard resources used by
+Tauri. Generated files under desktop/src-tauri/binaries/ and
+desktop/src-tauri/resources/ remain ignored.
+
 The macOS bundle verifier launches the signed sidecar from a disposable unrelated directory and
 requires its bounded, load-only keyring probe to expose both native constructors. It does not read
 or write an OS credential, which would make an ad-hoc CI identity depend on a consent dialog.
@@ -434,6 +439,18 @@ The macOS desktop shell writes the WidgetKit snapshot to
 The schema version is `1`; the Rust writer refreshes it every five minutes after an
 immediate first write. The WidgetKit appex reads this privacy-safe file and performs no
 network access.
+
+The WidgetKit extension in `app/` needs three things that Xcode's app-extension target
+would supply on its own, and SwiftPM has no such target: `@main` on
+`OpenCodexWidgetBundle`, the `-e _NSExtensionMain` linker entry, and
+`-application-extension` — the compiler spelling of `APPLICATION_EXTENSION_API_ONLY` — all
+in `app/Package.swift`. Any one missing yields a widget that never appears: without
+`@main` the linker drops the bundle and the extension registers with nothing to offer, and
+without the entry override ExtensionFoundation traps during bootstrap. Nothing observable
+distinguishes these from a working widget, because the bundle still builds, signs and
+registers. `com.apple.security.app-sandbox` is also mandatory — `pkd` refuses to register
+an unsandboxed plug-in at all — which is why the shell writes its snapshot into the
+extension's own container rather than a shared App Group, which ad-hoc signing cannot use.
 
 ## The tray icon opens a usage popup
 
