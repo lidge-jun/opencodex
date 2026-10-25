@@ -274,8 +274,9 @@ export function preferKiroModelSupport(
   if (!model) return ids;
   if (providerName === "google-antigravity") {
     const positive = ids.filter(id => accountListsModel(providerName, id, model) === true);
-    if (positive.length) return positive;
-    return ids.filter(id => accountListsModel(providerName, id, model) !== false);
+    const modelMatched = positive.length ? positive : ids.filter(id => accountListsModel(providerName, id, model) !== false);
+    const nonExhausted = modelMatched.filter(id => !isAccountQuotaExhausted(providerName, id, model));
+    return nonExhausted.length ? nonExhausted : modelMatched;
   }
   if (providerName !== "kiro") return ids;
   const cap = config?.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount;
@@ -580,10 +581,16 @@ export function noteGenericPoolSelection(
   requestedModelId?: string | null,
 ): void {
   if (activeGenericStrategy(config, providerName) !== "round-robin") return;
-  const poolKey = genericPoolKey(providerName);
-  const limit = genericStickyLimit(config, providerName);
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
-  const picked = pickRoundRobinAccount(poolKey, eligibleFailoverAccounts(providerName, Date.now(), family), limit);
+  const poolKey = genericPoolKey(providerName, family);
+  const limit = genericStickyLimit(config, providerName);
+  const eligible = preferKiroModelSupport(
+    providerName,
+    eligibleFailoverAccounts(providerName, Date.now(), family),
+    requestedModelId,
+    config,
+  );
+  const picked = pickRoundRobinAccount(poolKey, eligible, limit);
   // The resolver may have admitted a different account than the ring proposed: a removal, a
   // reauth verdict or a manual selection can land during credential resolution. Realign the
   // cursor onto what actually served rather than leaving it on a road not taken.
@@ -684,7 +691,7 @@ export function rotateGenericOAuthAccountOnRefusal(
     // PICK here, not peek: the failure already happened and this answer is the one being used,
     // so the ring genuinely advances. A caller that only asks whether a sibling exists peeks.
     return (commit ? pickRoundRobinAccount : peekRoundRobinAccount)(
-      genericPoolKey(providerName),
+      genericPoolKey(providerName, family),
       candidates,
       genericStickyLimit(config, providerName),
     );
@@ -822,7 +829,7 @@ export function preferredInitialAccount(
     // PEEK, not pick: this proposal is discardable, and advancing the ring for an account the
     // resolver then rejects would skip a turn for nothing. noteGenericPoolSelection commits.
     const picked = peekRoundRobinAccount(
-      genericPoolKey(providerName),
+      genericPoolKey(providerName, family),
       eligibleNow,
       genericStickyLimit(config, providerName),
     );
