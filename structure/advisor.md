@@ -84,7 +84,11 @@ The loopback call re-enters the normal data plane, so model resolution, provider
 mapping, and usage accounting are the routing authority's job. Any model string the router
 accepts works as the advisor: a bare native model, an explicit `provider/model`, or an
 account-qualified native model. The advisor never builds its own router and never touches
-provider credentials.
+provider credentials. `src/server/advisor-admission-scope.ts` carries the originating request's
+immutable provider/model admission scope over the loopback hop as capability-authenticated
+metadata and remains authoritative for every final
+physical Advisor destination, including alias, policy, combo, and retry resolution; the local
+transport credential cannot widen it.
 
 ## Context and safety boundaries
 

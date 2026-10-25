@@ -6,6 +6,7 @@ import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget
 import type { CodexAuthPolicyConfig, CodexAuthContext } from "../../codex/auth-context";
 import type { AdmissionLease } from "../../lib/admission";
 import type { DataPlaneAdmission } from "../auth-cors";
+import type { AdmissionModelScope } from "../admission-model-scope";
 import { resolveCodexModelEntitlements } from "../../codex/model-entitlements";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import type { ResponsesTerminalRepairScheduler } from "../responses-terminal-repair";
@@ -93,6 +94,8 @@ export interface DirectRequestOption {
 }
 
 export interface HandleResponsesOptions {
+  /** Immutable caller scope inherited by a capability-authenticated internal sidecar request. */
+  admissionScope?: AdmissionModelScope;
   /** Internal request-owned policy authorization; never read from client headers or body. */
   policyRequestScope?: PolicyRequestScope;
   /** Internal concrete selector chosen from the original policy evaluation. */

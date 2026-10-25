@@ -658,7 +658,7 @@ export async function prepareResponsesRequest(
     || secondaryProvider.authMode === "oauth" && configuredAnthropicInstance(config, "anthropic2") !== "anthropic2")) {
     return formatErrorResponse(401, "authentication_error", "Anthropic Pool 2 requires an enabled configured provider");
   }
-  const admissionScope = resolveAdmissionModelScope(config, options.admission);
+  const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
   const captureInboundRoutePolicy = (candidate: RouteResult, captureRequestPolicy = true): RouteResult => {
     // Router-collapsed aliases bypass the combo loop. Re-pick before capturing destination
     // policy so random/RR cannot refuse while an unmetered target is still usable.

@@ -29,6 +29,8 @@ import {
 import { configuredPort } from "../server/auth-cors";
 import { readAdvisorReasoning } from "../server/inference/advisor-diagnostics";
 import { ADVISOR_SYSTEM_INSTRUCTION, buildAdvisorUserPrompt, type AdvisorContextInput } from "./context";
+import { ADVISOR_ADMISSION_SCOPE_HEADER, encodeAdvisorAdmissionScope } from "../server/advisor-admission-scope";
+import type { AdmissionModelScope } from "../server/admission-model-scope";
 
 /**
  * The header the advisor presents on its own loopback request. Its VALUE is this process's
@@ -116,6 +118,7 @@ export async function consultAdvisor(
   timeoutMs: number,
   abortSignal?: AbortSignal,
   baseUrlOverride?: string,
+  admissionScope?: AdmissionModelScope,
 ): Promise<AdvisorConsultationResult> {
   const t0 = Date.now();
   const headers: Record<string, string> = {
@@ -127,6 +130,7 @@ export async function consultAdvisor(
   // require no token simply omit it.
   const admission = localAdmissionToken(config);
   if (admission) headers["x-opencodex-api-key"] = admission;
+  if (admissionScope) headers[ADVISOR_ADMISSION_SCOPE_HEADER] = encodeAdvisorAdmissionScope(admissionScope);
 
   const requestBody = {
     model: input.advisorModel,

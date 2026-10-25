@@ -9,12 +9,18 @@ import { consultAdvisor } from "../../src/advisor/consult";
 import { parseRequest } from "../../src/responses/parser";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
+import { encodeAdvisorAdmissionScope, decodeAdvisorAdmissionScope } from "../../src/server/advisor-admission-scope";
 
 afterEach(() => {
   setInternalCallCapabilityForTests(null);
 });
 
 describe("internal-call capability — server-owned authority", () => {
+  test("advisor admission scope metadata round-trips without granting authority", () => {
+    const scope = { providers: ["worker"], models: ["worker/cheap"] };
+    expect(decodeAdvisorAdmissionScope(encodeAdvisorAdmissionScope(scope))).toEqual(scope);
+    expect(decodeAdvisorAdmissionScope("not-a-scope")).toBeUndefined();
+  });
   test("a forged literal header value is NOT internal authority", () => {
     // This is the spoof the fence must reject: any external caller can send it.
     expect(isInternalCallCapability("1")).toBe(false);

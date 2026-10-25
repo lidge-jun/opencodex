@@ -35,7 +35,7 @@ import {
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { isNonReplayableResponse, SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
-import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
+import { AdmissionModelDeniedError, admissionModelDeniedResponse, resolveAdmissionModelScope } from "../admission-model-scope";
 import { noteKiroMonthlyRefusal, noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { anthropicPoolCooldownResponse, readDisplaySafeErrorText } from "./core-errors";
@@ -191,6 +191,7 @@ export async function executeResponsesSidecars(
       config,
       workerIdentity: `${route.modelId} (provider ${route.providerName})`,
       workerModelId: route.modelId,
+      admissionScope: options.admissionScope ?? resolveAdmissionModelScope(config, options.admission),
       abortSignal: options.abortSignal,
     });
   // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
