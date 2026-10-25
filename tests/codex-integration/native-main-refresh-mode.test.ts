@@ -238,12 +238,14 @@ describe("main account in codex refresh mode (#2999)", () => {
     setNativeMainRefreshResolutionForTests(CODEX_MODE);
     seedAuth(expired());
     const fresh = fakeChatGptJwt("acct-other");
-    const { codexAuthStatus } = seam(() => {
+    const { calls, codexAuthStatus } = seam(() => {
       rmSync(join(home, "auth.json"));
       return { authMethod: "chatgpt", authToken: fresh, requiresOpenaiAuth: true };
     });
 
     expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: fresh, chatgptAccountId: "acct-other" });
+    expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: fresh, chatgptAccountId: "acct-other" });
+    expect(calls).toEqual([{ refresh: true }]);
   });
 
   test("a chatgpt login with a withheld token means reauthentication", async () => {

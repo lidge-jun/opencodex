@@ -310,8 +310,8 @@ runtime resolved by `src/codex/runtime.ts` is 0.130.0 or newer, starts a
 short-lived `codex -c model_provider="openai" app-server` under the same
 CODEX_HOME and calls `getAuthStatus` with `includeToken` and `refreshToken`.
 OpenCodex uses the returned `authToken` for the request and writes nothing; it
-does not read auth.json again afterwards, because Codex in keyring mode deletes
-the file. A `chatgpt` method with a null token is the only permanent-failure
+does not read auth.json again afterwards, because Codex keyring mode deletes the
+file. It retains that bearer and asks Codex again when it needs refresh. A `chatgpt` method with a null token is the only permanent-failure
 signal on the wire and marks the grant rejected (reauth). An unreachable binary,
 a non-ChatGPT method, or the same or an expired bearer is transient. The
 exchange runs on the refresh timeout alone, under the same claim and grant lock
