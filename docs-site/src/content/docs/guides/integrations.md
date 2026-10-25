@@ -760,7 +760,7 @@ every Codex agent role found in `$CODEX_HOME/agents/*.toml`, with the model each
 to. Codex runs a role on that pin no matter which model the parent asks for, so this is where a
 role's model is actually decided. LazyCodex counts as installed when the `omo@sisyphuslabs`
 Codex plugin is enabled in `$CODEX_HOME/config.toml` and an installed copy under
-`$CODEX_HOME/plugins/cache/sisyphuslabs/omo/` carries its `lazycodex-install.json`. A `~/.omo`
+`$CODEX_HOME/plugins/cache/sisyphuslabs/omo/` carries its plugin manifest or `lazycodex-install.json`. A `~/.omo`
 folder on its own does not count, because Pi-based omo creates it too. Without LazyCodex the
 section is hidden and the command line reports it as not installed. Pick a model and a reasoning
 effort on a row and press Save. A row whose role has no model pin can save an effort on its own;

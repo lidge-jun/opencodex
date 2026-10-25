@@ -134,6 +134,8 @@ describe("final HTTP send compression", () => {
         expect(sent.get("authorization")).toBe("Bearer test-token");
         expect(sent.get("content-type")).toBe("application/json");
         expect(call.init?.signal).toBe(signal);
+        expect(Buffer.isBuffer(call.init?.body)).toBe(true);
+        expect((call.init?.body as Buffer).buffer).toBeInstanceOf(ArrayBuffer);
         expect(decode(mode, call.init?.body)).toBe(body);
       }
       expect(init.body).toBe(body);
@@ -141,6 +143,16 @@ describe("final HTTP send compression", () => {
       expect(headers).toEqual(headersBefore);
     });
   }
+
+  test("gzip preserves UTF-8 encoding across string representations", () => {
+    for (const input of ["ASCII tool history ", "éàÿ Latin-1 ", "한글 日本語 🦊 ", "unpaired \ud800 / \udc00 "]) {
+      // Keep lone surrogates in the string so the codec must apply the same UTF-8 replacement.
+      const body = `{"input":"${input.repeat(256)}"}`;
+      const compressed = compressUpstreamRequestBody(endpoint, body, new Headers(), "gzip");
+      expect(compressed?.encoding).toBe("gzip");
+      expect(gunzipSync(compressed!.body).equals(Buffer.from(body, "utf8"))).toBe(true);
+    }
+  });
 
   test("the 1 KiB threshold counts UTF-8 bytes, not code units", async () => {
     bind("gzip");
@@ -193,7 +205,7 @@ describe("final HTTP send compression", () => {
   test("a nested pass and a rebuild compress once, receipt first, and only toward the canonical destination", async () => {
     bind("gzip");
     let compressions = 0;
-    setUpstreamRequestCompressionForTests({ compressor: (_mode, bytes) => { compressions++; return gzipSync(bytes) as Buffer<ArrayBuffer>; } });
+    setUpstreamRequestCompressionForTests({ compressor: (_mode, body) => { compressions++; return gzipSync(body) as Buffer<ArrayBuffer>; } });
     const events: string[] = [];
     const capture = captureFetch();
     const recording = (async (input, init) => { events.push("executor"); return capture.execute(input, init); }) as typeof fetch;
@@ -237,17 +249,24 @@ describe("final HTTP send compression", () => {
     }
   });
 
-  test("every retry derives its own coded bytes from the original string", async () => {
-    bind("zstd");
-    const capture = captureFetch();
-    const body = json(4096);
-    const init: RequestInit = { method: "POST", body };
-    await sendWithConnectionPolicy(capture.execute, endpoint, init);
-    await sendWithConnectionPolicy(capture.execute, endpoint, init);
-    expect(capture.calls).toHaveLength(2);
-    expect(capture.calls[0]!.init?.body).not.toBe(capture.calls[1]!.init?.body);
-    for (const call of capture.calls) expect(decode("zstd", call.init?.body)).toBe(body);
-  });
+  for (const mode of ["gzip", "zstd"] as const) {
+    test(`${mode} retries derive independent coded bytes from the original string`, async () => {
+      bind(mode);
+      const capture = captureFetch();
+      const body = json(4096);
+      const init: RequestInit = { method: "POST", body };
+      await sendWithConnectionPolicy(capture.execute, endpoint, init);
+      await sendWithConnectionPolicy(capture.execute, endpoint, init);
+      expect(capture.calls).toHaveLength(2);
+      const first = capture.calls[0]!.init?.body as Buffer;
+      const second = capture.calls[1]!.init?.body as Buffer;
+      expect(first).not.toBe(second);
+      for (const call of capture.calls) expect(decode(mode, call.init?.body)).toBe(body);
+      first.fill(0);
+      expect(decode(mode, second)).toBe(body);
+      expect(init.body).toBe(body);
+    });
+  }
 
   test("a codec failure falls back to the identity send, silently, keeping the large-body buffer", async () => {
     bind("gzip");

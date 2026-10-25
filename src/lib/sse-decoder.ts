@@ -78,6 +78,9 @@ export async function* decodeServerSentEvents(
   const reader = source.getReader();
   const decoder = new TextDecoder();
   let lineBuffer = "";
+  // Keep field classification separate from the growing line. Re-slicing its
+  // prefix on every fragment can repeatedly flatten/copy a long string rope.
+  let linePrefix = "";
   let skipLineFeed = false;
   let lineRawBytes = 0;
   let lineRetainedBytes = 0;
@@ -103,8 +106,8 @@ export async function* decodeServerSentEvents(
   };
 
   const linePrefixAfter = (sourceValue: string, start: number, end: number): string => {
-    if (lineBuffer.length >= 6) return lineBuffer.slice(0, 6);
-    return (lineBuffer + sourceValue.slice(start, Math.min(end, start + 6 - lineBuffer.length))).slice(0, 6);
+    if (linePrefix.length >= 6) return linePrefix;
+    return linePrefix + sourceValue.slice(start, Math.min(end, start + 6 - linePrefix.length));
   };
 
   const accountedLineBytes = (rawBytes: number, prefix: string): number => {
@@ -132,6 +135,7 @@ export async function* decodeServerSentEvents(
       translatorBudget.releaseRetained(lineRetainedBytes, scope);
       lineRawBytes = nextRawBytes;
       lineRetainedBytes = nextRawBytes;
+      linePrefix = prefix;
     } catch (error) {
       reservation.release();
       throw error;
@@ -194,6 +198,7 @@ export async function* decodeServerSentEvents(
       translatorBudget.releaseRetained(retainedLineBytes, scope);
     };
     lineBuffer = "";
+    linePrefix = "";
     lineRawBytes = 0;
     lineRetainedBytes = 0;
     try {
