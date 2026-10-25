@@ -48,6 +48,13 @@
   ],
   "docs": [
     {
+      "path": "quota-snapshots.md",
+      "tier": 4,
+      "title": "Account Quota Snapshots",
+      "scope": "Bounded write deferral and cancellation for Codex and provider account quota snapshots.",
+      "documents": ["src/codex/quota.ts", "src/providers/account-quota-disk.ts"]
+    },
+    {
       "path": "providers/generic-account-pool.md",
       "tier": 4,
       "title": "Generic OAuth Account Pool",
@@ -300,6 +307,17 @@
         "src/server/",
         "src/adapters/",
         "gui/"
+      ]
+    },
+    {
+      "path": "transports/responses-citations.md",
+      "tier": 3,
+      "title": "Replayed URL Citations",
+      "scope": "Destination-gated citation repair for ordinary Responses and every native compact send.",
+      "documents": [
+        "src/adapters/openai-responses/request-strips.ts",
+        "src/adapters/openai-responses/passthrough.ts",
+        "src/server/responses/compact.ts"
       ]
     },
     {
@@ -837,6 +855,17 @@
       "scope": "Verified regular-file reads of Claude Desktop config-library metadata, profiles and snapshots.",
       "documents": [
         "src/claude/"
+      ]
+    },
+    {
+      "path": "clients/hermes.md",
+      "tier": 5,
+      "title": "Hermes Profiles",
+      "scope": "Hermes profile discovery, per-profile selection, ownership stores, and boundaries.",
+      "documents": [
+        "src/cli/",
+        "src/integrations/",
+        "src/server/"
       ]
     },
     {

@@ -285,7 +285,7 @@ non-empty list without `image` becomes `false`; an absent or empty modality list
 model object so Hermes receives no guessed capability. OpenCodex does not emit `supports_video`
 because its authoritative input-modality vocabulary currently has no video value.
 
-> Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md)
+> Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md). Profile selection and per-profile ownership: [Hermes Profiles](hermes.md).
 
 ## Hermes session affinity
 
@@ -489,7 +489,7 @@ Link mode and destinations aliasing Pi's default, configured or preserved origin
 | Variant | Its own evidence | opencodex surface |
 | --- | --- | --- |
 | Pi-based omo (senpi engine) | `~/.omo/agent`, or `OMO_CODING_AGENT_DIR` / `SENPI_CODING_AGENT_DIR` / `PI_CODING_AGENT_DIR` (`omoAgentDir()`) | the `omo` file integration and tab, `providers.opencodex` in `models.json` |
-| Codex-based omo (LazyCodex) | `[plugins."omo@sisyphuslabs"] enabled = true` in `$CODEX_HOME/config.toml` plus `lazycodex-install.json` in an installed copy under `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/<version>/` (`detectLazyCodex()` in `src/clients/lazycodex.ts`) | role model pins and the omo.jsonc mirror below, in their own section of the omo tab |
+| Codex-based omo (LazyCodex) | `[plugins."omo@sisyphuslabs"] enabled = true` in `$CODEX_HOME/config.toml` plus `.codex-plugin/plugin.json` or `lazycodex-install.json` in an installed copy under `$CODEX_HOME/plugins/cache/sisyphuslabs/omo/<version>/` (`detectLazyCodex()` in `src/clients/lazycodex.ts`) | role model pins and the omo.jsonc mirror below, in their own section of the omo tab |
 | OpenCode-based omo (oh-my-opencode) | its config under OpenCode | none; nothing here reads or writes it |
 
 `~/.omo` alone identifies none of them: Pi-based omo and LazyCodex both use it.

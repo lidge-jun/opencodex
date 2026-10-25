@@ -131,6 +131,19 @@ conflict — there is nothing to retry. Either enable the listener and restart t
 report that this hub leaves its own clients native. Details:
 [05_remote_hub.md](05_remote_hub.md#the-hub-gate-on-the-hubs-own-clients).
 
+## A pinned sync that refuses (exit 5)
+
+`ocx sync --expect-link <linkId>` and `ocx sync --expect-hub-key <apiKeyId>` sync only when, under
+the lock that chooses the sync path, the machine is still connected to that link or with that hub
+key. Otherwise they write nothing, never fall back to the local providers, exit 5, and end stderr
+with one JSON line: `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":"..."}`. Read
+the `phase`, not the exit code alone. `reason` is `disconnected`, `invalid_state`,
+`disconnect_pending`, `pending_operation` (a key rotation, connect or other sync in progress), `hub_client`,
+`link_client`, `other_link` or `other_key`. Do not retry unchanged: re-read
+`ocx connect status --json` and decide whether this machine should follow that Home at all. A
+malformed, repeated or doubled flag exits 2 before anything is read. Older versions ignore the
+flags, so check `ocx --version` before relying on them.
+
 ## Destructive verbs fail closed
 
 `storage trash restore` and `storage policy run` exit 2 without `--yes` and send no mutating
