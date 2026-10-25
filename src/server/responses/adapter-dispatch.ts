@@ -20,7 +20,7 @@ import type { ResponsesSendBudget } from "./request-send-budget";
 import { linkAbortSignal } from "./core-lifetime";
 import type { AdapterRequest } from "../../adapters/base";
 import type { AdapterEvent } from "../../types";
-import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "../../bridge";
+import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, formatUpstreamFailureResponse } from "../../bridge";
 import { trackStreamLifetime } from "../lifecycle";
 import {
   recordAdapterReasoning,
@@ -1962,7 +1962,7 @@ export async function prepareAdapterExchange(
           upstreamRetryAfter,
           includeDefault: !(transportState.anthropicPoolAccountId && classifyAnthropic429(upstreamResponse.headers) === "request-scoped-unknown"),
         });
-      return formatErrorResponse(
+      return formatUpstreamFailureResponse(upstreamResponse, normalized.code,
         upstreamResponse.status,
         normalized.cyberPolicy ? (normalized.type ?? CYBER_POLICY_ERROR_CODE) : "upstream_error",
         message,
