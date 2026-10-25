@@ -459,8 +459,10 @@ Combo's `decisionProvider`:
   route options include both `value` and detailed `description` fields.
 - OpenCodex offers 2–26 options to a System One-compatible row (`SELF_HOSTED_MIN_OPTIONS = 2`, `SELF_HOSTED_MAX_OPTIONS = 26`).
   Each target contributes one option per offered reasoning effort; use per-target `reasoningEfforts` to trim them.
-  Fewer than 2 or more than 26 options fail open without a request. For `/decisions` endpoints (such as Vercel AI Gateway),
-  the upper bound is expanded to 255 options (`DECISIONS_MAX_OPTIONS = 255`).
+  Fewer than 2 or more than 26 options fail open without a request. For `/decisions` endpoints complying with the
+  [Vercel OpenAI-compatible Decisions reference](https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-decisions)
+  (supporting 1..255 choices), the upper bound expands to 255 options (`DECISIONS_MAX_OPTIONS = 255`); OpenCodex
+  enforces the 2-choice minimum as local routing policy to select among candidate targets.
 - Vercel AI Gateway endpoints (`https://ai-gateway.vercel.sh/v1`) automatically normalize to `/decisions`.
   OpenCodex projects structured conversation context into a formatted plain-text `input` string
   (`Task:`, `Signals:`, `Recent Assistant:`, `Recent Tool Call:`, and `Tool Output:`). Route answers are accepted

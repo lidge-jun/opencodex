@@ -91,7 +91,7 @@ credential or preparation work. It checks again after endpoint resolution and pr
 POST, redirect inspection, HTTP error-body cleanup and response reads, and when parsing returns or throws;
 caller cancellation takes precedence over the local outcome at those checkpoints. HTTP error-body cancellation
 is best effort and never awaited. The separate decision deadline remains a `timeout` gate. Its request builder
-receives only `model` and `descriptiveCriteria` after authorization/credential resolution; its answer parser
+receives `model`, `descriptiveCriteria`, and optional canonical gateway `url` after authorization/credential resolution; its answer parser
 runs inside the cancellation boundary. Without caller cancellation, question-specific local refusals and
 invalid answers retain their existing gates. `tests/routing/jev-service-exchange.test.ts` exercises this seam
 independently of route questions; `tests/routing/jev-typesafe-golden.test.ts` keeps the unchanged route bytes authoritative.
@@ -103,11 +103,12 @@ the existing fail-open inference target without sending a decision request; mana
 admissions retain their existing behavior. Telemetry never retains extracted state or credentials.
 
 Primary endpoint/model-contract evidence and verification:
-Verification date: 2026-10-23. Vendor acceptance was observed against the live Vercel AI Gateway decision
-endpoint (`https://ai-gateway.vercel.sh/v1`) in interactive routing sessions. Continuous CI verification exercises
-hermetic local fixtures in `tests/routing/jev-decision.test.ts` and `tests/routing/jev-service-exchange.test.ts`
-(covering `/decisions` endpoint rewriting, context projection, 2..255 option bounds, array/object answers, and
-duplicate-probability refusal) without live vendor network calls.
+Verification date: 2026-10-25. The [official Vercel OpenAI-compatible Decisions reference](https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-decisions)
+(checked 2026-10-25) specifies the `/v1/decisions` contract, string input, named array questions/answers, and the value/probability schema.
+The upstream API supports a choice range of 1..255; OpenCodex enforces a 2-choice minimum as local routing policy since routing requires
+at least two distinct targets. Continuous CI verification exercises hermetic local fixtures in `tests/routing/jev-decision.test.ts` and
+`tests/routing/jev-service-exchange.test.ts` (covering `/decisions` endpoint rewriting, context projection, 2..255 option bounds,
+array/object answers, and duplicate-probability refusal) without live vendor network calls.
 
 ## Loaded advisory quota
 
