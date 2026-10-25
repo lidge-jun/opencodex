@@ -1,11 +1,10 @@
 # Desktop supervision
 
-`src/service/desktop-supervision.mjs` (types in `src/service/desktop-supervision.d.mts`)
-owns how the runtime proves a live Desktop-supervised proxy before mutating it: the
-durable ownership read, takeover-consent handling, the platform supervision probe —
-including the Windows probe's trusted system-directory acquisition — and the
-`createSupervisionLatch` blocking contract shared by guarded service commands, Node
-and Bun update runs and the dashboard restart veto.
+This document describes durable Desktop ownership, takeover consent and live
+supervision. `src/service/desktop-supervision.mjs` (types in
+`src/service/desktop-supervision.d.mts`) owns the platform supervision probe,
+including Windows system-directory acquisition, and `createSupervisionLatch`;
+durable ownership and consent remain with the owners described below.
 
 ## Runtime ownership, from the app's side
 
