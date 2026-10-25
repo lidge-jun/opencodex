@@ -158,6 +158,8 @@ async function handleChatCompletionsWithBudget(
     ? decodeAdvisorAdmissionScope(req.headers.get(ADVISOR_ADMISSION_SCOPE_HEADER))
     : undefined;
   if (advisorInternal && req.headers.has(ADVISOR_ADMISSION_SCOPE_HEADER) && !inheritedAdmissionScope) {
+    // Refused requests still own a final log row like every other early rejection.
+    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
     return chatCompletionsErrorResponse(403, "invalid inherited advisor admission scope", "permission_error", MODEL_NOT_ALLOWED_FOR_KEY);
   }
   let chatBody: Rec;

@@ -670,4 +670,79 @@ describe("advisor-inherited admission scope on native combos", () => {
     expect(a.bodies).toHaveLength(1);
     expect(a.bodies[0]!.reasoning_effort).toBe("high");
   });
+
+  function decisionModelCombo(decisionModel: string): { config: OcxConfig; a: ReturnType<typeof upstream>; b: ReturnType<typeof upstream> } {
+    const a = upstream(body => body.stream === true ? chatStream("fallback answer") : twoChoiceCompletion());
+    // The decision turn is a streamed Responses request; b answers with the choice JSON.
+    const b = upstream(() => responsesStream("{\"choice\":\"a/m1:high\"}"));
+    const config = scopedComboConfig(
+      {
+        a: provider("openai-chat", a.baseUrl, {
+          models: ["m1"], liveModels: false, reasoningEfforts: ["low", "high"],
+        }),
+        b: provider("openai-responses", b.baseUrl, { models: ["m2"], liveModels: false }),
+      },
+      [{ provider: "a", model: "m1" }],
+    );
+    config.combos!.pair!.strategy = "jev";
+    config.combos!.pair!.decisionModel = decisionModel;
+    return { config, a, b };
+  }
+
+  test("a JEV decisionModel outside the inherited scope is never invoked", async () => {
+    const { config, a, b } = decisionModelCombo("b/m2");
+
+    const { response } = await send(config, { stream: false, reasoning_effort: "high" }, {
+      headers: advisorHeaders(NARROW), admission: HOST,
+    });
+
+    // The internal decision turn must run under the caller's scope: b/m2 is refused before
+    // dispatch, provider b sees no body, and the declared fallback still serves target a.
+    expect(b.bodies).toHaveLength(0);
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+  });
+
+  test("a JEV decisionModel inside the inherited scope is invoked", async () => {
+    const { config, a, b } = decisionModelCombo("b/m2");
+
+    const { response } = await send(config, { stream: false, reasoning_effort: "high" }, {
+      headers: advisorHeaders({ providers: ["a", "b"], models: [] }), admission: HOST,
+    });
+
+    expect(b.bodies).toHaveLength(1);
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+    expect(a.bodies[0]!.reasoning_effort).toBe("high");
+  });
+
+  test("a bare-id JEV decisionModel outside the inherited scope is refused the same way", async () => {
+    // "m2" has no provider qualifier: the model scan resolves it to provider b, and the
+    // scope must judge the resolved destination, not the string the config named.
+    const { config, a, b } = decisionModelCombo("m2");
+
+    const { response } = await send(config, { stream: false, reasoning_effort: "high" }, {
+      headers: advisorHeaders(NARROW), admission: HOST,
+    });
+
+    expect(b.bodies).toHaveLength(0);
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+  });
+
+  test("a JEV decisionModel denied by the inherited model allowlist is never invoked", async () => {
+    // Both providers are in scope, so only the model list can refuse b/m2: the scope
+    // decision must reach the resolved destination, not stop at the provider name.
+    const { config, a, b } = decisionModelCombo("b/m2");
+
+    const { response, text } = await send(config, { stream: false, reasoning_effort: "high" }, {
+      headers: advisorHeaders({ providers: ["a", "b"], models: ["a/m1"] }), admission: HOST,
+    });
+
+    expect(b.bodies).toHaveLength(0);
+    expect(response.status).toBe(200);
+    expect(a.bodies).toHaveLength(1);
+    // The declared fallback worker still produced the caller-visible answer.
+    expect(text).toContain("chatcmpl-native");
+  });
 });

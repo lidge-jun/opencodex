@@ -30,7 +30,8 @@ import {
 } from "../../src/lib/local-internal-call-capability";
 import { advisorBaseUrl } from "../../src/advisor/consult";
 import { MODEL_NOT_ALLOWED_FOR_KEY } from "../../src/server/admission-model-scope";
-import type { DataPlaneAdmission } from "../../src/server/auth-cors";
+import { resolveDataPlaneAdmissionSecret, type DataPlaneAdmission } from "../../src/server/auth-cors";
+import { getRequestLogEntries } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 
 const originalFetch = globalThis.fetch;
@@ -100,13 +101,26 @@ function loopbackInterceptor(config: OcxConfig, consults: ConsultRecord[]) {
   // Exact loopback consult target only: matching on a substring would let an external
   // origin or a query-string bypass ("/v1/chat/completions?x") reach the real handler.
   const expected = `${advisorBaseUrl(config)}/v1/chat/completions`;
+  let consultSeq = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url !== expected) {
       throw new Error(`unexpected fetch during scope-transport test: ${url} (expected ${expected})`);
     }
     const headers = new Headers(init?.headers);
-    const res = await handleChatCompletions(new Request(url, init), config, logCtx);
+    consultSeq += 1;
+    const requestId = `scope-transport-consult-${consultSeq}`;
+    // Mirror the listener: the presented data-plane key resolves to the consult's own
+    // admission — the host token — before the handler's scope checks run.
+    const presented = headers.get("x-opencodex-api-key");
+    const admission = presented
+      ? resolveDataPlaneAdmissionSecret(presented, config, "x-api-key") ?? undefined
+      : undefined;
+    const res = await handleChatCompletions(new Request(url, init), config, logCtx, {
+      requestId,
+      start: Date.now(),
+      ...(admission ? { admission } : {}),
+    });
     let errorType: string | undefined;
     try { errorType = (await res.clone().json() as { error?: { type?: string } }).error?.type; } catch { /* not JSON */ }
     consults.push({
@@ -241,6 +255,45 @@ describe("advisor admission-scope transport (end-to-end)", () => {
     expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
     expect(JSON.stringify(frames)).toContain("Following the advice");
   });
+
+  test("an unrestricted caller's consult is not narrowed by a restricted host key", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const expertCalls: string[] = [];
+    const consults: ConsultRecord[] = [];
+    const config = scopedConfig(
+      { providers: ["worker", "expert"], models: ["worker/deepseek-v4", "expert/gpt-6-astra"] },
+      workerBodies,
+      expertCalls,
+    );
+    // localAdmissionToken picks the FIRST configured key for the loopback consult. Make it a
+    // restricted host key that may not reach the expert provider, while the caller key —
+    // apiKeys[1] — has no lists at all, so its scope resolves undefined (unrestricted).
+    config.apiKeys = [
+      {
+        id: "host", name: "host", key: "ocx_data_" + "h".repeat(40), createdAt: "2026-01-01T00:00:00.000Z",
+        allowedProviders: ["worker"], allowedModels: ["worker/deepseek-v4"],
+      },
+      { id: "caller", name: "caller", key: "ocx_data_" + "c".repeat(40), createdAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    loopbackInterceptor(config, consults);
+
+    const response = await handleResponses(
+      workerRequest("Fix the failing auth tests"), config, logCtx, { admission: CALLER_ADMISSION },
+    );
+    expect(response.status).toBe(200);
+    const frames = await collectSse(response.body!);
+
+    // The consult carries an explicit empty scope — defined but unrestricted — so the
+    // receiver keeps the capability fence yet does not re-resolve the restricted host key.
+    expect(consults).toHaveLength(1);
+    expect(decodeAdvisorAdmissionScope(consults[0]!.scopeHeader))
+      .toEqual({ providers: [], models: [] });
+    expect(consults[0]!.status).toBe(200);
+    expect(expertCalls).toHaveLength(1);
+    expect(workerBodies.length).toBeGreaterThanOrEqual(2);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+  });
 });
 
 /**
@@ -337,5 +390,11 @@ describe("advisor admission-scope metadata without the capability (negative regr
     const body = await response.json() as { error?: { code?: string } };
     expect(body.error?.code).toBe(MODEL_NOT_ALLOWED_FOR_KEY);
     expect(workerBodies).toHaveLength(0);
+    // The refusal must land in the request log like every other early rejection: exactly
+    // one final row at 403 — and the malformed scope value, caller data, is never copied.
+    const rows = getRequestLogEntries().filter(entry => entry.requestId === `scope-neg-${chatSeq}`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe(403);
+    expect(JSON.stringify(rows)).not.toContain("not-a-scope");
   });
 });

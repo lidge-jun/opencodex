@@ -134,17 +134,20 @@ export async function consultAdvisor(
   // require no token simply omit it.
   const admission = localAdmissionToken(config);
   if (admission) headers["x-opencodex-api-key"] = admission;
-  if (admissionScope) {
-    try {
-      headers[ADVISOR_ADMISSION_SCOPE_HEADER] = encodeAdvisorAdmissionScope(admissionScope);
-    } catch (error) {
-      if (error instanceof AdvisorAdmissionScopeEncodedBoundExceeded) {
-        // Controlled failure before fetch: an over-bound scope must never reach the peer —
-        // it would be rejected mid-request — and must never be narrowed silently either.
-        return { ok: false, advice: "", advisorModel: input.advisorModel, error: error.message, durationMs: Date.now() - t0 };
-      }
-      throw error;
+  // Always send the caller's resolved snapshot, including the unrestricted empty form: an
+  // omitted header would be re-resolved against the host admission token above, and a
+  // restricted host key would then narrow a caller whose own scope allows the destination.
+  // Empty lists decode as a defined-but-unrestricted scope, so the capability fence and the
+  // malformed-header refusal are unchanged.
+  try {
+    headers[ADVISOR_ADMISSION_SCOPE_HEADER] = encodeAdvisorAdmissionScope(admissionScope ?? { providers: [], models: [] });
+  } catch (error) {
+    if (error instanceof AdvisorAdmissionScopeEncodedBoundExceeded) {
+      // Controlled failure before fetch: an over-bound scope must never reach the peer —
+      // it would be rejected mid-request — and must never be narrowed silently either.
+      return { ok: false, advice: "", advisorModel: input.advisorModel, error: error.message, durationMs: Date.now() - t0 };
     }
+    throw error;
   }
 
   const requestBody = {
