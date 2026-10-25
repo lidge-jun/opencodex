@@ -123,6 +123,16 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
+`src/lib/eventstream-decoder.ts` retains only an incomplete EventStream frame in a geometrically
+grown byte buffer. Fragmentation therefore requires linear aggregate copying; a complete frame in
+one source chunk keeps its source view. Storage grows with received bytes rather than an advertised
+length, and completed carry allocations remain owned by their yielded payloads. The four-byte
+length and twelve-byte prelude are validated before copying subsequent payload bytes, including
+the header-to-frame boundary. The 16 MiB frame and 128 KiB header limits, both CRC checks, truncated
+EOF errors and reader cancellation remain in force. Coalesced chunks may contain multiple valid
+frames whose aggregate exceeds the per-frame cap. `tests/responses/eventstream-fragmentation.test.ts`
+covers copy work, ownership, validation checkpoints and cleanup across split/coalesced input.
+
 The Chat adapter's decoded carry contains only an unfinished line after each drain.
 A network fragment with no newline retains the carry's already-counted UTF-8 size
 instead of splitting and re-encoding the entire growing line. The append and

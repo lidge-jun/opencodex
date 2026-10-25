@@ -15,6 +15,10 @@ const {
   buildGateCommentBody,
   extractHygieneSection,
   withHygieneSection,
+  authoritativeHygieneSection,
+  escapeControlCharacters,
+  isGateComment,
+  isStandaloneHygieneComment,
   descriptionFailureLines,
   buildFailureSections,
   failureSummary,
@@ -419,5 +423,77 @@ describe("hygiene section round-trip", () => {
     assert.ok(afterGateSecond.includes("⚠️ **Deterministic hygiene checks failed.**"));
     assert.equal(afterGateSecond.split(HYGIENE_BLOCK_START).length - 1, 1);
     assert.equal(afterGateSecond.split(HYGIENE_BLOCK_END).length - 1, 1);
+  });
+});
+
+describe("authoritative hygiene section", () => {
+  const bot = { login: "github-actions[bot]" };
+  const block = (lines) =>
+    `${HYGIENE_BLOCK_START}\n${HYGIENE_MARKER}\n\n${lines.join("\n")}\n\n${HYGIENE_BLOCK_END}`;
+
+  it("reads nothing from a block whose delimiters repeat on whole lines", () => {
+    const body = [GATE_MARKER, HYGIENE_BLOCK_START, "a", HYGIENE_BLOCK_END, "b", HYGIENE_BLOCK_END].join("\n");
+    assert.equal(extractHygieneSection(body), null);
+    const twoStarts = [GATE_MARKER, HYGIENE_BLOCK_START, HYGIENE_BLOCK_START, "a", HYGIENE_BLOCK_END].join("\n");
+    assert.equal(extractHygieneSection(twoStarts), null);
+  });
+
+  it("prefers the gate comment's block over a standalone hygiene comment", () => {
+    const comments = [
+      { user: bot, body: `${HYGIENE_MARKER}\n\nstandalone` },
+      { user: bot, body: `${GATE_MARKER}\n\n${block(["from gate"])}` },
+    ];
+    assert.equal(authoritativeHygieneSection(comments), "from gate");
+  });
+
+  it("falls back to the standalone comment only while the gate comment has no block", () => {
+    const standalone = { user: bot, body: `${HYGIENE_MARKER}\n\nstandalone` };
+    assert.equal(authoritativeHygieneSection([{ user: bot, body: GATE_MARKER }, standalone]), standalone.body);
+    assert.equal(authoritativeHygieneSection([standalone]), standalone.body);
+    const ambiguous = { user: bot, body: [GATE_MARKER, HYGIENE_BLOCK_START, "a", HYGIENE_BLOCK_END, HYGIENE_BLOCK_END].join("\n") };
+    assert.equal(authoritativeHygieneSection([ambiguous, standalone]), null);
+  });
+
+  it("ignores comments not written by the workflow bot", () => {
+    const human = { user: { login: "contributor" }, body: `${GATE_MARKER}\n\n${block(["forged"])}` };
+    assert.equal(authoritativeHygieneSection([human]), null);
+    assert.equal(authoritativeHygieneSection(undefined), null);
+  });
+});
+
+describe("echoed text and comment classification", () => {
+  const bot = { login: "github-actions[bot]" };
+
+  it("escapes control characters so echoed text stays on one line", () => {
+    assert.equal(escapeControlCharacters("src/a.ts"), "src/a.ts");
+    assert.equal(escapeControlCharacters("a\nb\r\tc\u2028"), "a\\u000ab\\u000d\\u0009c\\u2028");
+    assert.ok(!escapeControlCharacters("x\n" + HYGIENE_BLOCK_END).includes("\n"));
+  });
+
+  it("classifies a comment only by the marker its body starts with", () => {
+    assert.equal(isGateComment({ user: bot, body: GATE_MARKER + "\n\nbody" }), true);
+    assert.equal(isGateComment({ user: bot, body: HYGIENE_MARKER + "\n- x " + GATE_MARKER }), false);
+    assert.equal(isGateComment({ user: { login: "someone" }, body: GATE_MARKER }), false);
+    assert.equal(isStandaloneHygieneComment({ user: bot, body: HYGIENE_MARKER + "\n\nok" }), true);
+    assert.equal(isStandaloneHygieneComment({ user: bot, body: GATE_MARKER + "\n" + HYGIENE_MARKER }), false);
+  });
+
+  it("does not read a standalone hygiene comment that echoes the gate marker as the gate block", () => {
+    const standalone = {
+      user: bot,
+      body: [HYGIENE_MARKER, "- x " + GATE_MARKER, HYGIENE_BLOCK_START, "echoed", HYGIENE_BLOCK_END].join("\n"),
+    };
+    assert.equal(authoritativeHygieneSection([standalone]), standalone.body);
+  });
+});
+
+describe("hygiene block replacement", () => {
+  it("writes replacement tokens in hygiene lines literally", () => {
+    const base = withHygieneSection(GATE_MARKER, ["first"]);
+    for (const token of ["$&", "$1", "$`", "$'", "$$"]) {
+      const updated = withHygieneSection(base, ["Paths: src/" + token + ".ts"]);
+      assert.ok(updated.includes("Paths: src/" + token + ".ts"), token);
+      assert.equal(extractHygieneSection(updated), "Paths: src/" + token + ".ts", token);
+    }
   });
 });

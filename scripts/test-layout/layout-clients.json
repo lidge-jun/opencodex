@@ -139,5 +139,6 @@
   "link-apply-record.test.ts": "clients",
   "client-runtime-restart.test.ts": "clients",
   "link-parity-reporter.test.ts": "clients",
-  "cli-sync-expect-link.test.ts": "cli"
+  "cli-sync-expect-link.test.ts": "cli",
+  "ci-pr-hygiene-approvals.test.ts": "ci-workflows"
 }
