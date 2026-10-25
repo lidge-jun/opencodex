@@ -14,6 +14,20 @@ describe("Kiro refusal classification", () => {
     expect(classified(403, { reason: "MONTHLY_REQUEST_COUNT" }).kind).toBe("other");
   });
 
+  test("kiro refusal: exhausted overage allowance is account quota, not a bad request", () => {
+    const body = { __type: "com.amazon.kiro.runtimeservice#ServiceQuotaExceededException",
+      reason: "OVERAGE_REQUEST_LIMIT_EXCEEDED", message: "You have reached the limit for overages." };
+    for (const status of [400, 429])
+      expect(classified(status, body)).toEqual({ kind: "monthly_quota" });
+    for (const status of [401, 403, 500])
+      expect(classified(status, body).kind).toBe("other");
+    for (const unrelated of [
+      { reason: "REQUEST_BODY_INVALID", message: "OVERAGE_REQUEST_LIMIT_EXCEEDED" },
+      { error: body }, { metadata: body.reason }, { reason: `${body.reason}_UNKNOWN` },
+      { ...body, padding: "x".repeat(70_000) },
+    ]) expect(classified(400, unrelated).kind).toBe("other");
+  });
+
   test("kiro refusal: runtime and q-host suspension shapes require 403", () => {
     expect(classified(403, { reason: "TEMPORARILY_SUSPENDED" }).kind).toBe("suspended");
     for (const message of ["temporarily suspended", "temporarily is suspended",
