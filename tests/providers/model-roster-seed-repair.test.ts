@@ -3,7 +3,15 @@ import { mergeConfiguredModelsIntoLiveCatalog } from "../../src/codex/catalog/pr
 import { routedMaxOutputTokens } from "../../src/codex/catalog/model-hints";
 import { projectStartupConfigRepairs } from "../../src/providers/model-rename-startup";
 import { projectStaleModelRosters, STALE_MODEL_ROSTERS } from "../../src/providers/stale-model-roster-migration";
-import { ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS, MINIMAX_MODELS, MINIMAX_MODELS_BEFORE_M31 } from "../../src/providers/registry/model-seeds";
+import {
+  ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
+  META_MODEL_API_MODELS,
+  META_MUSE_CONTEXT_WINDOW,
+  META_MUSE_MODELS,
+  META_MUSE_WONDER_MODEL,
+  MINIMAX_MODELS,
+  MINIMAX_MODELS_BEFORE_M31,
+} from "../../src/providers/registry/model-seeds";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
@@ -18,6 +26,35 @@ function minimaxConfig(provider: string, row: Partial<OcxProviderConfig>): OcxCo
 }
 
 describe("stale model roster migration", () => {
+  test("adds Muse Wonder to an untouched saved Meta Model API seed", () => {
+    const config = { providers: { "meta-model": {
+      adapter: "openai-responses",
+      models: [...META_MUSE_MODELS],
+      modelContextWindows: { "muse-spark-1.3": META_MUSE_CONTEXT_WINDOW },
+    } } } as unknown as OcxConfig;
+
+    const projection = projectStartupConfigRepairs(config);
+    const row = projection.config.providers!["meta-model"]!;
+    expect(projection.changed).toBe(true);
+    expect(row.models).toEqual(META_MODEL_API_MODELS);
+    expect(row.modelContextWindows).toEqual({
+      "muse-spark-1.3": META_MUSE_CONTEXT_WINDOW,
+      [META_MUSE_WONDER_MODEL]: META_MUSE_CONTEXT_WINDOW,
+    });
+    expect(projection.warnings.join(" ")).toContain(`added ${META_MUSE_WONDER_MODEL}`);
+    expect(projectStartupConfigRepairs(structuredClone(projection.config)).changed).toBe(false);
+  });
+
+  test("preserves a hand-edited Meta Model API roster", () => {
+    const models = [...META_MUSE_MODELS, "custom-model"];
+    const config = { providers: { "meta-model": {
+      adapter: "openai-responses", models: [...models],
+    } } } as unknown as OcxConfig;
+
+    expect(projectStaleModelRosters(config).changed).toBe(false);
+    expect(config.providers!["meta-model"]!.models).toEqual(models);
+  });
+
   test("adds the preview to an untouched saved MiniMax seed on both presets", () => {
     // A config saved since 2026-07-10 carries exactly this eight-id copy, and enrichment
     // never rewrites a present list. MiniMax's /v1/models omits the preview, so without
