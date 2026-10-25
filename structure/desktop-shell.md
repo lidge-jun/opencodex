@@ -341,9 +341,12 @@ process snapshots must agree. The target runtime PID, `ocx.pid`, and the PID in
 `runtime-port.json` must agree wherever present; mismatches make supervision unknown.
 The attestation secret is never included in supervision evidence. On Windows, `ocx.pid` and `runtime-port.json` must both name the runtime PID; its direct parent must be a live `opencodex-desktop.exe`; both images must have drive-qualified paths, with the runtime matching the Desktop image's sibling `ocx.exe` case-insensitively; parent and child must share a session; and the parent must have been created strictly before the child.
 Two snapshots must agree. Each acquisition is one bounded PowerShell `Win32_Process`
-read of the runtime row and its parent's row, emitted as JSON; both snapshots share the
-inspection's six-second budget, a single read may take at most three seconds, and a read
-that would start with under 250 ms left answers `probe-timeout`. Process evidence is
+read of the runtime row and its parent's row, emitted as JSON. Both snapshots share a
+six-second scheduling budget. Before each acquisition, the caller requires at least
+250 ms remaining and assigns the PowerShell subprocess a timeout of at most three
+seconds. Synchronous system-directory resolution occurs before that subprocess starts
+and has no separate timeout, so these are not hard wall-clock bounds for the complete
+inspection. Process evidence is
 re-read on every probe; only a successfully resolved system directory is memoized, and
 only for the process lifetime, so a failed resolution keeps the retry-on-next-call
 recovery contract.
@@ -357,7 +360,7 @@ Node, it derives the directory from `process.report.getReport().sharedObjects` a
 accepts it only when `kernel32.dll` and `ntdll.dll` each appear exactly once,
 drive-qualified, under one shared parent and below the report's 260-character
 module-name buffer — a namesake at the limit may already be truncated and is refused —
-and only after the candidate provably contains both DLLs and
+and only after the candidate passes F_OK existence checks for both DLLs and
 `WindowsPowerShell\v1.0\powershell.exe`. The report object also carries the process's
 environment values, so the resolver reads only `.sharedObjects` and never logs,
 serializes, stores or forwards the report. `bin/ocx.mjs` imports this module under
