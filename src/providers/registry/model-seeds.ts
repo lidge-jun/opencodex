@@ -770,7 +770,24 @@ export const KIMI_CODING_K28_MODELS = ["kimi-for-coding"];
 export const KIMI_CODING_LIVE_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CODING_K31_MODELS, ...KIMI_CODING_K28_MODELS];
 export const KIMI_CODING_ADJUSTABLE_THINKING_MODELS = [...KIMI_CODING_LIVE_MODELS];
 export const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
-export const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
+// 261025 Kimi K3.1 Pro on the Moonshot API (#7653): the platform model list names kimi-k3.1-pro
+// and kimi-k3.1-pro-highspeed (same model, 2-3x speed) on both the International and China
+// platforms. Every K3-series model has a 1,048,576-token window, and both ids share kimi-k3's
+// parameter constraints: thinking is always on, top-level reasoning_effort takes low/high/max
+// (default max), temperature/top_p/n/penalties are fixed, tool_choice "required" is supported.
+// Verified 2026-10-25 against official docs only:
+// Evidence: https://platform.kimi.ai/docs/models.md
+//           https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart.md
+//           https://platform.kimi.ai/docs/api/models-overview.md
+//           https://platform.kimi.ai/docs/pricing/chat.md
+//           https://platform.kimi.com/docs/models.md (China)
+export const KIMI_API_K31_MODELS = ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"];
+export const KIMI_API_K3_SERIES_MODELS = ["kimi-k3", ...KIMI_API_K31_MODELS];
+export const KIMI_API_MODELS = [...KIMI_API_K3_SERIES_MODELS, ...KIMI_LEGACY_API_MODELS];
+// The moonshot roster saved by installs between the K3 seed (260717) and K3.1 Pro. A literal on
+// purpose: stale-model-roster-migration refreshes only rows still identical to it, and a later
+// K2 retirement must not change what that refresh matches.
+export const KIMI_API_MODELS_BEFORE_K31 = ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
 // Every kimi coding preset record - picker, context windows, locked-parameter lists -
 // derives from the live ids only. seeding a retired id in a metadata list would re-arm
 // the model-rename migration on every boot (#5066): the list holds the retired id but
@@ -779,7 +796,7 @@ export const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
 // repairs saved rows still naming them.
 export const KIMI_THINKING_MODELS = KIMI_CODING_LIVE_MODELS;
 export const KIMI_CODING_NO_REASONING_MODELS = KIMI_CODING_LIVE_MODELS.filter(id => !KIMI_CODING_ADJUSTABLE_THINKING_MODELS.includes(id));
-export const KIMI_API_NO_REASONING_MODELS = KIMI_API_MODELS.filter(id => id !== "kimi-k3");
+export const KIMI_API_NO_REASONING_MODELS = KIMI_API_MODELS.filter(id => !KIMI_API_K3_SERIES_MODELS.includes(id));
 export const KIMI_CODING_K3_REASONING_EFFORTS = ["low", "high", "max"];
 export const KIMI_CODING_K3_REASONING_EFFORT_MAP: Record<string, string> = {
   none: "none",
@@ -798,15 +815,33 @@ export const KIMI_CODING_DEFAULT_REASONING_EFFORTS = Object.fromEntries(
 export const KIMI_CODING_REASONING_EFFORT_MAPS = Object.fromEntries(
   KIMI_CODING_ADJUSTABLE_THINKING_MODELS.map(id => [id, KIMI_CODING_K3_REASONING_EFFORT_MAP]),
 );
+// kimi-k3 keeps its launch-time max-only list; K3.1 Pro gets the documented low/high/max ladder.
 export const KIMI_API_REASONING_EFFORTS = Object.fromEntries(
-  KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? ["max"] : []]),
+  KIMI_API_MODELS.map(id => [
+    id,
+    KIMI_API_K31_MODELS.includes(id) ? KIMI_CODING_K3_REASONING_EFFORTS : id === "kimi-k3" ? ["max"] : [],
+  ]),
+);
+export const KIMI_API_DEFAULT_REASONING_EFFORTS = Object.fromEntries(KIMI_API_K31_MODELS.map(id => [id, "max"]));
+// K3.1 Pro cannot disable thinking and documents only low/high/max, so an explicit "none" omits
+// reasoning_effort (upstream default max) rather than sending an undocumented value. The value is
+// REASONING_EFFORT_OMIT_SENTINEL (src/reasoning-effort.ts); the registry does not import the
+// request-path module, and provider-registry-parity asserts the two stay equal.
+export const KIMI_API_K31_REASONING_EFFORT_MAP: Record<string, string> = {
+  ...KIMI_CODING_K3_REASONING_EFFORT_MAP,
+  none: "__omit__",
+};
+export const KIMI_API_REASONING_EFFORT_MAPS = Object.fromEntries(
+  KIMI_API_K31_MODELS.map(id => [id, KIMI_API_K31_REASONING_EFFORT_MAP]),
 );
 export const KIMI_LOCKED_PARAMETER_MODELS = KIMI_CODING_LIVE_MODELS;
 export const KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS = ["kimi-for-coding"];
 export const KIMI_API_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? KIMI_K3_1M_CONTEXT_WINDOW : 262_144]),
+  KIMI_API_MODELS.map(id => [id, KIMI_API_K3_SERIES_MODELS.includes(id) ? KIMI_K3_1M_CONTEXT_WINDOW : 262_144]),
 );
-export const KIMI_API_MODEL_INPUT_MODALITIES = { "kimi-k3": ["text", "image"] };
+export const KIMI_API_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  KIMI_API_K3_SERIES_MODELS.map(id => [id, ["text", "image"]]),
+);
 
 // 260715 NVIDIA NIM kimi family (issue #126): documented served ids on integrate
 // chat/completions per docs.api.nvidia.com/nim/reference/llm-apis; live /v1/models
