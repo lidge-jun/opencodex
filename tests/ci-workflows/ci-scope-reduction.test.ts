@@ -54,7 +54,7 @@ const MACOS_JOBS = ["platform-macos", "widget"] as const;
 /** The two smoke jobs whose matrix legs shrink with the event and native selection. */
 const MATRIX_JOBS = ["keyring-smoke", "npm-global-smoke"] as const;
 
-type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string };
+type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string; docker?: string };
 
 function term(source: string, inputs: SelectionInputs): string | boolean {
   const text = source.trim();
@@ -72,6 +72,7 @@ function term(source: string, inputs: SelectionInputs): string | boolean {
     if (output[1] === "ci") return inputs.ci;
     if (output[1] === "native") return inputs.native;
     if (output[1] === "desktop") return inputs.desktop ?? "false";
+    if (output[1] === "docker") return inputs.docker ?? "false";
   }
   throw new Error(`unsupported expression term: ${text}`);
 }
@@ -312,6 +313,22 @@ describe("the push trigger", () => {
     // qualify, so removing either breaks publication. dev is deliberately absent
     // (CI policy): cross-platform legs run on dev only by manual dispatch.
     expect([...(workflow.on?.push?.branches ?? [])].sort()).toEqual(["main", "preview"]);
+  });
+});
+
+describe("Docker PR selection", () => {
+  test("selects only its Ubuntu smoke for matching inputs without widening event policy", () => {
+    const job = jobs["docker-smoke"]!;
+    expect(job["runs-on"]).toBe("ubuntu-latest");
+    for (const ci of ["true", "false"]) {
+      for (const docker of ["true", "false"]) {
+        expect(evaluate(job.if!, { event_name: "pull_request", ci, docker, native: "false" }))
+          .toBe(ci === "true" && docker === "true");
+      }
+    }
+    for (const event_name of ["push", "workflow_dispatch", "schedule"]) {
+      expect(evaluate(job.if!, { event_name, ci: "false", docker: "false", native: "false" })).toBe(true);
+    }
   });
 });
 
