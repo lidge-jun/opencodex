@@ -367,7 +367,7 @@
   "claude-cli-tool-capture.test.ts": "providers", "claude-cli-usage-admission.test.ts": "providers",
   "claude-config-first-party.test.ts": "cli", "claude-code-thought-signature-scope.test.ts": "claude-integration",
   "claude-compatibility.test.ts": "claude-integration", "claude-context-windows.test.ts": "claude-integration",
-  "claude-desktop-1m.test.ts": "claude-integration", "claude-desktop-cli.test.ts": "claude-integration",
+  "claude-desktop-1m.test.ts": "claude-integration", "claude-desktop-cli.test.ts": "claude-integration", "claude-desktop-model-visibility.test.ts": "claude-integration",
   "claude-desktop-config-path.test.ts": "claude-integration", "claude-desktop-discovery.test.ts": "claude-integration",
   "claude-desktop-first-party.test.ts": "claude-integration",
   "claude-desktop-first-party-guards.test.ts": "claude-integration",

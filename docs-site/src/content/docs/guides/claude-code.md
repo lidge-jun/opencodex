@@ -286,6 +286,27 @@ backup and replacement; if it detects a concurrent edit, it refuses with `deskto
 Review the edit and reapply. If restoring the profile also fails after a metadata error, the
 reported reason includes both failures; reconcile the profile and metadata before retrying.
 
+#### Choose which models Claude Desktop lists
+
+**Connect → Claude Desktop → Desktop model list** has a checkbox for each model. Search by name or
+filter by provider, then use **Select shown** or **Clear shown** to change many rows at once. Click
+**Save & apply** to write the list to Desktop. Only Claude Desktop's list changes: provider model
+settings, Claude Code, Codex and other clients keep every model.
+
+**Newly discovered models** sets what happens when a provider later adds a model. **List
+automatically** adds it to Desktop. **Keep hidden until selected** leaves it out until you check it.
+The selection is saved in `claudeCode.desktopModelVisibility` and survives catalog refreshes and
+reapplies. Tier families under **Advanced** stay optional and do not affect which models are shown.
+A hidden model keeps its Desktop id, so a conversation that is already using it keeps working.
+
+The card shows the selected, available and applied counts separately. A selected model that is no
+longer available is counted on its own and is not written. Before you apply, the card previews the
+models Desktop will gain and lose. The status bar shows **Saved — apply to update Desktop** until
+the saved list reaches Desktop. Applying replaces the model list in OpenCodex's Desktop profile,
+including a list edited there by hand. Discovery-only mode (`--discovery-only`) writes no list, so
+it does not use this selection. The dashboard will not save a selection that hides every
+available model.
+
 ### First-party (opt-in)
 
 :::caution[Account risk]

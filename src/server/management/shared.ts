@@ -409,10 +409,14 @@ export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxCla
   for (const id of desktopVisibleNativeSlugs(config)) {
     effortByRoute.set(`native/${id}`, true);
   }
+  const { desktopRouteVisible, filterDesktopModelsByVisibility, readDesktopModelVisibility } = await import("../../claude/desktop-model-visibility");
+  const visibility = readDesktopModelVisibility(config.claudeCode);
   const models = Object.keys(profile.assignments).sort().map(route => ({
     route,
     label: modelByRoute.get(route)?.label ?? route,
     available: available.has(route),
+    // Desktop list membership (#7702), separate from the tier assignment below.
+    visible: desktopRouteVisible(visibility, route),
     ...(modelByRoute.get(route)?.contextWindow ? { contextWindow: modelByRoute.get(route)!.contextWindow } : {}),
     effortSupported: effortByRoute.get(route) ?? false,
     // Read-only view of the 1M capability the written Desktop config already emits,
@@ -420,10 +424,20 @@ export async function buildClaudeDesktopState(config: OcxConfig, stored?: OcxCla
     supports1m: routeSupportsOneMillion(route, modelByRoute.get(route)?.contextWindow),
     assignment: profile.assignments[route]!,
   }));
+  const rendered = renderDesktopProfile(profile, profileModels);
+  const listed = filterDesktopModelsByVisibility(
+    rendered.map(model => ({ ...model, anthropicFamilyTier: model.family })),
+    rendered.map(model => model.route),
+    visibility,
+  );
   return {
     profile,
     models,
-    rendered: renderDesktopProfile(profile, profileModels),
+    rendered,
+    visibility: visibility ?? null,
+    // What the next apply writes, in order: `rendered` narrowed by visibility. Empty means the
+    // writer would fall back to the full list (see generateDesktop3pModels).
+    listed: listed.map(({ route, name, label, family, isFamilyDefault }) => ({ route, name, label, family, isFamilyDefault: !!isFamilyDefault })),
     port: config.port,
   };
 }
