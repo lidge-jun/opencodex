@@ -388,6 +388,10 @@ export async function executeComboResponses(
   // result after its provisional Authorization is removed, including an explicitly keyless result.
   const replayPrincipal = options.replayPrincipal
     ?? { clientPrincipalId: resolveContextPrincipal(req, config, options.admission) };
+  // The caller's model scope, resolved once from the request options. A capability-authenticated
+  // internal request carries the caller's captured scope on options.admissionScope even though
+  // its own admission is the host's broad key; recomputing from options.admission would lose it.
+  const admissionScope = options.admissionScope ?? resolveAdmissionModelScope(config, options.admission);
   // PF-07: present only for a Chat combo with `nativeChatCombos` on; otherwise every child
   // takes the bridge below exactly as before.
   const protocolLanes = createComboProtocolLanes({
@@ -395,7 +399,7 @@ export async function executeComboResponses(
     req,
     config,
     logCtx,
-    admission: options.admission,
+    admissionScope,
     droidDefaultEffort: options.droidDefaultEffort,
     comboId,
     targets: combo.targets,
@@ -698,7 +702,7 @@ export async function executeComboResponses(
         fallback,
         config,
         isDestinationAllowed: (providerName, modelId) => routeAllowedByScope(
-          resolveAdmissionModelScope(config, options.admission), { providerName, modelId },
+          admissionScope, { providerName, modelId },
         ),
         ...(combo.decisionQuotaSignals === true ? { decisionQuotaSignals: true, decisionQuotaTiers: combo.decisionQuotaTiers } : {}),
         ...(combo.decisionProvider ? { decisionProvider: combo.decisionProvider } : {}),

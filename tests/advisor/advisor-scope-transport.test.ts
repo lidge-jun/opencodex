@@ -22,7 +22,12 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import {
   ADVISOR_ADMISSION_SCOPE_HEADER,
   decodeAdvisorAdmissionScope,
+  encodeAdvisorAdmissionScope,
 } from "../../src/server/advisor-admission-scope";
+import {
+  ADVISOR_INTERNAL_CAPABILITY_HEADER,
+  internalCallCapability,
+} from "../../src/lib/local-internal-call-capability";
 import { advisorBaseUrl } from "../../src/advisor/consult";
 import { MODEL_NOT_ALLOWED_FOR_KEY } from "../../src/server/admission-model-scope";
 import type { DataPlaneAdmission } from "../../src/server/auth-cors";
@@ -235,5 +240,102 @@ describe("advisor admission-scope transport (end-to-end)", () => {
     expect(workerBodies[1]!).toContain(ADVISOR_ADVICE);
     expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
     expect(JSON.stringify(frames)).toContain("Following the advice");
+  });
+});
+
+/**
+ * The scope header has authority ONLY beside the process-owned capability. An ordinary
+ * caller that sends the same metadata — absent, foreign, or malformed — must see it
+ * ignored, not applied: it can narrow nobody. Only a capability-authenticated caller gets
+ * the malformed value refused, which keeps a corrupt sidecar loud instead of silently wide.
+ */
+describe("advisor admission-scope metadata without the capability (negative regression)", () => {
+  function chatConfig(workerBodies: string[]): OcxConfig {
+    return {
+      port: 0,
+      providers: {
+        worker: {
+          adapter: "openai-chat",
+          baseUrl: "https://worker.test/v1",
+          apiKey: "worker-key",
+          models: ["deepseek-v4"],
+          fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+            workerBodies.push(String(init?.body));
+            return chatCompletion("worker answer");
+          }) as typeof fetch,
+        },
+      },
+      apiKeys: [{
+        id: "caller", name: "caller", key: "ocx_data_" + "c".repeat(40),
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }],
+    } as OcxConfig;
+  }
+
+  let chatSeq = 0;
+  function sendChat(config: OcxConfig, headers: Record<string, string>) {
+    chatSeq += 1;
+    return handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify({
+        model: "worker/deepseek-v4",
+        messages: [{ role: "user", content: "hi" }],
+        stream: false,
+      }),
+    }), config, logCtx, {
+      requestId: "scope-neg-" + chatSeq,
+      start: Date.now(),
+      admission: CALLER_ADMISSION,
+    });
+  }
+
+  // A scope naming only "expert" would refuse "worker" if it were applied; every case below
+  // must instead reach the worker normally, proving the metadata was ignored.
+  const FOREIGN_SCOPE = { providers: ["expert"], models: [] };
+
+  test("a scope header without the capability does not narrow an ordinary caller", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const response = await sendChat(chatConfig(workerBodies), {
+      [ADVISOR_ADMISSION_SCOPE_HEADER]: encodeAdvisorAdmissionScope(FOREIGN_SCOPE),
+    });
+    expect(response.status).toBe(200);
+    expect(workerBodies).toHaveLength(1);
+  });
+
+  test("a scope header beside a foreign capability does not narrow an ordinary caller", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    // Shaped like a capability but not this process's: any caller can mint such a string.
+    const response = await sendChat(chatConfig(workerBodies), {
+      [ADVISOR_INTERNAL_CAPABILITY_HEADER]: "A".repeat(43),
+      [ADVISOR_ADMISSION_SCOPE_HEADER]: encodeAdvisorAdmissionScope(FOREIGN_SCOPE),
+    });
+    expect(response.status).toBe(200);
+    expect(workerBodies).toHaveLength(1);
+  });
+
+  test("a malformed scope header without the capability is ignored, not refused", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const response = await sendChat(chatConfig(workerBodies), {
+      [ADVISOR_ADMISSION_SCOPE_HEADER]: "not-a-scope",
+    });
+    expect(response.status).toBe(200);
+    expect(workerBodies).toHaveLength(1);
+  });
+
+  test("a malformed scope header beside the real capability IS refused", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [];
+    const response = await sendChat(chatConfig(workerBodies), {
+      [ADVISOR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
+      [ADVISOR_ADMISSION_SCOPE_HEADER]: "not-a-scope",
+    });
+    expect(response.status).toBe(403);
+    const body = await response.json() as { error?: { code?: string } };
+    expect(body.error?.code).toBe(MODEL_NOT_ALLOWED_FOR_KEY);
+    expect(workerBodies).toHaveLength(0);
   });
 });

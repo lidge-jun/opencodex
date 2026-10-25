@@ -29,7 +29,11 @@ import {
 import { configuredPort } from "../server/auth-cors";
 import { readAdvisorReasoning } from "../server/inference/advisor-diagnostics";
 import { ADVISOR_SYSTEM_INSTRUCTION, buildAdvisorUserPrompt, type AdvisorContextInput } from "./context";
-import { ADVISOR_ADMISSION_SCOPE_HEADER, encodeAdvisorAdmissionScope } from "../server/advisor-admission-scope";
+import {
+  ADVISOR_ADMISSION_SCOPE_HEADER,
+  AdvisorAdmissionScopeEncodedBoundExceeded,
+  encodeAdvisorAdmissionScope,
+} from "../server/advisor-admission-scope";
 import type { AdmissionModelScope } from "../server/admission-model-scope";
 
 /**
@@ -130,7 +134,18 @@ export async function consultAdvisor(
   // require no token simply omit it.
   const admission = localAdmissionToken(config);
   if (admission) headers["x-opencodex-api-key"] = admission;
-  if (admissionScope) headers[ADVISOR_ADMISSION_SCOPE_HEADER] = encodeAdvisorAdmissionScope(admissionScope);
+  if (admissionScope) {
+    try {
+      headers[ADVISOR_ADMISSION_SCOPE_HEADER] = encodeAdvisorAdmissionScope(admissionScope);
+    } catch (error) {
+      if (error instanceof AdvisorAdmissionScopeEncodedBoundExceeded) {
+        // Controlled failure before fetch: an over-bound scope must never reach the peer —
+        // it would be rejected mid-request — and must never be narrowed silently either.
+        return { ok: false, advice: "", advisorModel: input.advisorModel, error: error.message, durationMs: Date.now() - t0 };
+      }
+      throw error;
+    }
+  }
 
   const requestBody = {
     model: input.advisorModel,

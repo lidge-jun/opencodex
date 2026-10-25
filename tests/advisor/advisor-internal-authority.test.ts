@@ -9,7 +9,11 @@ import { consultAdvisor } from "../../src/advisor/consult";
 import { parseRequest } from "../../src/responses/parser";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
-import { encodeAdvisorAdmissionScope, decodeAdvisorAdmissionScope } from "../../src/server/advisor-admission-scope";
+import {
+  AdvisorAdmissionScopeEncodedBoundExceeded,
+  encodeAdvisorAdmissionScope,
+  decodeAdvisorAdmissionScope,
+} from "../../src/server/advisor-admission-scope";
 import type { OcxConfig } from "../../src/types";
 import { executeResponsesSidecars } from "../../src/server/responses/sidecar-execution";
 import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
@@ -128,6 +132,13 @@ describe("internal-call capability — server-owned authority", () => {
     const scope = { providers: ["worker"], models: ["worker/cheap"] };
     expect(decodeAdvisorAdmissionScope(encodeAdvisorAdmissionScope(scope))).toEqual(scope);
     expect(decodeAdvisorAdmissionScope("not-a-scope")).toBeUndefined();
+  });
+  test("the encoder shares the decoder bound and fails rather than emit an undeliverable scope", () => {
+    // The decoder rejects anything longer than the shared bound; an encoder that still
+    // emitted it would produce a header the peer is guaranteed to refuse mid-request.
+    const oversized = { providers: ["worker"], models: ["worker/" + "m".repeat(20_000)] };
+    expect(() => encodeAdvisorAdmissionScope(oversized)).toThrow(AdvisorAdmissionScopeEncodedBoundExceeded);
+    expect(() => encodeAdvisorAdmissionScope(oversized)).toThrow("exceeds encoded bound");
   });
   test("a forged literal header value is NOT internal authority", () => {
     // This is the spoof the fence must reject: any external caller can send it.
