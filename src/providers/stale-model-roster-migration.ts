@@ -15,13 +15,17 @@
  * those records all-or-nothing, so creating one here would hide the rest of the registry seed.
  * Same shape and restraint as `stale-context-window-migration`.
  */
-import { ALIBABA_INTL_TOKEN_PLAN_BASE_URL } from "./base-url-choices";
+import { ALIBABA_INTL_TOKEN_PLAN_BASE_URL, MOONSHOT_CN_BASE_URL, MOONSHOT_INTL_BASE_URL } from "./base-url-choices";
 import { PROVIDER_REGISTRY, normalizedProviderEndpoint } from "./registry";
 import {
   ALIBABA_TOKEN_PLAN_MODELS,
   ALIBABA_INTL_TOKEN_PLAN_MODELS,
   ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
   ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
+  KIMI_API_DEFAULT_REASONING_EFFORTS,
+  KIMI_API_MODEL_CONTEXT_WINDOWS,
+  KIMI_API_MODELS,
+  KIMI_API_MODELS_BEFORE_K31,
   MINIMAX_M31_DEFAULT_REASONING_EFFORT,
   MINIMAX_M31_FLASH_PREVIEW,
   MINIMAX_MODELS,
@@ -96,6 +100,16 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
     maxOutputTokens: ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
     defaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "high" },
   })),
+  // Kimi K3.1 Pro (#7653). Both the International and China platforms list kimi-k3.1-pro and
+  // -highspeed; a Custom URL may be another gateway, so it keeps its saved list.
+  {
+    provider: "moonshot",
+    from: KIMI_API_MODELS_BEFORE_K31,
+    to: KIMI_API_MODELS,
+    contextWindows: KIMI_API_MODEL_CONTEXT_WINDOWS,
+    defaultReasoningEfforts: KIMI_API_DEFAULT_REASONING_EFFORTS,
+    destinationBaseUrls: [MOONSHOT_INTL_BASE_URL, MOONSHOT_CN_BASE_URL],
+  },
 ];
 
 function sameList(value: unknown, expected: readonly string[]): boolean {
