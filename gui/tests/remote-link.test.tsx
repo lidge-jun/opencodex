@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 import { act } from "react";
@@ -24,9 +24,14 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  if (root) await act(async () => { root?.unmount(); });
-  root = null;
-  for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+  try {
+    if (root) await act(async () => { root?.unmount(); });
+  } finally {
+    root = null;
+    try { await win.happyDOM.close(); } finally {
+      for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+    }
+  }
 });
 
 function response(body: unknown, status = 200): Response { return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }); }
@@ -882,6 +887,51 @@ async function enterAlias(sheet: HTMLElement, value: string): Promise<void> {
     input.dispatchEvent(new win.Event("input", { bubbles: true }));
   });
 }
+
+test.each(["close", "unmount"] as const)("pending sheet focus is cancelled on %s", async transition => {
+  type Timer = ReturnType<Window["setTimeout"]>;
+  const pending = new Map<Timer, () => void>();
+  const schedule = win.setTimeout.bind(win);
+  const cancel = win.clearTimeout.bind(win);
+  const timers = spyOn(win, "setTimeout").mockImplementation((callback, delay = 0, ...args) => {
+    if (delay !== 0) return schedule(callback, delay, ...args);
+    const timer = {} as Timer;
+    pending.set(timer, () => callback(...args));
+    return timer;
+  });
+  const cancellations = spyOn(win, "clearTimeout").mockImplementation(timer => {
+    if (!pending.delete(timer)) cancel(timer);
+  });
+  globalThis.fetch = (async input => response(String(input).endsWith("/candidates") ? { candidates: [] } : baseStatus)) as typeof fetch;
+  try {
+    const host = await mount();
+    const sheet = await openHomeSheet(host);
+    const trigger = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))!;
+    expect(pending.size).toBe(1);
+    // Prove the held callback is live and still gives an open sheet its initial focus.
+    for (const [timer, callback] of pending) { pending.delete(timer); callback(); }
+    expect(win.document.activeElement).toBe(sheet.querySelector("input, button"));
+    await act(async () => { sheet.dispatchEvent(new win.Event("cancel", { cancelable: true })); });
+    expect(win.document.activeElement).toBe(trigger);
+    await act(async () => { trigger.click(); });
+    expect(pending.size).toBe(1);
+    if (transition === "close") {
+      await act(async () => { sheet.dispatchEvent(new win.Event("cancel", { cancelable: true })); });
+    } else {
+      await act(async () => { root?.unmount(); });
+      root = null;
+    }
+    // Check cancellation before draining; executing an uncancelled timer cannot make this pass.
+    expect(pending.size).toBe(0);
+    for (const callback of pending.values()) callback();
+    if (transition === "close") expect(win.document.activeElement).toBe(trigger);
+  } finally {
+    if (root) await act(async () => { root?.unmount(); });
+    root = null;
+    timers.mockRestore();
+    cancellations.mockRestore();
+  }
+});
 
 test("discovery loading, empty setup and rescan retain keyboard-accessible manual entry", async () => {
   let complete!: (value: Response) => void;

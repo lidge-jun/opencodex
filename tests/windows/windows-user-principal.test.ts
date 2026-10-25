@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 
 import {
   cachedCurrentWindowsIdentity,
@@ -30,6 +30,30 @@ afterEach(() => {
 });
 
 describe("Windows effective ACL principal", () => {
+  test.if(process.platform === "win32" && process.arch === "x64")(
+    "an uncached native ACL principal needs no PowerShell child (#7547)", () => {
+      resetWindowsPrincipalForTests();
+      const spawn = spyOn(Bun, "spawnSync").mockImplementation(() => { throw new Error("PowerShell must not start"); });
+      try {
+        expect(resolveCurrentWindowsPrincipal(5_000)).toMatch(/^\*S-1-/);
+        expect(Boolean(cachedCurrentWindowsIdentity()?.name)).toBe(true);
+        expect(spawn).not.toHaveBeenCalled();
+      } finally { spawn.mockRestore(); }
+    },
+  );
+
+  test.if(process.platform === "win32" && process.arch === "x64")(
+    "an uncached async native ACL principal needs no PowerShell child (#7547)", async () => {
+      resetWindowsPrincipalForTests();
+      const spawn = spyOn(Bun, "spawn").mockImplementation(() => { throw new Error("PowerShell must not start"); });
+      try {
+        expect(await resolveCurrentWindowsPrincipalAsync(5_000)).toMatch(/^\*S-1-/);
+        expect(Boolean(cachedCurrentWindowsIdentity()?.name)).toBe(true);
+        expect(spawn).not.toHaveBeenCalled();
+      } finally { spawn.mockRestore(); }
+    },
+  );
+
   test("builds a non-interactive command without the Bun-incompatible PowerShell window flag", () => {
     const trusted = "C:\\trusted-system32\\WindowsPowerShell\\v1.0\\powershell.exe";
     setTrustedWindowsElevationExecutablesForTests({ powershell: trusted });

@@ -353,8 +353,9 @@ export function assertNativeProfileLockPath(context: NativeProfileContext): void
 }
 
 export function resolveNativeProfileContext(options: { codexHome?: string; configDir?: string } = {}): NativeProfileContext {
-  const codexHome = canonicalExistingDirectory(options.codexHome ?? getCodexHome(), "The effective CODEX_HOME");
+  // Read-only callers may tolerate an absent native home, but never unsafe OpenCodex storage.
   const configDir = canonicalizeDirectoryPath(options.configDir ?? getConfigDir());
+  const codexHome = canonicalExistingDirectory(options.codexHome ?? getCodexHome(), "The effective CODEX_HOME");
   const homeId = nativeProfileHomeId(codexHome);
   const foldedHomeId = process.platform === "win32" ? legacyWindowsNativeProfileHomeId(codexHome) : homeId;
   const instanceId = createHash("sha256").update(DOMAIN_INSTANCE).update(configDir).digest("hex");

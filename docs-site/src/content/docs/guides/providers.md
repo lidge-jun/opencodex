@@ -52,6 +52,8 @@ reset is expected to recover as `+N% pool capacity`. **Incomplete coverage** mea
 accounts could not safely contribute to the estimate, for example because their plan or quota is
 unknown, their reading is stale, or the account is paused or needs reauthentication.
 
+Business Premium seats reported as `self_serve_business_prolite` count as five Standard-seat units in this estimate. This display weight does not select accounts or create a five-hour window when the upstream reports only weekly usage. The calibration follows the [official Business usage limits](https://help.openai.com/en/articles/12003714-chatgpt-business-models-and-limits), checked 2026-10-20; unknown plans continue to count at the baseline with the unknown-plan count disclosed.
+
 A **partial window coverage** warning means some included accounts reported one quota window but
 not another. The overview keeps those windows separate and marks each affected window incomplete
 instead of treating the missing reading as usage for that window.
@@ -316,7 +318,7 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth uses the separate Grok CLI subscription gateway. The API-key override uses `https://api.x.ai/v1` and may inject Priority Processing. Live-first Grok catalog; `grok-4.5` is the fallback default. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude models; live model list fetched from `/v1/models`. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. `k3.1-pro` and `k3.1-pro-highspeed` (K3.1 Pro) are also listed: 1M-token context, thinking-only on the same ladder (default `max`). Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
 | `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | The dashboard Login and Add account buttons offer Builder ID, Google, GitHub device login, or Kiro CLI. Native device login adds an account without signing `kiro-cli` out. The Kiro CLI choice imports or starts a CLI session; its Add account workflow temporarily switches the CLI account and restores it on cancellation or failure. |
@@ -388,14 +390,27 @@ to avoid its `assistant must not be empty` rejection. Nonempty text, whitespace,
 reasoning and tool calls/results are retained; stored client history is not rewritten.
 An empty message referenced by an `item_reference` in the same input is retained rather than leaving a dangling reference.
 
-Kimi Coding usage prices for `k3`, `k3[1m]`, and `k3-256k` are **API-reference estimates** across
-`kimi`, `kimi-code`, and `kimi-responses`, using the published default 5-minute cache-write rate.
-They do not reproduce Code Plan billing or quota: K3's 1M variant consumes about twice the quota
-of `k3-256k`. `kimi-for-coding` now points to K2.8 Preview, so its former K2.7 price is no longer
+Kimi Coding usage prices for `k3`, `k3[1m]`, `k3-256k`, `k3.1-pro`, and `k3.1-pro-highspeed` are
+**API-reference estimates** across `kimi`, `kimi-code`, and `kimi-responses`, using the published
+default 5-minute cache-write rate (the `moonshot` API preset prices the same models as `kimi-k3`,
+`kimi-k3.1-pro`, and `kimi-k3.1-pro-highspeed`). They do not reproduce Code Plan billing or quota:
+K3's 1M variant consumes about twice the quota of `k3-256k`, and K3.1 Pro Highspeed about twice
+that of `k3.1-pro`. `kimi-for-coding` now points to K2.8 Preview, so its former K2.7 price is no longer
 used; its estimate remains unavailable unless the operator supplies `modelCosts`. Unknown-price
 routing policies and cost caps that exclude unknown estimates can therefore exclude this alias.
 See [Kimi's model configuration](https://www.kimi.com/code/docs/en/kimi-code/models.html) and
 [API pricing](https://platform.kimi.ai/docs/pricing/chat).
+
+The `moonshot` (Kimi API) preset lists `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed` next to
+`kimi-k3` and the K2 ids. Both have a 1M-token context window and text + image input, and always
+think: the picker offers `low` / `high` / `max` (default `max`), Codex `medium` is sent as `high`
+and `xhigh` as `max`, and an explicit `none` leaves `reasoning_effort` out so the upstream default
+applies. Fixed sampling parameters (`temperature`, `top_p`, penalties) are not sent. A saved
+`moonshot` model list that is still the previous built-in list gains both ids at startup when it
+points at the International or China endpoint; an edited list or a Custom URL is left as it is.
+The preset default stays `kimi-k2.7-code`. Moonshot closes the K2 series to new accounts on
+2026-10-31 and plans to retire it by the end of December 2026; see the
+[Kimi API model list](https://platform.kimi.ai/docs/models).
 
 A custom `openai-chat` provider can opt in when its upstream documents support for
 `prompt_cache_key`:
@@ -1328,6 +1343,7 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Model Discovery:** `qoder --list-models` is the authoritative entitlement roster for the current PAT. The cache is bound to an irreversible fingerprint of the token, so switching accounts never reuses another account's roster. If discovery fails, the provider degrades to a stale cache and then the documented static seed.
 - **Token usage:** Qoder CLI reports zero token counts unless its usage switch is on, so each preset turns it on in its scoped CLI child environment: `QODER_EXPOSE_TOKEN_USAGE=true` for Global and `QODERCN_EXPOSE_TOKEN_USAGE=true` for CN, which reads only its own prefix.
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. Client-declared tools are exposed through an isolated request-scoped MCP server.
+- **Output guard:** If the CLI echoes OpenCodex tool-call/result replay envelopes into assistant text, the turn fails with `vendor_scaffold_detected` (502) instead of returning the envelope as a successful answer, and neither reasoning nor tool calls following the envelope are forwarded. Reasoning starts a fresh replay-text block, so earlier prose or code fences cannot hide an envelope in later text. If the CLI's turn already ended with its own error, that error is reported instead, still without the envelope. The proxy does not retry that failure automatically. Ordinary prose and closed fenced examples follow the shared envelope recognizer; an unverified overflowing fenced example is refused. Assistant text preserves Unicode characters split across CLI frames; unpaired surrogates are replaced with U+FFFD.
 - **Image Input:** Qoder Global accepts image input through the Qoder CLI. OpenCodex forwards supported image inputs that reach the Global adapter to the CLI without maintaining a per-model vision capability allowlist there. Image compatibility and any model-specific preprocessing or routing are handled by Qoder. OpenCodex does not use the static discovery fallback roster to classify per-model vision capability. Qoder CN keeps its existing sidecar classification, and any residual raw-image request that reaches the CN adapter is rejected as `unsupported_input_modality`. OpenCodex serializes history before the current turn, but Qoder does not persist sessions, so prior images are replayed on later turns. In observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied.
 - **PAT recovery:** For both Qoder presets, a multi-key API-key pool can switch to another PAT on a supported authentication rejection or account-level quota exhaustion, but only before response content or an event that makes replay unsafe. Recovery requires Qoder-specific classification and respects credential-hop and send budgets; an HTTP 401/429 or quota message alone is not permission to replay. Single-key configurations do not rotate. Sharing the CLI runner does not enable this API-key recovery for CodeBuddy or self-authenticated Claude CLI.
 - **Quota:** No public quota API is used, so totals and reset times are unavailable. Codes 110 (account daily limit) and 118 (personal Credits exhaustion) report `insufficient_quota` and permit consideration of PAT recovery. Other supported quota codes also report `insufficient_quota` but do not authorize it. Numeric error codes take precedence: an unrecognized numeric code does not fall back to quota or authentication text. Without a numeric code, only the supported account-daily message beginning “You've reached your daily usage limit for Chat”, with no team/model/shared qualifier, grants quota recovery; generic credit-limit text does not. Only quota failures eligible for PAT recovery enter key cooldown handling. When such a failure has no reset time, the failed key uses the existing default cooldown; nonrecoverable quota classifications do not create a cooldown through this path, and no next-day reset is inferred.

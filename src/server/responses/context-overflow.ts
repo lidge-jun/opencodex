@@ -2,7 +2,7 @@ import { bridgeToResponsesSSE, formatErrorResponse } from "../../bridge";
 import { OLLAMA_LATE_ATTRIBUTION_LIMIT_MESSAGE } from "../../adapters/ollama-native";
 import { isThroughputLimitText } from "../../claude/outbound";
 import { isDefiniteContextOverflow } from "../../combos/failover";
-import { classifyError } from "../../lib/errors";
+import { classifyError, MODEL_NOT_IN_PLAN_STREAM_CODE } from "../../lib/errors";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { AdapterEvent } from "../../types";
 
@@ -99,6 +99,8 @@ export interface SidecarLoopFailure {
   upstreamCode?: string;
   /** The failed response was marked non-replayable: the provider may already have run the turn. */
   nonReplayable?: boolean;
+  /** The failed response was a verified plan refusal; the loop's own envelope must carry the mark. */
+  verifiedPlanRefusal?: boolean;
 }
 
 /**
@@ -127,6 +129,11 @@ export function sidecarLoopOverflowEvent(
 export function sidecarLoopTerminalEvent(
   failure: SidecarLoopFailure,
 ): Extract<AdapterEvent, { type: "error" }> | undefined {
+  // A verified plan refusal in a later iteration lands inside an already committed 200 stream,
+  // where only a terminal refusal code ends the turn; `model_not_in_plan` would be reconnected.
+  if (failure.verifiedPlanRefusal && failure.event) {
+    return { ...failure.event, code: MODEL_NOT_IN_PLAN_STREAM_CODE, retryable: false };
+  }
   const overflow = sidecarLoopOverflowEvent(failure);
   if (overflow || failure.event) return overflow;
   if (classifyError(failure.status, "upstream_error", failure.message).code !== "context_length_exceeded") return undefined;
