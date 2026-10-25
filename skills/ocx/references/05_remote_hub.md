@@ -315,6 +315,12 @@ protocol version, API key id, selected clients, and three health fields worth ch
 | `Key rotation` | `recovery-required` means a rotation was interrupted. Re-run `connect rotate` to commit or abort it. |
 | `Catalog` | `unsafe` means the catalog bytes are not the ones this connection wrote. |
 
+To sync only while that reading still holds, pass what you read back to sync:
+`ocx sync --expect-link <link.linkId>` on a Remote Link Child, or
+`ocx sync --expect-hub-key <apiKeyId>` on a hub client. If the machine was disconnected or
+relinked in between, the sync changes nothing and exits 5 with a JSON `phase` line on stderr
+([04_failure_semantics.md](04_failure_semantics.md#a-pinned-sync-that-refuses-exit-5)).
+
 ## Key rotation is a two-step commit
 
 Starting a rotation issues the new key while **the old key stays valid**. The dashboard

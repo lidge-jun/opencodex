@@ -169,6 +169,12 @@ API, the adapter removes item-level `extra_content` from the outgoing HTTP reque
 create. Native `/responses/compact` applies the same projection. The original history keeps the Google
 thought signature for later Google turns. Other Responses gateways retain their extensions.
 
+OpenAI-operated destinations receive replayed `url_citation` annotations with missing or invalid
+titles and indices repaired. This applies to ordinary HTTP/WebSocket requests and native
+`/responses/compact`. Custom gateways keep the original annotations even when
+`supportsNativeCompactEndpoint: true` enables native compaction. Citation repair leaves the
+client's stored history unchanged.
+
 The adapter preserves the incoming client's `User-Agent` as a fallback in both auth modes because
 some Responses-compatible providers use the Codex client fingerprint for compatibility behavior.
 An explicitly configured provider `User-Agent` remains authoritative regardless of header casing;

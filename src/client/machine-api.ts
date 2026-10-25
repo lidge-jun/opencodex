@@ -106,7 +106,9 @@ export async function handleMachineApi(
       return Response.json({ error: "invalid sync request" }, { status: 400 });
     }
     try {
-      const result = await deps.sync(
+      // `connection` is the full saved connection (token fingerprint, prior catalog) for local
+      // callers; it is not part of this response.
+      const { connection: _connection, ...result } = await deps.sync(
         input.restartCodex === undefined ? {} : { restartCodex: input.restartCodex },
       );
       deps.setHubReachability?.("online");
