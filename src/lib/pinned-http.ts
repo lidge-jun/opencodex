@@ -61,6 +61,7 @@ function decodedBody(
   maxBytes: number | undefined,
   context: string,
   release: () => void,
+  setBackpressure: (paused: boolean) => void,
 ): ReadableStream<Uint8Array> {
   // Interposed purely to attribute failures. Once bytes enter the decompressor, a transport
   // error and a corrupt trailer are indistinguishable from the far side of the pipe.
@@ -95,6 +96,7 @@ function decodedBody(
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
+        setBackpressure(false);
         const next = await reader.read();
         if (next.done) {
           controller.close();
@@ -105,6 +107,9 @@ function decodedBody(
           throw new PinnedHttpError("output_byte_limit", `${context} exceeds ${maxBytes} byte cap`);
         }
         controller.enqueue(next.value);
+        // The native decoder may accept more coded input while its output is queued.
+        // Carry the final consumer's pressure to the socket as well as its immediate input.
+        setBackpressure(controller.desiredSize !== null && controller.desiredSize <= 0);
       } catch (error) {
         // A failure the socket stream raised is the caller's answer, whatever shape it has.
         // Only what the decompressor itself rejected is renamed.
@@ -284,9 +289,26 @@ function pinnedHttpRequest(
       }
 
       let received = 0;
+      let bodySettled = false;
+      let sourceDemand = true;
+      let decodedBackpressure = false;
+      let paused = false;
+      const updateBodyFlow = () => {
+        const shouldPause = !sourceDemand || decodedBackpressure;
+        if (bodySettled || paused === shouldPause) return;
+        paused = shouldPause;
+        if (paused) {
+          response.pause();
+          // A full local queue is consumer backpressure, not upstream inactivity.
+          // This also suspends the legacy request timeout on the same socket.
+          response.setTimeout(0);
+        } else {
+          response.setTimeout(inactivityTimeoutMs);
+          response.resume();
+        }
+      };
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
-          let bodySettled = false;
           const failBody = (error: Error) => {
             if (bodySettled) return;
             bodySettled = true;
@@ -307,6 +329,8 @@ function pinnedHttpRequest(
               return;
             }
             try { controller.enqueue(buffer); } catch { /* closed */ }
+            sourceDemand = controller.desiredSize !== null && controller.desiredSize > 0;
+            updateBodyFlow();
           });
           response.on("end", () => {
             if (bodySettled) return;
@@ -317,7 +341,13 @@ function pinnedHttpRequest(
             failBody(error);
           });
         },
+        pull() {
+          sourceDemand = true;
+          updateBodyFlow();
+        },
         cancel() {
+          bodySettled = true;
+          response.destroy();
           req?.destroy();
         },
       });
@@ -329,7 +359,10 @@ function pinnedHttpRequest(
         try { req?.destroy(); } catch { /* ignore */ }
       };
       const payload = coding.kind === "decodable"
-        ? decodedBody(stream, coding.format, maxBytes, context, release)
+        ? decodedBody(stream, coding.format, maxBytes, context, release, backpressured => {
+          decodedBackpressure = backpressured;
+          updateBodyFlow();
+        })
         : stream;
       resolve(new Response(payload, { status, headers: responseHeaders }));
     };

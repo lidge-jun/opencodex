@@ -1,3 +1,4 @@
+import { createUploadWaiter } from "./socks5-upload-waiter";
 import net, { type Socket } from "node:net";
 import tls, { type TLSSocket } from "node:tls";
 import { classifyContentCoding, isNullBodyStatus } from "./http-response-semantics";
@@ -590,37 +591,9 @@ async function finalResponseHead(
   return head;
 }
 
-/**
- * A promise that rejects with the caller's abort reason, and a way to stop listening.
- *
- * Destroying the socket is not enough to end a pending `bodyReader.read()`: that promise belongs
- * to the caller's body stream, which knows nothing about this socket. Racing it against this one
- * is what turns an abort into a settled fetch instead of a permanently pending one.
- */
-function abortRejection(signal: AbortSignal): { promise: Promise<never>; dispose: () => void } {
-  let onAbort = (): void => { /* replaced below */ };
-  const promise = new Promise<never>((_resolve, reject) => {
-    // Reject with the caller's reason exactly, including `null` and `false`. A real
-    // `AbortSignal` always has one — `abort()` with no argument supplies an AbortError — so
-    // the fallback covers only a hand-built signal that exposes none.
-    onAbort = () => reject(signal.reason === undefined ? new Error("The operation was aborted") : signal.reason);
-    if (signal.aborted) onAbort();
-    else signal.addEventListener("abort", onAbort, { once: true });
-  });
-  // The race below may settle on another branch first; this rejection must not be reported as
-  // unhandled when nobody is left waiting for it.
-  promise.catch(() => { /* surfaced by whoever loses the race */ });
-  return { promise, dispose: () => signal.removeEventListener("abort", onAbort) };
-}
-
-/**
- * The two races below have different possible outcomes, so they have different result types.
- * One union covering both would let the compiler accept reading `value` off a drain result,
- * which is the kind of mistake a type is supposed to catch rather than describe.
- */
-type Answered = { kind: "answered" };
-type BodyStep = { kind: "chunk"; value: Uint8Array } | { kind: "end" } | Answered;
-type DrainStep = { kind: "drained" } | Answered;
+/** Read and drain results stay distinct; the waiter adds the shared early-answer outcome. */
+type BodyStep = { kind: "chunk"; value: Uint8Array } | { kind: "end" };
+type DrainStep = { kind: "drained" };
 
 /**
  * Send the request body, settling on caller abort or on an answer that arrives first.
@@ -644,21 +617,13 @@ async function uploadRequestBody(
   if (!body) return;
   const signal = request.signal;
   const bodyReader = body.getReader();
-  const abort = abortRejection(signal);
-  const answered: Promise<Answered> = head.then(
-    (): Answered => ({ kind: "answered" }),
-    (): Answered => ({ kind: "answered" }),
-  );
+  const waiter = createUploadWaiter(head, signal);
   let completed = false;
   try {
     for (;;) {
-      const read: Promise<BodyStep> = bodyReader.read().then(
+      const step = await waiter.wait(() => bodyReader.read().then(
         (result): BodyStep => (result.done ? { kind: "end" } : { kind: "chunk", value: result.value }),
-      );
-      // Releasing the lock below rejects a read still waiting on a source that stopped
-      // producing. That rejection is this function's own doing, not a failure to report.
-      read.catch(() => { /* settled by releasing the reader */ });
-      const step = await Promise.race([read, answered, abort.promise]);
+      ));
       if (step.kind === "answered") break;
       if (step.kind === "end") {
         completed = true;
@@ -668,17 +633,16 @@ async function uploadRequestBody(
         ? Buffer.concat([Buffer.from(`${step.value.byteLength.toString(16)}\r\n`), Buffer.from(step.value), CRLF])
         : step.value;
       if (socket.write(payload)) continue;
-      const drain: Promise<DrainStep> = waitForDrain(socket, signal).then((): DrainStep => ({ kind: "drained" }));
-      if ((await Promise.race([drain, answered, abort.promise])).kind === "answered") break;
+      const drain = await waiter.wait(() => waitForDrain(socket, signal).then((): DrainStep => ({ kind: "drained" })));
+      if (drain.kind === "answered") break;
     }
     // A terminating chunk written after the peer has already answered goes into a conversation
     // that is over, and a peer that has moved on may read it as the head of the next request.
     if (completed && chunked && !socket.write("0\r\n\r\n")) {
-      const drain: Promise<DrainStep> = waitForDrain(socket, signal).then((): DrainStep => ({ kind: "drained" }));
-      await Promise.race([drain, answered, abort.promise]);
+      await waiter.wait(() => waitForDrain(socket, signal).then((): DrainStep => ({ kind: "drained" })));
     }
   } finally {
-    abort.dispose();
+    waiter.dispose();
     if (!completed) {
       // Cancelling runs the caller's own cancel algorithm, which is free to never settle, so it
       // is started rather than awaited. Releasing the lock is what actually frees a read still

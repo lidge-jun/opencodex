@@ -34,6 +34,7 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Transport | Owner | Invariant worth knowing |
 | --- | --- | --- |
 | Azure OpenAI Responses | `src/adapters/azure.ts` | Deployment-shaped URLs on top of the Responses contract. |
+| Tool identity digests | `src/adapters/tool-call-id.ts`, `src/adapters/google-wire-compiler.ts`, `src/adapters/kiro-wire.ts`, `src/responses/muse-tool-name-alias.ts` | Rewritten Anthropic call IDs and Google, Kiro and Muse tool names take eight lowercase hexadecimal characters from `Bun.SHA256.hash(..., "hex")` over the original or salted UTF-8 string. Prefix limits and collision policies are adapter-specific. Request-scoped allocators keep distinct identities separate even when UTF-8 encoding produces the same bytes; tool-name maps restore the original names. `tests/adapters/tool-identity-hash.test.ts` pins the wire bytes, numeric and salted collisions, and Google declaration/call/result/selector agreement. |
 | AWS eventstream | `src/lib/eventstream-decoder.ts` | Kiro's prelude and message checksums use `Bun.hash.crc32` over the supplied byte view, with unsigned IEEE CRC-32 results and incremental seed support. Corrupt or truncated frames fail decoding. The streaming decoder rejects advertised sizes above 16 MiB per frame or 128 KiB per header block once the corresponding prelude bytes are available. `tests/responses/eventstream-decoder.test.ts` covers fixed wire bytes, offset views, seeded checksums, corruption, and fragmented input. |
 | Responses custom-tool preview | `src/bridge/sse.ts`, `src/server/responses-custom-tool-repair.ts`, `src/responses/progressive-freeform-input.ts`, `src/responses/freeform-wrapper-scan.ts` | Direct adapter events and routed function restoration share one progressive wrapper decoder over one bounded JSON classification of the prefix, so property order and escaped key spellings preview as the wrapper completion unwraps them. Fence-shaped `exec`/`apply_patch` prefixes stay held until authoritative completion normalization, while each caller retains its own patch-envelope and byte-budget policy. |
 | Meta Muse Responses tool names | `src/responses/muse-tool-name-alias.ts`, `src/adapters/openai-responses.ts` | `api.meta.ai` only: function names over 64 characters or containing characters outside `[a-zA-Z0-9_-]` become collision-safe wire aliases and are restored before the client sees them. |
@@ -418,6 +419,9 @@ failure surfaces as a named `PinnedHttpError`. Connection teardown belongs to th
 end early — a decode failure, an exceeded ceiling, a cancelled read; a response that completed
 is left to the HTTP agent, which may pool or destroy it.
 `tests/lib/pinned-http-content-coding.test.ts` covers both routes on the same payload.
+Pinned identity and decoded response delivery follow the
+[stream-buffer accounting contract](byte-accounting.md#stream-buffer-accounting), including
+socket backpressure and inactivity timing while the local reader is paused.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
