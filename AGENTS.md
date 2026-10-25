@@ -33,8 +33,6 @@ Bun-native TypeScript with no separate server compile step.
   executables, not XCTest bundles — Command Line Tools ships neither a usable
   XCTest module nor the swift-testing runtime.
 - `docs-site/` — public docs (Astro + Starlight), deployed to GitHub Pages.
-- `go/` — retired Go native-runtime experiment; kept only where the TypeScript
-  runtime still references it. New work does not go here.
 - `structure/` — maintainer invariants and architecture notes; read before
   changing shared subsystems. [`structure/INDEX.md`](./structure/INDEX.md) is the
   reading order and the source-ownership table, and
@@ -395,11 +393,8 @@ commits in the description.
 
 The **`enforce-target`** CI check rejects pull requests whose head
 ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
-empty, thin, or malformed descriptions. If changed paths include files under
-`gui/`, include a screenshot of the UI change in the description; the check
-re-runs on description edits until the screenshot is present. Drag the image
-into the description editor rather than committing it, or, when uploading from
-the command line, use the `pr-assets` branch and link by commit SHA.
+empty, thin, or malformed descriptions. Screenshot evidence follows the
+[pull-request requirements](#issues-and-pull-requests-agents) above.
 Contributor PRs (authors without repository push permission) open in draft and
 stay there until a four-box review-readiness checklist in the description is
 complete: required local validation passed with its scope documented, branch
