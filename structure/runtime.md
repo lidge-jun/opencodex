@@ -443,7 +443,7 @@ privately to final dispatch; preliminary route selection does not inject Go-only
 
 Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-accounts.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
-Cline CLI joins the existing export/client integration registries. Explicit CLI sync and POST /api/sync refresh its owned pair; unattended catalog refresh excludes it. See [Cline paired files](clients/integrations.md#cline-paired-files). Explicit CLI sync (`src/cli/dispatch.ts`) and management sync also refresh already-owned OpenCode and Kilo catalogs after publication, preserving unowned, removed and hand-edited blocks under the [ownership contract](clients/integrations.md#owned-catalog-convergence).
+Cline CLI joins the existing export/client integration registries. Explicit CLI sync and POST /api/sync refresh its owned pair; unattended catalog refresh excludes it. See [Cline paired files](clients/integrations.md#cline-paired-files). Explicit CLI sync (`src/cli/dispatch.ts`) and management sync also refresh already-owned OpenCode, Kilo and Hermes catalogs after publication, preserving unowned, removed and hand-edited blocks under the [ownership contract](clients/integrations.md#owned-catalog-convergence).
 Its paired-file writer uses the config atomic-write primitive that replaces the named entry without
 following a final symlink, so an exchange during a mutation cannot redirect the write.
 

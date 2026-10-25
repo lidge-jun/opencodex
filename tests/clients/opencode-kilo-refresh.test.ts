@@ -138,6 +138,69 @@ describe("OpenCode and Kilo owned model configuration convergence", () => {
     expect(readFileSync(path, "utf8")).toBe(original);
   });
 
+  test("a connected Hermes block refreshes its models and keeps unrelated YAML bytes and comments", async () => {
+    const hermesPath = INTEGRATION_CLIENTS.hermes.configPath({}, home);
+    mkdirSync(join(hermesPath, ".."), { recursive: true });
+    const hermesPrefix = "# Hermes personal settings\nmodel:\n  default: user-choice # keep this comment\nproviders:\n  other:\n    api: http://localhost:9000/v1 # other provider\n";
+    const hermesTrailer = "terminal:\n  shell: zsh # trailing user section\n";
+    writeFileSync(hermesPath, hermesPrefix);
+    expect(applyIntegration(input("hermes")).ok).toBe(true);
+    // A user section after the managed block must also survive byte-for-byte.
+    writeFileSync(hermesPath, readFileSync(hermesPath, "utf8") + hermesTrailer);
+    const applied = readFileSync(hermesPath, "utf8");
+    expect(applied.startsWith(hermesPrefix)).toBe(true);
+    expect(applied.endsWith(hermesTrailer)).toBe(true);
+    const updated = [...models, { namespaced: "mock/next", provider: "mock", id: "next", contextWindow: 64_000 }];
+    let loads = 0;
+    // No explicit client list: this exercises the default fan-out that a background catalog change uses.
+    const outcomes = await refreshOwnedCatalogIntegrations({ ...input("hermes"), models: async () => {
+      loads++;
+      return updated;
+    } });
+    expect(outcomes).toEqual([{ client: "hermes", ok: true, changed: true }]);
+    expect(loads).toBe(1);
+    const refreshed = readFileSync(hermesPath, "utf8");
+    // Only the managed providers.opencodex range may change; the user's prefix and trailer stay byte-identical.
+    expect(refreshed.startsWith(hermesPrefix)).toBe(true);
+    expect(refreshed.endsWith(hermesTrailer)).toBe(true);
+    const provider = (Bun.YAML.parse(refreshed) as { providers: { opencodex: { models: Record<string, unknown> } } }).providers.opencodex;
+    expect(Object.keys(provider.models).sort()).toEqual(["mock/next", "mock/reasoner"]);
+    expect(refreshed).toContain("other provider");
+    expect(refreshed).toContain("# keep this comment");
+    expect(Bun.YAML.parse(refreshed)).toMatchObject({ model: { default: "user-choice" }, providers: { other: { api: "http://localhost:9000/v1" } } });
+  });
+
+  test("a Hermes block edited by hand is refused and reported, not overwritten", async () => {
+    const path = INTEGRATION_CLIENTS.hermes.configPath({}, home);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, "providers: {}\n");
+    expect(applyIntegration(input("hermes")).ok).toBe(true);
+    // A protected managed value changed by hand (not a comment) is a foreign edit.
+    const before = readFileSync(path, "utf8");
+    const edited = before.replace("api_mode: chat_completions", "api_mode: codex_responses");
+    expect(edited).not.toBe(before);
+    writeFileSync(path, edited);
+    const grown = [...models, { namespaced: "mock/next", provider: "mock", id: "next", contextWindow: 64_000 }];
+    const outcomes = await refreshOwnedCatalogIntegrations(input("hermes", grown), ["hermes"]);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ client: "hermes", ok: false, state: "conflict" });
+    expect(readFileSync(path, "utf8")).toBe(edited);
+  });
+
+  test("a Hermes config that was never connected is not touched or loaded", async () => {
+    const path = INTEGRATION_CLIENTS.hermes.configPath({}, home);
+    mkdirSync(join(path, ".."), { recursive: true });
+    const never = "providers:\n  opencodex:\n    api: http://127.0.0.1:10100/v1 # never connected\n";
+    writeFileSync(path, never);
+    let loads = 0;
+    expect(await refreshOwnedCatalogIntegrations({ ...input("hermes"), models: async () => {
+      loads++;
+      return models;
+    } }, ["hermes"])).toEqual([]);
+    expect(loads).toBe(0);
+    expect(readFileSync(path, "utf8")).toBe(never);
+  });
+
   test("a competing Kilo candidate refuses refresh without blocking OpenCode", async () => {
     for (const client of clients) expect(applyIntegration(input(client)).ok).toBe(true);
     const path = INTEGRATION_CLIENTS.kilo.configPath({}, home);

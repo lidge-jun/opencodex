@@ -538,10 +538,11 @@ ocx mcode
 ```
 
 Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside,
-Raycast, omo, OpenCode, and Kilo catalogs with the current model selection, context windows, and
-reasoning-effort ladders. Proxy startup refreshes an owned Raycast catalog. Changes to
+Raycast, omo, OpenCode, Kilo, and Hermes catalogs with the current model selection, context windows, and
+reasoning-effort ladders. Background catalog changes also refresh connected Hermes configs unattended;
+an edited or never-connected Hermes block stays untouched and is reported. Proxy startup refreshes an owned Raycast catalog. Changes to
 model visibility, provider selection, or presets also refresh connected Pi, Aside,
-Raycast, omo, OpenCode, and Kilo catalogs.
+Raycast, omo, OpenCode, Kilo, and Hermes catalogs.
 Missing, foreign-edited, or unsafe blocks stay untouched, as do previously owned blocks
 you removed manually.
 An enabled Aside profile is an exception to the usual owned-only refresh: if its account
