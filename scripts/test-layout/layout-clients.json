@@ -140,5 +140,6 @@
   "client-runtime-restart.test.ts": "clients",
   "link-parity-reporter.test.ts": "clients",
   "hermes-profiles.test.ts": "clients",
-  "hermes-profile-routes.test.ts": "clients"
+  "hermes-profile-routes.test.ts": "clients",
+  "ci-pr-hygiene-approvals.test.ts": "ci-workflows"
 }

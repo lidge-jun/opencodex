@@ -57,7 +57,12 @@ jobs:
             const path = require("node:path");
             const {
               collectDeterministicHygieneFailures,
+              countHeadRewrites,
+              formatApprovalRecord,
               HYGIENE_FAILURE_HINTS,
+              needsHeadRewriteCount,
+              parseApprovalRecord,
+              reconcileHeadBoundApprovals,
             } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-hygiene.cjs"),
             );
@@ -68,8 +73,11 @@ jobs:
               path.join(process.cwd(), ".github", "scripts", "pr-referenced-authors.cjs"),
             );
             const {
-              GATE_MARKER,
               HYGIENE_MARKER,
+              authoritativeHygieneSection,
+              escapeControlCharacters,
+              isGateComment,
+              isStandaloneHygieneComment,
               withHygieneSection
             } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-quality-messages.cjs"),
@@ -104,33 +112,79 @@ jobs:
             }
             for (const name of Object.keys(labelDefinitions)) await ensureLabel(name);
 
+            // Counts head rewrites (force pushes, restored branches); null when
+            // the history cannot be read, which confirms no approval.
+            async function readHeadRewrites() {
+              try {
+                return countHeadRewrites(
+                  await github.paginate(github.rest.issues.listEvents, {
+                    owner, repo, issue_number: pull_number, per_page: 100,
+                  }),
+                );
+              } catch (error) {
+                core.warning(`Could not read head rewrite history: ${error.message}`);
+                return null;
+              }
+            }
+            // Read before the snapshot so the published record never counts a
+            // rewrite that happened after the head it names.
+            const headRewritesBefore = await readHeadRewrites();
             const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner, repo, pull_number, per_page: 100,
             });
+            // The file list must belong to the head the approvals are judged
+            // against; if the head moved while listing, none is confirmed.
+            const { data: prAfterFiles } = await github.rest.pulls.get({ owner, repo, pull_number });
+            const filesAtHead = prAfterFiles.head?.sha === pr.head.sha;
             const labels = new Set(pr.labels.map((label) => label.name));
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pull_number, per_page: 100,
+            });
             // Exception approvals are head-specific: a new commit invalidates
             // them, so a contributor cannot obtain one narrow exception and
-            // then push unreviewed violations under the same label.
-            if (context.payload.action === "synchronize") {
-              for (const name of [
-                "test-exception-approved",
-                "suppression-approved",
-                "generated-change-approved",
-                "dependency-change-approved",
-                "attribution-approved",
-              ]) {
-                if (labels.has(name)) {
-                  await github.rest.issues.removeLabel({
-                    owner, repo, issue_number: pull_number, name,
-                  });
-                  labels.delete(name);
-                }
+            // then push unreviewed violations under the same label. This is
+            // decided on every run from the head this workflow last recorded,
+            // not from the triggering action: a queued synchronize run can be
+            // replaced by a later event before it executes.
+            const approvalInput = {
+              labels: [...labels],
+              headSha: filesAtHead ? pr.head.sha : null,
+              record: parseApprovalRecord(authoritativeHygieneSection(comments)),
+              eventAction: context.payload.action,
+            };
+            const headRewriteCount = needsHeadRewriteCount(approvalInput)
+              ? await readHeadRewrites()
+              : null;
+            const { stale: staleApprovals } = reconcileHeadBoundApprovals({
+              ...approvalInput,
+              headRewriteCount,
+            });
+            for (const name of staleApprovals) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner, repo, issue_number: pull_number, name,
+                });
+              } catch (error) {
+                if (error.status !== 404) throw error;
               }
+              labels.delete(name);
             }
+            // Written last in the hygiene section on every outcome; the next
+            // run of this workflow and the PR gate both read it.
+            const approvalLines = [
+              ...(staleApprovals.length === 0
+                ? []
+                : [
+                    "",
+                    `ℹ️ Removed ${staleApprovals.map((name) => "\x60" + name + "\x60").join(", ")}: these approvals could not be confirmed for this head (\x60${pr.head.sha.slice(0, 7)}\x60). A maintainer can re-apply them after reviewing it.`,
+                  ]),
+              "",
+              formatApprovalRecord({ head: pr.head.sha, headRewrites: headRewritesBefore }),
+            ];
             // Sponsorship is head-independent: it is about which surfaces the
             // change touches, not about the state of a particular revision, so
-            // it is NOT cleared by the synchronize sweep above.
+            // it is not head-bound.
             // author_association is not enough: a read/triage collaborator can
             // be COLLABORATOR without write access. Match the PR quality gate.
             let authorPermission = null;
@@ -188,17 +242,18 @@ jobs:
             }
 
             async function upsert(body) {
-              const comments = await github.paginate(github.rest.issues.listComments, {
-                owner, repo, issue_number: pull_number, per_page: 100,
-              });
               // The single consolidated bot comment is the one the PR gate
               // owns (GATE_MARKER). Write the hygiene status into that same
               // comment so there is one editable message, not two. Fall back
               // to a standalone hygiene comment only when the gate has not
-              // posted yet (the next gate run absorbs it).
-              const gateComment = comments.find(
-                (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.includes(GATE_MARKER),
-              );
+              // posted yet; the next hygiene run writes into the gate comment.
+              // The comment list was read once above, before the approval
+              // check; both workflows share one concurrency group, so no gate
+              // write lands in between.
+              // Classified by the marker each body starts with, the same rule
+              // the approval-record reader uses: echoed paths can contain a
+              // marker string but never start the comment.
+              const gateComment = comments.find(isGateComment);
               if (gateComment) {
                 // The hygiene block already carries the marker; strip the
                 // standalone body's own marker line before merging.
@@ -210,9 +265,7 @@ jobs:
                 await github.rest.issues.updateComment({ owner, repo, comment_id: gateComment.id, body: merged });
                 return;
               }
-              const existingHygiene = comments.find(
-                (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.includes(marker),
-              );
+              const existingHygiene = comments.find(isStandaloneHygieneComment);
               if (existingHygiene) {
                 await github.rest.issues.updateComment({ owner, repo, comment_id: existingHygiene.id, body });
               } else {
@@ -222,17 +275,17 @@ jobs:
 
             if (failures.length === 0) {
               await setBlocked(false);
-              await upsert(`${marker}\n\n✅ **Deterministic PR hygiene checks passed.**`);
+              await upsert([marker, "", "✅ **Deterministic PR hygiene checks passed.**", ...approvalLines].join("\n"));
               return;
             }
 
             const lines = failures.map((failure) => {
               const paths = failure.paths?.length
-                ? ` Paths: ${failure.paths.map((p) => `\`${p}\``).join(", ")}.`
+                ? ` Paths: ${failure.paths.map((p) => `\`${escapeControlCharacters(p)}\``).join(", ")}.`
                 : "";
               return `- **${failure.code}** — ${HYGIENE_FAILURE_HINTS[failure.code] ?? failure.code}${paths}`;
             });
 
             await setBlocked(true);
-            await upsert([marker, "", "⚠️ **Deterministic hygiene checks failed.**", "", ...lines].join("\n"));
+            await upsert([marker, "", "⚠️ **Deterministic hygiene checks failed.**", "", ...lines, ...approvalLines].join("\n"));
             core.setFailed(`PR hygiene failed: ${failures.map((f) => f.code).join(", ")}`);

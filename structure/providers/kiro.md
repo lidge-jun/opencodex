@@ -74,7 +74,8 @@ rotation reaches them. The public catalog advertises only observed IDs made of p
 characters (no `/` the router would have to decode), at most 64 across the roster; every
 observed ID still informs routing preference.
 
-`src/adapters/kiro-refusal.ts` recognizes an exact monthly reason on HTTP 400/429 and a
+`src/adapters/kiro-refusal.ts` recognizes exact `MONTHLY_REQUEST_COUNT` and
+`OVERAGE_REQUEST_LIMIT_EXCEEDED` reasons on HTTP 400/429 as account quota exhaustion, and a
 confirmed suspension on HTTP 403; ordinary 400/403 remains an error without an account
 verdict. A 400 whose parsed body carries `ValidationException` (as `reason`, or inside `message`)
 and the message "Improperly formed request" is the `profile` kind: the account layer rotates to a
