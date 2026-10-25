@@ -83,9 +83,10 @@ in-process, and the helper's cmdlet-free script on every platform.
 `src/server/management/desktop-compatibility-routes.ts` exposes the authenticated
 `/api/codex/desktop-compatibility/certificate` setup endpoint. GET is read-only public metadata and OS-trust inspection;
 it does not decrypt a key, create a file, acquire a lease or register trust. POST
-requires a GUI-session principal on trusted loopback ingress and explicit confirmation.
+uses `src/server/management/desktop-compatibility-authorization.ts` to require an
+operator-paired GUI session on trusted loopback ingress and explicit confirmation.
 Trust mutations also require the exact SHA-256 fingerprint. Raw admin tokens cannot
-substitute browser provenance; this does not protect against arbitrary same-user code.
+substitute the pairing ceremony, and automatically issued loopback sessions cannot mutate trust.
 
 `src/codex/desktop-compatibility/certificate-service.ts` serializes setup and refuses
 busy operations. Only prepare may generate a key. Trust/removal load existing validated
@@ -209,7 +210,7 @@ registration occurs only after successful startup. Cleanup stops owned listeners
 a failed cleanup retains ownership and reports `cleanup-required`, never a false `off` state.
 
 `src/server/management/desktop-compatibility-runtime-routes.ts` provides GET status and
-local GUI-session POST start/stop/observe/apply/launch, with explicit confirmation and
+operator-paired local GUI-session POST start/stop/observe/apply/launch, with explicit confirmation and
 separate account-wide consent for apply. No setting, login, quota, automatic startup or
 dashboard preference is changed by this API. The separate startup preference below never saves Apply.
 The status CLI verb remains deferred to this integration owner.
