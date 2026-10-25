@@ -13,15 +13,17 @@ provider capabilities below; see [Responses compatibility](../transports/respons
 ## Kiro CLI executable resolution
 
 Native device login is an add-only Kiro account path for AWS IAM Identity Center, Builder ID, Google, and GitHub.
-It uses fixed Kiro authorization hosts, guarded outbound POSTs, and a bounded process-local
-flow table. A flow ID is returned only at start; status and cancellation require that ID and
+It uses the fixed AWS OIDC host for Builder ID, the fixed Kiro social authorization host for
+Google and GitHub, and the selected region's AWS OIDC host for IAM, with guarded outbound
+POSTs and a bounded process-local flow table. A flow ID is returned only at start; status and cancellation require that ID and
 the same management principal kind. Polling follows the server's interval, and only an exact
 approval shape reaches the protected OAuth store. Device codes and tokens never enter
 management responses. Social polling accepts `authorized` and the legacy `approved` alias, with the same token and profile checks. Native slots carry `loginOrigin: "kiro-device"`; kiro-cli reauth
 refuses them before starting CLI work. Upstream verification URLs require HTTPS, no credentials
 or control characters, and a 2048-character limit; user codes use 4–32 plain alphanumeric or
 hyphen characters. Completed flow results are consumed once, terminal entries expire after
-60 seconds, and the table holds at most 16 entries. Terminal entries retain no config snapshot.
+60 seconds, and the table holds at most 16 entries. Capacity pruning evicts only terminal entries;
+pending approval and live profile selection are preserved. Terminal entries retain no config snapshot.
 Explicit reauth rotates login identity, while token
 refresh preserves it. A first-account config-publication failure compensates the new slot
 through the existing receipt ownership check.

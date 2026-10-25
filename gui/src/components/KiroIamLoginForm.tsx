@@ -20,12 +20,12 @@ export function KiroIamLoginForm({ disabled, onStart, onBack }: {
     <label className="field-label" htmlFor={`${id}-portal`}>{t("kiroLogin.startUrl")}</label>
     <input className="input" id={`${id}-portal`} type="url" required maxLength={2048} value={startUrl} disabled={disabled}
       placeholder="https://example.awsapps.com/start" autoComplete="url" aria-describedby={invalid ? `${id}-error` : undefined}
-      aria-invalid={invalid || undefined} onChange={event => setStartUrl(event.target.value)} />
+      aria-invalid={invalid || undefined} onChange={event => { setStartUrl(event.target.value); setInvalid(false); }} />
     <label className="field-label" htmlFor={`${id}-region`}>{t("kiroLogin.region")}</label>
     <input className="input" id={`${id}-region`} required maxLength={32} value={region} disabled={disabled}
       placeholder="us-east-1" autoComplete="off" aria-invalid={invalid || undefined}
       aria-describedby={invalid ? `${id}-error` : undefined}
-      onChange={event => setRegion(event.target.value)} />
+      onChange={event => { setRegion(event.target.value); setInvalid(false); }} />
     {invalid && <p id={`${id}-error`} role="alert" className="notice-warn">{t("kiroLogin.invalidIam")}</p>}
     <div className="kiro-device-actions">
       <button type="button" className="btn btn-ghost" disabled={disabled} onClick={onBack}>{t("kiroLogin.back")}</button>

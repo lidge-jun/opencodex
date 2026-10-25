@@ -180,8 +180,7 @@ Les fournisseurs OAuth dont les identifiants comportent un identifiant de compte
 peuvent conserver plusieurs connexions. La page **Fournisseurs** affiche ces comptes dans une liste déroulante,
 permet d'en ajouter un autre et de changer de compte actif sans déconnecter les autres. Une connexion ordinaire
 avec un identifiant Kimi qui ne contient aucune information d'identité remplace l'emplacement actif, tandis que l'action explicite **Ajouter un
-compte** préserve cet emplacement et en active un nouveau, distinct. Les comptes Kiro sont indexés par ARN de
-profil. `chatgpt` n'utilise toujours qu'un seul emplacement, car les comptes du pool Codex sont gérés dans un
+compte** préserve cet emplacement et en active un nouveau, distinct. Les comptes Kiro utilisent l’ARN du profil avec l’adresse e-mail de l’utilisateur connecté lorsqu’elle est disponible ; plusieurs utilisateurs peuvent conserver des identifiants distincts pour un même profil d’organisation. `chatgpt` n'utilise toujours qu'un seul emplacement, car les comptes du pool Codex sont gérés dans un
 registre distinct. Les jetons restent dans `~/.opencodex/auth.json` ; `/api/oauth/accounts` ne renvoie que des
 métadonnées masquées.
 

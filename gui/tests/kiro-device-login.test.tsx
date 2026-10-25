@@ -136,6 +136,24 @@ test("invalid IAM portal or region is explained without sending a login request"
   expect(host.textContent).toContain("Builder ID");
 });
 
+test.each(["portal", "region"])("editing the IAM %s clears stale validation feedback", async field => {
+  await mountDialog(); await click("AWS IAM Identity Center");
+  await iamInput("https://evil.test/start", "invalid-region"); await submitIamForm();
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  const input = host.querySelector<HTMLInputElement>(`input[id$="-${field}"]`)!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(input,
+      field === "portal" ? "https://example.awsapps.com/start" : "eu-west-1");
+    input.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+  expect(host.querySelector('[role="alert"]')).toBeNull();
+  expect(host.querySelector('[aria-invalid="true"]')).toBeNull();
+  expect(host.querySelector("input[aria-describedby]")).toBeNull();
+  await submitIamForm();
+  expect(host.querySelector('[role="alert"]')).not.toBeNull();
+  expect(requests).toHaveLength(0);
+});
+
 test("IAM profile selection sends the server-offered ARN and completes only once", async () => {
   const profiles = [
     { arn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/team", name: "Team profile", region: "us-east-1" },

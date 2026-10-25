@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cancelKiroDeviceLogin, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin } from "../../../src/oauth/kiro-device-login";
+import { cancelKiroDeviceLogin, kiroDeviceFlowCountForTests, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin } from "../../../src/oauth/kiro-device-login";
 import { listKiroIamProfiles, parseKiroIamOptions } from "../../../src/oauth/kiro-iam-identity-center";
 import { getAccountSet } from "../../../src/oauth/store";
 import { authorization, kiroDeviceFixture, profileArn, response } from "../../helpers/kiro-device-fixture";
@@ -33,11 +33,13 @@ async function approved() {
 
 test("IAM validates portal and region before any network request", async () => {
   expect(parseKiroIamOptions({ ...options, startUrl: options.startUrl+"/#/" })).toEqual(options);
+  const authenticatedPortal = new URL(options.startUrl);
+  authenticatedPortal.username = "fixture-user";
   for (const input of [undefined, {}, { ...options, region: "us-east-1.evil.test" },
     { ...options, startUrl: "http://example.awsapps.com/start" },
     { ...options, startUrl: "https://example.awsapps.com.evil.test/start" },
     { ...options, startUrl: "https://example.awsapps.com:443/start" },
-    { ...options, startUrl: "https://user@example.awsapps.com/start" },
+    { ...options, startUrl: authenticatedPortal.href },
     { ...options, startUrl: options.startUrl+"?next=https://evil.test" },
     { ...options, startUrl: options.startUrl+"\n" }]) {
     expect(parseKiroIamOptions(input)).toBeNull();
@@ -99,6 +101,32 @@ test("two users of one organization profile remain separate without a duplicate 
   expect(result.accounts[0]).toEqual(first);
   expect(result.activeAccountId).toBe(initial.activeAccountId);
   expect(result.accounts[1]!.credential.email).toBe("second@example.test");
+});
+
+test("flow-table pressure preserves live IAM profile selection and the active-flow cap", async () => {
+  transport("first@example.test", [profile, second]);
+  const choosing = await approved();
+  fixture!.setPost(async (url, _body, headers) => {
+    if (url.endsWith("/client/register")) return response({ clientId: "id", clientSecret: "private-client-secret" });
+    if (url.endsWith("/device_authorization")) return response({ ...authorization, interval: 1 });
+    if (url.endsWith("/token")) return response({ accessToken: "private-access", refreshToken: "private-refresh", expiresIn: 3600 });
+    if (headers?.["x-amz-target"]?.endsWith("ListAvailableProfiles")) return response({ profiles: url.includes("us-east-1") ? [profile, second] : [] });
+    if (headers?.["x-amz-target"]?.endsWith("GetUsageLimits")) return response({ userInfo: { email: "first@example.test" } });
+    throw new Error("Unexpected upstream request");
+  });
+  for (let i = 0; i < 14; i++) {
+    const finished = await startKiroDeviceLogin("iam-identity-center", "gui-session", undefined, options);
+    fixture!.advance(1_000);
+    expect((await statusKiroDeviceLogin(finished.flowId, "gui-session"))?.state).toBe("select-profile");
+    expect((await selectKiroDeviceProfile(finished.flowId, "gui-session", profileArn))?.state).toBe("done");
+  }
+  const pending = [];
+  for (let i = 0; i < 3; i++) pending.push(await startKiroDeviceLogin("builder-id", "gui-session"));
+  expect(kiroDeviceFlowCountForTests()).toBeLessThanOrEqual(16);
+  expect((await statusKiroDeviceLogin(choosing.started.flowId, "gui-session"))?.state).toBe("select-profile");
+  await expect(startKiroDeviceLogin("builder-id", "gui-session")).rejects.toThrow("Too many Kiro device logins");
+  for (const flow of pending) expect((await statusKiroDeviceLogin(flow.flowId, "gui-session"))?.state).toBe("pending");
+  expect((await selectKiroDeviceProfile(choosing.started.flowId, "gui-session", second.arn))?.state).toBe("done");
 });
 
 test("cancel and expiry while choosing a profile retain no credential", async () => {

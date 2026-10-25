@@ -158,7 +158,7 @@ Kimi Code 原生 Responses 路由会省略明确正文为空的 assistant 历史
 
 OAuth 凭据中带有稳定账号 id 或邮箱的提供商可以保存多个登录。Providers 页面会在下拉列表中显示这些
 账号，允许继续添加，并在不登出其他账号的情况下切换当前账号。普通登录时，没有身份信息的 Kimi 凭据会替换
-当前 active slot；显式 **添加账号** 会保留原有 slot 并激活一个独立的新 slot。Kiro 账户以配置文件 ARN 为键。
+当前 active slot；显式 **添加账号** 会保留原有 slot 并激活一个独立的新 slot。Kiro 账户结合配置文件 ARN 与已登录用户的电子邮件地址（若可用）来区分身份；共享同一组织配置文件的用户可以各自保留独立的凭据。
 `chatgpt` 始终只有一个 slot，因为 Codex 账号池使用独立存储。令牌仍保存在
 `~/.opencodex/auth.json` 中；`/api/oauth/accounts` 只返回脱敏后的 metadata。
 

@@ -196,8 +196,7 @@ sağlayıcıları birden fazla oturum tutabilir. Sağlayıcılar sayfası bu hes
 bir açılır menüde gösterir, başka bir tane eklemenize izin verir ve diğerlerinin
 oturumunu kapatmadan etkin hesabı değiştirir. Normal oturum açmada kimliği olmayan
 Kimi kimlik bilgileri etkin yuvanın yerini alır; açık **Hesap ekle** akışı mevcut
-yuvayı korur ve ayrı yeni yuvayı etkinleştirir. Kiro hesapları profil ARN'sine göre
-anahtarlanır. `chatgpt` her zaman tek yuvalıdır çünkü Codex havuz hesaplarının
+yuvayı korur ve ayrı yeni yuvayı etkinleştirir. Kiro hesapları, varsa oturum açan kullanıcının e-posta adresi ile profil ARN'si birlikte kullanılarak ayırt edilir; aynı kuruluş profilini paylaşan kullanıcılar ayrı kimlik bilgilerini koruyabilir. `chatgpt` her zaman tek yuvalıdır çünkü Codex havuz hesaplarının
 ayrı bir defteri vardır. Belirteçler `~/.opencodex/auth.json` içinde kalır;
 `/api/oauth/accounts` yalnızca maskelenmiş meta verileri döndürür.
 

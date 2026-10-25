@@ -140,7 +140,7 @@ function pruneFlows(): void {
     if (flow.terminalAt !== undefined && now - flow.terminalAt >= TERMINAL_RETENTION_MS) forgetFlow(id);
   }
   while (flows.size >= MAX_KIRO_DEVICE_ENTRIES) {
-    const oldest = [...flows].find(([, flow]) => flow.view.state !== "pending");
+    const oldest = [...flows].find(([, flow]) => !live(flow));
     if (!oldest) break;
     forgetFlow(oldest[0]);
   }
