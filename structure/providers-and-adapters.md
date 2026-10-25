@@ -354,6 +354,10 @@ Meta's two direct surfaces keep separate reasoning contracts: `meta-model` caps 
 and gives Muse Wonder (`muse-wonder-1.0`) its documented `minimal`..`max` ladder, while `meta-muse`
 advertises `max` and sends the transparent Muse compatibility User-Agent required by that
 credential surface. The existing registry header merge keeps an operator-supplied User-Agent authoritative.
+At startup, `src/providers/stale-model-roster-migration.ts` refreshes the untouched two-Spark
+`meta-model` seed to include Muse Wonder only on `https://api.meta.ai/v1` or the registry default.
+Custom destinations and edited rosters stay unchanged; an existing context-window map gains only
+the missing Wonder entry, preserving saved values and output limits.
 The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
 so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
