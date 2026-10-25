@@ -499,7 +499,8 @@ MiMo model Command Code serves.
   limits inform context windows, conservatively combined with shipped limits when evidence is partial.
   Accounts that have not served have no list evidence yet.
 - Participates in multi-account rotation. With two stored accounts, a request-rate refusal
-  cools the refused account briefly; an exact monthly-quota refusal on HTTP 400 or 429
+  cools the refused account briefly; an exact `MONTHLY_REQUEST_COUNT` or
+  `OVERAGE_REQUEST_LIMIT_EXCEEDED` refusal on HTTP 400 or 429
   excludes it until the observed reset or evidence expiry. A confirmed HTTP 403 suspension
   quarantines that account in process, while an ordinary 403 does not rotate. Reactive
   rotation remains available when `oauthAccountFailover.enabled` is false. Refusal-aware
