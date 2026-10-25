@@ -340,7 +340,52 @@ On macOS and Linux, the read-only probe verifies that the runtime's direct paren
 process snapshots must agree. The target runtime PID, `ocx.pid`, and the PID in
 `runtime-port.json` must agree wherever present; mismatches make supervision unknown.
 The attestation secret is never included in supervision evidence. On Windows, `ocx.pid` and `runtime-port.json` must both name the runtime PID; its direct parent must be a live `opencodex-desktop.exe`; both images must have drive-qualified paths, with the runtime matching the Desktop image's sibling `ocx.exe` case-insensitively; parent and child must share a session; and the parent must have been created strictly before the child.
-Two snapshots must agree, with one bounded PowerShell `Win32_Process` read per snapshot and a six-second budget for the inspection. Inconclusive evidence is `unknown`, retaining `desktopSeen` when a Desktop image was observed. Windows Start at Login is not verified, so live supervision never grants startup protection there.
+Two snapshots must agree. Each acquisition is one bounded PowerShell `Win32_Process`
+read of the runtime row and its parent's row, emitted as JSON; both snapshots share the
+inspection's six-second budget, a single read may take at most three seconds, and a read
+that would start with under 250 ms left answers `probe-timeout`. Process evidence is
+re-read on every probe; only a successfully resolved system directory is memoized, and
+only for the process lifetime, so a failed resolution keeps the retry-on-next-call
+recovery contract.
+
+The directory is resolved before the child spawns and no longer comes from the
+environment. `SystemRoot`, `windir` and `PATH` are caller-supplied on this path, and
+the fixed `C:\Windows` fallback they used to feed was guesswork, so either could answer
+a wrong or tampered `powershell.exe`. `src/service/desktop-supervision.mjs` picks by
+runtime instead: on Bun, `bun:ffi` calls kernel32 `GetSystemDirectoryW` directly; on
+Node, it derives the directory from `process.report.getReport().sharedObjects` and
+accepts it only when `kernel32.dll` and `ntdll.dll` each appear exactly once,
+drive-qualified, under one shared parent and below the report's 260-character
+module-name buffer — a namesake at the limit may already be truncated and is refused —
+and only after the candidate provably contains both DLLs and
+`WindowsPowerShell\v1.0\powershell.exe`. The report object also carries the process's
+environment values, so the resolver reads only `.sharedObjects` and never logs,
+serializes, stores or forwards the report. `bin/ocx.mjs` imports this module under
+Node >=18, so it keeps no TypeScript or Bun-only imports; `bun:ffi` is reached through
+`createRequire` inside the Bun branch alone. The Node lane assumes the diagnostic
+report enumerates each loaded DLL by path — `getReport` has existed since Node 11.8.0
+(<https://nodejs.org/api/process.html#processreportgetreporterr>, field layout in
+<https://nodejs.org/api/report.html>) — and is verified positively only on Node
+24.18.0 / Windows x64 and Bun 1.4.4 / Windows x64; the focused tests inject the
+resolver and PowerShell output, and Linux CI runs no Windows acquisition, so neither is
+native evidence. WoW64, ARM64, a real Desktop-positive supervisor, compiled packaging
+and live installs remain unverified.
+
+The spawned PowerShell receives a minimal environment — `SystemRoot` and `WINDIR` set
+to the system directory's parent, `PATH` to the system directory alone and a fixed
+`PATHEXT` — with nothing else inherited. Its script disables module autoloading and
+imports `Microsoft.PowerShell.Utility` before `CimCmdlets`, because the CimCmdlets
+manifest calls `Set-Alias`, which autoload-off cannot supply; the query and the JSON
+conversion stay module-qualified.
+
+Missing pid records, an unavailable or ambiguous report, a duplicated or truncated
+namesake, an FFI failure and every other inconclusive read all answer `unknown` —
+retaining `desktopSeen` when a Desktop image was observed — never proven `none`, and
+callers do not fail closed on plain `unknown`. A Desktop image seen inside otherwise
+failed evidence keeps the block; without it, an inconclusive read can still allow an
+action a complete probe would have vetoed, which is the early-warning residual the
+guard table below records. Windows Start at Login is not verified, so live supervision
+never grants startup protection there.
 
 Command guards use this live evidence independently of login registration and durable ownership.
 Each guarded service command, Node/Bun update run and dashboard restart decision uses one

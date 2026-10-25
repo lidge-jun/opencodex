@@ -427,7 +427,11 @@ Plain unknown/unsupported evidence preserves existing decisions unless an earlie
 `src/update/runtime-ownership.mjs` denies all three update authorities and failed-update recovery
 when blocked. A restoration refusal after a completed package swap does not undo that update.
 Service install, repair, start and restart refuse before mutation, including Windows XML staging,
-when live Desktop supervision is verified. Windows probes use bounded process snapshots; `ocx stop` shows the Desktop notice. Limits are listed
+when live Desktop supervision is verified. Each Windows probe resolves the trusted
+PowerShell location through the runtime's system-directory resolver before running its
+bounded process snapshots, and an unresolvable or inconclusive acquisition reports
+`unknown`, never proven absence; `ocx stop` shows the Desktop notice. The acquisition
+contract and its residual limits are listed
 in [desktop supervision](../desktop-shell.md#runtime-ownership-from-the-apps-side).
 The lease is released before any service-manager-mediated start (`service repair` in recovery
 or the post-install refresh): the manager's `ocx start` child cannot join it, and holding it
