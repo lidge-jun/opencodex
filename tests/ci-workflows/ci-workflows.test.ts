@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import {
   SCRIPT_BINDINGS,
@@ -1213,13 +1214,17 @@ describe("GitHub Actions hardening", () => {
     expect(String(resolver?.["if"] ?? "")).toContain("github.event.state == 'success'");
     expect(String(resolver?.["if"] ?? "")).toContain("github.event.sender.login == 'coderabbitai[bot]'");
     expect(String(resolver?.["if"] ?? "")).toContain("github.event.sender.id == 136622811");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'gui-screenshot-waived'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'intake: hygiene-blocked'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'maintainer-sponsored'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'test-exception-approved'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'suppression-approved'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'generated-change-approved'");
-    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'dependency-change-approved'");
+    // Every label that can clear or reinstate a hygiene failure must wake the
+    // gate (#7651). Derive the list from HYGIENE_GATE_LABELS instead of
+    // restating it, so a label added there without a wake condition fails here.
+    const { HYGIENE_GATE_LABELS } = createRequire(import.meta.url)(
+      join(repoRoot(), ".github", "scripts", "pr-hygiene.cjs"),
+    ) as { HYGIENE_GATE_LABELS: string[] };
+    const wakeLabels = [
+      ...String(resolver?.["if"] ?? "").matchAll(/github\.event\.label\.name == '([^']+)'/g),
+    ].map(match => match[1]);
+    expect(new Set(wakeLabels).size).toBe(wakeLabels.length);
+    expect([...wakeLabels].sort()).toEqual([...HYGIENE_GATE_LABELS, "gui-screenshot-waived"].sort());
 
     const hygieneWorkflow = Bun.YAML.parse(
       await readText(".github/workflows/pr-hygiene.yml"),

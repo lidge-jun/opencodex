@@ -1,5 +1,6 @@
 import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
+import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
 import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
 /**
  * Media bridge agentic loop — supports both image and video generation sidecars.
@@ -288,7 +289,7 @@ class LoopError extends Error {
     readonly status: number,
     message: string,
     readonly event?: Extract<AdapterEvent, { type: "error" }>,
-    readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable">,
+    readonly detail?: Pick<SidecarLoopFailure, "upstreamCode" | "nonReplayable" | "verifiedPlanRefusal">,
   ) {
     super(message);
     this.name = "LoopError";
@@ -792,6 +793,14 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           } catch { /* formatter hooks are best-effort */ }
         }
         if (body.displaySafe && !body.truncated) upstreamCode = upstreamErrorCode(body.text);
+        // A verified plan refusal keeps its fixed copy, code and provenance through this envelope, so a
+        // combo or policy can still move past it; an unverified echo of the code stays an ordinary failure.
+        const planMessage = body.displaySafe && !body.truncated ? verifiedPlanRefusalMessage(prepared.response, body.text) : undefined;
+        if (planMessage !== undefined) {
+          throw new LoopError(400, `Provider error 400: ${planMessage}`,
+            { type: "error", status: 400, message: planMessage, errorType: "invalid_request_error", code: MODEL_NOT_IN_PLAN_CODE },
+            { upstreamCode: MODEL_NOT_IN_PLAN_CODE, nonReplayable: isNonReplayableResponse(prepared.response), verifiedPlanRefusal: true });
+        }
         const suffix = formatted ? `: ${formatted.slice(0, 400)}` : "";
         throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}${suffix}`, undefined,
           { upstreamCode, nonReplayable: isNonReplayableResponse(prepared.response) });
@@ -912,7 +921,12 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       firstPrepared = await prepareIterationDrained(maxRounds <= 0);
     } catch (e) {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
-      if (e instanceof LoopError) return markSidecarContextOverflow(jsonError(e.status, e.message, e.event), loopFailure(e));
+      if (e instanceof LoopError) {
+        const failure = loopFailure(e);
+        const failed = markSidecarContextOverflow(jsonError(e.status, e.message, e.event), failure);
+        if (failure.verifiedPlanRefusal) markVerifiedModelNotInPlanResponse(failed);
+        return failed;
+      }
       if (e instanceof SendBudgetExhaustedError) return jsonError(429, e.message,
         { type: "error", status: 429, errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false });
       throw e;

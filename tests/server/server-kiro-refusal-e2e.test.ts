@@ -193,34 +193,42 @@ describe("Kiro refusal recovery through Responses", () => {
     } finally { ADAPTER_REGISTRY.kiro.create = originalCreate; await server?.stop(true); }
   });
 
-  for (const [status, reason] of [[400, "MONTHLY_REQUEST_COUNT"], [403, "TEMPORARILY_SUSPENDED"],
+  for (const [status, reason] of [[400, "MONTHLY_REQUEST_COUNT"],
+    [400, "OVERAGE_REQUEST_LIMIT_EXCEEDED"], [429, "OVERAGE_REQUEST_LIMIT_EXCEEDED"], [403, "TEMPORARILY_SUSPENDED"],
     [429, "USER_REQUEST_RATE_EXCEEDED"]] as const) {
-    test(`streaming Kiro ${status} ${reason} rotates with paired bearer profile and region`, async () => {
-      const [a] = await seed();
-      saveConfig(config());
-      const observed: Array<{ url: string; auth: string | null; profile: string | null }> = [];
-      globalThis.fetch = (async (input, init) => {
-        const url = input instanceof Request ? input.url : String(input);
-        if (url.startsWith("https://runtime.") && url.endsWith(".kiro.dev/")) {
-          observed.push({ url, auth: new Headers(init?.headers).get("authorization"),
-            profile: new Headers(init?.headers).get("x-amzn-kiro-profile-arn") });
-          if (observed.length === 1) return new Response(JSON.stringify({ reason }), { status });
-          return answer("served by b");
-        }
-        return realFetch(input, init);
-      }) as typeof fetch;
-      const server = startServer(0);
-      try {
-        const response = await post(server, true);
-        expect(response.status).toBe(200);
-        expect(await response.text()).toContain("served by b");
-        expect(observed).toEqual([
-          { url: "https://runtime.us-east-1.kiro.dev/", auth: "Bearer access-a", profile: aProfile },
-          { url: "https://runtime.eu-west-1.kiro.dev/", auth: "Bearer access-b", profile: bProfile },
-        ]);
-        if (status === 400) expect(kiroAccountEvidence(a!).exhausted).toBe(true);
-      } finally { await server.stop(true); }
-    });
+    for (const stream of [false, true]) {
+      test(`${stream ? "streaming" : "buffered"} Kiro ${status} ${reason} rotates with paired bearer profile and region`, async () => {
+        const [a, b] = await seed();
+        saveConfig(config());
+        const refusalBody = reason === "OVERAGE_REQUEST_LIMIT_EXCEEDED"
+          ? { __type: "com.amazon.kiro.runtimeservice#ServiceQuotaExceededException", reason,
+            message: "You have reached the limit for overages." } : { reason };
+        const observed: Array<{ url: string; auth: string | null; profile: string | null }> = [];
+        globalThis.fetch = (async (input, init) => {
+          const url = input instanceof Request ? input.url : String(input);
+          if (url.startsWith("https://runtime.") && url.endsWith(".kiro.dev/")) {
+            observed.push({ url, auth: new Headers(init?.headers).get("authorization"),
+              profile: new Headers(init?.headers).get("x-amzn-kiro-profile-arn") });
+            if (observed.length === 1) return new Response(JSON.stringify(refusalBody), { status });
+            return answer("served by b");
+          }
+          return realFetch(input, init);
+        }) as typeof fetch;
+        const server = startServer(0);
+        try {
+          const response = await post(server, stream);
+          expect(response.status).toBe(200);
+          expect(await response.text()).toContain("served by b");
+          expect(observed).toEqual([
+            { url: "https://runtime.us-east-1.kiro.dev/", auth: "Bearer access-a", profile: aProfile },
+            { url: "https://runtime.eu-west-1.kiro.dev/", auth: "Bearer access-b", profile: bProfile },
+          ]);
+          expect(getAccountSet("kiro")!.activeAccountId).toBe(b!.id);
+          if (reason === "MONTHLY_REQUEST_COUNT" || reason === "OVERAGE_REQUEST_LIMIT_EXCEEDED")
+            expect(kiroAccountEvidence(a!).exhausted).toBe(true);
+        } finally { await server.stop(true); }
+      });
+    }
   }
 
 
