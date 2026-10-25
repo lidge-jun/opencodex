@@ -32,6 +32,32 @@ function isRec(value: unknown): value is Rec {
 /** OpenRouter's `format` for Anthropic thinking entries. */
 export const ANTHROPIC_REASONING_DETAIL_FORMAT = "anthropic-claude-v1";
 
+/**
+ * One `reasoning.text` detail the inbound replay accepts as Anthropic state: Anthropic's format
+ * marker or no format at all, a text the client saw, and a signature with Anthropic's spelling.
+ * A client spelling the same signed block without OpenRouter's marker carries the same opaque
+ * state, so the native passthrough boundary must see it too.
+ */
+function isAnthropicSignedReasoningText(detail: Rec): detail is Rec & { text: string; signature: string } {
+  if (detail.type !== "reasoning.text") return false;
+  if (detail.format !== undefined && detail.format !== ANTHROPIC_REASONING_DETAIL_FORMAT) return false;
+  const signature = typeof detail.signature === "string" ? detail.signature : undefined;
+  return typeof detail.text === "string" && isLikelyRealAnthropicThinkingSignature(signature);
+}
+
+/**
+ * Whether a Chat body contains provider-issued Anthropic state that another provider must not
+ * see: a `reasoning_details` entry carrying Anthropic's format marker, or an unmarked signed
+ * `reasoning.text` entry the inbound replay would accept.
+ */
+export function chatBodyCarriesAnthropicReasoningState(body: Rec): boolean {
+  if (!Array.isArray(body.messages)) return false;
+  return body.messages.some(message => isRec(message)
+    && Array.isArray(message.reasoning_details)
+    && message.reasoning_details.some(detail => isRec(detail)
+      && (detail.format === ANTHROPIC_REASONING_DETAIL_FORMAT || isAnthropicSignedReasoningText(detail))));
+}
+
 /** One closed reasoning item, as either outbound path sees it. */
 export interface ReasoningDetailSource {
   /** The thinking text the client was shown for this item. */
@@ -125,11 +151,8 @@ export function signedReasoningInputItems(details: unknown): Rec[] | undefined {
       redacted.push(raw.data);
       continue;
     }
-    if (raw.type !== "reasoning.text") return undefined;
-    if (raw.format !== undefined && raw.format !== ANTHROPIC_REASONING_DETAIL_FORMAT) return undefined;
-    const signature = typeof raw.signature === "string" ? raw.signature : undefined;
-    if (typeof raw.text !== "string" || !isLikelyRealAnthropicThinkingSignature(signature)) return undefined;
-    items.push(reasoningInputItem(raw.text, { sig: signature, ...(redacted.length > 0 ? { red: redacted } : {}) }));
+    if (!isAnthropicSignedReasoningText(raw)) return undefined;
+    items.push(reasoningInputItem(raw.text, { sig: raw.signature, ...(redacted.length > 0 ? { red: redacted } : {}) }));
     redacted = [];
   }
   if (redacted.length > 0) items.push(reasoningInputItem("", { red: redacted }));

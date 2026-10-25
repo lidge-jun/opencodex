@@ -380,8 +380,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (wantsKeepNative && typeof body.keepNativeChatGptOnV1 !== "boolean") {
       return jsonResponse({ error: "body.keepNativeChatGptOnV1 must be a boolean" }, 400);
     }
-    if (wantsThreads && (typeof body.maxConcurrentThreadsPerSession !== "number" || !Number.isInteger(body.maxConcurrentThreadsPerSession) || body.maxConcurrentThreadsPerSession < 1)) {
-      return jsonResponse({ error: "body.maxConcurrentThreadsPerSession must be an integer >= 1" }, 400);
+    if (wantsThreads && (typeof body.maxConcurrentThreadsPerSession !== "number" || !Number.isSafeInteger(body.maxConcurrentThreadsPerSession) || body.maxConcurrentThreadsPerSession < 1)) {
+      return jsonResponse({ error: "body.maxConcurrentThreadsPerSession must be a safe integer >= 1" }, 400);
     }
     // Validate every new field BEFORE any write, so each 400 leaves config untouched.
     // null unsets the key; "" is a meaningful value for instructions and must not be

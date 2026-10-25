@@ -859,10 +859,24 @@ describe("resolveCodexRuntime", () => {
     const previousHome = process.env.OPENCODEX_HOME;
     process.env.OPENCODEX_HOME = configDir;
     resetCodexRuntimeResolveCacheForTests();
-    const deps = { env: { PATH: "" }, discoverAlternatives: false };
+    const deps = {
+      env: { CODEX_HOME: join(configDir, "codex-home"), HOME: configDir, PATH: "" },
+      platform: "linux" as const,
+      discoverAlternatives: false,
+    };
 
     try {
-      const cached = resolveCodexRuntime(deps);
+      const missingCodex = Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
+      const cached = resolveCodexRuntime({
+        ...deps,
+        configDir,
+        existsSync: () => false,
+        readdirSync: () => [],
+        execFileSync: ((_file, _args, options) => {
+          expect(options.timeout).toBe(8_000);
+          throw missingCodex;
+        }) as RuntimeExecFile,
+      });
       expect(cached.runtime.source).toBe("fallback");
       setCodexRuntimeResolveCacheForTests({
         runtime: { command: "codex", version: null, source: "environment" },

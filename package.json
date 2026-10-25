@@ -96,9 +96,9 @@
     "@hono/node-server": "2.1.0",
     "body-parser": "2.4.0",
     "fast-uri": "^3.1.7",
-    "hono": "4.13.8",
-    "ip-address": "^10.4.0",
-    "qs": "^6.16.0"
+    "hono": "4.13.13",
+    "ip-address": "^10.7.4",
+    "qs": "^6.16.1"
   },
   "keywords": [
     "codex",
