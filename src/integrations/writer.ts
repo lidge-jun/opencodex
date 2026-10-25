@@ -829,6 +829,12 @@ export interface CoordinatedIntegrationOptions {
    * `revalidate` and any lock acquisition). A non-null result refuses without writing.
    */
   guard?: (frozen: IntegrationWriteInput) => WriteOutcome | null;
+  /**
+   * Restore's own synchronous last word, evaluated immediately before the restore transaction
+   * with no await in between. Restore deliberately ignores `guard` (the background-refresh
+   * admission hook), so a caller that must re-prove a boundary at restore time uses this one.
+   */
+  restoreGuard?: (frozen: IntegrationWriteInput) => WriteOutcome | null;
 }
 
 /** Freeze all mutable resolution seams before the first lock await. */
@@ -1026,7 +1032,9 @@ export async function restoreIntegrationCoordinated(
   if (!prepared.ok) return prepared.refusal;
   const frozen = prepared.value;
   const spec = INTEGRATION_CLIENTS[frozen.clientId];
-  const run = () => restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
+  // Nothing awaits between restoreGuard and the restore transaction.
+  const run = () => options?.restoreGuard?.(frozen)
+    ?? restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
     return refused ?? run();
