@@ -366,15 +366,15 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Last, so promoted namespace children are also cleared of Codex-private fields.
         outBody = stripCanonicalOnlyToolFields(outBody, provider.supportsOpenAiWebSearchToolFields === false);
       }
-      if (!forward) {
-        if (
+      if (
+        provider.promoteAdditionalTools === true
+        || (!forward && (
           isOpenCodeGoResponsesUrl(url)
           || isXaiResponsesDestination(provider)
           || isXaiResponsesUrl(url)
-          || provider.promoteAdditionalTools === true
-        ) {
-          outBody = promoteResponsesAdditionalTools(outBody, replayPrefixLen);
-        }
+        ))
+      ) {
+        outBody = promoteResponsesAdditionalTools(outBody, replayPrefixLen);
       }
       // Same native-v2/portable predicate as the routedCompaction gate in handleResponses():
       // neither forward auth nor native v1 endpoint support implies trigger support. The

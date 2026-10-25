@@ -155,6 +155,46 @@ describe("xAI Responses additional_tools promotion", () => {
     expect(body.input).toEqual(raw.input);
   });
 
+  test("custom provider with authMode: forward and promoteAdditionalTools: true promotes tools", () => {
+    const forwardOptInProvider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://forward-proxy.example.com/v1",
+      authMode: "forward",
+      promoteAdditionalTools: true,
+    };
+
+    const raw = {
+      model: "custom-model",
+      input: [
+        { type: "message", role: "user", content: "forward query" },
+        { type: "additional_tools", tools: [lookup] },
+      ],
+    };
+
+    const { body } = build(forwardOptInProvider, raw);
+    expect(body.input).toEqual([{ type: "message", role: "user", content: "forward query" }]);
+    expect((body.tools as any[]).some(t => t.name === "lookup")).toBe(true);
+  });
+
+  test("custom provider with authMode: forward without flag leaves input untouched", () => {
+    const forwardNoOptInProvider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "forward",
+    };
+
+    const raw = {
+      model: "custom-model",
+      input: [
+        { type: "message", role: "user", content: "forward query" },
+        { type: "additional_tools", tools: [lookup] },
+      ],
+    };
+
+    const { body } = build(forwardNoOptInProvider, raw);
+    expect(body.input).toEqual(raw.input);
+  });
+
   test("promoteResponsesAdditionalTools recalculates replay boundary when reasoning items are dropped", () => {
     const xaiProvider: OcxProviderConfig = {
       adapter: "openai-responses",
