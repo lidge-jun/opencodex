@@ -159,6 +159,10 @@ export const ZAI_GLM_5X_REASONING_EFFORTS: Record<string, string[]> = {
 // (effort none or thinking disabled answers 400), omitted effort = max. It returns thinking as
 // reasoning_content and ignores reasoning_split. The live /v1/models roster may omit it.
 export const MINIMAX_M31_FLASH = "MiniMax-M3.1-Flash";
+/** The preview id MiniMax retired when M3.1-Flash went GA (2026-10-19); see MODEL_RENAMES. */
+export const MINIMAX_M31_FLASH_PREVIEW_RETIRED = "MiniMax-M3.1-Flash-Preview";
+/** MiniMax's published M3.1-Flash output ceiling (512K). */
+export const MINIMAX_M31_FLASH_MAX_OUTPUT_TOKENS = 524_288;
 export const MINIMAX_MODELS = [
   MINIMAX_M31_FLASH,
   "MiniMax-M3",
@@ -177,7 +181,7 @@ export const MINIMAX_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.from
 /** MiniMax's OpenAI-compatible M3 endpoints accept image_url; keep video off Codex's input enum. */
 export const MINIMAX_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
   "MiniMax-M3": ["text", "image"],
-  [MINIMAX_M31_FLASH]: ["text", "image", "video"],
+  [MINIMAX_M31_FLASH]: ["text", "image"],
 };
 export const MINIMAX_M3_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 /** Identity efforts on the wire; no map, so none omits the field instead of disabling thinking. */

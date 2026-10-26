@@ -391,7 +391,7 @@ axis that outranks every source here, so it is where a deliberate text-only over
 (`ocx provider edit <provider> --model <id> --text-only` writes it) and the one declaration a
 restart cannot take back.
 
-When `/models` omits MiniMax-M3.1-Flash-Preview, `src/providers/stale-model-roster-migration.ts` replaces only a saved roster identical to the old seed and fills existing window and default-effort records during startup; `CALLABLE_CONFIGURED_COMPATIBILITY_MODELS` (`src/codex/catalog/model-hints.ts`) retains it in the live catalog.
+When `/models` omits MiniMax-M3.1-Flash, `src/providers/stale-model-roster-migration.ts` replaces only a saved roster identical to the old seed and fills existing window, output-limit and default-effort records during startup; `CALLABLE_CONFIGURED_COMPATIBILITY_MODELS` (`src/codex/catalog/model-hints.ts`) retains it in the live catalog. `MODEL_RENAMES` (`src/providers/model-rename-migration.ts`) repairs saved rows that still name the retired MiniMax-M3.1-Flash-Preview id.
 
 Both MiniMax Coding Plan presets declare `text` and `image` for M3 and M3.1 in `src/providers/registry/model-seeds.ts`; registry enrichment fills missing saved declarations, so id-only live rows enable the Combo image switch when every target supports images. Explicit overrides still win; video is outside Codex's catalog input enum.
 

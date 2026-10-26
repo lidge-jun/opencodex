@@ -885,17 +885,15 @@ attempt fails, while transient failures keep it. An unreadable or oversized body
 further attempts. Dollar credits show the included allowance only, excluding purchased credits,
 so an exhausted allowance stops routing to Ollama Cloud only when no purchased credit remains.
 
-`MiniMax-M3.1-Flash-Preview` (1M context) is listed on both MiniMax presets. MiniMax serves it
-only to Token Plan subscription keys and MiniMax Code for now, so a pay-as-you-go API key gets an
-error for it. Thinking is always on: the effort picker offers `low` through `max` and defaults to
-`max`, and there is no way to turn thinking off. MiniMax has not published a per-token price
-for the preview; usage is drawn from your
-[Token Plan quota](https://platform.minimax.io/docs/guides/pricing-token-plan), so OpenCodex
-shows no estimated cost for it. MiniMax's `/models` endpoint does not list
-the preview yet, so OpenCodex keeps it in the catalog from the preset. An install whose saved
-MiniMax model list is still the previous default receives it on the next start; a list you edited
-is left as it is; register the preview by hand with
-`ocx models add minimax MiniMax-M3.1-Flash-Preview --context-window 1000000`.
+`MiniMax-M3.1-Flash` (1M context, up to 524,288 output tokens) is the default model on both MiniMax
+presets. MiniMax released it on 2026-10-19 and retired the `MiniMax-M3.1-Flash-Preview` id, so a
+saved configuration that still names the preview is renamed to `MiniMax-M3.1-Flash` on the next
+start. Thinking is always on: the effort picker offers `low` through `max` and defaults to `max`,
+and there is no way to turn thinking off. MiniMax's `/models` endpoint does not list Flash, so
+OpenCodex keeps it in the catalog from the preset. An install whose saved MiniMax model list is
+still the previous default receives it on the next start; a list you edited is left as it is;
+register it by hand with
+`ocx models add minimax MiniMax-M3.1-Flash --context-window 1000000`.
 
 **OpenCode Go** routes `gemini-4-argon-contributor` through its Gemini API, including
 streaming and tool-result continuations. The existing `opencode-go` preset keeps its

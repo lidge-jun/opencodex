@@ -94,6 +94,42 @@ describe("stale model roster migration", () => {
     expect(projection.config.providers!.minimax!.modelDefaultReasoningEfforts).toEqual({ [PREVIEW]: "low" });
   });
 
+  test("fills the Flash output limit into an existing partial output map", () => {
+    // Custom catalog rows read the saved map directly; without this the added id would
+    // publish with no output ceiling (CodeRabbit on #7739).
+    const projection = projectStaleModelRosters(minimaxConfig("minimax", {
+      models: [...MINIMAX_MODELS_BEFORE_M31],
+      modelMaxOutputTokens: { "MiniMax-M3": 128_000 },
+    }));
+    expect(projection.config.providers!.minimax!.modelMaxOutputTokens).toEqual({
+      "MiniMax-M3": 128_000, [PREVIEW]: 524_288,
+    });
+  });
+
+  test("renames a saved MiniMax-M3.1-Flash-Preview selection to the GA id on both presets", () => {
+    const RETIRED = "MiniMax-M3.1-Flash-Preview";
+    for (const [provider, baseUrl] of [["minimax", "https://api.minimax.io/v1"], ["minimax-cn", "https://api.minimaxi.com/v1"]] as const) {
+      const config = minimaxConfig(provider, {
+        baseUrl,
+        authMode: "key",
+        defaultModel: RETIRED,
+        models: MINIMAX_MODELS.map(id => (id === PREVIEW ? RETIRED : id)),
+        modelContextWindows: { [RETIRED]: 1_000_000, "MiniMax-M3": 1_000_000 },
+        modelDefaultReasoningEfforts: { [RETIRED]: "high" },
+      });
+      const projection = projectStartupConfigRepairs(config);
+      const row = projection.config.providers![provider]!;
+      expect(projection.changed).toBe(true);
+      expect(JSON.stringify(projection.config)).not.toContain(RETIRED);
+      expect(row.models).toEqual(MINIMAX_MODELS);
+      expect(row.defaultModel).toBe(PREVIEW);
+      expect(row.modelContextWindows).toEqual({ [PREVIEW]: 1_000_000, "MiniMax-M3": 1_000_000 });
+      // The user's saved effort survives the rename rather than being reset to the seed.
+      expect(row.modelDefaultReasoningEfforts).toEqual({ [PREVIEW]: "high" });
+      expect(projectStartupConfigRepairs(structuredClone(projection.config)).changed).toBe(false);
+    }
+  });
+
   test("leaves a hand-edited roster alone", () => {
     const trimmed = MINIMAX_MODELS_BEFORE_M31.filter(id => id !== "MiniMax-M2");
     const reordered = [...MINIMAX_MODELS_BEFORE_M31].reverse();
