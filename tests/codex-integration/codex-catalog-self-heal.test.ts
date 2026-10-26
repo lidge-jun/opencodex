@@ -55,6 +55,7 @@ function harness(options: { path?: string; config?: Partial<OcxConfig>; gates?: 
     scheduleFn: (fn, ms) => { timer = fn; delays.push(ms); return { cancel: () => { cancelled += 1; timer = null; } }; },
     now: () => clock,
     catalogPath: () => path,
+    retainPath: () => () => true, // This harness supplies synthetic observations, including virtual paths.
     observe: (_path, content) => {
       if (content) reads += 1;
       return { signature: `v${version}`, catalog: content ? structuredClone(catalog) : null };

@@ -968,6 +968,13 @@ Most use the `openai-chat` adapter with a bearer key; Anthropic-compatible prese
 preset, `xiaomi-mimo`, and a token-plan preset, `mimo`. All three default to MiMo V2.6 (`mimo-v2.6-pro`,
 or `mimo-v2.6-flash` on `xiaomi-mimo`). Xiaomi retires `mimo-v2.5` and `mimo-v2.5-pro` on 2026-10-21
 with no redirect, so switch a saved V2.5 default before then; opencodex does not rewrite it for you.
+
+**Reasoning capabilities.** Model metadata describes three independent capabilities: `supportsReasoning`, `supportsThinkingToggle`, and `supportsReasoningEffort`. An omitted value is unknown; `false` is an explicit declaration. `defaultThinkingEnabled` records the default switch state, while `reasoningEfforts` lists actual strength choices. Per-model declarations live in the provider's `modelCapabilities` map; reasoning axes merge over registry defaults using case-insensitive model IDs, with operator values taking precedence. `/v1/models` exposes the corresponding `supports_reasoning`, `supports_thinking_toggle`, `supports_reasoning_effort`, and `default_thinking_enabled` fields under `capabilities`, without inventing an effort list for fixed-strength models.
+
+Legacy configurations with an explicit empty effort list and no reasoning capability declarations retain `capabilities.supports_reasoning: false` in `/v1/models` discovery. An explicit `supportsReasoning: true` or `supportsThinkingToggle: true` still advertises thinking when the effort list is empty.
+
+Public MiMo V2.6 is one instance: its three models support reasoning and an on/off switch, but no adjustable intensity; thinking defaults to enabled. The wire adapter sends `thinking.type: enabled/disabled`. OCX's Responses ingress also accepts `reasoning.enabled` independently of `reasoning.effort`. For clients that only offer effort enums, Codex catalogs and OpenCode/Kilo exports represent this switch as `none/high`; those values are client compatibility aliases, not MiMo strength levels. Client-owned labels may still say “High.” Fixed reasoning models without a switch get no fabricated control. Xiaomi's [deep-thinking guide](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking) describes the public MiMo switch; free, token-plan, third-party routes and older MiMo models keep their existing declarations.
+
 Volcengine Coding Plan and Agent Plan use their native Responses endpoints through `openai-responses`.
 During validated Ark Coding Plan tool continuations, replaying the returned Responses `reasoning` item
 answered `400 InvalidParameter`, so the Coding Plan preset drops replayed reasoning items before

@@ -3,7 +3,7 @@ import { readRuntimePort } from "../config/process-state";
 import { readClientConnectionState } from "../client/state";
 import { getActiveTurnCount, isDraining, isRecyclingForExit, isShutdownDraining } from "../server/lifecycle";
 import type { OcxConfig } from "../types";
-import { compareCatalogHealPaths, observeCatalogHealFile, selectCatalogHealPath, type CatalogObservation } from "./catalog/heal-observation";
+import { compareCatalogHealPaths, observeCatalogHealFile, retainCatalogHealPath, selectCatalogHealPath, type CatalogObservation } from "./catalog/heal-observation";
 import { subscribeCatalogPublication } from "./catalog/publication-observer";
 import { configEnablesRoutedNamespace, ocxRoutedNamespaceCounts } from "./catalog/routed-removal";
 import { inspectCodexHomeOwner } from "./codex-home-owner";
@@ -51,6 +51,7 @@ export interface CatalogSelfHealDeps {
   now?: () => number;
   catalogPath?: () => string | null;
   observe?: (path: string, readContent: boolean) => CatalogObservation | null;
+  retainPath?: typeof retainCatalogHealPath;
   converge?: (config: OcxConfig, lifecycle: CatalogHealLifecycle) => Promise<CatalogHealOutcome>;
   subscribe?: typeof subscribeCatalogPublication;
   gates?: Partial<CatalogSelfHealGates>;
@@ -145,8 +146,9 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
     }
     const seen = observe(path, true);
     if (seen === null) return null;
-    observed = { path, signature: seen.signature, namespaces: seen.catalog ? new Set(ocxRoutedNamespaceCounts(seen.catalog).keys()) : null };
-    return observed;
+    const result = { path, signature: seen.signature, namespaces: seen.catalog ? new Set(ocxRoutedNamespaceCounts(seen.catalog).keys()) : null };
+    if (!fresh) observed = result;
+    return result;
   };
   const accept = (path: string): void => {
     const seen = read(path);
@@ -249,9 +251,11 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
 
   const unsubscribe = (deps.subscribe ?? subscribeCatalogPublication)(event => {
     if (stopped) return;
+    const release = event.kind === "native-released" || event.intent === "restore";
+    // Bind publication evidence before comparisons can observe a retargeted alias.
+    const stillPublished = !release && event.path !== null ? (deps.retainPath ?? retainCatalogHealPath)(event.path) : null;
     // Native restoration can remove the journal before notification. Fence the known
     // target (and target-less releases) without resolving possibly unavailable evidence.
-    const release = event.kind === "native-released" || event.intent === "restore";
     const known = event.path !== null && target !== null ? compareCatalogHealPaths(event.path, target) : "different";
     if (release && (event.path === null || known !== "different")) {
       clear();
@@ -266,19 +270,19 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
       released = true; // Only a later accepted owner publication can re-arm this lifecycle.
       return;
     }
-    if (selected === "unknown" || (known === "unknown" && selected !== "same")) { clear(); return; }
     if (running) {
-      if (known === "unknown") clear();
+      if (known === "unknown" || selected === "unknown") clear();
       return; // Catalog-success/cache-failure must not accept a baseline.
     }
     // A committed owner publication supplies a read-only baseline even while heal writes are gated.
-    if (event.path === null || path === null || selected !== "same") return;
+    if (event.path === null || path === null || selected !== "same" || stillPublished === null) return;
     // Read independently of obsolete evidence, but retire it only after current selection proof.
-    const seen = read(path, true);
+    const seen = read(event.path, true);
     const current = catalogPath();
-    if (seen?.namespaces == null || current === null || compareCatalogHealPaths(current, path) !== "same") return;
+    if (seen?.namespaces == null || current === null
+      || compareCatalogHealPaths(event.path, current) !== "same" || !stillPublished(seen.signature)) return;
     clear();
-    target = path;
+    target = current;
     baseline = observed = seen;
     released = false;
   });

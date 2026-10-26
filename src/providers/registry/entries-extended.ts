@@ -9,6 +9,7 @@ import {
   MOONSHOT_INTL_BASE_URL,
 } from "../base-url-choices";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
+import { MIMO_THINKING_CAPABILITIES, MIMO_THINKING_MODELS } from "../mimo-thinking";
 import {
   CODEBUDDY_CN_MODELS,
   CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS,
@@ -1291,11 +1292,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
   // Saved defaults are not rewritten; V2.5 stays listed until it stops answering.
   // Both first-party presets read the xiaomi metadata bundle for window, output, modalities and price.
-  { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.6-pro", models: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5-pro", "mimo-v2.5"], jawcodeBundle: "xiaomi" },
+  { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.6-pro", models: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5-pro", "mimo-v2.5"], jawcodeBundle: "xiaomi", modelCapabilities: MIMO_THINKING_CAPABILITIES, thinkingToggleModels: [...MIMO_THINKING_MODELS] },
   // Xiaomi's public OpenAI-compatible endpoint is a distinct transport from both the Anthropic
   // preset above and the paid token-plan host below. Keep a separate fixed-destination contract
-  // so existing custom providers are never retargeted while the official route receives the
-  // strict reasoning ladder its validator enforces (#1483).
+  // so existing custom providers are never retargeted. V2.6 uses the documented thinking
+  // toggle; older models retain the reasoning ladder validated in #1483.
   {
     id: "xiaomi-mimo",
     label: "Xiaomi MiMo (OpenAI Chat)",
@@ -1305,11 +1306,13 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://platform.xiaomimimo.com/console/balance",
     defaultModel: "mimo-v2.6-flash",
     models: ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5"],
+    modelCapabilities: MIMO_THINKING_CAPABILITIES,
+    thinkingToggleModels: [...MIMO_THINKING_MODELS],
     jawcodeBundle: "xiaomi",
     reasoningEfforts: ["low", "medium", "high"],
     reasoningEffortMap: { xhigh: "high", max: "high", ultra: "high" },
     preserveCustomDestination: true,
-    note: "Official Xiaomi MiMo OpenAI-compatible Chat endpoint. The upstream validator accepts reasoning_effort none/low/medium/high; higher Codex tiers are clamped to high.",
+    note: "Official Xiaomi MiMo OpenAI-compatible Chat endpoint. V2.6 thinking is on/off: none disables it; high is the client-compatible on value, not a distinct reasoning strength. Older models retain their existing effort contract.",
   },
   { id: "kilo", label: "Kilo", baseUrl: "https://api.kilo.ai/api/gateway", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://kilo.ai" },
   {
