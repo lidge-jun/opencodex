@@ -1777,7 +1777,7 @@
     "startup-prompt.test.ts": "server",
     "state-store-sweeper.test.ts": "oauth",
     "stepfun-provider.test.ts": "providers",
-    "stop-deferred-teardown.test.ts": "service",
+    "stop-deferred-teardown.test.ts": "service", "stop-direct-fetch.test.ts": "service",
     "storage-cleanup.test.ts": "storage",
     "storage-mutation-race.test.ts": "storage",
     "storage-policy-config-race.test.ts": "storage",
