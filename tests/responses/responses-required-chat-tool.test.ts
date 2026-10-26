@@ -126,3 +126,29 @@ for (const stream of [false, true]) for (const combo of [false, true]) test(`exi
   expect(body).not.toContain("response.completed");
   expect(sends).toBe(1);
 });
+
+test("a zero-output streamed combo child that skips a required call stops the combo", async () => {
+  let fallbackSends = 0;
+  const provider = (name: string): OcxProviderConfig => ({
+    adapter: "openai-chat", baseUrl: `https://${name}.invalid/v1`, apiKey: "fixture-key", authMode: "key", models: ["fixture"],
+    fetch: (async () => {
+      if (name === "silent-fallback") { fallbackSends++; return Response.json({ choices: [{ message: { role: "assistant", content: "replayed" }, finish_reason: "stop" }] }); }
+      const chunks = [{ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 7, completion_tokens: 0, total_tokens: 7 } }];
+      return new Response(chunks.map(x => `data: ${JSON.stringify(x)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch,
+  });
+  // Distinct provider names keep earlier combo failures in this file from cooling down the primary.
+  const cfg = { defaultProvider: "silent-primary", providers: { "silent-primary": provider("silent-primary"), "silent-fallback": provider("silent-fallback") },
+    combos: { silent: { alias: "chain/silent-required", strategy: "failover", targets: [{ provider: "silent-primary", model: "fixture" }, { provider: "silent-fallback", model: "fixture" }] } },
+  } as OcxConfig;
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "chain/silent-required", input: "Use a marker", store: false, stream: true, tools, tool_choice: "required" }),
+  }), cfg, { model: "", provider: "" });
+  const text = await response.text();
+  expect(fallbackSends).toBe(0);
+  expect(text).toContain("required_tool_not_called");
+  expect(text).not.toContain("replayed");
+  expect(text).not.toContain("response.completed");
+});
+
