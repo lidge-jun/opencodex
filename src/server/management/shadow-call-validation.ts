@@ -4,7 +4,11 @@ import { routeConcreteModel, routeModel } from "../../router";
 import type { OcxConfig } from "../../types";
 
 /** Validate a prospective persisted shadow-call target against its resolved source identities. */
-export function shadowCallTargetError(config: OcxConfig, targetModel: string | undefined): string | null {
+export function shadowCallTargetError(
+  config: OcxConfig,
+  targetModel: string | undefined,
+  sourceModels: unknown = config.shadowCallIntercept?.sourceModels,
+): string | null {
   if (!targetModel) return null;
 
   let target;
@@ -19,7 +23,7 @@ export function shadowCallTargetError(config: OcxConfig, targetModel: string | u
     return "model must resolve to a configured provider";
   }
 
-  const intersectsSource = shadowSourceModels(config.shadowCallIntercept?.sourceModels).some(sourceModel => {
+  const intersectsSource = shadowSourceModels(sourceModels).some(sourceModel => {
     let source = { providerName: OPENAI_CODEX_PROVIDER_ID, modelId: sourceModel };
     try {
       const resolved = routeConcreteModel(config, sourceModel);
@@ -31,6 +35,33 @@ export function shadowCallTargetError(config: OcxConfig, targetModel: string | u
   return intersectsSource
     ? "shadow-call target must not intersect a source model"
     : null;
+}
+
+/**
+ * Validate a new `sourceModels` list before it reaches persisted config.
+ * Matching is by bare-model prefix, so provider-qualified entries can never
+ * match and a slash is rejected rather than stored as a dead rule.
+ */
+export function shadowCallSourceModelsError(value: unknown): string | null {
+  if (!Array.isArray(value)) return "sourceModels must be an array";
+  if (value.length === 0) return "sourceModels must contain at least one model prefix";
+  const seen = new Set<string>();
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      return `sourceModels.${index} must be a nonblank model prefix`;
+    }
+    const prefix = entry.trim();
+    if (/\s/.test(prefix)) return `sourceModels.${index} must not contain whitespace`;
+    if (prefix.includes("/")) return `sourceModels.${index} must be a bare model prefix, not a provider-qualified model`;
+    if (seen.has(prefix)) return "sourceModels must not contain duplicate prefixes";
+    seen.add(prefix);
+  }
+  return null;
+}
+
+/** Trim and deduplicate only after `shadowCallSourceModelsError` accepted the list. */
+export function normalizeShadowCallSourceModels(value: readonly string[]): string[] {
+  return [...new Set(value.map(entry => entry.trim()))];
 }
 
 /** The shadow-call reference a provider change leaves behind, reported by disable and delete. */

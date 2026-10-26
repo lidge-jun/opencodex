@@ -48,7 +48,7 @@ import {
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { isStreamMode } from "../../lib/bun-stream-caps";
-import { shadowSourceModels } from "../../lib/shadow-call";
+import { isDefaultShadowSourceModels, shadowSourceModelOptions, shadowSourceModels } from "../../lib/shadow-call";
 import {
   configureAppOwnedMemoryBudget,
   enforceAppOwnedMemoryBudget,
@@ -124,7 +124,11 @@ import {
   type DebugFlag,
 } from "../../lib/debug-settings";
 import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
-import { shadowCallTargetError } from "./shadow-call-validation";
+import {
+  normalizeShadowCallSourceModels,
+  shadowCallSourceModelsError,
+  shadowCallTargetError,
+} from "./shadow-call-validation";
 import { autoReviewOverrideConfigError } from "../../config/provider-validation";
 import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { drainAndShutdown } from "../lifecycle";
@@ -149,6 +153,17 @@ function quotaAutoRefreshSettings(config: OcxConfig) {
     id,
     { fiveHour: setting.fiveHour === true, weekly: setting.weekly === true },
   ]));
+}
+
+/** The complete shadow-call settings body shared by GET and a successful PUT. */
+function shadowCallSettingsResponse(config: OcxConfig) {
+  const sci = config.shadowCallIntercept ?? {};
+  return {
+    enabled: sci.enabled === true,
+    model: sci.model ?? "",
+    sourceModels: shadowSourceModels(sci.sourceModels),
+    sourceModelOptions: shadowSourceModelOptions(sci.sourceModels),
+  };
 }
 
 async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
@@ -1299,19 +1314,14 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
   }
 
   if (url.pathname === "/api/shadow-call-settings" && req.method === "GET") {
-    const sci = config.shadowCallIntercept ?? {};
-    return jsonResponse({
-      enabled: sci.enabled === true,
-      model: sci.model ?? "",
-      sourceModels: shadowSourceModels(sci.sourceModels),
-    });
+    return jsonResponse(shadowCallSettingsResponse(config));
   }
 
   if (url.pathname === "/api/shadow-call-settings" && req.method === "PUT") {
     let raw: unknown;
     try { raw = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
     if (!isPlainRecord(raw)) return jsonResponse({ error: "body must be a JSON object" }, 400);
-    const body = raw as { enabled?: unknown; model?: unknown };
+    const body = raw as { enabled?: unknown; model?: unknown; sourceModels?: unknown };
     if (body.enabled !== undefined && typeof body.enabled !== "boolean") {
       return jsonResponse({ error: "enabled must be a boolean" }, 400);
     }
@@ -1319,12 +1329,17 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       return jsonResponse({ error: "model must be a string" }, 400);
     }
     const refusal = await settleConfigRoot(configRoot(), () => {
+      const sourceModelsError = body.sourceModels === undefined ? null : shadowCallSourceModelsError(body.sourceModels);
+      if (sourceModelsError) return jsonResponse({ error: sourceModelsError }, 400);
+      const nextSourceModels = body.sourceModels === undefined
+        ? undefined
+        : normalizeShadowCallSourceModels(body.sourceModels as string[]);
       const candidateModel = typeof body.model === "string"
         ? body.model
-        : body.enabled === true
+        : body.enabled === true || body.sourceModels !== undefined
           ? config.shadowCallIntercept?.model
           : undefined;
-      const targetError = shadowCallTargetError(config, candidateModel);
+      const targetError = shadowCallTargetError(config, candidateModel, nextSourceModels ?? config.shadowCallIntercept?.sourceModels);
       if (targetError) return jsonResponse({ error: targetError }, 400);
       config.shadowCallIntercept = { ...config.shadowCallIntercept };
       if (typeof body.enabled === "boolean") config.shadowCallIntercept.enabled = body.enabled;
@@ -1332,17 +1347,17 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         if (body.model === "") delete config.shadowCallIntercept.model;
         else config.shadowCallIntercept.model = body.model;
       }
+      if (nextSourceModels) {
+        // Drop a list that merely restates the built-in set, so future client
+        // versions can move the defaults without pinning them here.
+        if (isDefaultShadowSourceModels(nextSourceModels)) delete config.shadowCallIntercept.sourceModels;
+        else config.shadowCallIntercept.sourceModels = nextSourceModels;
+      }
       saveConfigPreservingClaudeCode(config);
       return null;
     });
     if (refusal) return refusal;
-    const sci = config.shadowCallIntercept ?? {};
-    return jsonResponse({
-      ok: true,
-      enabled: sci.enabled === true,
-      model: sci.model ?? "",
-      sourceModels: shadowSourceModels(sci.sourceModels),
-    });
+    return jsonResponse({ ok: true, ...shadowCallSettingsResponse(config) });
   }
 
   if (url.pathname === "/api/auto-review-settings" && req.method === "GET") {

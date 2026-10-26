@@ -380,6 +380,39 @@ describe("memory model routing", () => {
     expect(logCtx.shadowCallRewrittenFrom).toBeUndefined();
   });
 
+  test("a Terra shadow opt-in still yields to a configured consolidation route", async () => {
+    const settings = config();
+    settings.shadowCallIntercept = {
+      enabled: true,
+      model: "gateway/helper",
+      sourceModels: ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"],
+    };
+    const calls: Array<Record<string, any>> = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      calls.push(JSON.parse(String(init?.body)));
+      return Response.json(completion());
+    }) as typeof fetch;
+
+    const configuredRoute = await handleResponses(
+      request(body("gpt-5.6-terra"), consolidationMetadata()), settings, { model: "", provider: "" },
+    );
+    expect(configuredRoute.status).toBe(200);
+    await configuredRoute.text();
+    expect(calls[0]!.model).toBe("strong");
+
+    const withoutMemoryRouting = config();
+    delete withoutMemoryRouting.memoryModels;
+    withoutMemoryRouting.shadowCallIntercept = settings.shadowCallIntercept;
+    const shadowLog: { model: string; provider: string; shadowCallRewrittenFrom?: string } = { model: "", provider: "" };
+    const shadowed = await handleResponses(
+      request(body("gpt-5.6-terra"), consolidationMetadata()), withoutMemoryRouting, shadowLog,
+    );
+    expect(shadowed.status).toBe(200);
+    await shadowed.text();
+    expect(calls[1]!.model).toBe("helper");
+    expect(shadowLog.shadowCallRewrittenFrom).toBe("gpt-5.6-terra");
+  });
+
   test("a target that no longer resolves fails the memory call instead of falling back", async () => {
     const settings = config();
     settings.memoryModels = { extract: { model: "ghost/secret-token" } };

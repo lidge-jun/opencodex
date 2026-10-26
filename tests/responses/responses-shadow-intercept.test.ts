@@ -9,7 +9,11 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, isShadowSourceModel } from "../../src/server/responses";
-import { shadowCallPreservesSelectedModel, shouldInterceptShadowCall } from "../../src/lib/shadow-call";
+import {
+  shadowCallPreservesSelectedModel,
+  shadowSourceModelOptions,
+  shouldInterceptShadowCall,
+} from "../../src/lib/shadow-call";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
@@ -71,6 +75,33 @@ describe("isShadowSourceModel", () => {
 
   test("empty array falls back to defaults", () => {
     expect(isShadowSourceModel("gpt-5.6-luna", [])).toBe(true);
+  });
+});
+
+describe("shadowSourceModelOptions", () => {
+  test("exposes Terra and the legacy helper as opt-in sources", () => {
+    const options = shadowSourceModelOptions(undefined);
+    expect(options.map(option => [option.id, option.role, option.defaultIntercepted])).toEqual([
+      ["gpt-6-luna", "helper", true],
+      ["gpt-5.6-luna", "helper", true],
+      ["gpt-5.6-terra", "memory", false],
+      ["gpt-5.4-mini", "legacy", false],
+    ]);
+  });
+
+  test("keeps a custom prefix visible next to the known sources", () => {
+    const options = shadowSourceModelOptions(["gpt-6-luna", "custom-helper"]);
+    expect(options.at(-1)).toEqual({ id: "custom-helper", role: "custom", defaultIntercepted: false });
+  });
+
+  test("does not offer a provider-qualified prefix that can never match", () => {
+    const options = shadowSourceModelOptions(["openai/gpt-5.6-luna"]);
+    expect(options.some(option => option.id === "openai/gpt-5.6-luna")).toBe(false);
+  });
+
+  test("does not list a known source twice", () => {
+    const options = shadowSourceModelOptions(["gpt-5.6-terra", "gpt-5.6-terra"]);
+    expect(options.filter(option => option.id === "gpt-5.6-terra")).toHaveLength(1);
   });
 });
 
@@ -489,6 +520,51 @@ describe("shadow call intercept request path (issue #311)", () => {
     expect(sawFetch).toBe(false);
     expect(response.status).toBe(404);
   });
+
+  test("intercepts Terra only after the operator opts that source in", async () => {
+    takeSpendHome();
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return Response.json({
+        choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    }) as typeof fetch;
+    const config = interceptConfig();
+    config.shadowCallIntercept = {
+      enabled: true,
+      model: "xai/grok-4.5",
+      sourceModels: ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"],
+    };
+
+    const response = await post(config, "gpt-5.6-terra", "memory");
+
+    expect(response.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+    expect(String(bodies[0]?.model ?? "")).toContain("grok-4.5");
+  });
+
+  test("an explicit user turn keeps Terra even when the source is opted in", async () => {
+    let sawFetch = false;
+    globalThis.fetch = (async () => {
+      sawFetch = true;
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    const config = interceptConfig();
+    config.shadowCallIntercept = {
+      enabled: true,
+      model: "xai/grok-4.5",
+      sourceModels: ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"],
+    };
+
+    const response = await post(config, "gpt-5.6-terra", undefined, { model: "", provider: "" }, {
+      "x-codex-turn-metadata": JSON.stringify({ request_kind: "turn", thread_source: "user" }),
+    });
+
+    expect(sawFetch).toBe(false);
+    expect(response.status).toBe(404);
+  });
 });
 
 /**
@@ -747,6 +823,80 @@ describe("shadow-call settings API reports the intercepted source models", () =>
     await withTempHome(async () => {
       const body = await shadowApi({ port: 0, defaultProvider: "xai", providers: {} } as OcxConfig, "GET");
       expect(body.sourceModels).toEqual(["gpt-6-luna", "gpt-5.6-luna"]);
+    });
+  });
+
+  test("GET reports Terra as an opt-in source option", async () => {
+    await withTempHome(async () => {
+      const body = await shadowApi({ port: 0, defaultProvider: "xai", providers: {} } as OcxConfig, "GET");
+      expect(body.sourceModelOptions).toContainEqual({
+        id: "gpt-5.6-terra", role: "memory", defaultIntercepted: false,
+      });
+    });
+  });
+
+  test("PUT persists an opted-in source and drops the list when it restates the defaults", async () => {
+    await withTempHome(async () => {
+      const config = {
+        port: 0,
+        defaultProvider: "xai",
+        providers: {
+          xai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.x.ai/v1",
+            authMode: "key",
+            apiKey: "test-xai-key",
+          },
+        },
+        shadowCallIntercept: { enabled: true, model: "xai/grok-4.5" },
+      } as OcxConfig;
+
+      const optedIn = await shadowApi(config, "PUT", {
+        sourceModels: ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"],
+      });
+      expect(optedIn.sourceModels).toEqual(["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"]);
+      expect(config.shadowCallIntercept?.sourceModels).toEqual(["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"]);
+
+      const restored = await shadowApi(config, "PUT", { sourceModels: ["gpt-5.6-luna", "gpt-6-luna"] });
+      expect(restored.sourceModels).toEqual(["gpt-6-luna", "gpt-5.6-luna"]);
+      expect(config.shadowCallIntercept?.sourceModels).toBeUndefined();
+    });
+  });
+
+  test.each([
+    [[], "at least one"],
+    [["gpt-5.6-terra", "gpt-5.6-terra"], "duplicate"],
+    [["xai/gpt-5.6-terra"], "bare model prefix"],
+    [["gpt-5.6 terra"], "whitespace"],
+  ])("PUT rejects an invalid source list %#", async (sourceModels, message) => {
+    await withTempHome(async () => {
+      const config = { port: 0, defaultProvider: "xai", providers: {} } as OcxConfig;
+      const response = await shadowApiResponse(config, { sourceModels });
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toContain(message);
+      expect(config.shadowCallIntercept).toBeUndefined();
+    });
+  });
+
+  test("PUT validates the existing target against a newly selected source", async () => {
+    await withTempHome(async () => {
+      const config = {
+        port: 0,
+        defaultProvider: "xai",
+        providers: {
+          xai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.x.ai/v1",
+            authMode: "key",
+            apiKey: "test-xai-key",
+          },
+        },
+        shadowCallIntercept: { enabled: false, model: "xai/grok-4.5" },
+      } as OcxConfig;
+      const response = await shadowApiResponse(config, { sourceModels: ["grok-4.5"] });
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toContain("must not intersect");
+      expect(config.shadowCallIntercept?.sourceModels).toBeUndefined();
     });
   });
 
