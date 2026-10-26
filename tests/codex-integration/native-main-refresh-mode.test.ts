@@ -442,9 +442,16 @@ describe("main account in codex refresh mode (#2999)", () => {
     writeFileSync(file, "not a directory");
     process.env.CODEX_HOME = file;
     const { calls, codexAuthStatus } = seam(() => { throw new Error("must not be called"); });
-    await expect(getValidMainAccountToken({ codexAuthStatus }))
-      .rejects.toMatchObject({ code: "CODEX_HOME_UNAVAILABLE" });
+    const before = readFileSync(file);
+    const failure = await getValidMainAccountToken({ codexAuthStatus }).then(
+      () => { throw new Error("expected a non-directory CODEX_HOME to be rejected"); },
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    // Linux can reject file/auth.json at lstat before the profile-context validator runs.
+    expect(["CODEX_HOME_UNAVAILABLE", "ENOTDIR"]).toContain((failure as NodeJS.ErrnoException).code);
     expect(calls).toEqual([]);
+    expect(readFileSync(file)).toEqual(before);
   });
 
   test("a dangling CODEX_HOME link stays fail closed, including through a dangling parent", async () => {
