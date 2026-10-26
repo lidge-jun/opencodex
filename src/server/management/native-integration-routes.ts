@@ -31,7 +31,7 @@ import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
 import {
   applyDesktopFirstParty, withFirstPartySecretsSettled,
-  captureDesktopFirstPartyRollback,
+  captureDesktopFirstPartyRollback, rollbackDesktopFirstPartySettled,
   inspectDesktopFirstParty,
   observeClaudeDesktopMode,
   recordClaudeDesktopMode,
@@ -50,7 +50,7 @@ import { grokConfigPath } from "../../grok/status";
 import { assertNativeTeardownOwned } from "../../integrations/native/ownership-preflight";
 import type { CodexNativeRestoreResult } from "../../codex/inject";
 import type { OcxConfig } from "../../types";
-import { getConfigDir, withConfigDirHardeningSettled } from "../../config/paths";
+import { getConfigDir } from "../../config/paths";
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { managementInferencePort, type ManagementContext } from "./context";
@@ -768,7 +768,7 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
         let gatewayRemoved = false;
         if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
           const removed = (ctx.deps.removeDesktop3pStandardPivot ?? removeDesktop3pStandardPivot)({ appliedFingerprint: fingerprint, replaceWhileEnabled: true });
-          if (!removed.ok && !removed.changed && applied.changed && !await withConfigDirHardeningSettled(getConfigDir(), rollback)) {
+          if (!removed.ok && !removed.changed && applied.changed && !await rollbackDesktopFirstPartySettled(getConfigDir(), rollback)) {
             return postCommitRefusal(500, "claude-desktop", "write_failed",
               "Gateway cleanup and first-party settings rollback did not complete.", { desiredEnabled });
           }
