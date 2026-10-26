@@ -21,9 +21,13 @@ import {
   MainAccountTokenRefreshError,
 } from "../../src/codex/main-account";
 import { codexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
-import { resolveCodexAuthContext, materializeCodexUpstreamAuthAsync, CodexAuthContextError } from "../../src/codex/auth-context";
+import { resolveCodexAuthContext, materializeCodexUpstreamAuthAsync, CodexAuthContextError, CodexMainAccountHardLockError } from "../../src/codex/auth-context";
+import { applyConfirmedMainCodexAccountTransition, reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
+import { captureMainQuotaWriter, isMainQuotaDispatchLive, isMainQuotaWriterLive, matchesMainQuotaCredential, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
+import { clearAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { clearThreadAccountMap } from "../../src/codex/routing";
-import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
+import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { withNativeMainSharedClaim } from "../../src/codex/native-main-claim";
 import { resolveNativeProfileContext } from "../../src/codex/native-profile-store";
 import type { OcxConfig } from "../../src/types";
@@ -492,5 +496,209 @@ describe("main account in codex refresh mode (#2999)", () => {
     }
     expect(calls).toEqual([]);
     expect(JSON.parse(readFileSync(join(home, "auth.json"), "utf8")).tokens.refresh_token).toBe("rotated");
+  });
+});
+
+describe("owned keyring account identity and quota", () => {
+  let previousHome: string | undefined;
+
+  beforeEach(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = join(root, "opencodex-home");
+    mkdirSync(process.env.OPENCODEX_HOME);
+    resetMainCodexAccountIdentityTrackingForTests();
+    clearAccountQuota();
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("__main__");
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+  });
+
+  afterEach(() => {
+    clearAccountQuota();
+    resetMainCodexAccountIdentityTrackingForTests();
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+  });
+
+  function config(): OcxConfig {
+    return { port: 10100, defaultProvider: "openai", codexAccounts: [], codexMainAccountHardLock: true,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } } };
+  }
+
+  function oldAccount(percent = 99) {
+    const accessToken = fakeChatGptJwt("acct-main");
+    seedAuth(accessToken);
+    reconcileMainCodexAccountRuntimeState();
+    const writer = observeMainQuotaCredential(accessToken, "acct-main")!;
+    expect(writer).toBeDefined();
+    setAccountQuotaFromParsed("__main__", { weeklyPercent: percent, weeklyResetAt: Date.now() / 1000 + 3600 }, undefined, writer);
+    rmSync(join(home, "auth.json"));
+    return { accessToken, writer };
+  }
+
+  function answer(accessToken: string) {
+    const calls: boolean[] = [];
+    return { calls, codexAuthStatus: async ({ refresh }: { refresh: boolean; signal: AbortSignal }) => {
+      calls.push(refresh);
+      return { authMethod: "chatgpt", authToken: accessToken, requiresOpenaiAuth: true } as CodexAuthStatus;
+    } };
+  }
+
+  const selection = () => ({ mainProfileDraining: false, claimMainProfile: () => true, release() {} });
+
+  test("a verified keyring switch retires the old quota writer and binds the new credential", async () => {
+    const old = oldAccount();
+    const fresh = fakeChatGptJwt("acct-keyring-new");
+    const { codexAuthStatus } = answer(fresh);
+    expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: fresh, chatgptAccountId: "acct-keyring-new" });
+    expect(isMainQuotaWriterLive(old.writer)).toBe(false);
+    expect(matchesMainQuotaCredential(old.accessToken, "acct-main")).toBe(false);
+    expect(matchesMainQuotaCredential(fresh, "acct-keyring-new")).toBe(true);
+    const nextWriter = captureMainQuotaWriter("acct-keyring-new");
+    expect(nextWriter).toBeDefined();
+    expect(getMainPolicyQuota()).toBeNull();
+    setAccountQuotaFromParsed("__main__", { weeklyPercent: 5 }, undefined, nextWriter);
+    setAccountQuotaFromParsed("__main__", { weeklyPercent: 100 }, undefined, old.writer);
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(5);
+  });
+
+  test("stored Direct materialization binds its new keyring dispatch after an awaited identity switch", async () => {
+    oldAccount();
+    const fresh = fakeChatGptJwt("acct-keyring-new");
+    const { codexAuthStatus } = answer(fresh);
+    const context: { kind: "main"; accountId: null; mainQuotaDispatch?: import("../../src/codex/main-account-cache").MainQuotaDispatch } = { kind: "main", accountId: null };
+    const headers = await materializeCodexUpstreamAuthAsync(new Headers({ authorization: "Bearer fixture-admission" }), context, {
+      config: config(), substituteMainCredential: true, nativeMainRefreshDependencies: { codexAuthStatus },
+    });
+    expect(headers.get("authorization")).toBe(`Bearer ${fresh}`);
+    expect(headers.get("chatgpt-account-id")).toBe("acct-keyring-new");
+    expect(context.mainQuotaDispatch).toBeDefined();
+    expect(isMainQuotaDispatchLive(context.mainQuotaDispatch!)).toBe(true);
+  });
+
+  test.each([true, false])("stored Direct discovers a replacement before old policy checks (hard lock=%s)", async hardLock => {
+    oldAccount(100);
+    const cfg = { ...config(), codexMainAccountHardLock: hardLock };
+    const { calls, codexAuthStatus } = answer(fakeChatGptJwt("acct-keyring-new"));
+    await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer fixture-admission" }), cfg, "direct", {
+      substituteMainCredentialForDirect: true, nativeMainRefreshDependencies: { codexAuthStatus },
+      beginCodexAccountSelection: selection,
+    })).resolves.toMatchObject({ kind: "main", accountId: null });
+    expect(calls).toEqual([false]);
+    expect(getMainPolicyQuota()).toBeNull();
+  });
+
+  test.each([false, true])("Pool observes a replacement before old quota selection (prior keyring lookup=%s)", async warm => {
+    const old = oldAccount();
+    if (warm) {
+      await getValidMainAccountToken({ codexAuthStatus: answer(old.accessToken).codexAuthStatus });
+      expect(getMainAccountCredentialStatus().usable).toBe(true);
+    }
+    const cfg = config();
+    const before = structuredClone(cfg);
+    const fresh = fakeChatGptJwt("acct-keyring-new");
+    const { calls, codexAuthStatus } = answer(fresh);
+    const context = await resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      modelId: "gpt-5.5", nativeMainRefreshDependencies: { codexAuthStatus },
+      beginCodexAccountSelection: selection, primeCodexPoolQuotas: async () => {},
+    });
+    expect(context).toMatchObject({ kind: "main-pool", accessToken: fresh, chatgptAccountId: "acct-keyring-new" });
+    expect(context.kind === "main-pool" && context.mainQuotaWriter).toBeDefined();
+    if (context.kind === "main-pool") expect(isMainQuotaWriterLive(context.mainQuotaWriter!)).toBe(true);
+    expect(calls).toEqual([false, false]);
+    // Ordinary Pool selection records its active slot; operator policy stays unchanged.
+    expect(cfg).toEqual({ ...before, activeCodexAccountId: "__main__" });
+    expect(isMainQuotaWriterLive(old.writer)).toBe(false);
+  });
+
+  test("the unchanged keyring account retains its hard lock", async () => {
+    const old = oldAccount();
+    const { codexAuthStatus } = answer(old.accessToken);
+    await getValidMainAccountToken({ codexAuthStatus });
+    expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+    expect(isMainQuotaWriterLive(old.writer)).toBe(true);
+    await expect(materializeCodexUpstreamAuthAsync(new Headers(), { kind: "main", accountId: null }, {
+      config: config(), substituteMainCredential: true, nativeMainRefreshDependencies: { codexAuthStatus },
+    })).rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+  });
+
+  test("Pool acquisition carries the specifically owned replacement writer after discovery", async () => {
+    const old = oldAccount(5);
+    const fresh = fakeChatGptJwt("acct-keyring-new");
+    let reads = 0;
+    const context = await resolveCodexAuthContext(new Headers(), config(), "pool", {
+      nativeMainRefreshDependencies: { codexAuthStatus: async () => ({
+        authMethod: "chatgpt", authToken: ++reads === 1 ? old.accessToken : fresh, requiresOpenaiAuth: true,
+      }) },
+      beginCodexAccountSelection: selection, primeCodexPoolQuotas: async () => {},
+    });
+    expect(reads).toBe(2);
+    expect(context).toMatchObject({ kind: "main-pool", chatgptAccountId: "acct-keyring-new" });
+    expect(isMainQuotaWriterLive(old.writer)).toBe(false);
+    expect(context.kind === "main-pool" && context.mainQuotaWriter).toEqual(captureMainQuotaWriter("acct-keyring-new"));
+    if (context.kind === "main-pool") {
+      setAccountQuotaFromParsed("__main__", { weeklyPercent: 7 }, undefined, context.mainQuotaWriter);
+    }
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(7);
+  });
+
+  test("an incoming Direct bearer cannot replace the owned quota identity", async () => {
+    const old = oldAccount();
+    const incoming = fakeChatGptJwt("acct-caller-only");
+    const { calls, codexAuthStatus } = answer(incoming);
+    await expect(resolveCodexAuthContext(new Headers({ authorization: `Bearer ${incoming}` }), config(), "direct", {
+      nativeMainRefreshDependencies: { codexAuthStatus }, beginCodexAccountSelection: selection,
+    })).resolves.toMatchObject({ kind: "main", accountId: null });
+    expect(calls).toEqual([]);
+    expect(isMainQuotaWriterLive(old.writer)).toBe(true);
+    expect(matchesMainQuotaCredential(incoming, "acct-caller-only")).toBe(false);
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+  });
+
+  test("a late RPC cannot overwrite a newer native identity generation", async () => {
+    const old = oldAccount();
+    await expect(getValidMainAccountToken({ codexAuthStatus: async () => {
+      applyConfirmedMainCodexAccountTransition("acct-main", "acct-concurrent");
+      return { authMethod: "chatgpt", authToken: fakeChatGptJwt("acct-keyring-new"), requiresOpenaiAuth: true };
+    } })).rejects.toBeInstanceOf(MainAuthJsonChangedDuringRefreshError);
+    expect(isMainQuotaWriterLive(old.writer)).toBe(false);
+    expect(captureMainQuotaWriter("acct-concurrent")).toBeDefined();
+    expect(captureMainQuotaWriter("acct-keyring-new")).toBeUndefined();
+  });
+
+  test.each(["unavailable", "missing-id", "conflicting-id", "cancelled", "home-changed"])("uncertain keyring evidence preserves old quota policy (%s)", async scenario => {
+    const old = oldAccount();
+    markAccountNeedsReauth("__main__");
+    const controller = new AbortController();
+    const otherHome = join(root, "other-home");
+    mkdirSync(otherHome);
+    const token = scenario === "missing-id" ? "opaque-fixture-token" : scenario === "conflicting-id"
+      ? fakeChatGptJwt("acct-keyring-new", { chatgpt_account_id: "acct-conflict" })
+      : fakeChatGptJwt("acct-keyring-new");
+    await getValidMainAccountToken({ signal: controller.signal, codexAuthStatus: async () => {
+      if (scenario === "unavailable") throw new CodexAuthStatusError("fixture unavailable");
+      if (scenario === "cancelled") controller.abort(new Error("fixture cancelled"));
+      if (scenario === "home-changed") process.env.CODEX_HOME = otherHome;
+      return { authMethod: "chatgpt", authToken: token, requiresOpenaiAuth: true };
+    } }).catch(() => null);
+    process.env.CODEX_HOME = home;
+    expect(isMainQuotaWriterLive(old.writer)).toBe(true);
+    expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
+    expect(isAccountNeedsReauth("__main__")).toBe(true);
+  });
+
+  test("a manual main pause prevents discovery and remains configured", async () => {
+    oldAccount();
+    const cfg = { ...config(), pausedCodexAccountIds: ["__main__"] };
+    const { calls, codexAuthStatus } = answer(fakeChatGptJwt("acct-keyring-new"));
+    await expect(resolveCodexAuthContext(new Headers(), cfg, "pool", {
+      nativeMainRefreshDependencies: { codexAuthStatus }, beginCodexAccountSelection: selection,
+      primeCodexPoolQuotas: async () => {},
+    })).rejects.toBeDefined();
+    expect(calls).toEqual([]);
+    expect(cfg.pausedCodexAccountIds).toEqual(["__main__"]);
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(99);
   });
 });

@@ -1,4 +1,4 @@
-import { observeMainDecisionCredentialUsable } from "./main-account-cache";
+import { captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive, observeMainDecisionCredentialUsable, type MainQuotaWriter } from "./main-account-cache";
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createHash } from "node:crypto";
@@ -51,6 +51,13 @@ let jwtPlanAttempted = false;
 const MAIN_TOKEN_REFRESH_SKEW_MS = 60_000;
 let beforeMainAuthJsonRenameForTests: (() => void) | null = null;
 let codexOwnedMainCredential: { home: string; expiresAt: number; refreshRefused?: true } | null = null;
+type MainAccountToken = Readonly<{ accessToken: string; chatgptAccountId: string }>;
+const codexOwnedQuotaWriters = new WeakMap<MainAccountToken, MainQuotaWriter>();
+
+/** Exact RPC result provenance; copied/request-created tokens cannot recapture native quota ownership. */
+export function mainAccountTokenQuotaWriter(token: MainAccountToken): MainQuotaWriter | undefined {
+  return codexOwnedQuotaWriters.get(token);
+}
 
 function forgetCodexOwnedMainUsability(home: string): void {
   if (codexOwnedMainCredential?.home === home && !codexOwnedMainCredential.refreshRefused) codexOwnedMainCredential = null;
@@ -647,7 +654,10 @@ async function refreshThroughCodex(
   codexHome: string,
   refresh = true,
 ): Promise<{ accessToken: string; chatgptAccountId: string }> {
+  // Deferred to keep lifecycle's cache/plan cleanup off this module's load-time import cycle.
+  const { observeCodexOwnedMainAccountCredential } = await import("./account-lifecycle");
   if (resolveCodexHomeDir() !== codexHome) throw new MainAuthJsonChangedDuringRefreshError();
+  const identityGeneration = captureMainAccountIdentityGeneration();
   // This observation is only selection evidence. A later request must ask Codex again:
   // JWT expiry cannot detect logout or an external keyring account switch.
   forgetCodexOwnedMainUsability(codexHome);
@@ -665,7 +675,9 @@ async function refreshThroughCodex(
     noteNativeMainRefresh("codex-unavailable");
     throw new MainAccountTokenRefreshError("transient", { cause });
   }
-  if (resolveCodexHomeDir() !== codexHome) throw new MainAuthJsonChangedDuringRefreshError();
+  if (resolveCodexHomeDir() !== codexHome || !isMainAccountIdentityGenerationLive(identityGeneration)) {
+    throw new MainAuthJsonChangedDuringRefreshError();
+  }
   if (status.authMethod === "chatgpt" && !status.authToken) {
     // The only permanent-failure signal the response carries: Codex withholds the token once
     // its refresh was refused for good. The specific OAuth code is not on the wire.
@@ -686,12 +698,14 @@ async function refreshThroughCodex(
     throw new MainAccountTokenRefreshError("transient");
   }
   noteNativeMainRefresh("codex-ok");
-  if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   if (dependencies.signal?.aborted) throw dependencies.signal.reason;
-  const result = {
+  const result = Object.freeze({
     accessToken: token,
     chatgptAccountId: extractAccountId(undefined, token) ?? locked?.chatgptAccountId ?? "",
-  };
+  });
+  const writer = observeCodexOwnedMainAccountCredential(token);
+  if (writer) codexOwnedQuotaWriters.set(result, writer);
+  if (writer && dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   const exp = decodeJwtPayload(token)?.exp;
   codexOwnedMainCredential = { home: codexHome, expiresAt: typeof exp === "number" ? exp * 1000 : Infinity };
   return result;

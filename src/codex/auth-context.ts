@@ -28,6 +28,7 @@ import {
   getMainAccountToken,
   getMainAccountCredentialStatus,
   getValidMainAccountToken,
+  mainAccountTokenQuotaWriter,
   isMainAccountTokenLive,
   type NativeMainRefreshDependencies,
 } from "./main-account";
@@ -901,6 +902,10 @@ function observeSelectedMainCredential(
   token: { accessToken: string; chatgptAccountId: string },
   writer: MainQuotaWriter | undefined,
 ): MainQuotaWriter | undefined {
+  // A claimed RPC can observe a replacement identity while the caller awaits it. Only that
+  // exact result carries the replacement writer; stale results keep their stale fence.
+  const ownedWriter = mainAccountTokenQuotaWriter(token);
+  if (ownedWriter) return ownedWriter;
   if (!writer) return undefined;
   // Carry an explicitly stale writer through to quota's rejection fence; turning it into an
   // untagged write would instead invalidate the replacement account's trusted observation.
@@ -1246,6 +1251,14 @@ async function resolveCodexAuthContextUnannotated(
         throw new CodexMainProfileDrainingError();
       }
       if (isMainAccountHardLockEnabled(policy)) reconcileMainCodexAccountRuntimeState();
+      if (!getMainAccountToken()) {
+        try {
+          await (options.getValidMainAccountToken ?? getValidMainAccountToken)({
+            signal: options.signal, ...(options.nativeMainRefreshDependencies ?? {}),
+          });
+        } catch (cause) { throw new CodexAuthContextError(MAIN_CODEX_ACCOUNT_ID, cause); }
+        options.signal?.throwIfAborted();
+      }
       assertMainAccountPolicy(policy);
       if (options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)) {
         const entitled = entitledCodexAccountIdsForModel(
@@ -1347,14 +1360,14 @@ async function resolveCodexAuthContextUnannotated(
       && callerOwnsAnyCooledPoolSubscription(headers, config, quotaScope),
   });
   try {
-    // A keyring-only login has no auth.json to make synchronous Pool candidacy live.
-    // Discover it while this selector still fences profile switching. The selected
-    // account is independently revalidated before dispatch, just like a file-backed one.
+    // A fileless login can change identity even while its previous expiry observation is usable.
+    // Discover it under the selector before applying identity-bound quota or hard-lock policy;
+    // the selected credential is independently revalidated before dispatch.
     if (selectionAdmission && !nativeMainReadsForbidden && !options.isMainAccountTokenLive
       && (fixedAccountId === undefined || fixedAccountId === MAIN_CODEX_ACCOUNT_ID)
       && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
       && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
-      && !isMainAccountHardLocked(policy) && !getMainAccountCredentialStatus().usable) {
+      && (!getMainAccountToken() || !getMainAccountCredentialStatus().usable)) {
       try {
         await (options.getValidMainAccountToken ?? getValidMainAccountToken)({
           signal: options.signal, ...(options.nativeMainRefreshDependencies ?? {}),
