@@ -14,7 +14,7 @@ import { modelInList, type OcxProviderConfig } from "../../types";
 import { mapReasoningEffort, modelRecordValue } from "../../reasoning-effort";
 import { resolveReasoningCapabilities } from "../../providers/reasoning-capabilities";
 import { chatParallelToolCallsWireValue } from "./parallel-tool-calls";
-import { applyExplicitChatReasoningWirePolicy } from "./reasoning-wire";
+import { applyExplicitChatReasoningWirePolicy, declaresIndependentChatReasoningControls } from "./reasoning-wire";
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "../reasoning-controls";
 import { planNativeChatReasoningReplay } from "./reasoning-replay";
 import type { OcxReasoningReplayScopeRef } from "../../types";
@@ -90,6 +90,7 @@ export function buildOpenAIChatPassthroughRequest(
     Array.isArray(rawBody.tools) && rawBody.tools.length > 0, maxSerializedBytes);
   if (protectGlmSummaryBudget(body, provider.baseUrl, body.reasoning_effort)) body.reasoning_effort = "low";
   const toggleWire = declaresThinkingToggleWire(provider, modelId);
+  const independentControls = declaresIndependentChatReasoningControls(provider, modelId);
   const rawEfforts = modelRecordValue(provider.modelReasoningEfforts, modelId) ?? provider.reasoningEfforts;
   const reasoningDisabled = modelInList(provider.noReasoningModels, modelId)
     || (!toggleWire && rawEfforts?.length === 0) || reasoningControlsAreUnsupported(provider, modelId);
@@ -108,14 +109,14 @@ export function buildOpenAIChatPassthroughRequest(
     hasTools,
     thinkingEnabled: explicitThinkingEnabled,
     requestedEffort,
-    wireEffort: toggleWire ? mapReasoningEffort(provider, modelId, requestedEffort) : requestedEffort,
+    wireEffort: toggleWire && independentControls ? mapReasoningEffort(provider, modelId, requestedEffort) : requestedEffort,
     reasoningDisabled,
     body,
   });
   let reasoningLog = explicitReasoning.handled ? explicitReasoning.reasoningLog : undefined;
   // A native caller's own thinking object is already in the upstream wire shape. Forward it only
   // on a provider-declared toggle wire, below an explicit reasoning.enabled but above a default.
-  if (!reasoningDisabled && toggleWire
+  if (!reasoningDisabled && toggleWire && independentControls
     && resolveReasoningCapabilities(provider, modelId).supportsThinkingToggle !== false
     && explicitThinkingEnabled === undefined
     && rawBody.thinking !== undefined) {

@@ -908,7 +908,7 @@ export interface OcxProviderConfig {
    * `reasoningEffortMap`, resolved per model first.
    */
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
-  /** OpenAI-compatible gateway reasoning wire shape. Default sends `reasoning_effort`. */
+  /** Chat gateway reasoning object; also opts custom Responses wires into `reasoning.enabled`. */
   reasoningWireFormat?: "gateway-object";
   /**
    * Model ids that do NOT support a reasoning/thinking parameter. The openai-chat adapter drops

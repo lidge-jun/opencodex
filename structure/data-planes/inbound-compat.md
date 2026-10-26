@@ -146,7 +146,7 @@ ineligible for native passthrough so its signature or redacted ciphertext cannot
 another provider; the bridge keeps only the plaintext projection. Other provider formats retain their native wire shape.
 The native passthrough applies the [independent reasoning capability contract](../providers-and-adapters.md): explicit false declarations constrain their respective controls, and an empty strength ladder removes caller `reasoning_effort` without disabling a declared thinking switch. Unknown axes remain unclassified. The two Chat builders share the explicit wire policy after provider resolution:
 `reasoningWireFormat: "gateway-object"` projects the configured object shape, and a listed
-tool-bearing model omits reasoning effort on both paths. On a declared toggle wire, explicit `reasoning.enabled` wins, then caller raw `thinking`, then aliases/defaults; unknown or adaptive raw thinking shapes remain intact. With no applicable declaration, native raw reasoning forwarding stays unchanged. This guard does not alter the separate raw service-tier contract.
+tool-bearing model omits reasoning effort on both paths. For explicitly declared independent controls on a toggle wire, `reasoning.enabled` wins, then caller raw `thinking`, then aliases/defaults; unknown or adaptive raw thinking shapes remain intact. With no applicable declaration, native raw reasoning forwarding stays unchanged. This guard does not alter the separate raw service-tier contract.
 
 On the response side, the upstream `service_tier` echo (xAI Priority Processing, OpenAI fast
 tier) relays to the Chat Completions caller on every delivery shape: the non-streaming body

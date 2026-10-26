@@ -34,7 +34,7 @@ import {
 } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
-import { REASONING_CAPABILITY_FIELDS } from "../../providers/reasoning-capabilities";
+import { declaredModelCapabilities, REASONING_CAPABILITY_FIELDS } from "../../providers/reasoning-capabilities";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
@@ -314,10 +314,11 @@ export function applyProviderConfigHints(
     ?? (azureMetadata?.input ? modelInputModalities({ id: model.id, input_modalities: azureMetadata.input }, undefined) : undefined);
   const inputModalities = resolvedModalities ? [...resolvedModalities] : undefined;
   const reasoningSource = reasoningHintSources.get(model) ?? model;
+  const declaredCapabilities = declaredModelCapabilities(prov.modelCapabilities, model.id);
   const reasoningCapabilities: Partial<CatalogModel> = {};
   for (const field of REASONING_CAPABILITY_FIELDS) {
     const value = modelInList(prov.noReasoningModels, model.id) ? staticPolicy.model[field]
-      : prov.modelCapabilities?.[model.id]?.[field] ?? reasoningSource[field] ?? staticPolicy.model[field];
+      : declaredCapabilities?.[field] ?? reasoningSource[field] ?? staticPolicy.model[field];
     if (typeof value === "boolean") reasoningCapabilities[field] = value;
   }
   if (reasoningCapabilities.supportsReasoning === false) {

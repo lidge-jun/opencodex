@@ -327,8 +327,8 @@ export function stripDisabledVerbosity(
 
 /**
  * `reasoning.enabled` is an OCX inbound compatibility extension, not an OpenAI Responses
- * parameter. Call this at the OpenAI-operated final wire boundary so translated clients retain
- * the choice until destination selection while routed Responses adapters can receive it.
+ * parameter. Strip it at Responses egress unless a custom destination explicitly declares
+ * the gateway-object wire; thinking capability alone does not declare a wire format.
  */
 export function stripInternalReasoningEnabled(body: unknown): unknown {
   if (!isPlainObject(body) || !isPlainObject(body.reasoning) || !Object.hasOwn(body.reasoning, "enabled")) {

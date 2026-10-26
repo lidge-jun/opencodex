@@ -516,7 +516,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);
       }
       let wireBody = applyGithubCopilotContextTier(finalBody, provider, parsed.modelId, incoming.providerName);
-      if (isOpenAiOperatedResponsesDestination(provider)) {
+      if (isOpenAiOperatedResponsesDestination(provider) || provider.reasoningWireFormat !== "gateway-object") {
         wireBody = stripInternalReasoningEnabled(wireBody);
       }
       const body = JSON.stringify(wireBody);

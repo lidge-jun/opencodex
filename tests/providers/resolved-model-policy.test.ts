@@ -904,6 +904,30 @@ describe("independent reasoning policy", () => {
     expect(entry.modelCapabilities?.[id]?.supportsThinkingToggle).toBe(true);
     expect(provider.modelCapabilities?.[id.toUpperCase()]).toEqual({ supportsThinkingToggle: false, defaultThinkingEnabled: false });
   });
+  test("case-folded capability declarations govern discovered rows without changing unknown legacy evidence", () => {
+    const provider: OcxProviderConfig = {
+      adapter: entry.adapter,
+      baseUrl: entry.baseUrl,
+      modelCapabilities: { M: { supportsReasoning: false } },
+    };
+    const discovered = {
+      provider: "synthetic",
+      id: "m",
+      supportsReasoning: true,
+      supportsThinkingToggle: true,
+      supportsReasoningEffort: true,
+      reasoningEfforts: ["low", "high"],
+    };
+    const policy = resolveModelPolicy({ providerName: "synthetic", modelId: "m", provider, registryEntry: entry, transportMatchedRegistry: true });
+    expect(policy.model).toMatchObject({ supportsReasoning: false, supportsThinkingToggle: false, supportsReasoningEffort: false });
+    expect(applyProviderConfigHints("synthetic", provider, discovered)).toMatchObject({
+      supportsReasoning: false,
+      supportsThinkingToggle: false,
+      supportsReasoningEffort: false,
+      reasoningEfforts: [],
+    });
+    expect(applyProviderConfigHints("synthetic", { adapter: entry.adapter, baseUrl: entry.baseUrl }, discovered)).toMatchObject(discovered);
+  });
   test.each(["operator", "registry"])("%s noReasoningModels remains authoritative over every independent declaration", source => {
     const provider: OcxProviderConfig = { adapter: entry.adapter, baseUrl: entry.baseUrl,
       modelCapabilities: { [id]: { supportsThinkingToggle: true } },

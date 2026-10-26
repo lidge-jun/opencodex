@@ -1,11 +1,10 @@
 import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
 import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary-budget";
 import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
-import { applyExplicitChatReasoningWirePolicy } from "./openai-chat/reasoning-wire";
+import { applyExplicitChatReasoningWirePolicy, declaresIndependentChatReasoningEffort } from "./openai-chat/reasoning-wire";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { modelInList, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage } from "../types";
 import { mapReasoningEffort } from "../reasoning-effort";
-import { resolveReasoningCapabilities } from "../providers/reasoning-capabilities";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { isDebugEnabled } from "../lib/debug-settings";
@@ -173,7 +172,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
                 wireValue: budget,
               };
             }
-          } else if (modelInList(provider.thinkingToggleModels, parsed.modelId) && resolveReasoningCapabilities(provider, parsed.modelId).supportsReasoningEffort !== true) {
+          } else if (modelInList(provider.thinkingToggleModels, parsed.modelId) && !declaresIndependentChatReasoningEffort(provider, parsed.modelId)) {
             if (reasoningEffort === "enabled" || reasoningEffort === "disabled" || reasoningEffort === "adaptive") {
               body.thinking = { type: reasoningEffort };
               reasoningLog = {

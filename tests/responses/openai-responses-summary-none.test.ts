@@ -42,7 +42,7 @@ describe("Responses summary:none wire marker", () => {
     }
   });
 
-  test("strips only the internal thinking toggle for OpenAI-operated Responses wires", () => {
+  test("strips the internal thinking toggle unless a custom Responses wire declares it", () => {
     const bodies = [
       { model: "gpt-6-astra", input: "hi", reasoning: { enabled: false, effort: "high", summary: "detailed" } },
       chatCompletionsToResponsesBody({
@@ -69,10 +69,19 @@ describe("Responses summary:none wire marker", () => {
     }
 
     const routed = { adapter: "openai-responses", baseUrl: "https://compat.example.test/v1", authMode: "key" as const };
-    for (const body of bodies) expect(outboundReasoning(routed, body)).toEqual(body.reasoning);
+    for (const body of bodies) {
+      expect(outboundReasoning(routed, body)).toEqual(
+        Object.fromEntries(Object.entries(body.reasoning as Record<string, unknown>).filter(([key]) => key !== "enabled")),
+      );
+      expect(outboundReasoning({ ...routed, reasoningWireFormat: "gateway-object" }, body)).toEqual(body.reasoning);
+    }
     const toggleOnly = { model: "gpt-6-astra", input: "hi", reasoning: { enabled: false } };
     for (const target of targets) expect(outboundReasoning(target, toggleOnly)).toBeUndefined();
     expect(toggleOnly.reasoning).toEqual({ enabled: false });
-    expect(outboundReasoning(routed, toggleOnly)).toEqual({ enabled: false });
+    expect(outboundReasoning(routed, toggleOnly)).toBeUndefined();
+    expect(outboundReasoning({ ...routed, reasoningWireFormat: "gateway-object" }, toggleOnly)).toEqual({ enabled: false });
+    for (const target of targets) {
+      expect(outboundReasoning({ ...target, reasoningWireFormat: "gateway-object" }, toggleOnly)).toBeUndefined();
+    }
   });
 });

@@ -298,27 +298,121 @@ describe("toggle-only Chat reasoning capability", () => {
       expect(body.reasoning_effort).toBe("low");
     }
   });
+
+  test.each([
+    [undefined, false], [undefined, true],
+    ["gateway-object", false], ["gateway-object", true],
+  ] as const)("dual controls retain %s effort policy with tools=%s", (reasoningWireFormat, hasTools) => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      reasoningEfforts: ["low", "high"],
+      modelCapabilities: { [toggleModel]: {
+        supportsThinkingToggle: true, supportsReasoningEffort: true, defaultThinkingEnabled: true,
+      } },
+      omitReasoningEffortWithToolsModels: [toggleModel],
+    };
+    for (const thinkingEnabled of [undefined, false, true]) {
+      const bodies = finalToggleBodies({
+        ...request("high"), ...(hasTools ? { tools: [tool] } : {}),
+      }, target, toggleModel, thinkingEnabled);
+      for (const body of Object.values(bodies)) {
+        expect(body.thinking).toEqual({ type: thinkingEnabled === false ? "disabled" : "enabled" });
+        expect(body.reasoning_effort).toBe(!hasTools && !reasoningWireFormat ? "high" : undefined);
+        expect(body.reasoning).toEqual(!hasTools && reasoningWireFormat ? { enabled: thinkingEnabled !== false, effort: "high" } : undefined);
+        if (hasTools) expect(body.tools).toEqual([tool]);
+      }
+    }
+  });
+
+  test.each([
+    [false, "high"], [true, "high"], [false, "none"], [true, "none"],
+  ] as const)("dual gateway enablement preserves explicit %s with effort %s", (thinkingEnabled, effort) => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat: "gateway-object",
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort: true } },
+      reasoningEfforts: ["low", "high"],
+    };
+    for (const body of Object.values(finalToggleBodies(request(effort), target, toggleModel, thinkingEnabled))) {
+      expect(body.thinking).toEqual({ type: thinkingEnabled ? "enabled" : "disabled" });
+      expect(body.reasoning).toEqual({ enabled: thinkingEnabled, ...(effort === "high" ? { effort } : {}) });
+      expect(body.reasoning_effort).toBeUndefined();
+    }
+  });
+
+  test.each([false, true])("mapped independent toggle survives tool omission with effort support=%s", supportsReasoningEffort => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider,
+      modelCapabilities: { [toggleModel]: { supportsThinkingToggle: true, supportsReasoningEffort } },
+      modelReasoningEffortMap: { [toggleModel]: { high: "enabled" } },
+      omitReasoningEffortWithToolsModels: [toggleModel],
+    };
+    for (const thinkingEnabled of [false, true]) {
+      for (const body of Object.values(finalToggleBodies({
+        ...request("high"), tools: [tool],
+      }, target, toggleModel, thinkingEnabled))) {
+        expect(body.thinking).toEqual({ type: thinkingEnabled ? "enabled" : "disabled" });
+        expect(body.reasoning_effort).toBeUndefined();
+        expect(body.reasoning).toBeUndefined();
+        expect(body.tools).toEqual([tool]);
+      }
+    }
+  });
 });
 
 describe("legacy mapped thinking discriminator wires", () => {
+  test.each([undefined, "gateway-object"] as const)("legacy toggle selection stays unchanged with %s wire", reasoningWireFormat => {
+    const target: OcxProviderConfig = {
+      ...toggleProvider, reasoningWireFormat,
+      modelCapabilities: undefined,
+      reasoningEfforts: ["low", "high"],
+    };
+    const raw = { messages: [{ role: "user", content: "think" }], reasoning_effort: "high" };
+    const bodies = finalToggleBodies(raw, target);
+    expect(bodies.translated.reasoning_effort).toBeUndefined();
+    expect(bodies.native.reasoning_effort).toBe(reasoningWireFormat ? undefined : "high");
+    for (const body of Object.values(bodies)) {
+      expect(body.thinking).toBeUndefined();
+      expect(body.reasoning).toEqual(reasoningWireFormat ? { enabled: true, effort: "high" } : undefined);
+    }
+  });
+
   test.each([
     ["zhipu-bigmodel", "glm-4.6", "enabled"],
     ["opencode-go", "mimo-v2.5", "enabled"],
     ["volcengine", "doubao-seed-2-1-pro-260628", "enabled"],
     ["minimax", "MiniMax-M3", "adaptive"],
-  ] as const)("%s/%s emits %s on the declared wire", (providerId, modelId, type) => {
+  ] as const)("%s/%s translates %s without remapping the native wire", (providerId, modelId, type) => {
     const entry = getProviderRegistryEntry(providerId);
     if (!entry) throw new Error(`Missing registry seed ${providerId}`);
     const target = { ...providerConfigSeed(entry), apiKey: "sk-test" };
     const raw = { model: modelId, messages: [{ role: "user", content: "think" }], reasoning_effort: "high" };
     const parsed = parseRequest(chatCompletionsToResponsesBody(raw));
-    const bodies = [
-      JSON.parse(createOpenAIChatAdapter(target).buildRequest(parsed).body) as Record<string, unknown>,
-      JSON.parse(buildOpenAIChatPassthroughRequest(target, raw, modelId, false).body) as Record<string, unknown>,
-    ];
-    for (const body of bodies) {
-      expect(body.thinking).toEqual({ type });
+    const translated = JSON.parse(createOpenAIChatAdapter(target).buildRequest(parsed).body) as Record<string, unknown>;
+    const native = JSON.parse(buildOpenAIChatPassthroughRequest(target, raw, modelId, false).body) as Record<string, unknown>;
+    expect(translated.thinking).toEqual({ type });
+    expect(translated.reasoning_effort).toBeUndefined();
+    expect(native.thinking).toBeUndefined();
+    expect(native.reasoning_effort).toBe("high");
+  });
+
+  test.each([
+    ["zhipu-bigmodel", "glm-4.6"],
+    ["opencode-go", "mimo-v2.5"],
+  ] as const)("%s/%s retains legacy tool omission before toggle mapping", (providerId, modelId) => {
+    const entry = getProviderRegistryEntry(providerId);
+    if (!entry) throw new Error(`Missing registry seed ${providerId}`);
+    const target = {
+      ...providerConfigSeed(entry), apiKey: "sk-test",
+      omitReasoningEffortWithToolsModels: [modelId],
+    };
+    const bodies = finalToggleBodies({
+      messages: [{ role: "user", content: "think" }], reasoning_effort: "high", tools: [tool],
+    }, target, modelId);
+    for (const body of Object.values(bodies)) {
+      expect(body.tools).toEqual([tool]);
+      expect(body.thinking).toBeUndefined();
       expect(body.reasoning_effort).toBeUndefined();
+      expect(body.reasoning).toBeUndefined();
     }
   });
 
