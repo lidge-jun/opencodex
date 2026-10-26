@@ -445,6 +445,14 @@ function capabilityRecord(value: unknown): value is Record<string, unknown> {
     && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 
+/** Provider-wide fallback; the same modality vocabulary as exact model declarations. */
+export function providerInputModalitiesConfigError(value: unknown): string | null {
+  if (value === undefined) return null;
+  return Array.isArray(value) && value.length > 0
+    && value.every(item => typeof item === "string" && ["text", "image", "audio", "video"].includes(item))
+    ? null : "inputModalities must be a nonempty array of text, image, audio or video";
+}
+
 /** Strict per-model context-tier values; PATCH accepts null to clear the entire map. */
 export function contextTierRecordConfigError(value: unknown, allowClear = false): string | null {
   if (value === undefined || (allowClear && value === null)) return null;

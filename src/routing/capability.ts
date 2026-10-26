@@ -182,7 +182,8 @@ export function candidateCapabilityEvidence(
     ? (nativeOpenAiContextWindow(modelId, nativeContextLimits(config)) ?? rawContextWindow)
     : rawContextWindow;
 
-  // `noVisionModels` is checked before the modality chain because that is the order
+  // Exact capability declarations precede legacy vision hints, matching runtime eligibility.
+  // `noVisionModels` is checked before the remaining modality chain because that is the order
   // `isModelTextOnly` uses: it matches the no-vision list and returns true before it
   // ever reads `modelInputModalities` (`src/vision/index.ts:32`). So a `gpt-oss`
   // no-vision entry beats an exact `gpt-oss:120b` entry that lists "image", and
@@ -191,7 +192,9 @@ export function candidateCapabilityEvidence(
   // #2086: routing *acts* on this evidence, so it would select the candidate for image
   // work that execution then rejects.
   const noVision = modelInList(provider?.noVisionModels, modelId);
-  const modalities = noVision
+  const explicitModalities = Object.hasOwn(provider?.modelCapabilities ?? {}, modelId)
+    ? provider?.modelCapabilities?.[modelId]?.inputModalities : undefined;
+  const modalities = explicitModalities?.length ? explicitModalities : noVision
     ? ["text"]
     : (modelRecordValue(provider?.modelInputModalities, modelId)
       ?? modelRecordValue(registryEntry?.modelInputModalities, modelId)

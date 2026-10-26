@@ -572,7 +572,7 @@ Pairing-grant source limiting applies only to invalid guesses from an allowed br
 
 ## Durable provider PATCH
 
-`PUT /api/combos` shares this transaction for combo changes, rename references, disabled selectors and request-only Vision Sidecar enrollment; see `tests/routing/combo-vision-enrollment.test.ts`.
+Provider editor snapshots and management writes validate provider-wide `inputModalities` through `providerManagementConfigError` in `src/server/auth-cors.ts`, sharing the [config modality contract](config.md#explicit-per-model-capability-declarations). Malformed declarations are refused before persistence or catalog refresh; the field remains editor-owned rather than a credential or derived DTO field. `PUT /api/combos` shares this transaction for combo changes, rename references, disabled selectors and request-only Vision Sidecar enrollment; see `tests/routing/combo-vision-enrollment.test.ts`.
 
 `src/server/management/provider-routes.ts` commits every provider PATCH variant through
 `src/server/management/provider-patch-transaction.ts`, including standalone default-provider
