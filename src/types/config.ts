@@ -571,6 +571,7 @@ export interface OcxConfig {
   emptyCompletionRetry?: boolean;
   /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */
   dropCodexSafetyBuffering?: boolean;
+  completeOnMaxOutputTokens?: boolean;
   /**
    * Whether a login may open a browser on the machine running the proxy.
    *

@@ -35,6 +35,7 @@ import {
 } from "../responses/citation-markers";
 import { declaresCodeModeExec, normalizeDeclaredToolName } from "../types";
 import { appendSafeWebSearchSource, safeWebSearchSources } from "../web-search/sources";
+import { closeOpenMarkdownBlocks } from "../responses/markdown-block-repair";
 import {
   isTranslatorBudgetExceededError,
   releaseTranslatedEvent,
@@ -117,6 +118,7 @@ function buildResponseJSONWithBudget(
      * so a block that fit live delivery could otherwise overflow here and lose the cache write.
      */
     omitHiddenReasoningEnvelope?: boolean;
+    completeOnMaxOutputTokens?: boolean;
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;
@@ -619,30 +621,47 @@ function buildResponseJSONWithBudget(
     batchKiroRedacted = undefined;
     batchKiroRedactedBytes = 0;
   }
+  const gracefulComplete = Boolean(options?.completeOnMaxOutputTokens)
+    && (stopReason === "max_tokens" || (incompleteEvent && (truncationReasonFor(incompleteEvent.reason) === "max_output_tokens" || incompleteEvent.reason === "max_output_tokens")));
+
   // A truncated turn must never be installed as replacement history: emit the
   // compaction item only when the turn actually completed (#422).
   if (
     options?.compaction
     && !errorEvent
-    && !incompleteEvent
+    && (!incompleteEvent || gracefulComplete)
     // A stream that stopped without any terminal did not complete either. The original guard
     // could only see explicit failure events, so an adapter EOF slipped past it and installed a
     // truncated summary as replacement history — the exact #422 hazard, reached by a route that
     // did not exist when the guard was written.
     && sawTerminal
-    && !isTruncatedStopReason(rawStopReason)
+    && (!isTruncatedStopReason(rawStopReason) || gracefulComplete)
   ) {
-   const item = {
+    const summary = joinChunks(batchCompaction);
+    const fallbackSummary = summary.trim().length > 0 ? summary : "[earlier conversation was compacted]";
+    const item = {
       type: "compaction", id: `cmp_${uuid()}`,
-      encrypted_content: compactionEncryptedContent ?? (options?.compactionRetention?.encode(joinChunks(batchCompaction)) ?? encodeCompactionSummary(joinChunks(batchCompaction))),
+      encrypted_content: compactionEncryptedContent ?? (options?.compactionRetention?.encode(fallbackSummary) ?? encodeCompactionSummary(fallbackSummary)),
     };
     pushOutput(item, compactionEncryptedContent ? 0 : batchCompaction.bytes);
+  }
+
+  if (gracefulComplete) {
+    for (const item of output) {
+      if (typeof item === "object" && item !== null && (item as any).type === "message" && Array.isArray((item as any).content)) {
+        for (const part of (item as any).content) {
+          if (typeof part === "object" && part !== null && part.type === "output_text" && typeof part.text === "string") {
+            part.text = closeOpenMarkdownBlocks(part.text);
+          }
+        }
+      }
+    }
   }
 
   const failure = errorEvent ? adapterFailureFromEvent(errorEvent) : undefined;
   const status = errorEvent
     ? "failed"
-    : incompleteEvent || stopReason === "max_tokens" || stopReason === "content_filter"
+    : ((incompleteEvent || stopReason === "max_tokens" || stopReason === "content_filter") && !gracefulComplete)
       ? "incomplete"
       : sawTerminal
         ? "completed"
@@ -662,13 +681,13 @@ function buildResponseJSONWithBudget(
     ...(failure && isCyberPolicyCode(failure.error.code)
       ? { retryable: false }
       : errorEvent?.retryable !== undefined ? { retryable: errorEvent.retryable } : {}),
-    ...(incompleteEvent ? {
+    ...(!gracefulComplete && incompleteEvent ? {
       incomplete_details: {
         reason: truncationReasonFor(incompleteEvent.reason) ?? incompleteEvent.reason,
         ...(incompleteEvent.message ? { message: incompleteEvent.message } : {}),
         ...(incompleteEvent.retryable !== undefined ? { retryable: incompleteEvent.retryable } : {}),
       },
-    } : stopReason === "max_tokens" ? {
+    } : (!gracefulComplete && stopReason === "max_tokens") ? {
       incomplete_details: { reason: "max_output_tokens" },
     } : stopReason === "content_filter" ? {
       incomplete_details: { reason: "content_filter" },

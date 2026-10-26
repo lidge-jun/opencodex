@@ -43,6 +43,7 @@ import {
 } from "../responses/citation-markers";
 import { declaresCodeModeExec, normalizeDeclaredToolName } from "../types";
 import { appendSafeWebSearchSource, safeWebSearchSources } from "../web-search/sources";
+import { closeOpenMarkdownBlocks } from "../responses/markdown-block-repair";
 import {
   isTranslatorBudgetExceededError,
   releaseTranslatedEvent,
@@ -162,6 +163,7 @@ export function bridgeToResponsesSSE(
       setInterval: (handler: () => void, ms: number) => unknown;
       clearInterval: (id: unknown) => void;
     };
+    completeOnMaxOutputTokens?: boolean;
   },
 ): ReadableStream<Uint8Array> {
   const replayCacheScope = options?.replayCacheScope;
@@ -502,7 +504,7 @@ export function bridgeToResponsesSSE(
         return anns;
       };
 
-      const closeCurrentMessage = (inferredPhase?: OcxMessagePhase) => {
+      const closeCurrentMessage = (inferredPhase?: OcxMessagePhase, gracefulRepair?: boolean) => {
         if (!currentMsg) return;
         // Release anything the citation filter was holding for this message, then strip the
         // accumulated text: closeCurrentMessage re-sends it in output_text.done and
@@ -514,7 +516,18 @@ export function bridgeToResponsesSSE(
             content_index: 0, delta: trailing,
           });
         }
-        const messageText = stripCitationMarkers(joinChunks(currentMsg.text));
+        let messageText = stripCitationMarkers(joinChunks(currentMsg.text));
+        if (gracefulRepair) {
+          const repaired = closeOpenMarkdownBlocks(messageText);
+          if (repaired !== messageText) {
+            const delta = repaired.slice(messageText.length);
+            emit("response.output_text.delta", {
+              item_id: currentMsg.itemId, output_index: currentMsg.outputIndex,
+              content_index: 0, delta,
+            });
+            messageText = repaired;
+          }
+        }
         // Chat Completions has no message-phase field. Keep its live item provisional, then
         // classify it only when the next adapter event proves whether this text led into more
         // work or completed the turn. Explicit adapter phases always outrank this inference.
@@ -1256,17 +1269,21 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "done": {
-              if (currentMsg) closeCurrentMessage(isTruncatedStopReason(event.stopReason) ? undefined : "final_answer");
+              const isTruncated = isTruncatedStopReason(event.stopReason);
+              const truncationReason = truncationReasonFor(event.stopReason);
+              const gracefulComplete = Boolean(options?.completeOnMaxOutputTokens) && truncationReason === "max_output_tokens";
+
+              if (currentMsg) closeCurrentMessage(isTruncated && !gracefulComplete ? undefined : "final_answer", gracefulComplete);
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
               if (currentToolCall) {
-                if (isTruncatedStopReason(event.stopReason)) failCurrentToolCall();
+                if (isTruncated) failCurrentToolCall();
                 else closeCurrentToolCall();
               }
               // A search still in flight when upstream truncates never returned results, so it
               // takes the same "failed" status as the error/incomplete terminals below.
-              if (currentWebSearch) closeCurrentWebSearch(isTruncatedStopReason(event.stopReason) ? "failed" : "completed", []);
+              if (currentWebSearch) closeCurrentWebSearch(isTruncated ? "failed" : "completed", []);
               releasePendingWebSources();
               // Redacted-only turns (or hidden thinking without a trailing signature event) still
               // need their envelope-only reasoning item so the blocks replay next turn.
@@ -1274,15 +1291,14 @@ export function bridgeToResponsesSSE(
               // After every close above, so the blob lands AFTER the assistant message it belongs
               // to and the parser's backwards pairing finds it.
               flushKiroRedactedReasoning();
-              // Truncated turns must never install replacement history (#422). The buffered path
-              // has always checked this; streaming emitted the item BEFORE reading stopReason, so
-              // a max_tokens/content_filter turn shipped a half-written summary and then declared
-              // itself incomplete — the same hazard, one branch over.
-              if (options?.compaction && !isTruncatedStopReason(event.stopReason)) {
+
+              if (options?.compaction && (!isTruncated || gracefulComplete)) {
                 // Exactly one compaction item per turn; codex-rs takes the first and fatals on 0.
+                const summary = joinChunks(compaction);
+                const fallbackSummary = summary.trim().length > 0 ? summary : "[earlier conversation was compacted]";
                 const item = {
                   type: "compaction", id: `cmp_${uuid()}`,
-                  encrypted_content: event.compactionEncryptedContent ?? (options?.compactionRetention?.encode(joinChunks(compaction)) ?? encodeCompactionSummary(joinChunks(compaction))),
+                  encrypted_content: event.compactionEncryptedContent ?? (options?.compactionRetention?.encode(fallbackSummary) ?? encodeCompactionSummary(fallbackSummary)),
                 };
                 emit("response.output_item.done", { output_index: outputIndex, item });
                 retainFinishedItem(item as OutputItem, event.compactionEncryptedContent ? 0 : compaction.bytes);
@@ -1293,7 +1309,7 @@ export function bridgeToResponsesSSE(
               // Suppression and terminal status must agree: withholding the compaction item while
               // still reporting success hands codex-rs a completed response with zero compaction
               // items, which it treats as fatal.
-              if (truncationReasonFor(event.stopReason)) {
+              if (truncationReason && !gracefulComplete) {
                 // Upstream stopped before a normal completion. Surface as incomplete so the
                 // client can distinguish a truncated/filtered turn from a finished one.
                 // #1926 gap 2: bound the window in which a handed-out thought signature is
@@ -1303,7 +1319,7 @@ export function bridgeToResponsesSSE(
                   ...responseSnapshot("incomplete", finishedItems, event.endTurn),
                   usage: responsesUsage(event.usage),
                   incomplete_details: {
-                    reason: truncationReasonFor(event.stopReason) ?? "content_filter",
+                    reason: truncationReason ?? "content_filter",
                   },
                 };
                 // Cache max-output partials so previous_response_id replay can continue them;
@@ -1327,7 +1343,10 @@ export function bridgeToResponsesSSE(
               break;
             }
             case "incomplete": {
-              if (currentMsg) closeCurrentMessage();
+              const truncReason = truncationReasonFor(event.reason) ?? event.reason;
+              const gracefulComplete = Boolean(options?.completeOnMaxOutputTokens) && truncReason === "max_output_tokens";
+
+              if (currentMsg) closeCurrentMessage(gracefulComplete ? "final_answer" : undefined, gracefulComplete);
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
@@ -1337,6 +1356,29 @@ export function bridgeToResponsesSSE(
               flushHiddenReasoningEnvelope();
               options?.onUsage?.(event.usage);
               await awaitThoughtSignatureDurability();
+              if (gracefulComplete) {
+                if (options?.compaction) {
+                  const summary = joinChunks(compaction);
+                  const fallbackSummary = summary.trim().length > 0 ? summary : "[earlier conversation was compacted]";
+                  const item = {
+                    type: "compaction", id: `cmp_${uuid()}`,
+                    encrypted_content: options?.compactionRetention?.encode(fallbackSummary) ?? encodeCompactionSummary(fallbackSummary),
+                  };
+                  emit("response.output_item.done", { output_index: outputIndex, item });
+                  retainFinishedItem(item as OutputItem, compaction.bytes);
+                  outputIndex++;
+                  if (!closed && !terminated) options.compactionRetention?.commit();
+                }
+                const response = {
+                  ...responseSnapshot("completed", finishedItems, event.endTurn),
+                  usage: responsesUsage(event.usage),
+                };
+                options?.onCompletedResponse?.(response);
+                emit("response.completed", { response });
+                reportTerminal("completed");
+                terminalEvent = true;
+                break;
+              }
               const refusal = options?.terminalRefusalAsFailed ? terminalRefusalFailure(event) : undefined;
               if (refusal) {
                 emit("response.failed", {
