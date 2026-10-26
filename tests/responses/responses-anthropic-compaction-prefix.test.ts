@@ -123,6 +123,32 @@ for (const [label, modelId, choice] of [
   expect(after.system).toEqual(before.system);
 });
 
+for (const [label, modelId, functions, choice] of [
+  ["an excluded same-named function still suppresses the hosted tool", "claude-sonnet-4-6", ["read", "web_search"], { allowedTools: ["read"], mode: "auto" }],
+  ["a forced-choice downgrade still drops the hosted tool", "claude-opus-5-5", ["read", "write"], { type: "function", name: "read" }],
+] as const) test(`hosted declarations keep the ordinary tool prefix: ${label}`, async () => {
+  const provider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "key" as const, apiKey: "synthetic-test-key" };
+  const adapter = withTestTranslatorBudget(createAnthropicAdapter(provider, "short"));
+  const ordinary = { modelId, options: { toolChoice: structuredClone(choice), parallelToolCalls: false },
+    _anthropicServerTools: [{ type: "web_search_20250305", name: "web_search" }],
+    context: { tools: functions.map(name => ({ name, description: name, parameters: { type: "object", properties: {} } })),
+      systemPrompt: ["stable system"], messages: [{ role: "user", content: "earlier turn", timestamp: 1 }] } } as unknown as OcxParsedRequest;
+  const summary = structuredClone(ordinary);
+  type Args = Parameters<typeof createResponsesEffects>;
+  createResponsesEffects(
+    { options: {}, req: new Request("http://localhost/v1/responses"), config: {} } as Args[0],
+    {} as Args[1], { parsed: summary, route: { provider: {} } } as Args[2],
+    { routedCompaction: true, preserveCompactionPrefix: true } as Args[3],
+  );
+  expect(summary.options.toolChoice).toBe("none");
+  const before = JSON.parse((await adapter.buildRequest(ordinary)).body as string);
+  const after = JSON.parse((await adapter.buildRequest(summary)).body as string);
+  expect(before.tools.map((tool: { name: string }) => tool.name)).toEqual(["read"]);
+  expect(after.tools).toEqual(before.tools);
+  expect(after.system).toEqual(before.system);
+  expect(after.tool_choice).toEqual({ type: "none" });
+});
+
 for (const kind of ["text", "tool", "search", "empty", "progress", "abnormal", "eof", "truncated", "error", "incomplete"] as const) {
   test(`summary guard validates completion and releases discarded event leases: ${kind}`, async () => {
     const budget = createTranslatorBudget();
