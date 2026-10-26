@@ -183,13 +183,27 @@ table do not invalidate the routing snapshot. Desktop refreshes that tool-transp
 after launch; all other native fields, including unknown ones and selected profiles, remain bound.
 It does not claim knowledge of project-local overrides or a conversation's selected model.
 Each record that would be corrected checks routing and the assessed installed build asynchronously,
-then rechecks account identity and trial generation before emitting it. `installed-build.ts` shares
-the Windows adapter's discovery parser, coalesces concurrent probes without caching a positive
+then rechecks account identity and trial generation before emitting it. `installed-build.ts` uses a
+compatibility-only current-user package query that reads the registered manifest's actual App and
+fixed ChatGPT.exe entry in the installed package's app directory, binds its publisher/name/version to the exact official family,
+and refuses missing/reparse executable facts. It coalesces concurrent probes without caching a positive
 result across requests, and aborts/reaps its bounded child before shutdown completes. Observe and
 unchanged responses do not query Windows. Background refresh runs once a minute in Observe,
 every ten seconds during Apply, and stops probing after the safety deadline. Failed checks
 disarm Apply. Native update/routing failures are
 public diagnostic codes; originals continue to relay and no app/config repair is automatic.
+The package proof's manifest digest and canonical executable metadata stay private. An observed
+identity change or failed proof invalidates trial generation, prior exhaustion and outputs before
+another correction; a supported-version A-to-B-to-A transition cannot revive old consent. Later
+success requires a new original exhaustion and explicit account-wide consent with the unchanged
+maximum three-minute trial. Stop/start replaces the observation context, and old probe completions
+cannot affect its replacement. Identical observed registration/file metadata cannot detect every
+same-version reinstall; this is not continuous file/process or signature attestation.
+Every volume-root-to-file ancestor is checked for reparse points before manifest/file consumption
+and rechecked before proof publication. FullName is lexical and is not a held-handle canonical-path
+proof; the bounded before/after metadata walk does not exclude a transient replace-and-restore
+between observations. Such unobserved replacement remains outside this observation contract. The launcher,
+exact version allowlist, GET/SSE surface and default-off behavior remain unchanged.
 Each completed check also publishes a `buildAssessment` record on runtime status holding only
 `assessedVersion`, `observedVersion`, `verified` and `completedAt`. A status read never starts
 a probe, a runtime without a real probe omits the field, and an aborted or in-flight check never

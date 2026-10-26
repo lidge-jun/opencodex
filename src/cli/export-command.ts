@@ -94,6 +94,9 @@ export function exportModelsFromProxyRows(
     if (entry.maxTokens !== undefined) model.maxTokens = entry.maxTokens;
     if (entry.maxInputTokens !== undefined) model.maxInputTokens = entry.maxInputTokens;
     if (entry.reasoningEfforts !== undefined) model.reasoningEfforts = [...entry.reasoningEfforts];
+    if (entry.supportsThinkingToggle !== undefined) model.supportsThinkingToggle = entry.supportsThinkingToggle;
+    if (entry.supportsReasoningEffort !== undefined) model.supportsReasoningEffort = entry.supportsReasoningEffort;
+    if (entry.defaultThinkingEnabled !== undefined) model.defaultThinkingEnabled = entry.defaultThinkingEnabled;
     if (entry.defaultReasoningEffort) model.defaultReasoningEffort = entry.defaultReasoningEffort;
     if (entry.inputModalities && entry.inputModalities.length > 0) {
       model.inputModalities = [...entry.inputModalities];
@@ -169,7 +172,7 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
     const spec = EXPORT_CLIENTS[client];
     const root = await runtimeBaseUrl(deps);
     let built: { document: unknown; text: string };
-    if (client === "raycast" || client === "droid" || client === "qoder") {
+    if (client === "raycast" || client === "droid" || client === "qoder" || client === "qoder-cn" || client === "workbuddy" || client === "workbuddy-ai") {
       // The dial address alone cannot distinguish a wildcard authenticated bind
       // from loopback. Let the live server resolve its admission/listener policy;
       // saved config can differ from the process serving this request.

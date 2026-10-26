@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { isSshAlias } from "./ssh-argv";
 
 /**
@@ -117,11 +117,43 @@ export interface LoadHostCandidatesOptions {
   glob?: (pattern: string) => string[];
 }
 
+/** OpenSSH Include uses glob(..., GLOB_TILDE): parentheses and braces are literal. */
+function normalizeIncludeGlob(pattern: string): string {
+  let normalized = "";
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i]!;
+    if (char === "\\" && i + 1 < pattern.length) {
+      normalized += char + pattern[++i];
+      continue;
+    }
+    if (char === "[") {
+      let end = i + 1;
+      if (pattern[end] === "!" || pattern[end] === "^") end += 1;
+      if (pattern[end] === "]") end += 1;
+      for (; end < pattern.length; end += 1) {
+        if (pattern[end] === "\\") end += 1;
+        else if (pattern[end] === "]") break;
+      }
+      if (end < pattern.length) {
+        normalized += pattern.slice(i, end + 1);
+        i = end;
+        continue;
+      }
+      // Keep a malformed suffix intact: generated quoting must not close its class.
+      return normalized + pattern.slice(i);
+    }
+    // Character classes work on both Bun versions, without enabling 1.4.4's extglobs.
+    normalized += char === "(" ? "[(]" : char === "{" ? "[{]" : char;
+  }
+  return normalized;
+}
+
 function defaultGlob(pattern: string): string[] {
   if (!/[*?[]/.test(pattern)) return [pattern];
   const base = dirname(pattern.slice(0, pattern.search(/[*?[]/) + 1));
-  const relative = pattern.slice(base.length + 1);
-  return [...new Bun.Glob(relative).scanSync({ cwd: base, absolute: true, onlyFiles: true })].sort();
+  // Only native Windows separators become slashes; POSIX backslash escapes stay intact.
+  const relative = pattern.slice(base.length + 1).split(sep).join("/");
+  return [...new Bun.Glob(normalizeIncludeGlob(relative)).scanSync({ cwd: base, absolute: true, onlyFiles: true })].sort();
 }
 
 /**

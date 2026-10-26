@@ -1852,7 +1852,7 @@ describe("immutable update target (WP160)", () => {
     const cacheGateAt = source.indexOf("const cachePreflight = (io.cachePreflightFn ?? runNpmCachePreflight)();");
     const trayStopAt = source.indexOf("handoffWindowsTrayForUpdate(tray");
     const failAt = source.indexOf('updateJob(job, { status: "failed", error: integrity.reason });');
-    const spawnAt = source.indexOf("const result = (io.runCommandFn ?? runLoggedCommand)(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);");
+    const spawnAt = source.indexOf("const result = (io.runCommandFn ?? runLoggedCommand)(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS, updateEnv);");
     expect(gateAt).toBeGreaterThan(-1);
     expect(cacheGateAt).toBeGreaterThan(-1);
     expect(trayStopAt).toBeGreaterThan(-1);

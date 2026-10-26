@@ -1,0 +1,4 @@
+{
+  "codex-direct-credit-renewal.test.ts": "codex-integration", "codex-direct-renewal-revocation.test.ts": "codex-integration",
+  "direct-credit-renewal-ingress.test.ts": "responses"
+}

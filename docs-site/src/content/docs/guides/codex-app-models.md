@@ -320,6 +320,45 @@ advertised where it cannot be honored. An `openai-chat` destination can authoriz
 eligible model with `chatServiceTier: true`, or authorize only exact models with
 `modelSupportsServiceTier`; Responses routes do not need that extra Chat wire authorization.
 
+### Selecting Flex in Codex
+
+For a routed provider and model verified to accept `service_tier: "flex"`, explicitly
+declare Flex support alongside the existing Fast wire. Merge these fields into the
+**existing** `providers.nanogpt` entry (do not replace its URL or credentials):
+
+```json
+{
+  "modelSupportsServiceTier": { "openai/gpt-6-luna": true },
+  "fastWire": {
+    "kind": "service-tier",
+    "canonicalToWire": { "priority": "priority", "flex": "flex" },
+    "foreignCallerTiers": "verbatim"
+  }
+}
+```
+
+With an eligible `openai-responses` route, the Luna row advertises Standard,
+Fast and Flex in Codex's speed selector. For an `openai-chat` route, also set
+`chatServiceTier: true` **only if** the upstream Chat Completions endpoint supports
+caller-provided service tiers. The `fastWire` mapping is **provider-wide**:
+other service-tier-eligible routed models in the same `providers.nanogpt`
+entry can also advertise Flex when the catalog publishes them as ordinary routed
+rows, even when they are not listed in `modelSupportsServiceTier`. That map is not
+an allowlist excluding other eligible models. Combo-namespace and native-alias
+rows are **not** published with Flex. Verify Flex support for **every** eligible
+ordinary routed model;
+if only Luna supports Flex, configure it in a separate provider entry with
+no other Fast-eligible models. Do not infer Flex support from Fast alone.
+
+Keep OpenCodex's global Fast mode on **Auto** (`fastMode` unset), as forcing
+Fast or Default overrides the caller's Flex choice. After `ocx sync`, refresh the
+Codex model list. Select **Flex** from the speed selector, or use
+`/model <routed-id> --speed=flex` in Codex CLI. This is a **selectable tier**,
+not a per-model forced default: switching models does not force Flex automatically.
+The tier is forwarded as `service_tier: "flex"` and can still be declined by
+the upstream; availability, cost and latency depend on the provider. Neither
+the menu nor a request alone proves which tier was billed.
+
 ### Selecting Ultra Fast in Codex Desktop
 
 For a provider that supports `service_tier: "ultrafast"`, declare that wire mapping once.

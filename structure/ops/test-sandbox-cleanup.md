@@ -21,6 +21,35 @@ Token, SID allocation and DLL cleanup finish before the Worker posts its result 
 `USERPROFILE` and `LOCALAPPDATA` never choose this root. Runtime canonicalization/reparse checks
 and the Bun test lock's required ACL hardening remain separate admission checks.
 
+## Bun test lock generations
+
+`scripts/test-run-lock.ts` serializes updated runners' authoritative acquire, stale
+retirement, same-run/inherited member registration and owner release through
+`scripts/test-run-lock-gate.ts`. A synchronous `BEGIN IMMEDIATE` holds the gate
+through liveness checks and filesystem changes; polling and callbacks run outside.
+The gate is the permanent `${lockPath}.gate.sqlite` sibling. It is never renamed,
+unlinked or PID/mtime-reclaimed. The existing effective-user runtime/ACL boundary
+protects it; redirected and hardlinked gate paths are refused. SQLite owns its
+file descriptors, with no separate filesystem open/close of the gate inode.
+
+Acquire retries SQLite busy within its existing bounded wait. Synchronous owner
+release retries the gate in bounded slices under a ten-second elapsed deadline,
+then fails without deleting the canonical lock. Process death releases the
+gate's OS lock. The next runner applies
+the existing conservative process-start/PID/member evidence to directory state.
+Owner publication probes before exposing a new directory; failed publication
+never recursively deletes through the current canonical path. Retirement checks
+directory identity and owner contents before and after quarantine rename. An
+unexpected displaced object is preserved rather than restored over another owner.
+Only the original owner capability releases a generation; joined release is a no-op.
+
+The canonical name, version 1 owner records, member names and legacy live-PID veto
+remain compatible. This does not stop an old in-flight executable that ignores the
+gate and already decided to rename/delete a previous generation. Finish pre-update
+test runners before upgrading; metadata compatibility is not mixed-version race
+freedom. `tests/ci-workflows/test-run-lock-generation.test.ts` exercises private
+paths, delayed generation transitions, member/release ordering and gate-holder death.
+
 ## Sandbox lifecycle
 
 The batch runner's per-process home isolation and live-home/service-manager guards remain active

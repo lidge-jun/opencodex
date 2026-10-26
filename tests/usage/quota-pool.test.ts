@@ -3,7 +3,7 @@
  * a local mirror of the contract, absent-not-zero, the window-kind mapping through the existing
  * Codex header parser, and the opaque, stable `accountRef`.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { lstatSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +22,7 @@ import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from ".
 import { setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
 import { nullPaths, QuotaPoolSchema } from "../helpers/quota-pool-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 
 const NOW = Date.parse("2026-10-21T12:00:00.000Z");
 const HOUR = 3_600_000;
@@ -30,9 +31,16 @@ let home = "";
 let priorHome: string | undefined;
 let admissionPath = "";
 let xaiIds: string[] = [];
+const IDENTITY_RACE_SCRIPT = `const { ensureQuotaPoolIdentity } = await import(${JSON.stringify(join(import.meta.dir, "../../src/quota-pool/identity.ts"))});
+await Bun.sleep(Math.max(0, Number(process.env.QP_START_AT) - Date.now()));
+console.log(ensureQuotaPoolIdentity().homeId);`;
+beforeAll(async () => {
+  await warmModuleGraph({ graph: "quota-pool/identity-race", source: IDENTITY_RACE_SCRIPT });
+}, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
 function config(): OcxConfig {
   return {
+    port: 0, defaultProvider: "quiet",
     providers: {
       xai: { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "oauth" },
       "claude-cli": { adapter: "claude-cli", baseUrl: "http://127.0.0.1:9" },
@@ -234,14 +242,10 @@ describe("quota-pool identity creation", () => {
     expect(readQuotaPoolIdentity()).toEqual(identity);
   });
 
-  test("servers racing on a fresh home agree on one identity", async () => {
-    const script = `const { ensureQuotaPoolIdentity } = await import(${JSON.stringify(join(import.meta.dir, "../../src/quota-pool/identity.ts"))});
-await Bun.sleep(Math.max(0, Number(process.env.QP_START_AT) - Date.now()));
-console.log(ensureQuotaPoolIdentity().homeId);`;
-    for (let round = 0; round < 3; round++) {
+  test.each([0, 1, 2])("servers racing on a fresh home agree on one identity (round %i)", async () => {
       const dir = mkdtempSync(join(home, "race-"));
       const startAt = String(Date.now() + 400);
-      const runs = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, "-e", script], {
+      const runs = Array.from({ length: 4 }, () => Bun.spawn([process.execPath, "-e", IDENTITY_RACE_SCRIPT], {
         env: { ...process.env, OPENCODEX_HOME: dir, QP_START_AT: startAt }, stdout: "pipe", stderr: "pipe",
       }));
       // Read each child to completion (stdout, stderr and exit) so a loser that fails names its error.
@@ -252,7 +256,6 @@ console.log(ensureQuotaPoolIdentity().homeId);`;
       resetQuotaPoolIdentityMemoForTests();
       const persisted = readQuotaPoolIdentity(dir)!.homeId;
       expect(results).toEqual(Array.from({ length: 4 }, () => ({ id: persisted, code: 0, error: "" })));
-    }
   });
 });
 

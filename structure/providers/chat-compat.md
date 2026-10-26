@@ -111,11 +111,7 @@ Passthrough and routed-compaction raw-body repairs emit it as a user turn (`exte
 Stateful developer-guidance injection reuses that validator for its raw insertion
 boundary, so parsed messages and stored raw history retain the same task/guidance order.
 
-Native OpenAI passthrough consults the existing configured capability ladder before forwarding
-`reasoning_effort`; an explicitly empty ladder removes that unsupported control while an unknown
-ladder remains unclassified. Both Chat builders then apply the same explicit provider declarations:
-gateway-object projection and tool-bearing model effort omission. An unset declaration preserves the
-native caller field exactly. Native passthrough also sanitizes routed reasoning history so `reasoning` input items do not send
+Native Chat passthrough and translated Chat share `src/adapters/openai-chat/reasoning-wire.ts` after provider resolution. Explicit reasoning/effort false declarations and empty strength ladders remove unsupported effort; toggle false removes the switch without declaring an unknown strength axis unsupported. A declared toggle wire serializes the independent thinking choice without treating enabled/disabled/adaptive discriminators as strengths. Dual-control requests still pass through gateway-object projection and tool-bearing effort omission; a legacy toggle configuration gains a second serialized control only with explicit effort support; unknown declarations preserve legacy raw forwarding. Native passthrough also sanitizes routed reasoning history so `reasoning` input items do not send
 non-empty `content` arrays to upstream models that reject them. Chat Completions bridging repairs
 orphan `toolResult` messages by inserting a synthetic assistant `tool_call` before tool messages.
 It also repairs the opposite direction (260718): an assistant `tool_calls` round left dangling —
@@ -330,9 +326,7 @@ Its scanner `src/adapters/openai-chat/serialized-tool-call-markup.ts` also recog
 Structured-call reconciliation holds a possible serialized block, resumes ordinary text delivery when the header cannot match, and removes the block only when its function name and
 freeform body match a structured call's parsed `input` or exact raw arguments from a declared
 freeform/custom tool in the same response. Valid JSON primitives, arrays, and objects can be raw
-freeform input too; the declared tool name and namespace determine whether the bridge would
-unwrap an alternate field, and JSON text that changes on dispatch is not treated as executed input.
-Malformed JSON on an ordinary function is not raw input.
+freeform input too; the declared tool name and namespace fit whether the bridge unwraps an alternate field.
 A block may close a freeform body with a stray `</parameter>` and may omit `</function>`, and one
 newline after the function header is template layout, so MiMo's echoes of those shapes match too
 (#5724). A forward-only next-line-header cursor keeps adjacent-block scanning linear; closing tags must match the opener’s exact ID (`</tool_call>` for bare blocks).
@@ -466,8 +460,7 @@ measurement rather than allocating a serialized copy just to measure it.
 
 > Decision record: [ADR-0067](../decisions/ADR-0067-reasoning-display-parity-hidethinkingsummary.md)
 
-`hideThinkingSummary` is set for explicit summary "none", or omitted summary without a validated
-active effort. Accepted minimal/low/medium/high/xhigh/max (including ultra normalized to max)
+`hideThinkingSummary` is set for explicit summary "none", or omitted summary without active thinking. An explicit `thinkingEnabled` boolean determines activity before effort is considered; otherwise accepted minimal/low/medium/high/xhigh/max (including ultra normalized to max)
 allow raw visibility when summary is omitted; none and invalid efforts do not. Explicit "auto"
 still permits raw visibility independently of effort. This flag is
 honored by BOTH reasoning paths: anthropic `thinking_delta` AND raw `reasoning_raw_delta`
@@ -485,9 +478,7 @@ grouping evidence: `devlog/_fin/260709_native_response_pattern/`.
 Provider policy `hideRawReasoning` hides only this raw channel (summaries keep streaming); it controls
 display, not confidentiality ([Responses wire shapes](../transports/responses-wire-shapes.md)).
 
-For models requiring a reasoning placeholder, a preserved thinking-only assistant receives it even
-without tools, keeping strict DeepSeek continuations valid (#5421). Chat replay policy in
-`src/adapters/openai-chat/reasoning-replay.ts` honors explicit lists and otherwise recognizes DeepSeek Flash/Pro tokens across versions and gateways; [native continuation](../data-planes/inbound-compat.md#native-chat-thinking-continuation) shares this policy and fills configured placeholders on plain assistant history when DeepSeek tools require them.
+For models requiring a reasoning placeholder, a preserved thinking-only assistant receives it even without tools, keeping strict DeepSeek continuations valid (#5421). Chat replay policy in `src/adapters/openai-chat/reasoning-replay.ts` honors explicit lists and otherwise recognizes thinking model families (`isThinkingModelFamily`): DeepSeek Flash/Pro (`isDeepSeekThinkingModel`) across versions and gateways, and Reflection/Stealth families (`isReflectionThinkingModel`: `/(?:^|\/)(?:reflection|stealth)(?:$|[-_:/.])/i`). Default replay policy sets `preserve: true` for all thinking model families; operators may override preservation via `provider.preserveReasoningContentModels` or placeholder synthesis via `provider.requiresReasoningPlaceholderModels`. While DeepSeek models scope reasoning replay to tool-enabled turns (`hasTools: true`), Reflection and Stealth families require reasoning replay across all prior assistant turns even when no tools are present (`hasTools: false`), synthesizing whitespace placeholder `[" "]` when `placeholder: true` and cached reasoning is absent. In `src/adapters/openai-chat/messages.ts`, `messagesToChatFormat` checks `isReflectionThinkingModel` to synthesize thinking placeholders when `wireSerializesThinking` is true. Upstream reasoning capture in `src/server/chat-native-reasoning.ts` extracts thinking from both `reasoning_content` and `reasoning` in SSE stream deltas and non-streaming choices. In `src/adapters/openai-chat/passthrough.ts`, `baseBytes` is measured unconditionally against `maxSerializedBytes - replayPlan.serializedBytes` via `jsonUtf8Bytes(transformedBody(), ...)` for both unchanged bodies and changed replays; exceeding budget raises `TranslatorBudgetExceededError("request_copies", maxSerializedBytes)` (HTTP 413), guaranteeing non-replay requests also enforce `maxSerializedBytes` and reserve transient budget. [Native continuation](../data-planes/inbound-compat.md#native-chat-thinking-continuation) shares this replay and byte-accounting policy. Model-contract evidence and compatibility policy: Verification date: 2026-10-25. The Reflection/Stealth family default is a defensive compatibility fallback policy based on observed vendor behavior: live testing against Vercel AI Gateway (`reflection-beam`, 2026-10-23) observed rejection of tool-free multi-turn requests with HTTP 400 (`Missing required parameter: 'messages[12].reasoning_content'`). Because this destination-specific observation is not a vendor guarantee across all possible stealth or reflection hosts, OpenCodex applies this heuristic as a fallback policy while providing explicit operator overrides via `preserveReasoningContentModels` and `requiresReasoningPlaceholderModels`. Continuous CI verification exercises hermetic local fixtures in `tests/responses/chat-native-reasoning-scope.test.ts` (pinning multi-turn non-tool replay, `reasoning` delta capture, and passthrough size checks) without live network requests.
 
 The process-local raw-reasoning fallback is fail-closed unless a request has an explicit client
 thread plus an exact provider destination, wire adapter, final model, and physical credential
@@ -514,87 +505,72 @@ explicitly, and image-bearing legacy results remain unsupported rather than losi
 
 ## Chat streamed tool-call identity
 
-`src/adapters/openai-chat.ts` retains a call's first observed non-negative safe integer
-index as an alias when the call started by ID. Every present, non-null index must
-be a number in that range: strings (including numeric and empty strings), booleans,
-objects, arrays, negative numbers, fractions and unsafe integers terminate the stream
-before any key, alias, ID or last-call matching. `Number.MAX_SAFE_INTEGER` is accepted;
-larger integers are rejected because distinct wire literals can parse to the same number.
-The invalid-index error releases all pending call reservations without emitting
-those calls or a successful completion; invalid indexes are never treated as absent.
-Only missing and null indexes are absent-index placeholders. Repeated ID, name and
-argument string-field tolerance retains its existing rules.
+`src/adapters/openai-chat.ts` retains a call's first observed non-negative safe integer index as an
+alias when the call started by ID. Every present, non-null index must be a number in that range:
+strings (including numeric and empty strings), booleans, objects, arrays, negative numbers, fractions,
+and unsafe integers terminate the stream before any key, alias, ID or last-call matching.
+`Number.MAX_SAFE_INTEGER` is accepted; larger integers are rejected because distinct wire literals can parse
+to the same number. The invalid-index error releases all pending call reservations without emitting
+those calls or a successful completion; invalid indexes are never treated as absent. Only missing and
+null indexes are absent-index placeholders. Repeated ID, name and argument string-field tolerance retains
+its existing rules.
 
-For valid indexes, lookup preserves direct-key precedence, then index alias, then
-ID fallback. The initial key continues to own all translator budget reservations
-and release; learning an alias creates no additional owner. Unassociated index-only
-fragments are not guessed onto pending ID-only calls.
-`tests/adapters/openai/openai-chat-parallel-stream.test.ts` covers late aliases,
-parallel/colliding identities, distinct unsafe raw JSON index literals, the maximum
-safe-integer boundary, invalid index types, missing/null continuations and UTF-8
-byte-limit boundaries.
+For valid indexes, lookup preserves direct-key precedence, then index alias, then ID fallback. The
+initial key continues to own all translator budget reservations and release; learning an alias creates
+no additional owner. Unassociated index-only fragments are not guessed onto pending ID-only calls.
+`tests/adapters/openai/openai-chat-parallel-stream.test.ts` covers late aliases, parallel/colliding
+identities, distinct unsafe raw JSON index literals, the maximum safe-integer boundary, invalid index
+types, missing/null continuations and UTF-8 byte-limit boundaries.
 
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](../transports/responses.md).
 
 Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 ## Anthropic parallel tool use
 
-`options.parallelToolCalls === false` maps onto Anthropic's nested
-`tool_choice.disable_parallel_tool_use`. Because the flag lives inside
-`tool_choice`, a request that carries only the parallel intent and no explicit
-choice gets a synthesized `{type:"auto"}` so the flag has somewhere to live;
-`required` maps to `{type:"any"}` and a named choice to `{type:"tool"}`, and both
-accept it. `{type:"none"}` does not receive the flag because tool use is already off,
-and a request with no tools on the wire emits no `tool_choice` at all. An unset or
-true `parallelToolCalls` is byte-identical to previous behavior.
+`options.parallelToolCalls === false` maps onto Anthropic's nested `tool_choice.disable_parallel_tool_use`.
+Because the flag lives inside `tool_choice`, a request that carries only the parallel intent and no
+explicit choice gets a synthesized `{type:"auto"}` so the flag has somewhere to live; `required` maps
+to `{type:"any"}` and a named choice to `{type:"tool"}`, and both accept it. `{type:"none"}` does not
+receive the flag because tool use is already off, and a request with no tools on the wire emits no
+`tool_choice` at all. An unset or true `parallelToolCalls` is byte-identical to previous behavior.
 
-The flag constrains the model's output, not execution ordering. Sequential tool use
-is enforced by the caller's own loop returning each `tool_result` before issuing the
-next request; this mapping does not provide that.
+The flag constrains the model's output, not execution ordering. Sequential tool use is enforced by
+the caller's own loop returning each `tool_result` before issuing the next request; this mapping does not provide that.
 
-Claude Opus 5.5, Fable 5.1 and Sonnet 5.5 are upstream exceptions to the forced-choice mapping: Anthropic rejects
-`tool_choice: {type:"any"}` and `{type:"tool",name:...}` for that model, with or without
-adaptive thinking, for all three. The adapter sends `{type:"auto"}` for those choices so the
-request succeeds, but the caller's forced-tool guarantee cannot be preserved; the prompt
-must provide any required tool-use instruction. Other Claude model families retain the
-normal forced-choice mapping: Haiku 5.5 retains `any`/named tools, uses adaptive thinking for low..max, and reasoning none sends `disabled` without effort. Its non-default sampling fields are dropped on every path.
+Claude Opus 5.5, Fable 5.1 and Sonnet 5.5 are upstream exceptions to the forced-choice mapping: Anthropic
+rejects `tool_choice: {type:"any"}` and `{type:"tool",name:...}` for that model, with or without adaptive
+thinking, for all three. The adapter sends `{type:"auto"}` for those choices so the request succeeds,
+but the caller's forced-tool guarantee cannot be preserved; the prompt must provide any required tool-use
+instruction. Other Claude model families retain the normal forced-choice mapping: Haiku 5.5 retains
+`any`/named tools, uses adaptive thinking for low..max, and reasoning none sends `disabled` without effort.
+Its non-default sampling fields are dropped on every path.
 ## Unmapped modalities are recorded, not dropped
 
-The translated Chat route has no video mapping — this adapter does not implement one.
-Both serialization branches emit a bounded marker for a video part: the image-bearing
-branch previously produced `{type:"text", text: undefined}`, a malformed part, and the
-text-only branch joined it to `""` so a video-only or text-plus-video message was
-dropped entirely. The marker names opencodex's own missing mapping; it does not assert
-anything about the provider's or model's capability, which the proxy has not
-established. Native Chat passthrough and Google inline video are separate routes and
-are unaffected.
+The translated Chat route has no video mapping — this adapter does not implement one. Both serialization
+branches emit a bounded marker for a video part: the image-bearing branch previously produced `{type:"text", text: undefined}`,
+a malformed part, and the text-only branch joined it to `""` so a video-only or text-plus-video message
+was dropped entirely. The marker names opencodex's own missing mapping; it does not assert anything about
+the provider's or model's capability, which the proxy has not established. Native Chat passthrough and
+Google inline video are separate routes and are unaffected.
 
-`input_audio` parts with an inline WAV/MP3 data URL, or raw base64 with an explicit
-`wav`/`mp3` format, are supported on the translated Chat wire.
-The shared parser preserves the bytes as an `OcxAudioContent` part; the Chat serializer emits
-`input_audio` for user content and promotes tool-result audio into a follow-up user message
-because `role:"tool"` content is text-only. The parser stays non-throwing for native Responses
-passthrough; native Responses and native Chat retain their existing wire behavior. Remote audio,
-unsupported formats, the top-level `audio` spelling, developer audio, and system or assistant
-audio are refused. The final adapter checks the original input under the
-[untranslated-media contract](../adapters/registry.md#untranslated-input-media); translated
-adapters refuse unsupported inputs while native Responses retains the original body. The
-opposite Chat-to-Responses projection still rejects audio/file parts, except user-content inline
-documents. No audio transport or URL fetch is added, and no client filename, payload, URL or
-metadata enters errors. Admission charges supported audio by decoded size at the conservative
-256-bytes-per-token proxy, not an upstream token formula.
+`input_audio` parts with an inline WAV/MP3 data URL, or raw base64 with an explicit `wav`/`mp3` format,
+are supported on the translated Chat wire. The shared parser preserves the bytes as an `OcxAudioContent` part;
+the Chat serializer emits `input_audio` for user content and promotes tool-result audio into a follow-up
+user message because `role:"tool"` content is text-only. The parser stays non-throwing for native Responses
+passthrough; native Responses and native Chat retain their existing wire behavior. Remote audio, unsupported
+formats, the top-level `audio` spelling, developer audio, and system or assistant audio are refused. The final
+adapter checks the original input under the [untranslated-media contract](../adapters/registry.md#untranslated-input-media);
+translated adapters refuse unsupported inputs while native Responses retains the original body. The opposite
+Chat-to-Responses projection still rejects audio/file parts, except user-content inline documents. No audio
+transport or URL fetch is added, and no client filename, payload, URL or metadata enters errors. Admission
+charges supported audio by decoded size at the conservative 256-bytes-per-token proxy, not an upstream token formula.
 
 The shared coding-agent projection in `src/adapters/coding-agent/` (CodeBuddy, Qoder) carries supported tool-result image references as
 real image blocks. Current tool-result prose marks supported images as `[image attached below]` and unsupported references as `[image omitted: unsupported reference]`; historical tool-result prose retains `[image]` while supported references are also emitted as image blocks. In multi-turn projection, image blocks follow conversation order — history before current. Vendor tool execution stays disabled on both
-adapters. CodeBuddy refuses an unquoted, line-oriented full-width-bar DSML `calls`
-container followed by a named bare or namespaced invoke control line in either output channel; it
-preserves preceding answer text, never promotes vendor prose into execution authority,
-and leaves discussed or quoted literals and code examples untouched. Qoder Global accepts image input through the Qoder CLI. OpenCodex forwards supported image inputs that reach the Global adapter in `src/adapters/qoder/` through the shared coding-agent projection without maintaining a per-model vision capability allowlist there. Image compatibility and any model-specific preprocessing or routing are handled by Qoder. OpenCodex does not use the static discovery fallback roster to classify per-model vision capability. Qoder CN keeps its sidecar classification and rejects residual raw-image requests that reach the adapter. OpenCodex serializes image blocks in conversation order, with history before the current turn. Because Qoder runs with `--no-session-persistence`, prior images are re-projected on later turns; in observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied, a known limitation of the current stateless Qoder projection path.
+adapters. CodeBuddy refuses an unquoted, line-oriented full-width-bar DSML `calls` container followed by a named bare or namespaced invoke control line in either output channel; it preserves preceding answer text, never promotes vendor prose into execution authority, and leaves discussed or quoted literals and code examples untouched. Qoder Global accepts image input through the Qoder CLI. OpenCodex forwards supported image inputs that reach the Global adapter in `src/adapters/qoder/` through the shared coding-agent projection without maintaining a per-model vision capability allowlist there. Image compatibility and any model-specific preprocessing or routing are handled by Qoder. OpenCodex does not use the static discovery fallback roster to classify per-model vision capability. Qoder CN keeps its sidecar classification and rejects residual raw-image requests that reach the adapter. OpenCodex serializes image blocks in conversation order, with history before the current turn. Because Qoder runs with `--no-session-persistence`, prior images are re-projected on later turns; in observed multi-turn image conversations, replayed images can become unreliably associated or effectively ordered relative to the historical text they originally accompanied, a known limitation of the current stateless Qoder projection path.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
-
 Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
-
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
 DeepSeek Artifact compatibility: `src/adapters/openai-chat/tool-schema.ts` omits schema `pattern` and `anyOf` constraints and strict mode for unnamespaced `Artifact` tools on `api.deepseek.com`. Surrounding properties and required fields remain; union-only nodes become unconstrained, so tool execution must validate inputs. Property names, literal defaults/examples, and caller schemas are preserved; other tools and hosts retain existing normalization. `tests/providers/deepseek-artifact-tool-schema.test.ts` checks the serialized request.

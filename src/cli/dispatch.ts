@@ -404,6 +404,14 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   sync: async deps => {
     const syncArgs = deps.args.slice(1);
+    // #7694: parse the expected identity before anything else reads or writes state.
+    const { parseSyncExpectation, reportSyncExpectationMismatch, SYNC_EXPECTATION_USAGE_EXIT } = await import("./sync-expectation");
+    const parsedExpectation = parseSyncExpectation(syncArgs);
+    if (!parsedExpectation.ok) {
+      console.error(parsedExpectation.message);
+      return SYNC_EXPECTATION_USAGE_EXIT;
+    }
+    const expectation = parsedExpectation.expectation;
     const restartScope = readRestartScope(syncArgs, console);
     // The wire field keeps APP-SERVER-ONLY meaning and is deliberately not widened. A
     // remote hub must not end a local user's conversations because a field name acquired
@@ -412,15 +420,24 @@ const commandRunners: Record<string, CommandRunner> = {
     const restartCodex = restartScope.appServers;
     const { readClientConnectionState } = await import("../client/state");
     const clientState = readClientConnectionState();
-    if (clientState.kind === "invalid" || clientState.kind === "mismatched") {
+    // With an expectation the unlocked read decides nothing: the connected sync re-reads under its
+    // lock and refuses there, so a state that changes in between can never reach the local path.
+    if (!expectation && (clientState.kind === "invalid" || clientState.kind === "mismatched")) {
       console.error(`Client state is ${clientState.kind}: ${clientState.reason}`);
       return 1;
     }
-    if (clientState.kind === "connected") {
+    if (expectation || clientState.kind === "connected") {
       try {
         const { syncConnectedClient } = await import("../client/connect");
-        const result = await syncConnectedClient({ restartCodex });
-        const link = clientState.value.transport === "link";
+        const result = await syncConnectedClient(expectation ? { restartCodex, expect: expectation } : { restartCodex });
+        if (expectation) {
+          // The root preflight skipped the shim repair for a pinned sync; the identity held, so
+          // run it now, as an unpinned sync would have.
+          const { runCodexShimAutoRestore } = await import("./codex-shim-autorestore");
+          runCodexShimAutoRestore();
+        }
+        // The connection the sync ran under, read inside its lock; the read above may be stale.
+        const link = result.connection.transport === "link";
         console.log(result.stale
           ? `${link ? "Home" : "Hub"} unavailable; retained and applied the last-known-good remote catalog (stale).`
           : link ? "Remote Link Home catalog synchronized." : "Remote hub catalog synchronized.");
@@ -445,7 +462,7 @@ const commandRunners: Record<string, CommandRunner> = {
         if (link && result.appliedRecord) {
           const { applyRestartMessage, restartRuntimeAfterApply } = await import("./link-apply-restart");
           const { sameClientConnectionOwner } = await import("../client/state");
-          const applied = clientState.value;
+          const applied = result.connection;
           const outcome = await restartRuntimeAfterApply(result.appliedRecord, {
             restart: startWhenStopped => deps.handleProxyRestart(startWhenStopped),
             recoveryStart: recovering => deps.handleRestartStartWhenStopped(recovering),
@@ -470,6 +487,8 @@ const commandRunners: Record<string, CommandRunner> = {
         // types it as `number | string`; only a numeric code means anything here.
         return typeof process.exitCode === "number" ? process.exitCode : 0;
       } catch (error) {
+        const { ClientSyncExpectationError } = await import("../client/sync-expectation");
+        if (error instanceof ClientSyncExpectationError) return reportSyncExpectationMismatch(error, console);
         // The refresh path reaches the same hub catalog `ocx connect` validates, so a rejected
         // reasoning level arrives here as hub-supplied text. Rendering it through the shared
         // terminal boundary is what keeps the routine refresh from forging output; the domain
@@ -527,7 +546,7 @@ const commandRunners: Record<string, CommandRunner> = {
             },
             config,
             port: live.port,
-          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder"]));
+          }, ["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai"]));
         } catch (error) {
           console.warn(`Client integrations were not refreshed: ${error instanceof Error ? error.message : String(error)}`);
         }

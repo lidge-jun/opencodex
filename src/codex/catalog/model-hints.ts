@@ -1,7 +1,7 @@
 import { canInferVendorContext, vendorContextInference } from "./vendor-context";
 import { effectiveProviderAlias, effectiveProviderAliasDecision } from "../../providers/default-aliases";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
-import { supportsConfiguredUltraFast } from "./configured-tiers";
+import { supportsConfiguredFlex, supportsConfiguredUltraFast } from "./configured-tiers";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -34,6 +34,7 @@ import {
 } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
+import { declaredModelCapabilities, REASONING_CAPABILITY_FIELDS } from "../../providers/reasoning-capabilities";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
@@ -260,7 +261,17 @@ export function withVisionSidecarInput(
 ): CatalogModel {
   if (!enabled || !provider || !isModelVisionSidecarConsumer(provider, model.id)) return model;
   const modalities = model.inputModalities ?? ["text"];
-  return modalities.includes("image") ? model : { ...model, inputModalities: [...modalities, "image"] };
+  return modalities.includes("image") ? model
+    : copyReasoningHintSource(model, { ...model, inputModalities: [...modalities, "image"] });
+}
+
+const reasoningHintSources = new WeakMap<CatalogModel, Partial<CatalogModel>>();
+
+/** Forward discovery provenance only across transparent clones, never custom reasoning overrides. */
+export function copyReasoningHintSource(source: CatalogModel, clone: CatalogModel): CatalogModel {
+  const reasoningSource = reasoningHintSources.get(source);
+  if (reasoningSource) reasoningHintSources.set(clone, reasoningSource);
+  return clone;
 }
 
 /** Reapply configured limits and captured wire capabilities without trusting stale discovery hints. */
@@ -302,10 +313,25 @@ export function applyProviderConfigHints(
   const resolvedModalities = staticPolicy.model.inputModalities ?? model.inputModalities
     ?? (azureMetadata?.input ? modelInputModalities({ id: model.id, input_modalities: azureMetadata.input }, undefined) : undefined);
   const inputModalities = resolvedModalities ? [...resolvedModalities] : undefined;
-  const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
+  const reasoningSource = reasoningHintSources.get(model) ?? model;
+  const declaredCapabilities = declaredModelCapabilities(prov.modelCapabilities, model.id);
+  const reasoningCapabilities: Partial<CatalogModel> = {};
+  for (const field of REASONING_CAPABILITY_FIELDS) {
+    const value = modelInList(prov.noReasoningModels, model.id) ? staticPolicy.model[field]
+      : declaredCapabilities?.[field] ?? reasoningSource[field] ?? staticPolicy.model[field];
+    if (typeof value === "boolean") reasoningCapabilities[field] = value;
+  }
+  if (reasoningCapabilities.supportsReasoning === false) {
+    reasoningCapabilities.supportsThinkingToggle = false;
+    reasoningCapabilities.supportsReasoningEffort = false;
+    reasoningCapabilities.defaultThinkingEnabled = false;
+  }
+  const reasoningEfforts = reasoningCapabilities.supportsReasoningEffort === false ? []
+    : configuredReasoningEfforts(prov, model.id) ?? reasoningSource.reasoningEfforts;
   const suppressSyntheticMax = modelRecordValue(prov.modelSuppressSyntheticMax, model.id)
     ?? (model.antigravityEffortWireModelIds !== undefined);
-  const defaultReasoningEffort = staticPolicy.model.defaultReasoningEffort ?? model.defaultReasoningEffort;
+  const defaultReasoningEffort = reasoningCapabilities.supportsReasoningEffort === false ? undefined
+    : staticPolicy.model.defaultReasoningEffort ?? reasoningSource.defaultReasoningEffort;
   const supportsReasoningSummaries = staticPolicy.model.supportsReasoningSummaries;
   const supportsVerbosity = staticPolicy.model.supportsVerbosity;
   const fastPolicy = fastPolicyForModel(prov, model.id, name);
@@ -319,9 +345,16 @@ export function applyProviderConfigHints(
     contextCapped: previousContextCapped,
     supportsServiceTier: _staleServiceTier,
     supportsUltraFastTier: _staleUltraFastTier,
+    supportsFlexTier: _staleFlexTier,
     fastTierDescription: _staleFastTierDescription,
     providerAlias: _staleProviderAlias,
     suppressSyntheticMax: _staleSuppressSyntheticMax,
+    supportsReasoning: _staleSupportsReasoning,
+    supportsThinkingToggle: _staleThinkingToggle,
+    supportsReasoningEffort: _staleReasoningEffort,
+    defaultThinkingEnabled: _staleDefaultThinking,
+    reasoningEfforts: _staleReasoningEfforts,
+    defaultReasoningEffort: _staleDefaultEffort,
     ...modelWithoutServiceTier
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
@@ -355,11 +388,13 @@ export function applyProviderConfigHints(
       }
       : {}),
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    ...reasoningCapabilities,
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsVerbosity === "boolean" ? { supportsVerbosity } : {}),
     ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
     supportsUltraFastTier: supportsConfiguredUltraFast(fastPolicy),
+    supportsFlexTier: supportsConfiguredFlex(fastPolicy),
     ...(supportsServiceTier === true && fastPolicy.fastTierDescription !== undefined
       ? { fastTierDescription: fastPolicy.fastTierDescription }
       : {}),
@@ -387,8 +422,7 @@ export function applyProviderConfigHints(
     : withCap;
   const softCandidates = [model.autoCompactTokenLimit, configuredAutoCompact]
     .filter((value): value is number => typeof value === "number" && value > 0);
-  if (contextWindow === undefined || softCandidates.length === 0) return withHardBounds;
-  return {
+  const result = contextWindow === undefined || softCandidates.length === 0 ? withHardBounds : {
     ...withHardBounds,
     autoCompactTokenLimit: clampAutoCompactTokenLimit(
       contextWindow,
@@ -396,6 +430,10 @@ export function applyProviderConfigHints(
       Math.min(...softCandidates),
     ),
   };
+  reasoningHintSources.set(result, Object.fromEntries([
+    ...REASONING_CAPABILITY_FIELDS, "reasoningEfforts", "defaultReasoningEffort",
+  ].map(field => [field, reasoningSource[field as keyof CatalogModel]])));
+  return result;
 }
 
 /** Project a configured row, optionally deferring sidecar attachment metadata until publication. */
@@ -468,13 +506,13 @@ export const CALLABLE_CONFIGURED_COMPATIBILITY_MODELS: Readonly<Record<string, R
   "codebuddy-cn": new Set([
     "default",
   ]),
-  // MiniMax serves MiniMax-M3.1-Flash-Preview to Token Plan keys, but its /v1/models roster
-  // does not list the preview (probed 2026-09-30), so a live roster would drop it.
+  // MiniMax serves MiniMax-M3.1-Flash to Token Plan keys, but its /v1/models roster
+  // does not list Flash (probed 2026-10-21), so a live roster would drop it.
   minimax: new Set([
-    "MiniMax-M3.1-Flash-Preview",
+    "MiniMax-M3.1-Flash",
   ]),
   "minimax-cn": new Set([
-    "MiniMax-M3.1-Flash-Preview",
+    "MiniMax-M3.1-Flash",
   ]),
   kimi: new Set([
     "k3[1m]",
@@ -695,6 +733,15 @@ export function discoveredPricingStatus(item: ProviderModelsApiItem): "free" | "
 export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
   const metadata = plainRecord(item.metadata);
   const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const reasoningCapabilities: Partial<CatalogModel> = {};
+  for (const [wire, field] of [
+    ["supports_reasoning", "supportsReasoning"],
+    ["supports_thinking_toggle", "supportsThinkingToggle"],
+    ["supports_reasoning_effort", "supportsReasoningEffort"],
+    ["default_thinking_enabled", "defaultThinkingEnabled"],
+  ] as const) {
+    if (typeof capabilityRecord?.[wire] === "boolean") reasoningCapabilities[field] = capabilityRecord[wire];
+  }
   const limits = plainRecord(metadata?.limits);
   const capabilityLimits = plainRecord(plainRecord(item.capabilities)?.limits);
   const contextWindow =
@@ -746,7 +793,8 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
     ?? item.reasoning_efforts
     ?? reasoningParameters?.efforts;
   const listedReasoningEfforts = normalizedStringList(rawReasoningEfforts, 8, 24);
-  const reasoningEfforts = listedReasoningEfforts
+  const reasoningEfforts = reasoningCapabilities.supportsReasoning === false || reasoningCapabilities.supportsReasoningEffort === false ? []
+    : listedReasoningEfforts
     ? sanitizeCodexReasoningEfforts(listedReasoningEfforts)
     : typeof rawReasoningEfforts === "boolean"
       ? (rawReasoningEfforts
@@ -764,6 +812,7 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
     ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    ...reasoningCapabilities,
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(capabilities ? { capabilities } : {}),

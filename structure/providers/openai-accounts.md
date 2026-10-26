@@ -536,7 +536,7 @@ No requests means no new polling. For this reason only, stale observation proof 
 quota-cache freshness after the existing attempt backoff. Main refresh keeps its owned lease and
 passive intent: cache bypass does not clear an inference reauthentication mark. Other prime reasons
 retain their existing cache rules except the independently scheduled [pool credit renewal](pool-credit-renewal.md). The split config schema degrades malformed optional values to
-false. Exact-account and Direct routes are unchanged.
+false. Priority failback leaves exact-account and Direct routes unchanged; explicitly bound Direct stored accounts remain eligible for the separate credit-renewal sweep.
 
 ## Main-account policy observations
 

@@ -509,12 +509,14 @@ export async function executeComboResponses(
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
   const meteredAllowed = admissionMayUseMeteredComboTargets(config, options.admission, combo);
-  const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
+  // Recovery can replace unreadable encrypted input, but cannot relax other admission checks.
+  const recoveryEligible = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered)
     && (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
-    && payloadEligible(target)
     && reasoningReplayEligible(target)
     && (protocolLanes?.pickable(target) ?? true);
+  const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
+    payloadEligible(target) && recoveryEligible(target);
   const onlyReplayIncompatibleTargetsRemain = (excluded: Iterable<string> = []): boolean => {
     const excludedKeys = new Set(excluded);
     const remaining = combo.targets.filter(target => {
@@ -528,16 +530,13 @@ export async function executeComboResponses(
   let encryptedTaskRecoveryAttempted = false;
   let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
   let storedPool401ReplayDispatched = false;
+  const recovery = agentTaskRecoveryConfig(config);
+  const encryptedTaskRecoveryAdmitted = (options.inboundWire ?? "responses") === "responses"
+    && isThreadSpawnRequest(req.headers) && !!recovery && !options.comboAttempt;
   const recoverUnreadableEncryptedTask = async (): Promise<boolean> => {
     if (encryptedTaskRecoveryAttempted) return false;
     encryptedTaskRecoveryAttempted = true;
-    const recovery = agentTaskRecoveryConfig(config);
-    if (
-      (options.inboundWire ?? "responses") !== "responses"
-      || !isThreadSpawnRequest(req.headers)
-      || !recovery
-      || options.comboAttempt
-    ) {
+    if (!encryptedTaskRecoveryAdmitted || !recovery) {
       discardEncryptedAgentTaskRecovery(
         req,
         (body as { input?: unknown } | undefined)?.input,
@@ -582,6 +581,7 @@ export async function executeComboResponses(
   const pickWithWait = (pickOptions: {
     exclude?: Iterable<string>;
     eligible?: (target: NonNullable<typeof combo>["targets"][number]) => boolean;
+    allowCooldownReprobe?: boolean;
     now?: number;
   }) => pickComboTargetWithWait(config, comboId, {
     ...pickOptions,
@@ -613,7 +613,11 @@ export async function executeComboResponses(
     : jevSessionPinScope({ combo, comboId, admission: options.admission, lane: sessionLaneIdFromRequest(req.headers) });
 
   if (unreadableEncryptedAgentTask && !pick) {
-    pick = await pickWithWait({ now: initialNow });
+    pick = await pickWithWait({
+      eligible: recoveryEligible,
+      allowCooldownReprobe: encryptedTaskRecoveryAdmitted,
+      now: initialNow,
+    });
     if (!pick) {
       discardEncryptedAgentTaskRecovery(
         req,
@@ -624,7 +628,7 @@ export async function executeComboResponses(
       return options.abortSignal?.aborted
         ? clientCancelledResponse()
         : comboUnavailable(comboId, undefined,
-          comboExclusionReasons(config, comboId, target => meteredAllowed || !target.metered));
+          comboExclusionReasons(config, comboId, recoveryEligible));
     }
     if (!(await recoverUnreadableEncryptedTask())) {
       return options.abortSignal?.aborted
@@ -855,8 +859,8 @@ export async function executeComboResponses(
     // The physical destination after provider aliases and blockedModelRedirects: hops are
     // classified by where the request really goes, not by the selector the combo names.
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
-    // The hard-lock rewrite may have previewed a different random pick. Enforce this actual
-    // first destination against the locked source, after aliases and redirects resolve.
+    // Selection-free hard-lock preflight grants no hop. Enforce this actual first destination
+    // against the locked source, after aliases and redirects resolve.
     if (firstComboTarget && options.mainHardLockFallbackOverride) {
       const hop = guardFallbackHop(config, {
         site: "combo",
@@ -1258,6 +1262,7 @@ export async function executeComboResponses(
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
         codexModelRefusal: failure.codexModelRefusal,
+        verifiedPlanRefusal: failure.verifiedPlanRefusal,
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
         // model through another wire via `modelAdapters`, and an unresolved leg grants no hop.
         failedAdapter: childLog.providerAdapter,
@@ -1273,6 +1278,7 @@ export async function executeComboResponses(
         const recoveredTarget = await pickWithWait({
           exclude: pick.attempted,
           eligible: target => {
+            if (!recoveryEligible(target)) return false;
             try {
               const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
               return route.codexAccountMode === undefined
@@ -1361,10 +1367,11 @@ export async function executeComboResponses(
     const failedTargetCooled = failureCooldownScope !== "none"
       && failedTargetCooldownRecorded
       && isComboTargetInCooldown(comboId, pick.target, failureNow);
-    // Same target selector as the exclusionary pick below, minus `exclude`: the only
-    // difference is deliberate and is the whole point of the single-target retry.
+    // Drop exclusions for the single-target retry, but wait for normal cooldown
+    // expiry: an in-flight request cannot reserve a fresh recovery pass.
     const retryAfterCooldown = () =>
       pickWithWait({
+        allowCooldownReprobe: false,
         eligible: targetEligible,
         now: failureNow,
       });
@@ -1406,6 +1413,7 @@ export async function executeComboResponses(
       if (unreadableEncryptedAgentTask && !comboPayloadReadable) {
         const recoveredTarget = await pickWithWait({
           exclude: attemptedTargets,
+          eligible: recoveryEligible,
           now: failureNow,
         });
         if (recoveredTarget && await recoverUnreadableEncryptedTask()) {

@@ -189,6 +189,8 @@ API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAu
 
 대시보드 연결 테스트와 라이브 모델 발견은 범위가 제한된 GET 전용 전송을 사용합니다. 아웃바운드 프록시가 없으면 opencodex는 호스트 이름을 한 번만 확인하고, 검증된 주소로만 연결합니다. HTTPS는 원래 Host, SNI, 인증서 검증을 유지하며, 공급자 설정으로 인증서 검사를 끌 수는 없습니다.
 
+직접 응답 다운로드는 로컬 처리가 다음 데이터를 받을 준비가 될 때까지 잠시 멈춥니다. gzip과 deflate 응답에도 적용됩니다. 이 대기 시간은 공급자의 무응답 시간으로 계산하지 않으며, 요청 전체의 제한 시간과 취소는 계속 적용됩니다.
+
 이 작업들은 [서버에 설정된 아웃바운드 fetch](/ko/reference/configuration/server/)를 사용합니다. `config.proxy`로 설정했거나 SOCKS5 `ALL_PROXY`에서 상속된 서버 SOCKS5 프록시는 대상이 `NO_PROXY`에 걸리지 않을 때 OpenCodex의 내장 터널을 사용합니다. `HTTP_PROXY`와 `HTTPS_PROXY`는 Bun의 네이티브 HTTP(S) 처리를 그대로 사용하지만, SOCKS가 아닌 `ALL_PROXY`는 네이티브 HTTP fetch 경로가 아닙니다. URL과 리터럴 주소 검사는 계속 실행되지만, 선택된 프록시가 최종 경로, DNS 응답, 피어를 고르므로 opencodex는 그 피어를 고정하거나 검증할 수 없습니다. 이는 명시적인 보안 한계입니다.
 
 사설/로컬 목적지는 `allowPrivateNetwork: true`가 필요하며, 아웃바운드 프록시가 활성화된 경우에는 일치하는 `NO_PROXY` 항목도 필요합니다. loopback은 자동으로 추가됩니다. CIDR 항목은 해석하지 않으므로 각 LAN 호스트는 따로 적어야 합니다. matcher는 정확한 호스트, 도메인 접미사, 선택적 포트, 괄호로 감싼 IPv6, `*`를 지원합니다. 예를 들면 `192.168.1.50`은 따로 적어야 합니다. 메타데이터와 link-local 목적지는 계속 차단됩니다. 진단 요청은 리디렉션을 거부하고, 자격 증명이 제거된 대상만 보고합니다. 일반적인 공급자 요청의 리디렉션 검토는 이 진단 가드와 별도로 유지됩니다.
@@ -393,6 +395,12 @@ Cursor 서버 주도 로컬 도구는 기본값으로 비활성화됩니다. Cod
 ```
 
 필드는 최상위가 아니라 `providers.cursor`에 설정하십시오. 대시보드에서는 **Providers → Cursor → Edit JSON**을 사용해 저장한 뒤 다시 시작합니다. 레거시 `unsafeAllowNativeLocalExec: true`는 `nativeLocalExec`이 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. MCP, 화면 녹화, computer use는 `mcpServers`와 `desktopExecutor`가 따로 제어합니다.
+
+네이티브 `grep`이 허용된 디렉터리 검색에서는 `glob`으로 파일을 고릅니다. `*.ts`는 모든 하위 폴더의
+파일명에 적용되고, `src/**/*.ts`는 선택한 검색 폴더를 기준으로 한 상대 경로에 적용됩니다(`./`로 시작해도 됩니다). 모든 운영체제에서
+패턴의 경로 구분자는 `/`를 사용합니다. 문자 범위와 중괄호 선택 패턴을 지원하며, Bun 1.4.4에서는
+`**/!(*.test).ts` 같은 제외 패턴과 `part-{1..3}.ts` 같은 숫자 범위도 지원합니다.
+필터는 검색 폴더를 바꾸거나 네이티브 실행을 활성화하지 않습니다.
 
 각 `mcpServers.<name>`는 `command`(stdio) 또는 `url`(Streamable HTTP) 중 하나를 받습니다. stdio는 `args`, `env`, `cwd`도 받습니다. HTTP는 `headers`를 받습니다. 둘 다 `enabled`(기본값 true)와 `toolPrefix`를 지원합니다. `desktopExecutor`는 `computerUseCommand`, `recordScreenCommand`, `cwd`, `env`, `timeoutMs`(기본값 `30000`)를 받습니다. 명령은 `sh -c`를 거치며 stdin에서 JSON 요청 하나를 읽고, stdout에 JSON 결과 하나를 써야 합니다.
 

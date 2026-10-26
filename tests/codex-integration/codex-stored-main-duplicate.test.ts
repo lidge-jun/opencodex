@@ -104,6 +104,7 @@ describe("stored Pool duplicate of native main", () => {
     saveCodexAccountCredential(poolId, { accessToken: jwt("plus", email, "other-user"),
       refreshToken: "fake-refresh", chatgptAccountId: "shared-account", expiresAt: Date.now() + 3600_000 });
     const changed = await runPassiveRead(() => listCodexAuthAccounts(config));
+    expect(changed.find(row => row.id === poolId)?.upstreamAccountKey).toMatch(/^uai1_[0-9a-f]{64}$/);
     expect(changed.find(row => row.id === poolId)?.upstreamAccountKey).not.toBe(main.upstreamAccountKey);
     expect(changed.find(row => row.id === "__main__")?.upstreamAccountKey).toBe(main.upstreamAccountKey);
   });

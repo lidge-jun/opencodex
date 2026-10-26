@@ -34,6 +34,10 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   // The desktop's approval-bound stop must validate its snapshot before any unrelated
   // CLI repair changes the installation it was approved against.
   if (command === "stop" && args.some(arg => arg.startsWith("--expect-"))) return true;
+  // A pinned sync (#7694) must change nothing when its expected Home or hub key does not hold,
+  // so the root preflight may not repair the shim first; the sync runner repairs it only after
+  // the locked identity check passed (runCodexShimAutoRestore in src/cli/dispatch.ts).
+  if (command === "sync" && args.some(arg => /^--expect-(link|hub-key)(=|$)/.test(arg))) return true;
   // The entire updater-inspection namespace is zero-effect, including malformed
   // or future actions. A later `apply` implementation must own its preflight.
   if (command === "system" && args[1] === "codex-cli-update") return true;
@@ -47,6 +51,11 @@ export function maybeAutoRestoreCodexShim(
   deps: CodexShimAutoRestoreCliDeps = DEFAULT_DEPS,
 ): void {
   if (skipsCodexShimAutoRestore(command, args)) return;
+  runCodexShimAutoRestore(deps);
+}
+
+/** The repair itself, without the command gate: for a caller that deferred it past its own check. */
+export function runCodexShimAutoRestore(deps: CodexShimAutoRestoreCliDeps = DEFAULT_DEPS): void {
   try {
     const result = deps.restore({
       enabled: () => codexShimAutoRestoreEnabled(deps.readConfig().config, deps.env),

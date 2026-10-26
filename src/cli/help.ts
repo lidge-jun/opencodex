@@ -49,6 +49,7 @@ Usage:
   ocx remote-workspace <sub>  Pair/run an OCX-only remote execution computer
   ocx disconnect              Restore local state and clear the hub connection
   ocx sync [--restart-codex]  Fetch models from providers and inject into Codex config
+                              --expect-link <id> | --expect-hub-key <id>: only from that Home/hub key (exit 5 otherwise)
   ocx sync-cache [--restart-codex]
                               Refresh Codex's model cache from the active catalog
   ocx catalog pull <https-url> Install a validated remote catalog and refresh the Codex cache
@@ -93,7 +94,7 @@ Usage:
   ocx api-key <sub>           Alias of ocx access key
   ocx access <sub>            External API keys and endpoint information
   ocx api <sub>               Protocol paths: vocabulary, request-path preview, and policy
-  ocx export --client <id>    Print a client config wired to the running proxy (20 clients)
+  ocx export --client <id>    Print a client config wired to the running proxy (23 clients)
   ocx integration client <sub> Enable, disable, inspect or roll back a client integration
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, OpenCodex updates, and Codex CLI inspection

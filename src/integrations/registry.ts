@@ -8,6 +8,7 @@
  *
  * Design of record: devlog/_fin/260802_client_toggle_api/021 §1.
  */
+import { agentConfigPath, agentHomeDir } from "../clients/config-export/agent-clients";
 import { homedir } from "node:os";
 import { gentleShellPaths } from "../clients/gentle-shell-path";
 import { assertDroidSettingsUnambiguous } from "./droid-settings";
@@ -288,6 +289,10 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     configPath: qoderConfigPath,
     detectDir: (env = process.env, home = homedir()) => qoderHomeDir(env, home),
   },
+  ...Object.fromEntries((["qoder-cn", "workbuddy", "workbuddy-ai"] as const).map(id => [id, {
+    id, configPath: (env = process.env, home = homedir()) => agentConfigPath(id, env, home),
+    detectDir: (env = process.env, home = homedir()) => agentHomeDir(id, env, home),
+  }])) as Record<"qoder-cn" | "workbuddy" | "workbuddy-ai", IntegrationClientSpec>,
   opencode: {
     id: "opencode",
     // These take `home` explicitly. The export registry's `destination` reads

@@ -12,6 +12,7 @@ import {
   validateConfigCandidate,
 } from "../../src/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { mergeModelCapabilities, modelCapabilitiesConfigError } from "../../src/config/provider-validation";
 
 let home = "";
 let previousHome: string | undefined;
@@ -222,7 +223,7 @@ test("model capability writes stay strict while load preserves independent restr
     apiKey: "fixture-key", modelCapabilities: {
       ModelA: { inputModalities: ["text"] },
       modela: { contextTier: "long_context" },
-      broken: { inputModalities: "image", contextTier: "typo" },
+      broken: { inputModalities: "image", contextTier: "typo", supportsReasoning: true, supportsThinkingToggle: "true", supportsReasoningEffort: false, defaultThinkingEnabled: false },
     },
   } } };
   expect(validateConfigCandidate(raw).ok).toBe(false);
@@ -230,7 +231,7 @@ test("model capability writes stay strict while load preserves independent restr
   const loaded = loadConfig();
   expect(loaded.providers.xai.modelCapabilities).toEqual({
     ModelA: { inputModalities: ["text"] }, modela: { contextTier: "long_context" },
-    broken: { inputModalities: ["text"] },
+    broken: { inputModalities: ["text"], supportsReasoning: true, supportsReasoningEffort: false, defaultThinkingEnabled: false },
   });
   expect(loaded.providers.xai.apiKey).toBe("fixture-key");
   expect(validateConfigCandidate(loaded).ok).toBe(true);
@@ -239,7 +240,7 @@ test("model capability writes stay strict while load preserves independent restr
 test("model capabilities round-trip all explicit axes without expanding inference", () => {
   const raw = { ...candidate(undefined), providers: { xai: {
     ...candidate(undefined).providers.xai,
-    modelCapabilities: { ModelA: { inputModalities: ["text", "image"], contextTier: "long_context", video: { processing: "agentic" } } },
+    modelCapabilities: { ModelA: { inputModalities: ["text", "image"], contextTier: "long_context", video: { processing: "agentic" }, supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: false } },
   } } };
   const validated = validateConfigCandidate(raw);
   expect(validated.ok).toBe(true);
@@ -247,6 +248,21 @@ test("model capabilities round-trip all explicit axes without expanding inferenc
   saveConfig(validated.config);
   expect(loadConfig().providers.xai.modelCapabilities).toEqual(raw.providers.xai.modelCapabilities);
   expect(loadConfig().providers.xai.modelContextWindows).toBeUndefined();
+});
+
+test("reasoning capability patches preserve false and independently delete or validate axes", () => {
+  const original = { ModelA: { supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: true } };
+  const patch = { ModelA: { supportsThinkingToggle: false, defaultThinkingEnabled: null } };
+  expect(modelCapabilitiesConfigError(patch, true)).toBeNull();
+  expect(mergeModelCapabilities(original, patch)).toEqual({ ModelA: {
+    supportsReasoning: true, supportsThinkingToggle: false, supportsReasoningEffort: false,
+  } });
+  expect(original.ModelA.defaultThinkingEnabled).toBe(true);
+  for (const field of ["supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"]) {
+    expect(modelCapabilitiesConfigError({ ModelA: { [field]: "false" } })).not.toBeNull();
+    expect(modelCapabilitiesConfigError({ ModelA: { [field]: false } })).toBeNull();
+    expect(modelCapabilitiesConfigError({ ModelA: { [field]: null } })).not.toBeNull();
+  }
 });
 
 test.each([

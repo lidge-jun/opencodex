@@ -169,6 +169,12 @@ API, the adapter removes item-level `extra_content` from the outgoing HTTP reque
 create. Native `/responses/compact` applies the same projection. The original history keeps the Google
 thought signature for later Google turns. Other Responses gateways retain their extensions.
 
+OpenAI-operated destinations receive replayed `url_citation` annotations with missing or invalid
+titles and indices repaired. This applies to ordinary HTTP/WebSocket requests and native
+`/responses/compact`. Custom gateways keep the original annotations even when
+`supportsNativeCompactEndpoint: true` enables native compaction. Citation repair leaves the
+client's stored history unchanged.
+
 The adapter preserves the incoming client's `User-Agent` as a fallback in both auth modes because
 some Responses-compatible providers use the Codex client fingerprint for compatibility behavior.
 An explicitly configured provider `User-Agent` remains authoritative regardless of header casing;
@@ -323,6 +329,14 @@ MiMo model Command Code serves.
 **Auth:** `key` (`x-api-key` by default, or `Authorization: Bearer` with `apiKeyTransport: "bearer"`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
 
 - Converts messages to Anthropic content blocks (text, base64 image, `tool_use`, `thinking`).
+- Routed Codex compaction keeps the client tool catalog, system prompt and tool-selection
+  options to preserve their prompt-cache prefix. Summary requests disable search/media
+  sidecars; upstream-hosted tools retain their declarations with `tool_choice: none`, as does a
+  mandatory tool choice, while the advertised catalog stays the same. A request that advertises a
+  sidecar web-search tool (for example Exa) still changes its tool prefix on compaction.
+  A summary that attempts a tool call fails without publishing a function call or replacing
+  history. A successful summary returns exactly one compaction item. Image normalization
+  and the existing one-shot tighter-image retry after HTTP 413 remain unchanged.
 - Translated Anthropic Messages reasoning replay shares the request translation budget, including
   encoding/decoding copy overhead. Requests exceeding it return HTTP 413 with
   `translation_buffer_limit`; signatures and opaque reasoning data are never truncated to fit.
@@ -491,7 +505,9 @@ MiMo model Command Code serves.
   The plan's precise credit balance is retained with that identity-fenced quota reading.
   Separately, Kiro `meteringEvent` credit values are measured request spend: the last value
   within a physical response is used, and credits from separately billed sends are added.
-  Token usage remains estimated; credits are never inferred from tokens.
+  Token usage remains estimated; credits are never inferred from tokens. Requests with hosted
+  search or image tools retain the adapter's full prompt estimate in Usage and daily activity,
+  including replayed history, even when the model does not invoke those tools.
 - After an admitted request, reads that account's available models from the regional management
   service without delaying the request. Cached results add model IDs to the shipped catalog.
   Empty or unrecognised replies retain the shipped list and any last good account list. Model
@@ -499,7 +515,8 @@ MiMo model Command Code serves.
   limits inform context windows, conservatively combined with shipped limits when evidence is partial.
   Accounts that have not served have no list evidence yet.
 - Participates in multi-account rotation. With two stored accounts, a request-rate refusal
-  cools the refused account briefly; an exact monthly-quota refusal on HTTP 400 or 429
+  cools the refused account briefly; an exact `MONTHLY_REQUEST_COUNT` or
+  `OVERAGE_REQUEST_LIMIT_EXCEEDED` refusal on HTTP 400 or 429
   excludes it until the observed reset or evidence expiry. A confirmed HTTP 403 suspension
   quarantines that account in process, while an ordinary 403 does not rotate. Reactive
   rotation remains available when `oauthAccountFailover.enabled` is false. Refusal-aware

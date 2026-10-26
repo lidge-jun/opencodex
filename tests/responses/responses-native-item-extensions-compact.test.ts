@@ -44,7 +44,7 @@ describe("native compact item extensions (#7111)", () => {
   ];
 
   for (const [name, provider] of providers) {
-    test(`strips Google replay metadata on the direct ${name} compact send`, async () => {
+    test(`strips Google replay metadata and repairs citations on the direct ${name} compact send`, async () => {
       const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
       const mockFetch = (async (input, init) => {
         const req = new Request(input, init);
@@ -58,12 +58,17 @@ describe("native compact item extensions (#7111)", () => {
       };
       const call = { type: "function_call", call_id: "call_probe", name: "probe", arguments: '{"value":1}' };
       const output = { type: "function_call_output", call_id: "call_probe", output: '{"extra_content":"tool data"}' };
+      const citation = { type: "url_citation", url: "https://source.example/reference", start_index: "3", end_index: -1, extra: "keep" };
+      const assistant = { type: "message", role: "assistant", content: [
+        { type: "output_text", text: "Fixture answer.", annotations: [citation] },
+      ] };
       const body = {
         model: `${name}/gpt-6-sol`,
         input: [
           { role: "user", content: "Compact the completed tool call." },
           { ...call, extra_content: { google: { thought_signature: "synthetic-signature-7111" } } },
           output,
+          assistant,
         ],
       };
       const before = structuredClone(body);
@@ -76,7 +81,11 @@ describe("native compact item extensions (#7111)", () => {
       await response.text();
       expect(calls).toHaveLength(1);
       expect(calls[0]!.url).toBe(`${provider.baseUrl}/responses/compact`);
-      expect(calls[0]!.body.input).toEqual([body.input[0], call, output]);
+      expect(calls[0]!.body.input).toEqual([body.input[0], call, output, {
+        ...assistant, content: [{ ...assistant.content[0], annotations: [
+          { ...citation, title: citation.url, start_index: 3, end_index: 0 },
+        ] }],
+      }]);
       expect(body).toEqual(before);
     });
   }

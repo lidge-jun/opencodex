@@ -172,6 +172,46 @@ fast_mode = true
 `service_tier`가 제거됩니다(레지스트리가 정식 OpenAI를 `true`, DeepSeek과 Volcengine Ark를 `false`로 분류). 미분류 커스텀 게이트웨이는 호출자가 준 값을 그대로 보존하고 주입도 받지 않습니다. 따라서
 처리 불가능한 곳에 fast 옵션이 노출되지 않으며, 커스텀 게이트웨이는 `true`로 명시적으로 옵트인할 수 있습니다.
 
+### Codex에서 Flex 선택
+
+`service_tier: "flex"` 지원이 확인된 라우팅 프로바이더와 모델에 한해 Flex를
+명시적으로 선언할 수 있습니다. 아래 필드는 **기존** `providers.nanogpt` 설정에
+병합해야 하며 URL과 API 키를 덮어쓰면 안 됩니다.
+
+```json
+{
+  "modelSupportsServiceTier": { "openai/gpt-6-luna": true },
+  "fastWire": {
+    "kind": "service-tier",
+    "canonicalToWire": { "priority": "priority", "flex": "flex" },
+    "foreignCallerTiers": "verbatim"
+  }
+}
+```
+
+적격한 `openai-responses` 라우트에서는 Luna의 Codex 속도 선택기에 Standard,
+Fast, Flex가 나타납니다. `openai-chat` 라우트는 Chat Completions API가
+호출자의 서비스 등급을 지원하는 것이 확인된 경우에만 `chatServiceTier: true`도
+설정해야 합니다. `fastWire` 매핑은 **프로바이더 전체에 적용**되므로 같은
+`providers.nanogpt` 항목에서 서비스 등급 사용이 이미 허용된 다른 모델에도
+Flex 선택지가 표시될 수 있습니다. `modelSupportsServiceTier`에 Luna만 적어도
+이미 적격인 다른 모델을 제외하는 허용 목록이 되는 것은 아닙니다. 다만 Flex 선택지는
+카탈로그에 게시되는 **일반 라우팅 모델 행**에만 표시되며, Combo 네임스페이스와
+Native Alias 행에는 표시되지 않습니다. 따라서 해당 항목에서 서비스 등급 사용이
+허용된 **모든 일반 라우팅 모델**의 Flex 지원 여부를 확인하세요.
+Luna만 Flex를 지원한다면 Fast 지원 모델이 다른 모델과 섞이지 않도록
+**별도 프로바이더 항목**으로 분리해야 합니다. Fast 지원만으로 Flex 지원을
+추정해서는 안 됩니다.
+
+OpenCodex의 전역 Fast 설정은 **Auto**(`fastMode` 생략)로 유지하세요.
+Fast 또는 Default 강제 모드는 Flex 선택을 덮어씁니다. `ocx sync` 후 Codex의
+모델 목록을 갱신하고 속도 선택기에서 **Flex**를 선택하거나, Codex CLI에서
+`/model <routed-id> --speed=flex`를 사용하면 됩니다. 이는 **선택 가능한 등급**이지
+모델별 강제 기본값은 아닙니다. 다른 모델로 바꾸더라도 Flex 사용이 자동 강제되지는
+않습니다. 상위 API로 `service_tier: "flex"`를 전달하지만, 실제 처리 가능 여부,
+요금과 지연 시간은 공급자에 따라 다릅니다. 메뉴나 요청 로그만으로 Flex 과금이
+확정되지는 않습니다.
+
 ### Codex 데스크톱에서 Ultra Fast 선택
 
 `service_tier: "ultrafast"`를 지원하는 프로바이더에는 전송 매핑을 한 번 설정하면 됩니다.

@@ -1,6 +1,6 @@
 # Responses Failover And Replay
 
-Combo `metered` eligibility follows the [runtime consent contract](../runtime.md#request-local-target-compatibility), including recovery selections. In `src/server/responses/run-turn-execution.ts`, streaming and buffered pre-output failures retain structured adapter status/type/code via `adapterFailureFromEvent`, and `formatErrorResponse`'s `classified` option keeps that verdict in the child body instead of re-deriving it from the status, wherever its type and message add nothing to what the status alone says; a verdict read from the message (quota, credentials, cyber policy, context overflow, catalog size) still outranks a generic adapter code, and spend-ledger, cyber-policy and replay-refusal overrides still win, and `consumeComboFailure` re-applies the client allowlist. Spend-ledger storage refusal remains 503. This preserves an exhausted subscription chain’s 429 response, a child's `insufficient_quota`, and the cool-free hop on `unsupported_input_modality` in `src/combos/failover.ts`. Coverage: `tests/adapters/anthropic/anthropic-subscription-chain.test.ts` and `tests/responses/responses-combo-run-turn-classified-failure.test.ts`.  `src/server/responses/request-transport.ts` resolves the final Anthropic model ID once for each enabled-pool request and holds its model route through admission. The three account-refusal retry sites in `adapter-dispatch.ts`, `adapter-continuation.ts` and `sidecar-execution.ts` use the same route, keep the original refusal if no replacement exists inside it, and preserve existing send and output replay limits. A local cooldown returns 429 with the earliest known Retry-After among accounts the route can use when they recover, and answers a usage limit when every held account is on spent quota ([quota exhaustion answer](../providers/anthropic-account-pool.md#quota-exhaustion-answer-and-fresh-read-recovery)); explicit fallback includes usable ordinary-pool accounts even when the saved route IDs have been removed, while a strict route stays route-scoped. Selection, refusal and 429-rotation logs use the rule’s 1-based `route:#<n>` position, never its name.
+Buffered native required-tool failures follow the [combo contract boundary](responses-combo-boundaries.md#buffered-required-tool-contract): their `required_tool_contract_unsatisfied` code survives `src/bridge/errors.ts` formatting, and the existing failure path owns hopping, usage and non-replayable hosted-effect refusals. Combo `metered` eligibility follows the [runtime consent contract](../runtime.md#request-local-target-compatibility), including recovery selections. In `src/server/responses/run-turn-execution.ts`, streaming and buffered pre-output failures retain structured adapter status/type/code via `adapterFailureFromEvent`, and `formatErrorResponse`'s `classified` option keeps that verdict in the child body instead of re-deriving it from the status, wherever its type and message add nothing to what the status alone says; a verdict read from the message (quota, credentials, cyber policy, context overflow, catalog size) still outranks a generic adapter code, and spend-ledger, cyber-policy and replay-refusal overrides still win, and `consumeComboFailure` re-applies the client allowlist. Spend-ledger storage refusal remains 503. This preserves an exhausted subscription chain’s 429 response, a child's `insufficient_quota`, and the cool-free hop on `unsupported_input_modality` in `src/combos/failover.ts`. Coverage: `tests/adapters/anthropic/anthropic-subscription-chain.test.ts` and `tests/responses/responses-combo-run-turn-classified-failure.test.ts`.  `src/server/responses/request-transport.ts` resolves the final Anthropic model ID once for each enabled-pool request and holds its model route through admission. The three account-refusal retry sites in `adapter-dispatch.ts`, `adapter-continuation.ts` and `sidecar-execution.ts` use the same route, keep the original refusal if no replacement exists inside it, and preserve existing send and output replay limits. A local cooldown returns 429 with the earliest known Retry-After among accounts the route can use when they recover, and answers a usage limit when every held account is on spent quota ([quota exhaustion answer](../providers/anthropic-account-pool.md#quota-exhaustion-answer-and-fresh-read-recovery)); explicit fallback includes usable ordinary-pool accounts even when the saved route IDs have been removed, while a strict route stays route-scoped. Selection, refusal and 429-rotation logs use the rule’s 1-based `route:#<n>` position, never its name.
 Classified 429 admission follows the [Anthropic account-pool contract](../providers/anthropic-account-pool.md#classified-429-admission). Classified account-entitlement 403 recovery and combo 402 credit-refusal cooldowns follow the [Anthropic account-pool contract](../providers/anthropic-account-pool.md#account-entitlement-refusal-recovery); combo error normalization preserves the original physical-send proof, and a stale credential cannot cool its replacement.
 `src/server/responses/compaction-recovery-policy.ts` is a pure eligibility policy, not a dispatcher.
 It requires explicit configuration and normalized attempt evidence, preserves ordinary requests,
@@ -147,8 +147,8 @@ cooldown is live. A stale-generation refusal cannot borrow a sibling request's s
 
 `src/server/responses/core.ts` passes the combo's `reasoningEffortMode` and the final target's
 `supportedLadderFor` result to `src/combos/request.ts` before adapter parsing. Explicit empty
-capability ladders remove effort and thinking controls in every combo mode; adaptive mode also
-removes those controls for unknown ladders and preserves `reasoning.summary`. Known non-empty
+capability ladders remove effort and legacy alternative thinking controls in every combo mode; adaptive mode also
+removes those controls for unknown ladders. Independent `reasoning.enabled` and `reasoning.summary` survive. Known non-empty
 ladders retain the existing per-target effort resolution. This request normalization does not
 change target order or attempt accounting; provider-400 decisions follow the [request-local target compatibility](../runtime.md#request-local-target-compatibility) contract.
 
@@ -262,6 +262,19 @@ including when the destination is a combo, so request history names the phase th
 
 ## Compaction routing overrides
 
+For routed v2 summaries served by the resolved Anthropic Messages adapter, `src/server/responses/response-effects.ts`
+preserves client tool definitions, system text, `toolChoice` and `parallelToolCalls`. Other adapters retain tool removal.
+Search/media sidecar execution stays disabled; Anthropic server-tool declarations and replay remain,
+with wire `tool_choice: none` when server tools exist, preventing upstream execution.
+[Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#what-invalidates-the-cache)
+orders the prefix as tools, system, messages: changing tool definitions invalidates all three;
+changing tool choice invalidates message cache only. Client-only summaries keep an optional choice unchanged; a mandatory choice (required, named, or required allowed tools) keeps the caller's choice for catalog derivation and sets `_summaryProhibitsToolCalls`; `src/adapters/anthropic.ts` builds tools and system from that choice, provider name transforms included, then sends `tool_choice: none`, so tools and system stay byte-identical. Search sidecar declarations are not injected for summaries, so a request whose ordinary turn advertised a sidecar search tool still changes its tool prefix.
+`src/responses/compaction-summary.ts` suppresses tool/search events and rejects tool attempts,
+empty summaries and abnormal completions before delivery;
+only successful prose reaches the single synthetic compaction item. Truncated completions retain the existing incomplete outcome.
+Signed progress is not summary prose.
+`tests/responses/responses-anthropic-compaction-prefix.test.ts` covers the prefix and both delivery modes; image normalization and 413 recovery retain their existing policy.
+
 `src/server/responses/compaction-routing.ts` applies `compactionRouting` before model routing in
 both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"` in
 `x-codex-turn-metadata`, supplied as a header or embedded in Responses `client_metadata`, and on
@@ -284,7 +297,10 @@ canonical `openai` provider exists (#2901), not when its quota is exhausted. A h
 `triggers` the schema would reject disables the whole block instead of widening it, so a
 malformed edit can never route more than it names.
 
-The override changes only the model and optional reasoning effort; native forwarding, routed summaries, capability handling, and retry
+The override changes only the model and optional reasoning effort. Final-route normalization
+checks that effort against the selected canonical native model's published ladder before each
+Responses send, including a combo fallback (`gpt-6.1-sol` `none` → `low`). Native forwarding,
+routed summaries, capability handling, and retry
 budgets stay authoritative, and native compact still removes reasoning before sending. Handoffs carry the override record (with the source
 model) as a recursion guard so combo children and fallbacks keep their targets. Overrides bypass shadow interception and conversation
 combo recall, and do not publish replacement combo/handoff recall. They never change the conversation's model or compactions outside the

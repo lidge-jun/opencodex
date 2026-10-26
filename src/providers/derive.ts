@@ -4,6 +4,7 @@ import { cloneFastWire } from "./fastwire";
 import { isAzureModelMetadataDestination, publishedAzureModelMetadata, type AzureModelMetadata } from "./azure-model-metadata";
 import { resolveModelPolicy } from "./resolved-model-policy";
 import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-merge";
+import { mergeReasoningModelCapabilities } from "./reasoning-capabilities";
 import {
   PROVIDER_REGISTRY,
   registryEntryForProviderDestination,
@@ -31,6 +32,7 @@ export interface DerivedKeyLoginProvider {
   contextWindow?: number;
   modelContextWindows?: Record<string, number>;
   modelInputModalities?: Record<string, string[]>;
+  modelCapabilities?: OcxProviderConfig["modelCapabilities"];
   modelMaxInputTokens?: Record<string, number>;
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
@@ -263,6 +265,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(staticPolicy.modelContextWindows ? { modelContextWindows: { ...staticPolicy.modelContextWindows } } : {}),
     ...(staticPolicy.modelDisplayNames ? { modelDisplayNames: { ...staticPolicy.modelDisplayNames } } : {}),
     ...(staticPolicy.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(staticPolicy.modelInputModalities) } : {}),
+    ...(staticPolicy.modelCapabilities ? { modelCapabilities: structuredClone(staticPolicy.modelCapabilities) } : {}),
     ...(staticPolicy.modelMaxInputTokens ? { modelMaxInputTokens: { ...staticPolicy.modelMaxInputTokens } } : {}),
     ...(entry.defaultMaxOutputTokens !== undefined ? { defaultMaxOutputTokens: entry.defaultMaxOutputTokens } : {}),
     ...(staticPolicy.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...staticPolicy.modelMaxOutputTokens } } : {}),
@@ -340,6 +343,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...entry.modelMaxOutputTokens } } : {}),
       ...(entry.reasoningEfforts ? { reasoningEfforts: [...entry.reasoningEfforts] } : {}),
       ...(entry.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(entry.modelReasoningEfforts) } : {}),
+      ...(entry.modelCapabilities ? { modelCapabilities: structuredClone(entry.modelCapabilities) } : {}),
       ...(entry.modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts: { ...entry.modelDefaultReasoningEfforts } } : {}),
       ...(entry.reasoningEffortMap ? { reasoningEffortMap: { ...entry.reasoningEffortMap } } : {}),
       ...(entry.modelReasoningEffortMap ? { modelReasoningEffortMap: cloneNestedRecord(entry.modelReasoningEffortMap) } : {}),
@@ -484,6 +488,8 @@ function applyVerbosityDefaults(prov: OcxProviderConfig, entry: ProviderRegistry
  */
 function enrichReasoningMetadataByDestination(prov: OcxProviderConfig): void {
   const destination = registryEntryForProviderDestination(prov);
+  const capabilities = mergeReasoningModelCapabilities(destination?.modelCapabilities, prov.modelCapabilities);
+  if (capabilities) prov.modelCapabilities = capabilities;
   applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
   if (destination?.modelDefaultReasoningEfforts) {
     prov.modelDefaultReasoningEfforts = mapFill(destination.modelDefaultReasoningEfforts, prov.modelDefaultReasoningEfforts)[0];
@@ -499,6 +505,9 @@ function enrichReasoningMetadataByDestination(prov: OcxProviderConfig): void {
   }
   if (destination?.modelReasoningEfforts) {
     prov.modelReasoningEfforts = fillRecordOfArrays(destination.modelReasoningEfforts, prov.modelReasoningEfforts);
+  }
+  if (destination?.modelDefaultReasoningEfforts) {
+    [prov.modelDefaultReasoningEfforts] = mapFill(destination.modelDefaultReasoningEfforts, prov.modelDefaultReasoningEfforts);
   }
   if (prov.reasoningEfforts === undefined && destination?.reasoningEfforts !== undefined) {
     prov.reasoningEfforts = [...destination.reasoningEfforts];
@@ -568,6 +577,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   // (mapFill in src/providers/resolved-model-policy-merge.ts), so the wire honored the effort while /v1/models and
   // every client export showed no effort control at all.
   if (resolvedStatic.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(resolvedStatic.modelReasoningEfforts);
+  if (resolvedStatic.modelCapabilities) prov.modelCapabilities = structuredClone(resolvedStatic.modelCapabilities);
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };
   if (!prov.reasoningEffortMap && seed.reasoningEffortMap) prov.reasoningEffortMap = { ...seed.reasoningEffortMap };
   if (!prov.modelReasoningEffortMap && seed.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(seed.modelReasoningEffortMap);

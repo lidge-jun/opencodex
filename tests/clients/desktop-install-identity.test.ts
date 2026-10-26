@@ -24,6 +24,7 @@ const STARTUP = repoPath(`${SHELL}/startup.rs`);
 const STATE = repoPath("src/service/state.ts");
 const COMPATIBILITY = repoPath("src/service/ownership-compatibility.ts");
 const DESKTOP_SHELL_DOC = repoPath("structure/desktop-shell.md");
+const DESKTOP_SUPERVISION_DOC = repoPath("structure/ops/desktop-supervision.md");
 
 function code(path: string): string {
   return readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
@@ -35,6 +36,7 @@ describe("desktop install identity", () => {
   const state = code(STATE);
   const compatibility = code(COMPATIBILITY);
   const desktopShellDoc = readFileSync(DESKTOP_SHELL_DOC, "utf8");
+  const desktopSupervisionDoc = readFileSync(DESKTOP_SUPERVISION_DOC, "utf8");
 
   test("the installation's id is minted once and never rewritten", () => {
     // Exclusive, because two launches racing to mint would answer to two ids, and the second one
@@ -136,13 +138,19 @@ describe("desktop install identity", () => {
   });
 
   test("the desktop acceptance text names the consent reuse boundaries", () => {
-    expect(desktopShellDoc).toContain("Desktop runtime ownership acceptance");
-    expect(desktopShellDoc).toMatch(/same desktop installation reuses consent/i);
-    expect(desktopShellDoc).toMatch(/Package update and service repair also preserve that grant/i);
-    expect(desktopShellDoc).toMatch(/different `owner`, different `installId`, moved\s+`consentGeneration`/i);
-    expect(desktopShellDoc).toMatch(/unreadable ownership record is not reuse/i);
-    expect(desktopShellDoc).toMatch(/Uninstall or an explicit handback releases only the live claim/i);
-    expect(desktopShellDoc).toMatch(/old package-owned registration is only attachable as a guest/i);
+    // The acceptance contract moved to ops/desktop-supervision.md; the shell doc must keep
+    // both old anchors and their forwarding links so inbound references still resolve.
+    expect(desktopShellDoc).toContain("## Runtime ownership, from the app's side");
+    expect(desktopShellDoc).toContain("### Desktop runtime ownership acceptance");
+    expect(desktopShellDoc).toContain("ops/desktop-supervision.md#runtime-ownership-from-the-apps-side");
+    expect(desktopShellDoc).toContain("ops/desktop-supervision.md#desktop-runtime-ownership-acceptance");
+    expect(desktopSupervisionDoc).toContain("### Desktop runtime ownership acceptance");
+    expect(desktopSupervisionDoc).toMatch(/same desktop installation reuses consent/i);
+    expect(desktopSupervisionDoc).toMatch(/Package update and service repair also preserve that grant/i);
+    expect(desktopSupervisionDoc).toMatch(/different `owner`, different `installId`, moved\s+`consentGeneration`/i);
+    expect(desktopSupervisionDoc).toMatch(/unreadable ownership record is not reuse/i);
+    expect(desktopSupervisionDoc).toMatch(/Uninstall or an explicit handback releases only the live claim/i);
+    expect(desktopSupervisionDoc).toMatch(/old package-owned registration is only attachable as a guest/i);
   });
 
   test("service refresh preserves consent and handback releases only the live claim", () => {

@@ -39,7 +39,7 @@ export function isDecisionModelCandidate(row: DiscoveryModelRow, query = ""): bo
   const term = normalize(query);
   const haystack = `${row.id} ${row.owned_by ?? ""} ${row.displayName ?? ""}`.toLowerCase();
   if (term.length > 0) return haystack.includes(term);
-  return DECISION_MODEL_HINT.test(row.id) || DECISION_MODEL_HINT.test(row.owned_by ?? "");
+  return DECISION_MODEL_HINT.test(row.id) || DECISION_MODEL_HINT.test(row.owned_by ?? "") || row.id.toLowerCase().includes("laya");
 }
 
 /**
@@ -53,7 +53,17 @@ export function isDecisionModelCandidate(row: DiscoveryModelRow, query = ""): bo
 export function systemOneEndpoint(baseUrl: string | undefined): string | null {
   const trimmed = (baseUrl ?? "").trim().replace(/\/+$/, "");
   if (!/^https?:\/\//i.test(trimmed)) return null;
-  return trimmed.endsWith("/systemone") ? trimmed : `${trimmed}/systemone`;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.hostname === "ai-gateway.vercel.sh") {
+      if (trimmed.endsWith("/decisions")) return trimmed;
+      return `${trimmed.replace(/\/systemone$/, "").replace(/\/+$/, "")}/decisions`;
+    }
+  } catch {
+    return null;
+  }
+  if (trimmed.endsWith("/systemone") || trimmed.endsWith("/decisions")) return trimmed;
+  return `${trimmed}/systemone`;
 }
 
 /** Deduplicate by provider+model so a row that appears twice is probed once. */

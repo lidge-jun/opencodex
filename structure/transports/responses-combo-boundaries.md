@@ -1,5 +1,29 @@
 # Combo Streaming Boundaries
 
+## Buffered required-tool contract
+
+Before combo success bookkeeping, native delivery in `src/server/responses/passthrough-delivery.ts`
+uses `src/server/responses/combo-required-tool-contract.ts` to check successful native
+`openai-responses` JSON children with explicit required or named function/custom choices.
+Only a parsed `completed` output array can prove a violation. A missing required call becomes
+502 `required_tool_contract_unsatisfied`; normal failure handling owns target eligibility,
+send budgets, fallback consent and spent-replacement refusal. Usage remains on the failed attempt.
+Hosted calls satisfy an any-tool requirement only for a declared mapped capability. A mismatched
+hosted call returns HTTP 400 with the same code, marked non-replayable and carrying
+`x-should-retry: false`, because it may already have executed. Error formatting retains that client policy.
+Provider-executed custom calls use response ownership and `isAuthorizedProviderExecutedCall` in
+`src/server/responses-undeclared-tool-guard.ts`; a hosted call cannot masquerade as a client custom call.
+Unknown tool declarations abstain; incomplete, failed and opaque payloads retain delivery.
+Judgment precedes local hosted-image display projection, which replaces image calls with messages;
+canonical SSE buffered for JSON callers is judged after restoration and before that projection too.
+Accepted bodies retain response tool ownership and preinspection identity, with stale representation
+headers removed after decoding. Existing non-replayable responses bypass inspection.
+Translated Chat, runTurn and native Chat terminal owners stay outside this guard; streaming text-only
+completion with required tools remains open. No second SSE reader or post-output replay is added.
+`src/lib/errors.ts` declares the code and `src/bridge/errors.ts` preserves it through combo error
+formatting without overriding cyber-policy precedence. Regression coverage lives in
+`tests/server/server-combo-required-tool-contract.test.ts`, including the 151-tool call/result cycle.
+
 ## Combo streaming commit boundary
 
 An HTTP 200 does not by itself commit a streaming combo child. The combo parent runs the child's

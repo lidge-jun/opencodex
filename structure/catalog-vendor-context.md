@@ -43,3 +43,5 @@ Compaction and max input still follow the effective default
 window, including retained lower soft budgets. Native capacity remains defined by the
 [native passthrough contract](catalog.md#native-passthrough). Covered by
 `tests/codex-integration/catalog-native-max-context.test.ts`.
+
+The first-party DeepSeek catalog retains `deepseek-v4-pro`: its retirement plan was withdrawn, and the official models endpoint still advertises it. `src/codex/catalog/parsing.ts` does not exclude that first-party row; third-party exclusions remain provider-specific. `src/providers/registry/entries-core.ts` restores its text-only capability, context window, reasoning controls and inbound-scoped Responses route while retaining Flash as the default. Evidence: [official service continuation notice](https://api-docs.deepseek.com/updates/), checked 2026-10-23.

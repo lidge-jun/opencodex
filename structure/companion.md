@@ -21,6 +21,12 @@ The timeline's fixed bucket count includes the current partial interval. Its end
 bucket boundary; `src/server/management/usage-timeline-routes.ts` retains the rounded cache
 anchor and 15-second lifetime.
 
+Max and average aggregation iterate request-map values without temporary per-request arrays
+or variadic function calls. Same-model attempts are combined before request weighting; the
+`other` series aggregates individual request values rather than averaging series averages.
+Aggregation scratch storage is constant beyond the retained request maps, which still scale
+with traffic. `tests/usage/usage-timeline.test.ts` covers large single-series and folded populations.
+
 Repeated `hiddenProvider` query values are explicit, bounded to 100 entries and normalized.
 Each exclusion matches either the raw logged provider or its base label: a base name hides all its
 pool accounts, while an account-qualified name hides only that account's attributions. The

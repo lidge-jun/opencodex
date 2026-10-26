@@ -9,7 +9,7 @@ import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
 import type { CatalogModel, OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const M3 = "MiniMax-M3";
-const PREVIEW = "MiniMax-M3.1-Flash-Preview";
+const PREVIEW = "MiniMax-M3.1-Flash";
 const REGIONS = ["minimax", "minimax-cn"] as const;
 const originalFetch = globalThis.fetch;
 

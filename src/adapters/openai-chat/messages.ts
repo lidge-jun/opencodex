@@ -7,7 +7,7 @@ import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../
 import { identifyRoutedModel } from "../identity";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "../tool-catalog-nudge";
 import { peekReasoningForCall } from "../../responses/reasoning-replay-cache";
-import { chatReasoningReplayPolicy } from "./reasoning-replay";
+import { chatReasoningReplayPolicy, isReflectionThinkingModel } from "./reasoning-replay";
 import type { ClaudeThinkingProjection } from "../../lib/claude-request-projection";
 import { inlineDocumentDataUrl } from "../../responses/inline-document";
 import type { OcxAssistantMessage, OcxContentPart, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall } from "../../types";
@@ -282,9 +282,15 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         const chatMsg: Record<string, unknown> = { role: "assistant" };
         if (textParts.length > 0) chatMsg.content = textParts.map(p => p.text).join("");
         let reasoningContent = thinkingParts.map(p => p.thinking).join("");
+        // Reflection/Stealth replay a placeholder even on a tool-less turn, but never on an
+        // empty turn inside an unfinished tool batch: that turn is dropped below, and a
+        // fabricated reasoning block there would split the call from its real result.
+        const reflectionPlaceholder = isReflectionThinkingModel(parsed.modelId)
+          && chatReasoningReplayPolicy(provider, parsed.modelId).placeholder
+          && !(pendingToolCalls.length > 0 && !chatMsg.content && toolCalls.length === 0 && thinkingParts.length === 0);
         if (
           reasoningContent.length === 0
-          && (toolCalls.length > 0 || thinkingParts.length > 0)
+          && (toolCalls.length > 0 || thinkingParts.length > 0 || reflectionPlaceholder)
           && wireSerializesThinking
         ) {
           const cached = toolCalls
