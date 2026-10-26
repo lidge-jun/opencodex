@@ -5,7 +5,7 @@ import {
   type CodexAuthContext,
   type CodexAuthPolicyConfig,
 } from "../codex/auth-context";
-import { poolContextCreditHoldResetAt } from "../codex/pool-credit-policy";
+import { poolContextCreditHoldResetAt, poolContextCreditRecoveryNeeded } from "../codex/pool-credit-policy";
 
 export function createOpenAiSidecarCreditGuard(
   context: CodexAuthContext,
@@ -16,7 +16,7 @@ export function createOpenAiSidecarCreditGuard(
     const resetAt = poolContextCreditHoldResetAt(context, policy);
     if (resetAt === undefined) return;
     releaseCodexAuthContextProbeLease(context);
-    throw new CodexPoolAccountCreditsOffError(context.accountId, resetAt);
+    throw new CodexPoolAccountCreditsOffError(context.accountId, resetAt, poolContextCreditRecoveryNeeded(context, policy), context.quotaScope);
   };
 }
 

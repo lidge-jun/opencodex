@@ -7,6 +7,7 @@ import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-mer
 import { mergeReasoningModelCapabilities } from "./reasoning-capabilities";
 import {
   PROVIDER_REGISTRY,
+  normalizedProviderEndpoint,
   registryEntryForProviderDestination,
   registryModelServiceTierCapabilityApplies,
   type ProviderRegistryEntry,
@@ -520,6 +521,23 @@ export function hasLegacyClinePassReasoningEfforts(name: string, prov: OcxProvid
     && prov.reasoningWireFormat === "gateway-object"
     && prov.reasoningEfforts?.length === 1
     && prov.reasoningEfforts[0] === "low";
+}
+
+/**
+ * The registry's provider-wide `inputModalities` for a row that still points at that entry's
+ * destination. Runtime-only: callers apply it to a private copy (vision eligibility) or to the
+ * routed provider. Enrichment does not copy it, because init and management writes persist the
+ * enriched object, and a saved copy would follow the row to another URL.
+ */
+export function registryInputModalitiesForDestination(name: string, prov: OcxProviderConfig): string[] | undefined {
+  let entry = PROVIDER_REGISTRY.find(row => row.id === name);
+  if (!entry || !providerMatchesRegistryTransportWithStaticGuards(name, prov)) {
+    entry = registryEntryForProviderDestination(prov);
+    // Runtime modality authority follows only the canonical fixed-key destination, not aliases.
+    if (entry && (entry.adapter !== prov.adapter
+      || normalizedProviderEndpoint(entry.baseUrl) !== normalizedProviderEndpoint(prov.baseUrl))) return undefined;
+  }
+  return entry?.inputModalities ? [...entry.inputModalities] : undefined;
 }
 
 export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {

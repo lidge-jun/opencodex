@@ -2,6 +2,7 @@
   "agent-clients.test.ts": "clients",
   "workbuddy-selector-recovery.test.ts": "clients",
   "server-live-close.test.ts": "server",
+  "server-live-cancel.test.ts": "server",
   "link-diagnostics.test.ts": "clients",
   "link-tunnel-history.test.ts": "clients",
   "link-readiness.test.ts": "clients",

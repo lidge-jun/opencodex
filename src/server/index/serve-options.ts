@@ -1767,7 +1767,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (audioController) registerTurn(audioController, turnAdmissionLease);
         const acquisition = audioController
           ? clearableDeadline(120_000, AbortSignal.any([req.signal, audioController.signal])) : undefined;
-        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal);
+        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal); // detached at the dial; then close/CLOSED owns release
         const releaseAcquisition = () => {
           detachClientAbort();
           acquisition?.clear();
@@ -1820,6 +1820,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           finally { finalizeLiveRequest(499, { closeReason: "client_cancel" }); }
           return withCors(formatErrorResponse(499, "client_closed_request", "Audio connection canceled"), req, policy);
         }
+        detachClientAbort();
         const upstreamHandshake = await openLiveSidebandUpstream(
           resolved.upstreamWsUrl,
           resolved.headers,
@@ -1888,7 +1889,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(formatErrorResponse(502, "upstream_error", "Audio WebSocket upgrade failed"), req, policy);
         }
         if (upgraded) {
-          detachClientAbort();
           acquisition?.clear();
           finalizeLiveRequest(101);
           return undefined as unknown as Response;

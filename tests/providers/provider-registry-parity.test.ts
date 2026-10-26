@@ -1,4 +1,3 @@
-import { configuredReasoningEfforts } from "../../src/reasoning-effort";
 import { describe, expect, spyOn, test } from "bun:test";
 import { buildCatalogEntries } from "../../src/codex/catalog";
 import { CURSOR_NO_VISION_MODELS } from "../../src/adapters/cursor/discovery";
@@ -42,15 +41,9 @@ function nativeTemplate(): Record<string, unknown> {
   };
 }
 
-const EXPECTED_KEY_PROVIDER_IDS = [
-  "anthropic-apikey", "openai-apikey", "meta-model", "umans", "opencode-go", "neuralwatt", "openrouter", "cline-pass", "cline", "orcarouter", "packycode", "bizrouter", "groq", "google", "google-vertex", "azure-openai",
-  "deepseek", "cerebras", "chutes", "deepinfra", "hyperbolic", "nscale", "vultr", "jev", "baseten", "commandcode", "sambanova", "nebius", "crusoe", "digitalocean", "scaleway", "featherless", "novita", "together", "fireworks", "firepass", "moonshot",
-  "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
-  "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
-  "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper", "opengateway", "tokenlab", "modelflare",
-  "xiaomi", "xiaomi-mimo", "kilo", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
-  "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun", "claude-cli",
-];
+const EXPECTED_KEY_PROVIDER_IDS = PROVIDER_REGISTRY
+  .filter(entry => entry.authKind === "key" && !entry.deprecated)
+  .map(entry => entry.id);
 
 describe("provider registry parity", () => {
   test("CodeBuddy static catalogs cover every official CLI-agent model in the bundled 2.143.0 manifest", () => {
