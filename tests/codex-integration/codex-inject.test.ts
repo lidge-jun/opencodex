@@ -261,6 +261,29 @@ describe("Codex config injection", () => {
     expect(block).toContain("supports_websockets = true");
   });
 
+  test("declares remote compaction so compactionRouting receives Codex compaction requests", () => {
+    const target = standaloneCodexRoutingTarget(10100, { codexDesktopAuthless: true });
+    const block = buildProviderTableBlockForTarget(target, true);
+    const parsed = Bun.TOML.parse(block) as { model_providers: { opencodex: Record<string, unknown> } };
+    expect(parsed.model_providers.opencodex.supports_websockets).toBe(true);
+    expect(parsed.model_providers.opencodex.capabilities).toEqual({ remote_compaction: "v2" });
+
+    const config = 'model_provider = "opencodex"\n' + block + "\n[agents]\nmax_threads = 4\n";
+    expect(extractOcxProviderTableBlock(config)).toContain("[model_providers.opencodex.capabilities]");
+    const stripped = stripOpencodexConfig(config);
+    expect(stripped).not.toContain("model_providers.opencodex");
+    expect(stripped).not.toContain("remote_compaction");
+    expect(stripped).toContain("max_threads = 4");
+  });
+
+  test("client-side compaction opt-in omits the remote compaction capability", () => {
+    const target = standaloneCodexRoutingTarget(10100, { codexClientCompaction: true });
+    expect(target.clientCompaction).toBe(true);
+    const block = buildProviderTableBlockForTarget(target);
+    expect(block).not.toContain("capabilities");
+    expect(block).not.toContain("remote_compaction");
+  });
+
   test("non-loopback proxy mode injects the modern env_key admission line (#2073)", () => {
     const block = buildProviderTableBlock(10100, false, true);
 

@@ -174,6 +174,13 @@ export function buildProviderTableBlockForTarget(
     lines.push(`env_key = ${tomlString(target.tokenEnv)}`);
   }
   if (supportsWebsockets) lines.push("supports_websockets = true");
+  if (target.clientCompaction !== true) {
+    // Without this capability Codex compacts locally and sends the summary prompt as an ordinary
+    // turn to the chat's own model, so compactionRouting never sees it. Declaring remote
+    // compaction makes Codex send tagged compaction requests the proxy can route. The
+    // client-compaction opt-in asks for the opposite, so it omits the table.
+    lines.push("", "[model_providers.opencodex.capabilities]", 'remote_compaction = "v2"');
+  }
   return lines.join("\n") + "\n";
 }
 
