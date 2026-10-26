@@ -122,6 +122,7 @@ function cursorForwardConfig(baseUrl: string, apiKey?: string): OcxConfig {
 async function withCursorCaptureServer<T>(
   run: (baseUrl: string, capturedAuth: Array<string | null>) => Promise<T>,
   beforeResponse?: () => Promise<void>,
+  closeTrace?: BearerIterationTrace,
 ): Promise<T> {
   const capturedAuth: Array<string | null> = [];
   const sessions = new Set<http2.ServerHttp2Session>();
@@ -157,8 +158,15 @@ async function withCursorCaptureServer<T>(
   try {
     return await run(`http://127.0.0.1:${address.port}`, capturedAuth);
   } finally {
-    for (const session of sessions) session.destroy();
-    await new Promise<void>(resolve => server.close(() => resolve()));
+    closeTrace?.begin("capture_close");
+    try {
+      for (const session of sessions) session.destroy();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      closeTrace?.end("capture_close");
+    } catch (error) {
+      closeTrace?.error("capture_close");
+      throw error;
+    }
   }
 }
 
@@ -272,6 +280,181 @@ async function startOwnedServer(): Promise<ReturnType<typeof startServer>> {
   await waitForNativeMainStartupGate();
   return server;
 }
+
+/**
+ * Opt-in stage tracing for the multi-iteration admission loops below. One of
+ * these tests consumed its whole SERVER_BUDGET_MS in CI with no evidence of
+ * which stage ate it — the per-test timeout reports only that the test died.
+ *
+ * OPENCODEX_BEARER_STAGE_TRACE=1 emits one JSON record per stage event on
+ * stderr: a fixed stage name with begin/end/error, the case index, this
+ * iteration's elapsed and the whole-test elapsed against the single 30s
+ * budget the test timeout actually enforces. Records carry enum literals and
+ * numbers only — no path, header, token, or error text — an elapsed
+ * correlation alone never proves an external kill. Tracing adds no timers,
+ * retries, or files and never alters the call sequence or cleanup: an
+ * undefined trace is an exact no-op.
+ */
+type BearerTraceStage = "save_config" | "startup_gate" | "request" | "server_stop" | "capture_close";
+
+interface BearerIterationTrace {
+  begin(stage: BearerTraceStage): void;
+  end(stage: BearerTraceStage): void;
+  error(stage: BearerTraceStage): void;
+  finish(): void;
+}
+
+interface BearerTestTrace {
+  iteration(caseIndex: number, caseCount: number): BearerIterationTrace;
+  finish(): void;
+}
+
+function bearerStageTracer(label: string): BearerTestTrace | undefined {
+  if (process.env.OPENCODEX_BEARER_STAGE_TRACE !== "1") return undefined;
+  const startedAt = Date.now();
+  const emit = (record: Record<string, unknown>): void => {
+    console.error(`[bearer-stage-trace] ${JSON.stringify({ label, budgetMs: SERVER_BUDGET_MS, ...record })}`);
+  };
+  emit({ event: "test_begin" });
+  return {
+    finish: () => emit({ event: "test_end", testElapsedMs: Date.now() - startedAt }),
+    iteration: (caseIndex, caseCount) => {
+      const iterationStartedAt = Date.now();
+      const stageStartedAt = new Map<string, number>();
+      emit({
+        event: "iteration_begin",
+        caseIndex,
+        caseCount,
+        testElapsedMs: iterationStartedAt - startedAt,
+      });
+      const mark = (stage: BearerTraceStage, event: "begin" | "end" | "error"): void => {
+        const now = Date.now();
+        const record: Record<string, unknown> = {
+          event: `${stage}_${event}`,
+          caseIndex,
+          iterationElapsedMs: now - iterationStartedAt,
+          testElapsedMs: now - startedAt,
+        };
+        if (event === "begin") {
+          stageStartedAt.set(stage, now);
+        } else {
+          const began = stageStartedAt.get(stage);
+          if (began !== undefined) record.stageElapsedMs = now - began;
+        }
+        emit(record);
+      };
+      return {
+        begin: stage => mark(stage, "begin"),
+        end: stage => mark(stage, "end"),
+        error: stage => mark(stage, "error"),
+        finish: () => emit({
+          event: "iteration_end",
+          caseIndex,
+          iterationElapsedMs: Date.now() - iterationStartedAt,
+          testElapsedMs: Date.now() - startedAt,
+        }),
+      };
+    },
+  };
+}
+
+/** Run `fn` inside a traced stage; an undefined trace changes nothing. */
+async function tracedBearerStage<T>(
+  iteration: BearerIterationTrace | undefined,
+  stage: BearerTraceStage,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  if (!iteration) return fn();
+  iteration.begin(stage);
+  try {
+    const value = await fn();
+    iteration.end(stage);
+    return value;
+  } catch (error) {
+    iteration.error(stage);
+    throw error;
+  }
+}
+
+/**
+ * Sync counterpart for stages whose body is already synchronous. Routing a
+ * sync call through an async wrapper would add a microtask on every
+ * iteration even with tracing off, so this keeps the original direct call.
+ */
+function tracedBearerStageSync<T>(
+  iteration: BearerIterationTrace | undefined,
+  stage: BearerTraceStage,
+  fn: () => T,
+): T {
+  if (!iteration) return fn();
+  iteration.begin(stage);
+  try {
+    const value = fn();
+    iteration.end(stage);
+    return value;
+  } catch (error) {
+    iteration.error(stage);
+    throw error;
+  }
+}
+
+describe("bearer stage tracer seam", () => {
+  test("a disabled trace runs a sync stage as a direct call — no microtask, same order", () => {
+    // The whole point of the sync wrapper: a sync body must come back as a
+    // value, not a resolved Promise, when tracing is off.
+    const order: string[] = [];
+    const value = tracedBearerStageSync(undefined, "save_config", () => {
+      order.push("save_config");
+      return "saved";
+    });
+    order.push("auth_write");
+
+    expect(value).toBe("saved");
+    expect(order).toEqual(["save_config", "auth_write"]);
+  });
+
+  test("an enabled trace emits the fixed event sequence without altering call order", async () => {
+    const previous = process.env.OPENCODEX_BEARER_STAGE_TRACE;
+    process.env.OPENCODEX_BEARER_STAGE_TRACE = "1";
+    const lines: string[] = [];
+    const originalError = console.error;
+    console.error = (line: unknown) => { lines.push(String(line)); };
+    try {
+      const trace = bearerStageTracer("seam-check");
+      const iteration = trace?.iteration(0, 1);
+      const order: string[] = [];
+
+      tracedBearerStageSync(iteration, "save_config", () => { order.push("save_config"); });
+      await tracedBearerStage(iteration, "request", async () => { order.push("request"); });
+      iteration?.finish();
+      trace?.finish();
+
+      expect(order).toEqual(["save_config", "request"]);
+      const events = lines
+        .filter(line => line.startsWith("[bearer-stage-trace] "))
+        .map(line => JSON.parse(line.slice("[bearer-stage-trace] ".length)) as Record<string, unknown>);
+      expect(events.map(record => record.event)).toEqual([
+        "test_begin",
+        "iteration_begin",
+        "save_config_begin",
+        "save_config_end",
+        "request_begin",
+        "request_end",
+        "iteration_end",
+        "test_end",
+      ]);
+      for (const record of events) {
+        expect(record.label).toBe("seam-check");
+        expect(Number.isFinite(record.budgetMs)).toBe(true);
+        expect(Number.isFinite(record.testElapsedMs ?? 0)).toBe(true);
+      }
+    } finally {
+      console.error = originalError;
+      if (previous === undefined) delete process.env.OPENCODEX_BEARER_STAGE_TRACE;
+      else process.env.OPENCODEX_BEARER_STAGE_TRACE = previous;
+    }
+  });
+});
 
 describe("#2132 bearer admission does not require a ChatGPT credential for routed providers", () => {
   test("a key-authenticated route is served with no stored main credential", async () => {
@@ -746,28 +929,36 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
       { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": {} })}` },
       { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": { user_id: "u_1" } })}` },
     ];
-    for (const extra of cases) {
-      await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
-        saveConfig(cursorForwardConfig(baseUrl));
-        writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
-        const server = await startOwnedServer();
-        try {
-          const headers = { "x-opencodex-api-key": ADMISSION_SECRET, ...extra };
-          const response = surface === "Chat"
-            ? await postChatCompletions(server.url, "cursorcustom/auto", headers)
-            : await postResponses(server.url, "cursorcustom/auto", headers);
-          if (surface === "Responses") {
-            expect(await response.json()).toMatchObject({ status: "failed" });
-          } else {
-            expect(response.status).not.toBe(200);
-            await response.text();
+    const trace = bearerStageTracer(`ChatGPT-claimed bearer (${surface})`);
+    for (const [caseIndex, extra] of cases.entries()) {
+      const iteration = trace?.iteration(caseIndex, cases.length);
+      try {
+        await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+          tracedBearerStageSync(iteration, "save_config", () => saveConfig(cursorForwardConfig(baseUrl)));
+          writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+          const server = await tracedBearerStage(iteration, "startup_gate", () => startOwnedServer());
+          try {
+            const headers = { "x-opencodex-api-key": ADMISSION_SECRET, ...extra };
+            const response = await tracedBearerStage(iteration, "request", () =>
+              surface === "Chat"
+                ? postChatCompletions(server.url, "cursorcustom/auto", headers)
+                : postResponses(server.url, "cursorcustom/auto", headers));
+            if (surface === "Responses") {
+              expect(await response.json()).toMatchObject({ status: "failed" });
+            } else {
+              expect(response.status).not.toBe(200);
+              await response.text();
+            }
+            expect(capturedAuth).toEqual([]);
+          } finally {
+            await tracedBearerStage(iteration, "server_stop", () => server.stop(true));
           }
-          expect(capturedAuth).toEqual([]);
-        } finally {
-          await server.stop(true);
-        }
-      });
+        }, undefined, iteration);
+      } finally {
+        iteration?.finish();
+      }
     }
+    trace?.finish();
   });
 
   test.each(["Responses", "Chat"])("%s keeps an unmarked JWT as the Cursor credential", async surface => {
