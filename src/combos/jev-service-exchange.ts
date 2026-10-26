@@ -12,6 +12,7 @@ import { providerMatchesRegistryTransport } from "../providers/registry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { JevDecision, ResolveJevDecisionOptions } from "./jev";
 import {
+  isDecisionsEndpoint,
   isSystemOneEndpoint,
   jevDecisionEndpointUrl,
   JEV_DECISION_TIMEOUT_DEFAULT_MS,
@@ -48,6 +49,7 @@ export type JevServiceExchangeOptions = Pick<ResolveJevDecisionOptions,
 export interface JevDecisionEndpointShape {
   model: string;
   descriptiveCriteria: boolean;
+  url?: string;
 }
 
 /** The decision deadline: the configured value when in bounds, otherwise the four-second default. */
@@ -208,7 +210,7 @@ export async function exchangeJevDecision<T>(
   if (endpoint === null) return { gate: "invalid" };
   if (!endpoint) return { gate: "missing_key" };
 
-  const request = prepareRequestBody(prepare, { model: endpoint.model, descriptiveCriteria: endpoint.descriptiveCriteria });
+  const request = prepareRequestBody(prepare, { model: endpoint.model, descriptiveCriteria: endpoint.descriptiveCriteria, ...(isDecisionsEndpoint(endpoint.url) ? { url: endpoint.url } : {}) });
   if (options.signal?.aborted) throw options.signal.reason;
   if ("gate" in request) return request;
   const requestBody = request.body;

@@ -1,3 +1,4 @@
+import { withRequiredChatToolResult } from "./openai-chat/required-tool-result";
 import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
 import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary-budget";
 import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
@@ -48,7 +49,6 @@ import { openAIChatTransport, stripBracketedModelSuffix } from "./openai-chat/wi
 import { toolChoiceToChatFormat, toolsToChatFormatForProvider } from "./openai-chat/tool-schema";
 import { freeformToolsByWireName, type FreeformToolIdentity, reconcileStructuredToolCall, reconcileStructuredToolCalls } from "./openai-chat/serialized-tool-call-content";
 import { StandaloneBareToolCallBuffer, reconcileStandaloneBareToolCallEvents } from "./openai-chat/standalone-bare-tool-calls";
-
 export { stripBracketedModelSuffix } from "./openai-chat/wire";
 export { buildOpenAIChatPassthroughRequest } from "./openai-chat/passthrough";
 export { formatOpenAIChatErrorBody } from "./openai-chat/errors";
@@ -90,7 +90,7 @@ function canSerializeOpenAIChatServiceTier(
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
   let lastRequestedModelId: string | undefined;
   let freeformTools = new Map<string, FreeformToolIdentity>();
-  return withOpenAIChatToolNames(toolNames => ({
+  return withRequiredChatToolResult(withOpenAIChatToolNames(toolNames => ({
     name: "openai-chat",
 
     formatErrorBody: formatOpenAIChatErrorBody,
@@ -817,5 +817,5 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         budget.releaseRetained(responseBytes, { kind: "retained_collectors" });
       }
     },
-  }));
+  })));
 }

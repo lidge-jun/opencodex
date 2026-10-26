@@ -4,6 +4,12 @@ Qoder follows the shared [client-integration ownership contract](integrations.md
 
 ## Qoder settings ownership
 
+Qoder CN is an independent `qoder-cn` client. Its settings live under `QODERCN_CONFIG_DIR`,
+defaulting to `~/.qoder-cn`; it shares the Qoder wire schema and fragment ownership, but
+never falls back to the Global edition. The edition paths are resolved in
+`src/clients/config-export/agent-clients.ts`.
+
+
 Qoder IDE / qodercli uses JSON at `settings.json` under `QODER_CONFIG_DIR`, default `~/.qoder`;
 `qoderHomeDir` resolves that directory once for export, writing and detection, and refuses a
 relative override. The Qoder exporter in
@@ -15,7 +21,7 @@ restore uses its snapshots. On refresh, older ownership records remove their pre
 owned custom-model rows before merging the provider-only contribution. Foreign rows remain
 untouched, and edits to previously owned rows remain conflicts. The legacy selector template
 in `src/integrations/mutation-plan.ts` stays available for previewing that removal.
-An unowned `modelConfigs.customModels` row with `provider: "opencodex"` and a model the
+For both `qoder` and `qoder-cn`, an unowned `modelConfigs.customModels` row with `provider: "opencodex"` and a model the
 provider catalog also exports would recreate that rejection, so `classifyIntegration` reports
 it as a `conflict` / `unowned-key` before any write; `qoderLegacyCatalogCollision` decides
 which rows collide, and rows an ownership record still names are left to the refresh above.

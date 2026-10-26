@@ -25,6 +25,12 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   alreadyStopped?: boolean;
   absence?: "dead" | "unknown" | "live";
   managerState?: "inactive" | "active" | "unknown";
+  /** #7423: run the stop the way an update that restarts the proxy runs it. */
+  handover?: boolean;
+  /** The runtime-port record is missing, so the stop can only record a guessed endpoint. */
+  noRuntimeRecord?: boolean;
+  /** Like the real readPid, report no PID once the process is gone (a manager stop exited it). */
+  deadPidReadsNull?: boolean;
 };
 if (options.proxyProbePort) {
   // Deliberately bypass every fixture mock for the real proxy-environment regression.
@@ -100,8 +106,8 @@ mock.module("../../src/config/pending-teardown", () => ({
 const state = await import("../../src/config/process-state");
 mock.module("../../src/config/process-state", () => ({
   ...state,
-  readPid: () => options.orphan || options.alreadyStopped ? null : fakePid,
-  readRuntimePort: () => options.alreadyStopped ? null : endpoint,
+  readPid: () => options.orphan || options.alreadyStopped || (options.deadPidReadsNull && !alive) ? null : fakePid,
+  readRuntimePort: () => options.alreadyStopped || options.noRuntimeRecord ? null : endpoint,
   removePid() {},
   removeRuntimePort() {},
 }));
@@ -198,6 +204,7 @@ mock.module("../../src/server/direct-local-http", () => ({ ...direct,
 }));
 
 process.argv = [process.execPath, "ocx", "stop", ...(options.json ? ["--json"] : [])];
+if (options.handover) process.env.OCX_UPDATE_TEARDOWN_HANDOVER = "1";
 if (options.exitCleanup) {
   delete process.env.OCX_SERVICE;
   // Execute the actual startup exit closure, with only host/config effects replaced.

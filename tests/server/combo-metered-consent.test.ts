@@ -125,7 +125,7 @@ test("a subagent fallback that collapses a combo onto its metered target needs k
     const config = (consent: boolean): OcxConfig => ({
       port: 16389, defaultProvider: "primary",
       providers: { primary: provider("primary"), subscription: provider("subscription"), paid: provider("paid") },
-      combos: { chain: { alias: "chain-model", targets: [{ provider: "subscription", model: "m" }, { provider: "paid", model: "m", metered: true }] } },
+      combos: { chain: { alias: "chain-model", cooldownReprobe: { enabled: true }, targets: [{ provider: "subscription", model: "m" }, { provider: "paid", model: "m", metered: true }] } },
       subagentModelFallback: ["chain-model"],
       apiKeys: [{ ...key, allowMeteredComboTargets: consent }],
     });

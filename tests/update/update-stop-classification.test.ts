@@ -382,7 +382,8 @@ describe("stop failure classification (#3008)", () => {
       .toEqual({ proceed: false, reason: "proxy-unknown" });
 
     // And no neighbouring status inherits the exemption.
-    for (const status of [1, 2, 4, 64, 78, 81, 130, null]) {
+    // 81 is the update handover code (#7423), pinned in update-teardown-handover.test.ts.
+    for (const status of [1, 2, 4, 64, 78, 82, 130, null]) {
       expect(decidePostStopUpdate({ status, teardownOutstanding: true, ...dead }))
         .toEqual({ proceed: false, reason: "stop-failed" });
     }

@@ -518,8 +518,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "export",
-    usage: "ocx export --client <qoder|opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|commandcode|prime|aside|raycast|omo|cline|kilo|droid|gentle-shell> [--json] [--out <path>] [--force]",
-    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Command Code, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid, Qoder, Gentle Shell) wired to the running proxy.",
+    usage: "ocx export --client <qoder|qoder-cn|workbuddy|workbuddy-ai|opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|commandcode|prime|aside|raycast|omo|cline|kilo|droid|gentle-shell> [--json] [--out <path>] [--force]",
+    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Command Code, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid, Qoder, Qoder CN, WorkBuddy, WorkBuddy AI, Gentle Shell) wired to the running proxy.",
     details: [
       "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
       "--out <path> writes the native config there and refuses to replace an existing file without --force.",

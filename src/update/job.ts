@@ -53,6 +53,8 @@ import {
 } from "./npm-cache-preflight.mjs";
 import { guiUpdateWorkerCommand } from "./worker-launch";
 import { withoutSiblingMarker } from "../codex/sibling-start";
+import { spawnBindProbe, strictBindProbeScript } from "./bind-probe";
+import { withoutUpdateTeardownHandover, withUpdateTeardownHandover } from "./teardown-handover";
 import type { WorkerLaunchContext } from "./worker-launch";
 
 const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/latest";
@@ -138,34 +140,6 @@ function nodeBin(): string {
 
 function usesNodeLauncher(installer: Installer): boolean {
   return installer === "npm" || installer === "pnpm";
-}
-
-/**
- * Strict bind script: exit 0 only after listen+close. Any listen error (including
- * Windows ghost-TCB failures under Bun) is busy — matches published `ocx start`
- * probes that treat every listen error as unavailable.
- */
-function strictBindProbeScript(port: number, hostname: string): string {
-  return [
-    "const net=require('net');",
-    "const s=net.createServer();",
-    "s.once('error',()=>process.exit(2));",
-    `s.listen(${Math.trunc(port)},${JSON.stringify(hostname)},()=>s.close(()=>process.exit(0)));`,
-    "setTimeout(()=>process.exit(3),2500);",
-  ].join("");
-}
-
-function spawnBindProbe(bin: string, script: string): boolean {
-  try {
-    const r = spawnSync(bin, ["-e", script], {
-      windowsHide: true,
-      timeout: 4000,
-      stdio: "ignore",
-    });
-    return r.status === 0;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -700,12 +674,14 @@ function runLoggedCommand(
   bin: string,
   args: string[],
   timeout: number,
+  env?: NodeJS.ProcessEnv,
 ): { status: number | null; signal: NodeJS.Signals | null; timedOut: boolean } {
   job = updateJob(job, {}, `$ ${formatCommand(bin, args)}`);
   const result = spawnSync(bin, args, {
     encoding: "utf8",
     timeout,
     windowsHide: true,
+    ...(env ? { env } : {}),
   });
   const stdout = typeof result.stdout === "string" ? result.stdout.trim() : "";
   const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
@@ -1812,6 +1788,7 @@ export interface GuiUpdateWorkerIo {
     bin: string,
     args: string[],
     timeout: number,
+    env?: NodeJS.ProcessEnv,
   ) => { status: number | null; signal: NodeJS.Signals | null };
 }
 
@@ -1933,7 +1910,11 @@ export async function runGuiUpdateWorker(
     - 대안 분석: (1) 서버에서 runUpdate 직접 호출: process.exit/stdio/실행 파일 교체 위험. (2) GUI에서 CLI 명령 안내만 제공: 자동 업데이트 UX 부족. (3) 숨은 worker가 Node launcher/Bun 전역 명령을 실행: 상태 추적과 안전한 재시작이 가능.
     - 선택 근거: 현재 CLI의 package-manager self-update 우회를 재사용하면서도 GUI 서버 요청 생명주기와 설치 작업을 분리할 수 있어 가장 안정적이다.
     */
-    const result = (io.runCommandFn ?? runLoggedCommand)(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);
+    // #7423: this job restarts the proxy itself, so the update's stop hands Codex routing
+    // and the routed catalog to the replacement instead of restoring native Codex for the
+    // seconds in between. Without a restart the stop restores, even under an inherited marker.
+    const updateEnv = restart ? withUpdateTeardownHandover(process.env) : withoutUpdateTeardownHandover(process.env);
+    const result = (io.runCommandFn ?? runLoggedCommand)(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS, updateEnv);
     if (result.status !== 0) {
       if (check.installer === "pnpm") {
         const verifiedLauncher = pnpmOwner

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { isIP } from "node:net";
 import { loadConfig } from "../config";
 import { readRuntimePort } from "../config/process-state";
+import { directLocalHttpFetch } from "../server/direct-local-http";
 import { configuredAdminToken } from "./admin-secrets";
 
 export function isProcessAlive(pid: number): boolean {
@@ -203,6 +204,17 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
  */
 type StopRefusal = { message: string | null; code: string | null };
 
+async function stopRequestFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  let status: number | undefined;
+  try {
+    return await directLocalHttpFetch(input, init, { onResponseStatus: value => { status = value; } });
+  } catch (error) {
+    // A received refusal forbids forced stop even if its explanatory body fails.
+    if (status === 409) return new Response(null, { status });
+    throw error;
+  }
+}
+
 async function stopProxyGracefullyDetailed(
   pid: number,
   io: GracefulStopIo = {},
@@ -217,7 +229,7 @@ async function stopProxyGracefullyDetailed(
   const headers: Record<string, string> = {};
   const token = configuredAdminToken(env.OPENCODEX_HOME?.trim() || undefined, env as NodeJS.ProcessEnv);
   if (token) headers["x-opencodex-api-key"] = token;
-  const fetchFn = io.fetchFn ?? fetch;
+  const fetchFn = io.fetchFn ?? stopRequestFetch;
   let sharedTeardownConfirmed = false;
   try {
     // `ocx stop` asks the proxy NOT to restore shared client config: it does that itself,

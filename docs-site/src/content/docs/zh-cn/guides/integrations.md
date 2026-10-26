@@ -3,7 +3,7 @@ title: 集成
 description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、OpenClaw、Kimi Code、gjc、DeepSeek Harness、MiniMax Code、ZCode、Prime Agent、Aside、Raycast、omo、Cline CLI、Kilo、Command Code 和 Factory Droid；每个客户端都有独立开关，且每次写入前都会备份。
 ---
 
-**连接** 标签页可将 opencodex 的提供商配置块写入客户端自己的配置文件，也可再次移除。以下 18 个客户端都采用这种方式，各有独立开关：
+**连接** 标签页可将 opencodex 的提供商配置块写入客户端自己的配置文件，也可再次移除。以下客户端都采用这种方式，各有独立开关：
 
 | 客户端 | 配置文件 | 格式 | 变更生效时间 | 凭据 |
 |---|---|---|---|---|

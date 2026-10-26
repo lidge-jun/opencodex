@@ -17,6 +17,7 @@ import {
 } from "./jev-decision-contract";
 
 export const COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS = 0;
+export const COMBO_DEFAULT_COOLDOWN_REPROBE_INTERVAL_MS = 300_000;
 export const JEV_MAX_CANDIDATE_FIELD_CHARS = 512;
 export {
   JEV_DECISION_TIMEOUT_DEFAULT_MS,
@@ -60,6 +61,7 @@ export interface NormalizedComboConfig {
   stickyLimit: number;
   cooldownMs?: number;
   waitForCooldownMs: number;
+  cooldownReprobe?: { enabled: true; intervalMs: number };
   /** `before-last-resort` defers lastResort targets while a normal one can be waited out (#5691). */
   cooldownWaitPolicy: OcxComboCooldownWaitPolicy | null;
   defaultEffort: OcxComboDefaultEffort | null;
@@ -221,6 +223,24 @@ export function comboConfigIssues(
       || body.waitForCooldownMs < 0
       || body.waitForCooldownMs > 600_000)) {
     issues.push({ path: ["waitForCooldownMs"], message: "waitForCooldownMs must be an integer from 0 to 600000" });
+  }
+  if (body.cooldownReprobe !== undefined) {
+    const value = body.cooldownReprobe;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      issues.push({ path: ["cooldownReprobe"], message: "cooldownReprobe must be an object" });
+    } else {
+      const reprobe = value as Record<string, unknown>;
+      if (typeof reprobe.enabled !== "boolean") {
+        issues.push({ path: ["cooldownReprobe", "enabled"], message: "cooldownReprobe.enabled must be a boolean" });
+      }
+      if (reprobe.intervalMs !== undefined && (typeof reprobe.intervalMs !== "number"
+        || !Number.isSafeInteger(reprobe.intervalMs) || reprobe.intervalMs < 1000 || reprobe.intervalMs > 86_400_000)) {
+        issues.push({ path: ["cooldownReprobe", "intervalMs"], message: "cooldownReprobe.intervalMs must be an integer from 1000 to 86400000" });
+      }
+      if (Object.keys(reprobe).some(key => key !== "enabled" && key !== "intervalMs")) {
+        issues.push({ path: ["cooldownReprobe"], message: "cooldownReprobe supports only enabled and intervalMs" });
+      }
+    }
   }
   if (body.cooldownWaitPolicy !== undefined && body.cooldownWaitPolicy !== null
     && body.cooldownWaitPolicy !== "before-last-resort") {
@@ -535,6 +555,10 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     ...(raw.allowMeteredTargets === true ? { allowMeteredTargets: true } : {}),
     stickyLimit: raw.stickyLimit ?? 1,
     cooldownMs: raw.cooldownMs,
+    ...(raw.cooldownReprobe?.enabled === true ? { cooldownReprobe: {
+      enabled: true as const,
+      intervalMs: raw.cooldownReprobe.intervalMs ?? COMBO_DEFAULT_COOLDOWN_REPROBE_INTERVAL_MS,
+    } } : {}),
     waitForCooldownMs: raw.waitForCooldownMs ?? COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS,
     cooldownWaitPolicy: raw.cooldownWaitPolicy === "before-last-resort" ? "before-last-resort" : null,
     defaultEffort,

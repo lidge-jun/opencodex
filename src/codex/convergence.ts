@@ -1,5 +1,5 @@
 import { projectAntigravitySelectedModels } from "../providers/antigravity-effort-families";
-import { configuredUltraFastSlugs } from "./catalog/configured-tiers";
+import { configuredUltraFastSlugs, retainedFlexPolicyBySlug } from "./catalog/configured-tiers";
 import { join } from "node:path";
 import { sameCatalogHealPath } from "./catalog/heal-observation";
 
@@ -373,6 +373,7 @@ function prepareCatalog(
   const mergedModels = mergeCatalogEntriesFromObservedState({
     ultraFastTier: ultraFastTierEnabled(config),
     configuredUltraFastSlugs: configuredUltraFastSlugs(ordered),
+    retainedFlexPolicyBySlug: retainedFlexPolicyBySlug(config.providers ?? {}, catalogModels, ordered),
     modelPickerOrder,
     accountSelectors,
     catalogModels,

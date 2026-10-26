@@ -135,7 +135,7 @@ export function qoderLegacyCatalogConflict(
   record: OwnershipRecord | null,
   contribution: ManagedContribution | null,
 ): boolean {
-  if (contribution?.clientId !== "qoder") return false;
+  if (contribution?.clientId !== "qoder" && contribution?.clientId !== "qoder-cn") return false;
   const owned = new Set((record?.fragmentPaths ?? [])
     .filter(path => Array.isArray(path) && path.every(key => typeof key === "string"))
     .map(path => readPath(parsed, path)));
