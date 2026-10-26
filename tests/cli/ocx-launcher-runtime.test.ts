@@ -1,16 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { bundledBunPath } from "../../src/lib/bun-runtime";
 import { findDesktopCli, findPathBun, type PathBunIo } from "../../src/lib/bun-path-runtime.mjs";
 import { REAL_BUN_MIN_BYTES } from "../../src/lib/bun-binary-validator.mjs";
 import { killProxy } from "../../src/lib/process-control";
 import { repoPath } from "../helpers/repo-root";
-import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, moduleGraphSpecifiers, warmColdSpawn } from "../helpers/cold-spawn-warmup";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { trustedFixtureRoot } from "../helpers/trusted-fixture-root";
 
@@ -788,16 +788,45 @@ async function createWarmPathBun(): Promise<void> {
   });
 }
 
+/** The Node launcher needs its imported modules, not the whole TypeScript proxy tree. */
+function copyLauncherModuleFixture(root: string): void {
+  const repository = repoPath();
+  const pending = moduleGraphSpecifiers(readFileSync(BIN_OCX, "utf8"), dirname(BIN_OCX));
+  const copied = new Set<string>();
+  while (pending.length) {
+    const source = pending.pop()!;
+    if (copied.has(source)) continue;
+    const path = relative(repository, source);
+    if (isAbsolute(path) || path === ".." || path.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
+      throw new Error("launcher fixture import escapes the repository");
+    }
+    const destination = join(root, path);
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(source, destination);
+    copied.add(source);
+    if (source.endsWith(".mjs")) {
+      pending.push(...moduleGraphSpecifiers(readFileSync(source, "utf8"), dirname(source)));
+    }
+  }
+}
+
+// Every mode runs the real Node launcher: missing/broken/inspection/override
+// select the PATH Bun copy warmed once in beforeAll, while bundled and repair
+// use a fresh copy of the real ~100MB binary in this fixture's own node_modules;
+// repair gets it from the fixture's synthetic install.js running as a real Node
+// child, and bundled and repair then execute their new copy. Unchanged limits:
+// the launcher's 5s PATH-Bun probe and the 30s spawnSync bound below.
 function launcherFallbackFixture(mode: "missing" | "bundled" | "repair" | "broken" | "override" | "none" | "inspection" | "rejected") {
   const root = realpathSync.native(pathFixtureRoot("ocx-path-launcher-"));
   try {
     const node = spawnSync("node", ["-p", "process.execPath"], { encoding: "utf8", windowsHide: true }).stdout.trim();
     const version = spawnSync(process.execPath, ["--version"], { encoding: "utf8", windowsHide: true }).stdout.trim();
     expect(version).toMatch(/^1\.(?:[4-9]|[1-9]\d+)\./);
-    cpSync(repoPath("src"), join(root, "src"), { recursive: true });
+    copyLauncherModuleFixture(root);
     mkdirSync(join(root, "bin"));
     copyFileSync(BIN_OCX, join(root, "bin", "ocx.mjs"));
     writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2.81.0", dependencies: { bun: "1.4.2" } }));
+    mkdirSync(join(root, "src", "cli"), { recursive: true });
     writeFileSync(join(root, "src", "cli", "index.ts"), 'console.log(JSON.stringify({source:process.env.OCX_BUN_RUNTIME_SOURCE,path:process.env.OCX_BUN_RUNTIME_PATH}));');
     const shared = mode !== "none" && mode !== "rejected";
     if (shared && !sharedPathBun) throw new Error("the shared PATH Bun is created by the activation suite's beforeAll");

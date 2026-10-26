@@ -17,7 +17,7 @@ import {
   shouldAllowRootSkipPermissions,
 } from "../../src/cli/claude";
 import { buildClaudeContextWindows } from "../../src/claude/context-windows";
-import { buildDesktop3pRegistry } from "../../src/claude/desktop-3p";
+import { buildDesktop3pRegistry, legacyDesktop3pAlias } from "../../src/claude/desktop-3p";
 import { commandInvocation } from "../../src/lib/win-exec";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -346,6 +346,23 @@ describe("ocx claude native fallback", () => {
     } };
     const bound = buildNativeClaudeEnv(configured, { ANTHROPIC_MODEL: id });
     expect(bound.ANTHROPIC_MODEL).toBeUndefined();
+    expect(nativeModelOverride(id, "opus", [], Object.keys(configured.providers), nativeClaudeModelIds(configured)))
+      .toMatchObject({ flag: ["--model", "opus"] });
+  });
+
+  test("cold native launch sheds a legacy Desktop alias despite a stale Anthropic declaration", () => {
+    buildDesktop3pRegistry([], []);
+    const id = legacyDesktop3pAlias("mock", "model");
+    const configured = cfg({
+      providers: { anthropic: { adapter: "anthropic", defaultModel: id } },
+      claudeCode: { desktopProfile: { version: 1,
+        assignments: { "mock/model": { family: "opus", alias: "claude-opus-4-8-20260101" } },
+        defaults: { opus: "mock/model", fable: null, sonnet: null, haiku: null },
+      } },
+    });
+
+    expect(nativeClaudeModelIds(configured)).not.toContain(id);
+    expect(buildNativeClaudeEnv(configured, { ANTHROPIC_MODEL: id }).ANTHROPIC_MODEL).toBeUndefined();
     expect(nativeModelOverride(id, "opus", [], Object.keys(configured.providers), nativeClaudeModelIds(configured)))
       .toMatchObject({ flag: ["--model", "opus"] });
   });
