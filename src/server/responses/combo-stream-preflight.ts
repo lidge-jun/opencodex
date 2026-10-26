@@ -29,6 +29,10 @@ const TERMINAL_EVENTS = new Set([
   "response.incomplete",
 ]);
 
+// A failed terminal carrying one of these codes is a contract verdict, not a transient
+// upstream failure: another target would spend a request the adapter already refused.
+const NON_REPLAYABLE_FAILED_CODES = new Set(["required_tool_not_called"]);
+
 const RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS = new Set([
   "adapter_eof",
   "missing_terminal_event",
@@ -118,7 +122,10 @@ function retryableZeroOutputTerminal(payload: unknown): boolean {
     response?: { incomplete_details?: { reason?: unknown }; output?: unknown };
   };
   if (bareErrorIsRetryable(event)) return true;
-  if (event.type === "response.failed") return true;
+  if (event.type === "response.failed") {
+    const code = (event.response as { error?: { code?: unknown } } | undefined)?.error?.code;
+    return !(typeof code === "string" && NON_REPLAYABLE_FAILED_CODES.has(code));
+  }
   if (event.type !== "response.incomplete") return false;
   const reason = event.response?.incomplete_details?.reason;
   // A terminal-only upstream can carry output without preceding delta/item events.
