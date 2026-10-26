@@ -1330,7 +1330,9 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
     }
     const refusal = await settleConfigRoot(configRoot(), () => {
       const sourceModelsError = body.sourceModels === undefined ? null : shadowCallSourceModelsError(body.sourceModels);
-      if (sourceModelsError) return jsonResponse({ error: sourceModelsError }, 400);
+      if (sourceModelsError) {
+        return jsonResponse({ error: sourceModelsError, code: "shadow_call_source_invalid" }, 400);
+      }
       const nextSourceModels = body.sourceModels === undefined
         ? undefined
         : normalizeShadowCallSourceModels(body.sourceModels as string[]);
@@ -1340,7 +1342,9 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
           ? config.shadowCallIntercept?.model
           : undefined;
       const targetError = shadowCallTargetError(config, candidateModel, nextSourceModels ?? config.shadowCallIntercept?.sourceModels);
-      if (targetError) return jsonResponse({ error: targetError }, 400);
+      if (targetError) {
+        return jsonResponse({ error: targetError, code: "shadow_call_target_invalid" }, 400);
+      }
       config.shadowCallIntercept = { ...config.shadowCallIntercept };
       if (typeof body.enabled === "boolean") config.shadowCallIntercept.enabled = body.enabled;
       if (typeof body.model === "string") {

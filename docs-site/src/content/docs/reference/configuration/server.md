@@ -940,6 +940,9 @@ extending them, so include `gpt-6-luna` (and `gpt-5.6-luna` for 0.145.0-0.153.x 
 current clients should still be intercepted. The API rejects an empty, duplicate, whitespace-bearing,
 or provider-qualified source prefix, caps the list at 32 prefixes of 128 characters each, and it
 refuses a target that would intersect a selected source.
+A rejected source list returns `code: "shadow_call_source_invalid"` and a conflicting target
+returns `code: "shadow_call_target_invalid"`, so the dashboard can show the matching message
+instead of treating every `400` or HTTP error as a network failure.
 At least one source stays active; use the main switch to stop every shadow call.
 Memory consolidation is separate: Codex asks for Terra there, and
 `memoryModels.consolidation` controls that phase. Terra is also a normal foreground and subagent

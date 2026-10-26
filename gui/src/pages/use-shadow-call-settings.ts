@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { createBoundedFetch } from "../bounded-fetch";
 import { readJsonIfOk } from "../fetch-json";
 import type { TFn } from "../i18n/shared";
-import type { ShadowCallData } from "./models-shared";
+import { shadowCallSaveErrorKey, type ShadowCallData } from "./models-shared";
 
 /** Load and persist the Models workspace's shadow-call settings. */
 export function useShadowCallSettings({
@@ -38,7 +38,8 @@ export function useShadowCallSettings({
       });
       if (!res.ok) {
         setShadowCall(previous);
-        publishFeedback(false, res.status === 400 ? t("models.shadowCallSaveFailed") : t("models.networkError"));
+        const body = await res.json().catch(() => null) as { code?: unknown } | null;
+        publishFeedback(false, t(shadowCallSaveErrorKey(body?.code)));
         return;
       }
       const data = await res.json().catch(() => null) as ShadowCallData | null;

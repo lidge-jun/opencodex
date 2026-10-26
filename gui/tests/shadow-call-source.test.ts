@@ -8,6 +8,32 @@ import {
   toggleShadowCallSource,
   type ShadowCallSourceOption,
 } from "../src/pages/shadow-call-source";
+import { shadowCallSaveErrorKey } from "../src/pages/models-shared";
+
+/**
+ * The settings endpoint answers several different 400s with the same status, so the message
+ * has to come from the stable `code`. These cases pin the three operator-visible outcomes and
+ * keep an unknown code (older runtime, proxy error page) on the neutral text rather than
+ * blaming a target the operator may not have touched.
+ */
+describe("shadowCallSaveErrorKey", () => {
+  test("maps a target conflict to the replacement target message", () => {
+    expect(shadowCallSaveErrorKey("shadow_call_target_invalid"))
+      .toBe("models.shadowCallTargetInvalid");
+  });
+
+  test("maps an invalid source selection to the source message", () => {
+    expect(shadowCallSaveErrorKey("shadow_call_source_invalid"))
+      .toBe("models.shadowCallSourceInvalid");
+  });
+
+  test.each([undefined, null, "", "upstream_error"])(
+    "falls back to the neutral save message for %p",
+    code => {
+      expect(shadowCallSaveErrorKey(code)).toBe("models.shadowCallSaveFailed");
+    },
+  );
+});
 
 /**
  * The GUI used to spell the intercepted slug into six locale files, which went

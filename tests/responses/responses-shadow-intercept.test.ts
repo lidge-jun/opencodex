@@ -877,7 +877,11 @@ describe("shadow-call settings API reports the intercepted source models", () =>
       const config = { port: 0, defaultProvider: "xai", providers: {} } as OcxConfig;
       const response = await shadowApiResponse(config, { sourceModels });
       expect(response.status).toBe(400);
-      expect((await response.json() as { error: string }).error).toContain(message);
+      const body = await response.json() as { error: string; code?: string };
+      expect(body.error).toContain(message);
+      // The dashboard cannot infer this from the shared 400 status; the stable code keeps the
+      // operator-facing message on the source list instead of the replacement target.
+      expect(body.code).toBe("shadow_call_source_invalid");
       expect(config.shadowCallIntercept).toBeUndefined();
     });
   });
@@ -899,7 +903,9 @@ describe("shadow-call settings API reports the intercepted source models", () =>
       } as OcxConfig;
       const response = await shadowApiResponse(config, { sourceModels: ["grok-4.5"] });
       expect(response.status).toBe(400);
-      expect((await response.json() as { error: string }).error).toContain("must not intersect");
+      const body = await response.json() as { error: string; code?: string };
+      expect(body.error).toContain("must not intersect");
+      expect(body.code).toBe("shadow_call_target_invalid");
       expect(config.shadowCallIntercept?.sourceModels).toBeUndefined();
     });
   });
