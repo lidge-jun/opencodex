@@ -4,6 +4,7 @@ import { confirmAction } from "../../action-dialogs";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useI18n, useT } from "../../i18n/shared";
 import { Select } from "../../ui";
+import ProviderBulkCompletionTest from "./ProviderBulkCompletionTest";
 import "./provider-completion-test.css";
 
 type InapplicableReason = "disabled" | "forward_auth" | "oauth_auth" | "unsupported_adapter" | "unsupported_transport";
@@ -32,6 +33,7 @@ export default function ProviderCompletionTest({ apiBase, provider, models }: Pr
           onChange={setModel} />
         <CompletionRun key={JSON.stringify([apiBase, provider, selectedModel])}
           apiBase={apiBase} provider={provider} model={selectedModel} />
+        <ProviderBulkCompletionTest apiBase={apiBase} provider={provider} models={models} />
     </section>
   );
 }

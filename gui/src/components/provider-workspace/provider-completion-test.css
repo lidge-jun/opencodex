@@ -6,6 +6,7 @@
   margin-top: var(--space-4);
 }
 .pws-completion-test > h4,
+.pws-completion-bulk,
 .pws-completion-result {
   grid-column: 1 / -1;
 }
@@ -14,6 +15,18 @@
 }
 .pws-completion-result {
   overflow-wrap: anywhere;
+}
+.pws-completion-bulk-actions {
+  gap: var(--space-2);
+}
+.pws-completion-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-2) 0;
+}
+.pws-completion-table td {
+  padding: var(--space-1) var(--space-2) var(--space-1) 0;
+  vertical-align: top;
 }
 @media (max-width: 640px) {
   .pws-completion-test {

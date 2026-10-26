@@ -507,3 +507,14 @@ test for the same provider returns 409. Completed diagnostics and applicability
 results return 200, including a structured error when inference fails. Destination
 policy and provider egress settings apply; redirects, retries and failover are disabled.
 For the CLI workflow, see [Providers and accounts](/reference/cli/providers-accounts/).
+
+**Test all models** runs the same completion test for every configured, listed and
+default model of the provider, one request at a time, after a single confirmation that
+states how many requests it sends. **Stop** cancels the in-flight request and sends no
+more. Each model is reported as passed, failed (the upstream answered with an error or
+timed out) or not tested (the management API refused the request, for example a
+concurrent test). An applicability refusal is a provider-level result, so the run stops
+after the first one. When any model failed, **Disable failed models** asks a second
+confirmation and then hides only those models from clients through the same visibility
+setting as the **Models** page, where they can be re-enabled. Models are never disabled
+without that confirmation.
