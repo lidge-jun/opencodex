@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   shadowBackgroundModelBadge,
+  shadowSourceOptionActive,
   shadowSourceModelBadge,
   shadowSourceModelLabel,
   shadowSourceModelList,
+  toggleShadowCallSource,
+  type ShadowCallSourceOption,
 } from "../src/pages/shadow-call-source";
 
 /**
@@ -41,6 +44,10 @@ describe("shadowSourceModelList", () => {
   test("falls back when the field is not an array at all", () => {
     expect(shadowSourceModelList("gpt-5.6-luna" as unknown as string[]))
       .toEqual(["gpt-6-luna", "gpt-5.6-luna"]);
+  });
+
+  test("drops a routed prefix that can never match a bare helper id", () => {
+    expect(shadowSourceModelList(["openai/gpt-5.6-luna"])).toEqual([]);
   });
 });
 
@@ -88,5 +95,41 @@ describe("shadowBackgroundModelBadge", () => {
 
   test("treats a broader source prefix as covering the memory model", () => {
     expect(shadowBackgroundModelBadge(["gpt-5.6"], "Memory: Terra")).toBe("5.6");
+  });
+});
+
+const terra: ShadowCallSourceOption = { id: "gpt-5.6-terra", role: "memory", defaultIntercepted: false };
+const luna: ShadowCallSourceOption = { id: "gpt-5.6-luna", role: "helper", defaultIntercepted: true };
+
+describe("shadow source toggles", () => {
+  test("an option is active when any configured prefix covers it", () => {
+    expect(shadowSourceOptionActive("gpt-5.6-terra", ["gpt-5.6"])).toBe(true);
+    expect(shadowSourceOptionActive("gpt-5.6-terra", ["gpt-6-luna"])).toBe(false);
+  });
+
+  test("switching an inactive source on appends its exact prefix", () => {
+    expect(toggleShadowCallSource(terra, ["gpt-6-luna", "gpt-5.6-luna"])).toEqual({
+      sourceModels: ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"],
+    });
+  });
+
+  test("switching an active source off removes only its exact prefix", () => {
+    expect(toggleShadowCallSource(luna, ["gpt-6-luna", "gpt-5.6-luna"]))
+      .toEqual({ sourceModels: ["gpt-6-luna"] });
+  });
+
+  test("the last active source cannot be switched off", () => {
+    expect(toggleShadowCallSource(terra, ["gpt-5.6-terra"])).toEqual({ blocked: "last" });
+  });
+
+  test("a broader custom prefix blocks a covered option instead of changing siblings", () => {
+    expect(toggleShadowCallSource(terra, ["gpt-5.6", "custom-helper"]))
+      .toEqual({ blocked: "covered", prefix: "gpt-5.6" });
+  });
+
+  test("a custom entry can be switched off by its exact prefix", () => {
+    const custom: ShadowCallSourceOption = { id: "custom-helper", role: "custom", defaultIntercepted: false };
+    expect(toggleShadowCallSource(custom, ["gpt-6-luna", "custom-helper"]))
+      .toEqual({ sourceModels: ["gpt-6-luna"] });
   });
 });

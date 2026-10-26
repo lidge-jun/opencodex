@@ -12,11 +12,24 @@
  */
 const FALLBACK_SOURCE_MODELS = ["gpt-6-luna", "gpt-5.6-luna"];
 
+export type ShadowCallSourceRole = "helper" | "memory" | "legacy" | "custom";
+
+/** One toggle the runtime offered; `sourceModelOptions` is the only source of truth. */
+export interface ShadowCallSourceOption {
+  id: string;
+  role: ShadowCallSourceRole;
+  defaultIntercepted: boolean;
+}
+
 export function shadowSourceModelList(sourceModels?: string[]): string[] {
-  const cleaned = Array.isArray(sourceModels)
+  const raw = Array.isArray(sourceModels)
     ? sourceModels.filter(v => typeof v === "string" && v.trim() !== "").map(v => v.trim())
     : [];
-  return cleaned.length > 0 ? cleaned : FALLBACK_SOURCE_MODELS;
+  if (raw.length === 0) return FALLBACK_SOURCE_MODELS;
+  // A routed model id can never match: the runtime hard-excludes slashes before
+  // prefix comparison. Keeping one visible would let the next save send a value
+  // the API rejects, so the effective list drops it here as well.
+  return raw.filter(id => !id.includes("/"));
 }
 
 /** Comma-joined source models for inline badges and warning text. */
@@ -29,6 +42,41 @@ export function shadowSourceModelBadge(sourceModels?: string[]): string {
   return shadowSourceModelList(sourceModels)
     .map(id => id.replace(/^gpt-/, ""))
     .join(", ");
+}
+
+/** True when any configured prefix intercepts this option's model id. */
+export function shadowSourceOptionActive(optionId: string, sourceModels?: string[]): boolean {
+  return shadowSourceModelList(sourceModels).some(prefix => optionId.startsWith(prefix));
+}
+
+/** The configured prefix that covers this option, if any. */
+export function shadowSourceOptionCoveringPrefix(optionId: string, sourceModels?: string[]): string | undefined {
+  return shadowSourceModelList(sourceModels).find(prefix => optionId.startsWith(prefix));
+}
+
+export type ShadowCallSourceToggleResult =
+  | { sourceModels: string[] }
+  | { blocked: "last" }
+  | { blocked: "covered"; prefix: string };
+
+/**
+ * Compute the next source list for one toggle.
+ *
+ * A broader custom prefix can cover several options. Removing that prefix here
+ * would also switch off the siblings the operator did not touch, so the covered
+ * option is blocked and the explanation names the prefix. The last active
+ * source is never removed; stopping everything is the main switch's job.
+ */
+export function toggleShadowCallSource(
+  option: ShadowCallSourceOption,
+  sourceModels?: string[],
+): ShadowCallSourceToggleResult {
+  const selected = shadowSourceModelList(sourceModels);
+  const covering = selected.find(prefix => option.id.startsWith(prefix));
+  if (covering === undefined) return { sourceModels: [...selected, option.id] };
+  if (covering !== option.id) return { blocked: "covered", prefix: covering };
+  const next = selected.filter(prefix => prefix !== option.id);
+  return next.length === 0 ? { blocked: "last" } : { sourceModels: next };
 }
 
 /**

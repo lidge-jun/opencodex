@@ -90,7 +90,7 @@ import { DiscoveryDependencyHint, EmptyProviderHint } from "./models-provider-hi
 import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
 import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory } from "../subagent-surface";
 import { shadowCallModelOptions } from "./dashboard-shared";
-import { shadowBackgroundModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
+import { ShadowCallSettingsRow } from "./shadow-call-settings-row";
 import { ModelCatalogDelivery } from "./models-catalog-state";
 import { CustomModelsSummary, InfoHint, ModelsSettingsPanel, SettingsRow } from "./models-settings-panel";
 import { modelsSettingsSummary } from "./models-settings-summary";
@@ -1077,14 +1077,21 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
 
   const saveShadowCall = async (patch: Partial<ShadowCallData>) => {
     if (!shadowCall || shadowCallSaving) return;
+    const previous = shadowCall;
     setShadowCallSaving(true);
     setShadowCall({ ...shadowCall, ...patch });
     try {
-      await fetch(`${apiBase}/api/shadow-call-settings`, {
+      const res = await fetch(`${apiBase}/api/shadow-call-settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
+      if (!res.ok) throw new Error("shadow-call save failed");
+      const data = await res.json().catch(() => null) as ShadowCallData | null;
+      if (data && typeof data.enabled === "boolean") setShadowCall(data);
+    } catch {
+      setShadowCall(previous);
+      publishFeedback(false, t("models.networkError"));
     } finally {
       setShadowCallSaving(false);
     }
@@ -1970,13 +1977,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           <Switch on={aliases.defaults.global} onClick={() => void setDefaultAliases(!aliases.defaults.global)} label={t("models.useDefaultAliasesGlobal")} />
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowAliases(value => !value)}>{t("models.aliases")}</button>
         </SettingsRow>
-        <SettingsRow label={t("models.shadowCallIntercept")} hint={<Tooltip content={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.shadowCallInterceptHint", { models: shadowSourceModelLabel(shadowCall?.sourceModels) })}>ⓘ</span></Tooltip>} busy={!shadowCall}>
-          <code className="text-caption models-shadow-warning" style={{ opacity: 0.6 }}>{t("models.shadowCallOriginal", { models: shadowBackgroundModelBadge(shadowCall?.sourceModels, t("shadowCall.memoryLabel")) })}</code>
-          <Switch on={shadowCall?.enabled ?? false} onClick={() => void saveShadowCall({ enabled: !shadowCall?.enabled })} disabled={!shadowCall || shadowCallSaving} label={t("models.shadowCallIntercept")} />
-          <div className="models-shadow-model-slot">
-            <Select value={shadowCall?.model ?? ""} options={shadowCallOptions} onChange={v => { setShadowCall(c => c ? { ...c, model: v } : c); void saveShadowCall({ model: v }); }} disabled={!shadowCall || shadowCallSaving || !shadowCall.enabled} label={t("models.shadowCallIntercept")} />
-          </div>
-        </SettingsRow>
+        <ShadowCallSettingsRow shadowCall={shadowCall} saving={shadowCallSaving} modelOptions={shadowCallOptions} onSave={patch => void saveShadowCall(patch)} />
 
         <SettingsRow label={t("models.autoReviewOverride")} hint={<Tooltip content={t("models.autoReviewOverrideHint")} side="top" maxWidth={320}><span style={{ cursor: "help" }} aria-label={t("models.autoReviewOverrideHint")}>ⓘ</span></Tooltip>} busy={!autoReview}>
           <Switch on={autoReview?.enabled ?? false} onClick={() => void saveAutoReview({ enabled: !autoReview?.enabled })} disabled={!autoReview || autoReviewSaving} label={t("models.autoReviewOverride")} />

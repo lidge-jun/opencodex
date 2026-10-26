@@ -32,6 +32,7 @@ import {
   VISION_TIMEOUT_MS_MIN,
 } from "./dashboard-shared";
 import { shadowBackgroundModelBadge } from "./shadow-call-source";
+import { ShadowCallSourceToggles } from "./shadow-call-source-toggles";
 import type { useDashboardData } from "./use-dashboard-data";
 
 type Dash = ReturnType<typeof useDashboardData>;
@@ -766,6 +767,14 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             />
           </div>
         </div>
+        <ShadowCallSourceToggles
+          className="dash-shadow-sources"
+          options={shadowCall?.sourceModelOptions}
+          sourceModels={shadowCall?.sourceModels}
+          disabled={!shadowCall?.enabled}
+          saving={shadowCallSaving}
+          onChange={sourceModels => void saveShadowCall({ sourceModels })}
+        />
       </div>
     </>
   );

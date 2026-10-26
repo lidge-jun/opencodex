@@ -2,6 +2,7 @@ import type { TFn, TKey } from "../i18n/shared";
 import type { ProviderDiscoverySummary } from "../models-groups";
 import { modelVisible, type ProviderModelMap } from "../model-visibility";
 import { formatNamespacedModelId } from "../provider-icons";
+import type { ShadowCallSourceOption } from "./shadow-call-source";
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
@@ -166,6 +167,8 @@ export interface ShadowCallData {
   model: string;
   /** Source models the runtime actually intercepts. Older runtimes omit it. */
   sourceModels?: string[];
+  /** Runtime-owned source inventory; older runtimes omit it. */
+  sourceModelOptions?: ShadowCallSourceOption[];
 }
 
 /** The global auto-review (approval reviewer) override the Models settings panel writes. */
