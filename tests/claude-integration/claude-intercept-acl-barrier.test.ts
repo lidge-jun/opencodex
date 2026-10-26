@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import * as firstParty from "../../src/claude/desktop-first-party";
@@ -23,6 +23,7 @@ import { readClaudeInterceptProxyToken } from "../../src/claude/intercept/proxy-
 import { hardenSecretDirAsync, resetHardenedStateForTests, setAsyncIcaclsBeltSchedulerForTests, setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests, setNowForTests, setPlatformForTests, windowsSecretAclReapPendingForPath, type IcaclsResult } from "../../src/lib/windows-secret-acl";
 import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
 import { handleManagementAPI } from "../../src/server/management-api";
+import { previewClaudeModelDefaults } from "../../src/claude/model-default-settings";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -487,14 +488,21 @@ test("startup settings migration after the proxy bind waits for a parent flight 
       return proxy;
     },
   });
+  let handle: Awaited<typeof work> | undefined;
   try {
     await entered.promise;
     await macrotask();
     expect(overlapping).toEqual([]);
   } finally {
     held = false; release.resolve();
-    await (await work)?.stop();
+    handle = await work;
   }
+  try {
+    // The ordering check alone would also pass if startup skipped the migration entirely.
+    const env = (JSON.parse(readFileSync(join(root, "claude", "settings.json"), "utf8")) as { env?: Record<string, string> }).env;
+    expect(handle?.proxyPort).toBeGreaterThan(0);
+    expect(env?.HTTPS_PROXY).toContain(`:${handle?.proxyPort}`);
+  } finally { await handle?.stop(); }
 });
 
 test("settled first-party removal waits for a parent flight over a nested Claude home", async () => {
@@ -512,4 +520,32 @@ test("settled first-party removal waits for a parent flight over a nested Claude
   finally { release.resolve(); await flight; }
   expect(await work).toMatchObject({ ok: true, changed: true });
   expect(removed).toBe(true);
+});
+
+// #7777 review r3 F4: the model-defaults rewrite also runs after a body await on the Claude home.
+test("model-defaults POST waits for a parent flight over a nested Claude home", async () => {
+  const home = join(root, "claude");
+  mkdirSync(home, { recursive: true });
+  const path = join(home, "settings.json");
+  writeFileSync(path, JSON.stringify({ env: { HTTPS_PROXY: "http://opencodex:fixture-token@127.0.0.1:10200" } }));
+  const models = { sonnet: "claude-sonnet-4-6" };
+  const fingerprint = previewClaudeModelDefaults(models).fingerprint;
+  const overlapping: string[] = [];
+  let held = true;
+  setIcaclsRunnerForTests(args => { if (held && args[0]?.startsWith(home + sep)) overlapping.push(args[1] ?? ""); return success; });
+  const entered = deferred(), release = deferred();
+  setAsyncIcaclsRunnerForTests(async () => { entered.resolve(); await release.promise; return success; });
+  hardenConfigDir();
+  await entered.promise;
+  const url = new URL("http://127.0.0.1:10100/api/claude-code/model-defaults");
+  const work = handleManagementAPI(new Request(url, { method: "POST", headers: { Host: url.host, "Content-Type": "application/json" },
+    body: JSON.stringify({ fingerprint }) }), url, { port: 10100, providers: {}, claudeCode: { tierModels: models } } as OcxConfig,
+    {}, "admin-token", undefined, { trustedLoopback: true });
+  try {
+    await macrotask();
+    expect(overlapping).toEqual([]);
+    expect(JSON.parse(readFileSync(path, "utf8")).env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
+  } finally { held = false; release.resolve(); }
+  expect((await work)?.status).toBe(200);
+  expect(JSON.parse(readFileSync(path, "utf8")).env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe(models.sonnet);
 });

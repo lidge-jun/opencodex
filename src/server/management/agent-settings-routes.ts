@@ -1224,7 +1224,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const firstPartyRemoved = await removeDesktopFirstPartySettled(loadConfig);
         if (!firstPartyRemoved.ok) {
           return { response: jsonResponse({
-            error: `Claude Code settings could not be parsed (${firstPartyRemoved.path}); first-party cleanup remains incomplete after gateway apply.`,
+            error: `Claude Code first-party settings cleanup did not complete (${firstPartyRemoved.path}); the gateway was applied.`,
             code: "claude_desktop_first_party_refused", reason: firstPartyRemoved.reason,
             applied: true, saved: committed.ok, mode: "gateway", path: result.path,
             ...(modeWarning ? { warning: modeWarning } : {}),
@@ -1409,7 +1409,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           !("fingerprint" in body) || typeof body.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(body.fingerprint)) {
         return jsonResponse({ error: "fingerprint is required" }, 400);
       }
-      return jsonResponse(applyClaudeModelDefaults(config.claudeCode?.tierModels, body.fingerprint));
+      // Fresh admission after the body await: a nested Claude home shares the config-root ACL flight.
+      const fingerprint = body.fingerprint;
+      const { withConfigDirHardeningSettled } = await import("../../config/paths"), { claudeConfigDir } = await import("../../claude/auth-detect");
+      return jsonResponse(await withConfigDirHardeningSettled(claudeConfigDir(), () => applyClaudeModelDefaults(config.claudeCode?.tierModels, fingerprint)));
     } catch (error) {
       rethrowManagementBodyTooLarge(error);
       if (error instanceof ModelDefaultsRecoveryError) return jsonResponse({ error: error.message, code: error.message, backupPath: error.backupPath }, 500);
