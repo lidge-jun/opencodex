@@ -1204,10 +1204,10 @@ export const OPPER_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fro
   OPPER_MODELS.map(id => [id, OPPER_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
 );
 
-// AI Stupid Level routing modes, as listed by the authenticated GET /v1/models on 2026-10-23
+// AI Stupid Level routing modes, as listed by the authenticated GET /v1/models on 2026-10-26
 // (https://aistupidlevel.info/router/docs#strategies). Each mode picks a model per request, so it
-// declares limits that hold for any pick: the smallest window among the models the router can pick
-// (Kimi K2.7 Code, 262,144 tokens) and an output limit all of them accept (64,000 tokens).
+// declares conservative limits that hold for any pick: a 262,144-token window (the pool's smallest,
+// Kimi K2.7 Code's, when first checked on 2026-10-23) and 64,000 output tokens.
 // The router is text only (image, audio and file parts are a 400 `unsupported_content`), so images
 // for a mode go through the vision sidecar. Pinned model ids arrive through live discovery.
 export const AISTUPIDLEVEL_ROUTING_MODES = [

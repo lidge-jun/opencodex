@@ -23,7 +23,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 const baseUrl = "https://aistupidlevel.info/v1";
-// The routing modes the authenticated GET /v1/models listed on 2026-10-23.
+// The routing modes the authenticated GET /v1/models listed on 2026-10-23 and again on 2026-10-26.
 const ROUTING_MODES = [
   "auto-coding", "auto-tooling", "auto-reasoning", "auto-best", "auto", "auto-task",
   "auto-value", "auto-value-coding", "auto-value-tooling", "auto-value-reasoning",

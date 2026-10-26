@@ -1293,7 +1293,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   },
   {
     // AI Stupid Level Smart Router, operated by S.C. Studio Platforms S.R.L. Contract checked
-    // 2026-10-23: https://aistupidlevel.info/router/docs and https://aistupidlevel.info/terms#router.
+    // 2026-10-26: https://aistupidlevel.info/router/docs and https://aistupidlevel.info/terms#router.
     // The router calls the model it picks with the provider keys saved on the user's own ASL
     // account, so each provider bills the user directly; ASL resells no model access. GET /v1/models
     // answers 401 without a valid key, so the default discovery URL doubles as key validation. The
