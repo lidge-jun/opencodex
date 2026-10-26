@@ -201,7 +201,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS).toEqual(deriveKeyLoginMap());
     expect(Object.keys(KEY_LOGIN_PROVIDERS)).toEqual(EXPECTED_KEY_PROVIDER_IDS);
     expect(Object.keys(deriveKeyLoginMap())).toEqual(EXPECTED_KEY_PROVIDER_IDS);
-    expect(KEY_LOGIN_PROVIDERS.minimax.defaultModel).toBe("MiniMax-M3");
+    expect(KEY_LOGIN_PROVIDERS.minimax.defaultModel).toBe("MiniMax-M3.1-Flash");
     expect(KEY_LOGIN_PROVIDERS.umans).toMatchObject({
       label: "Umans AI Coding Plan",
       adapter: "anthropic",
@@ -510,7 +510,7 @@ describe("provider registry parity", () => {
     });
 
     const minimaxModels = [
-      "MiniMax-M3.1-Flash-Preview",
+      "MiniMax-M3.1-Flash",
       "MiniMax-M3",
       "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
       "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
@@ -522,16 +522,16 @@ describe("provider registry parity", () => {
       const entry = PROVIDER_REGISTRY.find(provider => provider.id === providerId);
       expect(entry?.adapter).toBe("openai-chat");
       expect(entry?.baseUrl).toBe(providerId === "minimax" ? "https://api.minimax.io/v1" : "https://api.minimaxi.com/v1");
-      expect(entry?.defaultModel).toBe("MiniMax-M3");
+      expect(entry?.defaultModel).toBe("MiniMax-M3.1-Flash");
       expect(entry?.models).toEqual(minimaxModels);
       expect(entry?.modelContextWindows?.["MiniMax-M3"]).toBe(1_000_000);
-      expect(entry?.modelContextWindows?.["MiniMax-M3.1-Flash-Preview"]).toBe(1_000_000);
+      expect(entry?.modelContextWindows?.["MiniMax-M3.1-Flash"]).toBe(1_000_000);
       expect(entry?.modelReasoningEfforts?.["MiniMax-M3"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
-      expect(entry?.modelReasoningEfforts?.["MiniMax-M3.1-Flash-Preview"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(entry?.modelReasoningEfforts?.["MiniMax-M3.1-Flash"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
       expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3"]).toBe("medium");
-      expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3.1-Flash-Preview"]).toBe("max");
+      expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3.1-Flash"]).toBe("max");
       expect(entry?.modelReasoningEffortMap?.["MiniMax-M3"]).toMatchObject({ low: "disabled", medium: "adaptive", high: "adaptive" });
-      expect(entry?.modelReasoningEffortMap?.["MiniMax-M3.1-Flash-Preview"]).toBeUndefined();
+      expect(entry?.modelReasoningEffortMap?.["MiniMax-M3.1-Flash"]).toBeUndefined();
       expect(entry?.preserveReasoningContentModels).toEqual(minimaxModels);
       expect(entry?.reasoningSplitModels).toEqual(splitModels);
       expect(entry?.reasoningDetailsModels).toEqual(splitModels);

@@ -9,7 +9,7 @@ import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
 import type { CatalogModel, OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const M3 = "MiniMax-M3";
-const PREVIEW = "MiniMax-M3.1-Flash-Preview";
+const PREVIEW = "MiniMax-M3.1-Flash";
 const REGIONS = ["minimax", "minimax-cn"] as const;
 const originalFetch = globalThis.fetch;
 
@@ -33,7 +33,7 @@ describe("MiniMax Coding Plan Combo image input", () => {
     for (const region of REGIONS) {
       const fresh = seeded(region);
       expect(fresh.modelInputModalities?.[M3]).toEqual(["text", "image"]);
-      expect(fresh.modelInputModalities?.[PREVIEW]).toEqual(["text", "image"]);
+      expect(fresh.modelInputModalities?.[PREVIEW]).toEqual(["text", "image", "video"]);
       expect(fresh.modelInputModalities?.["MiniMax-M2.7"]).toBeUndefined();
 
       const saved: OcxProviderConfig = {
@@ -43,7 +43,7 @@ describe("MiniMax Coding Plan Combo image input", () => {
       };
       enrichProviderFromRegistry(region, saved);
       expect(saved.modelInputModalities).toMatchObject({
-        [M3]: ["text", "image"], [PREVIEW]: ["text", "image"], "MiniMax-M2.7": ["text"],
+        [M3]: ["text", "image"], [PREVIEW]: ["text", "image", "video"], "MiniMax-M2.7": ["text"],
       });
       expect(saved.modelCapabilities?.[M3]?.inputModalities).toEqual(["text"]);
       expect(isModelVisionSidecarConsumer(saved, M3)).toBe(true);

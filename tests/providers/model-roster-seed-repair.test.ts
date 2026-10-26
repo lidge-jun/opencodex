@@ -15,7 +15,7 @@ import {
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
-const PREVIEW = "MiniMax-M3.1-Flash-Preview";
+const PREVIEW = "MiniMax-M3.1-Flash";
 
 function minimaxConfig(provider: string, row: Partial<OcxProviderConfig>): OcxConfig {
   return {
