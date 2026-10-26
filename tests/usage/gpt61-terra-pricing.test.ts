@@ -64,15 +64,31 @@ describe("GPT-6.1 Terra pricing", () => {
     }
   });
 
-  test("tier membership is exact and does not create reseller bands or unsupported priority rules", () => {
+  test.each(["openai", "openai-apikey"])("%s prices confirmed Fast at 2x, stacked on the 272K tier", provider => {
+    expect(findPriorityPricingRule(provider, MODEL)).toMatchObject({ multiplier: 2, verifiedAt: "2026-10-27" });
+    expect(resolvePriorityMultiplier(MODEL)).toBe(2);
+    for (const inputTokens of [271_999, 272_000, 272_001]) {
+      const usage = { inputTokens, outputTokens: 1000, cachedInputTokens: 200_000, cacheCreationInputTokens: 20_000 };
+      const input = { provider, model: MODEL, usage, usageStatus: "reported" as const };
+      const rates = inputTokens > 272_000 ? LONG_PRICE : PRICE;
+      const fast = { responseServiceTier: "priority" };
+      for (const estimate of [estimateRequestCost({ ...input, serviceTier: fast }),
+        estimateAttemptCost({ ...input, ordinal: 1 }, EXPECTED_PRICE_OVERLAYS, fast)]) {
+        expect(estimate!.cost.input).toBeCloseTo(2 * (inputTokens - 220_000) * rates.input / 1e6, 12);
+        expect(estimate!.cost.output).toBeCloseTo(2 * 1000 * rates.output / 1e6, 12);
+        expect(estimate!.cost.cacheRead).toBeCloseTo(2 * 200_000 * rates.cacheRead / 1e6, 12);
+        expect(estimate!.cost.cacheWrite).toBeCloseTo(2 * 20_000 * rates.cacheWrite / 1e6, 12);
+      }
+    }
+  });
+
+  test("tier membership is exact and does not create reseller bands", () => {
     expect(CONTEXT_TIERS.filter(row => row.modelId === MODEL).map(row => row.provider).sort())
       .toEqual(["openai", "openai-apikey"]);
-    // Sol has no priority price rule: the scoped addition must not invent one for Terra.
-    for (const provider of ["openai", "openai-apikey", "openrouter", "devin", "cursor"]) {
-      expect(findPriorityPricingRule(provider, "gpt-6.1-sol")).toBeUndefined();
+    // Routed resellers never inherit OpenAI's Fast premium for the same slug.
+    for (const provider of ["openrouter", "devin", "cursor"]) {
       expect(findPriorityPricingRule(provider, MODEL)).toBeUndefined();
     }
-    expect(resolvePriorityMultiplier(MODEL)).toBe(1);
     expect(findContextTier("openrouter", `openai/${MODEL}`)).toBeUndefined();
     expect(findExpectedPriceOverlay("cursor", MODEL)).toBeUndefined();
     expect(findExpectedPriceOverlay("openai", `${MODEL}-pro`)).toBeUndefined();

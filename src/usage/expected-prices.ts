@@ -663,6 +663,8 @@ export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
   // standard tuples; the stale bases made these look like 1.6/0.4 (#907).
   "gpt-5.6-terra": 2,
   "gpt-5.6-luna": 2,
+  // GPT-6.1 Terra model page (2026-10-27): Fast mode costs 2× standard.
+  "gpt-6.1-terra": 2,
   "gpt-5.5": 2.5,
   "gpt-5.4-mini": 2,
   "gpt-5.4": 2,
@@ -702,8 +704,9 @@ export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
         provider,
         modelId,
         multiplier,
-        source: modelId === "gpt-6-astra" ? ASTRA_API_PRICING : "https://openai.com/api-fast-mode/",
-        verifiedAt: modelId === "gpt-6-astra" ? "2026-09-05" : "2026-08-05",
+        source: modelId === "gpt-6-astra" ? ASTRA_API_PRICING
+          : modelId === "gpt-6.1-terra" ? GPT61_TERRA_API_PRICING : "https://openai.com/api-fast-mode/",
+        verifiedAt: modelId === "gpt-6-astra" ? "2026-09-05" : modelId === "gpt-6.1-terra" ? "2026-10-27" : "2026-08-05",
       })),
   ),
   ...["gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro"].map((modelId): PriorityPricingRule => ({

@@ -1080,7 +1080,7 @@ describe("priority (Fast) service tier multiplier", () => {
   });
 
   test("P9. PRIORITY_MULTIPLIERS table has expected entries", () => {
-    expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(9);
+    expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(10); // incl. gpt-6.1-terra (gpt61-terra-pricing.test.ts)
     expect(PRIORITY_MULTIPLIERS["gpt-5.6-sol"]).toBe(2);
     expect(PRIORITY_MULTIPLIERS["gpt-daybreak-blue-latest"]).toBe(2);
     expect(PRIORITY_MULTIPLIERS["daybreak-blue-latest"]).toBe(2);
