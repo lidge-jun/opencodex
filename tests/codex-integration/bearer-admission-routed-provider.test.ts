@@ -291,9 +291,11 @@ async function startOwnedServer(): Promise<ReturnType<typeof startServer>> {
  * iteration's elapsed and the whole-test elapsed against the single 30s
  * budget the test timeout actually enforces. Records carry enum literals and
  * numbers only — no path, header, token, or error text — an elapsed
- * correlation alone never proves an external kill. Tracing adds no timers,
- * retries, or files and never alters the call sequence or cleanup: an
- * undefined trace is an exact no-op.
+ * correlation alone never proves an external kill. The request stage spans
+ * the body read, and test_end is emitted from a finally so a failed stage
+ * or assertion still closes the record after capture_close and
+ * iteration_end. Tracing adds no timers, retries, or files and never alters
+ * the call sequence or cleanup: an undefined trace emits nothing.
  */
 type BearerTraceStage = "save_config" | "startup_gate" | "request" | "server_stop" | "capture_close";
 
@@ -398,6 +400,109 @@ function tracedBearerStageSync<T>(
   }
 }
 
+/**
+ * Opt-in trace capture for the seam tests: enables the env switch, records
+ * parsed stderr records, and always restores both even when a check fails.
+ */
+async function withTraceLines(
+  run: (records: () => Array<Record<string, unknown>>) => Promise<void>,
+): Promise<void> {
+  const previous = process.env.OPENCODEX_BEARER_STAGE_TRACE;
+  process.env.OPENCODEX_BEARER_STAGE_TRACE = "1";
+  const lines: string[] = [];
+  const originalError = console.error;
+  console.error = (line: unknown) => { lines.push(String(line)); };
+  try {
+    await run(() => lines
+      .filter(line => line.startsWith("[bearer-stage-trace] "))
+      .map(line => JSON.parse(line.slice("[bearer-stage-trace] ".length)) as Record<string, unknown>));
+  } finally {
+    console.error = originalError;
+    if (previous === undefined) delete process.env.OPENCODEX_BEARER_STAGE_TRACE;
+    else process.env.OPENCODEX_BEARER_STAGE_TRACE = previous;
+  }
+}
+
+type BearerAdmissionPost = (url: string, model: string, headers: HeadersInit) => Promise<Response>;
+
+/**
+ * The request stage used by the matrix below — and exercised directly by the
+ * seam tests through the injected `post`. The body read belongs to the
+ * stage: a stalled or rejected body is still request work, not unmeasured
+ * time after request_end. Chat keeps the original order — the status
+ * refusal precedes the drain, so an unexpected 200 fails fast instead of
+ * hanging on a stalled body.
+ */
+async function runBearerRequestStage(
+  iteration: BearerIterationTrace | undefined,
+  surface: "Responses" | "Chat",
+  url: string,
+  headers: HeadersInit,
+  post: BearerAdmissionPost,
+): Promise<{ body: unknown }> {
+  return tracedBearerStage(iteration, "request", async () => {
+    const res = await post(url, "cursorcustom/auto", headers);
+    if (surface === "Responses") return { body: await res.json() };
+    expect(res.status).not.toBe(200);
+    return { body: await res.text() };
+  });
+}
+
+interface AdmissionCaseDeps {
+  readonly post?: BearerAdmissionPost;
+}
+
+/** One matrix iteration: real config, real servers, real stage tracing. */
+async function runTracedAdmissionCase(
+  iteration: BearerIterationTrace | undefined,
+  surface: "Responses" | "Chat",
+  extra: Record<string, string>,
+  deps: AdmissionCaseDeps = {},
+): Promise<void> {
+  await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+    tracedBearerStageSync(iteration, "save_config", () => saveConfig(cursorForwardConfig(baseUrl)));
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
+    const server = await tracedBearerStage(iteration, "startup_gate", () => startOwnedServer());
+    try {
+      const headers = { "x-opencodex-api-key": ADMISSION_SECRET, ...extra };
+      const post = deps.post ?? (surface === "Chat" ? postChatCompletions : postResponses);
+      const { body } = await runBearerRequestStage(iteration, surface, server.url, headers, post);
+      if (surface === "Responses") {
+        expect(body).toMatchObject({ status: "failed" });
+      }
+      expect(capturedAuth).toEqual([]);
+    } finally {
+      await tracedBearerStage(iteration, "server_stop", () => server.stop(true));
+    }
+  }, undefined, iteration);
+}
+
+/**
+ * The matrix loop itself, shared by the parameterized test and the seam
+ * tests so failure-order regressions are checked on the real control flow.
+ */
+async function runTracedAdmissionMatrix(
+  surface: "Responses" | "Chat",
+  cases: ReadonlyArray<Record<string, string>>,
+  deps: AdmissionCaseDeps = {},
+): Promise<void> {
+  const trace = bearerStageTracer(`ChatGPT-claimed bearer (${surface})`);
+  try {
+    for (const [caseIndex, extra] of cases.entries()) {
+      const iteration = trace?.iteration(caseIndex, cases.length);
+      try {
+        await runTracedAdmissionCase(iteration, surface, extra, deps);
+      } finally {
+        iteration?.finish();
+      }
+    }
+  } finally {
+    // test_end closes every run — including a failed stage or assertion,
+    // after that iteration's capture_close and iteration_end.
+    trace?.finish();
+  }
+}
+
 describe("bearer stage tracer seam", () => {
   test("a disabled trace runs a sync stage as a direct call — no microtask, same order", () => {
     // The whole point of the sync wrapper: a sync body must come back as a
@@ -414,12 +519,7 @@ describe("bearer stage tracer seam", () => {
   });
 
   test("an enabled trace emits the fixed event sequence without altering call order", async () => {
-    const previous = process.env.OPENCODEX_BEARER_STAGE_TRACE;
-    process.env.OPENCODEX_BEARER_STAGE_TRACE = "1";
-    const lines: string[] = [];
-    const originalError = console.error;
-    console.error = (line: unknown) => { lines.push(String(line)); };
-    try {
+    await withTraceLines(async records => {
       const trace = bearerStageTracer("seam-check");
       const iteration = trace?.iteration(0, 1);
       const order: string[] = [];
@@ -430,9 +530,7 @@ describe("bearer stage tracer seam", () => {
       trace?.finish();
 
       expect(order).toEqual(["save_config", "request"]);
-      const events = lines
-        .filter(line => line.startsWith("[bearer-stage-trace] "))
-        .map(line => JSON.parse(line.slice("[bearer-stage-trace] ".length)) as Record<string, unknown>);
+      const events = records();
       expect(events.map(record => record.event)).toEqual([
         "test_begin",
         "iteration_begin",
@@ -448,11 +546,108 @@ describe("bearer stage tracer seam", () => {
         expect(Number.isFinite(record.budgetMs)).toBe(true);
         expect(Number.isFinite(record.testElapsedMs ?? 0)).toBe(true);
       }
-    } finally {
-      console.error = originalError;
-      if (previous === undefined) delete process.env.OPENCODEX_BEARER_STAGE_TRACE;
-      else process.env.OPENCODEX_BEARER_STAGE_TRACE = previous;
-    }
+    });
+  });
+
+  test("the shared request stage holds request_end until the body settles", async () => {
+    await withTraceLines(async records => {
+      const trace = bearerStageTracer("body-attribution");
+      const iteration = trace!.iteration(0, 1);
+      const events = (name: string) => records().filter(record => record.event === name);
+
+      // Headers resolved but the body is still in flight: the stage must not
+      // end until the read releases. The gate is released in finally so a
+      // failed count check cannot leave the stage promise hanging.
+      let release!: () => void, entered!: () => void;
+      const bodyEntered = new Promise<void>(resolve => { entered = resolve; });
+      const gate = new Promise<string>(resolve => { release = () => resolve("payload"); });
+      const post: BearerAdmissionPost = () => Promise.resolve({
+        status: 401,
+        text: () => { entered(); return gate; },
+        json: () => Promise.resolve({}),
+      } as unknown as Response);
+      const pending = runBearerRequestStage(iteration, "Chat", "http://fixture.invalid", {}, post);
+      try {
+        await Promise.race([bodyEntered, pending.then(() => { throw new Error("request settled before body entry"); })]);
+        expect(events("request_end")).toHaveLength(0);
+      } finally {
+        release();
+        await pending.catch(() => {});
+      }
+      expect(events("request_end")).toHaveLength(1);
+
+      const rejectedPost: BearerAdmissionPost = () => Promise.resolve({
+        status: 401,
+        text: () => Promise.reject<string>(new Error("synthetic-stall")),
+        json: () => Promise.reject<unknown>(new Error("synthetic-stall")),
+      } as unknown as Response);
+      const parseError = await runBearerRequestStage(iteration, "Responses", "http://fixture.invalid", {}, rejectedPost)
+        .then(() => null, error => error);
+      expect(parseError).toBeInstanceOf(Error);
+      expect(parseError.message).toBe("synthetic-stall");
+      expect(events("request_error")).toHaveLength(1);
+
+      iteration.finish();
+      trace!.finish();
+    });
+  });
+
+  test("an unexpected Chat 200 fails inside the shared request stage before the body drain", async () => {
+    await withTraceLines(async records => {
+      const trace = bearerStageTracer("chat-200-fast-fail");
+      const iteration = trace!.iteration(0, 1);
+      const events = (name: string) => records().filter(record => record.event === name);
+
+      // A 200 with a body that never settles must fail on the status check
+      // immediately — the assertion precedes the drain inside the stage.
+      let bodyRead = false;
+      const post: BearerAdmissionPost = () => Promise.resolve({
+        status: 200,
+        text: () => { bodyRead = true; return new Promise<string>(() => {}); },
+        json: () => { bodyRead = true; return new Promise<unknown>(() => {}); },
+      } as unknown as Response);
+      const statusError = await runBearerRequestStage(iteration, "Chat", "http://fixture.invalid", {}, post)
+        .then(() => null, error => error);
+      expect(statusError).toBeInstanceOf(Error);
+      expect(bodyRead).toBe(false);
+      expect(events("request_error")).toHaveLength(1);
+      expect(events("request_end")).toHaveLength(0);
+
+      iteration.finish();
+      trace!.finish();
+    });
+  });
+
+  test("an injected stage failure still ends the real matrix with test_end last", async () => {
+    await withTraceLines(async records => {
+      // Real saveConfig, real servers, real capture — only the wire response
+      // is injected, with a Chat 200 the shared request stage must refuse.
+      const post: BearerAdmissionPost = () => Promise.resolve({
+        status: 200,
+        text: () => Promise.resolve("{}"),
+        json: () => Promise.resolve({}),
+      } as unknown as Response);
+
+      const failure = await runTracedAdmissionMatrix("Chat", [{}], { post }).then(() => null, error => error);
+      expect(failure).toBeInstanceOf(Error);
+
+      expect(records().map(record => record.event)).toEqual([
+        "test_begin",
+        "iteration_begin",
+        "save_config_begin",
+        "save_config_end",
+        "startup_gate_begin",
+        "startup_gate_end",
+        "request_begin",
+        "request_error",
+        "server_stop_begin",
+        "server_stop_end",
+        "capture_close_begin",
+        "capture_close_end",
+        "iteration_end",
+        "test_end",
+      ]);
+    });
   });
 });
 
@@ -929,36 +1124,7 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
       { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": {} })}` },
       { authorization: `Bearer ${fakeChatGptJwt({ "https://api.openai.com/auth": { user_id: "u_1" } })}` },
     ];
-    const trace = bearerStageTracer(`ChatGPT-claimed bearer (${surface})`);
-    for (const [caseIndex, extra] of cases.entries()) {
-      const iteration = trace?.iteration(caseIndex, cases.length);
-      try {
-        await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
-          tracedBearerStageSync(iteration, "save_config", () => saveConfig(cursorForwardConfig(baseUrl)));
-          writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: {} }));
-          const server = await tracedBearerStage(iteration, "startup_gate", () => startOwnedServer());
-          try {
-            const headers = { "x-opencodex-api-key": ADMISSION_SECRET, ...extra };
-            const response = await tracedBearerStage(iteration, "request", () =>
-              surface === "Chat"
-                ? postChatCompletions(server.url, "cursorcustom/auto", headers)
-                : postResponses(server.url, "cursorcustom/auto", headers));
-            if (surface === "Responses") {
-              expect(await response.json()).toMatchObject({ status: "failed" });
-            } else {
-              expect(response.status).not.toBe(200);
-              await response.text();
-            }
-            expect(capturedAuth).toEqual([]);
-          } finally {
-            await tracedBearerStage(iteration, "server_stop", () => server.stop(true));
-          }
-        }, undefined, iteration);
-      } finally {
-        iteration?.finish();
-      }
-    }
-    trace?.finish();
+    await runTracedAdmissionMatrix(surface, cases);
   });
 
   test.each(["Responses", "Chat"])("%s keeps an unmarked JWT as the Cursor credential", async surface => {
