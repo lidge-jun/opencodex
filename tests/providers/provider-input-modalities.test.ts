@@ -12,6 +12,7 @@ import { candidateCapabilityEvidence } from "../../src/routing/capability";
 import { parseProviderEditorConfigDTO, providerEditorConfigDTO, providerManagementConfigError } from "../../src/server/auth-cors";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { isVisionSidecarConsumer } from "../../src/vision/eligibility";
 import { requiresVisionPreprocessing } from "../../src/vision/plan";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -137,6 +138,55 @@ describe("tolerant modality load and management persistence", () => {
 });
 
 describe("runtime provider modality authority", () => {
+  test("renamed fixed-key destinations retain vision eligibility without saving defaults", () => {
+    for (const baseUrl of [provider.baseUrl, " https://AISTUPIDLEVEL.info:443/v1/// "]) {
+      const saved = { ...provider, baseUrl };
+      const cfg: OcxConfig = { port: 10100, providers: { "my-asl": saved } };
+      const modalities = registryInputModalitiesForDestination("my-asl", saved);
+      expect(modalities).toEqual(["text"]);
+      modalities!.push("image");
+      expect(registryInputModalitiesForDestination("my-asl", saved)).toEqual(["text"]);
+      expect(isVisionSidecarConsumer(cfg, "my-asl", "unlisted-model")).toBe(true);
+      expect(saved.inputModalities).toBeUndefined();
+    }
+  });
+
+  test("renamed routed providers inherit a detached runtime modality fallback", () => {
+    const saved = { ...provider, baseUrl: " https://AISTUPIDLEVEL.info:443/v1/// " };
+    const routed = routedProviderConfig("my-asl", saved);
+    expect(routed.inputModalities).toEqual(["text"]);
+    routed.inputModalities!.push("image");
+    expect(routedProviderConfig("my-asl", saved).inputModalities).toEqual(["text"]);
+    expect(saved.inputModalities).toBeUndefined();
+  });
+
+  test("renamed rows reject custom destinations and retain explicit modality authority", () => {
+    for (const row of [
+      { ...provider, baseUrl: "https://relay.example.test/v1" },
+      { ...provider, baseUrl: "https://aistupidlevel.info/another-path" },
+      { ...provider, baseUrl: "https://aistupidlevel.info/v1?custom=1" },
+      { ...provider, adapter: "openai-responses" as const },
+      { ...provider, authMode: "oauth" as const },
+    ]) {
+      expect(registryInputModalitiesForDestination("my-asl", row)).toBeUndefined();
+      expect(routedProviderConfig("my-asl", row).inputModalities).toBeUndefined();
+      expect(isVisionSidecarConsumer({ providers: { "my-asl": row } }, "my-asl", "unlisted-model")).toBe(false);
+    }
+    for (const override of [
+      { inputModalities: ["text", "image"] },
+      { modelInputModalities: { "unlisted-model": ["text", "image"] } },
+      { modelCapabilities: { "unlisted-model": { inputModalities: ["text", "image"] } } },
+    ]) {
+      const saved = { ...provider, ...override };
+      const cfg: OcxConfig = { port: 10100, providers: { "my-asl": saved } };
+      const routed = routedProviderConfig("my-asl", saved);
+      if (override.inputModalities) expect(routed.inputModalities).toEqual(["text", "image"]);
+      expect(isVisionSidecarConsumer(cfg, "my-asl", "unlisted-model")).toBe(false);
+      expect(requiresVisionPreprocessing(cfg, routed, "unlisted-model", "my-asl")).toBe(false);
+      expect(candidateCapabilityEvidence(cfg, "my-asl", "unlisted-model", routed).image).toBe(true);
+    }
+  });
+
   test("registry backfill is destination-bound, cloned, and never saved", () => {
     for (const baseUrl of [provider.baseUrl, `${provider.baseUrl}/`, " https://aistupidlevel.info/v1/ "]) {
       const saved = { ...provider, baseUrl };

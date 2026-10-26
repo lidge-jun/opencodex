@@ -6,6 +6,7 @@ import { resolveModelPolicy } from "./resolved-model-policy";
 import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-merge";
 import {
   PROVIDER_REGISTRY,
+  normalizedProviderEndpoint,
   registryEntryForProviderDestination,
   registryModelServiceTierCapabilityApplies,
   type ProviderRegistryEntry,
@@ -520,9 +521,14 @@ export function hasLegacyClinePassReasoningEfforts(name: string, prov: OcxProvid
  * enriched object, and a saved copy would follow the row to another URL.
  */
 export function registryInputModalitiesForDestination(name: string, prov: OcxProviderConfig): string[] | undefined {
-  const entry = PROVIDER_REGISTRY.find(row => row.id === name);
-  if (!entry?.inputModalities || !providerMatchesRegistryTransportWithStaticGuards(name, prov)) return undefined;
-  return [...entry.inputModalities];
+  let entry = PROVIDER_REGISTRY.find(row => row.id === name);
+  if (!entry || !providerMatchesRegistryTransportWithStaticGuards(name, prov)) {
+    entry = registryEntryForProviderDestination(prov);
+    // Runtime modality authority follows only the canonical fixed-key destination, not aliases.
+    if (entry && (entry.adapter !== prov.adapter
+      || normalizedProviderEndpoint(entry.baseUrl) !== normalizedProviderEndpoint(prov.baseUrl))) return undefined;
+  }
+  return entry?.inputModalities ? [...entry.inputModalities] : undefined;
 }
 
 export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {

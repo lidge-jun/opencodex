@@ -903,7 +903,8 @@ Messages endpoint is a passthrough to Anthropic without routing, so the preset d
 The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
 `text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values
 are rejected on save; a malformed value in a hand-edited config loads as `["text"]` with a warning.
-The preset's text-only fallback is applied at runtime and does not follow a same-named custom URL.
+The preset's text-only fallback is applied at runtime, including when saved under another provider
+name at the same URL and Chat adapter. It does not follow a custom URL or another adapter.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly

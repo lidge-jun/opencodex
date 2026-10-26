@@ -199,17 +199,17 @@ describe("AI Stupid Level text-only contract for pinned models", () => {
     expect(isVisionSidecarConsumer(config({ baseUrl: "https://relay.example.test/v1" }), "aistupidlevel", PINNED)).toBe(false);
   });
 
-  test("an image sent to a pinned model never reaches the router", async () => {
+  test.each(["aistupidlevel", "my-asl"])("%s: an image sent to a pinned model never reaches the router", async providerName => {
     saveConfig({
-      port: 0, hostname: "127.0.0.1", defaultProvider: "aistupidlevel",
-      providers: { aistupidlevel: { ...providerConfigSeed(entry()), apiKey: "fixture-asl-key" } },
+      port: 0, hostname: "127.0.0.1", defaultProvider: providerName,
+      providers: { [providerName]: { ...providerConfigSeed(entry()), apiKey: "fixture-asl-key" } },
     });
     const server = startServer(0);
     try {
       const response = await fetch(new URL("/v1/responses", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: `aistupidlevel/${PINNED}`, stream: false,
+        body: JSON.stringify({ model: `${providerName}/${PINNED}`, stream: false,
           input: [{ role: "user", content: [
             { type: "input_text", text: "Describe this image." }, { type: "input_image", image_url: IMAGE },
           ] }],

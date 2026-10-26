@@ -13,7 +13,7 @@ import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "../lib/redact";
 import { PROVIDER_REGISTRY, registryEntryForProviderDestination } from "./registry";
-import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts } from "./derive";
+import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts, registryInputModalitiesForDestination } from "./derive";
 import { cloneFastWire } from "./fastwire";
 import { fastSwitchOff } from "./fast-opt-in";
 import {
@@ -122,8 +122,11 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     // the reasoning item the upstream answers 400 to. Destination matching refuses templated and
     // overridable base URLs, so this cannot follow a retargeted row, and an explicit value wins.
     const destination = registryEntryForProviderDestination(provider);
+    const inputModalities = provider.inputModalities === undefined
+      ? registryInputModalitiesForDestination(providerName, provider) : undefined;
     return {
       ...provider,
+      ...(inputModalities ? { inputModalities } : {}),
       apiKey: usableResolvedApiKey(provider.apiKey),
       ...(destination?.modelDefaultReasoningEfforts ? {
         modelDefaultReasoningEfforts: mapFill(destination.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts)[0],
