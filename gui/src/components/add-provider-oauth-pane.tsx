@@ -71,6 +71,7 @@ export function AddProviderOAuthPane({
       )}
       {oauthBusy && (
         <LoginHint
+          providerId={preset.oauthProvider}
           hint={{ url: oauthUrl, deviceCode: oauthDeviceCode, instructions: oauthInstructions, browserLaunch: oauthBrowserLaunch }}
           paste={{
             value: manualCode,

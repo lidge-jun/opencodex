@@ -838,3 +838,7 @@ For the official DeepSeek Chat Completions endpoint, opencodex relaxes regex and
 schema-validation HTTP 400 errors. Strict mode is omitted for this tool. Fields
 defined only inside an `anyOf` are no longer constrained by that union; the tool
 must validate its inputs. Other tools and providers retain their existing behavior.
+
+## Microsoft 365 Copilot
+
+The `m365-copilot` adapter owns native Microsoft ChatHub WebSocket turns from `runTurn`. It reuses Chat tool lowering internally and emits the normal OpenCodex events; it requires no separate compatibility server. See [setup and limitations](/guides/m365-copilot/).

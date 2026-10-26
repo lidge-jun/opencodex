@@ -5,7 +5,7 @@ import {
   type ProviderRegistryEntry,
 } from "./registry";
 
-const STATIC_MODEL_CATALOG_PROVIDER_IDS = new Set(["cline-pass", "mimo-free"]);
+const STATIC_MODEL_CATALOG_PROVIDER_IDS = new Set(["cline-pass", "mimo-free", "m365-copilot"]);
 
 function normalizedEndpoint(value: string): string {
   const trimmed = value.trim();
@@ -28,7 +28,8 @@ function exactRegistryTransportMatch(
   const legacyMimoLocal = options.allowLegacyMimoLocal === true
     && entry.id === "mimo-free"
     && provider.authMode === "local";
-  if (provider.authMode !== undefined && provider.authMode !== "key" && !legacyMimoLocal) return false;
+  const canonicalM365 = entry.id === "m365-copilot" && (provider.authMode === undefined || provider.authMode === "oauth");
+  if (provider.authMode !== undefined && provider.authMode !== "key" && !legacyMimoLocal && !canonicalM365) return false;
   return normalizedEndpoint(provider.baseUrl) === normalizedEndpoint(entry.baseUrl);
 }
 

@@ -1827,3 +1827,7 @@ An access-denied result does not by itself prove an expired login or an ineligib
 ## Large inline images on Chat providers
 
 Translated OpenAI-compatible Chat requests shrink inline images when their combined base64 data exceeds 3.5 MiB. Older images lose detail first. This is a best-effort image budget, so large text, schemas, or images that cannot be processed may still exceed an upstream request limit. Remote image URLs are not downloaded, and images that cannot be shrunk remain attached. Native Chat passthrough keeps its original image bytes.
+
+## Microsoft 365 Copilot
+
+The experimental native `m365-copilot` provider uses Microsoft work/school sign-in and maintained model aliases. See [Microsoft 365 Copilot setup](/guides/m365-copilot/) for its isolated browser flow, account requirements and limitations. It is separate from GitHub Copilot.

@@ -58,6 +58,19 @@ async function startLogin(
 }
 
 describe("POST /api/oauth/login browser opening", () => {
+  test("refuses managed M365 login before spawning when browser launch is disabled", async () => {
+    const oauth = await import("../../src/oauth");
+    const startSpy = spyOn(oauth, "startLoginFlow");
+    const req = new Request("http://127.0.0.1/api/oauth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "m365-copilot", openBrowser: false }) });
+    try {
+      const response = await handleOauthAccountRoutes({ req, url: new URL(req.url), config: baseConfig(), deps: {},
+        convergeCodexCatalog: async () => ({ status: "failed", reason: "disk" }), syncClaudeAgentDefsBestEffort: async () => {} });
+      expect(response?.status).toBe(400);
+      expect((await response!.json()).error).toContain("isolated window");
+      expect(startSpy).not.toHaveBeenCalled();
+    } finally { startSpy.mockRestore(); }
+  });
   test("a device flow is not opened server-side, and still returns its URL and code", async () => {
     const { opened, body } = await startLogin({
       url: "https://auth.kimi.com/device?user_code=WDJB-MJHT",

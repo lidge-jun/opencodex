@@ -262,6 +262,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    if (provider === "m365-copilot") {
+      const { shouldOpenBrowserForLogin } = await import("../../oauth/open-browser-choice");
+      if (!shouldOpenBrowserForLogin(body.openBrowser, config)) {
+        return jsonResponse({ error: "Microsoft 365 Copilot sign-in requires an isolated window in a supported local browser." }, 400);
+      }
+    }
     // Omitted mode is the localhost-callback flow this route has always run.
     if (body.mode !== undefined && body.mode !== "callback" && body.mode !== "code") {
       return jsonResponse({ error: "mode must be \"callback\" or \"code\"" }, 400);

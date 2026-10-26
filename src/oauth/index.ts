@@ -48,6 +48,7 @@ import { loginZed, refreshZedToken } from "./zed";
 import { assertDevinCliAdoptionOwnership, loginDevin, refreshDevinToken } from "./devin";
 import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
+import { loginM365Copilot, refreshM365CopilotToken } from "./m365-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { loginWorkBuddy, refreshWorkBuddyToken } from "./workbuddy";
@@ -249,6 +250,11 @@ function oauthDefaultModel(id: string): string {
 }
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
+  "m365-copilot": {
+    login: loginM365Copilot, refresh: refreshM365CopilotToken,
+    providerConfig: oauthConfig("m365-copilot"), defaultModel: oauthDefaultModel("m365-copilot"),
+    defaultRefreshPolicy: "lazy-only",
+  },
   "workbuddy-ai": {
     login: loginWorkBuddy, refresh: refreshWorkBuddyToken,
     providerConfig: oauthConfig("workbuddy-ai"), defaultModel: oauthDefaultModel("workbuddy-ai"),
