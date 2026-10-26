@@ -56,7 +56,7 @@ export const PICKER_MAX_HEADER_BYTES = 64 * 1024;
 export const PICKER_MAX_ACTIVE_UPSTREAMS = 256;
 /** Advertised per HTTP/2 connection; Chromium queues further requests rather than failing them. */
 export const PICKER_MAX_CONCURRENT_STREAMS = 100;
-/** Only stalled, pre-response uploads expire; progressing attachments have no absolute deadline. */
+/** Pre-response body inactivity budget; native runtime limits remain independent. */
 export const PICKER_UPLOAD_IDLE_MS = 60_000;
 /** A connection that has not sent a complete ClientHello by then is dropped. */
 const CLIENT_HELLO_TIMEOUT_MS = 10_000;
@@ -221,7 +221,11 @@ export async function startPickerListener(options: PickerListenerOptions): Promi
           // Discard further input and flush a graceful FIN without waiting for body completion.
           req.resume();
           req.socket.end();
-        } else req.destroy();
+        } else {
+          // Bun can synthesize an empty 200 when only its request readable is destroyed.
+          // An unfinished upload without a reply must abort the transport instead.
+          req.socket.destroy();
+        }
       }
     };
     // An HTTP/1.1 reply sent while the upload is unfinished advertises Connection: close. Bun 1.4.3

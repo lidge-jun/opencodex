@@ -235,8 +235,8 @@ After a complete response, HTTP/2 closes only that stream with `RST_STREAM NO_ER
 `CANCEL` for a premature downstream close or an upstream close without a reply.
 HTTP/1.1 refusals, generated 502s and early replies advertise `Connection: close` only while input is unfinished; after the writable finishes,
 the listener unpipes the upstream upload, reads and discards remaining input, and ends the socket
-gracefully so queued response bytes flush. Errors and premature downstream closes still destroy
-the request. The request-side drain adds no upload deadline or byte cap and does not wait for request-body
+gracefully so queued response bytes flush. Before a complete reply, cleanup aborts the HTTP/1.1 socket
+without a success response, or cancels only the HTTP/2 stream. The request-side drain adds no upload deadline or byte cap and does not wait for request-body
 completion before ending the response side. Bun 1.4.3's HTTP server ends a `Connection: close`
 response with `socket.destroySoon()` before the listener's own finish handler runs, which reset
 the splice before the reply reached the client; every HTTP/1.1 reply that closes unfinished input
