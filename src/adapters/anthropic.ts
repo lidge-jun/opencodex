@@ -1212,6 +1212,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           && settledToolChoice.type !== "none") {
         body.tool_choice = { ...settledToolChoice, disable_parallel_tool_use: true };
       }
+      // A routed compaction summary keeps every tools/system byte derived from the caller's
+      // choice above, so only the final execution choice changes.
+      if (parsed._summaryProhibitsToolCalls && body.tools) body.tool_choice = { type: "none" };
 
       const url = resolveAnthropicMessagesUrl(provider);
       // Anthropic fast mode: `speed` is only accepted beside its beta; without it the API

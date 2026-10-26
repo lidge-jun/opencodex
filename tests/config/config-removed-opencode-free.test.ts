@@ -3,6 +3,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { armClaudeCodeBaseline, getConfigPath, getDefaultConfig, loadConfig, saveConfigPreservingClaudeCode } from "../../src/config";
 import { readConfigDiagnostics } from "../../src/config/diagnostics";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { buildClaudeReplayConfig } from "../../src/server/claude-messages";
+import { parseRequest } from "../../src/responses/parser";
+import { planVisionSidecar, shouldResolveOpenAiVisionSidecar } from "../../src/vision/plan";
+import { planWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../src/web-search";
 import { createTempHome } from "../helpers/temp-home";
 
 test("retired OpenCode Free entries and dependent routes are skipped on load, once per process", () => {
@@ -179,8 +183,8 @@ test("all routed reference sites and whitespace aliases are pruned while healthy
     const loaded = loadConfig();
     expect(readConfigDiagnostics().source).toBe("file");
     expect(loaded.codexRoleTiers).toEqual({ fast: ["healthy/keep"], standard: [], frontier: [] });
-    expect(loaded.visionSidecar).toBeUndefined();
-    expect(loaded.webSearchSidecar).toBeUndefined();
+    expect(loaded.visionSidecar).toEqual({ backend: "routed", enabled: false });
+    expect(loaded.webSearchSidecar).toEqual({ backend: "openai", enabled: false });
     expect(loaded.shadowCallIntercept).toEqual({ enabled: true, model: "healthy/keep", sourceModels: ["healthy/*"] });
     expect(loaded.providers.healthy.defaultModel).toBeUndefined();
     expect(loaded.providers.healthy.autoReviewModel).toBeUndefined();
@@ -191,6 +195,110 @@ test("all routed reference sites and whitespace aliases are pruned while healthy
     expect(loadConfig().shadowCallIntercept).toBeUndefined();
   });
 });
+
+test.each([false, true, undefined])("retired sidecar targets stay disabled through load, diagnostics and saves (enabled: %s)", enabled => {
+  const routes = {
+    combos: { retired: { alias: " retired-combo ", targets: [{ provider: "opencode-free", model: "old" }] } },
+    routingProfiles: { retired: { alias: " retired-policy ", candidates: [{ provider: "opencode-free", model: "old" }] } },
+  };
+  for (const model of ["opencode-free/old", " retired-alias/old ", "combo/retired", "retired-combo", "policy/retired", "retired-policy"]) {
+    const settings = { ...(enabled === undefined ? {} : { enabled }), model, timeoutMs: 12_345, reasoning: "low" };
+    const vision = { ...settings, backend: "routed", maxDescriptionsPerTurn: 2 };
+    const search = { ...settings, backend: "openai", maxSearchesPerTurn: 3 };
+    withLegacyConfig({ ...routes, visionSidecar: vision, webSearchSidecar: search }, bytes => {
+      const expectedVision = { backend: "routed", enabled: false, timeoutMs: 12_345, reasoning: "low", maxDescriptionsPerTurn: 2 };
+      const expectedSearch = { backend: "openai", enabled: false, timeoutMs: 12_345, reasoning: "low", maxSearchesPerTurn: 3 };
+      const live = loadConfig();
+      const check = (config: ReturnType<typeof loadConfig>) => {
+        expect(config.visionSidecar).toEqual(expectedVision);
+        expect(config.webSearchSidecar).toEqual(expectedSearch);
+      };
+      check(live);
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.source).toBe("file");
+      check(diagnostics.config);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+      armClaudeCodeBaseline(live);
+      for (const fastMode of [true, false]) {
+        live.fastMode = fastMode;
+        saveConfigPreservingClaudeCode(live);
+        check(live);
+        check(JSON.parse(readFileSync(getConfigPath(), "utf8")));
+        check(loadConfig());
+        expect(loadConfig().fastMode).toBe(fastMode);
+      }
+    });
+  }
+}, 60_000);
+
+test.each([false, true, undefined])("healthy sidecar settings keep their activation and targets (enabled: %s)", enabled => {
+  const settings = { ...(enabled === undefined ? {} : { enabled }), model: "healthy/keep", reasoning: "low", timeoutMs: 12_345 };
+  const visionSidecar = { ...settings, backend: "routed", maxDescriptionsPerTurn: 2 };
+  const webSearchSidecar = { ...settings, backend: "openai", maxSearchesPerTurn: 3 };
+  withLegacyConfig({ visionSidecar, webSearchSidecar }, bytes => {
+    const live = loadConfig();
+    expect(live.visionSidecar).toEqual(visionSidecar);
+    expect(live.webSearchSidecar).toEqual(webSearchSidecar);
+    expect(readConfigDiagnostics().config.visionSidecar).toEqual(visionSidecar);
+    expect(readConfigDiagnostics().config.webSearchSidecar).toEqual(webSearchSidecar);
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+    armClaudeCodeBaseline(live);
+    live.fastMode = true;
+    saveConfigPreservingClaudeCode(live);
+    expect(loadConfig().visionSidecar).toEqual(visionSidecar);
+    expect(loadConfig().webSearchSidecar).toEqual(webSearchSidecar);
+  });
+});
+
+test.each([false, true, undefined])("Claude retired overrides stay disabled without changing healthy globals (enabled: %s)", enabled => {
+  const request = parseRequest({ model: "healthy/blind", tools: [{ type: "web_search" }], input: [{ role: "user", content: [
+    { type: "input_text", text: "Describe and search." }, { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+  ] }] });
+  const globalVision = { enabled: true, backend: "routed", model: "healthy/vision", timeoutMs: 12_345 };
+  const globalSearch = { enabled: true, backend: "exa", model: "healthy/search", exaApiKey: "fixture-exa-key" };
+  for (const globals of [false, true]) for (const model of ["opencode-free/old", " retired-alias/old ", "combo/retired", "retired-combo", "policy/retired", "retired-policy"]) {
+    const activation = enabled === undefined ? {} : { enabled };
+    withLegacyConfig({
+      ...(globals ? { visionSidecar: globalVision, webSearchSidecar: globalSearch } : {}),
+      combos: { retired: { alias: " retired-combo ", targets: [{ provider: "opencode-free", model: "old" }] } },
+      routingProfiles: { retired: { alias: " retired-policy ", candidates: [{ provider: "opencode-free", model: "old" }] } },
+      claudeCode: { enabled: true, visionSidecar: { ...activation, backend: "routed", model }, webSearchSidecar: { ...activation, backend: "openai", model } },
+    }, bytes => {
+      const live = loadConfig();
+      live.providers.healthy!.modelInputModalities = { blind: ["text"], vision: ["text", "image"] };
+      const check = (config: ReturnType<typeof loadConfig>) => {
+        expect(config.visionSidecar).toEqual(globals ? globalVision : undefined);
+        expect(config.webSearchSidecar).toEqual(globals ? globalSearch : undefined);
+        expect(config.claudeCode?.visionSidecar).toEqual({ enabled: false, backend: "routed" });
+        expect(config.claudeCode?.webSearchSidecar).toEqual({ enabled: false, backend: "openai" });
+        const effective = buildClaudeReplayConfig(config);
+        const provider = { ...config.providers.healthy!, noVisionModels: ["blind"] };
+        expect(planVisionSidecar(effective, provider, "blind", request, undefined, { providerName: "healthy" })).toBeUndefined();
+        expect(shouldResolveOpenAiVisionSidecar(effective, provider, "blind", request, "healthy")).toBe(false);
+        expect(planWebSearch(effective, request, false, provider, "blind")).toBeUndefined();
+        expect(shouldResolveOpenAiWebSearchSidecar(effective, request, false)).toBe(false);
+      };
+      check(live);
+      expect(readConfigDiagnostics().source).toBe("file");
+      check(readConfigDiagnostics().config);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+      // The same legitimate global/default config remains usable outside the Claude override.
+      const provider = live.providers.healthy!;
+      expect(planVisionSidecar(live, provider, "blind", request, undefined, { providerName: "healthy" })?.backend).toBe(globals ? "routed" : undefined);
+      expect(planWebSearch(live, request, false, provider, "blind")?.backend).toBe(globals ? "exa" : undefined);
+      expect(shouldResolveOpenAiVisionSidecar(live, provider, "blind", request, "healthy")).toBe(!globals);
+      expect(shouldResolveOpenAiWebSearchSidecar(live, request, false)).toBe(!globals);
+      armClaudeCodeBaseline(live);
+      for (const fastMode of [true, false]) {
+        live.fastMode = fastMode;
+        saveConfigPreservingClaudeCode(live);
+        check(live);
+        check(JSON.parse(readFileSync(getConfigPath(), "utf8")));
+        check(loadConfig());
+      }
+    });
+  }
+}, 60_000);
 
 test("unrelated providers and config remain unchanged", () => {
   const home = createTempHome("ocx-retained-provider-");

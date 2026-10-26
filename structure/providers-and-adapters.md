@@ -7,7 +7,7 @@ Claude CLI replay, client tool capture and usage admission follow [Claude CLI re
 
 API-key credit-balance refusals follow the [Anthropic billing recovery contract](providers/anthropic-key-billing.md). Managed native Anthropic serving UUID and observed CLI header continuity follow [native Messages](data-planes/protocol-paths.md#managed-native-messages); generated Responses retain the adapter's compatibility fingerprint.
 
-Opus 5.5 commentary follows the [signed progress-update contract](providers/anthropic-progress.md). Per-account usage thresholds follow the [Anthropic account thresholds contract](providers/anthropic-account-thresholds.md).
+Opus 5.5 commentary follows the [signed progress-update contract](providers/anthropic-progress.md). Per-account usage thresholds follow the [Anthropic account thresholds contract](providers/anthropic-account-thresholds.md). Routed Anthropic compaction preserves the client tool/system prefix and guards summary output under the [compaction contract](transports/responses-failover.md#compaction-routing-overrides); image normalization and HTTP 413 recovery retain their existing policy.
 A shared-quota Anthropic 429 or classified pre-output account 403 records the served account's cooldown even when the request has used its allowed retry sends. That final account remains excluded on the next request; combo target cooling for 429 is skipped only after the matching account cooldown is present. Exact revoked-token 401s persist generation-fenced reauthentication under [the Anthropic recovery contract](providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery).
 
 The Anthropic helper sends share the same routing authority: `getAnthropicSidecarAccessToken` resolves the vision-describe and web-search sidecars' helper model through the same first-match route decision, so a routed send authenticates as the route's own account rather than whatever pool account happens to be active. A strict route with no eligible account fails the helper locally instead of silently falling back to the active outsider, matching the primary-traffic contract; callers without a pool config keep the plain stored-credential path.
@@ -350,10 +350,10 @@ Provider-scoped capability hints remain authoritative when discovery returns an 
 capabilities. In particular, `src/providers/registry/entries-core.ts` assigns OpenCode Go's live
 `deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
 routed-model fallback. Custom-named Azure OpenAI providers obtain missing image/text input metadata and context/output limits through the destination-gated lookup in `src/providers/derive.ts`, consumed by shared catalog hints. Discovery refreshes public models.dev Azure rows through `src/providers/azure-model-metadata.ts`; stale cache and bundled hints remain available offline. This uses known model ids without changing transport selection or persisting model declarations; see [the shared catalog contract](catalog.md#shared-catalog).
-Meta's two direct surfaces keep separate reasoning contracts: `meta-model` caps Muse Spark at `xhigh`
-and gives Muse Wonder (`muse-wonder-1.0`) its documented `minimal`..`max` ladder, while `meta-muse`
-advertises `max` and sends the transparent Muse compatibility User-Agent required by that
-credential surface. The existing registry header merge keeps an operator-supplied User-Agent authoritative.
+Meta's two direct surfaces keep separate reasoning contracts: `meta-model` caps Muse Spark at `xhigh` and gives Muse Wonder (`muse-wonder-1.0`) its documented `minimal`..`max` ladder, while `meta-muse`
+advertises `max` and sends the transparent Muse compatibility User-Agent required by that credential surface. The existing registry header merge keeps an operator-supplied User-Agent authoritative.
+At startup, `src/providers/stale-model-roster-migration.ts` refreshes the untouched two-Spark `meta-model` seed to include Muse Wonder only on `https://api.meta.ai/v1` or the registry default.
+Custom destinations and edited rosters stay unchanged; an existing context-window map gains only the missing Wonder entry, preserving saved values and output limits.
 The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
 so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
@@ -391,7 +391,7 @@ axis that outranks every source here, so it is where a deliberate text-only over
 (`ocx provider edit <provider> --model <id> --text-only` writes it) and the one declaration a
 restart cannot take back.
 
-When `/models` omits MiniMax-M3.1-Flash-Preview, `src/providers/stale-model-roster-migration.ts` replaces only a saved roster identical to the old seed and fills existing window and default-effort records during startup; `CALLABLE_CONFIGURED_COMPATIBILITY_MODELS` (`src/codex/catalog/model-hints.ts`) retains it in the live catalog.
+When `/models` omits MiniMax-M3.1-Flash, `src/providers/stale-model-roster-migration.ts` replaces only a saved roster identical to the old seed and fills existing window, output-limit and default-effort records during startup; `CALLABLE_CONFIGURED_COMPATIBILITY_MODELS` (`src/codex/catalog/model-hints.ts`) retains it in the live catalog. `MODEL_RENAMES` (`src/providers/model-rename-migration.ts`) repairs saved rows that still name the retired MiniMax-M3.1-Flash-Preview id. The same startup projection restores DeepSeek V4 Pro only for the exact previous native seed on the official destination and registry adapter, filling missing Pro context in existing maps. Operator lists (including empty lists), custom destinations and explicit context overrides remain unchanged; normal registry enrichment supplies Pro's reasoning metadata.
 
 Both MiniMax Coding Plan presets declare `text` and `image` for M3 and M3.1 in `src/providers/registry/model-seeds.ts`; registry enrichment fills missing saved declarations, so id-only live rows enable the Combo image switch when every target supports images. Explicit overrides still win; video is outside Codex's catalog input enum.
 
@@ -589,7 +589,7 @@ Account-row projection is loaded with `import()` after each account probe in `sr
 remains authoritative. No raw body is retained in that field, serialized into client errors, or logged.
 Presence of both `detail` and `error` across the original root and its own non-array `response` record is ambiguous, regardless of values; null counts and deeper quoted objects do not. This is checked before selecting an error carrier.
 For complete bounded HTTP errors, the text wrapper selects root `detail`/`error` when present; otherwise it selects the own `response` record for the same exact `detail` or `error.message` match. It never searches another carrier after a nonmatch or descends further. Policy-fallback and direct callers share this wrapper; SSE message parsing disables nested HTTP selection. The same bounded HTTP parser retains allowlisted dedicated `code` fields from root and response before display truncation; diagnostic `type` is never promoted, including when code is absent or malformed. Policy/direct classification inspects full text only without authoritative carrier metadata; SSE never borrows hard codes from quoted message JSON.
-Committed output, cancellation, hard policy refusals and resend limits remain stronger than model fallback.
+Committed output, cancellation, hard policy refusals and resend limits remain stronger than model fallback. Opt-in all-cooled target recovery in `src/combos/resolve.ts` follows [the Combo cooldown contract](runtime.md#scoped-provider-quota-for-combo-selection) without widening account/provider admission. It clears only request-eligible target cooldowns; route-level selection (including an unmetered reroute) and in-flight cooldown retries cannot initiate a reprobe. Encrypted-task recovery preserves request-specific JEV, reasoning-replay and protocol eligibility while relaxing payload readability.
 
 Token Plan dated-model policy (2026-10-20): both curated presets include exact
 `deepseek-v4.1-flash-1017` metadata without changing live discovery or Responses pins.

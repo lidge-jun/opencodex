@@ -95,6 +95,26 @@ afterEach(async () => {
     removeTreeWithRetry(home);
   }
 });
+test("an in-flight cooldown retry cannot initiate an opt-in reprobe", async () => {
+  let hits = 0;
+  const server = serve(() => {
+    hits += 1;
+    return hits === 1
+      ? Response.json({ error: { message: "rate limited" } }, {
+        status: 429, headers: { "retry-after": "2" },
+      })
+      : chatSuccess("unexpected immediate retry", "m1");
+  });
+  const cfg = comboConfig({ a: provider("openai-chat", baseUrl(server), "synthetic-key") }, [target], {
+    cooldownReprobe: { enabled: true, intervalMs: 1000 }, waitForCooldownMs: 100,
+  });
+  const response = await post(cfg);
+  await response.text();
+  expect(response.status).toBe(429);
+  expect(hits).toBe(1);
+  expect(isComboTargetInCooldown("free", target)).toBe(true);
+});
+
 test("cooldown recording distinguishes a successful write from a stale removed writer", () => {
   expect(coolComboTarget("free", target, { cooldownMs: 1000 })).toBe(true);
   reconcileComboTargetCooldowns(removalContext());

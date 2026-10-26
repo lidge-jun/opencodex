@@ -480,19 +480,19 @@ A standalone no-response
 exchange has a 90-second prelude deadline in addition to the upgrade deadline.
 That prelude deadline is a ceiling, not a floor: the exchange runs under the
 caller's abort signal, so a `connectTimeoutMs` shorter than 90 seconds cancels
-an already-sent create before the prelude timer fires.
+an already-sent create before the prelude timer fires. After the first Responses event an exchange with the metadata channel keeps pinging on the same interval, and sends one ping at the commit unless an earlier one was answered; a peer that has answered a ping on that exchange and then delivers no frame and no pong for two consecutive intervals is treated as a dead socket, so the committed stream fails as a body error that the relay ends with its `upstream_reset` `response.failed` tail. This check never cuts a peer that keeps answering, however long the model is silent; that peer, like one that never answered a ping, still meets the client's own idle deadline (`tests/responses/ws-committed-liveness.test.ts`).
 These are transport-fidelity guarantees, not a provider-billing guarantee.
 
 Every exchange also leaves a content-free stage record (`CodexWsStageRecord`, #4191): create-frame bytes (measured on failure only — the committed-success record keeps it null so the happy path never byte-counts a megabyte replay frame), send completion, numeric close code, elapsed, first-frame and first-response-event durations, frame counters, liveness ping/pong counts, pool reuse, the OCX/Bun versions, and (#6740) `terminalEvent` — the normalized `response.completed` / `response.failed` / `response.incomplete` / `error` frame that ended a plain exchange, observed before any synthetic tail — with `terminalErrorStatus`, the wrapper status of a terminal `error` frame. Both are null when no terminal frame arrived, on native-control exchanges (which can end on an acknowledgement), and on rows written before they existed; malformed persisted values read as null without dropping the stage. The exchange pins the record on the resolved Response (`markCodexWsStage`, the same marker seam as `markCodexWsResponse`); `handleResponses` adopts it onto the serving attempt, and usage.jsonl persists it per attempt behind a drop-guard normalizer, so hand-edited rows cannot inject strings into the DTO. Later snapshots update the same response-local record in place, so an attempt holding the committed reference observes final success or failure counters. Each exchange supplies a complete fresh snapshot; separate responses keep distinct records. On eager-relay cancel-drain expiry, upstream cancellation finalizes the transport snapshot before the cancellation hook writes the usage row; an actual terminal observed within the drain still wins over cancellation. The record never carries conversation text, headers, close-reason text, or account identifiers, and it is not a fallback-eligibility signal: nothing it says permits a resend. The one replacement an operator can grant after a socket dies is the resend gate's decision (see [ambiguous-resend gate](responses-failover.md#ambiguous-resend-gate)).
 
-Eligible complete-input creates can retain a canonical upstream socket within
-one selected account, credential, thread and turn. Model/tier and immutable
-handshake headers and the selected outbound proxy must also match. Turn-state and turn-metadata headers are
-projected into their same-name per-frame metadata slots; explicit body values win.
-The pool retains at most 32 sockets, expires idle sockets after 30 seconds, and
-retires a socket after five minutes or 32 successful exchanges (after active work
-finishes). Cancellation, errors, idle unsolicited frames and shutdown dispose it.
-A busy key uses a separate one-shot connection rather than interleaving requests.
+Eligible complete-input creates can retain a canonical upstream socket within one selected account, credential, thread and turn.
+Model/tier, immutable handshake headers and the selected outbound proxy must also match. Turn-state and turn-metadata headers are projected into their same-name per-frame metadata slots; explicit body values win.
+The pool retains at most 32 sockets, expires idle sockets after 30 seconds, and retires a socket after five minutes or 32 successful exchanges (after active work finishes).
+Cancellation, errors, idle unsolicited frames and shutdown dispose it. A busy key uses a separate one-shot connection rather than interleaving requests.
+Private disposal requests graceful close, then schedules optional native `terminate()` after a one-second grace; successful retained release stays reusable.
+That unrefed fallback holds only the socket and cleanup state, removes its close observer on timeout, and cancels both on early close.
+Without native `terminate()`, disposal attempts `close()` without a fallback timer or observer; retained disposal requests close and optional terminate immediately.
+`tests/responses/codex-ws-handshake-validation.test.ts` covers native stalled-peer teardown and optional-method cleanup.
 
 This is connection reuse, not native incremental-input synthesis: complete HTTP
 inputs are never trimmed and no previous response id is invented. Explicit

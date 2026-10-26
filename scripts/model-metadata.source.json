@@ -42160,9 +42160,9 @@
 				"maxLevel": "xhigh"
 			}
 		},
-		"MiniMax-M3.1-Flash-Preview": {
-			"id": "MiniMax-M3.1-Flash-Preview",
-			"name": "MiniMax-M3.1-Flash-Preview",
+  "MiniMax-M3.1-Flash": {
+    "id": "MiniMax-M3.1-Flash",
+    "name": "MiniMax-M3.1-Flash",
 			"api": "anthropic-messages",
 			"provider": "minimax",
 			"baseUrl": "https://api.minimax.io/anthropic",
@@ -42172,7 +42172,14 @@
 				"image",
 				"video"
 			],
-			"contextWindow": 1000000
+    "contextWindow": 1000000,
+    "maxTokens": 524288,
+    "cost": {
+      "input": 0.15,
+      "output": 0.6,
+      "cacheRead": 0.015,
+      "cacheWrite": 0
+    }
 		}
 	},
 	"minimax-cn": {
@@ -42394,9 +42401,9 @@
 				"maxLevel": "xhigh"
 			}
 		},
-		"MiniMax-M3.1-Flash-Preview": {
-			"id": "MiniMax-M3.1-Flash-Preview",
-			"name": "MiniMax-M3.1-Flash-Preview",
+		"MiniMax-M3.1-Flash": {
+			"id": "MiniMax-M3.1-Flash",
+			"name": "MiniMax-M3.1-Flash",
 			"api": "anthropic-messages",
 			"provider": "minimax-cn",
 			"baseUrl": "https://api.minimaxi.com/anthropic",
@@ -42406,7 +42413,14 @@
 				"image",
 				"video"
 			],
-			"contextWindow": 1000000
+			"contextWindow": 1000000,
+			"maxTokens": 524288,
+			"cost": {
+				"input": 0.15,
+				"output": 0.6,
+				"cacheRead": 0.015,
+				"cacheWrite": 0
+			}
 		}
 	},
 	"minimax-code": {

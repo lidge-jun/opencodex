@@ -78,7 +78,7 @@ const defaultDiagnostic: LockedTempDiagnostic = {
     return {
       stdout: decode(result.stdout),
       stderr: decode(result.stderr),
-      timedOut: result.signal === "SIGKILL" || result.exitCode === null,
+      timedOut: result.exitedDueToTimeout === true,
     };
   },
   children: targetBasename => listDirectChildren(process.pid, targetBasename),

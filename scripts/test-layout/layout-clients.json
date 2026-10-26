@@ -1,4 +1,7 @@
 {
+  "agent-clients.test.ts": "clients",
+  "workbuddy-selector-recovery.test.ts": "clients",
+  "server-live-close.test.ts": "server",
   "link-diagnostics.test.ts": "clients",
   "link-tunnel-history.test.ts": "clients",
   "link-readiness.test.ts": "clients",
@@ -20,6 +23,7 @@
   "aside-profiles-catalog-refresh.test.ts": "clients",
   "client-catalog-compatibility.test.ts": "clients",
   "opencode-kilo-refresh.test.ts": "clients",
+  "hermes-catalog-refresh.test.ts": "clients",
   "client-export-reasoning-metadata.test.ts": "clients",
   "client-export-reasoning-controls.test.ts": "clients",
   "client-export-live-wire.test.ts": "clients",

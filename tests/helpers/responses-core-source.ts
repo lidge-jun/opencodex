@@ -71,6 +71,8 @@ export const RESPONSES_CORE_MODULES = [
   "pacing-overload.ts",
   "reset-replay.ts",
   "passthrough-delivery.ts",
+  // Reached from passthrough-delivery.ts: buffered combo children must honor a required tool_choice (#7456).
+  "combo-required-tool-contract.ts",
   "buffered-sse-json.ts",
   "terminal-error-redaction.ts",
   "non-replayable-error.ts",

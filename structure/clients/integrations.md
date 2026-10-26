@@ -79,7 +79,8 @@ defaults as one owned value.
 The request preference is interpreted after initial Chat route selection and before
 concrete dispatch under the [inbound effort contract](../data-planes/inbound-compat.md#droid-request-defaults).
 It never authenticates a client or changes admission policy.
-
+## WorkBuddy editions
+`src/clients/config-export/agent-clients.ts` manages independent `workbuddy` and `workbuddy-ai` roots (`~/.workbuddy/models.json`, `~/.workbuddy-ai/models.json`). Both honor `WORKBUDDY_CONFIG_DIR`, then `CODEBUDDY_CONFIG_DIR`; relative overrides refuse. Rows retain proxy IDs, a full Chat Completions URL, a loopback placeholder and declared metadata. Ownership selects each `id` in object-form `models` or legacy root arrays. Foreign settings stay untouched; `validateApply` refuses hiding `availableModels` restrictions during apply/refresh; status, disable and Undo remain available. An unrepresentable model ID also refuses apply/refresh; its empty desired contribution lets status/disable verify and remove only recorded ownership, preserving foreign-edit checks. Project overrides may shadow user settings. Shared snapshots, drift checks and owned-catalog refresh apply. No client IO runs on inference paths. Doubao Desktop and Devin have no verified arbitrary-provider configuration contract and no managed integration.
 ## Cursor installed capability reads
 
 `src/integrations/cursor-effort-table.ts` reads the installed agent bundle through one regular-file
@@ -204,11 +205,11 @@ their existing visibility rules.
 ## Owned catalog convergence
 
 Visibility, selected-model and preset writes refresh already-owned catalog contributions (including OpenCode, Kilo and
-Command Code) after persisting the selection. Explicit sync also refreshes owned OpenCode, Kilo, Command Code and Hermes blocks. The shared catalog-refresh
+Command Code) after persisting the selection. Explicit sync also refreshes owned OpenCode, Kilo, Command Code and default-profile Hermes blocks. The shared catalog-refresh
 fan-out loads the filtered roster lazily once, leaves unowned clients alone, and reports each
 refusal independently. Existing coordinated writers retain all no-clobber and ownership checks. A background catalog auto-refresh that changes the served set calls `syncEnabledClientIntegrations` unattended from `src/server/background-lifecycle.ts`: it refreshes only an existing Grok fence, a Desktop gateway profile that is still selected and byte-identical to the last applied write (keeping its static, hybrid or discovery mode), and owned file and Aside blocks without a first apply; it skips Cline, includes Hermes (its managed `providers.opencodex` range is patched byte-wise and a hand-edited or never-connected block is never claimed), honours the hub and sibling gate, and the coordinated writer's synchronous `guard` refuses any write once the scheduler generation has stopped or the owner captured for that delivery has revoked fan-out admission or released its lease; a later delivery may select a surviving owner. Each write also requires the projection's configuration snapshot to remain current, ignoring only Desktop's applied fingerprint and timestamp; Grok rechecks its complete fence and refuses symlinked config or backup paths inside the synchronous injector, then revalidates admission and unchanged regular-file bytes in the no-follow writer's pre-rename hook without copying a backup.
-Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy
-rather than joining a write of a different catalog and reporting false success.
+Implicit refresh operations use distinct flight keys: overlapping desired catalogs return busy rather than joining a write of a different catalog and reporting false success.
+Hermes refresh is limited to the [default profile](hermes.md); named profiles expose stale status and require explicit Apply. `src/integrations/hermes-refresh.ts` checks actual preflight bytes against the ownership fingerprint, refusing even edits outside managed fragments until a pending catalog change is explicitly applied. An unchanged Apply does not adopt a new baseline.
 On a sibling instance ([Codex home](../codex-home.md#codex-home)), including one identified from another home's managed client destination, `src/integrations/catalog-refresh.ts`
 and `syncEnabledClientIntegrations` in `src/server/management/config-routes.ts` refresh nothing: the
 client files name the live owner's port, and a refresh from the sibling would re-point them at its own.

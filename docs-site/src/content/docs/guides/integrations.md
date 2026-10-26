@@ -4,7 +4,7 @@ description: Connect opencodex to OpenCode, Pi, Gentle Shell, OMP, Hermes, OpenC
 ---
 
 The **Connect** page writes opencodex's provider block into a client's own config
-file, and removes it again. Twenty clients work this way, each with a switch:
+file, and removes it again. Each client below has its own switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -24,6 +24,9 @@ file, and removes it again. Twenty clients work this way, each with a switch:
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
 | omo (Pi / senpi) | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
 | Qoder | `settings.json` in `$QODER_CONFIG_DIR`, default `~/.qoder` | JSON | new sessions | loopback placeholder |
+| Qoder CN | `settings.json` in `$QODERCN_CONFIG_DIR`, default `~/.qoder-cn` | JSON | new sessions | loopback placeholder |
+| WorkBuddy (CN) | `~/.workbuddy/models.json` | JSON | auto reload / new sessions | loopback placeholder |
+| WorkBuddy AI | `~/.workbuddy-ai/models.json` | JSON | auto reload / new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
 | Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
@@ -64,6 +67,40 @@ This integration retains Pi’s loopback-only export policy and stores no real A
 (LazyCodex) gets its own section on the same tab, shown only when LazyCodex is detected, described in
 [omo (Codex / LazyCodex) role models](#omo-codex--lazycodex-role-models). OpenCode-based omo
 (oh-my-opencode) keeps its own config under OpenCode; opencodex does not read or write it.
+
+### Qoder CN and WorkBuddy editions
+
+In **Connect**, enable **Qoder CN**, **WorkBuddy (CN)** or **WorkBuddy AI**, then choose
+an OpenCodex model in the client's custom-model picker. The proxy must stay running.
+The first enable saves a snapshot; disable removes only the generated contribution,
+and Undo restores the snapshot. Existing models and unrelated settings remain intact.
+These are separate connections from Global Qoder and from each other.
+
+The same operations are available through the CLI (replace `workbuddy` with
+`workbuddy-ai` or `qoder-cn` for the other editions):
+
+```bash
+ocx integration client enable --client workbuddy
+ocx export --client workbuddy --json
+ocx integration client disable --client workbuddy
+```
+
+Qoder CN honors `QODERCN_CONFIG_DIR`. Both WorkBuddy editions honor their native
+`WORKBUDDY_CONFIG_DIR`, then `CODEBUDDY_CONFIG_DIR`; unset overrides keep the regional
+roots in the table. Overrides must be absolute, `~`, or start with `~/` or `~\`. WorkBuddy's legacy
+array configuration and its object-form `models` list are both supported. If an existing
+`availableModels` restriction excludes OpenCodex models, remove that restriction in
+WorkBuddy before enabling. Project-level settings can override user-level models.
+
+Connections require an unauthenticated loopback listener; no upstream credentials are
+copied into these clients. WorkBuddy receives the full Chat Completions URL and the
+capabilities declared by the OpenCodex catalog. Restart the client or start a new session
+if its model picker has not reloaded yet. Configuration/lifecycle tests do not establish
+end-to-end compatibility with every upstream model or every client release.
+
+Doubao Desktop and Devin currently have no verified arbitrary-provider configuration
+contract in this integration. They have no enable switch; adding a local JSON file alone
+would not make their model pickers consume it.
 
 Qoder IDE / qodercli supports export and managed configuration through the Dashboard and CLI:
 
@@ -344,6 +381,15 @@ own backups and rollback history, and the other profiles stay unchanged. Every p
 `model.default` and other providers: OpenCodex adds only `providers.opencodex`. With no named profiles,
 the page works as before and changes the default profile.
 
+Catalog changes and `ocx sync` automatically refresh only the default profile resolved from the
+running proxy's environment (including `HERMES_HOME`). Named profiles keep their previous catalog.
+After changing the model selection, open **Connect → Hermes**, select each named profile showing
+**Update needed**, and review and confirm **Apply**. The CLI has no named-profile selector.
+Automatic refresh refuses any Hermes file changed since the last Apply, including comments or
+settings outside `providers.opencodex`. When the catalog shows **Update needed**, review and Apply
+the pending catalog change to resume automatic updates. Apply with an unchanged catalog is a no-op
+and does not accept a new file baseline.
+
 The management API selects a profile with `profile=<name>` on `/api/client-integrations/hermes` and with
 `client=hermes&profile=<name>` on the preview, journal, and restore endpoints;
 `GET /api/client-integrations/hermes/profiles` lists the profiles. A directory under `profiles/` counts
@@ -539,8 +585,9 @@ ocx mcode
 
 Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside,
 Raycast, omo, OpenCode, Kilo, and Hermes catalogs with the current model selection, context windows, and
-reasoning-effort ladders. Background catalog changes also refresh connected Hermes configs unattended;
-an edited or never-connected Hermes block stays untouched and is reported. Proxy startup refreshes an owned Raycast catalog. Changes to
+reasoning-effort ladders. Background catalog changes also refresh the connected Hermes default profile unattended;
+an edited Hermes file is refused and reported; a never-connected or disabled integration stays untouched.
+Named profiles require [explicit Apply](#hermes-profiles). Proxy startup refreshes an owned Raycast catalog. Changes to
 model visibility, provider selection, or presets also refresh connected Pi, Aside,
 Raycast, omo, OpenCode, Kilo, and Hermes catalogs.
 Missing, foreign-edited, or unsafe blocks stay untouched, as do previously owned blocks

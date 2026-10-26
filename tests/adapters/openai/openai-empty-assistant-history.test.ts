@@ -148,3 +148,27 @@ describe("translated Chat empty assistant projection", () => {
     expect(body.messages[3].content).toBe(" \n");
   });
 });
+
+describe("Reflection/Stealth placeholder replay keeps tool pairs intact (#7574 review)", () => {
+  test.each(["reflection/beam", "stealth/beam"])("%s: an empty assistant between a call and its result is dropped", model => {
+    const parsed = parseRequest({ model, input: [
+      { type: "function_call", call_id: "call_1", name: "read_file", arguments: "{}" },
+      assistant([{ type: "output_text", text: "" }]),
+      { type: "function_call_output", call_id: "call_1", output: "result" },
+      user,
+    ] });
+    const adapter = createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture" });
+    const messages = JSON.parse(adapter.buildRequest(parsed).body).messages as Array<Record<string, any>>;
+    const calls = messages.filter(m => m.role === "assistant" && m.tool_calls?.length);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.tool_calls[0].id).toBe("call_1");
+    expect(messages.filter(m => m.role === "tool")).toEqual([{ role: "tool", tool_call_id: "call_1", content: "result" }]);
+  });
+
+  test("a standalone empty Reflection assistant still receives its placeholder", () => {
+    const parsed = parseRequest({ model: "reflection/beam", input: [user, assistant([{ type: "output_text", text: "" }]), user] });
+    const adapter = createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture" });
+    const messages = JSON.parse(adapter.buildRequest(parsed).body).messages as Array<Record<string, any>>;
+    expect(messages.some(m => m.role === "assistant" && typeof m.reasoning_content === "string")).toBe(true);
+  });
+});

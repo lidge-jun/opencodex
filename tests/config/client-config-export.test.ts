@@ -850,8 +850,8 @@ describe("hub-resolved Fast exports", () => {
 });
 
 describe("EXPORT_CLIENTS registry", () => {
-  test("covers exactly the nineteen file-toggle clients", () => {
-    expect(EXPORT_CLIENT_IDS).toEqual(["qoder", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid", "gentle-shell"]);
+  test("covers exactly the twenty-three file-toggle clients", () => {
+    expect(EXPORT_CLIENT_IDS).toEqual(["qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid", "gentle-shell"]);
     for (const id of EXPORT_CLIENT_IDS) expect(isExportClientId(id)).toBe(true);
     // The exception clients keep their own surfaces and are not export clients.
     expect(isExportClientId("claude-desktop")).toBe(false);

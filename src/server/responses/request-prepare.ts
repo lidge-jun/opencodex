@@ -665,7 +665,10 @@ export async function prepareResponsesRequest(
     if (candidate.combo?.target.metered && !admissionMayUseMeteredComboTargets(
       config, options.admission, config.combos?.[candidate.combo.comboId],
     )) {
-      const pick = pickComboTarget(config, candidate.combo.comboId, { eligible: target => !target.metered });
+      const pick = pickComboTarget(config, candidate.combo.comboId, {
+        eligible: target => !target.metered,
+        allowCooldownReprobe: false,
+      });
       if (!pick) {
         throw new NoAvailableComboTargetsError(candidate.combo.comboId,
           comboExclusionReasons(config, candidate.combo.comboId, target => !target.metered));
