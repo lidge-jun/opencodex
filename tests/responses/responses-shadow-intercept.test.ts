@@ -15,6 +15,7 @@ import {
   shouldInterceptShadowCall,
 } from "../../src/lib/shadow-call";
 import { handleManagementAPI } from "../../src/server/management-api";
+import { ConfigWritePublishedError } from "../../src/config/persist-unlocked";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
@@ -784,7 +785,12 @@ async function withTempHome<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
-async function shadowApi(config: OcxConfig, method: string, body?: unknown): Promise<Record<string, unknown>> {
+async function shadowApi(
+  config: OcxConfig,
+  method: string,
+  body?: unknown,
+  save?: (config: OcxConfig) => void,
+): Promise<Record<string, unknown>> {
   // Management API enforces a same-origin gate; a browserless caller must look local.
   const headers: Record<string, string> = { origin: "http://127.0.0.1:10100", host: "127.0.0.1:10100" };
   if (body !== undefined) headers["content-type"] = "application/json";
@@ -795,13 +801,18 @@ async function shadowApi(config: OcxConfig, method: string, body?: unknown): Pro
   });
   const res = await handleManagementAPI(req, new URL(req.url), config, {
     createManagementConvergeCodex: catalogConvergenceFactory(),
+    ...(save ? { saveConfigPreservingClaudeCode: save } : {}),
   });
   expect(res).not.toBeNull();
   expect(res!.status).toBe(200);
   return await res!.json() as Record<string, unknown>;
 }
 
-async function shadowApiResponse(config: OcxConfig, body: unknown): Promise<Response> {
+async function shadowApiResponse(
+  config: OcxConfig,
+  body: unknown,
+  save?: (config: OcxConfig) => void,
+): Promise<Response> {
   const req = new Request("http://localhost/api/shadow-call-settings", {
     method: "PUT",
     headers: {
@@ -813,6 +824,7 @@ async function shadowApiResponse(config: OcxConfig, body: unknown): Promise<Resp
   });
   const res = await handleManagementAPI(req, new URL(req.url), config, {
     createManagementConvergeCodex: catalogConvergenceFactory(),
+    ...(save ? { saveConfigPreservingClaudeCode: save } : {}),
   });
   expect(res).not.toBeNull();
   return res!;
@@ -951,6 +963,83 @@ describe("shadow-call settings API reports the intercepted source models", () =>
 
       expect(response.status).toBe(400);
       expect(config.shadowCallIntercept).toEqual({ sourceModels: ["custom-helper"] });
+    });
+  });
+
+  test("PUT restores every live shadow-call field when persistence throws", async () => {
+    await withTempHome(async () => {
+      const config = {
+        port: 0,
+        defaultProvider: "xai",
+        providers: {
+          xai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.x.ai/v1",
+            authMode: "key",
+            apiKey: "test-xai-key",
+          },
+        },
+        shadowCallIntercept: {
+          enabled: true,
+          model: "xai/grok-4.5",
+          sourceModels: ["gpt-5.6-luna"],
+        },
+      } as OcxConfig;
+
+      await expect(shadowApi(config, "PUT", {
+        enabled: false,
+        model: "xai/grok-4.6",
+        sourceModels: ["gpt-6-luna"],
+      }, () => { throw new Error("disk full"); })).rejects.toThrow("disk full");
+
+      // The request path reads the same live block; a failed save must not leave the new
+      // enabled/model/sourceModels tuple visible after the caller was told it did not persist.
+      expect(config.shadowCallIntercept).toEqual({
+        enabled: true,
+        model: "xai/grok-4.5",
+        sourceModels: ["gpt-5.6-luna"],
+      });
+
+      const fresh = { port: 0, defaultProvider: "xai", providers: {} } as OcxConfig;
+      await expect(shadowApi(fresh, "PUT", { enabled: true }, () => {
+        throw new Error("disk full");
+      })).rejects.toThrow("disk full");
+      expect(fresh.shadowCallIntercept).toBeUndefined();
+    });
+  });
+
+  test("PUT keeps the new live settings when persistence reports publication", async () => {
+    await withTempHome(async () => {
+      const config = {
+        port: 0,
+        defaultProvider: "xai",
+        providers: {
+          xai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.x.ai/v1",
+            authMode: "key",
+            apiKey: "test-xai-key",
+          },
+        },
+        shadowCallIntercept: {
+          enabled: true,
+          model: "xai/grok-4.5",
+          sourceModels: ["gpt-5.6-luna"],
+        },
+      } as OcxConfig;
+      const error = new ConfigWritePublishedError(new Error("bookkeeping"));
+
+      await expect(shadowApi(config, "PUT", {
+        enabled: false,
+        model: "xai/grok-4.6",
+        sourceModels: ["gpt-6-luna"],
+      }, () => { throw error; })).rejects.toBe(error);
+
+      expect(config.shadowCallIntercept).toEqual({
+        enabled: false,
+        model: "xai/grok-4.6",
+        sourceModels: ["gpt-6-luna"],
+      });
     });
   });
 });

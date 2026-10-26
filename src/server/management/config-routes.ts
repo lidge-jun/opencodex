@@ -1345,19 +1345,25 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
       if (targetError) {
         return jsonResponse({ error: targetError, code: "shadow_call_target_invalid" }, 400);
       }
-      config.shadowCallIntercept = { ...config.shadowCallIntercept };
-      if (typeof body.enabled === "boolean") config.shadowCallIntercept.enabled = body.enabled;
-      if (typeof body.model === "string") {
-        if (body.model === "") delete config.shadowCallIntercept.model;
-        else config.shadowCallIntercept.model = body.model;
+      const rollback = captureConfigTopLevelRollback(config, ["shadowCallIntercept"]);
+      try {
+        config.shadowCallIntercept = { ...config.shadowCallIntercept };
+        if (typeof body.enabled === "boolean") config.shadowCallIntercept.enabled = body.enabled;
+        if (typeof body.model === "string") {
+          if (body.model === "") delete config.shadowCallIntercept.model;
+          else config.shadowCallIntercept.model = body.model;
+        }
+        if (nextSourceModels) {
+          // Drop a list that merely restates the built-in set, so future client
+          // versions can move the defaults without pinning them here.
+          if (isDefaultShadowSourceModels(nextSourceModels)) delete config.shadowCallIntercept.sourceModels;
+          else config.shadowCallIntercept.sourceModels = nextSourceModels;
+        }
+        (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
+      } catch (error) {
+        if (!(error instanceof ConfigWritePublishedError)) rollback();
+        throw error;
       }
-      if (nextSourceModels) {
-        // Drop a list that merely restates the built-in set, so future client
-        // versions can move the defaults without pinning them here.
-        if (isDefaultShadowSourceModels(nextSourceModels)) delete config.shadowCallIntercept.sourceModels;
-        else config.shadowCallIntercept.sourceModels = nextSourceModels;
-      }
-      saveConfigPreservingClaudeCode(config);
       return null;
     });
     if (refusal) return refusal;
