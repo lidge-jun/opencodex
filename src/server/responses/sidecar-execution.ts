@@ -585,6 +585,7 @@ export async function executeResponsesSidecars(
         return fetch.unpacedFetch ?? fetch;
       },
       onRequestBuilt: request => {
+        if (typeof request.usageLog?.inputTokens === "number") logCtx.usageLogInputTokens = request.usageLog.inputTokens;
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       },
@@ -698,6 +699,7 @@ export async function executeResponsesSidecars(
       abortSignal: options.abortSignal,
       onFirstOutput: noteSidecarOutput,
       onRequestBuilt: request => {
+        if (typeof request.usageLog?.inputTokens === "number") logCtx.usageLogInputTokens = request.usageLog.inputTokens;
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       },
