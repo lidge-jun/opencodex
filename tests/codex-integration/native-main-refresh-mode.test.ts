@@ -17,11 +17,14 @@ import {
   getMainAccountCredentialStatus,
   getValidMainAccountToken,
   isMainAccountRefreshGrantRejected,
+  MAIN_CODEX_ACCOUNT_ID,
   MainAuthJsonChangedDuringRefreshError,
   MainAccountTokenRefreshError,
 } from "../../src/codex/main-account";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { NATIVE_GPT6_ASTRA_MINOR_MODEL } from "../../src/codex/catalog/native-models";
 import { codexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
-import { resolveCodexAuthContext, materializeCodexUpstreamAuthAsync, CodexAuthContextError, CodexMainAccountHardLockError } from "../../src/codex/auth-context";
+import { resolveCodexAuthContext, materializeCodexUpstreamAuthAsync, CodexAuthContextError, CodexMainAccountHardLockError, CodexMainProfileDrainingError, CodexModelAvailabilityError, CodexPoolAuthenticationError } from "../../src/codex/auth-context";
 import { applyConfirmedMainCodexAccountTransition, reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { captureMainQuotaWriter, isMainQuotaDispatchLive, isMainQuotaWriterLive, matchesMainQuotaCredential, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
@@ -319,6 +322,223 @@ describe("main account in codex refresh mode (#2999)", () => {
     expect(failure.cause).toMatchObject({ reason: "transient" });
   });
 
+  test("a cold keyring discovery failure reaches the exact __main__ selector as its retryable cause", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("__main__");
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai", codexAccounts: [], codexMainAccountHardLock: false,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+    };
+    const failure = await resolveCodexAuthContext(new Headers(), config, "pool", {
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+      nativeMainRefreshDependencies: { codexAuthStatus: async () => { throw new CodexAuthStatusError("fixture unavailable"); } },
+      beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => true, release() {} }),
+    }).catch(error => error);
+    expect(failure).toBeInstanceOf(CodexAuthContextError);
+    expect(failure).not.toBeInstanceOf(CodexPoolAuthenticationError);
+    expect(failure.cause).toMatchObject({ reason: "transient" });
+  });
+
+  test("an ordinary keyring read with no Codex login reports absence for the exact __main__ selector", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("__main__");
+    const { codexAuthStatus } = seam(() => ({ authMethod: null, authToken: null, requiresOpenaiAuth: true }));
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai", codexAccounts: [], codexMainAccountHardLock: false,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+    };
+    const failure = await resolveCodexAuthContext(new Headers(), config, "pool", {
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+      nativeMainRefreshDependencies: { codexAuthStatus },
+      beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => true, release() {} }),
+    }).catch(error => error);
+    expect(failure).toBeInstanceOf(CodexPoolAuthenticationError);
+    expect(failure).not.toBeInstanceOf(CodexAuthContextError);
+    expect(getMainAccountCredentialStatus().usable).toBe(false);
+  });
+
+  test("an ordinary keyring read with no Codex login reports absence in Pool mode", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("__main__");
+    const { codexAuthStatus } = seam(() => ({ authMethod: null, authToken: null, requiresOpenaiAuth: true }));
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai", codexAccounts: [], codexMainAccountHardLock: false,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+    };
+    const failure = await resolveCodexAuthContext(new Headers(), config, "pool", {
+      nativeMainRefreshDependencies: { codexAuthStatus },
+      beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => true, release() {} }),
+    }).catch(error => error);
+    expect(failure).toBeInstanceOf(CodexPoolAuthenticationError);
+    expect(failure).not.toBeInstanceOf(CodexAuthContextError);
+  });
+
+  test("an ordinary fileless read with no Codex login returns null instead of a refresh failure", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const { calls, codexAuthStatus } = seam(() => ({ authMethod: null, authToken: null, requiresOpenaiAuth: true }));
+    expect(await getValidMainAccountToken({ codexAuthStatus })).toBeNull();
+    expect(calls).toEqual([{ refresh: false }]);
+    expect(getMainAccountCredentialStatus().usable).toBe(false);
+  });
+
+  test("an expiring-bearer promotion turns the same no-login back into a refresh failure", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const answers: CodexAuthStatus[] = [
+      { authMethod: "chatgpt", authToken: expired(), requiresOpenaiAuth: true },
+      { authMethod: null, authToken: null, requiresOpenaiAuth: true },
+    ];
+    let index = 0;
+    const { calls, codexAuthStatus } = seam(() => answers[index++]);
+    const failure = await getValidMainAccountToken({ codexAuthStatus }).catch(error => error);
+    expect(failure).toBeInstanceOf(MainAccountTokenRefreshError);
+    expect((failure as MainAccountTokenRefreshError).reason).toBe("transient");
+    expect(calls).toEqual([{ refresh: false }, { refresh: true }]);
+  });
+
+  test("an expiring-bearer promotion keeps a withheld grant at reauth", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const answers: CodexAuthStatus[] = [
+      { authMethod: "chatgpt", authToken: expired(), requiresOpenaiAuth: true },
+      { authMethod: "chatgpt", authToken: null, requiresOpenaiAuth: true },
+    ];
+    let index = 0;
+    const { calls, codexAuthStatus } = seam(() => answers[index++]);
+    const failure = await getValidMainAccountToken({ codexAuthStatus }).catch(error => error);
+    expect(failure).toBeInstanceOf(MainAccountTokenRefreshError);
+    expect((failure as MainAccountTokenRefreshError).reason).toBe("reauth");
+    expect(calls).toEqual([{ refresh: false }, { refresh: true }]);
+  });
+
+  test("a forced fileless refresh still reports no-login as transient", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const { calls, codexAuthStatus } = seam(() => ({ authMethod: null, authToken: null, requiresOpenaiAuth: true }));
+    const failure = await forceRefreshMainAccountToken(expired(), { codexAuthStatus }).catch(error => error);
+    expect(failure).toBeInstanceOf(MainAccountTokenRefreshError);
+    expect((failure as MainAccountTokenRefreshError).reason).toBe("transient");
+    expect(calls).toEqual([{ refresh: true }]);
+  });
+
+  test("a refused main-profile claim outranks a saved discovery failure", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("__main__");
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai", codexAccounts: [], codexMainAccountHardLock: false,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+    };
+    const failure = await resolveCodexAuthContext(new Headers(), config, "pool", {
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+      nativeMainRefreshDependencies: { codexAuthStatus: async () => { throw new CodexAuthStatusError("fixture unavailable"); } },
+      beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => false, release() {} }),
+    }).catch(error => error);
+    expect(failure).toBeInstanceOf(CodexMainProfileDrainingError);
+  });
+
+  test("a stale discovery failure does not refuse an exact __main__ selector once the credential recovers", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("__main__");
+    const fresh = fakeChatGptJwt("acct-main");
+    let recovered = false;
+    const { codexAuthStatus } = seam(() => {
+      if (!recovered) throw new CodexAuthStatusError("fixture unavailable");
+      return { authMethod: "chatgpt", authToken: fresh, requiresOpenaiAuth: true };
+    });
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai", codexAccounts: [], codexMainAccountHardLock: false,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+    };
+    const context = await resolveCodexAuthContext(new Headers(), config, "pool", {
+      accountId: MAIN_CODEX_ACCOUNT_ID,
+      modelId: NATIVE_GPT6_ASTRA_MINOR_MODEL,
+      nativeMainRefreshDependencies: { codexAuthStatus },
+      resolveCodexModelEntitlements: async () => {
+        // A real recovery landing during the entitlement await: the read below goes through
+        // the production credential path, so the saved probe error above is stale evidence.
+        recovered = true;
+        await getValidMainAccountToken({ codexAuthStatus });
+        return {
+          modelsByAccount: new Map([[MAIN_CODEX_ACCOUNT_ID, new Set([NATIVE_GPT6_ASTRA_MINOR_MODEL])]]),
+          clientVersionByAccount: new Map(),
+          confirmedAccountIds: new Set([MAIN_CODEX_ACCOUNT_ID]),
+          credentialIdentities: new Map(),
+        };
+      },
+      beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => true, release() {} }),
+    });
+    expect(context).toMatchObject({ kind: "main-pool", accountId: MAIN_CODEX_ACCOUNT_ID, accessToken: fresh });
+  });
+
+  test("a stale discovery failure does not outrank the current selection answer when nothing can serve", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("__main__");
+    const fresh = fakeChatGptJwt("acct-main");
+    let recovered = false;
+    const { codexAuthStatus } = seam(() => {
+      if (!recovered) throw new CodexAuthStatusError("fixture unavailable");
+      return { authMethod: "chatgpt", authToken: fresh, requiresOpenaiAuth: true };
+    });
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai", codexAccounts: [], codexMainAccountHardLock: false,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+    };
+    const failure = await resolveCodexAuthContext(new Headers(), config, "pool", {
+      modelId: NATIVE_GPT6_ASTRA_MINOR_MODEL,
+      nativeMainRefreshDependencies: { codexAuthStatus },
+      resolveCodexModelEntitlements: async () => {
+        // Same mid-await recovery as above: the credential verifies healthy, so the saved
+        // probe error is stale. The roster admits nobody for this model, so main stays
+        // out of candidacy on CURRENT eligibility evidence and the honest refusal is the
+        // selection's own answer, not the stale transient.
+        recovered = true;
+        await getValidMainAccountToken({ codexAuthStatus });
+        return {
+          modelsByAccount: new Map(),
+          clientVersionByAccount: new Map(),
+          confirmedAccountIds: new Set(),
+          credentialIdentities: new Map(),
+        };
+      },
+      beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => true, release() {} }),
+    }).catch(error => error);
+    expect(failure).toBeInstanceOf(CodexModelAvailabilityError);
+    expect(failure).not.toBeInstanceOf(CodexAuthContextError);
+  });
+
+  test("a failed main discovery still lets a healthy pool account serve the request", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    clearThreadAccountMap();
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = join(root, "opencodex-home");
+    mkdirSync(process.env.OPENCODEX_HOME);
+    try {
+      saveCodexAccountCredential("pool-a", {
+        accessToken: "pool-a-bearer",
+        refreshToken: "pool-a-refresh",
+        expiresAt: Date.now() + 3_600_000,
+        chatgptAccountId: "pool_acc",
+      });
+      const config: OcxConfig = {
+        port: 10100, defaultProvider: "openai", codexMainAccountHardLock: false,
+        activeCodexAccountId: "pool-a",
+        codexAccounts: [{ id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "pool_acc" }],
+        providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+      };
+      const context = await resolveCodexAuthContext(new Headers(), config, "pool", {
+        nativeMainRefreshDependencies: { codexAuthStatus: async () => { throw new CodexAuthStatusError("fixture unavailable"); } },
+        beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => true, release() {} }),
+      });
+      expect(context).toMatchObject({ kind: "pool", accountId: "pool-a" });
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+    }
+  });
+
   test("a near-expiry keyring read refreshes once through Codex", async () => {
     setNativeMainRefreshResolutionForTests(CODEX_MODE);
     const fresh = fakeChatGptJwt("acct-main");
@@ -413,7 +633,7 @@ describe("main account in codex refresh mode (#2999)", () => {
     await getValidMainAccountToken({ codexAuthStatus });
     status = { authMethod: null, authToken: null, requiresOpenaiAuth: true };
 
-    await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toBeInstanceOf(MainAccountTokenRefreshError);
+    expect(await getValidMainAccountToken({ codexAuthStatus })).toBeNull();
     expect(getMainAccountCredentialStatus().usable).toBe(false);
   });
 

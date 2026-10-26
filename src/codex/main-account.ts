@@ -657,6 +657,9 @@ function inFlightMainAccountToken(
  * keyring save succeeds, so the RPC answer is the only place the new token exists for us.
  * The call runs on the refresh timeout alone: killing app-server mid-exchange could retire
  * the grant before Codex saves its successor.
+ *
+ * Returns null when an ordinary read (no locked file credential, nothing upstream rejected)
+ * observes that Codex has no ChatGPT login at all -- an observed absence, not a refresh failure.
  */
 async function refreshThroughCodex(
   locked: MainAuthJsonCredential | null,
@@ -666,7 +669,7 @@ async function refreshThroughCodex(
   authStatus: NonNullable<NativeMainRefreshDependencies["codexAuthStatus"]>,
   codexHome: string,
   refresh = true,
-): Promise<{ accessToken: string; chatgptAccountId: string }> {
+): Promise<{ accessToken: string; chatgptAccountId: string } | null> {
   // Deferred to keep lifecycle's cache/plan cleanup off this module's load-time import cycle.
   const { observeCodexOwnedMainAccountCredential } = await import("./account-lifecycle");
   if (resolveCodexHomeDir() !== codexHome) throw new MainAuthJsonChangedDuringRefreshError();
@@ -675,12 +678,14 @@ async function refreshThroughCodex(
   // JWT expiry cannot detect logout or an external keyring account switch.
   forgetCodexOwnedMainUsability(codexHome);
   let status: CodexAuthStatus;
+  let didRefresh = refresh;
   try {
     const readSignal = dependencies.signal ? AbortSignal.any([dependencies.signal, refreshTimeout]) : refreshTimeout;
     status = await authStatus({ refresh, signal: refresh ? refreshTimeout : readSignal });
     if (!refresh && status.authMethod === "chatgpt" && status.authToken
       && !mainAccessTokenFresh(status.authToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
       dependencies.signal?.throwIfAborted();
+      didRefresh = true;
       status = await authStatus({ refresh: true, signal: refreshTimeout });
     }
   } catch (cause) {
@@ -703,6 +708,11 @@ async function refreshThroughCodex(
   const token = status.authToken;
   if (status.authMethod !== "chatgpt" || !token) {
     noteNativeMainRefresh("codex-no-chatgpt-login");
+    // An ordinary read with no locked credential and nothing rejected observed a real
+    // absence, not a refresh failure: report no credential instead of a retryable error.
+    // Once the expiring-bearer answer above promoted this lookup into a real refresh, the
+    // same no-login outcome is a refresh failure again.
+    if (locked === null && rejectedAccessToken === undefined && !didRefresh) return null;
     throw new MainAccountTokenRefreshError("transient", { credentialObservedAbsent: true });
   }
   // A transient Codex refresh failure still answers with its cached bearer.

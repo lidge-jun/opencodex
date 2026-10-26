@@ -1487,7 +1487,11 @@ async function resolveCodexAuthContextUnannotated(
       return context;
     }
     if (!selected) {
-      if (mainDiscoveryFailure !== undefined) throw new CodexAuthContextError(MAIN_CODEX_ACCOUNT_ID, mainDiscoveryFailure);
+      // After an entitlement-await recovery, current selection evidence outranks the saved
+      // probe failure; retain it only while main is still unusable (as for fixed selection).
+      if (mainDiscoveryFailure !== undefined && !getMainAccountCredentialStatus().usable) {
+        throw new CodexAuthContextError(MAIN_CODEX_ACCOUNT_ID, mainDiscoveryFailure);
+      }
       // A retry that excluded a failed Pool account may still use the validated caller-owned
       // main credential. Treating every exclusion as if main itself had failed strands a healthy
       // native bearer after the first Pool attempt. Preserve the exactly-once boundary by refusing
@@ -1571,6 +1575,15 @@ async function resolveCodexAuthContextUnannotated(
       );
     }
     if (fixedAccountId !== undefined) {
+      // Discovery ran for an exact `__main__` selector too, so its saved failure must not be
+      // downgraded into a blanket unavailability refusal here: propagate it the same way the
+      // no-selection path above does. After an entitlement-await recovery, stale failure wins
+      // while the credential is still unusable; a healthy account falls through to the normal
+      // checks and gets served.
+      if (accountId === MAIN_CODEX_ACCOUNT_ID && mainDiscoveryFailure !== undefined
+        && !getMainAccountCredentialStatus().usable) {
+        throw new CodexAuthContextError(MAIN_CODEX_ACCOUNT_ID, mainDiscoveryFailure);
+      }
       if (policy.pausedCodexAccountIds?.includes(accountId)) {
         throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
       }
