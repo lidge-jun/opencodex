@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 import { create } from "@bufbuild/protobuf";
 import {
   DeleteErrorSchema,
@@ -235,19 +235,21 @@ export function lsExec(execMsg: ExecServerMessage): Uint8Array {
   }
 }
 
-function matchesGlob(file: string, glob?: string): boolean {
-  if (!glob) return true;
-  if (glob.startsWith("*.") || glob.startsWith("**/*.")) return file.endsWith(glob.slice(glob.indexOf("*") + 1));
-  return file.includes(glob.replaceAll("*", ""));
+function grepFileMatcher(root: string, glob?: string): (file: string) => boolean {
+  if (!glob) return () => true;
+  const matcher = new Bun.Glob(glob.replace(/^(?:\.\/)+/, ""));
+  // Bare patterns apply to each basename; slash patterns are relative to the selected root.
+  const pathPattern = glob.includes("/");
+  return file => matcher.match(pathPattern ? relative(root, file).split(sep).join("/") : basename(file));
 }
 
-function collectFiles(root: string, glob?: string, out: string[] = []): string[] {
+function collectFiles(root: string, matchesFile: (file: string) => boolean, out: string[] = []): string[] {
   if (out.length >= MAX_GREP_FILES) return out;
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name === ".git") continue;
     const path = join(root, entry.name);
-    if (entry.isDirectory()) collectFiles(path, glob, out);
-    if (entry.isFile() && matchesGlob(path, glob)) out.push(path);
+    if (entry.isDirectory()) collectFiles(path, matchesFile, out);
+    if (entry.isFile() && matchesFile(path)) out.push(path);
     if (out.length >= MAX_GREP_FILES) break;
   }
   return out;
@@ -269,7 +271,7 @@ export function grepExec(execMsg: ExecServerMessage): Uint8Array {
   const root = resolve(args.path || process.cwd());
   try {
     const pattern = new RegExp(args.pattern, args.caseInsensitive ? "i" : "");
-    const files = existsSync(root) && statSync(root).isDirectory() ? collectFiles(root, args.glob) : [root];
+    const files = existsSync(root) && statSync(root).isDirectory() ? collectFiles(root, grepFileMatcher(root, args.glob)) : [root];
     const matches = [];
     for (const file of files) {
       if (matches.length >= MAX_GREP_RESULTS) break;

@@ -124,8 +124,11 @@ failure to restore shared client configuration keeps the stop failed and its rec
 carries the outcome class (`stopped`, `not-running`, `history-incomplete`, `history-deferred`,
 or `failed`), the service and proxy classifications, whether the runtime is down, and a stable
 one-line message. Exit codes are identical with and without `--json`: 0 on success, 1 on failure,
-79 when only Codex history cleanup did not complete, and 80 when the shared teardown was deferred
-and is still owed.
+79 when only Codex history cleanup did not complete, 80 when the shared teardown was deferred
+and is still owed, and 81 when a dashboard update that will restart the proxy handed Codex routing
+and its catalog to the restarted proxy instead of restoring native Codex. With 81 the proxy is
+down, and the restarted proxy releases the kept teardown after its first sync; if it never starts,
+the next `ocx stop` restores native Codex.
 
 For a desktop-approved takeover, `ocx stop --json` also accepts the complete set of
 `--expect-*` values supplied by `ocx resolve --json`. On Windows, this guarded stop can
@@ -559,6 +562,46 @@ and a stale picker is not.
 
 When the command runs from inside the Codex app, the restart is handed off to a detached helper
 and this session ends with the app.
+
+#### Sync only from the expected Home: `--expect-link` and `--expect-hub-key`
+
+```bash
+ocx sync --expect-link <linkId> [--restart-codex]
+ocx sync --expect-hub-key <apiKeyId> [--restart-codex]
+```
+
+A script that reads `ocx connect status --json` and then runs `ocx sync` cannot tell whether the
+machine was disconnected or relinked to another Home in between; a plain `ocx sync` would then
+sync the local providers or the other Home's catalog. Passing the identity you read closes that
+gap. `--expect-link` takes the `link.linkId` of a Remote Link Child and `--expect-hub-key` the
+`apiKeyId` of a hub client. The check runs under the same lock that chooses the sync path, and
+every later write is bound to the connection that passed it.
+
+When the identity holds, the command is exactly the connected sync above. Otherwise it changes
+nothing (not even the automatic Codex shim repair other commands run first), never syncs the local
+providers, exits **5**, and prints a human line followed by one JSON line as the last line on stderr:
+
+```json
+{"phase":"child_link_mismatch","reason":"other_link"}
+```
+
+`phase` is `child_link_mismatch` for `--expect-link` and `hub_client_mismatch` for
+`--expect-hub-key`.
+
+| `reason` | Machine state |
+| --- | --- |
+| `disconnected` | Not connected to any Home or hub |
+| `invalid_state` | The client configuration or a connect marker cannot be read |
+| `disconnect_pending` | A disconnect has started and not finished |
+| `pending_operation` | A key rotation, a connect, or another sync is in progress (including one that holds the locks this check needs) |
+| `hub_client` | `--expect-link` on a hub client |
+| `link_client` | `--expect-hub-key` on a Remote Link Child |
+| `other_link` / `other_key` | Connected, but to a different link or with a different key |
+
+A missing or malformed value, a repeated flag, or both flags together exit 2 before any state is
+read. A connection that changes after the check, while the catalog is being fetched, still fails
+as a plain connected sync does (exit 1, nothing written). Versions without these flags ignore
+them, so check `ocx --version` first.
 
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 

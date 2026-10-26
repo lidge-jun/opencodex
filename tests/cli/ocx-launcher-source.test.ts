@@ -212,7 +212,7 @@ test("Desktop supervision is freshly checked before Node stop and both package-m
   const initial = source.indexOf("supervision: observeSupervision()", source.indexOf("const initialOwnership"));
   const gate = source.indexOf("const preStopPlan = planUpdateRuntimeHandling({");
   const stop = source.indexOf('const stopRes = spawnSync(process.execPath, [launcher, "stop"]');
-  const npm = source.indexOf("const tx = transactionalNpmUpdate({");
+  const npm = source.indexOf("const tx = await transactionalNpmUpdate({");
   const pnpm = source.indexOf("const update = runPnpmGlobalUpdate({");
   expect(initial).toBeGreaterThan(0); expect(gate).toBeGreaterThan(initial);
   expect(stop).toBeGreaterThan(gate); expect(npm).toBeGreaterThan(stop); expect(pnpm).toBeGreaterThan(stop);

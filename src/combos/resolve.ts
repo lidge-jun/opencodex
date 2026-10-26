@@ -3,6 +3,7 @@ import { getCachedProviderRoutingQuota } from "../providers/quota-routing-cache"
 import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
 import { sleepWithAbort } from "../lib/upstream-retry";
 import {
+  clearComboTargetCooldowns,
   coolComboTarget,
   earliestComboCooldown,
   isComboTargetInCooldown,
@@ -26,6 +27,7 @@ export interface ComboPick {
 }
 
 interface SelectionState {
+  lastCooldownReprobeAt?: number;
   activeKey?: string;
   successes: number;
   currentWeights: Map<string, number>;
@@ -286,12 +288,42 @@ function resetWindowIndex(
   return selected;
 }
 
+/** Reserve one recovery pass before mutating cooldowns; preview and in-flight picks never call this. */
+function reopenAllCooledTargets(
+  config: OcxConfig, comboId: string, now: number,
+  eligible?: (target: NormalizedComboTarget) => boolean,
+): void {
+  const combo = getCombo(config, comboId);
+  if (!combo?.cooldownReprobe?.enabled) return;
+  const state = selectionState.get(comboId);
+  if (state?.lastCooldownReprobeAt !== undefined
+    && now - state.lastCooldownReprobeAt < combo.cooldownReprobe.intervalMs) return;
+  const reprobeEligible = (target: NormalizedComboTarget): boolean => {
+    if (!targetProviderIsUsable(config, target, now)) return false;
+    try { return eligible?.(target) ?? true; } catch { return false; }
+  };
+  // Ordinary selection skips cooled targets without evaluating their request predicate.
+  // Preserve that behavior when a sibling is already available.
+  if (combo.targets.some(target => !isComboTargetInCooldown(comboId, target, now)
+    && reprobeEligible(target))) return;
+  const usable = combo.targets.filter(reprobeEligible);
+  if (usable.length === 0 || !usable.every(target => isComboTargetInCooldown(comboId, target, now))) return;
+  // No await between reservation and reset: concurrent requests cannot reserve another pass.
+  const next = state ?? { successes: 0, currentWeights: new Map<string, number>(), successfulUses: new Map<string, number>() };
+  next.lastCooldownReprobeAt = now;
+  selectionState.set(comboId, next);
+  clearComboTargetCooldowns(comboId, usable.map(targetKey));
+  console.warn(`[combo] ${comboId}: reopening all-cooled targets; minimum reprobe interval ${combo.cooldownReprobe.intervalMs}ms`);
+}
+
 export function pickComboTarget(
   config: OcxConfig,
   comboId: string,
   options: {
     exclude?: Iterable<string>;
     eligible?: (target: NormalizedComboTarget) => boolean;
+    /** Disable recovery for picks without request context or picks already in flight. */
+    allowCooldownReprobe?: boolean;
     now?: number;
     /** Inspect a round-robin choice without mutating its sticky/weight state. */
     preview?: boolean;
@@ -302,6 +334,9 @@ export function pickComboTarget(
   if (!combo) throw new UnknownComboError(comboId);
   const excluded = new Set(options.exclude ?? []);
   const now = options.now ?? Date.now();
+  if (options.allowCooldownReprobe !== false && !options.preview && excluded.size === 0) {
+    reopenAllCooledTargets(config, comboId, now, options.eligible);
+  }
   const eligible = (target: NormalizedComboTarget): boolean =>
     targetProviderIsUsable(config, target, now)
     && !isComboTargetInCooldown(comboId, target, now)
@@ -498,6 +533,8 @@ export async function pickComboTargetWithWait(
     eligible?: (target: NormalizedComboTarget) => boolean;
     waitForCooldownMs: number;
     abortSignal?: AbortSignal;
+    /** Disable recovery when retrying a target after its normal cooldown. */
+    allowCooldownReprobe?: boolean;
     now?: number;
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   },
@@ -505,6 +542,9 @@ export async function pickComboTargetWithWait(
   const now = options.now ?? Date.now();
   const excluded = new Set(options.exclude ?? []);
   const customEligible = options.eligible;
+  if (options.allowCooldownReprobe !== false && excluded.size === 0 && !options.abortSignal?.aborted) {
+    reopenAllCooledTargets(config, comboId, now, customEligible);
+  }
   const eligibleAt = (target: NormalizedComboTarget, at: number): boolean =>
     !isComboTargetInCooldown(comboId, target, at)
     && (customEligible?.(target) ?? true);
@@ -529,6 +569,7 @@ export async function pickComboTargetWithWait(
     const normalOnly = (target: NormalizedComboTarget): boolean =>
       !target.lastResort && eligible(target);
     const normalPick = pickComboTarget(config, comboId, {
+      allowCooldownReprobe: false,
       exclude: excluded,
       eligible: normalOnly,
       now,
@@ -559,6 +600,7 @@ export async function pickComboTargetWithWait(
       // The combo can be deleted or renamed while this request sleeps.
       if (!getCombo(config, comboId)) return null;
       const waited = pickComboTarget(config, comboId, {
+        allowCooldownReprobe: false,
         exclude: excluded,
         now: now + normalDelay,
         eligible: target => !target.lastResort
@@ -576,6 +618,7 @@ export async function pickComboTargetWithWait(
   const remainingWaitMs = options.waitForCooldownMs - spentWaitMs;
 
   const pick = pickComboTarget(config, comboId, {
+    allowCooldownReprobe: false,
     exclude: excluded,
     eligible: target => eligibleAt(target, clock),
     now: clock,
@@ -610,6 +653,7 @@ export async function pickComboTargetWithWait(
   if (!getCombo(config, comboId)) return null;
   return pickComboTarget(config, comboId, {
     exclude: excluded,
+    allowCooldownReprobe: false,
     now: clock + delay,
     eligible: targetCandidate => eligibleAt(targetCandidate, clock + delay),
   });
@@ -659,7 +703,7 @@ export function tryPickComboModel(config: OcxConfig, modelId: string, preview = 
   const comboId = resolveComboId(config, modelId);
   if (!comboId) return null;
   if (!getCombo(config, comboId)) throw new UnknownComboError(comboId);
-  const picked = pickComboTarget(config, comboId, { preview });
+  const picked = pickComboTarget(config, comboId, { preview, allowCooldownReprobe: false });
   if (!picked) throw new NoAvailableComboTargetsError(comboId, comboExclusionReasons(config, comboId));
   return picked;
 }

@@ -962,6 +962,10 @@ outbound proxy, opencodex resolves the hostname once and connects only to that v
 HTTPS retains the original Host, SNI, and certificate verification; provider config cannot disable
 certificate checks.
 
+Direct response downloads pause while local processing is not ready for more data, including
+gzip and deflate responses. This pause does not count as provider inactivity; the request's
+overall deadline and cancellation still apply.
+
 These operations use the [server's configured outbound fetch](/reference/configuration/server/).
 A server SOCKS5 proxy — set with
 `config.proxy` or inherited from a SOCKS5 `ALL_PROXY` — uses OpenCodex's built-in tunnel when
@@ -1450,6 +1454,12 @@ Set `nativeLocalExec` on `providers.cursor`, not at the top level. In the dashbo
 → Cursor → Edit JSON**, save, then restart. Legacy `unsafeAllowNativeLocalExec: true` equals
 `nativeLocalExec: "on"` only when `nativeLocalExec` is unset. MCP, screen recording, and computer use
 are controlled separately by `mcpServers` and `desktopExecutor`.
+
+For an enabled native `grep` directory search, `glob` filters file names: `*.ts` matches at any
+depth, while `src/**/*.ts` matches paths relative to the selected search directory (`./` is optional). Use `/` for
+pattern separators on every platform. Character classes and brace alternatives are supported;
+Bun 1.4.4 also supports extglobs such as `**/!(*.test).ts` and ranges such as `part-{1..3}.ts`.
+These filters do not change the selected directory or enable native execution.
 
 Foreground `shellArgs` and `shellStreamArgs` requests are rejected before process creation on
 Windows, macOS, and Linux, including with `nativeLocalExec: "on"`. They require a kernel-backed

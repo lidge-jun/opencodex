@@ -24,6 +24,9 @@ import type { ProviderRegistryEntry } from "../../src/providers/registry/types";
 import { META_MODEL_API_MODELS } from "../../src/providers/registry/model-seeds";
 import { FREE_PROVIDER_DIRECTORY } from "../../src/providers/free-directory";
 import { applyProviderConfigHints } from "../../src/codex/catalog";
+import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import type { AdapterRequest } from "../../src/adapters/base";
+import { configuredReasoningEfforts, REASONING_EFFORT_OMIT_SENTINEL } from "../../src/reasoning-effort";
 import { routeModel } from "../../src/router";
 import { resolveAdapter } from "../../src/server";
 import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
@@ -198,7 +201,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS).toEqual(deriveKeyLoginMap());
     expect(Object.keys(KEY_LOGIN_PROVIDERS)).toEqual(EXPECTED_KEY_PROVIDER_IDS);
     expect(Object.keys(deriveKeyLoginMap())).toEqual(EXPECTED_KEY_PROVIDER_IDS);
-    expect(KEY_LOGIN_PROVIDERS.minimax.defaultModel).toBe("MiniMax-M3");
+    expect(KEY_LOGIN_PROVIDERS.minimax.defaultModel).toBe("MiniMax-M3.1-Flash");
     expect(KEY_LOGIN_PROVIDERS.umans).toMatchObject({
       label: "Umans AI Coding Plan",
       adapter: "anthropic",
@@ -369,13 +372,12 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-sol"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-terra"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-luna"]).toBe(1_050_000);
-    // Retired from the first-party API on 2026-09-14; the vendor-hosted rosters keep it.
-    expect(KEY_LOGIN_PROVIDERS.deepseek.models).not.toContain("deepseek-v4-pro");
+    // The official retirement plan was withdrawn; Pro remains a separate text-only model.
+    expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-v4-pro");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelContextWindows?.["deepseek-v4-pro"]).toBe(1_048_576);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-flash");
-    // #1057: DeepSeek's ladder is low/high/max and the two V4 models resolve it
-    // differently (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-06).
-    // `xhigh` is an alias, so it stays in the wire map but is not advertised. Pro
-    // does not honor `low` (the vendor maps it to `high`), so Pro must not offer it.
+    // The current Thinking Mode guide declares low/high/max; aliases stay in the wire map.
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-flash"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-flash"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-flash"]?.low).toBe("low");
@@ -384,14 +386,12 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.low).toBe("low");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.xhigh).toBe("high");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.max).toBe("max");
-    // The retired deepseek-v4-pro stays OUT of `models` (line 357) but inside the preserve
-    // list: it still routes to a thinking-mode model, so a saved config that carries it
-    // must get reasoning replay rather than a guaranteed 400 (#5421).
+    // Pro and Flash both retain reasoning on tool-call continuations (#5421).
     expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels)
       .toEqual(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]);
     // #4436: first-party Flash accepts images; unprobed compatibility aliases keep the sidecar.
     expect(KEY_LOGIN_PROVIDERS.deepseek.noVisionModels).toEqual([
-      "deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash",
+      "deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-pro",
     ]);
   });
 
@@ -507,7 +507,7 @@ describe("provider registry parity", () => {
     });
 
     const minimaxModels = [
-      "MiniMax-M3.1-Flash-Preview",
+      "MiniMax-M3.1-Flash",
       "MiniMax-M3",
       "MiniMax-M2.7", "MiniMax-M2.7-highspeed",
       "MiniMax-M2.5", "MiniMax-M2.5-highspeed",
@@ -519,16 +519,16 @@ describe("provider registry parity", () => {
       const entry = PROVIDER_REGISTRY.find(provider => provider.id === providerId);
       expect(entry?.adapter).toBe("openai-chat");
       expect(entry?.baseUrl).toBe(providerId === "minimax" ? "https://api.minimax.io/v1" : "https://api.minimaxi.com/v1");
-      expect(entry?.defaultModel).toBe("MiniMax-M3");
+      expect(entry?.defaultModel).toBe("MiniMax-M3.1-Flash");
       expect(entry?.models).toEqual(minimaxModels);
       expect(entry?.modelContextWindows?.["MiniMax-M3"]).toBe(1_000_000);
-      expect(entry?.modelContextWindows?.["MiniMax-M3.1-Flash-Preview"]).toBe(1_000_000);
+      expect(entry?.modelContextWindows?.["MiniMax-M3.1-Flash"]).toBe(1_000_000);
       expect(entry?.modelReasoningEfforts?.["MiniMax-M3"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
-      expect(entry?.modelReasoningEfforts?.["MiniMax-M3.1-Flash-Preview"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(entry?.modelReasoningEfforts?.["MiniMax-M3.1-Flash"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
       expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3"]).toBe("medium");
-      expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3.1-Flash-Preview"]).toBe("max");
+      expect(entry?.modelDefaultReasoningEfforts?.["MiniMax-M3.1-Flash"]).toBe("max");
       expect(entry?.modelReasoningEffortMap?.["MiniMax-M3"]).toMatchObject({ low: "disabled", medium: "adaptive", high: "adaptive" });
-      expect(entry?.modelReasoningEffortMap?.["MiniMax-M3.1-Flash-Preview"]).toBeUndefined();
+      expect(entry?.modelReasoningEffortMap?.["MiniMax-M3.1-Flash"]).toBeUndefined();
       expect(entry?.preserveReasoningContentModels).toEqual(minimaxModels);
       expect(entry?.reasoningSplitModels).toEqual(splitModels);
       expect(entry?.reasoningDetailsModels).toEqual(splitModels);
@@ -1109,11 +1109,19 @@ describe("provider registry parity", () => {
     expect(moonshot?.allowBaseUrlOverride).toBe(true);
     expect(moonshot?.baseUrlChoices?.map(c => c.id)).toEqual(["international", "china", "custom"]);
     expect(moonshot?.baseUrlChoices?.find(c => c.id === "china")?.baseUrl).toBe("https://api.moonshot.cn/v1");
-    expect(moonshot?.models).toContain("kimi-k3");
+    // 261025 (#7653): platform.kimi.ai/docs/models.md lists kimi-k3.1-pro and its highspeed
+    // variant as current models; the K2 ids and the kimi-k2.7-code default stay (owner decision).
+    expect(moonshot?.models).toEqual([
+      "kimi-k3", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed",
+      "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5",
+    ]);
+    expect(moonshot?.defaultModel).toBe("kimi-k2.7-code");
     expect(moonshot?.models).not.toContain("k3");
     expect(moonshot?.models).not.toContain("kimi-for-coding");
     expect(moonshot?.modelContextWindows).toEqual({
       "kimi-k3": 1_048_576,
+      "kimi-k3.1-pro": 1_048_576,
+      "kimi-k3.1-pro-highspeed": 1_048_576,
       "kimi-k2.7-code": 262_144,
       "kimi-k2.7-code-highspeed": 262_144,
       "kimi-k2.6": 262_144,
@@ -1121,9 +1129,82 @@ describe("provider registry parity", () => {
     });
     expect(moonshot?.modelInputModalities?.["kimi-k3"]).toEqual(["text", "image"]);
     expect(moonshot?.noReasoningModels).not.toContain("kimi-k3");
+    // kimi-k3 keeps its launch-time max-only list; no default or wire map is seeded for it.
     expect(moonshot?.modelReasoningEfforts?.["kimi-k3"]).toEqual(["max"]);
-    expect(moonshot?.modelReasoningEffortMap).toBeUndefined();
+    expect(moonshot?.modelDefaultReasoningEfforts?.["kimi-k3"]).toBeUndefined();
+    expect(moonshot?.modelReasoningEffortMap?.["kimi-k3"]).toBeUndefined();
     expect(moonshot?.preserveReasoningContentModels).toContain("kimi-k3");
+    // K3.1 Pro shares kimi-k3's parameter constraints (api/models-overview.md): always thinking,
+    // low/high/max with default max, fixed sampling, vision, tool_choice "required" supported.
+    for (const modelId of ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"]) {
+      expect(moonshot?.noReasoningModels).not.toContain(modelId);
+      expect(moonshot?.modelReasoningEfforts?.[modelId]).toEqual(["low", "high", "max"]);
+      expect(moonshot?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
+      expect(moonshot?.modelInputModalities?.[modelId]).toEqual(["text", "image"]);
+      for (const field of ["noTemperatureModels", "noTopPModels", "noPenaltyModels", "preserveReasoningContentModels"] as const) {
+        expect(moonshot?.[field]).toContain(modelId);
+      }
+      expect(moonshot?.autoToolChoiceOnlyModels).not.toContain(modelId);
+      // Thinking cannot be disabled, so an explicit "none" omits the field instead of sending it.
+      expect(moonshot?.modelReasoningEffortMap?.[modelId]).toEqual({
+        none: REASONING_EFFORT_OMIT_SENTINEL,
+        low: "low",
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+        max: "max",
+      });
+    }
+    const moonshotModel = applyProviderConfigHints("moonshot", providerConfigSeed(moonshot!), { provider: "moonshot", id: "kimi-k3.1-pro" });
+    const moonshotEntry = buildCatalogEntries(nativeTemplate(), [], [moonshotModel]).find(entry => entry.slug === "moonshot/kimi-k3.1-pro");
+    expect(moonshotEntry?.default_reasoning_level).toBe("max");
+  });
+
+  test("a saved Moonshot row from the previous seed routes K3.1 Pro with the documented effort wire", () => {
+    // The row a pre-K3.1 install persisted: old roster and per-model records without the new ids.
+    // The router's registry backfill must still supply the ladder, map, and fixed-sampling lists.
+    const config = {
+      port: 10100,
+      defaultProvider: "moonshot",
+      providers: {
+        moonshot: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.moonshot.ai/v1",
+          apiKey: "k",
+          models: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],
+          modelContextWindows: { "kimi-k3": 1_048_576, "kimi-k2.7-code": 262_144 },
+          modelReasoningEfforts: { "kimi-k3": ["max"], "kimi-k2.7-code": [] },
+        },
+      },
+    } as unknown as OcxConfig;
+    for (const modelId of ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"]) {
+      const route = routeModel(config, `moonshot/${modelId}`);
+      expect(route.modelId).toBe(modelId);
+      expect(configuredReasoningEfforts(route.provider, route.modelId)).toEqual(["low", "high", "max"]);
+      for (const [requested, wire] of Object.entries({
+        none: undefined,
+        low: "low",
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+        max: "max",
+        ultra: "max",
+      })) {
+        const request = createOpenAIChatAdapter(route.provider).buildRequest({
+          modelId: route.modelId,
+          context: { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+          stream: false,
+          options: { reasoning: requested, temperature: 0.2, topP: 0.7, presencePenalty: 1, frequencyPenalty: 1 },
+        }) as AdapterRequest;
+        const body = JSON.parse(request.body as string) as Record<string, unknown>;
+        expect(body.reasoning_effort).toBe(wire);
+        expect(body).not.toHaveProperty("thinking");
+        expect(body).not.toHaveProperty("temperature");
+        expect(body).not.toHaveProperty("top_p");
+        expect(body).not.toHaveProperty("presence_penalty");
+        expect(body).not.toHaveProperty("frequency_penalty");
+      }
+    }
   });
 
   test("LiteLLM is the only registry seed with optional key authentication", () => {

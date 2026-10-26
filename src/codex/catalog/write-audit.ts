@@ -68,6 +68,8 @@ function readTail(fd: number, size: number): Buffer {
 }
 
 function completeRecords(bytes: Buffer): { records: Buffer[]; count: number; clean: boolean } {
+  // Keep a BOM in the decoded text so JSON.parse still rejects BOM-prefixed rows.
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   const records: Buffer[] = [];
   let start = 0;
   let clean = true;
@@ -75,8 +77,7 @@ function completeRecords(bytes: Buffer): { records: Buffer[]; count: number; cle
   for (let end = bytes.indexOf(10); end !== -1; end = bytes.indexOf(10, start)) {
     const line = bytes.subarray(start, end);
     try {
-      const text = line.toString("utf8");
-      if (!line.equals(Buffer.from(text))) throw new Error("invalid UTF-8");
+      const text = decoder.decode(line);
       JSON.parse(text);
       records[count % CATALOG_AUDIT_KEEP_RECORDS] = bytes.subarray(start, end + 1);
       count++;

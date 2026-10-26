@@ -79,7 +79,7 @@ describe("unattended native and file client admission", () => {
     expect(await syncEnabledClientIntegrations(12345, config, deps(fetch), unattended)).toEqual([]);
     expect(fetch).not.toHaveBeenCalled(); expect(writer).not.toHaveBeenCalled();
     const args = refresh.mock.calls[0]!;
-    expect(args[1]).toEqual(["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder"]);
+    expect(args[1]).toEqual(["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai"]);
     expect(args[2]?.refreshOnly).toBe(true); expect(args[2]?.admit?.()).toBe(true);
     config.runtimeRole = "hub"; persist(); expect(args[2]?.admit?.()).toBe(false);
     config.unauthenticatedLoopbackListener = { enabled: true, port: 12346 }; persist();

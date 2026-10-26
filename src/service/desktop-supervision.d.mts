@@ -27,18 +27,18 @@ export interface WindowsProcessReadOptions {
   /** Called with the parent image before row validation, so partial Desktop evidence keeps its veto. */
   onExecutable?: (path: string) => void;
   timeoutMs?: number;
-  env?: NodeJS.ProcessEnv;
+  resolveSystemDirectory?: () => string;
 }
 
 export interface DesktopSupervisionDeps {
   targetPid?: number;
   platform?: NodeJS.Platform;
-  run?: (command: string, args: string[], timeoutMs?: number) => string;
+  run?: (command: string, args: string[], timeoutMs?: number, env?: NodeJS.ProcessEnv) => string;
   proc?: ProcReader;
   readPid?: () => number | null;
   readRuntimePortPid?: () => number | null;
   windowsProcesses?: (pid: number, options: Pick<WindowsProcessReadOptions, "onExecutable" | "timeoutMs">) => WindowsProcessPair | null;
-  env?: NodeJS.ProcessEnv;
+  resolveWindowsSystemDirectory?: () => string;
   now?: () => number;
 }
 
@@ -46,7 +46,10 @@ export function desktopSupervisionPaths(): { pid: string; runtimePort: string };
 export const procfs: ProcReader;
 export function processIdentity(pid: number, execute?: DesktopSupervisionDeps["run"], onExecutable?: (path: string) => void):
   { parent: number; executable: string } | null;
-export function windowsPowerShellPath(env?: NodeJS.ProcessEnv): string;
+export function windowsPowerShellPath(resolveSystemDirectory?: () => string): string;
+/** Pure consistency check over loaded-module paths; throws unless exactly one well-formed
+ *  namesake per KnownDLL shares one parent directory. Exported for tests. */
+export function windowsSystemDirectoryFromSharedObjects(loaded: unknown): string;
 export function windowsProcessPair(pid: number, execute?: DesktopSupervisionDeps["run"], options?: WindowsProcessReadOptions): WindowsProcessPair;
 export function inspectDesktopSupervision(deps?: DesktopSupervisionDeps): SupervisionEvidence;
 export function createSupervisionLatch(): { observe(evidence: SupervisionEvidence): boolean };

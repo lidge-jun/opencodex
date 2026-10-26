@@ -123,6 +123,27 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
+`src/lib/pinned-http.ts` pauses its socket response when the receiving Web Stream queue fills
+and resumes when the reader asks for more. For gzip and deflate, the final decoded queue also
+gates subsequent socket input even when the decoder would accept more coded bytes.
+The body inactivity timer pauses with local backpressure and re-arms when socket input resumes.
+Cancellation and abort still release a paused connection. Native socket and decoder buffers are
+separate from Web Stream queue accounting: one highly compressed input chunk can expand inside
+the decoder before backpressure stops further socket delivery. Existing coded/decoded `maxBytes`
+checks still apply, but this flow control is not a decoder-allocation or total process-memory ceiling.
+`tests/lib/pinned-http.test.ts` observes actual receiver delivery, repeated pauses, exact resumed
+bytes, pending-read timeouts and cancellation/error teardown.
+
+`src/lib/eventstream-decoder.ts` retains only an incomplete EventStream frame in a geometrically
+grown byte buffer. Fragmentation therefore requires linear aggregate copying; a complete frame in
+one source chunk keeps its source view. Storage grows with received bytes rather than an advertised
+length, and completed carry allocations remain owned by their yielded payloads. The four-byte
+length and twelve-byte prelude are validated before copying subsequent payload bytes, including
+the header-to-frame boundary. The 16 MiB frame and 128 KiB header limits, both CRC checks, truncated
+EOF errors and reader cancellation remain in force. Coalesced chunks may contain multiple valid
+frames whose aggregate exceeds the per-frame cap. `tests/responses/eventstream-fragmentation.test.ts`
+covers copy work, ownership, validation checkpoints and cleanup across split/coalesced input.
+
 The Chat adapter's decoded carry contains only an unfinished line after each drain.
 A network fragment with no newline retains the carry's already-counted UTF-8 size
 instead of splitting and re-encoding the entire growing line. The append and
@@ -341,17 +362,7 @@ The [compaction routing override](responses-failover.md#compaction-routing-overr
 
 `src/lib/sse-decoder.ts` recognizes CR, LF and CRLF line endings, including CRLF split between fetch chunks. Delimiters are consumed before field retention; event/comment ordering, EOF dispatch and translator-budget release remain shared across all three forms. The delimiter search keeps native `indexOf` cursors for the next CR and LF in each decoded chunk, so scanning stays linear for every framing.
 
-Native Chat's optional reasoning capture (`src/server/chat-native-reasoning.ts`) charges retained
-reasoning and tool ids before concatenation and reserves the previous string during replacement.
-Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay.
-Terminal, error and cancellation paths release collector retention; the shared replay cache owns
-its own bounded text after insertion. For a changed replay, native Chat measures the exact
-escaped-JSON net change and checks the final request size (`baseBytes + serializedBytes`)
-against the fixed `maxSerializedBytes` cap before expansion. It then reserves that full size as
-transient `request_copies` against the remaining translator budget before applying replay and
-serializing the request, releasing the reservation in `finally`. Exceeding either limit returns
-413 without truncating history. The post-build request charge remains owned and released by
-the existing retry/key-rotation lifecycle. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior.
+Native Chat's optional reasoning capture (`src/server/chat-native-reasoning.ts`) captures thinking from both `reasoning_content` and `reasoning` properties across SSE stream deltas and non-streaming choices. It charges retained reasoning and tool ids before concatenation and reserves the previous string during replacement. Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay. Terminal, error and cancellation paths release collector retention; the shared replay cache owns its own bounded text after insertion. In `src/adapters/openai-chat/passthrough.ts`, passthrough body sizing measures `baseBytes` unconditionally against `maxSerializedBytes - replayPlan.serializedBytes` via `jsonUtf8Bytes(transformedBody(), maxSerializedBytes - replayPlan.serializedBytes)` for both unchanged bodies and changed replays. Exceeding the remaining serialized byte budget immediately throws `TranslatorBudgetExceededError("request_copies", maxSerializedBytes)` (HTTP 413), enforcing `maxSerializedBytes` even on non-replay requests without eager string serialization. For a changed replay, native Chat measures the exact escaped-JSON net change, checks final request size (`baseBytes + serializedBytes`) against `maxSerializedBytes`, and reserves that full size as transient `request_copies` against the remaining translator budget before applying replay and serializing the request, releasing the reservation in `finally`. Exceeding either limit returns 413 without truncating history. The post-build request charge remains owned and released by the existing retry/key-rotation lifecycle. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior. Model-contract evidence and compatibility policy: Verification date: 2026-10-25. The Reflection/Stealth family default is a defensive compatibility fallback policy based on observed vendor behavior: live testing against Vercel AI Gateway (`reflection-beam`, 2026-10-23) observed rejection of tool-free multi-turn requests with HTTP 400. Because this destination-specific observation is not a vendor guarantee across all possible stealth or reflection hosts, OpenCodex applies this heuristic as a fallback policy while providing explicit operator overrides via `preserveReasoningContentModels` and `requiresReasoningPlaceholderModels`. Continuous CI verification exercises hermetic local fixtures in `tests/responses/chat-native-reasoning-scope.test.ts` (pinning multi-turn non-tool replay, `reasoning` delta capture, and passthrough size checks) without live network requests.
 
 The Opus 5.5 progress normalizer in `src/adapters/anthropic-progress.ts` reserves its one-block
 thinking/signature buffer before concatenation, replaces signatures rather than appending, and

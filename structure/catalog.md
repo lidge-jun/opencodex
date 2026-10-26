@@ -481,7 +481,7 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 Ultra is always advertised in the catalog regardless of the `multi_agent_v2` toggle. The v2 toggle
 controls only the multi-agent collab surface, not ultra visibility. The `nativeEffortClamp` function
-wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire). `ultra` itself is never a native wire value: the ChatGPT backend accepts `none` through `max`, so the clamp folds it to `max` even on rows whose pinned ladder lists it (`gpt-6-astra`, `gpt-6.1-sol`), and `src/server/responses/core-normalize.ts` applies that to the raw body the passthrough serializes, which the parser's options-only fold does not reach (#7590; `tests/responses/responses-native-ultra-effort-wire.test.ts`).
+wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire). `ultra` itself is never a native wire value: the ChatGPT backend accepts `none` through `max`, so the clamp folds it to `max` even on rows whose pinned ladder lists it (`gpt-6-astra`, `gpt-6.1-sol`), and `src/server/responses/core-normalize.ts` applies that to the raw body the passthrough serializes, which the parser's options-only fold does not reach (#7590; `tests/responses/responses-native-ultra-effort-wire.test.ts`). For canonical OpenAI forwarding, other unsupported efforts map to the nearest published rung at or below the request, or the lowest rung when below the model minimum (`gpt-6.1-sol` `none` → `low`), after final model selection, including combo failover.
 
 For routed models, `modelSuppressSyntheticMax` is a catalog-only per-model setting. A true value
 prevents `src/codex/catalog/effort.ts` from adding a missing synthetic `max` and prevents

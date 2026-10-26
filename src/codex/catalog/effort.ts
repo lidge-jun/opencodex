@@ -53,19 +53,20 @@ import {
 } from "../runtime";
 
 export function nativeEffortClamp(slug: string, effort: string | undefined): string | null {
-  if (!effort || (effort !== "max" && effort !== "ultra")) return null;
+  if (!effort) return null;
   if (slug.includes("/")) return null; // routed models map efforts in their adapters
   // `ultra` is a client-facing catalog choice (max reasoning plus proactive delegation) that
   // codex-rs converts to `max` before any request (core/src/client.rs
   // `reasoning_effort_for_request`). The ChatGPT backend rejects it with HTTP 400 even for a
   // model whose pinned ladder lists it (#7590), so it is never a native wire value: fold it to
   // `max`, then clamp `max` like a direct selection.
-  const wire = "max";
+  const wire = effort === "ultra" ? "max" : effort;
   const entry = UPSTREAM_NATIVE_ENTRIES.get(slug);
   const levels = Array.isArray(entry?.supported_reasoning_levels)
     ? entry.supported_reasoning_levels as Array<{ effort?: string }>
     : [];
   if (levels.length === 0) {
+    if (wire !== "max") return null;
     // Not snapshot-covered. gpt-5.6 natives have a REAL max rung (ensureGpt56ReasoningLevels
     // restores it even off-snapshot) -> never clamp. Every other bare native (gpt-5.5,
     // a retired slug a client still asks for, and future old-ladder slugs)
@@ -76,12 +77,11 @@ export function nativeEffortClamp(slug: string, effort: string | undefined): str
   }
   const supported = levels.flatMap(l => typeof l.effort === "string" ? [l.effort] : []);
   if (supported.includes(wire)) return effort === wire ? null : wire;
-  const rank = ["minimal", "low", "medium", "high", "xhigh", "max"];
-  const highest = supported
-    .filter(e => rank.includes(e))
-    .sort((a, b) => rank.indexOf(a) - rank.indexOf(b))
-    .at(-1);
-  return highest ?? null;
+  const rank = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+  const requestedRank = rank.indexOf(wire);
+  if (requestedRank < 0) return null;
+  const available = supported.filter(e => rank.includes(e)).sort((a, b) => rank.indexOf(a) - rank.indexOf(b));
+  return available.filter(e => rank.indexOf(e) <= requestedRank).at(-1) ?? available[0] ?? null;
 }
 
 export function shouldApplyNativeEffortClamp(
@@ -184,6 +184,8 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
     entry.supports_reasoning_summaries = model.supportsReasoningSummaries;
   }
   if (model.supportsServiceTier === true) {
+    const eligibleRoutedFlex = model.supportsFlexTier === true
+      && model.provider !== COMBO_NAMESPACE && model.nativeAlias !== true;
     const nativeFast = model.codexForwardNativeCapabilityAlias && Array.isArray(entry.service_tiers)
       ? entry.service_tiers.find(tier => tier?.id === "priority")
       : undefined;
@@ -192,8 +194,12 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
       id: "priority",
       name: "Fast",
       description: model.fastTierDescription ?? nativeFast?.description ?? "1.5x speed, increased usage",
-    }];
-    entry.additional_speed_tiers = ["fast"];
+    }, ...(eligibleRoutedFlex ? [{
+      id: "flex",
+      name: "Flex",
+      description: "Capacity-dependent processing; availability and latency may vary",
+    }] : [])];
+    entry.additional_speed_tiers = eligibleRoutedFlex ? ["fast", "flex"] : ["fast"];
   }
   stampCapabilityProvenance(entry, model);
 }

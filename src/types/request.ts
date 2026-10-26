@@ -77,6 +77,11 @@ export interface OcxParsedRequest {
    */
   _anthropicServerTools?: readonly Record<string, unknown>[];
   /**
+   * Routed Anthropic compaction summary: build tools and system exactly as the ordinary request
+   * would (prompt-cache prefix), then send tool_choice none so no client or hosted tool runs.
+   */
+  _summaryProhibitsToolCalls?: boolean;
+  /**
    * Completed server-tool exchanges from the Claude client's history, keyed by the block that
    * followed them (`call:<tool_use id>` / `text:<text>`). Same audience as `_anthropicServerTools`.
    */

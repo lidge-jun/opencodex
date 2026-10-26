@@ -137,6 +137,15 @@ export function withdrawChangingHomeCodexSettingsRecord(linkId: string, document
   return true;
 }
 
+/** The apply lock is held by another apply or a link connect in flight; nothing ran. */
+export class LinkApplyBusyError extends Error {
+  readonly code = "link_apply_busy";
+  constructor() {
+    super("another Home settings apply is in progress on this machine; retry when it finishes");
+    this.name = "LinkApplyBusyError";
+  }
+}
+
 /**
  * Serialize applies of the Home's settings on this Child, from the Home read through the Codex
  * injection to the record write, so a receipt always names the settings the injection wrote.
@@ -152,7 +161,7 @@ export async function withLinkApply<T>(work: () => Promise<T>, lockPath: string 
     return await withClientLifecycle(() => { entered = true; return work(); }, { lockPath });
   } catch (error) {
     if (!entered && error instanceof Error && error.message === "client_lifecycle_busy") {
-      throw new Error("another Home settings apply is in progress on this machine; retry when it finishes");
+      throw new LinkApplyBusyError();
     }
     throw error;
   }

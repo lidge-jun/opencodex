@@ -26,7 +26,8 @@ afterEach(() => clearReasoningReplayCacheForTests());
 describe("native Chat reasoning policy and physical replay ownership", () => {
   test("family detection is version-agnostic and independent of provider names", () => {
     for (const model of [MODEL, "deepseek-v4-flash", "deepseek-v15.12-pro-20261015",
-      "deepseek/deepseek-v4.1-flash-free", "gateway/DeepSeek-V5.2-Flash:thinking", "deepseek-flash"]) {
+      "deepseek/deepseek-v4.1-flash-free", "gateway/DeepSeek-V5.2-Flash:thinking", "deepseek-flash",
+      "reflection-beam", "reflection/beam", "command-code/reflection-beam:free", "stealth-glyph-cluster:free"]) {
       expect(chatReasoningReplayPolicy(PROVIDER, model)).toEqual({ preserve: true, placeholder: true });
     }
     for (const model of ["deepseek-chat", "deepseek-reasoner", "deepseek-r1-distill-llama",
@@ -178,7 +179,28 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
       expect(() => planNativeChatReasoningReplay(absent, PROVIDER, MODEL, owner, false, max))
         .toThrow(expect.objectContaining({ code: "translation_buffer_limit", limitBytes: max }));
     }
+    // An assistant message carrying reasoning instead of tool_calls also pays the envelope delta.
+    const withReasoning = [{ role: "assistant", content: null, reasoning: "aa" }];
+    expect(planNativeChatReasoningReplay(withReasoning, PROVIDER, MODEL, owner, false, 25).serializedBytes).toBe(25);
+    for (const max of [1, 10, 24]) {
+      expect(() => planNativeChatReasoningReplay(withReasoning, PROVIDER, MODEL, owner, false, max))
+        .toThrow(expect.objectContaining({ code: "translation_buffer_limit", limitBytes: max }));
+    }
     budget.dispose();
+  });
+  test("enforces maxSerializedBytes even when replayPlan has no changes", () => {
+    const raw = { messages: [{ role: "user", content: "hello world" }] };
+    const exactBytes = Buffer.byteLength(
+      buildOpenAIChatPassthroughRequest(PROVIDER, raw, MODEL, false).body,
+    );
+    expect(
+      JSON.parse(
+        buildOpenAIChatPassthroughRequest(PROVIDER, raw, MODEL, false, undefined, undefined, "fixture", undefined, exactBytes).body,
+      ).messages[0].content,
+    ).toBe("hello world");
+    expect(() =>
+      buildOpenAIChatPassthroughRequest(PROVIDER, raw, MODEL, false, undefined, undefined, "fixture", undefined, exactBytes - 1),
+    ).toThrow(expect.objectContaining({ code: "translation_buffer_limit" }));
   });
   test("plain-answer placeholders require DeepSeek, tools and both policy opt-ins", () => {
     const messages = [{ role: "assistant", content: "Earlier answer" }];
@@ -194,6 +216,61 @@ describe("native Chat reasoning policy and physical replay ownership", () => {
       expect(JSON.parse(request.body).messages[0].reasoning_content).toBe(expected);
     }
     expect(messages).toEqual([{ role: "assistant", content: "Earlier answer" }]);
+  });
+  test("reflection models replay placeholder on prior assistant turns even without tools", () => {
+    const messages = [{ role: "assistant", content: "Earlier plain answer" }];
+    const request = buildOpenAIChatPassthroughRequest(PROVIDER, { messages, tools: [] }, "reflection/beam", false);
+    expect(JSON.parse(request.body).messages[0].reasoning_content).toBe(" ");
+  });
+  test("replays captured reasoning from delta.reasoning and message.reasoning rather than placeholder", async () => {
+    const replayModel = "reflection/beam";
+    const owner = scope("fixture-thread", PROVIDER, "fixture", replayModel);
+    const budget = createTranslatorBudget();
+    const capture = nativeChatReasoningCapture(PROVIDER, replayModel, owner, budget);
+
+    capture.json({ choices: [
+      { message: { reasoning: "from-json-message-reasoning", tool_calls: [tool("call_json")] } },
+    ] });
+
+    const frames = [
+      { choices: [{ index: 0, delta: { reasoning: "from-sse-delta-reasoning", tool_calls: [{ index: 0, id: "call_sse" }] } }] },
+    ];
+    const source = new Response(frames.map(v => `data: ${JSON.stringify(v)}\n\n`).join("") + "data: [DONE]\n\n").body!;
+    const stream = nativeChatSse(source, {
+      requestedModel: replayModel,
+      translatorBudget: budget,
+      signal: new AbortController().signal,
+      onUsage() {},
+      onChunk: capture.observe,
+      onTerminal: s => capture.finish(s < 400),
+      onCancel: () => capture.finish(false),
+    });
+    await new Response(stream).text();
+
+    const reqJson = buildOpenAIChatPassthroughRequest(
+      PROVIDER,
+      { messages: [{ role: "assistant", content: null, tool_calls: [tool("call_json")] }] },
+      "reflection/beam",
+      false,
+      undefined,
+      undefined,
+      "test-session",
+      owner,
+    );
+    expect(JSON.parse(reqJson.body).messages[0].reasoning_content).toBe("from-json-message-reasoning");
+
+    const reqSse = buildOpenAIChatPassthroughRequest(
+      PROVIDER,
+      { messages: [{ role: "assistant", content: null, tool_calls: [tool("call_sse")] }] },
+      "reflection/beam",
+      false,
+      undefined,
+      undefined,
+      "test-session",
+      owner,
+    );
+    expect(JSON.parse(reqSse.body).messages[0].reasoning_content).toBe("from-sse-delta-reasoning");
+    budget.dispose();
   });
 });
 
