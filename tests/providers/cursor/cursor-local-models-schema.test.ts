@@ -115,6 +115,25 @@ describe("modelCapabilityFields", () => {
     expect(fields.capabilities.reasoning_effort).toBeUndefined();
   });
 
+  test("legacy empty ladders retain the negative discovery signal without overriding declared axes", () => {
+    const legacy = modelCapabilityFields({ reasoningEfforts: [] }).capabilities;
+    expect(legacy.supports_reasoning).toBe(false);
+    expect(legacy).not.toHaveProperty("reasoning_effort");
+    expect(legacy).not.toHaveProperty("supports_thinking_toggle");
+    expect(legacy).not.toHaveProperty("supports_reasoning_effort");
+    for (const axes of [{ supportsReasoning: true }, { supportsThinkingToggle: true },
+      { supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false }]) {
+      const explicit = modelCapabilityFields({ reasoningEfforts: [], ...axes }).capabilities;
+      expect(explicit.supports_reasoning).toBe(true);
+      expect(explicit).not.toHaveProperty("reasoning_effort");
+    }
+    for (const axes of [{ supportsThinkingToggle: false }, { supportsReasoningEffort: false }]) {
+      expect(modelCapabilityFields({ reasoningEfforts: [], ...axes }).capabilities.supports_reasoning)
+        .toBeUndefined();
+    }
+    expect(modelCapabilityFields({}).capabilities).not.toHaveProperty("supports_reasoning");
+  });
+
   test("non-positive context and text-only modalities are reported honestly", () => {
     const fields = modelCapabilityFields({ contextWindow: 0, inputModalities: ["text"], reasoningEfforts: ["", "low"] });
     expect("context_length" in fields.capabilities).toBe(false);
@@ -233,7 +252,7 @@ describe("raw /v1/models list advertises Cursor local-agent capabilities", () =>
       expect(plain).toBeDefined();
       expect(plain!.api_types).toEqual(["chat_completions", "responses", "anthropic_messages"]);
       const plainCaps = plain!.capabilities as Record<string, unknown>;
-      expect("supports_reasoning" in plainCaps).toBe(false);
+      expect(plainCaps.supports_reasoning).toBe(false);
       expect("reasoning_effort" in plainCaps).toBe(false);
       expect("max_output_tokens" in plainCaps).toBe(false);
 

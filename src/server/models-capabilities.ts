@@ -175,8 +175,13 @@ function positiveInt(value: unknown): number | undefined {
 export function modelCapabilityFields(input: ModelCapabilityInput): ModelCapabilityFields {
   const efforts = input.supportsReasoning === false || input.supportsReasoningEffort === false ? []
     : (input.reasoningEfforts ?? []).filter(effort => typeof effort === "string" && effort.length > 0);
+  // Legacy discovery used an explicit empty ladder to withhold Cursor reasoning controls.
+  // Independent capability declarations replace that compatibility inference per axis.
+  const legacyEmptyLadder = input.reasoningEfforts?.length === 0
+    && input.supportsThinkingToggle === undefined && input.supportsReasoningEffort === undefined;
   const supportsReasoning = input.supportsReasoning
-    ?? (input.supportsThinkingToggle === true || input.supportsReasoningEffort === true || efforts.length > 0 ? true : undefined);
+    ?? (input.supportsThinkingToggle === true || input.supportsReasoningEffort === true || efforts.length > 0
+      ? true : legacyEmptyLadder ? false : undefined);
   const contextLength = positiveInt(input.contextWindow);
   const longContextLength = positiveInt(input.longContextWindow);
   const maxOutputTokens = positiveInt(input.maxOutputTokens);
