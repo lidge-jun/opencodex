@@ -1,4 +1,5 @@
 {
+  "cursor-native-grep-globs.test.ts": "providers/cursor",
   "tool-identity-hash.test.ts": "adapters",
   "eventstream-fragmentation.test.ts": "responses",
   "google-vertex-key-project.test.ts": "adapters/google",

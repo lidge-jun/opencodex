@@ -473,6 +473,12 @@ are request-local and excluded from diagnostics. HTTPS proxy identity is verifie
 against its configured host. HTTP Basic usernames with colons and malformed CONNECT
 response headers are rejected. Header size remains bounded even when a delimiter
 and early target bytes arrive together; remaining bytes are handed to the caller.
+HTTP/HTTPS CONNECT borrows the first response fragment. Additional fragments grow
+owned header storage geometrically, capped at `maxHeaderBytes`, so accumulated
+prefixes are copied only when storage grows. Delimiter scans examine initialized
+bytes from the new suffix plus the split-delimiter overlap. Coalesced target bytes
+inside and beyond the header buffer are restored in wire order before handoff.
+A complete first-fragment header needs no accumulation copy.
 
 `src/lib/socks5-handshake.ts` owns RFC 1928/1929 framing. Both SOCKS spellings use its
 remote-DNS behavior and existing zero-to-255-byte credential-field limits, including

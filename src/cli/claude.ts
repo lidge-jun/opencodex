@@ -32,7 +32,7 @@ import { DEFAULT_CATALOG_PATH } from "../codex/paths";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { aliasForNative, aliasForRoute, legacyAliasForNative, legacyAliasForRoute } from "../claude/alias";
-import { desktop3pAlias, isRealDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
+import { desktop3pAlias, isRealDesktop3pModelId, legacyDesktop3pAlias, resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { desktopProfileWireAlias, legacyDesktopProfileWireAlias } from "../claude/desktop-profile";
 import { inspectDesktopFirstParty } from "../claude/desktop-first-party";
 import { isClaudeInterceptProxyUrl, type ClaudeInterceptSettingsState } from "../claude/intercept/settings";
@@ -633,7 +633,8 @@ export function nativeClaudeModelIds(config: OcxConfig): string[] {
       const alias = assignments[route]!.alias;
       const slash = route.indexOf("/");
       return [alias, desktopProfileWireAlias(alias), legacyDesktopProfileWireAlias(alias),
-        desktop3pAlias(route.slice(0, slash), route.slice(slash + 1))];
+        desktop3pAlias(route.slice(0, slash), route.slice(slash + 1)),
+        legacyDesktop3pAlias(route.slice(0, slash), route.slice(slash + 1))];
     }));
   // The configured default is a genuine declaration too: the catalog seeds it for static
   // providers, so it must be recognized here even without a server registry.
