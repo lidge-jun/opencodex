@@ -65,10 +65,10 @@ async function queue(config: OcxConfig, id: string) {
     await Bun.sleep(5);
   }
 }
-function start(config: OcxConfig, abort: AbortController) {
+function start(config: OcxConfig, abort: AbortController, input: unknown[] = [{ role: "user", content: "fixture question" }]) {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const req = new Request("http://localhost/v1/responses/compact", { method: "POST", headers: { "content-type": "application/json" },
-    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5_000)]), body: JSON.stringify({ model: `${config.defaultProvider}/test`, input: [{ role: "user", content: "fixture question" }], stream: false }) });
+    signal: AbortSignal.any([abort.signal, AbortSignal.timeout(5_000)]), body: JSON.stringify({ model: `${config.defaultProvider}/test`, input, stream: false }) });
   const pending = handleResponsesCompact(req, config, logCtx).then(async response => ({ response, text: await response.text(), logCtx }));
   void pending.catch(() => {});
   return pending;
@@ -308,9 +308,15 @@ for (const reselect of [false, true]) test(`gateway compact preserves custom tra
   provider.supportsNativeCompactEndpoint = true;
   provider.headers = { "x-gateway-static": "initial" };
   saveConfig(config);
+  const annotations = [
+    { type: "url_citation", url: "https://gateway.example/source", start_index: "3", end_index: -1, gateway: { source: "fixture" } },
+    { type: "url_citation", url: "https://gateway.example/untitled", title: null, start_index: 0, end_index: 1 },
+    { type: "file_citation", file_id: "file_fixture", index: 0 },
+  ];
+  const input = [{ role: "user", content: "fixture question" }, { type: "message", role: "assistant", content: [{ type: "output_text", text: "fixture answer", annotations }] }];
   const held = reselect ? await waitForProviderRequestSlot(config.defaultProvider, provider) : undefined;
   const abort = new AbortController();
-  const pending = start(config, abort);
+  const pending = start(config, abort, input);
   try {
     if (reselect) {
       await queue(config, "k1");
@@ -327,7 +333,45 @@ for (const reselect of [false, true]) test(`gateway compact preserves custom tra
     expect(seen[0]!.url).toBe(`https://gateway.example/v1/${reselect ? "refreshed-responses" : "custom-responses"}/compact`);
     expect(seen[0]!.headers.get("x-gateway-static")).toBe(reselect ? "replacement" : "initial");
     expect(seen[0]!.headers.get("chatgpt-account-id")).toBeNull();
-    expect(seen[0]!.body).toMatchObject({ model: "test", input: [{ role: "user", content: "fixture question" }] });
+    expect(seen[0]!.body).toMatchObject({ model: "test" });
+    expect((seen[0]!.body as { input: unknown }).input).toEqual(input);
     noLeaks(config);
   } finally { abort.abort(); held?.release(); await pending.catch(() => undefined); }
+});
+
+for (const toOpenAi of [false, true]) test(`compact citation projection follows the destination refreshed after admission (OpenAI=${toOpenAi})`, async () => {
+  const config = fixture();
+  const provider = config.providers[NAME]!;
+  config.providers = { "gateway-key-fixture": provider };
+  config.defaultProvider = "gateway-key-fixture";
+  const officialBase = "https://api.openai.com/v1";
+  const gatewayBase = "https://gateway.example/v1";
+  provider.baseUrl = toOpenAi ? gatewayBase : officialBase;
+  provider.supportsNativeCompactEndpoint = true;
+  saveConfig(config);
+  const citation = { type: "url_citation", url: "https://gateway.example/source", start_index: "3", end_index: -1, gateway: { source: "fixture" } };
+  const user = { role: "user", content: "fixture question" };
+  const assistant = { type: "message", role: "assistant", content: [{ type: "output_text", text: "fixture answer", annotations: [citation] }] };
+  const input = [user, assistant];
+  const before = structuredClone(input);
+  const held = await waitForProviderRequestSlot(config.defaultProvider, provider);
+  const abort = new AbortController();
+  const pending = start(config, abort, input);
+  try {
+    await queue(config, "k1");
+    expect(seen).toEqual([]);
+    provider.baseUrl = toOpenAi ? officialBase : gatewayBase;
+    held.release();
+    const result = await pending;
+    expect(result.response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe(`${provider.baseUrl}/responses/compact`);
+    expect(seen[0]!.key).toBe(`Bearer ${KEYS[0]}`);
+    const expectedCitation = toOpenAi ? { ...citation, title: citation.url, start_index: 3, end_index: 0 } : citation;
+    expect((seen[0]!.body as { input: unknown }).input).toEqual([
+      user, { ...assistant, content: [{ ...assistant.content[0]!, annotations: [expectedCitation] }] },
+    ]);
+    expect(input).toEqual(before);
+    noLeaks(config);
+  } finally { abort.abort(); held.release(); await pending.catch(() => undefined); }
 });

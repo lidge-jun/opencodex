@@ -29,8 +29,14 @@ async function reclaimWithMockClock(options: ReclaimListenPortOptions): Promise<
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   try {
     return await reclaimListenPort(10100, "127.0.0.1", {
-      ...options, timeoutMs: 50, intervalMs: 10, scanIntervalMs: 10,
-      sleepMs: async () => { now += 10; },
+      ...options,
+      timeoutMs: options.timeoutMs ?? 50,
+      intervalMs: options.intervalMs ?? 10,
+      scanIntervalMs: options.scanIntervalMs ?? 10,
+      sleepMs: async ms => {
+        now += ms;
+        await options.sleepMs?.(ms);
+      },
     });
   } finally {
     clock.mockRestore();
@@ -880,16 +886,17 @@ describe("reclaimListenPort", () => {
 
   test("killAllOcxOnPort kills ocx listeners absent from the allowlist snapshot", async () => {
     const killed: number[] = [];
-    let holder = 9001;
+    const holderPid = process.pid === 9001 ? 9002 : 9001;
+    let holder = holderPid;
     let available = false;
-    await expect(reclaimListenPort(10100, "127.0.0.1", {
+    await expect(reclaimWithMockClock({
       timeoutMs: 200,
       intervalMs: 20,
       scanIntervalMs: 20,
       dropTcpRows: false,
       killOcxHolders: true,
       killAllOcxOnPort: true,
-      onlyKillPids: [100], // pre-update PID — respawned child is 9001
+      onlyKillPids: [100], // pre-update PID — the respawned holder is deliberately not self
       isAvailableFn: async () => available,
       listListenPidsFn: () => (holder > 0 ? [holder] : []),
       isAliveFn: pid => pid === holder,
@@ -902,7 +909,7 @@ describe("reclaimListenPort", () => {
         if (holder === 0) available = true;
       },
     })).resolves.toBe(true);
-    expect(killed).toEqual([9001]);
+    expect(killed).toEqual([holderPid]);
   });
 
   test("foreign non-ocx claimant survives reclaim without allowlist or ocx identity", async () => {

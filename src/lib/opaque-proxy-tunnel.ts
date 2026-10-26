@@ -78,7 +78,8 @@ function connectOne(authority: string, proxy: OpaqueProxyRoute, { signal, timeou
     // Keep a defensive observer across the promise-to-owner handoff. Errors still
     // settle the establishment promise or are handled by the relay after handoff.
     socket.on('error', () => {});
-    let pending: Buffer = Buffer.alloc(0); let settled = false, tlsReady = !secure;
+    let pending: Buffer = Buffer.alloc(0), pendingLength = 0;
+    let owned = false, statusChecked = false, settled = false, tlsReady = !secure;
     const connectedEvent = secure ? 'secureConnect' : 'connect';
     const cleanup = () => {
       clearTimeout(timer); signal?.removeEventListener('abort', onAbort);
@@ -103,22 +104,43 @@ function connectOne(authority: string, proxy: OpaqueProxyRoute, { signal, timeou
       socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n${auth}\r\n`);
     };
     const onData = (chunk: Buffer) => {
-      pending = Buffer.concat([pending, chunk]);
-      const lineEnd = pending.indexOf('\r\n');
+      if (settled || chunk.length === 0) return;
+      const previousLength = pendingLength;
+      // Never copy a whole coalesced target payload into the bounded header buffer.
+      const inputLength = Math.min(chunk.length, maxHeaderBytes - previousLength);
+      const needed = previousLength + inputLength;
+      if (previousLength === 0) {
+        // Most proxies deliver the complete header at once: borrow that chunk.
+        pending = chunk.subarray(0, inputLength);
+      } else if (inputLength > 0) {
+        if (!owned || needed > pending.length) {
+          const capacity = Math.min(maxHeaderBytes, Math.max(1024, pending.length * 2, needed));
+          const grown = Buffer.allocUnsafe(capacity);
+          pending.copy(grown, 0, 0, previousLength);
+          pending = grown;
+          owned = true;
+        }
+        chunk.copy(pending, previousLength, 0, inputLength);
+      }
+      pendingLength = needed;
+      const received = pending.subarray(0, pendingLength);
+      // Only the new suffix and a possible split delimiter need another scan.
+      const lineEnd = statusChecked ? -1 : received.indexOf('\r\n', Math.max(0, previousLength - 1));
       if (lineEnd >= 0) {
-        const firstLine = pending.subarray(0, lineEnd).toString('latin1');
+        statusChecked = true;
+        const firstLine = received.subarray(0, lineEnd).toString('latin1');
         const firstStatus = /^HTTP\/1\.[01] ([0-9]{3})(?: [\t\x20-\x7e\x80-\xff]*)?$/.exec(firstLine);
         if (!firstStatus) return fail(new TunnelError('PROTOCOL', 'Invalid HTTP proxy status line'));
         const status = Number(firstStatus[1]);
         if (status < 200 || status >= 300) return fail(new TunnelError('REFUSED', 'HTTP proxy refused CONNECT', { status }));
       }
-      const end = pending.indexOf('\r\n\r\n');
+      const end = received.indexOf('\r\n\r\n', Math.max(0, previousLength - 3));
       if (end < 0) {
-        if (pending.length > maxHeaderBytes) fail(new TunnelError('PROTOCOL', 'HTTP proxy response headers exceed limit'));
+        if (inputLength < chunk.length) fail(new TunnelError('PROTOCOL', 'HTTP proxy response headers exceed limit'));
         return;
       }
       if (end + 4 > maxHeaderBytes) return fail(new TunnelError('PROTOCOL', 'HTTP proxy response headers exceed limit'));
-      const lines = pending.subarray(0, end).toString('latin1').split('\r\n');
+      const lines = received.subarray(0, end).toString('latin1').split('\r\n');
       const statusLine = lines[0];
       const match = /^HTTP\/1\.[01] ([0-9]{3})(?: [^\r\n]*)?$/.exec(statusLine);
       if (!match) return fail(new TunnelError('PROTOCOL', 'Invalid HTTP proxy status line'));
@@ -128,7 +150,9 @@ function connectOne(authority: string, proxy: OpaqueProxyRoute, { signal, timeou
       }
       if (status < 200 || status >= 300) return fail(new TunnelError('REFUSED', 'HTTP proxy refused CONNECT', { status }));
       settled = true; socket.pause(); cleanup();
-      const head = pending.subarray(end + 4);
+      // unshift is LIFO: restore the outside-cap suffix before the buffered head.
+      if (inputLength < chunk.length) socket.unshift(chunk.subarray(inputLength));
+      const head = received.subarray(end + 4);
       if (head.length) socket.unshift(head);
       resolve(socket);
     };
