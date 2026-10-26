@@ -506,10 +506,10 @@ describe("resolveMatchedPrice", () => {
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     expect(keys.size).toBe(EXPECTED_PRICE_OVERLAYS.length);
     for (const expected of [
-      "openai-apikey/gpt-6.1-sol",
-      "openai/gpt-6.1-sol",
-      "devin/gpt-6-1-sol",
-      "devin-cli/gpt-6-1-sol",
+      "openai-apikey/gpt-6.1-sol", "openai-apikey/gpt-6.1-terra",
+      "openai/gpt-6.1-sol", "openai/gpt-6.1-terra",
+      "devin/gpt-6-1-sol", "devin/gpt-6-1-terra",
+      "devin-cli/gpt-6-1-sol", "devin-cli/gpt-6-1-terra",
       "anthropic/claude-fable-5-1",
       "anthropic-apikey/claude-fable-5-1",
       "cursor/claude-fable-5-1",
