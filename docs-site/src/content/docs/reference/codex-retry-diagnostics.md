@@ -48,6 +48,39 @@ that the account pool routed to the main account, the earliest known time anothe
 pool account recovers, whichever comes first (never sooner than one minute).
 Resume the Goal after that time; routing then picks an account from fresh state.
 
+## Triage: `idle timeout waiting for SSE`
+
+Codex ends a stream that has sent no event for its `stream_idle_timeout_ms`
+(300 seconds by default) and retries the turn. The report alone does not say
+why the stream went quiet. On the native ChatGPT upstream WebSocket, one
+possible cause is a path that failed silently after the response started: a VPN
+or tunnel restart, a Wi-Fi rejoin or an expired NAT mapping can drop it without
+a FIN or RST reaching the proxy.
+
+On the canonical ChatGPT Codex endpoint
+(`https://chatgpt.com/backend-api/codex/responses`, the exchange with the
+metadata channel), the proxy pings the upstream for the whole exchange. Once the
+response has started, a peer that has answered at least one ping on that
+exchange and then delivers no frame and no pong for two ping intervals ends the
+stream with a retryable failure. Codex then reconnects 30 to 45 seconds after
+the last frame or pong instead of after 300 seconds, and the reconnect row names
+the cause:
+
+```text
+Reconnecting... 1/5 (stream disconnected before completion: Upstream stream terminated unexpectedly: codex websocket stopped answering after the response started [cause=after-response-started ...])
+```
+
+When a ping reaches a path that a restarted tunnel resets, the same row reports
+`codex websocket closed before a Responses terminal event (close 1006)`
+instead, within about one ping interval. An `idle timeout waiting for SSE` that
+still arrives after the full timeout comes from a peer that kept answering pings
+while sending no events, a peer that never answered a ping, or an exchange
+without the metadata channel, such as the OpenAI API Responses WebSocket, which
+sends no pings. All three keep the client's idle deadline on purpose.
+`ocx logs get <request-id> --json` shows the attempt's `codexWsStage` with its
+`pings` and `pongs` counts, which tell the three apart. Raising
+`stream_idle_timeout_ms` only makes them wait longer.
+
 ## Why the first reconnect row can be absent
 
 The public Codex `rust-v0.158.0-alpha.2.1` source gates the ordinary stream-retry

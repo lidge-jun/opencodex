@@ -27,6 +27,8 @@ The dashboard does not ask you to enter a token. It probes the host first, and i
 
 The Add Child sheet explains that the Child uses this Home's providers over SSH and lists the prerequisites above. Host aliases come from `~/.ssh/config` on the Home running OpenCodex, not necessarily the computer displaying the browser. If discovery succeeds with no hosts, add a `Host` entry like this, then choose **Rescan hosts**. You can also enter an existing alias manually; selecting or entering an alias enables **Test connection**. The sheet links to this guide.
 
+Host discovery also follows top-level `Include` directives. Parentheses and braces in an included filename stay literal when combined with wildcards: for example, `Include conf.d/*(1).conf` finds `backup(1).conf`, and `Include conf.d/shard-{1..3}-*.conf` looks for filenames containing `{1..3}`. An `Include` inside a `Host` or `Match` block is conditional and is not used for discovery.
+
 ```sshconfig
 Host devbox
   HostName devbox.example.com

@@ -125,7 +125,8 @@ export function findPathBun({
       if (!validate(path)) continue;
       const version = probe(path, ["--version"]);
       const candidate = stableVersion(version);
-      if (!candidate || candidate[0] !== pin[0] || candidate[1] < pin[1]) continue;
+      if (!candidate || candidate[0] !== pin[0] || candidate[1] < pin[1]
+        || (candidate[1] === pin[1] && candidate[2] < pin[2])) continue;
       if (probe(path, ["-e", IDENTITY_PROBE]) !== version) continue;
       return { path, version };
     } catch {

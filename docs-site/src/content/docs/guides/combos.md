@@ -1029,3 +1029,31 @@ validation message.
 
 The error was terminal rather than target-specific. Fix invalid input, reduce an oversized context,
 handle a policy refusal, or correct the rejected request origin. Combos do not hop for those cases.
+
+## Retry all-cooled targets (opt-in)
+
+Combo cooldown recovery is opt-in and disabled by default. To allow one new
+failover pass when every otherwise eligible target has a saved combo cooldown:
+
+```sh
+ocx combo set review --cooldown-reprobe on --cooldown-reprobe-interval 300000
+ocx combo set review --cooldown-reprobe off
+```
+
+The corresponding per-combo configuration is:
+
+```json
+{ "cooldownReprobe": { "enabled": true, "intervalMs": 300000 } }
+```
+
+The default interval is five minutes; accepted values are integer milliseconds
+from 1000 to 86400000. Setting the interval alone does not enable recovery.
+Recovery is demand-driven: the first eligible request can reserve a pass immediately,
+and later passes are separated by at least the configured interval. There is no timer
+or background traffic. Each target can be attempted once in the request's existing
+failover budget; failures record fresh cooldowns. Account quota checks, disabled
+providers, request compatibility, metered-spend permissions and cancellation remain
+enforced. Explicit provider Retry-After values may therefore be retried early only
+when the operator enables this option. Preview/list operations never clear cooldowns.
+The interval is tracked per combo in memory and resets on proxy restart or combo
+selection-state reset. Existing cooldown-wait behavior is unchanged when disabled.

@@ -1455,6 +1455,12 @@ Set `nativeLocalExec` on `providers.cursor`, not at the top level. In the dashbo
 `nativeLocalExec: "on"` only when `nativeLocalExec` is unset. MCP, screen recording, and computer use
 are controlled separately by `mcpServers` and `desktopExecutor`.
 
+For an enabled native `grep` directory search, `glob` filters file names: `*.ts` matches at any
+depth, while `src/**/*.ts` matches paths relative to the selected search directory (`./` is optional). Use `/` for
+pattern separators on every platform. Character classes and brace alternatives are supported;
+Bun 1.4.4 also supports extglobs such as `**/!(*.test).ts` and ranges such as `part-{1..3}.ts`.
+These filters do not change the selected directory or enable native execution.
+
 Foreground `shellArgs` and `shellStreamArgs` requests are rejected before process creation on
 Windows, macOS, and Linux, including with `nativeLocalExec: "on"`. They require a kernel-backed
 descendant owner that this implementation does not provide; use the client's shell tool instead.

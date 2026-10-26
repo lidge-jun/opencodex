@@ -284,7 +284,10 @@ canonical `openai` provider exists (#2901), not when its quota is exhausted. A h
 `triggers` the schema would reject disables the whole block instead of widening it, so a
 malformed edit can never route more than it names.
 
-The override changes only the model and optional reasoning effort; native forwarding, routed summaries, capability handling, and retry
+The override changes only the model and optional reasoning effort. Final-route normalization
+checks that effort against the selected canonical native model's published ladder before each
+Responses send, including a combo fallback (`gpt-6.1-sol` `none` → `low`). Native forwarding,
+routed summaries, capability handling, and retry
 budgets stay authoritative, and native compact still removes reasoning before sending. Handoffs carry the override record (with the source
 model) as a recursion guard so combo children and fallbacks keep their targets. Overrides bypass shadow interception and conversation
 combo recall, and do not publish replacement combo/handoff recall. They never change the conversation's model or compactions outside the
