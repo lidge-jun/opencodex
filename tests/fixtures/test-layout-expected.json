@@ -1007,6 +1007,7 @@
   "openrouter-provider-routing.test.ts": "providers", "openrouter-quota-reset-cooldown-4024.test.ts": "providers",
   "opper-provider.test.ts": "providers", "tokenlab-protocols.test.ts": "providers",
   "modelflare-provider.test.ts": "providers",
+  "gpt61-terra-rows.test.ts": "providers",
   "aistupidlevel-provider.test.ts": "providers",
   "tokenlab-provider.test.ts": "providers", "optional-shutdown-hooks.test.ts": "lib",
   "orca-import.test.ts": "codex-integration", "orcarouter-provider.test.ts": "providers",
