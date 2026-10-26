@@ -245,7 +245,6 @@ export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: s
     ...(def.defaultMaxOutputTokens !== undefined ? { defaultMaxOutputTokens: def.defaultMaxOutputTokens } : {}),
     ...(def.modelMaxOutputTokens ? { modelMaxOutputTokens: { ...def.modelMaxOutputTokens } } : {}),
     ...(def.modelInputModalities ? { modelInputModalities: cloneRecordOfArrays(def.modelInputModalities) } : {}),
-    ...(def.inputModalities ? { inputModalities: [...def.inputModalities] } : {}),
     ...(def.reasoningEfforts ? { reasoningEfforts: [...def.reasoningEfforts] } : {}),
     ...(def.modelReasoningEfforts ? { modelReasoningEfforts: cloneRecordOfArrays(def.modelReasoningEfforts) } : {}),
     ...(def.reasoningEffortMap ? { reasoningEffortMap: { ...def.reasoningEffortMap } } : {}),

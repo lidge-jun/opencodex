@@ -163,15 +163,14 @@ describe("AI Stupid Level text-only contract for pinned models", () => {
     removeTreeWithRetry(home);
   });
 
-  test("a pinned live id needs vision preprocessing, also for a row saved before the declaration", () => {
+  test("a pinned live id needs vision preprocessing at the preset destination", () => {
     const saved = config();
-    delete saved.providers.aistupidlevel!.inputModalities;
-    for (const candidate of [config(), saved]) {
-      const route = routeModel(candidate, `aistupidlevel/${PINNED}`);
-      expect(route.modelId).toBe(PINNED);
-      expect(route.provider.inputModalities).toEqual(["text"]);
-      expect(requiresVisionPreprocessing(candidate, route.provider, route.modelId, route.providerName)).toBe(true);
-    }
+    // Registry-only: the saved row does not carry the declaration; routing backfills it.
+    expect(saved.providers.aistupidlevel!.inputModalities).toBeUndefined();
+    const route = routeModel(saved, `aistupidlevel/${PINNED}`);
+    expect(route.modelId).toBe(PINNED);
+    expect(route.provider.inputModalities).toEqual(["text"]);
+    expect(requiresVisionPreprocessing(saved, route.provider, route.modelId, route.providerName)).toBe(true);
   });
 
   test("a same-named custom destination does not inherit the text-only declaration", () => {
@@ -179,11 +178,16 @@ describe("AI Stupid Level text-only contract for pinned models", () => {
       port: 10100, defaultProvider: "aistupidlevel",
       providers: { aistupidlevel: { adapter: "openai-chat", baseUrl: "https://relay.example.test/v1", apiKey: "test-key" } },
     };
-    const route = routeModel(custom, `aistupidlevel/${PINNED}`);
-    expect(route.provider.baseUrl).toBe("https://relay.example.test/v1");
-    expect(route.provider.inputModalities).toBeUndefined();
-    expect(requiresVisionPreprocessing(custom, route.provider, route.modelId, route.providerName)).toBe(false);
-    expect(candidateCapabilityEvidence(custom, "aistupidlevel", PINNED).image).toBeUndefined();
+    // A row seeded from the preset and then pointed at another URL must drop it too.
+    const moved = config({ baseUrl: "https://relay.example.test/v1" });
+    expect(moved.providers.aistupidlevel!.inputModalities).toBeUndefined();
+    for (const candidate of [custom, moved]) {
+      const route = routeModel(candidate, `aistupidlevel/${PINNED}`);
+      expect(route.provider.baseUrl).toBe("https://relay.example.test/v1");
+      expect(route.provider.inputModalities).toBeUndefined();
+      expect(requiresVisionPreprocessing(candidate, route.provider, route.modelId, route.providerName)).toBe(false);
+      expect(candidateCapabilityEvidence(candidate, "aistupidlevel", PINNED).image).toBeUndefined();
+    }
   });
 
   test("an image sent to a pinned model never reaches the router", async () => {
