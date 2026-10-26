@@ -1,4 +1,5 @@
 {
+  "server-live-close.test.ts": "server",
   "link-diagnostics.test.ts": "clients",
   "link-tunnel-history.test.ts": "clients",
   "link-readiness.test.ts": "clients",

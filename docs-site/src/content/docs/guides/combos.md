@@ -455,10 +455,21 @@ Combo's `decisionProvider`:
 - Self-hosted services receive each target/effort option as a plain description string (for
   example `Target openai/gpt-5.6-sol (provider openai, model gpt-5.6-sol) with low reasoning
   effort.`), because Ollama accepts only string or `null` option descriptions. TypeSafe keeps
-  receiving the structured option objects.
-- OpenCodex offers 2–26 options to a System One-compatible row. Each target contributes one option
-  per offered reasoning effort; use per-target `reasoningEfforts` to trim them. Fewer than 2 or
-  more than 26 options fail open without a request.
+  receiving the structured option objects. When targeting Vercel AI Gateway (`ai-gateway.vercel.sh`),
+  route options include both `value` and detailed `description` fields. Other self-hosted endpoints,
+  including a custom `/decisions` path, keep the System One request format.
+- OpenCodex offers 2–26 options to a System One-compatible row (`SELF_HOSTED_MIN_OPTIONS = 2`, `SELF_HOSTED_MAX_OPTIONS = 26`).
+  Each target contributes one option per offered reasoning effort; use per-target `reasoningEfforts` to trim them.
+  Fewer than 2 or more than 26 options fail open without a request. For Vercel AI Gateway, whose
+  [OpenAI-compatible Decisions reference](https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-decisions)
+  supports 1..255 choices, the upper bound expands to 255 options (`DECISIONS_MAX_OPTIONS = 255`); OpenCodex
+  enforces the 2-choice minimum as local routing policy to select among candidate targets.
+- Vercel AI Gateway endpoints (`https://ai-gateway.vercel.sh/v1`) automatically normalize to `/decisions`.
+  OpenCodex projects structured conversation context into a formatted plain-text `input` string
+  (`Task:`, `Signals:`, `Recent Assistant:`, `Recent Tool Call:`, and `Tool Output:`). Route answers are accepted
+  from object (`answers.route`) or choice-array formats, resolving from either `choice` or `value`. Probability
+  distributions are accepted as key-value maps or probability records; duplicate choice keys or invalid distributions
+  strictly fail open to the first eligible target.
 - A cold model load can take tens of seconds, and an aborted decision request makes Ollama abandon the
   load. Pre-warm the model and keep it resident (`OLLAMA_KEEP_ALIVE=-1`, or `keep_alive`), and raise
   `decisionTimeoutMs` (1000–120000 ms, default 4000) when the service is slower than four seconds.

@@ -2043,7 +2043,7 @@ describe("provider discovered model display names", () => {
       maxOutputTokens: 500_000,
       // Classified by the 2026-09-13 OAuth-lane probe: grok-4.6 is Fast-eligible on
       // either xAI transport, so the hint fills the capability and its description.
-      supportsServiceTier: true, supportsUltraFastTier: false,
+      supportsServiceTier: true, supportsUltraFastTier: false, supportsFlexTier: false,
       fastTierDescription: "Priority processing; tier pricing applies on key auth only",
     });
     expect(catalogModelSlug(output)).toBe("xai/grok-4.6");
@@ -6266,7 +6266,7 @@ describe("Codex catalog routed normalization", () => {
 
     expect(provider.modelSupportsReasoningSummaries).toEqual({
       "deepseek-v4-flash": false,
-      "deepseek-flash": true,
+      "deepseek-flash": true, "deepseek-v4-pro": true,
     });
   });
 

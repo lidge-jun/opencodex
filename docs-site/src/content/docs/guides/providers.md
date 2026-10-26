@@ -675,6 +675,12 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 The native dashboard choices are add-only and do not sign out `kiro-cli`. A device dialog shows the code and verification destination. Only recognized Kiro or Builder ID hosts are opened as links; an unexpected destination is shown as copyable text for review. Closing the dialog sends cancellation and leaves a bounded background status check to reconcile a commit already in progress. A stalled status response is retried; exhausting the flow deadline produces the neutral ended outcome rather than claiming success. Google and GitHub approval completes when Kiro reports `authorized` (or the legacy `approved` status) with valid tokens and a profile ARN.
 The account list marks Kiro accounts excluded from automatic selection with a reason, when available.
 
+### DeepSeek API
+
+The `deepseek` API-key provider includes `deepseek-flash`, its `deepseek-v4-flash` alias, and `deepseek-v4-pro`. DeepSeek [withdrew the Pro retirement plan](https://api-docs.deepseek.com/updates/) and continues serving it; opencodex retains Pro in the catalog with a 1,048,576-token context window, text-only input, and `low`/`high`/`max` reasoning effort. Responses requests use its native Responses endpoint; Chat Completions requests retain the Chat wire. Flash remains the default. Third-party providers have independent model availability.
+
+On upgrade, startup adds Pro to a saved model list only when it exactly matches the previous built-in DeepSeek seed and still uses the official endpoint and adapter. Customized lists, including empty lists, remain unchanged; live discovery need not be enabled for this repair.
+
 ### DeepSeek Account (DSH)
 
 `dsh-account` is an experimental, import-first account provider designed to reuse the authenticated account credentials of an installed DeepSeek Harness (DSH) Desktop application.
@@ -885,17 +891,15 @@ attempt fails, while transient failures keep it. An unreadable or oversized body
 further attempts. Dollar credits show the included allowance only, excluding purchased credits,
 so an exhausted allowance stops routing to Ollama Cloud only when no purchased credit remains.
 
-`MiniMax-M3.1-Flash-Preview` (1M context) is listed on both MiniMax presets. MiniMax serves it
-only to Token Plan subscription keys and MiniMax Code for now, so a pay-as-you-go API key gets an
-error for it. Thinking is always on: the effort picker offers `low` through `max` and defaults to
-`max`, and there is no way to turn thinking off. MiniMax has not published a per-token price
-for the preview; usage is drawn from your
-[Token Plan quota](https://platform.minimax.io/docs/guides/pricing-token-plan), so OpenCodex
-shows no estimated cost for it. MiniMax's `/models` endpoint does not list
-the preview yet, so OpenCodex keeps it in the catalog from the preset. An install whose saved
-MiniMax model list is still the previous default receives it on the next start; a list you edited
-is left as it is; register the preview by hand with
-`ocx models add minimax MiniMax-M3.1-Flash-Preview --context-window 1000000`.
+`MiniMax-M3.1-Flash` (1M context, up to 524,288 output tokens) is the default model on both MiniMax
+presets. MiniMax released it on 2026-10-19 and retired the `MiniMax-M3.1-Flash-Preview` id, so a
+saved configuration that still names the preview is renamed to `MiniMax-M3.1-Flash` on the next
+start. Thinking is always on: the effort picker offers `low` through `max` and defaults to `max`,
+and there is no way to turn thinking off. MiniMax's `/models` endpoint does not list Flash, so
+OpenCodex keeps it in the catalog from the preset. An install whose saved MiniMax model list is
+still the previous default receives it on the next start; a list you edited is left as it is;
+register it by hand with
+`ocx models add minimax MiniMax-M3.1-Flash --context-window 1000000`.
 
 **OpenCode Go** routes `gemini-4-argon-contributor` through its Gemini API, including
 streaming and tool-result continuations. The existing `opencode-go` preset keeps its

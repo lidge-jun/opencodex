@@ -184,6 +184,8 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
     entry.supports_reasoning_summaries = model.supportsReasoningSummaries;
   }
   if (model.supportsServiceTier === true) {
+    const eligibleRoutedFlex = model.supportsFlexTier === true
+      && model.provider !== COMBO_NAMESPACE && model.nativeAlias !== true;
     const nativeFast = model.codexForwardNativeCapabilityAlias && Array.isArray(entry.service_tiers)
       ? entry.service_tiers.find(tier => tier?.id === "priority")
       : undefined;
@@ -192,8 +194,12 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
       id: "priority",
       name: "Fast",
       description: model.fastTierDescription ?? nativeFast?.description ?? "1.5x speed, increased usage",
-    }];
-    entry.additional_speed_tiers = ["fast"];
+    }, ...(eligibleRoutedFlex ? [{
+      id: "flex",
+      name: "Flex",
+      description: "Capacity-dependent processing; availability and latency may vary",
+    }] : [])];
+    entry.additional_speed_tiers = eligibleRoutedFlex ? ["fast", "flex"] : ["fast"];
   }
   stampCapabilityProvenance(entry, model);
 }

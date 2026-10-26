@@ -464,12 +464,11 @@ home aliases without trusting a redirected persist subtree. Unreadable paths fai
 Other Scoop apps, version-directory entries (`NO_JUNCTION`), custom home-root Scoop installs,
 arbitrary descendants and cwd inside the resolved Node installation are not admitted.
 
-The npm transaction creates each staging directory exclusively and may clean that fresh path
-while the creating process still owns it. On POSIX it also creates the stage's `lib` directory,
-because npm's strict script policy plans the global tree before it creates the prefix layout
-(#5760). A later update only reports staging leftovers. It does not recursively delete them
-from a marker: the marker is not an authorization secret, and a neighbouring writer could
-replace a previously checked pathname with a link before traversal.
+The Windows npm staging runner (`src/update/npm-install.mjs`) keeps a 180-second install budget and a separate 10-second join budget. Before cleanup or verification, it requires proof that the full installer tree exited, including when npm returns status zero.
+On Windows, `src/update/npm-install-job.ps1` creates the root atomically inside a private kill-on-close Job Object using `STARTUPINFOEX` and `PROC_THREAD_ATTRIBUTE_JOB_LIST`. It stays suspended until local exit-proof handling is armed. `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` admits only stdin and npm's stderr, excluding the Job and supervisor result pipe; attribute lists and value buffers are freed. Windows 10+ Job List support is required: attribute setup or extended creation failure returns `EINSTALLJOIN` with a clear prerequisite and native error, without starting an unsupervised installer or retrying a legacy creation path. Timeout terminates the job, checks zero active members and waits for the root handle. The updater and recovery stay outside this job; a watchdog bounds supervisor startup/protocol failure.
+Missing exit proof retains the complete stage and marker. npm output drains before a successful join returns; failed supervision stops forwarding it. Windows timeout diagnostics retain `ETIMEDOUT` and the budget; stage failures retain owner-aware recovery through the untouched launcher. POSIX keeps the legacy synchronous install and status-only transaction; complete-tree timeout cleanup remains open there because process groups do not contain detached descendants.
+The npm transaction creates each staging directory exclusively and may clean that fresh path while the creating process still owns it. On POSIX it also creates the stage's `lib` directory, because npm's strict script policy plans the global tree before creating the prefix layout (#5760).
+A later update only reports staging leftovers. It does not recursively delete them from a marker: the marker is not an authorization secret, and a neighbouring writer could replace a previously checked pathname with a link before traversal.
 
 Before any tray or proxy stop, `src/update/npm-cache-preflight.mjs` checks npm's cache on every
 platform (#6288). The cache root, or the nearest existing folder npm would create it under, must

@@ -133,3 +133,50 @@ test("the real HTTP catalog repeatedly publishes only the declared routed tier",
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 45_000);
+
+describe("declared Flex choice on routed models", () => {
+  const flexWire: OcxProviderConfig["fastWire"] = {
+    kind: "service-tier",
+    canonicalToWire: { priority: "priority", flex: "flex" },
+    foreignCallerTiers: "verbatim",
+  };
+
+  test("advertises Flex in both live and derived catalogs only for an eligible final route", () => {
+    const declared = model({ fastWire: flexWire });
+    const before = structuredClone(declared);
+    const row = build([declared]).find(entry => entry.slug === slug)!;
+    expect(row.service_tiers.map((tier: { id: string }) => tier.id)).toEqual(["priority", "flex"]);
+    expect(row.additional_speed_tiers).toEqual(["fast", "flex"]);
+    expect(row.default_service_tier).toBeNull();
+    expect(build([declared]).find(entry => entry.slug === slug)).toEqual(row);
+    expect(declared).toEqual(before);
+  });
+
+  test("ordinary Fast, unavailable wire, and explicit model opt-out never advertise Flex", () => {
+    const candidates = [
+      model({ fastWire: undefined }),
+      model({ fastWire: { kind: "service-tier", canonicalToWire: { priority: "priority", flex: "priority" }, foreignCallerTiers: "verbatim" } }),
+      model({ fastWire: flexWire, modelSupportsServiceTier: { "task-model": false } }),
+      model({ fastWire: { ...flexWire!, foreignCallerTiers: "drop" } }),
+    ];
+    for (const candidate of candidates) {
+      const row = build([candidate]).find(entry => entry.slug === slug)!;
+      expect(row.service_tiers?.some((tier: { id: string }) => tier.id === "flex") ?? false).toBe(false);
+      expect(row.additional_speed_tiers ?? []).not.toContain("flex");
+    }
+  });
+
+  test("a provider's declared Flex does not leak into unrelated native or combo rows", () => {
+    const declared = model({ fastWire: flexWire });
+    const combo = { ...declared, provider: "combo", id: "task-combo", alias: "friendly-combo", nativeAlias: true };
+    const rows = buildCatalogEntries(null, ["gpt-6.1-sol"], [declared, combo], undefined, false, "default",
+      new Set(["friendly-combo"]), ["main"]);
+    expect(rows.find(row => row.slug === slug)!.additional_speed_tiers).toContain("flex");
+    for (const id of ["friendly-combo", "gpt-6.1-sol", "main/gpt-6.1-sol"]) {
+      const row = rows.find(row => row.slug === id)!;
+      expect(row).toBeDefined();
+      expect(row.service_tiers?.some((tier: { id: string }) => tier.id === "flex") ?? false).toBe(false);
+      expect(row.additional_speed_tiers ?? []).not.toContain("flex");
+    }
+  });
+});
