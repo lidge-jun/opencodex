@@ -80,4 +80,13 @@ describe("shadowBackgroundModelBadge", () => {
     expect(shadowBackgroundModelBadge(["custom-helper"], "Terra"))
       .toBe("custom-helper (+ Terra)");
   });
+
+  test("does not list the memory model twice when it is an explicit source", () => {
+    expect(shadowBackgroundModelBadge(["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"], "Memory: Terra"))
+      .toBe("6-luna, 5.6-luna, 5.6-terra");
+  });
+
+  test("treats a broader source prefix as covering the memory model", () => {
+    expect(shadowBackgroundModelBadge(["gpt-5.6"], "Memory: Terra")).toBe("5.6");
+  });
 });
