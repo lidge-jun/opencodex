@@ -318,7 +318,7 @@ function classify(input: RequestInfo | URL): { plane: ApiPlane; bootstrap: boole
   if (url.href === new URL(targets.shared.bootstrapPath, window.location.href).href) return { plane: "shared", bootstrap: true };
   if (targets.shared.transport === "relay" && targetMatchesUrl(targets.shared, url)) return { plane: "shared", bootstrap: false };
   const machinePath = relativeTargetPath(targets.machine, url);
-  if (machinePath?.startsWith("/api/machine/")) return { plane: "machine", bootstrap: false };
+  if (machinePath?.startsWith("/api/machine/") || machinePath?.startsWith("/api/codex/desktop-compatibility/")) return { plane: "machine", bootstrap: false };
   const sharedPath = relativeTargetPath(targets.shared, url);
   if (sharedPath?.startsWith("/api/")) return { plane: "shared", bootstrap: false };
   if (url.href === new URL(targets.machine.bootstrapPath, window.location.href).href) return { plane: "machine", bootstrap: true };

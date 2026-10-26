@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act, createElement } from "react";
-import { configureApiTargets, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
+import { configureApiTargets, fetchApiSessionValidation, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
 import type { ApiTargets } from "../src/api-targets";
+import { submitConnectPairing } from "../src/connect-pairing-transport";
 
 const origin = "http://127.0.0.1:10100";
 function sessionHtml(token: string, serverOrigin = origin): string {
@@ -59,6 +60,38 @@ for (const relay of [false, true]) test(`pairing omits stale shared authenticati
   }
 });
 // TRANSPORT_REGRESSIONS_END
+
+test("desktop pairing replaces only the machine session and subsequent desktop mutations use it", async () => {
+  const keys = ["window", "document", "sessionStorage"] as const;
+  const previous = Object.fromEntries(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const win = new Window({ url: origin }), sent: { path: string; headers: Headers }[] = [];
+  const targets: ApiTargets = { connected: false,
+    machine: { id: "machine", baseUrl: "", serverOrigin: origin, bootstrapPath: "/opencodex-session", transport: "same-origin" },
+    shared: { id: "shared", baseUrl: "", serverOrigin: origin, bootstrapPath: "/opencodex-session", transport: "same-origin" } };
+  for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, value: Reflect.get(win, key === "window" ? "self" : key) });
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push({ path: String(input), headers: new Headers(init?.headers) });
+    return String(input).endsWith("/opencodex-session") ? new Response(sessionHtml("ocx_session_paired")) : new Response(null, { status: 204 });
+  } });
+  try {
+    resetApiAuthFetchForTests(); configureApiTargets(targets); installApiAuthFetch();
+    expect(installApiSessionFromHtml("machine", sessionHtml("ocx_session_automatic"))).toBe(true);
+    expect(installApiSessionFromHtml("shared", sessionHtml("ocx_session_shared"))).toBe(true);
+    const handoff = await submitConnectPairing(targets.machine, `ocx_pair_${"a".repeat(43)}`);
+    await fetchApiSessionValidation("machine", "/api/codex/desktop-compatibility/certificate", {});
+    expect(sent.at(-1)!.headers.get("x-opencodex-api-key")).toBe("ocx_session_paired");
+    handoff.commit();
+    await win.fetch("/api/codex/desktop-compatibility/runtime", { method: "POST" });
+    expect(sent.at(-1)!.headers.get("x-opencodex-api-key")).toBe("ocx_session_paired");
+    expect(sent.at(-1)!.headers.get("x-opencodex-csrf-token")).toBe("ocx_session_paired-csrf");
+    await win.fetch("/api/status");
+    expect(sent.at(-1)!.headers.get("x-opencodex-api-key")).toBe("ocx_session_shared");
+    expect(sent[0]!.headers.has("x-opencodex-api-key")).toBe(false);
+  } finally {
+    resetApiAuthFetchForTests(); win.close();
+    for (const key of keys) { const descriptor = previous[key]; if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); }
+  }
+});
 
 test("local pairing form names the local origin, makes no automatic exchange, and waits for explicit submission", async () => {
   const keys = ["window", "document", "navigator", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;

@@ -866,6 +866,8 @@ same selector is restored if that account id is added again.
 
 `GET /api/codex/desktop-compatibility/certificate` returns public certificate status:
 support, state, fingerprint, expiry, renewal notice, trust observation and any active operation.
+The certificate response also reports `mutationAuthorized` for the current session and ingress;
+this flag is read-only guidance, and each mutation checks authorization again.
 It never generates a key, decrypts private material or registers OS trust. Certificate trust alone
 does not mean a compatibility relay is running or the private key has been verified in this process.
 
@@ -900,6 +902,10 @@ The endpoint is experimental. The dashboard exposes it under **Codex Set → Des
 the **Resume observation when OpenCodex starts** toggle saves the optional
 `desktopCompatibility.startOnProxyStart` preference. OpenCodex managed client mode does not offer these
 local controls or forward them to the shared hub.
+Open the dashboard at the configured loopback origin. Before changing compatibility settings,
+use the panel's `ocx gui pair --origin "<dashboard-origin>"` command and submit its one-use pairing
+code in the panel. Controls stay disabled until the new local session is verified; pairing does
+not itself change certificate trust, runtime state or the auto-start preference.
 
 Start requires an already prepared, trusted certificate, a freshly verified native file-based
 ChatGPT login and the assessed Codex Windows build `26.924.2738.0`. It begins in Observe mode.
@@ -943,7 +949,8 @@ Failed cleanup reports `cleanup-required`; it does not claim that the runtime is
 system proxy settings and application files are not modified by these runtime commands.
 
 The separate settings endpoint returns `{ startOnProxyStart, revision }`. POST requires
-`{ startOnProxyStart: boolean, revision, confirmed: true }` from a local GUI session. A stale
+`{ startOnProxyStart: boolean, revision, confirmed: true }` from an operator-paired local GUI
+session on trusted loopback ingress; an unpaired session receives 403. A stale
 revision refuses the write; a valid update preserves unrelated config fields and verifies
 the persisted result. This preference affects the next proxy start, never current runtime
 state, app launch or an Apply trial. An uncertain response must be followed by GET, not an

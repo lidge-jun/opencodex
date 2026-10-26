@@ -54,7 +54,7 @@ async function isHtmlChallenge(response: Response): Promise<boolean> {
 }
 
 /**
- * Exchange a pairing code for a shared-plane session.
+ * Exchange a pairing code for a session on the selected target's plane.
  *
  * Separate module from the form that calls it so neither file mixes a component export with
  * a plain one. That mix is what `react-refresh/only-export-components` flags, and the two
@@ -79,7 +79,7 @@ export async function submitConnectPairing(
   // unauthenticated and the relay refused it.
   const send = fetchImpl ?? ((input, init) => window.fetch(input, init));
   // Capture authority before either response headers or body can yield to another login.
-  const handoff = beginApiSessionHandoff("shared");
+  const handoff = beginApiSessionHandoff(target.id);
   return withFetchDeadline(pairingDeadlineMs, signal, async deadline => {
     let response: Response;
     try {

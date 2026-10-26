@@ -35,7 +35,7 @@ export async function handleDesktopCompatibilityRoutes(ctx: ManagementContext): 
       : action === "trust" ? await controller.trust(fingerprint!)
       : action === "renew" ? await controller.renew(fingerprint!)
       : action === "remove-trust" ? await controller.removeTrust(fingerprint!) : await controller.status();
-    return jsonResponse({ ok: true, certificate: status });
+    return jsonResponse({ ok: true, certificate: { ...status, mutationAuthorized: isAuthorizedDesktopCompatibilityMutation(ctx) } });
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? String(error.code) : "operation_failed";
     const allowed = new Set(["unsupported", "busy", "not_prepared", "fingerprint_changed", "app_running", "runtime_running", "app_state_unknown", "trust_unknown", "trust_not_applied",
