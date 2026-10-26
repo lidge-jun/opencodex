@@ -47,7 +47,9 @@ describe("GPT-6.1 Terra native catalog", () => {
     expect(NATIVE_MAIN_DRAIN_SENTINEL_MODELS.has(TERRA)).toBe(true);
     expect(DOCUMENTED_NATIVE_OPENAI_ADDITIONS).toContain(TERRA);
     expect(isEligibleConfiguredNativeOpenAiModel(TERRA)).toBe(false);
-    expect(ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(TERRA)).toBe(true);
+    // Like GPT-6.1 Sol, a roster that lags the release cannot shrink Terra's pool.
+    expect(ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has(TERRA)).toBe(false);
+    expect(ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS.has("gpt-6.1-sol")).toBe(false);
   });
 
   test("pins the upstream identity, client floor, native windows, v2 and Fast-only metadata", () => {
@@ -113,15 +115,14 @@ describe("GPT-6.1 Terra native catalog", () => {
     expect(nativeEffortClamp(TERRA, "max")).toBeNull();
   });
 
-  test.each([
-    ["0.152.0", [], "unknown"], ["0.153.0", [], "denied"],
-    ["0.152.0", [TERRA], "granted"],
-  ] as const)("client %s roster %j gives %s evidence", (clientVersion, models, expected) => {
-    expect(codexModelEntitlementStateForAccount({
-      modelsByAccount: new Map([["pool", new Set(models)]]),
-      clientVersionByAccount: new Map([["pool", clientVersion]]),
-      confirmedAccountIds: new Set(["pool"]), credentialIdentities: new Map(),
-    }, "pool", TERRA)).toBe(expected);
+  test.each([TERRA, "gpt-6.1-sol"])("%s roster evidence follows the same ungated rule", model => {
+    for (const [models, expected] of [[[], "denied"], [[model], "granted"]] as const) {
+      expect(codexModelEntitlementStateForAccount({
+        modelsByAccount: new Map([["pool", new Set<string>(models)]]),
+        clientVersionByAccount: new Map([["pool", "0.152.0"]]),
+        confirmedAccountIds: new Set(["pool"]), credentialIdentities: new Map(),
+      }, "pool", model)).toBe(expected);
+    }
   });
 
   test("live discovery cannot replace Terra's pinned native context or ladder", () => {

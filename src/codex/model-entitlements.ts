@@ -17,7 +17,6 @@ import { withNativeMainCredentialAdmission } from "./native-main-admission";
 import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
   NATIVE_GPT6_ASTRA_MODEL,
-  NATIVE_GPT61_TERRA_MODEL,
 } from "./catalog/native-models";
 import { loadPersistedCodexRuntime } from "./runtime";
 import { codexRuntimeStateEpoch } from "./runtime";
@@ -120,10 +119,6 @@ export const ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS: ReadonlyMap<str
   ["gpt-5.6-terra", MEASURED_GATED_CLIENT_VERSION_MINIMUM],
   ["gpt-5.6-luna", MEASURED_GATED_CLIENT_VERSION_MINIMUM],
 ]);
-
-// Published row minimum, not a measured gated-discovery floor: old rosters cannot deny Terra,
-// but its addition must not shorten the success TTL for unrelated models on those clients.
-const NATIVE_GPT61_TERRA_MINIMUM_CLIENT_VERSION = "0.153.0";
 
 /**
  * Fallback when the snapshot records no usable gated floor.
@@ -1366,8 +1361,7 @@ function codexModelEntitlementStateForRoster(
   if (!models || !confirmed) return "unknown";
   // Positive evidence is authoritative regardless of which client version asked for it.
   if (models.has(modelId)) return "granted";
-  const minimum = ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS.get(modelId)
-    ?? (modelId === NATIVE_GPT61_TERRA_MODEL ? NATIVE_GPT61_TERRA_MINIMUM_CLIENT_VERSION : undefined);
+  const minimum = ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS.get(modelId);
   if (minimum && (!clientVersion || compareClientVersions(clientVersion, minimum) < 0)) {
     return "unknown";
   }
@@ -1458,7 +1452,6 @@ export const ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = n
   "gpt-5.6-terra",
   "gpt-5.6-luna",
   NATIVE_GPT6_ASTRA_MODEL,
-  NATIVE_GPT61_TERRA_MODEL,
 ]);
 
 /**
