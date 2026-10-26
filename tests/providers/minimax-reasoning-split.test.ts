@@ -376,11 +376,11 @@ describe("MiniMax split reasoning", () => {
   });
 });
 
-describe("MiniMax-M3.1-Flash-Preview reasoning wire", () => {
+describe("MiniMax-M3.1-Flash reasoning wire", () => {
   // Probed 2026-09-30: thinking cannot be turned off (effort none or thinking disabled
   // answers 400 code 2013), effort low..max is accepted as-is, reasoning_split is ignored
   // and thinking always returns as reasoning_content.
-  const PREVIEW = "MiniMax-M3.1-Flash-Preview";
+  const PREVIEW = "MiniMax-M3.1-Flash";
 
   test("Codex efforts go out as identity reasoning_effort and never disable thinking", () => {
     const route = minimaxRoute(PREVIEW);

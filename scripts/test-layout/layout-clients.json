@@ -1,4 +1,7 @@
 {
+  "agent-clients.test.ts": "clients",
+  "workbuddy-selector-recovery.test.ts": "clients",
+  "server-live-close.test.ts": "server",
   "link-diagnostics.test.ts": "clients",
   "link-tunnel-history.test.ts": "clients",
   "link-readiness.test.ts": "clients",
@@ -139,6 +142,8 @@
   "link-apply-record.test.ts": "clients",
   "client-runtime-restart.test.ts": "clients",
   "link-parity-reporter.test.ts": "clients",
+  "hermes-profiles.test.ts": "clients",
+  "hermes-profile-routes.test.ts": "clients",
   "cli-sync-expect-link.test.ts": "cli",
   "ci-pr-hygiene-approvals.test.ts": "ci-workflows"
 }

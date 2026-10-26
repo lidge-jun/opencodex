@@ -64,6 +64,17 @@ describe("management route registry reconciliation", () => {
       .toMatchObject({ module: "server/management/oauth-account-routes", mutates: false, exempt: { reason: "session-only" } });
   });
 
+  test("the constant-backed Hermes profile list is explicitly declared", () => {
+    expect(MANAGEMENT_ROUTES.find(route =>
+      route.method === "GET" && route.path === "/api/client-integrations/hermes/profiles"))
+      .toMatchObject({
+        module: "server/management/hermes-profile-routes",
+        mutates: false,
+        mechanism: "path-constant",
+        exempt: { reason: "gui-only" },
+      });
+  });
+
   test("every route resolvable from source is declared in the registry", () => {
     const declared = new Set(MANAGEMENT_ROUTES.map(r => key(r.method, r.path)));
     const undeclared: string[] = [];

@@ -731,10 +731,15 @@ describe("socks5Fetch", () => {
       );
       const reader = response.body?.getReader();
       if (!reader) throw new Error("huge chunked response had no body");
-      const pending = reader.read();
+      // Payload may already be delivered before the injected transport failure.
+      // Observe the whole read lifetime, not just the first available slice.
+      const pending = (async () => {
+        while (!(await reader.read()).done) { /* consume the valid prefix */ }
+      })();
       await Bun.sleep(50);
       if (!clientSocket) throw new Error("SOCKS5 client socket was not captured");
-      clientSocket.destroy(new Error("test chunk stream failure"));
+      const failure = new Error("test chunk stream failure");
+      clientSocket.destroy(failure);
       const outcome = await Promise.race([
         pending.then(
           result => result,
@@ -743,6 +748,7 @@ describe("socks5Fetch", () => {
         Bun.sleep(1_000).then(() => "timed out"),
       ]);
       expect(outcome).toBeInstanceOf(Error);
+      expect(outcome).toBe(failure);
       expect(await awaitDestroyed(clientSocket)).toBe(true);
       expect(clientSocket.listenerCount("data")).toBe(0);
       expect(clientSocket.listenerCount("error")).toBe(0);

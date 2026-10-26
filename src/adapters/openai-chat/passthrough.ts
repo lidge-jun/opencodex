@@ -170,15 +170,13 @@ export function buildOpenAIChatPassthroughRequest(
   // The binding constraint is the final size base + net, so a shrinking replay may legitimately
   // measure a base above the cap; only a base above max - net makes the result unserializable.
   let baseBytes = 0;
-  if (replayPlan.hasChanges) {
-    try {
-      baseBytes = jsonUtf8Bytes(transformedBody(), maxSerializedBytes - replayPlan.serializedBytes);
-    } catch (error) {
-      if (isTranslatorBudgetExceededError(error)) {
-        throw new TranslatorBudgetExceededError("request_copies", maxSerializedBytes);
-      }
-      throw error;
+  try {
+    baseBytes = jsonUtf8Bytes(transformedBody(), maxSerializedBytes - replayPlan.serializedBytes);
+  } catch (error) {
+    if (isTranslatorBudgetExceededError(error)) {
+      throw new TranslatorBudgetExceededError("request_copies", maxSerializedBytes);
     }
+    throw error;
   }
   if (replayPlan.serializedBytes > maxSerializedBytes - baseBytes) {
     throw new TranslatorBudgetExceededError("request_copies", maxSerializedBytes);

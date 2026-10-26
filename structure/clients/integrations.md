@@ -79,7 +79,8 @@ defaults as one owned value.
 The request preference is interpreted after initial Chat route selection and before
 concrete dispatch under the [inbound effort contract](../data-planes/inbound-compat.md#droid-request-defaults).
 It never authenticates a client or changes admission policy.
-
+## WorkBuddy editions
+`src/clients/config-export/agent-clients.ts` manages independent `workbuddy` and `workbuddy-ai` roots (`~/.workbuddy/models.json`, `~/.workbuddy-ai/models.json`). Both honor `WORKBUDDY_CONFIG_DIR`, then `CODEBUDDY_CONFIG_DIR`; relative overrides refuse. Rows retain proxy IDs, a full Chat Completions URL, a loopback placeholder and declared metadata. Ownership selects each `id` in object-form `models` or legacy root arrays. Foreign settings stay untouched; `validateApply` refuses hiding `availableModels` restrictions during apply/refresh; status, disable and Undo remain available. An unrepresentable model ID also refuses apply/refresh; its empty desired contribution lets status/disable verify and remove only recorded ownership, preserving foreign-edit checks. Project overrides may shadow user settings. Shared snapshots, drift checks and owned-catalog refresh apply. No client IO runs on inference paths. Doubao Desktop and Devin have no verified arbitrary-provider configuration contract and no managed integration.
 ## Cursor installed capability reads
 
 `src/integrations/cursor-effort-table.ts` reads the installed agent bundle through one regular-file
@@ -285,7 +286,7 @@ non-empty list without `image` becomes `false`; an absent or empty modality list
 model object so Hermes receives no guessed capability. OpenCodex does not emit `supports_video`
 because its authoritative input-modality vocabulary currently has no video value.
 
-> Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md)
+> Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md). Profile selection and per-profile ownership: [Hermes Profiles](hermes.md).
 
 ## Hermes session affinity
 

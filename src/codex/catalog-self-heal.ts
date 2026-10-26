@@ -135,10 +135,10 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
   const attempts: number[] = [];
   const heals: number[] = [];
 
-  const read = (path: string): NamespaceObservation | null => {
+  const read = (path: string, fresh = false): NamespaceObservation | null => {
     const quick = observe(path, false);
     if (quick === null) return null;
-    if (observed !== null) {
+    if (!fresh && observed !== null) {
       const relation = compareCatalogHealPaths(observed.path, path);
       if (relation === "unknown") return null;
       if (relation === "same" && observed.signature === quick.signature) return observed;
@@ -266,14 +266,21 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
       released = true; // Only a later accepted owner publication can re-arm this lifecycle.
       return;
     }
-    if (known === "unknown" || selected === "unknown") { clear(); return; }
-    if (running) return; // Catalog-success/cache-failure must not accept a baseline.
+    if (selected === "unknown" || (known === "unknown" && selected !== "same")) { clear(); return; }
+    if (running) {
+      if (known === "unknown") clear();
+      return; // Catalog-success/cache-failure must not accept a baseline.
+    }
     // A committed owner publication supplies a read-only baseline even while heal writes are gated.
-    if (event.path === null || path === null || selected !== "same" || !updateTarget(path)) return;
+    if (event.path === null || path === null || selected !== "same") return;
+    // Read independently of obsolete evidence, but retire it only after current selection proof.
+    const seen = read(path, true);
+    const current = catalogPath();
+    if (seen?.namespaces == null || current === null || compareCatalogHealPaths(current, path) !== "same") return;
+    clear();
+    target = path;
+    baseline = observed = seen;
     released = false;
-    pendingRetry = null;
-    recheckAt = 0;
-    accept(event.path);
   });
   // Capture immediately after startup sync, before a foreign write can become the first tick.
   try { const path = catalogPath(); if (updateTarget(path) && target !== null) accept(target); }

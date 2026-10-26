@@ -12,7 +12,7 @@ import {
 /** Refresh only previously connected clients; a refused file never blocks its peers. */
 export async function refreshOwnedCatalogIntegrations(
   input: Omit<OwnedIntegrationRefreshInput, "clientId">,
-  clientIds: readonly IntegrationClientId[] = ["pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder", "gentle-shell"],
+  clientIds: readonly IntegrationClientId[] = ["pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "gentle-shell"],
   options: { refreshOnly?: boolean; admit?: () => boolean } = {},
 ): Promise<OwnedIntegrationRefreshOutcome[]> {
   // Client files are shared with the live proxy a sibling instance runs beside; their entries

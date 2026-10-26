@@ -1,7 +1,5 @@
 {
   "cyclic": [
-    "src/clients/config-export.ts",
-    "src/clients/config-export/qoder.ts",
     "src/codex/account-lifecycle.ts",
     "src/codex/auth-api.ts",
     "src/codex/auth-api/account-list.ts",

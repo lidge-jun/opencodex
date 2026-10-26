@@ -360,6 +360,17 @@ fragmented framing, header limits and explicit-route snapshot preservation.
 Explicit `http2` / `h2` pins reject before network I/O: this HTTP/1.1 tunnel cannot
 honor them and must not silently downgrade the provider contract.
 
+Response payload is delivered as bytes arrive, in raw slices of at most 64 KiB, rather than
+waiting to fill a slice or an entire declared HTTP chunk. The next pull validates a completed
+chunk's trailing CRLF before reading another chunk; premature EOF and malformed framing still
+error the body. Fixed-length completion releases the socket as soon as the declared bytes are
+queued, without requiring an extra consumer pull. Terminal reader cleanup discards unread bytes;
+only the successful SOCKS handshake preserves bytes for the next socket owner. Payload reads
+use existing byte views instead of accumulating an exact-length copy. Coding limits,
+certificate verification, proxy selection and upload ownership are unchanged.
+`tests/lib/socks5-tls-lifecycle.test.ts` also covers partial payloads, compressed SSE, delayed
+framing, truncation, cancellation and connection release.
+
 The upload and the answer are read together. One reader consumes the socket for the whole
 exchange, starting before the request body is finished, because a peer may answer a request it
 has not finished receiving and a caller's body stream may stall. Each body read and drain wait
@@ -462,6 +473,12 @@ are request-local and excluded from diagnostics. HTTPS proxy identity is verifie
 against its configured host. HTTP Basic usernames with colons and malformed CONNECT
 response headers are rejected. Header size remains bounded even when a delimiter
 and early target bytes arrive together; remaining bytes are handed to the caller.
+HTTP/HTTPS CONNECT borrows the first response fragment. Additional fragments grow
+owned header storage geometrically, capped at `maxHeaderBytes`, so accumulated
+prefixes are copied only when storage grows. Delimiter scans examine initialized
+bytes from the new suffix plus the split-delimiter overlap. Coalesced target bytes
+inside and beyond the header buffer are restored in wire order before handoff.
+A complete first-fragment header needs no accumulation copy.
 
 `src/lib/socks5-handshake.ts` owns RFC 1928/1929 framing. Both SOCKS spellings use its
 remote-DNS behavior and existing zero-to-255-byte credential-field limits, including

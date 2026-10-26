@@ -85,6 +85,7 @@ import {
 
 export type { CommandCodeGeneratedConfig, CommandCodeModelEntry, CommandCodeProviderBlock };
 export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution, commandCodeProviderRoot };
+import { agentConfigPath, buildQoderCnClientConfig, buildQoderCnContribution, buildWorkbuddyClientConfig, buildWorkbuddyContribution, summarizeWorkbuddy, workbuddyApplyRefusal } from "./config-export/agent-clients";
 import { buildQoderClientConfig, summarizeQoder, buildQoderContribution, qoderConfigPath } from "./config-export/qoder";
 export { buildQoderClientConfig, qoderConfigPath, qoderHomeDir, type QoderGeneratedConfig } from "./config-export/qoder";
 
@@ -1401,6 +1402,17 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     buildContribution: buildQoderContribution,
     loopbackOnly: true,
   },
+  "qoder-cn": {
+    id: "qoder-cn", filename: "qoder-cn-settings.json", destination: env => agentConfigPath("qoder-cn", env),
+    apiKeyEnv: "", exportHint: "Qoder CN uses a non-secret loopback placeholder.", format: "json",
+    build: buildQoderCnClientConfig, summarize: summarizeQoder, buildContribution: buildQoderCnContribution, loopbackOnly: true,
+  },
+  ...Object.fromEntries((["workbuddy", "workbuddy-ai"] as const).map(id => [id, {
+    id, filename: `${id}-models.json`, destination: (env: NodeJS.ProcessEnv) => agentConfigPath(id, env),
+    apiKeyEnv: "", exportHint: "WorkBuddy uses a non-secret loopback placeholder.", format: "json" as const,
+    build: buildWorkbuddyClientConfig, summarize: summarizeWorkbuddy, validateApply: workbuddyApplyRefusal,
+    buildContribution: (ctx: ExportContext) => buildWorkbuddyContribution(id, ctx), loopbackOnly: true,
+  }])) as Record<"workbuddy" | "workbuddy-ai", ExportClientSpec>,
   opencode: {
     id: "opencode",
     filename: "opencode.json",

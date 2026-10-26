@@ -680,6 +680,13 @@
       "documents": ["src/adapters/openai-chat/", "src/adapters/openai-chat.ts"]
     },
     {
+      "path": "providers/chat-required-tool-results.md",
+      "tier": 4,
+      "title": "Mandatory Translated Chat Tool Results",
+      "scope": "Translated Chat terminal guard that fails a clean completion missing a mandatory client tool call.",
+      "documents": ["src/adapters/openai-chat/required-tool-result.ts"]
+    },
+    {
       "path": "adapters/registry.md",
       "tier": 4,
       "title": "Adapter Registry Authority",
@@ -858,6 +865,17 @@
       ]
     },
     {
+      "path": "clients/hermes.md",
+      "tier": 5,
+      "title": "Hermes Profiles",
+      "scope": "Hermes profile discovery, per-profile selection, ownership stores, and boundaries.",
+      "documents": [
+        "src/cli/",
+        "src/integrations/",
+        "src/server/"
+      ]
+    },
+    {
       "path": "clients/qoder.md",
       "tier": 5,
       "title": "Qoder Client Integration",
@@ -914,6 +932,33 @@
         "src/service-manager-probe.ts",
         "src/sidecar/",
         "src/update/"
+      ]
+    },
+    {
+      "path": "ops/desktop-supervision.md",
+      "tier": 6,
+      "title": "Desktop Supervision",
+      "scope": "Durable Desktop ownership read, takeover-consent handling, live-supervision evidence, the Windows probe's trusted system-directory acquisition, and the supervision latch blocking contract consumed by service and update guards.",
+      "documents": [
+        "bin/ocx.mjs",
+        "desktop/src-tauri/src/claim.rs",
+        "desktop/src-tauri/src/first_run.rs",
+        "desktop/src-tauri/src/identity.rs",
+        "desktop/src-tauri/src/ownership.rs",
+        "desktop/src-tauri/src/resolve.rs",
+        "desktop/src-tauri/src/runtime_stop.rs",
+        "desktop/src-tauri/src/startup.rs",
+        "src/cli/desktop-runtime-guidance.ts",
+        "src/cli/update-restart.ts",
+        "src/service/cli.ts",
+        "src/service/desktop-command-guard.ts",
+        "src/service/desktop-startup.ts",
+        "src/service/desktop-supervision.d.mts",
+        "src/service/desktop-supervision.mjs",
+        "src/service/orchestration.ts",
+        "src/service/repair.ts",
+        "src/update/index.ts",
+        "src/update/restart-ownership.ts"
       ]
     },
     {
@@ -1049,8 +1094,10 @@
       "path": "ops/test-sandbox-cleanup.md",
       "tier": 6,
       "title": "Test Sandbox Cleanup",
-      "scope": "Test-runner home and case-scoped lifecycle teardown ordering.",
+      "scope": "Test-runner home, case-scoped lifecycle teardown, and Bun test lock generation ownership.",
       "documents": [
+        "scripts/test-run-lock.ts",
+        "scripts/test-run-lock-gate.ts",
         "tests/"
       ]
     },
