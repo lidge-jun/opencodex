@@ -26,6 +26,10 @@ import {
   KIMI_API_MODEL_CONTEXT_WINDOWS,
   KIMI_API_MODELS,
   KIMI_API_MODELS_BEFORE_K31,
+  META_MODEL_API_MODELS,
+  META_MUSE_CONTEXT_WINDOW,
+  META_MUSE_MODELS,
+  META_MUSE_WONDER_MODEL,
   MINIMAX_M31_DEFAULT_REASONING_EFFORT,
   MINIMAX_M31_FLASH_PREVIEW,
   MINIMAX_MODELS,
@@ -79,6 +83,15 @@ const ALIBABA_INTL_TOKEN_PLAN_MODELS_BEFORE_1017 = [
  * preview, so live discovery cannot add it; the catalog keeps it only when it is configured.
  */
 export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
+  {
+    provider: "meta-model",
+    from: META_MUSE_MODELS,
+    to: META_MODEL_API_MODELS,
+    contextWindows: { [META_MUSE_WONDER_MODEL]: META_MUSE_CONTEXT_WINDOW },
+    // A Custom row may keep this id pointed at another gateway
+    // (preserveCustomDestination); only api.meta.ai publishes the roster `to` describes.
+    destinationBaseUrls: ["https://api.meta.ai/v1"],
+  },
   ...["minimax", "minimax-cn"].map(provider => ({
     provider,
     from: MINIMAX_MODELS_BEFORE_M31,

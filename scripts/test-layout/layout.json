@@ -1953,7 +1953,7 @@
     "ws-capacity-reclamation.test.ts": "responses",
     "ws-capacity-tool-ownership.test.ts": "responses",
     "ws-endpoint.test.ts": "responses",
-    "ws-failure-stage.test.ts": "responses",
+    "ws-failure-stage.test.ts": "responses", "ws-committed-liveness.test.ts": "responses",
     "ws-native-injection.test.ts": "responses",
     "ws-native-result-continuations.test.ts": "responses",
     "ws-native-steering.test.ts": "responses",
