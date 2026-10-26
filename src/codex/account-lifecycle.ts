@@ -12,7 +12,7 @@ import { removeCodexAccountCredential } from "./account-store";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
 import { readMainAuth } from "./auth-collision";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
-import { clearAccountQuota } from "./quota";
+import { clearAccountQuota, discardMismatchedMainQuota } from "./quota";
 import { forgetManualPreference } from "./routing/active-account";
 import { deleteAllHealthForAccount } from "./routing/health-store";
 import { forgetCodexFailureWindow } from "./routing/failure-window";
@@ -79,6 +79,7 @@ function observeMainCodexAccountIdentity(accountId: string): boolean {
   const changed = previousAccountId !== undefined && previousAccountId !== accountId;
   if (changed) purgeMainCodexAccountRuntimeState();
   observeMainQuotaIdentity(accountId);
+  discardMismatchedMainQuota();
   return changed;
 }
 
@@ -146,6 +147,7 @@ export function initializeMainAccountPolicyBinding(authPath: string): boolean {
   if (previousAccountId !== undefined && previousAccountId !== accountId) purgeMainCodexAccountRuntimeState();
   observeSignedInCodexIdentity(tokens);
   observeMainQuotaIdentity(accountId);
+  discardMismatchedMainQuota();
   observeMainCodexCollisionIdentity(tokens);
   return observeMainQuotaCredential(tokens.access_token, accountId) !== undefined;
 }

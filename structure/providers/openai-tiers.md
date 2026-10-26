@@ -441,7 +441,7 @@ consent is covered by `tests/codex-integration/main-account-credit-renewal.test.
 
 The policy reads a separately retained identity-tagged quota snapshot, so the legacy rotation
 cache's six-hour expiry does not silently release a known block. A confirmed account transition
-invalidates old evidence, including an account change verified through [the owned Codex RPC](openai-accounts.md#native-main-refresh-ownership). Request-owned bearers are matched only against a credential and effective
+invalidates old evidence, including an account change verified through [the owned Codex RPC](openai-accounts.md#native-main-refresh-ownership). A valid persisted policy tag for another account also retires the legacy main selection quota at the first owned observation after restart; same-account and untagged quota remain. Request-owned bearers are matched only against a credential and effective
 workspace already observed under native ownership; an unrelated or unmatched keyring credential
 is not attributed to stored main and introduces no physical-main read. Credential equality tags
 remain process-local and never enter disk, logs, or management DTOs.
