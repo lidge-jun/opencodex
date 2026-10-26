@@ -663,8 +663,8 @@ export interface OcxProviderConfig {
   modelInputModalities?: Record<string, string[]>;
   /**
    * Provider-wide input modalities, applied to models `modelInputModalities` does not enumerate
-   * (a live-discovered id, for example). Backfilled from the registry only for the preset's own
-   * destination, never seeded; a per-model declaration still wins.
+   * (a live-discovered id, for example). The registry's value is applied at runtime only, for the
+   * preset's own destination, and never persisted; a per-model declaration still wins.
    */
   inputModalities?: string[];
   modelCapabilities?: Record<string, ModelCapabilities>;

@@ -25,7 +25,7 @@ import { modelRecordValue } from "../reasoning-effort";
 import { getModelMetadataCaseInsensitive, resolveMetadataProvider } from "../generated/model-metadata";
 import { nativeInputModalities } from "../codex/catalog/metadata";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
-import { enrichProviderFromRegistry } from "../providers/derive";
+import { enrichProviderFromRegistry, registryInputModalitiesForDestination } from "../providers/derive";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
 
 /**
@@ -196,6 +196,11 @@ function enrichedProviderForVision(
     } : {}),
   };
   enrichProviderFromRegistry(providerName, enriched);
+  // Registry-only and runtime-only: applied to this private copy, never to saved config.
+  if (!enriched.inputModalities) {
+    const providerWide = registryInputModalitiesForDestination(providerName, configured);
+    if (providerWide) enriched.inputModalities = providerWide;
+  }
   cache.set(providerName, enriched);
   return enriched;
 }

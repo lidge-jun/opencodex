@@ -321,9 +321,9 @@ export interface ProviderRegistryEntry {
   /**
    * Provider-wide input modalities for every model `modelInputModalities` does not enumerate,
    * including ids that arrive from live discovery. Declare it where the limit belongs to the
-   * provider's API rather than to one model; a per-model entry still wins over it. Registry-only:
-   * never seeded into saved config, and backfilled only while a provider points at this entry's
-   * destination, so a row moved to another URL drops it.
+   * provider's API rather than to one model; a per-model entry still wins over it. Registry-only
+   * and runtime-only: never seeded or enriched into saved config, and applied only while a provider
+   * points at this entry's destination (routed provider, vision eligibility).
    */
   inputModalities?: string[];
   defaultMaxOutputTokens?: number;

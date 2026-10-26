@@ -7,7 +7,7 @@ import { gatherRoutedModels } from "../../src/codex/catalog";
 import { clearModelCache } from "../../src/codex/model-cache";
 import { buildModelsRequest } from "../../src/oauth";
 import { KEY_LOGIN_PROVIDERS, validateApiKey } from "../../src/oauth/key-providers";
-import { deriveInitProviders, deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
+import { deriveInitProviders, deriveProviderPresets, enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { routeModel } from "../../src/router";
 import { candidateCapabilityEvidence } from "../../src/routing/capability";
@@ -15,7 +15,7 @@ import { startServer } from "../../src/server";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { resetVisionDescriptionCache } from "../../src/vision";
-import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
+import { isModelVisionSidecarConsumer, isVisionSidecarConsumer } from "../../src/vision/eligibility";
 import { requiresVisionPreprocessing } from "../../src/vision/plan";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -188,6 +188,15 @@ describe("AI Stupid Level text-only contract for pinned models", () => {
       expect(requiresVisionPreprocessing(candidate, route.provider, route.modelId, route.providerName)).toBe(false);
       expect(candidateCapabilityEvidence(candidate, "aistupidlevel", PINNED).image).toBeUndefined();
     }
+  });
+
+  test("registry enrichment never writes the declaration into a saved provider object", () => {
+    const saved = config();
+    enrichProviderFromRegistry("aistupidlevel", saved.providers.aistupidlevel!);
+    expect(saved.providers.aistupidlevel!.inputModalities).toBeUndefined();
+    // The runtime classification still applies at the preset destination, and only there.
+    expect(isVisionSidecarConsumer(saved, "aistupidlevel", PINNED)).toBe(true);
+    expect(isVisionSidecarConsumer(config({ baseUrl: "https://relay.example.test/v1" }), "aistupidlevel", PINNED)).toBe(false);
   });
 
   test("an image sent to a pinned model never reaches the router", async () => {

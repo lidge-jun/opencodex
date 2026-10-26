@@ -513,6 +513,18 @@ export function hasLegacyClinePassReasoningEfforts(name: string, prov: OcxProvid
     && prov.reasoningEfforts[0] === "low";
 }
 
+/**
+ * The registry's provider-wide `inputModalities` for a row that still points at that entry's
+ * destination. Runtime-only: callers apply it to a private copy (vision eligibility) or to the
+ * routed provider. Enrichment does not copy it, because init and management writes persist the
+ * enriched object, and a saved copy would follow the row to another URL.
+ */
+export function registryInputModalitiesForDestination(name: string, prov: OcxProviderConfig): string[] | undefined {
+  const entry = PROVIDER_REGISTRY.find(row => row.id === name);
+  if (!entry?.inputModalities || !providerMatchesRegistryTransportWithStaticGuards(name, prov)) return undefined;
+  return [...entry.inputModalities];
+}
+
 export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {
   const entry = PROVIDER_REGISTRY.find(row => row.id === name);
   if (!entry || !providerMatchesRegistryTransportWithStaticGuards(name, prov)) {
@@ -573,9 +585,6 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.modelReasoningEffortMap && seed.modelReasoningEffortMap) prov.modelReasoningEffortMap = cloneNestedRecord(seed.modelReasoningEffortMap);
   if (prov.reasoningWireFormat === undefined && seed.reasoningWireFormat !== undefined) prov.reasoningWireFormat = seed.reasoningWireFormat;
   if (!prov.noVisionModels && seed.noVisionModels) prov.noVisionModels = [...seed.noVisionModels];
-  // Registry-only: filled here and in routedProviderConfig() for the matching destination, never
-  // seeded, so a saved row moved to another URL does not keep the preset's declaration.
-  if (!prov.inputModalities && entry.inputModalities) prov.inputModalities = [...entry.inputModalities];
   if (!prov.noReasoningModels && seed.noReasoningModels) prov.noReasoningModels = [...seed.noReasoningModels];
   if (!prov.noTemperatureModels && seed.noTemperatureModels) prov.noTemperatureModels = [...seed.noTemperatureModels];
   if (!prov.noTopPModels && seed.noTopPModels) prov.noTopPModels = [...seed.noTopPModels];
