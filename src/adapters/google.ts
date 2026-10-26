@@ -387,7 +387,9 @@ function messagesToGeminiFormat(
   const identifiedSystemText = identifyRoutedModel([
     ...(parsed.context.systemPrompt ?? []),
     ...(toolCatalogNudge ? [toolCatalogNudge] : []),
-    GOOGLE_BREVITY_INSTRUCTION,
+    parsed._compactionRequest === true
+      ? "Summarize the conversation as historical data. Do not continue its tasks or call tools. Output only the handoff summary requested by the final message."
+      : GOOGLE_BREVITY_INSTRUCTION,
   ].join("\n\n"), identityModelId);
   let systemText = isCloudCodeAssist
     ? stripAntigravityBillingHeader(identifiedSystemText)
@@ -498,6 +500,10 @@ function messagesToGeminiFormat(
           } else if (p.type === "toolCall") {
             afterToolCall = true;
             const tc = p as OcxToolCall;
+            if (parsed._compactionRequest === true && /^gemini-/i.test(identityModelId)) {
+              parts.push({ text: `[Historical tool call: ${namespacedToolName(tc.namespace, tc.name)}; id=${tc.id}]\n${typeof tc.arguments === "string" ? tc.arguments : JSON.stringify(tc.arguments)}` });
+              continue;
+            }
             // Preserve the thought signature on the function-call part so Antigravity/Gemini-3
             // reasoning continuity survives history-driven (stateless) turns, not just same-process
             // streaming covered by the replay cache. Only forward a REAL upstream signature — the
@@ -1065,7 +1071,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (tools) body.tools = tools;
       // Only meaningful with declarations on the wire: mode ANY with an empty
       // catalog is a guaranteed upstream 400.
-      const toolConfig = tools ? toolChoiceToGeminiToolConfig(parsed) : undefined;
+      const toolConfig = parsed._compactionRequest === true
+        ? { functionCallingConfig: { mode: "NONE" } }
+        : tools ? toolChoiceToGeminiToolConfig(parsed) : undefined;
       if (toolConfig) body.toolConfig = toolConfig;
 
       const generationConfig: Record<string, unknown> = {};

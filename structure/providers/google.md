@@ -344,3 +344,9 @@ fetchable reference the proxy cannot vouch for is the SSRF-shaped half of this f
 
 `file_data` carries `file_uri` only. An earlier revision guessed a `mime_type` for it; the Files
 API already knows the type of what it stores, and a wrong guess is worse than no guess.
+
+## Compaction tool-call boundary
+
+`src/adapters/google.ts` sets `functionCallingConfig.mode` to `NONE` for `_compactionRequest` turns, including requests without function declarations. This explicitly prevents new function calls while summarizing historical tool traffic. Ordinary requests retain their existing tool-choice behavior. Regression coverage is in `tests/adapters/google/google-structured-output.test.ts`.
+
+Compaction replaces the coding-progress instruction with a summary-only instruction. Gemini compaction serializes historical tool calls as labelled text; results follow the existing text/image path, without live function-call replay or request-history mutation.

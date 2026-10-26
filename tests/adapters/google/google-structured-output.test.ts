@@ -150,3 +150,46 @@ describe("F3 unsupported modes refuse explicitly instead of dropping the schema"
     await expect(promise).rejects.toThrow(/requires text.format.schema/);
   });
 });
+
+
+describe("Google compaction function-calling boundary", () => {
+  test.each([aiStudio, vertex, cca])("compaction disables new function calls even without declarations", async provider => {
+    const req = parsed(undefined);
+    req._compactionRequest = true;
+    const { body } = await createGoogleAdapter(provider).buildRequest(req);
+    const envelope = JSON.parse(typeof body === "string" ? body : JSON.stringify(body));
+    const wire = envelope.request ?? envelope;
+    expect(wire.toolConfig).toEqual({ functionCallingConfig: { mode: "NONE" } });
+    expect(wire.tools).toBeUndefined();
+  });
+  test("ordinary text requests keep their existing wire shape", async () => {
+    const { body } = await createGoogleAdapter(aiStudio).buildRequest(parsed(undefined));
+    const wire = JSON.parse(typeof body === "string" ? body : JSON.stringify(body));
+    expect(wire.toolConfig).toBeUndefined();
+  });
+});
+
+
+test("Gemini compaction treats tool history as data and removes coding tool instructions", async () => {
+  const req = parsed(undefined, "gemini-3.8-flash");
+  req._compactionRequest = true;
+  req.context.messages = [
+    { role: "user", content: "Investigate failure", timestamp: 0 },
+    { role: "assistant", content: [{ type: "toolCall", id: "call1", name: "exec", arguments: { cmd: "ls" } }], timestamp: 0 },
+    { role: "toolResult", toolCallId: "call1", toolName: "exec", content: "file.ts", isError: false, timestamp: 0 },
+    { role: "user", content: "Summarize this history", timestamp: 0 },
+  ];
+  const { body } = await createGoogleAdapter(cca).buildRequest(req);
+  const envelope = JSON.parse(typeof body === "string" ? body : JSON.stringify(body));
+  const wire = envelope.request;
+  const history = JSON.stringify(wire.contents);
+  expect(history).not.toContain('"functionCall":');
+  expect(history).not.toContain('"functionResponse":');
+  expect(history).toContain("Historical tool call");
+  expect(history).toContain("file.ts");
+  expect(history).toContain("ls");
+  expect(JSON.stringify(wire.systemInstruction)).not.toContain("keep calling tools");
+  expect(JSON.stringify(wire.systemInstruction)).toContain("Do not continue its tasks or call tools");
+  expect(req.context.messages[1].role).toBe("assistant");
+  expect(JSON.stringify(req.context.messages[1])).toContain('"type":"toolCall"');
+});
