@@ -24,7 +24,7 @@ import {
   isClaudeDesktopMode,
   observeClaudeDesktopMode,
   recordClaudeDesktopMode,
-  removeDesktopFirstParty,
+  removeDesktopFirstParty, removeDesktopFirstPartySettled,
   resolveClaudeDesktopMode,
   resolveClaudeDesktopApplyMode,
   type ClaudeDesktopModeObservation,
@@ -463,7 +463,7 @@ export async function applyDesktop(
   const modeSaved = saveDesktopMode("gateway", deps);
   const warning = [result.warning, modeSaved ? "" : "desktop mode marker was not saved"].filter(Boolean).join(" ");
   // The gateway mode is committed before retiring first-party settings.
-  const removed = removeDesktopFirstParty(loadConfig());
+  const removed = await removeDesktopFirstPartySettled(loadConfig);
   if (!removed.ok) return { ok: false, path: removed.path, reason: "first_party_settings_unreadable",
     warning: ["gateway applied; first-party cleanup remains incomplete", warning].filter(Boolean).join(" ") };
   if (removed.retainedFor === "cli") {

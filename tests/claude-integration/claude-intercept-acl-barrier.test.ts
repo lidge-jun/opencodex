@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import * as firstParty from "../../src/claude/desktop-first-party";
 import * as localCa from "../../src/claude/intercept/local-ca";
 import * as proxyAuth from "../../src/claude/intercept/proxy-auth";
@@ -465,4 +465,51 @@ test("runtime token creation drains a parent flight started during the CA await"
     try { await (await work)?.stop(); } finally { startupCa.mockRestore(); }
   }
   expect(readClaudeInterceptProxyToken(root)).not.toBeNull();
+});
+
+// #7777 review r2 F3: a CLAUDE_CONFIG_DIR nested in the opencodex home shares the config-root
+// flight, so its credential-bearing settings rewrites need the same fresh admission.
+test("startup settings migration after the proxy bind waits for a parent flight over a nested Claude home", async () => {
+  const overlapping: string[] = [];
+  let held = false;
+  setIcaclsRunnerForTests(args => {
+    if (held && args[0]?.startsWith(join(root, "claude") + sep)) overlapping.push(args[1] ?? "");
+    return success;
+  });
+  const entered = deferred(), release = deferred();
+  setAsyncIcaclsRunnerForTests(async () => { entered.resolve(); await release.promise; return success; });
+  expect(firstParty.applyDesktopFirstParty({ port: 10100 })).toMatchObject({ ok: true });
+  const work = startClaudeIntercept({ config: { port: 10100, claudeCode: { cliFirstParty: true } } as OcxConfig,
+    configDir: root, publicPort: 10100, dispatch: async () => new Response("ok"), pickerPlatform: "linux",
+    startProxy: async (_port, options) => {
+      const proxy = await startConnectProxy(0, options);
+      held = true; hardenConfigDir(); await entered.promise;
+      return proxy;
+    },
+  });
+  try {
+    await entered.promise;
+    await macrotask();
+    expect(overlapping).toEqual([]);
+  } finally {
+    held = false; release.resolve();
+    await (await work)?.stop();
+  }
+});
+
+test("settled first-party removal waits for a parent flight over a nested Claude home", async () => {
+  expect(firstParty.applyDesktopFirstParty({ port: 10100 })).toMatchObject({ ok: true });
+  const entered = deferred(), release = deferred();
+  setAsyncIcaclsRunnerForTests(async () => { entered.resolve(); await release.promise; return success; });
+  const flight = hardenSecretDirAsync(root, { required: false });
+  await entered.promise;
+  let removed = false;
+  const work = firstParty.removeDesktopFirstPartySettled(() => ({}), {}, (config, options) => {
+    removed = true;
+    return firstParty.removeDesktopFirstParty(config, options);
+  });
+  try { await macrotask(); expect(removed).toBe(false); }
+  finally { release.resolve(); await flight; }
+  expect(await work).toMatchObject({ ok: true, changed: true });
+  expect(removed).toBe(true);
 });

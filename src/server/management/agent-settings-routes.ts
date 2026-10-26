@@ -1062,7 +1062,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         rethrowManagementBodyTooLarge(error);
         return jsonResponse({ error: "invalid JSON body" }, 400);
       }
-      const { resolveClaudeDesktopApplyMode, observeClaudeDesktopMode, applyDesktopFirstParty, withFirstPartySecretsSettled, captureDesktopFirstPartyRollback, removeDesktopFirstParty } = await import("../../claude/desktop-first-party");
+      const { resolveClaudeDesktopApplyMode, observeClaudeDesktopMode, applyDesktopFirstParty, withFirstPartySecretsSettled, captureDesktopFirstPartyRollback, removeDesktopFirstPartySettled } = await import("../../claude/desktop-first-party");
       const requested = (parsed as { mode?: unknown } | null)?.mode;
       let desktopMode: "first-party" | "gateway" = resolveClaudeDesktopApplyMode(config, observeClaudeDesktopMode(config));
       if (requested !== undefined) {
@@ -1221,7 +1221,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const committed = persistCommittedDesktopGateway(config, state.profile, result.fingerprint);
         const modeWarning = committed.ok ? undefined : `Gateway applied, but its mode/profile state was not saved (${committed.reason}).`;
         // The durable marker describes the committed gateway even if old-mode cleanup fails.
-        const firstPartyRemoved = removeDesktopFirstParty(loadConfig());
+        const firstPartyRemoved = await removeDesktopFirstPartySettled(loadConfig);
         if (!firstPartyRemoved.ok) {
           return { response: jsonResponse({
             error: `Claude Code settings could not be parsed (${firstPartyRemoved.path}); first-party cleanup remains incomplete after gateway apply.`,

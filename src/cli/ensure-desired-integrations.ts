@@ -21,7 +21,7 @@ import {
   applyDesktopFirstParty, withFirstPartySecretsSettled,
   inspectDesktopFirstParty,
   observeClaudeDesktopMode,
-  removeDesktopFirstParty,
+  removeDesktopFirstParty, removeDesktopFirstPartySettled,
   resolveClaudeDesktopMode,
 } from "../claude/desktop-first-party";
 import {
@@ -198,7 +198,7 @@ export async function ensureClaudeDesktopMatchesDesired(
     error(`⚠️  Claude Desktop picker cleanup skipped: ${detail}.`);
   }
   try {
-    const env = (deps.removeDesktopFirstParty ?? removeDesktopFirstParty)(deps.loadConfig());
+    const env = await removeDesktopFirstPartySettled(deps.loadConfig, {}, deps.removeDesktopFirstParty ?? removeDesktopFirstParty);
     if (env.ok && env.changed) log("   ↩️  Claude Desktop first-party env removed.");
     else if (env.ok && env.retainedFor === "cli") log("   = Shared first-party env retained for Claude Code CLI.");
     else if (!env.ok) error(`⚠️  Claude Desktop first-party env cleanup skipped: ${env.reason} (${env.path}).`);
