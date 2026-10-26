@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   addGoogleToolSchemaLoss,
   createGoogleToolSchemaLossReport,
@@ -59,7 +58,7 @@ function toolNameCodec(names: readonly string[]): {
     const prefix = (cleaned || "tool").slice(0, 55);
     for (let salt = 0; ; salt++) {
       const hashInput = salt === 0 ? name : `${name}#${salt}`;
-      const suffix = createHash("sha256").update(hashInput).digest("hex").slice(0, 8);
+      const suffix = Bun.SHA256.hash(hashInput, "hex").slice(0, 8);
       const candidate = `${prefix}_${suffix}`;
       if (used.has(candidate)) continue;
       toWire.set(name, candidate);

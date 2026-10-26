@@ -408,18 +408,19 @@ jobs:
               - 'scripts/ci/docker-smoke.ts'
               - 'scripts/generate-compatibility-version.ts'
               - 'scripts/model-metadata.source.json'
-              # The image's final RUN imports version.ts to prove the generated compatibility
-              # manifest; these four files are its whole module closure (Bun.build metafile).
-              - 'src/routing/compatibility/version.ts'
-              - 'src/lab/digest.ts'
-              - 'src/lab/conformance/digest.ts'
-              - 'src/lab/conformance/jcs.ts'
-              - 'src/cli/index.ts'
+              # The image copies and runs src/, then builds the GUI with tsc and Vite.
+              # Include their inputs without selecting GUI tests or documentation alone.
+              - 'src/**'
               - 'package.json'
               - 'bun.lock'
               - 'tsconfig.json'
               - 'gui/package.json'
               - 'gui/bun.lock'
+              - 'gui/src/**'
+              - 'gui/public/**'
+              - 'gui/index.html'
+              - 'gui/vite.config.ts'
+              - 'gui/tsconfig*.json'
               - '.github/workflows/ci.yml'
             # scripts/keyring-smoke.ts imports only src/lib/keyring-native.ts; the native binding
             # itself arrives through package.json and bun.lock.

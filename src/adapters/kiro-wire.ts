@@ -62,7 +62,7 @@ export function kiroToolName(wireName: string, used?: Set<string>): string {
   const base = cleaned.slice(0, 55) || "tool";
   for (let salt = 0; ; salt++) {
     const hashInput = salt === 0 ? wireName : `${wireName}#${salt}`;
-    const suffix = createHash("sha256").update(hashInput).digest("hex").slice(0, 8);
+    const suffix = Bun.SHA256.hash(hashInput, "hex").slice(0, 8);
     const candidate = `${base}_${suffix}`;
     if (!(used?.has(candidate))) {
       used?.add(candidate);

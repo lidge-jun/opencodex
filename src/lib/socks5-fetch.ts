@@ -1,3 +1,4 @@
+import { createUploadWaiter } from "./socks5-upload-waiter";
 import net, { type Socket } from "node:net";
 import tls, { type TLSSocket } from "node:tls";
 import { classifyContentCoding, isNullBodyStatus } from "./http-response-semantics";
@@ -90,7 +91,7 @@ function connectSocket(hostname: string, port: number, signal?: AbortSignal): Pr
 }
 
 class SocketReader {
-  private buffer = Buffer.alloc(0);
+  private buffer: Buffer = Buffer.alloc(0);
   private ended = false;
   private failure: Error | undefined;
   private readonly exactWaiters: Array<{
@@ -99,6 +100,7 @@ class SocketReader {
     reject: (error: unknown) => void;
   }> = [];
   private readonly anyWaiters: Array<{
+    maxBytes: number;
     resolve: (value: Buffer) => void;
     reject: (error: unknown) => void;
   }> = [];
@@ -122,10 +124,14 @@ class SocketReader {
   private readonly onData = (chunk: Buffer | string): void => {
     const value = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     if (this.anyWaiters.length > 0) {
-      this.anyWaiters.shift()!.resolve(value);
+      const waiter = this.anyWaiters.shift()!;
+      const end = Math.min(value.byteLength, waiter.maxBytes);
+      if (end < value.byteLength) this.buffer = value.subarray(end);
+      if (this.buffer.byteLength >= MAX_BODY_SLICE_BYTES) this.socket.pause();
+      waiter.resolve(end === value.byteLength ? value : value.subarray(0, end));
       return;
     }
-    this.buffer = Buffer.concat([this.buffer, value]);
+    this.buffer = this.buffer.byteLength === 0 ? value : Buffer.concat([this.buffer, value]);
     this.flushExact();
     if (this.buffer.byteLength >= MAX_BODY_SLICE_BYTES) this.socket.pause();
   };
@@ -210,12 +216,13 @@ class SocketReader {
     }
   }
 
-  readAny(signal?: AbortSignal): Promise<Buffer> {
+  readAny(signal?: AbortSignal, maxBytes = Number.MAX_SAFE_INTEGER): Promise<Buffer> {
     if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("The operation was aborted"));
     if (this.buffer.byteLength > 0) {
-      const value = this.buffer;
-      this.buffer = Buffer.alloc(0);
-      this.socket.resume();
+      const end = Math.min(this.buffer.byteLength, maxBytes);
+      const value = end === this.buffer.byteLength ? this.buffer : this.buffer.subarray(0, end);
+      this.buffer = end === this.buffer.byteLength ? Buffer.alloc(0) : this.buffer.subarray(end);
+      if (this.buffer.byteLength < MAX_BODY_SLICE_BYTES) this.socket.resume();
       return Promise.resolve(value);
     }
     if (this.failure) return Promise.reject(this.failure);
@@ -227,6 +234,7 @@ class SocketReader {
         waiter.reject(signal?.reason ?? new Error("The operation was aborted"));
       };
       const waiter = {
+        maxBytes,
         resolve: (value: Buffer) => { signal?.removeEventListener("abort", onAbort); resolve(value); },
         reject: (error: unknown) => { signal?.removeEventListener("abort", onAbort); reject(error); },
       };
@@ -237,13 +245,17 @@ class SocketReader {
     });
   }
 
-  dispose(): void {
+  dispose(preserveBuffered = false): void {
     this.socket.pause();
     this.socket.removeListener("data", this.onData);
     this.socket.removeListener("error", this.onError);
     this.socket.removeListener("end", this.onEnd);
     this.socket.removeListener("close", this.onEnd);
-    if (this.buffer.byteLength > 0) this.socket.unshift(this.buffer);
+    // Only a successful handshake hands unread bytes to another socket owner.
+    // Terminal cleanup must not unshift after EOF or retain abandoned payload.
+    if (preserveBuffered && !this.ended && !this.socket.destroyed && this.buffer.byteLength > 0) {
+      this.socket.unshift(this.buffer);
+    }
     this.buffer = Buffer.alloc(0);
     this.rejectExact(new Socks5FetchError("SOCKS5 reader disposed"));
     this.rejectAny(new Socks5FetchError("SOCKS5 reader disposed"));
@@ -268,7 +280,7 @@ async function socks5Connect(proxy: string, target: URL, signal?: AbortSignal): 
     if (error instanceof Socks5HandshakeError) throw new Socks5FetchError(error.message);
     throw error;
   } finally {
-    reader.dispose();
+    reader.dispose(true);
   }
 }
 
@@ -423,6 +435,7 @@ function responseBody(
   const chunked = (headers.get("transfer-encoding") ?? "").toLowerCase().split(",").some(value => value.trim() === "chunked");
   let remaining = contentLength;
   let chunkRemaining = 0;
+  let chunkTerminatorPending = false;
   let complete = false;
   const finish = () => {
     if (complete) return;
@@ -434,8 +447,24 @@ function responseBody(
   };
   const onAbort = () => socket.destroy();
   signal.addEventListener("abort", onAbort, { once: true });
+  // Framing needs exact reads, payload does not: waiting to fill 64 KiB can hold
+  // many complete SSE events behind bytes the upstream has not generated yet.
+  const readPayload = async (length: number): Promise<Buffer> => {
+    const value = await reader.readAny(signal, Math.min(length, MAX_BODY_SLICE_BYTES));
+    if (value.byteLength === 0) {
+      throw new Socks5FetchError("SOCKS5 socket ended before the expected bytes arrived");
+    }
+    return value;
+  };
   const readChunk = async (): Promise<Buffer | null> => {
     if (chunked) {
+      // Verify the previous chunk's delimiter before accepting another chunk,
+      // without holding already-received payload while the delimiter is delayed.
+      if (chunkTerminatorPending) {
+        const ending = await reader.read(2, signal);
+        if (!ending.equals(CRLF)) throw new Socks5FetchError("SOCKS5 upstream returned an invalid chunk terminator");
+        chunkTerminatorPending = false;
+      }
       if (chunkRemaining === 0) {
         const line = (await reader.readUntil(CRLF, MAX_RESPONSE_HEADER_BYTES, signal)).subarray(0, -2).toString("ascii");
         const size = parseChunkSize(line);
@@ -448,21 +477,18 @@ function responseBody(
         }
         chunkRemaining = size;
       }
-      const value = await reader.read(Math.min(chunkRemaining, MAX_BODY_SLICE_BYTES), signal);
+      const value = await readPayload(chunkRemaining);
       chunkRemaining -= value.byteLength;
-      if (chunkRemaining === 0) {
-        const ending = await reader.read(2, signal);
-        if (!ending.equals(CRLF)) throw new Socks5FetchError("SOCKS5 upstream returned an invalid chunk terminator");
-      }
+      chunkTerminatorPending = chunkRemaining === 0;
       return value;
     }
     if (remaining !== undefined) {
       if (remaining === 0) return null;
-      const value = await reader.read(Math.min(remaining, MAX_BODY_SLICE_BYTES), signal);
+      const value = await readPayload(remaining);
       remaining -= value.byteLength;
       return value;
     }
-    const value = await reader.readAny(signal);
+    const value = await reader.readAny(signal, MAX_BODY_SLICE_BYTES);
     return value.byteLength === 0 ? null : value;
   };
   return new ReadableStream<Uint8Array>({
@@ -475,6 +501,12 @@ function responseBody(
           return;
         }
         controller.enqueue(value);
+        // A fixed-length response needs no further read to prove completion.
+        // Release its connection even when the consumer leaves this chunk queued.
+        if (!chunked && remaining === 0) {
+          finish();
+          controller.close();
+        }
       } catch (error) {
         finish();
         controller.error(error);
@@ -559,37 +591,9 @@ async function finalResponseHead(
   return head;
 }
 
-/**
- * A promise that rejects with the caller's abort reason, and a way to stop listening.
- *
- * Destroying the socket is not enough to end a pending `bodyReader.read()`: that promise belongs
- * to the caller's body stream, which knows nothing about this socket. Racing it against this one
- * is what turns an abort into a settled fetch instead of a permanently pending one.
- */
-function abortRejection(signal: AbortSignal): { promise: Promise<never>; dispose: () => void } {
-  let onAbort = (): void => { /* replaced below */ };
-  const promise = new Promise<never>((_resolve, reject) => {
-    // Reject with the caller's reason exactly, including `null` and `false`. A real
-    // `AbortSignal` always has one — `abort()` with no argument supplies an AbortError — so
-    // the fallback covers only a hand-built signal that exposes none.
-    onAbort = () => reject(signal.reason === undefined ? new Error("The operation was aborted") : signal.reason);
-    if (signal.aborted) onAbort();
-    else signal.addEventListener("abort", onAbort, { once: true });
-  });
-  // The race below may settle on another branch first; this rejection must not be reported as
-  // unhandled when nobody is left waiting for it.
-  promise.catch(() => { /* surfaced by whoever loses the race */ });
-  return { promise, dispose: () => signal.removeEventListener("abort", onAbort) };
-}
-
-/**
- * The two races below have different possible outcomes, so they have different result types.
- * One union covering both would let the compiler accept reading `value` off a drain result,
- * which is the kind of mistake a type is supposed to catch rather than describe.
- */
-type Answered = { kind: "answered" };
-type BodyStep = { kind: "chunk"; value: Uint8Array } | { kind: "end" } | Answered;
-type DrainStep = { kind: "drained" } | Answered;
+/** Read and drain results stay distinct; the waiter adds the shared early-answer outcome. */
+type BodyStep = { kind: "chunk"; value: Uint8Array } | { kind: "end" };
+type DrainStep = { kind: "drained" };
 
 /**
  * Send the request body, settling on caller abort or on an answer that arrives first.
@@ -613,21 +617,13 @@ async function uploadRequestBody(
   if (!body) return;
   const signal = request.signal;
   const bodyReader = body.getReader();
-  const abort = abortRejection(signal);
-  const answered: Promise<Answered> = head.then(
-    (): Answered => ({ kind: "answered" }),
-    (): Answered => ({ kind: "answered" }),
-  );
+  const waiter = createUploadWaiter(head, signal);
   let completed = false;
   try {
     for (;;) {
-      const read: Promise<BodyStep> = bodyReader.read().then(
+      const step = await waiter.wait(() => bodyReader.read().then(
         (result): BodyStep => (result.done ? { kind: "end" } : { kind: "chunk", value: result.value }),
-      );
-      // Releasing the lock below rejects a read still waiting on a source that stopped
-      // producing. That rejection is this function's own doing, not a failure to report.
-      read.catch(() => { /* settled by releasing the reader */ });
-      const step = await Promise.race([read, answered, abort.promise]);
+      ));
       if (step.kind === "answered") break;
       if (step.kind === "end") {
         completed = true;
@@ -637,17 +633,16 @@ async function uploadRequestBody(
         ? Buffer.concat([Buffer.from(`${step.value.byteLength.toString(16)}\r\n`), Buffer.from(step.value), CRLF])
         : step.value;
       if (socket.write(payload)) continue;
-      const drain: Promise<DrainStep> = waitForDrain(socket, signal).then((): DrainStep => ({ kind: "drained" }));
-      if ((await Promise.race([drain, answered, abort.promise])).kind === "answered") break;
+      const drain = await waiter.wait(() => waitForDrain(socket, signal).then((): DrainStep => ({ kind: "drained" })));
+      if (drain.kind === "answered") break;
     }
     // A terminating chunk written after the peer has already answered goes into a conversation
     // that is over, and a peer that has moved on may read it as the head of the next request.
     if (completed && chunked && !socket.write("0\r\n\r\n")) {
-      const drain: Promise<DrainStep> = waitForDrain(socket, signal).then((): DrainStep => ({ kind: "drained" }));
-      await Promise.race([drain, answered, abort.promise]);
+      await waiter.wait(() => waitForDrain(socket, signal).then((): DrainStep => ({ kind: "drained" })));
     }
   } finally {
-    abort.dispose();
+    waiter.dispose();
     if (!completed) {
       // Cancelling runs the caller's own cancel algorithm, which is free to never settle, so it
       // is started rather than awaited. Releasing the lock is what actually frees a read still

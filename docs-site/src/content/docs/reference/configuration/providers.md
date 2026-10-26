@@ -962,6 +962,10 @@ outbound proxy, opencodex resolves the hostname once and connects only to that v
 HTTPS retains the original Host, SNI, and certificate verification; provider config cannot disable
 certificate checks.
 
+Direct response downloads pause while local processing is not ready for more data, including
+gzip and deflate responses. This pause does not count as provider inactivity; the request's
+overall deadline and cancellation still apply.
+
 These operations use the [server's configured outbound fetch](/reference/configuration/server/).
 A server SOCKS5 proxy — set with
 `config.proxy` or inherited from a SOCKS5 `ALL_PROXY` — uses OpenCodex's built-in tunnel when

@@ -176,6 +176,8 @@ ocx status --json
 
 コマンドを Codex アプリ内から実行すると、再起動は切り離されたヘルパーに引き渡され、このセッションはアプリとともに終了します。
 
+**接続先を固定した同期。** `ocx sync --expect-link <linkId>`（Remote Link Child）と `ocx sync --expect-hub-key <apiKeyId>`（hub クライアント）は、このマシンがまだそのリンク、またはそのキーで接続している場合にのみ同期します。そうでなければ何も変更せず、ローカルのプロバイダーも同期せず、終了コード 5 で終了し、stderr の最後の行は `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}` になります。不正な形式または重複したフラグは終了コード 2 で終了します。詳細は[英語版リファレンス](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)を参照してください。
+
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 Codex のローカル モデル ピッカー キャッシュを無効にし、アクティブな opencodex カタログから再構築されるようにします。 `ocx sync` と同じ、古い `app-server` 警告とオプションの再起動フラグが適用されます。
