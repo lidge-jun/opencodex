@@ -468,13 +468,13 @@ export const CALLABLE_CONFIGURED_COMPATIBILITY_MODELS: Readonly<Record<string, R
   "codebuddy-cn": new Set([
     "default",
   ]),
-  // MiniMax serves MiniMax-M3.1-Flash-Preview to Token Plan keys, but its /v1/models roster
-  // does not list the preview (probed 2026-09-30), so a live roster would drop it.
+  // MiniMax serves MiniMax-M3.1-Flash to Token Plan keys, but its /v1/models roster
+  // does not list Flash (probed 2026-10-21), so a live roster would drop it.
   minimax: new Set([
-    "MiniMax-M3.1-Flash-Preview",
+    "MiniMax-M3.1-Flash",
   ]),
   "minimax-cn": new Set([
-    "MiniMax-M3.1-Flash-Preview",
+    "MiniMax-M3.1-Flash",
   ]),
   kimi: new Set([
     "k3[1m]",

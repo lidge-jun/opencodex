@@ -23,7 +23,7 @@ import {
   ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
   ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
   MINIMAX_M31_DEFAULT_REASONING_EFFORT,
-  MINIMAX_M31_FLASH_PREVIEW,
+  MINIMAX_M31_FLASH,
   MINIMAX_MODELS,
   MINIMAX_MODELS_BEFORE_M31,
   MINIMAX_MODEL_CONTEXT_WINDOWS,
@@ -71,16 +71,16 @@ const ALIBABA_INTL_TOKEN_PLAN_MODELS_BEFORE_1017 = [
 ];
 
 /**
- * MiniMax-M3.1-Flash-Preview (2026-09-30). MiniMax's /v1/models roster does not list the
- * preview, so live discovery cannot add it; the catalog keeps it only when it is configured.
+ * MiniMax-M3.1-Flash (2026-10-21). MiniMax's /v1/models roster does not list the
+ * Flash, so live discovery cannot add it; the catalog keeps it only when it is configured.
  */
 export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
   ...["minimax", "minimax-cn"].map(provider => ({
     provider,
     from: MINIMAX_MODELS_BEFORE_M31,
     to: MINIMAX_MODELS,
-    contextWindows: { [MINIMAX_M31_FLASH_PREVIEW]: MINIMAX_MODEL_CONTEXT_WINDOWS[MINIMAX_M31_FLASH_PREVIEW]! },
-    defaultReasoningEfforts: { [MINIMAX_M31_FLASH_PREVIEW]: MINIMAX_M31_DEFAULT_REASONING_EFFORT },
+    contextWindows: { [MINIMAX_M31_FLASH]: MINIMAX_MODEL_CONTEXT_WINDOWS[MINIMAX_M31_FLASH]! },
+    defaultReasoningEfforts: { [MINIMAX_M31_FLASH]: MINIMAX_M31_DEFAULT_REASONING_EFFORT },
   })),
   ...[
     { provider: "alibaba-token-plan", from: ALIBABA_TOKEN_PLAN_MODELS_BEFORE_1017, to: ALIBABA_TOKEN_PLAN_MODELS },
