@@ -545,6 +545,80 @@ describe("the custom projection defers to the gather's resolved values", () => {
 });
 
 describe("capability booleans come from positive evidence only", () => {
+  test("independent capability truth survives management and both CLI projections without a fake ladder", async () => {
+    for (const custom of [false, true]) {
+      const cfg = config(custom ? { customModels: [{ id: "c1", provider: "acme", modelId: "writer" }] } : {});
+      const rows = await listManagementModelRows(cfg, {
+        models: [{ id: "writer", provider: "acme", supportsThinkingToggle: true,
+          supportsReasoningEffort: false, defaultThinkingEnabled: true, supportsReasoning: true }],
+      });
+      const row = rows.find(candidate => candidate.namespaced === "acme/writer")!;
+      const wire = JSON.parse(JSON.stringify(row));
+      for (const exported of [toExportModel(row), ...opencodeCatalogFromProxyRows([wire], cfg), ...exportModelsFromProxyRows([wire], cfg)]) {
+        expect(exported).toMatchObject({ supportsThinkingToggle: true, supportsReasoning: true,
+          supportsReasoningEffort: false, defaultThinkingEnabled: true });
+        expect(exported.reasoningEfforts ?? []).toEqual([]);
+        expect(exported.defaultReasoningEffort).toBeUndefined();
+        expect(exported).not.toHaveProperty("reasoningControl");
+      }
+    }
+  });
+
+  test("explicit false axes and defaults survive projection and stale efforts cannot override them", async () => {
+    for (const custom of [false, true]) {
+      const cfg = config(custom ? { customModels: [{ id: "c1", provider: "acme", modelId: "writer" }] } : {});
+      const rows = await listManagementModelRows(cfg, {
+        models: [{ id: "writer", provider: "acme", reasoningEfforts: ["low", "high"],
+          defaultReasoningEffort: "high", supportsReasoning: true, supportsThinkingToggle: false,
+          supportsReasoningEffort: false, defaultThinkingEnabled: false }],
+      });
+      const row = rows.find(candidate => candidate.namespaced === "acme/writer")!;
+      const wire = JSON.parse(JSON.stringify(row));
+      for (const exported of [toExportModel(row), ...opencodeCatalogFromProxyRows([wire], cfg), ...exportModelsFromProxyRows([wire], cfg)]) {
+        expect(exported).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: false,
+          supportsReasoningEffort: false, defaultThinkingEnabled: false, reasoningEfforts: [] });
+        expect(exported.defaultReasoningEffort).toBeUndefined();
+      }
+    }
+  });
+
+  test("custom-row capability survives an empty ladder and preserves explicit false", async () => {
+    for (const supportsReasoning of [true, false]) {
+      const cfg = config({ customModels: [{ id: "c1", provider: "acme", modelId: "writer", reasoningEfforts: [] }] });
+      const rows = await listManagementModelRows(cfg, {
+        models: [gatheredCustomRow("acme", "writer", { reasoningEfforts: [], supportsReasoning })],
+      });
+      const row = rows.find(candidate => candidate.namespaced === "acme/writer")!;
+      expect(row.exportMetadata?.supportsReasoning).toBe(supportsReasoning);
+      const wire = JSON.parse(JSON.stringify(row));
+      for (const exported of [toExportModel(row), ...opencodeCatalogFromProxyRows([wire], cfg), ...exportModelsFromProxyRows([wire], cfg)]) {
+        expect(exported.supportsReasoning).toBe(supportsReasoning);
+        expect(exported.reasoningEfforts).toEqual([]);
+      }
+    }
+  });
+
+  test("rosterless custom rows inherit configured independent axes and noReasoningModels remains authoritative", async () => {
+    for (const suppressed of [false, true]) {
+      const cfg = config({ providers: { acme: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1",
+        modelCapabilities: { writer: { supportsReasoning: true, supportsThinkingToggle: true,
+          supportsReasoningEffort: false, defaultThinkingEnabled: false } },
+        modelReasoningEfforts: { writer: [] }, ...(suppressed ? { noReasoningModels: ["writer"] } : {}),
+      } }, customModels: [{ id: "c1", provider: "acme", modelId: "writer" }] });
+      const rows = await listManagementModelRows(cfg, { models: suppressed ? [gatheredCustomRow("acme", "writer", {
+        supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: true,
+        defaultThinkingEnabled: true, reasoningEfforts: ["low", "high"],
+      })] : [] });
+      const row = rows.find(candidate => candidate.namespaced === "acme/writer")!;
+      const wire = JSON.parse(JSON.stringify(row));
+      for (const exported of [toExportModel(row), ...opencodeCatalogFromProxyRows([wire], cfg), ...exportModelsFromProxyRows([wire], cfg)]) {
+        expect(exported).toMatchObject({ supportsReasoning: !suppressed, supportsThinkingToggle: !suppressed,
+          supportsReasoningEffort: false, defaultThinkingEnabled: false, reasoningEfforts: [] });
+        expect(exported.defaultReasoningEffort).toBeUndefined();
+      }
+    }
+  });
+
   test("an off-sentinel-only ladder is not an assertion that the model can reason", async () => {
     const cfg = config({
       customModels: [{ id: "c1", provider: "acme", modelId: "writer", reasoningEfforts: ["none"] }],

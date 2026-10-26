@@ -178,6 +178,8 @@
   "codex-credits-settings.test.ts": "codex-integration", "codex-credits-probes.test.ts": "codex-integration",
     "codex-credits-after-limit.test.ts": "codex-integration",
     "codex-pool-credit-policy.test.ts": "codex-integration",
+    "codex-direct-credit-renewal.test.ts": "codex-integration", "codex-direct-renewal-revocation.test.ts": "codex-integration",
+    "direct-credit-renewal-ingress.test.ts": "responses",
     "codex-sidecar-credit-policy.test.ts": "codex-integration",
   "service-runtime-preflight.test.ts": "service", "service-desktop-runtime-preflight.test.ts": "service",
   "codex-credits-after-limit-main.test.ts": "codex-integration", "service-desktop-login-registration.test.ts": "service", "service-desktop-startup-health.test.ts": "service", "service-desktop-startup-linux.test.ts": "service",

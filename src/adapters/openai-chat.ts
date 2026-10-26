@@ -2,10 +2,9 @@ import { withRequiredChatToolResult } from "./openai-chat/required-tool-result";
 import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
 import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary-budget";
 import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
-import { applyExplicitChatReasoningWirePolicy } from "./openai-chat/reasoning-wire";
+import { applyExplicitChatReasoningWirePolicy, declaresIndependentChatReasoningEffort } from "./openai-chat/reasoning-wire";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
-import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
-import { modelInList } from "../types";
+import { modelInList, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage } from "../types";
 import { mapReasoningEffort } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
@@ -153,7 +152,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const explicitReasoning = applyExplicitChatReasoningWirePolicy({
           provider,
           modelId: parsed.modelId,
-          hasTools: !!tools,
+          hasTools: !!tools, thinkingEnabled: parsed.options.thinkingEnabled,
           requestedEffort,
           wireEffort: reasoningEffort,
           reasoningDisabled,
@@ -173,7 +172,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
                 wireValue: budget,
               };
             }
-          } else if (modelInList(provider.thinkingToggleModels, parsed.modelId)) {
+          } else if (modelInList(provider.thinkingToggleModels, parsed.modelId) && !declaresIndependentChatReasoningEffort(provider, parsed.modelId)) {
             if (reasoningEffort === "enabled" || reasoningEffort === "disabled" || reasoningEffort === "adaptive") {
               body.thinking = { type: reasoningEffort };
               reasoningLog = {

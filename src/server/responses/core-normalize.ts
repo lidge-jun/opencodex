@@ -1,4 +1,6 @@
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
+import { normalizeThinkingOptions } from "../../clients/reasoning-controls";
+import { nativeEffortClamp, shouldApplyNativeEffortClamp } from "../../codex/catalog";
 import { sanitizeLogMetadataString } from "../../lib/redact";
 import type { RouteResult } from "../../router";
 import type { InboundWire } from "../../providers/registry";
@@ -341,6 +343,15 @@ export async function applyFinalRouteRequestNormalization(args: {
   }
 
   {
+    // Native passthrough keeps its snapshot-owned effort contract, including saved exclusions.
+    if (!shouldApplyNativeEffortClamp(route.providerName, route.provider, finalSelectedModelId)) {
+      const previousEffort = parsed.options.reasoning;
+      normalizeThinkingOptions(route.provider, route.modelId, parsed.options);
+      if (previousEffort !== undefined && parsed.options.reasoning === undefined) {
+        const raw = parsed._rawBody as { reasoning?: unknown } | undefined;
+        if (raw) raw.reasoning = stripEmptyLadderEffort(raw.reasoning, []);
+      }
+    }
     const { applyEffortCap, effortCapAppliesTo, supportedLadderFor } = await import("../effort-policy");
     const surface = collabSurface(parsed);
     if (effortCapAppliesTo(surface, req.headers, config, parsed._compactionRequest === true)) {
@@ -357,7 +368,6 @@ export async function applyFinalRouteRequestNormalization(args: {
   }
 
   {
-    const { nativeEffortClamp, shouldApplyNativeEffortClamp } = await import("../../codex/catalog");
     const raw = parsed._rawBody as { reasoning?: { effort?: string } } | undefined;
     // The parser folds `ultra` to `max` only in options.reasoning; the passthrough adapter
     // serializes the raw body, so a raw `ultra` must reach the clamp itself (#7590).

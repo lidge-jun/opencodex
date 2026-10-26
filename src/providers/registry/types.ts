@@ -326,6 +326,7 @@ export interface ProviderRegistryEntry {
    * points at this entry's destination (routed provider, vision eligibility).
    */
   inputModalities?: string[];
+  modelCapabilities?: OcxProviderConfig["modelCapabilities"];
   defaultMaxOutputTokens?: number;
   modelMaxOutputTokens?: Record<string, number>;
   reasoningEfforts?: string[];
@@ -404,7 +405,7 @@ export type ProviderConfigSeed = Pick<
   "anthropicOAuthInstance" |
   "adapter" | "baseUrl" | "apiKeyTransport" | "responsesPath" | "chatCompletionsPath" | "authMode" | "keyOptional" | "freeTier" | "modelSuffixBracketStrip" | "defaultModel" | "models"
   | "liveModels" | "contextWindow" | "modelContextWindows" | "modelInputModalities"
-  | "modelDisplayNames"
+  | "modelDisplayNames" | "modelCapabilities"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noStopModels" | "noPenaltyModels"

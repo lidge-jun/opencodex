@@ -100,6 +100,7 @@ export const REGISTRY_FIELD_MODEL_ID_ROLES = {
   modelDisplayNames: RECORD_KEYS,
   modelInputModalities: RECORD_KEYS,
   inputModalities: NONE,
+  modelCapabilities: RECORD_KEYS,
   defaultMaxOutputTokens: NONE,
   modelMaxOutputTokens: RECORD_KEYS,
   reasoningEfforts: NONE,
