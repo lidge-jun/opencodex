@@ -35,7 +35,18 @@ export function shadowSourceModelBadge(sourceModels?: string[]): string {
  * Compact inventory for the shadow-call row: the intercepted helper models plus
  * the memory-consolidation model, which is controlled by Memory-Routing rather
  * than by the shadow-call switch. The caller localizes `memoryLabel`.
+ *
+ * Terra is normally outside the source set, but an explicit `sourceModels`
+ * entry can opt it in. In that case the source list already names Terra, and
+ * appending the memory label would list the same model twice.
  */
-export function shadowBackgroundModelBadge(sourceModels: string[] | undefined, memoryLabel: string): string {
-  return `${shadowSourceModelBadge(sourceModels)} (+ ${memoryLabel})`;
+export function shadowBackgroundModelBadge(
+  sourceModels: string[] | undefined,
+  memoryLabel: string,
+  memoryModelId = "gpt-5.6-terra",
+): string {
+  const memoryAlreadyIntercepted = memoryModelId !== ""
+    && shadowSourceModelList(sourceModels).some(prefix => memoryModelId.startsWith(prefix));
+  const sourceLabel = shadowSourceModelBadge(sourceModels);
+  return memoryAlreadyIntercepted ? sourceLabel : `${sourceLabel} (+ ${memoryLabel})`;
 }
