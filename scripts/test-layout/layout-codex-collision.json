@@ -1,4 +1,5 @@
 {
+  "codex-catalog-heal-reanchor.test.ts": "codex-integration",
   "codex-quota-persistence.test.ts": "codex-integration",
   "codex-sync-user-edits.test.ts": "codex-integration",
   "codex-stored-main-duplicate.test.ts": "codex-integration",

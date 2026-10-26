@@ -316,6 +316,9 @@ payloads cannot clear cooldowns, actual request refusals still drive cooldown/fa
 default-on main-account hard lock retains its separate local admission policy. Registration
 warmup remains conservative and does not spend paid credits to validate an exhausted account.
 
+Stored-account refusals in `src/codex/auth-context.ts` preserve the included-window `resetAt`. For opted-in accounts with stale, missing or incomplete credits, `src/codex/pool-credit-policy.ts` supplies a retry hint at the earlier of that reset and the 300-second base cadence from `src/codex/quota-query-backoff.ts`; the latest live account-wide or selected-scope cooldown takes precedence, without importing unrelated model-group holds. Numeric and HTTP-date Retry-After input retains the existing 24-hour parser ceiling.
+HTTP remains 429 and admission stays closed. Formatting never triggers a query, clears cooldown or switches accounts; query pacing remains independent. Opt-out, legacy null, known spending/overage vetoes and finite nonpositive balances without unlimited entitlement retain reset-bound advice as evidence ages. Parser-proven unavailable null carries `creditObservationUnavailable: true` through merges and persistence; replacement clears that provenance. It changes retry advice only and never authorizes spending. The same live-policy classification applies after token preparation, at materialization/dispatch and through `src/providers/openai-sidecar-credit.ts`. Main policy and ordinary upstream 429 formatting are unchanged.
+Coverage: `tests/codex-integration/codex-credit-retry-after.test.ts` and `tests/codex-integration/codex-credit-scoped-retry.test.ts`.
 For an opted-in, unpaused main account with a currently full usage window, the existing
 `src/codex/auth-api/pool-mode-gate.ts` recovery sweep renews credit observations from three minutes
 of age, leaving time for token preparation before the five-minute freshness limit. Missing, zero,

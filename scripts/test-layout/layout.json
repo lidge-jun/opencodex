@@ -94,7 +94,7 @@
     "codex-credits-settings.test.ts": "codex-integration",
     "codex-credits-probes.test.ts": "codex-integration",
     "codex-credits-after-limit.test.ts": "codex-integration",
-    "codex-pool-credit-policy.test.ts": "codex-integration",
+    "codex-pool-credit-policy.test.ts": "codex-integration", "codex-credit-retry-after.test.ts": "codex-integration", "codex-credit-scoped-retry.test.ts": "codex-integration",
     "codex-sidecar-credit-policy.test.ts": "codex-integration",
     "codex-credits-after-limit-main.test.ts": "codex-integration",
     "service-runtime-preflight.test.ts": "service", "service-desktop-runtime-preflight.test.ts": "service",
