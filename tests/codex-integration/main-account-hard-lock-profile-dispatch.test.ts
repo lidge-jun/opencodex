@@ -6,6 +6,7 @@ import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-
 import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -74,21 +75,25 @@ function config(modelFallback: boolean): OcxConfig {
   } as OcxConfig;
 }
 
-async function dispatch(modelFallback: boolean): Promise<Response> {
+async function dispatch(modelFallback: boolean) {
   const cfg = config(modelFallback);
+  const budget = createRequestExecutionBudget();
   expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
   expect(existsSync(home.path(".codex", "auth.json"))).toBe(false);
   // An unrelated caller's own credential can serve the ranked model. This prevents the
   // independent stored-main lock from masking a missing first-selection policy check.
-  return handleResponses(new Request("http://localhost/v1/responses", {
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${callerToken}`, "chatgpt-account-id": callerId },
     body: JSON.stringify({ model: "gpt-5.3", stream: false, input: "hello" }),
-  }), cfg, { model: "", provider: "" });
+  }), cfg, { model: "", provider: "" }, { sendBudget: budget });
+  return { response, used: budget.used };
 }
 
 test("model fallback off refuses the first ranked profile model before dispatch", async () => {
-  const response = await dispatch(false);
+  const { response, used } = await dispatch(false);
+  expect(used).toBe(0);
+  expect(recentFallbackEvents()).toHaveLength(1);
   expect(response.status).toBe(429);
   expect(response.headers.get("x-opencodex-fallback")).toBe("refused");
   expect(sent).toEqual([]);
@@ -99,7 +104,10 @@ test("model fallback off refuses the first ranked profile model before dispatch"
 });
 
 test("model fallback on lets the first ranked profile model use the caller's credential", async () => {
-  const response = await dispatch(true);
+  const { response, used } = await dispatch(true);
+  expect(used).toBe(1);
+  expect(recentFallbackEvents()).toMatchObject([{ site: "routing-profile", outcome: "taken", kind: "model" }]);
+  expect(recentFallbackEvents()).toHaveLength(1);
   expect(response.status).toBe(200);
   expect(response.headers.get("x-opencodex-fallback")).toBeNull();
   expect(sent).toEqual([{ model: "gpt-5.4", callerCredential: true, callerAccount: true }]);

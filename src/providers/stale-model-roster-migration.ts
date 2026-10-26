@@ -15,13 +15,21 @@
  * those records all-or-nothing, so creating one here would hide the rest of the registry seed.
  * Same shape and restraint as `stale-context-window-migration`.
  */
-import { ALIBABA_INTL_TOKEN_PLAN_BASE_URL } from "./base-url-choices";
+import { ALIBABA_INTL_TOKEN_PLAN_BASE_URL, MOONSHOT_CN_BASE_URL, MOONSHOT_INTL_BASE_URL } from "./base-url-choices";
 import { PROVIDER_REGISTRY, normalizedProviderEndpoint } from "./registry";
 import {
   ALIBABA_TOKEN_PLAN_MODELS,
   ALIBABA_INTL_TOKEN_PLAN_MODELS,
   ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
   ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
+  KIMI_API_DEFAULT_REASONING_EFFORTS,
+  KIMI_API_MODEL_CONTEXT_WINDOWS,
+  KIMI_API_MODELS,
+  KIMI_API_MODELS_BEFORE_K31,
+  META_MODEL_API_MODELS,
+  META_MUSE_CONTEXT_WINDOW,
+  META_MUSE_MODELS,
+  META_MUSE_WONDER_MODEL,
   MINIMAX_M31_DEFAULT_REASONING_EFFORT,
   MINIMAX_M31_FLASH_PREVIEW,
   MINIMAX_MODELS,
@@ -75,6 +83,15 @@ const ALIBABA_INTL_TOKEN_PLAN_MODELS_BEFORE_1017 = [
  * preview, so live discovery cannot add it; the catalog keeps it only when it is configured.
  */
 export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
+  {
+    provider: "meta-model",
+    from: META_MUSE_MODELS,
+    to: META_MODEL_API_MODELS,
+    contextWindows: { [META_MUSE_WONDER_MODEL]: META_MUSE_CONTEXT_WINDOW },
+    // A Custom row may keep this id pointed at another gateway
+    // (preserveCustomDestination); only api.meta.ai publishes the roster `to` describes.
+    destinationBaseUrls: ["https://api.meta.ai/v1"],
+  },
   ...["minimax", "minimax-cn"].map(provider => ({
     provider,
     from: MINIMAX_MODELS_BEFORE_M31,
@@ -96,6 +113,16 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
     maxOutputTokens: ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS,
     defaultReasoningEfforts: { "deepseek-v4.1-flash-1017": "high" },
   })),
+  // Kimi K3.1 Pro (#7653). Both the International and China platforms list kimi-k3.1-pro and
+  // -highspeed; a Custom URL may be another gateway, so it keeps its saved list.
+  {
+    provider: "moonshot",
+    from: KIMI_API_MODELS_BEFORE_K31,
+    to: KIMI_API_MODELS,
+    contextWindows: KIMI_API_MODEL_CONTEXT_WINDOWS,
+    defaultReasoningEfforts: KIMI_API_DEFAULT_REASONING_EFFORTS,
+    destinationBaseUrls: [MOONSHOT_INTL_BASE_URL, MOONSHOT_CN_BASE_URL],
+  },
 ];
 
 function sameList(value: unknown, expected: readonly string[]): boolean {

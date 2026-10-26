@@ -1558,9 +1558,9 @@ describe("codexWsUpstreamFetch", () => {
         const pending = codexWsUpstreamFetch(CODEX_URL, streamingInit(), noResend(counter));
         await opened.promise;
         const ws = FakeWebSocket.instances[0];
-        // Seven steps: 105 s of no message frames, well past the 90 s bound, every step ponged.
+        // Seven steps plus the send probe: 105 s of no message frames, past the 90 s bound.
         for (let step = 0; step < 7; step++) jest.advanceTimersByTime(CODEX_WS_LIVENESS_PING_INTERVAL_MS);
-        expect(pingsSent).toBe(7);
+        expect(pingsSent).toBe(8);
         ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
         ws.emit("message", { data: JSON.stringify({ type: "response.completed", response: { id: "r1" } }) });
         const response = await pending;
@@ -1568,9 +1568,9 @@ describe("codexWsUpstreamFetch", () => {
         expect(await response.text()).toContain("event: response.completed");
         expect(ws.sent).toHaveLength(1);
         expect(counter.http).toBe(0);
-        // The pinger stops once the response has started.
+        // The pinger stops once the exchange settles.
         jest.advanceTimersByTime(CODEX_WS_LIVENESS_PING_INTERVAL_MS * 4);
-        expect(pingsSent).toBe(7);
+        expect(pingsSent).toBe(8);
         expect([...ws.listeners.values()].every(listeners => listeners.length === 0)).toBe(true);
       } finally {
         jest.useRealTimers();

@@ -231,4 +231,14 @@ describe("Antigravity direct lane through the Chat ingress", () => {
     expect(trace).toMatchObject({ mode: "legacy-bridge", requestPath: ["chat", "responses-internal", "ir", "other"] });
     expect(trace?.reasonCodes).toContain("hosted-tool");
   });
+
+  test("charges the decoded conversation before building the Antigravity request", async () => {
+    const result = await send(true, false, {
+      messages: [{ role: "assistant", reasoning_content: "x".repeat(12 * 1024 * 1024), content: "answer" }],
+    });
+
+    expect(result.status).toBe(413);
+    expect(result.text).toContain('"code":"translation_buffer_limit"');
+    expect(upstreamBodies).toHaveLength(0);
+  });
 });

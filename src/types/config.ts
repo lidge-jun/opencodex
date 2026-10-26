@@ -234,9 +234,9 @@ export interface OcxClaudeCodeConfig {
   /** Optional roster-style model forced on subagents at the next routed Claude Code launch. */
   subagentModelForce?: string;
   /** Claude-originated web-search override. Unset fields inherit the global sidecar settings. */
-  webSearchSidecar?: { backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string; anthropicInstance?: AnthropicInstanceId };
+  webSearchSidecar?: { enabled?: boolean; backend?: "openai" | "anthropic" | "xai" | "gemini" | "exa"; model?: string; anthropicInstance?: AnthropicInstanceId };
   /** Claude-originated vision override. Unset fields inherit the global sidecar settings. */
-  visionSidecar?: { backend?: "openai" | "anthropic" | "routed"; model?: string; anthropicInstance?: AnthropicInstanceId };
+  visionSidecar?: { enabled?: boolean; backend?: "openai" | "anthropic" | "routed"; model?: string; anthropicInstance?: AnthropicInstanceId };
   /** Persisted Claude Desktop four-family routing profile. */
   desktopProfile?: OcxClaudeDesktopProfile;
   /**

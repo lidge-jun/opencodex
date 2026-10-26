@@ -401,6 +401,17 @@ routing policies and cost caps that exclude unknown estimates can therefore excl
 See [Kimi's model configuration](https://www.kimi.com/code/docs/en/kimi-code/models.html) and
 [API pricing](https://platform.kimi.ai/docs/pricing/chat).
 
+The `moonshot` (Kimi API) preset lists `kimi-k3.1-pro` and `kimi-k3.1-pro-highspeed` next to
+`kimi-k3` and the K2 ids. Both have a 1M-token context window and text + image input, and always
+think: the picker offers `low` / `high` / `max` (default `max`), Codex `medium` is sent as `high`
+and `xhigh` as `max`, and an explicit `none` leaves `reasoning_effort` out so the upstream default
+applies. Fixed sampling parameters (`temperature`, `top_p`, penalties) are not sent. A saved
+`moonshot` model list that is still the previous built-in list gains both ids at startup when it
+points at the International or China endpoint; an edited list or a Custom URL is left as it is.
+The preset default stays `kimi-k2.7-code`. Moonshot closes the K2 series to new accounts on
+2026-10-31 and plans to retire it by the end of December 2026; see the
+[Kimi API model list](https://platform.kimi.ai/docs/models).
+
 A custom `openai-chat` provider can opt in when its upstream documents support for
 `prompt_cache_key`:
 
@@ -1107,6 +1118,10 @@ ladder, and `meta-model/muse-wonder-1.0` (Muse Wonder, preview) with `minimal` t
 Muse Wonder is Standard mode only on the Model API: it has no Contributor tier and costs
 $4 per 1M input and $20 per 1M output tokens. Muse Wonder Full is available only inside Muse
 Code subscriptions, so it is not seeded.
+On startup, an untouched saved two-Spark model list gains Muse Wonder when `meta-model` uses
+`https://api.meta.ai/v1` or has no saved endpoint override. Custom gateway destinations and
+hand-edited model lists stay unchanged. Existing per-model context-window overrides and output
+limits are preserved; Wonder's context window is filled only into an existing window map.
 Discovery stays off until an authenticated roster is verified, because Meta serves image and
 voice models on the same host.
 

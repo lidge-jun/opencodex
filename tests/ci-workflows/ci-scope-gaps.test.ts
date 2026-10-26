@@ -36,6 +36,29 @@ const scriptOf = (job: Job): string => (job.steps ?? []).map(step => step.run ??
 const ACTION_PATH = ".github/actions/setup-project-bun/action.yml";
 const HELPER_PATH = "native/remote-workspace-helper/src/main.rs";
 
+describe("Docker build and runtime input scope", () => {
+  test("selects runtime sources and every GUI build input", () => {
+    for (const path of [
+      "src/config.ts", "src/config/paths.ts", "src/server/index.ts", "src/service.ts",
+      "gui/src/App.tsx", "gui/src/style.css", "gui/public/icon.svg", "gui/index.html",
+      "gui/vite.config.ts", "gui/tsconfig.json", "gui/tsconfig.app.json", "gui/tsconfig.node.json",
+      "gui/package.json", "gui/bun.lock",
+    ]) {
+      expect(`${path}:ci=${matches(filters.ci, path)}`).toBe(`${path}:ci=true`);
+      expect(`${path}:docker=${matches(filters.docker, path)}`).toBe(`${path}:docker=true`);
+    }
+  });
+
+  test("does not select Docker for tests or documentation alone", () => {
+    for (const path of [
+      "tests/server/server-live.test.ts", "gui/tests/claude-code-save.test.ts",
+      "gui/README.md", "docs-site/src/content/docs/index.mdx", "structure/runtime.md",
+    ]) {
+      expect(`${path}:docker=${matches(filters.docker, path)}`).toBe(`${path}:docker=false`);
+    }
+  });
+});
+
 describe("an edit to the setup action alone", () => {
   test("selects a job that runs the action and checks what it installed", () => {
     const selected = jobsSelectedBy(filtersMatching(ACTION_PATH))
