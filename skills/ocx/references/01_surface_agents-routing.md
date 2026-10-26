@@ -958,7 +958,7 @@ State-changing: no. JSON mode: `payload`.
 
 ### `ocx combo set`
 
-Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--session-pin <duration|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
+Usage: `ocx combo set <id> [--targets <provider/model[:weight],...> | --targets-file <FILE|->] [--strategy <failover|round-robin|random|least-used|reset-window|jev>] [--sticky <1-100|->] [--cooldown-reprobe <on|off>] [--cooldown-reprobe-interval <ms>] [--effort <low|medium|high|xhigh|max|ultra|->] [--effort-mode <fallback|force|->] [--alias <name|->] [--native-alias [on|off]] [--allow-metered-targets <on|off>] [--display-name <label|->] [--description <text|->] [--decision-provider <provider|-> | --decision-model <route|->] [--decision-timeout <ms|->] [--decision-quota-signals <on|off|->] [--decision-quota-tiers <JSON|->] [--session-pin <duration|->] [--rename-from <id>] [--image-input <auto|disabled>] [--reasoning-effort-mode <strict|adaptive>] [--json]`
 
 Create, update or rename a combo.
 
@@ -975,6 +975,8 @@ State-changing: yes. JSON mode: `payload`.
 | `--targets` | string | Ordered provider/model[:weight] list; required for creation. |
 | `--strategy` | string | Routing strategy. |
 | `--sticky` | string | Round-robin limit 1-100; - resets. |
+| `--cooldown-reprobe` | string | Opt into one recovery pass when all eligible targets cool; off by default. |
+| `--cooldown-reprobe-interval` | string | Minimum interval between recovery passes in ms (1000..86400000); default 300000. |
 | `--effort` | string | Default effort; - clears. |
 | `--effort-mode` | string | fallback or force; - resets to fallback. |
 | `--alias` | string | Alias; - clears. |

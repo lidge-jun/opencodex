@@ -665,7 +665,10 @@ export async function prepareResponsesRequest(
     if (candidate.combo?.target.metered && !admissionMayUseMeteredComboTargets(
       config, options.admission, config.combos?.[candidate.combo.comboId],
     )) {
-      const pick = pickComboTarget(config, candidate.combo.comboId, { eligible: target => !target.metered });
+      const pick = pickComboTarget(config, candidate.combo.comboId, {
+        eligible: target => !target.metered,
+        allowCooldownReprobe: false,
+      });
       if (!pick) {
         throw new NoAvailableComboTargetsError(candidate.combo.comboId,
           comboExclusionReasons(config, candidate.combo.comboId, target => !target.metered));
@@ -778,8 +781,8 @@ export async function prepareResponsesRequest(
     if (parsed._compactionRequest === true || options.compactionRoutingOverride) parsed._cursorIsolateConversation = true;
     route = memoryRoute ?? shadowRoute ?? resolveRoute(options.policyFallbackCandidate
       ? `${options.policyFallbackCandidate.provider}/${options.policyFallbackCandidate.model}` : parsed.modelId);
-    // The hard-lock rewrite checked a declared profile representative. Enforce the actual
-    // ranked destination against the locked source before admitting this first selection.
+    // Selection-free hard-lock preflight grants no hop. Enforce the actual ranked destination
+    // against the locked source before admitting this first selection.
     const hardLockProfileTrace = options.mainHardLockFallbackOverride ? route.routeDecision?.profile : undefined;
     if (hardLockProfileTrace && options.mainHardLockFallbackOverride) {
       const override = options.mainHardLockFallbackOverride;

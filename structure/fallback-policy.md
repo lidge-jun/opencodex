@@ -58,21 +58,24 @@ leaves is the failed child's resolved provider and model. Two selectors under on
 to different providers make a provider hop; a routing profile's `current` advances to the redirected
 candidate.
 
-The hard-lock site classifies its one proactive hop from config alone, before anything is sent: a
-combo, account namespace or concrete target through `previewRouteModel`, and a routing profile from
-its declared candidates (any candidate on another provider makes a provider hop) without running the
-evaluator, which would open `routing-history.sqlite` under `OPENCODEX_HOME`. The profile's own
-dispatch still evaluates it.
+The hard-lock site keeps concrete/account-qualified targets' proactive admission at body rewrite.
+For combos and profiles it only checks policy feasibility over declared destinations, resolved through
+`routeConcreteModel` with the actual first guard's route, alias, source-provider and device precedence.
+It refuses before rewriting only when every declared candidate resolves and is policy-denied. One
+denied candidate is the refusal witness; it is not a selected destination. Empty, mixed or unresolved
+declarations defer to actual dispatch. No candidate is filtered, no random sample is consumed, and no
+picker state or profile-history index is opened. Cooldown, weighted/RR/sticky order and evidence-based
+profile ranking remain the selector's responsibility. This preflight creates no taken event or send
+reservation: an all-denied declaration records one refusal, otherwise it records nothing.
 
-That pre-admission destination is not necessarily the first dispatch: a random combo picks again.
-A hard-lock rewrite therefore checks the actual first combo destination in `core-combo.ts` against
-the locked OpenAI source, with `trigger: hard_lock`. A prior provider-hop admission cannot authorize
-a same-provider model hop when model fallback is off. The combo records an allowed first hop after
-its send-budget reservation.
+A hard-lock rewrite checks the actual first combo destination in `core-combo.ts` against the locked
+OpenAI source, with `trigger: hard_lock`. Feasibility is no grant: a forbidden selected destination
+still refuses even when another declaration is allowed or unknown. Actual unknown resolution remains
+fail-closed. The combo records an allowed first hop only after its send-budget reservation.
 
 For a hard-lock profile rewrite, `src/server/responses/request-prepare.ts` checks the actual first
-ranked destination against the original OpenAI model with `trigger: hard_lock`. A declared provider
-hop does not admit a same-provider model hop when model fallback is off. The guard records an allowed
+ranked destination against the original OpenAI model with `trigger: hard_lock`. An allowed declared
+provider hop does not admit a selected model hop when model fallback is off. The guard records an allowed
 selection when it is accepted; later authentication or preparation can still refuse it.
 `tests/codex-integration/main-account-hard-lock-profile-dispatch.test.ts` covers refusal and allowed
 dispatch with a synthetic caller-owned credential and a fetch stub.
@@ -126,3 +129,5 @@ privacy), `tests/responses/responses-combo-fallback-off.test.ts`, `tests/routing
 `tests/routing/subagent-model-fallback-off.test.ts`, `tests/codex-integration/main-account-hard-lock-fallback-off.test.ts`,
 `tests/server/fallback-routes.test.ts`, `tests/clients/client-home-unreachable.test.ts`, `tests/cli/cli-fallback.test.ts`
 and `gui/tests/fallback-panel.test.tsx`.
+
+The opt-in [all-cooled Combo recovery](runtime.md#scoped-provider-quota-for-combo-selection) can reopen saved combo cooldowns in `src/combos/resolve.ts`; only the request-eligible target keys are cleared, with throwing predicates treated as ineligible during recovery preparation and available siblings preferred without probing cooled targets. Route-level picks and in-flight retry-after-cooldown selections disable reprobes. Recovery does not authorize a fallback hop or bypass the configured fallback policy.

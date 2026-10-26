@@ -65,7 +65,7 @@ async function runParentStop(options: {
   serverTeardown?: boolean; json?: boolean;
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
   managerCascades?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
-  nativeSignal?: boolean; apiFailure?: boolean;
+  nativeSignal?: boolean; apiFailure?: boolean; apiBodyFailure?: "truncated" | "timeout";
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
@@ -384,6 +384,17 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.receiptExists).toBe(true);
     expect(outcome.stderr).toContain("Run the stop outside the installed service.");
   });
+
+  for (const clientTransport of ["hub", "link"] as const) for (const apiBodyFailure of ["truncated", "timeout"] as const) {
+    test(`connected ${clientTransport} stop preserves a 409 refusal after a ${apiBodyFailure} body`, async () => {
+      const outcome = await runParentStop({ receipt: true, clientTransport, status: 409, apiBodyFailure, json: true,
+        response: { success: false }, restore: restoreResult(true) });
+      expect(outcome.calls).toMatchObject({ killed: 0, exited: 0, native: 0, grok: 0, cleared: 0 });
+      expect(outcome.directPosts).toBe(1);
+      expect(outcome.exitCode).toBe(1);
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, proxy: "ownership-refused", sharedTeardown: "skipped" });
+    });
+  }
 });
 
 describe("stopProxyGracefully deferral flag", () => {

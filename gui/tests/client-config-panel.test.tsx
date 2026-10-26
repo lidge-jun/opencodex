@@ -171,7 +171,7 @@ function rowButton(container: HTMLElement, name: string, label: string): HTMLBut
 }
 
 test("the API download surface includes DSH, MiniMax Code, Aside, Raycast and omo as clients", () => {
-  expect(CLIENTS).toEqual(["qoder", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid", "gentle-shell"]);
+  expect(CLIENTS).toEqual(["qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode", "zcode", "commandcode", "prime", "aside", "raycast", "omo", "cline", "kilo", "droid", "gentle-shell"]);
   expect(CLIENT_LABEL_KEYS["gentle-shell"]).toBe("integrations.tab.gentleShell");
   expect(CLIENT_LABEL_KEYS.dsh).toBe("api.clientConfig.clientDsh");
   expect(CLIENT_LABEL_KEYS.mcode).toBe("api.clientConfig.clientMcode");
@@ -252,7 +252,7 @@ test("clients render as rows, not a switch", async () => {
   expect(container.querySelector(".awi-clientconfig-segmented")).toBeNull();
   const names = [...container.querySelectorAll(".awi-clientconfig-name")].map(el => el.textContent);
   // Row order follows the registry, so a new client appears without a code change here.
-  expect(names?.slice(0, 2)).toEqual(["Qoder", "OpenCode"]);
+  expect(names?.slice(0, 5)).toEqual(["Qoder", "Qoder CN", "WorkBuddy (CN)", "WorkBuddy AI", "OpenCode"]);
   expect(names).toHaveLength(CLIENTS.length);
   // Each row states where its file goes; a Download with no destination is the
   // ambiguity the announcement text works to prevent.
@@ -331,7 +331,8 @@ test("each client row shows its own brand mark, never a borrowed one", async () 
   const sources = [...imgSources, ...maskSources]
     .filter((src): src is string => src !== null && src !== "");
   expect(sources.length).toBeGreaterThan(1);
-  expect(new Set(sources).size).toBe(sources.length);
+  // Global and CN editions share Qoder's own brand asset.
+  expect(new Set(sources).size).toBe(sources.length - 1);
   // Marks are decoration: the row already names its client in text.
   for (const img of container.querySelectorAll("img")) {
     expect(img.getAttribute("alt")).toBe("");

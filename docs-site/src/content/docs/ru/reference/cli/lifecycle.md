@@ -268,6 +268,8 @@ conversation'ов невосстановима, а устаревший picker �
 Если команда запущена изнутри приложения Codex, restart передаётся detached helper'у, и эта
 сессия завершается вместе с приложением.
 
+**Синхронизация с закреплённым источником.** `ocx sync --expect-link <linkId>` (Remote Link Child) и `ocx sync --expect-hub-key <apiKeyId>` (клиент hub) выполняют синхронизацию, только если эта машина всё ещё подключена к этой связи или с этим ключом. Иначе ничего не меняется, локальные провайдеры не синхронизируются, команда завершается с кодом 5, а последняя строка stderr — `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`. Неверный или повторённый флаг завершает команду с кодом 2. Подробнее: [английская справка](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key).
+
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 Инвалидировать локальный кэш model picker'а Codex, чтобы он пересобрался из активного каталога

@@ -408,18 +408,19 @@ jobs:
               - 'scripts/ci/docker-smoke.ts'
               - 'scripts/generate-compatibility-version.ts'
               - 'scripts/model-metadata.source.json'
-              # The image's final RUN imports version.ts to prove the generated compatibility
-              # manifest; these four files are its whole module closure (Bun.build metafile).
-              - 'src/routing/compatibility/version.ts'
-              - 'src/lab/digest.ts'
-              - 'src/lab/conformance/digest.ts'
-              - 'src/lab/conformance/jcs.ts'
-              - 'src/cli/index.ts'
+              # The image copies and runs src/, then builds the GUI with tsc and Vite.
+              # Include their inputs without selecting GUI tests or documentation alone.
+              - 'src/**'
               - 'package.json'
               - 'bun.lock'
               - 'tsconfig.json'
               - 'gui/package.json'
               - 'gui/bun.lock'
+              - 'gui/src/**'
+              - 'gui/public/**'
+              - 'gui/index.html'
+              - 'gui/vite.config.ts'
+              - 'gui/tsconfig*.json'
               - '.github/workflows/ci.yml'
             # scripts/keyring-smoke.ts imports only src/lib/keyring-native.ts; the native binding
             # itself arrives through package.json and bun.lock.
@@ -621,12 +622,10 @@ jobs:
           printf 'Scheduled run: workflow from %s, testing dev at %s\n' "$GITHUB_SHA" "$sha" >> "$GITHUB_STEP_SUMMARY"
           printf 'scheduled run tests dev at %s (workflow %s)\n' "$sha" "$GITHUB_SHA"
 
-  # Bun roles (#6713): runtime 1.4.2 fixes #6684's Windows Bun.fetch streaming;
-  # the test runner skipped 1.4.2's multi-file --isolate preload segfault (#4821
-  # reverted #4064; run 37631558263: Linux 1/4, macOS 2/2, Windows 9/9) and runs
-  # 1.4.3, whose oven-sh/bun#44581 stops Bun.spawnSync losing a child's exit (#4956).
-  # Rejoin after the upstream runner crash is fixed and a green lane=all dispatch
-  # proves the unified version, then delete testRunnerBun and the action's role input.
+  # Bun runtime and test-runner roles both read their 1.4.4 defaults from package.json.
+  # Keep role validation after the historical isolate preload and spawnSync failures
+  # (#6713, #4956). Promotion requires a green full cross-platform lane=all run on
+  # the exact candidate head; focused local results do not replace that proof.
   # The suite, split by file across four Linux runners.
   #
   # `scripts/ci/run-bun-test-batches.sh` assigns files to shards by the per-file

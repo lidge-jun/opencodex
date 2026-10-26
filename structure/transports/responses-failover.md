@@ -262,6 +262,19 @@ including when the destination is a combo, so request history names the phase th
 
 ## Compaction routing overrides
 
+For routed v2 summaries served by the resolved Anthropic Messages adapter, `src/server/responses/response-effects.ts`
+preserves client tool definitions, system text, `toolChoice` and `parallelToolCalls`. Other adapters retain tool removal.
+Search/media sidecar execution stays disabled; Anthropic server-tool declarations and replay remain,
+with wire `tool_choice: none` when server tools exist, preventing upstream execution.
+[Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#what-invalidates-the-cache)
+orders the prefix as tools, system, messages: changing tool definitions invalidates all three;
+changing tool choice invalidates message cache only. Client-only summaries keep an optional choice unchanged; a mandatory choice (required, named, or required allowed tools) keeps the caller's choice for catalog derivation and sets `_summaryProhibitsToolCalls`; `src/adapters/anthropic.ts` builds tools and system from that choice, provider name transforms included, then sends `tool_choice: none`, so tools and system stay byte-identical. Search sidecar declarations are not injected for summaries, so a request whose ordinary turn advertised a sidecar search tool still changes its tool prefix.
+`src/responses/compaction-summary.ts` suppresses tool/search events and rejects tool attempts,
+empty summaries and abnormal completions before delivery;
+only successful prose reaches the single synthetic compaction item. Truncated completions retain the existing incomplete outcome.
+Signed progress is not summary prose.
+`tests/responses/responses-anthropic-compaction-prefix.test.ts` covers the prefix and both delivery modes; image normalization and 413 recovery retain their existing policy.
+
 `src/server/responses/compaction-routing.ts` applies `compactionRouting` before model routing in
 both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"` in
 `x-codex-turn-metadata`, supplied as a header or embedded in Responses `client_metadata`, and on
@@ -284,7 +297,10 @@ canonical `openai` provider exists (#2901), not when its quota is exhausted. A h
 `triggers` the schema would reject disables the whole block instead of widening it, so a
 malformed edit can never route more than it names.
 
-The override changes only the model and optional reasoning effort; native forwarding, routed summaries, capability handling, and retry
+The override changes only the model and optional reasoning effort. Final-route normalization
+checks that effort against the selected canonical native model's published ladder before each
+Responses send, including a combo fallback (`gpt-6.1-sol` `none` → `low`). Native forwarding,
+routed summaries, capability handling, and retry
 budgets stay authoritative, and native compact still removes reasoning before sending. Handoffs carry the override record (with the source
 model) as a recursion guard so combo children and fallbacks keep their targets. Overrides bypass shadow interception and conversation
 combo recall, and do not publish replacement combo/handoff recall. They never change the conversation's model or compactions outside the

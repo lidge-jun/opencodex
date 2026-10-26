@@ -28,6 +28,7 @@ import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
+import { guardCompactionSummary } from "../../responses/compaction-summary";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -183,7 +184,9 @@ export async function deliverAdapterResponse(
           continuation: fetchGuardedEmptyCompletionRetry,
         })
       : advisorStream;
-    const guardedEventStream = guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
+    const catalogGuardedEventStream = guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
+    const guardedEventStream = routedCompaction && transportState.activeAdapter.name === "anthropic"
+      ? guardCompactionSummary(catalogGuardedEventStream, translatorBudget) : catalogGuardedEventStream;
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames } = deliveryToolBridgeMaps;
     // One completion owner for both deliveries: the bridge calls it from its terminal, the
     // direct client encoder from the fold of the same events.
@@ -328,6 +331,13 @@ export async function deliverAdapterResponse(
         })) events.push(event);
       } else {
         events = guardedEvents;
+      }
+      if (routedCompaction && transportState.activeAdapter.name === "anthropic") {
+        const summaryEvents: AdapterEvent[] = [];
+        for await (const event of guardCompactionSummary((async function* () { yield* events; })(), translatorBudget)) {
+          summaryEvents.push(event);
+        }
+        events = summaryEvents;
       }
     } catch (error) {
       if (error instanceof ResponseBodyInactivityError) {

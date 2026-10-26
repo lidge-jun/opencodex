@@ -21,6 +21,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   exitCleanup?: boolean;
   nativeSignal?: boolean;
   apiFailure?: boolean;
+  apiBodyFailure?: "truncated" | "timeout";
   proxyProbePort?: number;
   alreadyStopped?: boolean;
   absence?: "dead" | "unknown" | "live";
@@ -34,10 +35,9 @@ if (options.proxyProbePort) {
   const { assertConnectedClientStopSupported } = await import("../../src/cli/stop-restore");
   await assertConnectedClientStopSupported({ pid: process.pid, port: options.proxyProbePort, hostname: "127.0.0.1" });
   const { stopProxyGracefully } = await import("../../src/lib/process-control");
-  const { directLocalHttpFetch } = await import("../../src/server/direct-local-http");
   const result = await stopProxyGracefully(process.pid, {
     runtimeEndpoint: { port: options.proxyProbePort, hostname: "127.0.0.1" },
-    fetchFn: directLocalHttpFetch, waitExit: () => true,
+    waitExit: () => true,
   });
   if (result !== true) throw new Error("direct stop request failed");
   console.log(JSON.stringify({ ok: true, control: control.via }));
@@ -203,10 +203,13 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
 // Only the real proxy-environment mode above exercises TCP; other cases inject responses.
 const direct = await import("../../src/server/direct-local-http");
 mock.module("../../src/server/direct-local-http", () => ({ ...direct,
-  directLocalHttpFetch: async (input: string | URL | Request, init?: RequestInit) => {
+  directLocalHttpFetch: async (input: string | URL | Request, init?: RequestInit, io?: Parameters<typeof direct.directLocalHttpFetch>[2]) => {
     if (init?.method === "POST") directPosts++;
     if (!alive && String(input).endsWith("/healthz")) throw Object.assign(new Error("fixture listener closed"), { code: "ECONNREFUSED" });
-    return globalThis.fetch(input, { ...init, method: init?.method ?? "GET", redirect: "error" });
+    const response = await globalThis.fetch(input, { ...init, method: init?.method ?? "GET", redirect: "error" });
+    io?.onResponseStatus?.(response.status);
+    if (init?.method === "POST" && options.apiBodyFailure) throw new Error(`fixture stop body ${options.apiBodyFailure}`);
+    return response;
   },
 }));
 

@@ -7,6 +7,8 @@ type DirectLocalHttpIo = {
   timeoutMs?: number;
   connect?: (hostname: string, port: number) => Socket;
   scheduleDeadline?: (onTimeout: () => void, timeoutMs: number) => () => void;
+  /** Observe a parsed response status before reading its bounded body. */
+  onResponseStatus?: (status: number) => void;
 };
 
 function abortReason(signal: AbortSignal): Error {
@@ -96,7 +98,7 @@ function parseResponseHead(bytes: Buffer, boundary: number): {
   return { status, statusText: match[2] ?? "", headers };
 }
 
-function advanceResponseFraming(bytes: Buffer, initial: ResponseFraming): ResponseFraming {
+function advanceResponseFraming(bytes: Buffer, initial: ResponseFraming, onResponseStatus?: (status: number) => void): ResponseFraming {
   let framing = initial;
   for (;;) {
     if (framing.kind === "complete" || framing.kind === "close") return framing;
@@ -107,6 +109,7 @@ function advanceResponseFraming(bytes: Buffer, initial: ResponseFraming): Respon
         return { kind: "head", searchFrom: Math.max(0, bytes.length - 3) };
       }
       const { status, headers } = parseResponseHead(bytes, boundary);
+      onResponseStatus?.(status);
       const bodyStart = boundary + 4;
       if (status === 204 || status === 205 || status === 304) {
         if (bytes.length > bodyStart) {
@@ -350,7 +353,7 @@ export async function directLocalHttpFetch(
       }
       bytes.copy(responseBytes, receivedBytes - bytes.byteLength);
       try {
-        framing = advanceResponseFraming(responseBytes.subarray(0, receivedBytes), framing);
+        framing = advanceResponseFraming(responseBytes.subarray(0, receivedBytes), framing, io.onResponseStatus);
         if (framing.kind === "complete") finish();
       } catch (error) {
         finish(error instanceof Error ? error : new Error(String(error)));

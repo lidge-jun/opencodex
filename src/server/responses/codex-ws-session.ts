@@ -1,6 +1,43 @@
 import { readCodexWsUpgradeHeaders } from "./codex-ws-metadata";
 
 export const MAX_CODEX_WS_SESSION_EXCHANGES = 32;
+export const CODEX_WS_SESSION_CLOSE_GRACE_MS = 1_000;
+
+/** A disposed lease must not leave a private socket waiting on an unresponsive peer. */
+function closeSessionSocket(socket: WebSocket & { terminate?: () => void }, immediate: boolean): void {
+  if (immediate) {
+    // Preserve the retained pool's immediate physical-capacity release.
+    try { socket.close(); } catch { /* already closing */ }
+    try { socket.terminate?.(); } catch { /* already closed */ }
+    return;
+  }
+  if (socket.readyState === 3) return;
+  if (typeof socket.terminate !== "function") {
+    // A close observer cannot force teardown without the optional native method.
+    try { socket.close(); } catch { /* best-effort graceful teardown */ }
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cleanup = (): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+    socket.removeEventListener("close", cleanup);
+  };
+  const terminate = (): void => {
+    cleanup();
+    if (socket.readyState !== 3) {
+      try { socket.terminate?.(); } catch { /* best-effort physical teardown */ }
+    }
+  };
+  // Install before close(): older runtimes and test peers may close synchronously.
+  // Capture only the socket, not the disposed session or its former exchange owner.
+  socket.addEventListener("close", cleanup, { once: true });
+  timer = setTimeout(terminate, CODEX_WS_SESSION_CLOSE_GRACE_MS);
+  timer.unref?.();
+  try { socket.close(); } catch { terminate(); }
+  // close() may synchronously change the state narrowed by the earlier guard.
+  if ((socket.readyState as number) === 3) cleanup();
+}
 
 /** Owns one physical socket; request listeners belong to the exchange, not this object. */
 export class CodexWsSession {
@@ -69,10 +106,7 @@ export class CodexWsSession {
     try { owner?.(reason); } finally {
       this.busy = false;
       this.completedIds.clear();
-      try { this.socket.close(); } catch { /* already closing */ }
-      if (this.retainable) {
-        try { (this.socket as WebSocket & { terminate?: () => void }).terminate?.(); } catch { /* already closed */ }
-      }
+      closeSessionSocket(this.socket, this.retainable);
       this.changed();
     }
   }

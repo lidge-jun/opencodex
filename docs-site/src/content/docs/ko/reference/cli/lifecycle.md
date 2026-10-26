@@ -270,6 +270,8 @@ app-server / code-mode-host 프로세스에만 `SIGTERM`을 보내고 데스크�
 명령을 Codex 앱 안에서 실행하면 재시작은 분리된 helper에 넘기고, 이 세션은 앱과 함께
 종료됩니다.
 
+**대상을 고정한 동기화.** `ocx sync --expect-link <linkId>`(Remote Link Child)와 `ocx sync --expect-hub-key <apiKeyId>`(hub 클라이언트)는 이 머신이 여전히 그 링크나 그 키로 연결되어 있을 때만 동기화합니다. 그렇지 않으면 아무것도 바꾸지 않고 로컬 공급자도 동기화하지 않으며, 종료 코드 5로 끝나고 stderr 마지막 줄에 `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`를 출력합니다. 형식이 잘못되었거나 반복된 플래그는 종료 코드 2로 끝납니다. 자세한 내용은 [영어 레퍼런스](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)를 참고하세요.
+
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 
 Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카탈로그에서 다시 빌드되게 합니다.

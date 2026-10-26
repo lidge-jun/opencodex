@@ -749,3 +749,25 @@ describe("Responses TierDecision immutability", () => {
     else expect(outbound.service_tier).toBe(expected);
   });
 });
+
+describe("explicit Flex forwarding", () => {
+  test("eligible Responses wire forwards caller-selected flex, preserving Fast and default behavior", () => {
+    const policy = resolveFastPolicy({
+      ...authorityForMatrix({
+        source: "provider-adapter", declaration: "explicit", overrideAllowed: false,
+        capability: "true", chatForeignTierForward: true,
+      }),
+      providerAdapter: "openai-responses",
+      fastWireDeclaration: {
+        kind: "service-tier",
+        canonicalToWire: { priority: "priority", flex: "flex" },
+        foreignCallerTiers: "verbatim",
+      },
+    }, MODEL);
+    const decision = decideTier(policy, undefined, "flex");
+    expect(decision).toEqual({ kind: "forward-caller" });
+    expect(tierValueAfterDecision(decision, "flex")).toBe("flex");
+    expect(tierValueAfterDecision(decideTier(policy, true, "flex"), "flex")).toBe("priority");
+    expect(tierValueAfterDecision(decideTier(policy, false, "flex"), "flex")).toBeUndefined();
+  });
+});
