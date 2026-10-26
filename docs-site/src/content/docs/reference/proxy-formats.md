@@ -20,6 +20,18 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## Required tools on translated Chat routes
+
+A translated OpenAI Chat response must contain a complete selected client tool call when
+`tool_choice` is required, names a tool, or uses a required allowed-tool selection. If the upstream
+finishes normally without one, the turn fails with `required_tool_not_called` and preserves usage.
+Already streamed text stays visible; the proxy does not replay the request or switch targets after
+that output. A streamed Responses reply ends with `response.failed`; an admitted buffered Responses
+envelope has `status: "failed"` even when its HTTP status is 200. Check the envelope status.
+Auto/none choices and truncated outcomes keep their existing behavior. This guard covers translated
+Chat client-tool catalogs; catalogs containing proxy-executed sidecars, native passthrough and other
+adapters retain their existing completion rules.
+
 ## MiMo bare tool-call recovery
 
 On translated OpenAI Chat routes, `mimo-v2` and dotted `mimo-v2.*` model IDs can recover a

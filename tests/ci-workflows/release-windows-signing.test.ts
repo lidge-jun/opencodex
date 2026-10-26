@@ -360,3 +360,329 @@ describe("signed artifact swap (scripts/ci/apply-signed-windows-artifact.ps1)", 
     }
   }, PWSH_TIMEOUT_MS);
 });
+
+/**
+ * The -Msi leg hands the installer to msiexec /a, which makes the Windows Installer engine parse
+ * the package. The MSI must therefore pass the same -Trust contract as every file it carries
+ * before extraction runs at all, and the executables inside the image then go through the same
+ * checks including the shared-signer rule. A PowerShell harness shadows Get-AuthenticodeSignature,
+ * Get-ChildItem (the SDK glob resolves to a fake .ps1 signtool) and Start-Process, so no real
+ * signing, certificate store, SDK or installer machinery runs on any platform; every faked call
+ * appends one line to an event log whose order the assertions check. The verifier scratch
+ * directory is redirected under the fixture, so administrative-image leftovers are cleaned up
+ * with the fixture instead of leaking into the real temp.
+ */
+describe("verify-authenticode MSI ordering (scripts/ci/verify-authenticode.ps1)", () => {
+  const pwsh = Bun.which("pwsh");
+  const PWSH_TIMEOUT_MS = 30_000;
+  const SCRIPT = repoPath("scripts", "ci", "verify-authenticode.ps1");
+
+  const HARNESS = `param(
+  [Parameter(Mandatory = $true)][string]$ScriptPath,
+  [Parameter(Mandatory = $true)][string]$ConfigPath,
+  [string[]]$Path = @(),
+  [string]$Msi = "",
+  [string[]]$RequireInnerExe = @(),
+  [int]$MinimumInnerExe = 1,
+  [Parameter(Mandatory = $true)][string]$Trust
+)
+$ErrorActionPreference = "Stop"
+$config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+
+# The verifier script runs under Set-StrictMode -Version Latest; the fakes opt out so optional
+# JSON fields may simply be absent.
+function Get-AuthenticodeSignature {
+  param([string]$LiteralPath)
+  Set-StrictMode -Off
+  $leaf = Split-Path -Leaf $LiteralPath
+  Add-Content -LiteralPath $env:OCX_VERIFY_EVENTS -Value "signature|$leaf"
+  $entry = $config.signatures.$leaf
+  $certificate = $null
+  $stamper = $null
+  if ($entry -and $entry.signer) {
+    $certificate = [pscustomobject]@{ Subject = $entry.signer; Thumbprint = $entry.thumbprint }
+  }
+  if ($entry -and $entry.timestamp) {
+    $stamper = [pscustomobject]@{ Subject = $entry.timestamp }
+  }
+  $status = if ($entry -and $entry.status) { $entry.status } else { "NotSigned" }
+  $message = if ($entry -and $entry.statusMessage) { $entry.statusMessage } else { "" }
+  [pscustomobject]@{ Status = $status; StatusMessage = $message; SignerCertificate = $certificate; TimeStamperCertificate = $stamper }
+}
+
+# The Windows SDK glob resolves to the fake signtool script; every other listing is real.
+function Get-ChildItem {
+  [CmdletBinding()]
+  param([string]$Path, [string]$LiteralPath, [switch]$Recurse, [switch]$File, [string]$Filter)
+  Set-StrictMode -Off
+  if ($Path -like "*Windows Kits*signtool*") {
+    return [pscustomobject]@{ FullName = $config.signtoolPath }
+  }
+  Microsoft.PowerShell.Management\\Get-ChildItem @PSBoundParameters
+}
+
+function Start-Process {
+  param([string]$FilePath, [string[]]$ArgumentList, [switch]$Wait, [switch]$PassThru, [switch]$NoNewWindow)
+  Set-StrictMode -Off
+  Add-Content -LiteralPath $env:OCX_VERIFY_EVENTS -Value ("process|" + $FilePath + "|nnw=" + $NoNewWindow.IsPresent + "|" + ($ArgumentList -join ' '))
+  $exitCode = 0
+  if ($null -ne $config.msiexecExitCode) { $exitCode = [int]$config.msiexecExitCode }
+  $target = ""
+  foreach ($argument in $ArgumentList) {
+    if ($argument -match '^TARGETDIR="?([^"]+)"?$') { $target = $Matches[1] }
+  }
+  New-Item -ItemType Directory -Path $target -Force | Out-Null
+  foreach ($name in @($config.innerExes)) {
+    New-Item -ItemType File -Path (Join-Path $target $name) -Force | Out-Null
+  }
+  if ($exitCode -ne 0) {
+    $log = Join-Path (Split-Path -Parent $target) "administrative-image.log"
+    Set-Content -LiteralPath $log -Value "fake msiexec failure log"
+  }
+  [pscustomobject]@{ ExitCode = $exitCode }
+}
+
+try {
+  & $ScriptPath -Path $Path -Msi $Msi -RequireInnerExe $RequireInnerExe -MinimumInnerExe $MinimumInnerExe -Trust $Trust
+} catch {
+  # Surface the thrown message as one literal stdout line: the default error formatter wraps
+  # long messages at the host console width, which would make substring assertions fragile.
+  [Console]::Out.WriteLine("error|" + $_.Exception.Message)
+  exit 1
+}
+`;
+
+  const SIGTOOL_PS1 = `Set-StrictMode -Off
+$leaf = Split-Path -Leaf ($args | Select-Object -Last 1)
+Add-Content -LiteralPath $env:OCX_VERIFY_EVENTS -Value "signtool|$leaf"
+$code = 0
+if ($env:OCX_SIGNTOOL_EXIT) { $code = [int]$env:OCX_SIGNTOOL_EXIT }
+$global:LASTEXITCODE = $code
+`;
+
+  type Sig = { status?: string; signer?: string; thumbprint?: string; timestamp?: string; statusMessage?: string };
+  type Config = { signatures?: Record<string, Sig>; innerExes?: string[]; msiexecExitCode?: number; signtoolPath?: string };
+
+  function fixture() {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-verify-msi-"));
+    const scratch = join(dir, "tmp");
+    mkdirSync(scratch, { recursive: true });
+    const signtoolPath = join(dir, "fake-signtool.ps1");
+    writeFileSync(signtoolPath, SIGTOOL_PS1);
+    writeFileSync(join(dir, "harness.ps1"), HARNESS);
+    const msi = join(dir, "installer.msi");
+    const pathTarget = join(dir, "path-target.exe");
+    writeFileSync(msi, "fake installer");
+    writeFileSync(pathTarget, "fake path target");
+    const eventsPath = join(dir, "events.log");
+    const configPath = join(dir, "config.json");
+    const run = (config: Config, args: string[], env: Record<string, string> = {}) => {
+      writeFileSync(eventsPath, "");
+      writeFileSync(configPath, JSON.stringify({ signtoolPath, ...config }));
+      const result = Bun.spawnSync([pwsh!, "-NoProfile", "-NonInteractive", "-File", join(dir, "harness.ps1"),
+        "-ScriptPath", SCRIPT, "-ConfigPath", configPath, ...args], {
+        env: { ...process.env, HOME: dir, TEMP: scratch, TMP: scratch, TMPDIR: scratch, OCX_VERIFY_EVENTS: eventsPath, ...env },
+      });
+      return {
+        exitCode: result.exitCode,
+        output: result.stdout.toString() + result.stderr.toString(),
+        events: readFileSync(eventsPath, "utf8").split("\n").map(line => line.trim()).filter(Boolean),
+      };
+    };
+    return { dir, msi, pathTarget, run };
+  }
+
+  const eventIndex = (events: string[], prefix: string) => events.findIndex(line => line.startsWith(prefix));
+  const testSigned = { status: "NotTrusted", signer: "CN=ocx test", thumbprint: "AAAA" };
+  const releaseSigned = { status: "Valid", signer: "CN=SignPath Foundation", thumbprint: "BBBB", timestamp: "CN=SignPath time" };
+
+  const rejectedOuter: Array<[string, Config, string, string]> = [
+    ["an unsigned MSI under test trust", { innerExes: ["ocx.exe"] }, "test", "carries no Authenticode signature"],
+    ["an MSI with a mismatched hash under test trust", { signatures: { "installer.msi": { ...testSigned, status: "HashMismatch" } }, innerExes: ["ocx.exe"] }, "test", "unusable test signature"],
+    ["an unsigned MSI under release trust", { innerExes: ["ocx.exe"] }, "release", "carries no Authenticode signature"],
+    ["an MSI the chain cannot validate under release trust", { signatures: { "installer.msi": { ...releaseSigned, status: "NotTrusted" } }, innerExes: ["ocx.exe"] }, "release", "signed but not trusted"],
+    ["an MSI from the wrong signer under release trust", { signatures: { "installer.msi": { ...releaseSigned, signer: "CN=somebody else" } }, innerExes: ["ocx.exe"] }, "release", "not SignPath Foundation"],
+    ["an MSI with no timestamp under release trust", { signatures: { "installer.msi": { status: "Valid", signer: "CN=SignPath Foundation", thumbprint: "BBBB" } }, innerExes: ["ocx.exe"] }, "release", "has no timestamp"],
+  ];
+  for (const [label, config, trust, fragment] of rejectedOuter) {
+    test.skipIf(!pwsh)(label + " fails before msiexec ever sees the file", () => {
+      const f = fixture();
+      try {
+        const result = f.run(config, ["-Msi", f.msi, "-Trust", trust]);
+        expect(result.exitCode).not.toBe(0);
+        expect(result.output).toContain(fragment);
+        expect(result.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi"]);
+        expect(result.events.some(line => line.startsWith("process|"))).toBe(false);
+      } finally { removeTreeWithRetry(f.dir); }
+    }, PWSH_TIMEOUT_MS);
+  }
+
+  test.skipIf(!pwsh)("an MSI signtool rejects under release trust is never extracted", () => {
+    const f = fixture();
+    try {
+      const result = f.run({
+        signatures: { "installer.msi": releaseSigned, "ocx.exe": releaseSigned },
+        innerExes: ["ocx.exe"],
+      }, ["-Msi", f.msi, "-Trust", "release"], { OCX_SIGNTOOL_EXIT: "7" });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toContain("signtool verify /pa rejected");
+      expect(result.events).toContain("signtool|installer.msi");
+      expect(result.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi"]);
+      expect(result.events.some(line => line.startsWith("process|"))).toBe(false);
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("an accepted MSI is expanded before its inner executables are verified (test trust)", () => {
+    const f = fixture();
+    try {
+      const result = f.run({
+        signatures: { "installer.msi": testSigned, "ocx.exe": testSigned, "helper.exe": testSigned },
+        innerExes: ["ocx.exe", "subdir/helper.exe"],
+      }, ["-Msi", f.msi, "-Trust", "test"]);
+      expect(result.exitCode, result.output).toBe(0);
+      expect(result.output).toContain("Verified 3 file(s) with test trust.");
+      const outer = eventIndex(result.events, "signature|installer.msi");
+      const extract = eventIndex(result.events, "process|msiexec.exe");
+      expect(outer).toBeGreaterThanOrEqual(0);
+      expect(extract).toBeGreaterThan(outer);
+      expect(eventIndex(result.events, "signature|ocx.exe")).toBeGreaterThan(extract);
+      expect(eventIndex(result.events, "signature|helper.exe")).toBeGreaterThan(extract);
+      expect(result.events[extract]).toContain("nnw=True");
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("an accepted MSI is expanded only after signtool passes it (release trust)", () => {
+    const f = fixture();
+    try {
+      const result = f.run({
+        signatures: { "installer.msi": releaseSigned, "ocx.exe": releaseSigned },
+        innerExes: ["ocx.exe"],
+      }, ["-Msi", f.msi, "-Trust", "release"]);
+      expect(result.exitCode, result.output).toBe(0);
+      expect(result.output).toContain("Verified 2 file(s) with release trust.");
+      const extract = eventIndex(result.events, "process|msiexec.exe");
+      expect(eventIndex(result.events, "signature|installer.msi")).toBe(0);
+      expect(eventIndex(result.events, "signtool|installer.msi")).toBe(1);
+      expect(extract).toBe(2);
+      expect(eventIndex(result.events, "signature|ocx.exe")).toBeGreaterThan(extract);
+      expect(eventIndex(result.events, "signtool|ocx.exe")).toBeGreaterThan(extract);
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("an inner executable from the wrong release signer fails after extraction", () => {
+    const f = fixture();
+    try {
+      const result = f.run({
+        signatures: {
+          "installer.msi": releaseSigned,
+          "ocx.exe": { ...releaseSigned, signer: "CN=somebody else" },
+        },
+        innerExes: ["ocx.exe"],
+      }, ["-Msi", f.msi, "-Trust", "release"]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toContain("not SignPath Foundation");
+      const extract = eventIndex(result.events, "process|msiexec.exe");
+      expect(extract).toBeGreaterThanOrEqual(0);
+      expect(result.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi", "signature|ocx.exe"]);
+      expect(eventIndex(result.events, "signature|ocx.exe")).toBeGreaterThan(extract);
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("unsigned executables inside a passing MSI still fail the sweep", () => {
+    const f = fixture();
+    try {
+      const result = f.run({
+        signatures: { "installer.msi": testSigned },
+        innerExes: ["ocx.exe", "helper.exe"],
+      }, ["-Msi", f.msi, "-Trust", "test"]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toContain("ocx.exe carries no Authenticode signature");
+      expect(result.output).toContain("helper.exe carries no Authenticode signature");
+      expect(eventIndex(result.events, "process|msiexec.exe")).toBeGreaterThan(0);
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("an inner executable from a second signer fails the shared-signer rule", () => {
+    const f = fixture();
+    try {
+      const result = f.run({
+        signatures: { "installer.msi": testSigned, "ocx.exe": { ...testSigned, thumbprint: "CCCC" } },
+        innerExes: ["ocx.exe"],
+      }, ["-Msi", f.msi, "-Trust", "test"]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toContain("Expected one signer across every file");
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("an inner executable with an unusable test signature fails", () => {
+    const f = fixture();
+    try {
+      const result = f.run({
+        signatures: { "installer.msi": testSigned, "ocx.exe": { ...testSigned, status: "HashMismatch" } },
+        innerExes: ["ocx.exe"],
+      }, ["-Msi", f.msi, "-Trust", "test"]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toContain("unusable test signature");
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("-Path targets are verified directly without extraction", () => {
+    const f = fixture();
+    try {
+      const passing = f.run({ signatures: { "path-target.exe": testSigned } }, ["-Path", f.pathTarget, "-Trust", "test"]);
+      expect(passing.exitCode, passing.output).toBe(0);
+      expect(passing.output).toContain("Verified 1 file(s) with test trust.");
+      expect(passing.events).toEqual(["signature|path-target.exe"]);
+      const failing = f.run({}, ["-Path", f.pathTarget, "-Trust", "test"]);
+      expect(failing.exitCode).not.toBe(0);
+      expect(failing.output).toContain("path-target.exe carries no Authenticode signature");
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("-Path and -Msi inputs are all verified in one run", () => {
+    const f = fixture();
+    try {
+      const result = f.run({
+        signatures: { "installer.msi": testSigned, "path-target.exe": testSigned, "ocx.exe": testSigned },
+        innerExes: ["ocx.exe"],
+      }, ["-Path", f.pathTarget, "-Msi", f.msi, "-Trust", "test"]);
+      expect(result.exitCode, result.output).toBe(0);
+      expect(result.output).toContain("Verified 3 file(s) with test trust.");
+      const extract = eventIndex(result.events, "process|msiexec.exe");
+      expect(eventIndex(result.events, "signature|installer.msi")).toBe(0);
+      expect(eventIndex(result.events, "signature|path-target.exe")).toBeGreaterThan(extract);
+      expect(eventIndex(result.events, "signature|ocx.exe")).toBeGreaterThan(extract);
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("the required-name and minimum-count guards still gate the sweep", () => {
+    const f = fixture();
+    try {
+      const config: Config = { signatures: { "installer.msi": testSigned, "ocx.exe": testSigned }, innerExes: ["ocx.exe"] };
+      const missing = f.run(config, ["-Msi", f.msi, "-RequireInnerExe", "daemon.exe", "-Trust", "test"]);
+      expect(missing.exitCode).not.toBe(0);
+      expect(missing.output).toContain("daemon.exe is missing from the administrative image");
+      expect(missing.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi"]);
+      const few = f.run(config, ["-Msi", f.msi, "-MinimumInnerExe", "3", "-Trust", "test"]);
+      expect(few.exitCode).not.toBe(0);
+      expect(few.output).toContain("expected at least 3");
+      expect(few.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi"]);
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+
+  test.skipIf(!pwsh)("a failed extraction reports the msiexec log and stops", () => {
+    const f = fixture();
+    try {
+      const result = f.run({
+        signatures: { "installer.msi": testSigned },
+        innerExes: ["ocx.exe"],
+        msiexecExitCode: 5,
+      }, ["-Msi", f.msi, "-Trust", "test"]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.output).toContain("fake msiexec failure log");
+      expect(result.output).toContain("could not expand");
+      expect(eventIndex(result.events, "process|msiexec.exe")).toBeGreaterThan(0);
+      expect(result.events.filter(line => line.startsWith("signature|"))).toEqual(["signature|installer.msi"]);
+    } finally { removeTreeWithRetry(f.dir); }
+  }, PWSH_TIMEOUT_MS);
+});

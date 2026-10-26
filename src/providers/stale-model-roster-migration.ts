@@ -38,6 +38,7 @@ import {
   MINIMAX_MODEL_CONTEXT_WINDOWS,
 } from "./registry/model-seeds";
 import type { OcxConfig } from "../types";
+import { modelRecordValue } from "../reasoning-effort";
 
 export interface StaleModelRoster {
   /** Registry provider id whose saved rows may carry the old roster. */
@@ -92,6 +93,13 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
     // A Custom row may keep this id pointed at another gateway
     // (preserveCustomDestination); only api.meta.ai publishes the roster `to` describes.
     destinationBaseUrls: ["https://api.meta.ai/v1"],
+  },
+  {
+    provider: "deepseek",
+    from: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"],
+    to: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
+    contextWindows: { "deepseek-v4-pro": 1_048_576 },
+    destinationBaseUrls: ["https://api.deepseek.com", "https://api.deepseek.com/v1"],
   },
   ...["minimax", "minimax-cn"].map(provider => ({
     provider,
@@ -150,7 +158,7 @@ function fillExisting<T>(container: Record<string, T> | undefined, values: Reado
   let filled = false;
   for (const id of ids) {
     const value = values[id];
-    if (value !== undefined && !Object.prototype.hasOwnProperty.call(container, id)) {
+    if (value !== undefined && modelRecordValue(container, id) === undefined) {
       container[id] = value;
       filled = true;
     }

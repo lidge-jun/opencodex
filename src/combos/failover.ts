@@ -313,7 +313,8 @@ export function sweepExpiredComboTargetCooldowns(now = Date.now()): number {
   return removed;
 }
 
-export function clearComboTargetCooldowns(comboId?: string): void {
+/** Clear all cooldowns, one combo, or only the supplied target keys within that combo. */
+export function clearComboTargetCooldowns(comboId?: string, targetKeys?: Iterable<string>): void {
   if (comboId === undefined) {
     targetCooldowns.clear();
     liveComboTargets.clear();
@@ -321,6 +322,10 @@ export function clearComboTargetCooldowns(comboId?: string): void {
     return;
   }
   const prefix = `${comboId}\0`;
+  if (targetKeys !== undefined) {
+    for (const key of targetKeys) targetCooldowns.delete(`${prefix}${key}`);
+    return;
+  }
   for (const key of targetCooldowns.keys()) {
     if (key.startsWith(prefix)) targetCooldowns.delete(key);
   }

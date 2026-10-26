@@ -497,7 +497,9 @@ MiMo model Command Code serves.
   The plan's precise credit balance is retained with that identity-fenced quota reading.
   Separately, Kiro `meteringEvent` credit values are measured request spend: the last value
   within a physical response is used, and credits from separately billed sends are added.
-  Token usage remains estimated; credits are never inferred from tokens.
+  Token usage remains estimated; credits are never inferred from tokens. Requests with hosted
+  search or image tools retain the adapter's full prompt estimate in Usage and daily activity,
+  including replayed history, even when the model does not invoke those tools.
 - After an admitted request, reads that account's available models from the regional management
   service without delaying the request. Cached results add model IDs to the shipped catalog.
   Empty or unrecognised replies retain the shipped list and any last good account list. Model

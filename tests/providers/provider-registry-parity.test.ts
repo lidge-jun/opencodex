@@ -372,13 +372,12 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-sol"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-terra"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS.openrouter.modelContextWindows?.["openai/gpt-5.6-luna"]).toBe(1_050_000);
-    // Retired from the first-party API on 2026-09-14; the vendor-hosted rosters keep it.
-    expect(KEY_LOGIN_PROVIDERS.deepseek.models).not.toContain("deepseek-v4-pro");
+    // The official retirement plan was withdrawn; Pro remains a separate text-only model.
+    expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-v4-pro");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelContextWindows?.["deepseek-v4-pro"]).toBe(1_048_576);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.models).toContain("deepseek-flash");
-    // #1057: DeepSeek's ladder is low/high/max and the two V4 models resolve it
-    // differently (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-06).
-    // `xhigh` is an alias, so it stays in the wire map but is not advertised. Pro
-    // does not honor `low` (the vendor maps it to `high`), so Pro must not offer it.
+    // The current Thinking Mode guide declares low/high/max; aliases stay in the wire map.
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-flash"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-flash"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-flash"]?.low).toBe("low");
@@ -387,14 +386,12 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.low).toBe("low");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.xhigh).toBe("high");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.max).toBe("max");
-    // The retired deepseek-v4-pro stays OUT of `models` (line 357) but inside the preserve
-    // list: it still routes to a thinking-mode model, so a saved config that carries it
-    // must get reasoning replay rather than a guaranteed 400 (#5421).
+    // Pro and Flash both retain reasoning on tool-call continuations (#5421).
     expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels)
       .toEqual(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]);
     // #4436: first-party Flash accepts images; unprobed compatibility aliases keep the sidecar.
     expect(KEY_LOGIN_PROVIDERS.deepseek.noVisionModels).toEqual([
-      "deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash",
+      "deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-pro",
     ]);
   });
 
