@@ -83,7 +83,6 @@ import {
   type ModelPresetView,
   type ModelRow,
   type ProviderContextCapsResponse,
-  type ShadowCallData,
   type V2Status,
 } from "./models-shared";
 import { DiscoveryDependencyHint, EmptyProviderHint } from "./models-provider-hints";
@@ -95,6 +94,7 @@ import { ModelCatalogDelivery } from "./models-catalog-state";
 import { CustomModelsSummary, InfoHint, ModelsSettingsPanel, SettingsRow } from "./models-settings-panel";
 import { modelsSettingsSummary } from "./models-settings-summary";
 import { useAutoReviewSettings } from "./use-auto-review-settings";
+import { useShadowCallSettings } from "./use-shadow-call-settings";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -444,8 +444,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const [contextError, setContextError] = useState("");
   const [hoveredModel, setHoveredModel] = useState<{ namespaced: string; rect: DOMRect } | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
-  const [shadowCallSaving, setShadowCallSaving] = useState(false);
+  const { shadowCall, shadowCallSaving, loadShadowCall, saveShadowCall } = useShadowCallSettings({ apiBase, publishFeedback, t });
 
   // App owns the in-session view mode; fallback to persisted mode for isolated renders/tests.
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -471,16 +470,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     () => [{ value: "", label: "—" }, ...routedModelOptions(shadowModelOptions, models, autoReview?.model)],
     [models, shadowModelOptions, autoReview?.model],
   );
-
-  const loadShadowCall = useCallback(async () => {
-    const bounded = createBoundedFetch(15_000);
-    try {
-      const r = await fetch(`${apiBase}/api/shadow-call-settings`, { signal: bounded.signal });
-      const data = await readJsonIfOk<ShadowCallData>(r);
-      if (data) setShadowCall(data);
-    } catch { /* old server / network: keep the section disabled */ }
-    finally { bounded.clear(); }
-  }, [apiBase]);
 
   const loadV2 = useCallback(async () => {
     // Never let a toggle in flight be clobbered by the poll (same single-flight rule as models).
@@ -1074,32 +1063,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   };
 
   const setAll = () => { void putCap({ setAll: !allCapped }); };
-
-  const saveShadowCall = async (patch: Partial<ShadowCallData>) => {
-    if (!shadowCall || shadowCallSaving) return;
-    const previous = shadowCall;
-    setShadowCallSaving(true);
-    setShadowCall({ ...shadowCall, ...patch });
-    try {
-      const res = await fetch(`${apiBase}/api/shadow-call-settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) {
-        setShadowCall(previous);
-        publishFeedback(false, res.status === 400 ? t("models.shadowCallSaveFailed") : t("models.networkError"));
-        return;
-      }
-      const data = await res.json().catch(() => null) as ShadowCallData | null;
-      if (data && typeof data.enabled === "boolean") setShadowCall(data);
-    } catch {
-      setShadowCall(previous);
-      publishFeedback(false, t("models.networkError"));
-    } finally {
-      setShadowCallSaving(false);
-    }
-  };
 
   /**
    * Both v2 surface writes adopt the response directly instead of calling
