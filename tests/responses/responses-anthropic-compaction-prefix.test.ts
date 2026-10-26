@@ -197,7 +197,7 @@ for (const kind of ["text", "tool", "search", "empty", "progress", "abnormal", "
         releaseTranslatedEvent(event, budget);
       }
       expect(output.some(event => event.type.startsWith("tool_call") || event.type.startsWith("web_search_call"))).toBe(false);
-      if (["text", "truncated", "error", "incomplete"].includes(kind)) expect(output.at(-1)?.type).toBe(input.at(-1)?.type);
+      if (["text", "eof", "truncated", "error", "incomplete"].includes(kind)) expect(output.at(-1)?.type).toBe(input.at(-1)?.type);
       else expect(output.at(-1)).toMatchObject({ type: "error", code: "compaction_invalid_summary", retryable: false });
       if (kind === "progress") expect(output.some(event => event.type === "text_delta")).toBe(false);
       expect(budget.snapshot().currentBytes).toBe(17);

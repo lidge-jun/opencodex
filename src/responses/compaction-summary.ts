@@ -21,8 +21,10 @@ export async function* guardCompactionSummary(
     }
     if (event.type === "done") {
       if (!isTruncatedStopReason(event.stopReason)
-        && (attemptedTool || !hasText || event.endTurn === false
-          || (event.stopReason !== "end_turn" && event.stopReason !== "stop_sequence"))) {
+        // An absent stop reason is accepted, as on every other completion path: some
+        // Anthropic-compatible endpoints omit it. An explicit non-terminal reason is not.
+        && (attemptedTool || !hasText
+          || (event.stopReason !== undefined && event.stopReason !== "end_turn" && event.stopReason !== "stop_sequence"))) {
         releaseTranslatedEvent(event, budget);
         yield {
           type: "error", status: 502, errorType: "upstream_error",
