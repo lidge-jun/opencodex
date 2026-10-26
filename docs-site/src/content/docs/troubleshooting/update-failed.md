@@ -34,6 +34,25 @@ paths. Running `ocx update` in a terminal shows the step that failed and the nex
 
 ## Finish the update
 
+### If npm staging times out
+
+On Windows, the npm-backed `ocx update` staging install has a three-minute budget. A timeout reports
+`ETIMEDOUT` with that budget. On Windows, the updater terminates the installer's entire
+process tree and confirms its exit before removing the stage and recovering the previous
+service. It does not continue extracting into a deleted stage after recovery starts.
+
+If installer exit cannot be confirmed, the update fails and keeps the staging folder and
+its ownership marker. Confirm that no installer or OpenCodex process runs from that folder
+before removing it. A retained folder does not prevent another update attempt.
+
+Check your registry connection if the install repeatedly exceeds the budget, then retry
+`ocx update`. Increasing the budget is not needed to clean up a timed-out install safely.
+
+This process-tree exit guarantee applies to Windows npm updates. POSIX retains its existing
+timeout handling; complete-tree timeout cleanup remains open there.
+
+### Retry or reinstall
+
 1. Close anything that may still run OpenCodex files: the Codex app, terminals that started
    `ocx` or `bunx`, and the OpenCodex tray. A running `bun.exe` or `bunx.exe` keeps its files
    locked on Windows.
