@@ -1662,7 +1662,7 @@
     "server-combo-failover-e2e.test.ts": "server",
     "server-combo-held-response.test.ts": "server",
     "server-combo-reasoning-replay-eligibility.test.ts": "server",
-    "server-combo-tool-loop-continuation.test.ts": "server",
+    "server-combo-tool-loop-continuation.test.ts": "server", "server-combo-required-tool-contract.test.ts": "server",
     "server-combo-zero-output-failover.test.ts": "server",
     "server-google-antigravity-oauth-401-replay.test.ts": "server",
     "server-antigravity-web-search-validation.test.ts": "server", "server-google-antigravity-oauth-429-budget.test.ts": "server",
