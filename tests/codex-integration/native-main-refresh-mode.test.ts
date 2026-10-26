@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as nativeMainRefreshMode from "../../src/codex/native-main-refresh-mode";
 import {
   CODEX_AUTH_STATUS_MIN_VERSION,
   CodexAuthStatusError,
@@ -382,6 +383,85 @@ describe("main account in codex refresh mode (#2999)", () => {
     expect(await getValidMainAccountToken({ codexAuthStatus })).toBeNull();
     expect(calls).toEqual([{ refresh: false }]);
     expect(getMainAccountCredentialStatus().usable).toBe(false);
+  });
+
+  test("a missing CODEX_HOME is the same observed absence: no claim, no RPC, null", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    process.env.CODEX_HOME = join(root, "never-created", "codex-home");
+    const { calls, codexAuthStatus } = seam(() => { throw new Error("must not be called"); });
+    expect(await getValidMainAccountToken({ codexAuthStatus })).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  test("a forced fileless refresh over a missing CODEX_HOME still reports the absence", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    process.env.CODEX_HOME = join(root, "never-created");
+    const { calls, codexAuthStatus } = seam(() => { throw new Error("must not be called"); });
+    expect(await forceRefreshMainAccountToken(expired(), { codexAuthStatus })).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  test.each(["cancel", "home-change"] as const)("missing-home absence does not mask %s during mode discovery", async change => {
+    process.env.CODEX_HOME = join(root, "never-created");
+    const controller = new AbortController();
+    const cancellation = new Error("cancelled during mode discovery");
+    let started!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const held = new Promise<NativeMainRefreshResolution>(resolve => { release = () => resolve(CODEX_MODE); });
+    const mode = spyOn(nativeMainRefreshMode, "resolveNativeMainRefreshMode").mockImplementation(() => {
+      started();
+      return held;
+    });
+    const { calls, codexAuthStatus } = seam(() => { throw new Error("must not be called"); });
+    const observed = getValidMainAccountToken({ codexAuthStatus, signal: controller.signal }).then(
+      value => ({ kind: "resolved" as const, value }),
+      (error: unknown) => ({ kind: "rejected" as const, error }),
+    );
+    try {
+      await entered;
+      if (change === "cancel") controller.abort(cancellation);
+      else process.env.CODEX_HOME = home;
+      release();
+      const outcome = await observed;
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind !== "rejected") throw new Error("expected the pending lookup to reject");
+      if (change === "cancel") expect(outcome.error).toBe(cancellation);
+      else expect(outcome.error).toBeInstanceOf(MainAuthJsonChangedDuringRefreshError);
+      expect(calls).toEqual([]);
+    } finally {
+      release();
+      await observed;
+      mode.mockRestore();
+    }
+  });
+
+  test("a CODEX_HOME that exists but is not a directory stays fail closed", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const file = join(root, "codex-home-is-a-file");
+    writeFileSync(file, "not a directory");
+    process.env.CODEX_HOME = file;
+    const { calls, codexAuthStatus } = seam(() => { throw new Error("must not be called"); });
+    await expect(getValidMainAccountToken({ codexAuthStatus }))
+      .rejects.toMatchObject({ code: "CODEX_HOME_UNAVAILABLE" });
+    expect(calls).toEqual([]);
+  });
+
+  test("a dangling CODEX_HOME link stays fail closed, including through a dangling parent", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const dangling = join(root, "dangling-home");
+    symlinkSync(join(root, "gone"), dangling, process.platform === "win32" ? "junction" : "dir");
+    process.env.CODEX_HOME = dangling;
+    const { calls, codexAuthStatus } = seam(() => { throw new Error("must not be called"); });
+    await expect(getValidMainAccountToken({ codexAuthStatus }))
+      .rejects.toMatchObject({ code: "CODEX_HOME_UNAVAILABLE" });
+
+    // A missing child under a dangling parent must not read as an absent home:
+    // the entry that broke the chain exists, so the verdict stays unsafe.
+    process.env.CODEX_HOME = join(dangling, "child");
+    await expect(getValidMainAccountToken({ codexAuthStatus }))
+      .rejects.toMatchObject({ code: "CODEX_HOME_UNAVAILABLE" });
+    expect(calls).toEqual([]);
   });
 
   test("an expiring-bearer promotion turns the same no-login back into a refresh failure", async () => {

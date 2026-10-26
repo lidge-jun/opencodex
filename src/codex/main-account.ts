@@ -2,8 +2,8 @@ import { captureMainAccountIdentityGeneration, getMainQuotaCredentialGeneration,
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { readCodexTokens } from "./auth-collision";
 import {
   CHATGPT_CLIENT_ID,
@@ -31,6 +31,7 @@ import {
 import { advanceCodexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import { withNativeMainExclusiveClaim } from "./native-main-claim";
 import { resolveNativeProfileContext } from "./native-profile-store";
+import { NativeProfileError } from "./native-profile-types";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 import { loadConfig } from "../config";
 import {
@@ -475,6 +476,37 @@ export function beginNativeMainReauth(): {
   };
 }
 
+/**
+ * True only when CODEX_HOME provably does not exist: the resolved path itself
+ * has no directory entry and the nearest existing ancestor resolves to a real
+ * directory. resolve() normalizes the string without dereferencing links, so
+ * lstat sees each component itself -- an existing entry still counts as
+ * existing, and a link in the chain must stat to a directory before the absence
+ * below it counts as genuine. EACCES, a file where a directory belongs, and a
+ * dangling link all stay unproven, which keeps the caller fail closed.
+ */
+function codexHomeProvenMissing(codexHome: string): boolean {
+  const target = resolve(codexHome);
+  let cursor = target;
+  for (;;) {
+    try {
+      lstatSync(cursor);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
+      const parent = dirname(cursor);
+      if (parent === cursor) return false;
+      cursor = parent;
+    }
+  }
+  if (cursor === target) return false;
+  try {
+    return statSync(cursor).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** Resolve the main account access token from the owned auth.json read, refreshing through the token endpoint when needed, or return null when no usable credential exists. */
 async function resolveMainAccountToken(
   dependencies: NativeMainRefreshDependencies = {},
@@ -501,6 +533,19 @@ async function resolveMainAccountToken(
         ), { waitMs: 30_000, signal });
       } catch (cause) {
         forgetCodexOwnedMainUsability(codexHome);
+        // A proven-absent home is the same observed absence as a missing
+        // auth.json: no credential exists to claim or to refresh. Every other
+        // CODEX_HOME_UNAVAILABLE cause -- an entry that exists but cannot be
+        // verified, a dangling link, an untraversable parent -- stays fail
+        // closed; a blanket existsSync check would misclassify them as absence.
+        if (cause instanceof NativeProfileError && cause.code === "CODEX_HOME_UNAVAILABLE"
+          && codexHomeProvenMissing(codexHome)) {
+          // Mode discovery awaited: absence must still belong to this caller and home.
+          dependencies.signal?.throwIfAborted();
+          if (resolveCodexHomeDir() !== codexHome) throw new MainAuthJsonChangedDuringRefreshError();
+          if (rejectedAccessToken !== undefined) noteNativeMainRefresh("skipped-no-credential");
+          return null;
+        }
         if (refreshTimeout.aborted && !dependencies.signal?.aborted) {
           throw new MainAccountTokenRefreshError("transient", { cause });
         }
