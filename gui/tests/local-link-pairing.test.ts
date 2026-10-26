@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { act, createElement } from "react";
 import { configureApiTargets, fetchApiSessionValidation, installApiAuthFetch, installApiSessionFromHtml, resetApiAuthFetchForTests } from "../src/api";
 import type { ApiTargets } from "../src/api-targets";
-import { submitConnectPairing } from "../src/connect-pairing-transport";
+import { PairingError, setPairingDeadlineForTests, submitConnectPairing, validateRemoteLinkSession } from "../src/connect-pairing-transport";
 
 const origin = "http://127.0.0.1:10100";
 function sessionHtml(token: string, serverOrigin = origin): string {
@@ -132,4 +132,72 @@ test("local pairing form names the local origin, makes no automatic exchange, an
       else Reflect.deleteProperty(globalThis, key);
     }
   }
+});
+
+test.each([401, 403])("a stalled refusal-body cleanup still surfaces the pairing exchange refusal immediately (status: %s)", async status => {
+  const keys = ["window", "document", "sessionStorage"] as const;
+  const previous = Object.fromEntries(keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const win = new Window({ url: origin }), sent: { path: string; headers: Headers }[] = [];
+  const targets: ApiTargets = { connected: false,
+    machine: { id: "machine", baseUrl: "", serverOrigin: origin, bootstrapPath: "/opencodex-session", transport: "same-origin" },
+    shared: { id: "shared", baseUrl: "", serverOrigin: origin, bootstrapPath: "/opencodex-session", transport: "same-origin" } };
+  for (const key of keys) Object.defineProperty(globalThis, key, { configurable: true, value: Reflect.get(win, key === "window" ? "self" : key) });
+  Object.defineProperty(win, "fetch", { configurable: true, writable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    sent.push({ path: String(input), headers: new Headers(init?.headers) });
+    return new Response(null, { status: 204 });
+  } });
+  let releaseStall: (() => void) | undefined, cancelCalls = 0;
+  const refused = new Response(null, { status });
+  Object.defineProperty(refused, "body", { value: { cancel: () => { cancelCalls++; return new Promise<void>(resolve => { releaseStall = () => resolve(); }); } } });
+  try {
+    setPairingDeadlineForTests(100);
+    resetApiAuthFetchForTests(); configureApiTargets(targets); installApiAuthFetch();
+    expect(installApiSessionFromHtml("machine", sessionHtml("ocx_session_automatic"))).toBe(true);
+    expect(installApiSessionFromHtml("shared", sessionHtml("ocx_session_shared"))).toBe(true);
+    const failure = await submitConnectPairing(targets.machine, `ocx_pair_${"a".repeat(43)}`, (async () => refused) as typeof fetch)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(PairingError);
+    expect((failure as PairingError).kind).toBe(status === 401 ? "refused" : "origin-denied");
+    expect(cancelCalls).toBe(1);
+    await win.fetch("/api/codex/desktop-compatibility/certificate");
+    expect(sent.at(-1)!.headers.get("x-opencodex-api-key")).toBe("ocx_session_automatic");
+  } finally {
+    releaseStall?.(); setPairingDeadlineForTests(10_000);
+    resetApiAuthFetchForTests(); win.close();
+    for (const key of keys) { const descriptor = previous[key]; if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); }
+  }
+});
+
+test.each([401, 403])("a stalled refusal-body cleanup keeps remote-link validation definitive (status: %s)", async status => {
+  let releaseStall: (() => void) | undefined, cancelCalls = 0;
+  const refused = new Response(null, { status });
+  Object.defineProperty(refused, "body", { value: { cancel: () => { cancelCalls++; return new Promise<void>(resolve => { releaseStall = () => resolve(); }); } } });
+  try {
+    setPairingDeadlineForTests(100);
+    const failure = await validateRemoteLinkSession("", (async () => refused) as typeof fetch)
+      .then(() => null, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(PairingError);
+    expect((failure as PairingError).kind).toBe(status === 401 ? "remote-link-unauthorized" : "remote-link-forbidden");
+    expect(cancelCalls).toBe(1);
+  } finally { releaseStall?.(); setPairingDeadlineForTests(10_000); }
+});
+
+test.each([false, true])("HTML prefix classification survives stalled reader cleanup (challenge: %s)", async challenge => {
+  let cancelCalls = 0, release: (() => void) | undefined;
+  const response = new Response(null, { status: 401, headers: { "Content-Type": "text/html" } });
+  const text = (challenge ? "<title>Just a moment...</title>" : "<title>Unauthorized</title>").padEnd(16 * 1024, " ");
+  Object.defineProperty(response, "body", { value: {
+    getReader: () => ({
+      read: async () => ({ done: false, value: new TextEncoder().encode(text) }),
+      cancel: () => { cancelCalls++; return new Promise<void>(resolve => { release = resolve; }); },
+    }),
+    cancel: async () => {},
+  } });
+  try {
+    setPairingDeadlineForTests(100);
+    const error = await validateRemoteLinkSession("", (async () => response) as typeof fetch).then(() => null, error => error);
+    expect(error).toBeInstanceOf(PairingError);
+    expect((error as PairingError).kind).toBe(challenge ? "cloudflare-challenge" : "remote-link-unauthorized");
+    expect(cancelCalls).toBe(1);
+  } finally { release?.(); setPairingDeadlineForTests(10_000); }
 });

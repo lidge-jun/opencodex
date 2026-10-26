@@ -1,5 +1,5 @@
 import { fetchApiSessionValidation } from "./api";
-import { withFetchDeadline } from "./bounded-fetch";
+import { discardResponseBody, withFetchDeadline } from "./bounded-fetch";
 import { PairingError } from "./connect-pairing-transport";
 
 export type CertificateState = "missing" | "invalid" | "expired" | "renewal-required" | "prepared" | "trusted" | "unknown";
@@ -109,7 +109,7 @@ export async function validateCompatibilityPairing(apiBase: string, signal: Abor
   try {
     await withFetchDeadline(10000, signal, async deadline => {
       const response = await fetchApiSessionValidation("machine", apiBase + ROOT + "certificate", { signal: deadline });
-      if (response.status === 401 || response.status === 403) { await response.body?.cancel(); throw new PairingError("refused"); }
+      if (response.status === 401 || response.status === 403) { discardResponseBody(response); throw new PairingError("refused"); }
       const certificate = parseCompatibilityCertificate((await reply(response)).certificate);
       deadline.throwIfAborted();
       if (certificate.mutationAuthorized !== true) throw new PairingError("refused");

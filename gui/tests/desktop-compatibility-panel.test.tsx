@@ -121,6 +121,89 @@ test.each([false, true])("a local pairing handoff enables desktop actions only a
   }
 });
 
+const pairingSessionHtml = (token: string, origin: string): string =>
+  `<meta name="opencodex-session-token" content="${token}"><meta name="opencodex-session-csrf" content="${token}-csrf"><meta name="opencodex-session-origin" content="${origin}"><meta name="opencodex-session-server-origin" content="${origin}">`;
+function pairingTransport(intercept: (url: string, token: string | null) => Response | null) {
+  server(false, undefined, undefined, undefined, undefined, false);
+  const read = globalThis.fetch, origin = page.location.origin, sent: { url: string; token: string | null }[] = [];
+  const raw = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input), token = new Headers(init?.headers).get("x-opencodex-api-key");
+    sent.push({ url, token });
+    if (url.endsWith("/opencodex-session")) { requests.push({ url, method: init?.method ?? "GET" }); return new Response(pairingSessionHtml("ocx_session_paired", origin)); }
+    return intercept(url, token) ?? read(input, init);
+  }) as typeof fetch;
+  return { sent, raw };
+}
+async function mountPairing(raw: typeof fetch): Promise<HTMLElement> {
+  Object.defineProperty(page, "fetch", { configurable: true, writable: true, value: raw });
+  configureApiTargets(standaloneApiTargets("")); installApiAuthFetch();
+  for (const plane of ["machine", "shared"] as const) expect(installApiSessionFromHtml(plane, pairingSessionHtml("ocx_session_automatic", page.location.origin))).toBe(true);
+  globalThis.fetch = page.fetch as unknown as typeof fetch;
+  return mount();
+}
+async function submitPairing(container: HTMLElement): Promise<HTMLInputElement> {
+  const input = container.querySelector("#connect-pairing-code") as HTMLInputElement;
+  Object.getOwnPropertyDescriptor(page.HTMLInputElement.prototype, "value")!.set!.call(input, `ocx_pair_${"a".repeat(43)}`);
+  await act(async () => input.dispatchEvent(new page.Event("input", { bubbles: true })));
+  await act(async () => input.closest("form")!.dispatchEvent(new page.Event("submit", { bubbles: true, cancelable: true })));
+  return input;
+}
+function refusedResponse(status: number, cancel: () => Promise<void>): Response {
+  const response = new Response(null, { status });
+  Object.defineProperty(response, "body", { value: { cancel } });
+  return response;
+}
+function expectRefusedRollbackState(container: HTMLElement, input: HTMLInputElement): void {
+  expect(requests.filter(request => request.method === "POST").map(request => request.url)).toEqual(["/opencodex-session"]);
+  const alert = container.querySelector('[role="alert"]');
+  expect(alert?.textContent).toContain("rejected the code");
+  expect(alert?.textContent).not.toContain("Could not reach the hub");
+  expect(input.disabled).toBe(false);
+  button(container, "Connect");
+}
+
+test.each([401, 403])("a refused pairing validation rolls back the session handoff when body cleanup rejects (status: %s)", async status => {
+  let cancelCalls = 0;
+  const { sent, raw } = pairingTransport((url, token) => url.endsWith("/certificate") && token === "ocx_session_paired"
+    ? refusedResponse(status, () => { cancelCalls++; return Promise.reject(new Error("cancel failed")); }) : null);
+  const container = await mountPairing(raw), input = await submitPairing(container);
+  expect(cancelCalls).toBe(1);
+  expectRefusedRollbackState(container, input);
+  await page.fetch("/api/codex/desktop-compatibility/certificate");
+  expect(sent.at(-1)!.token).toBe("ocx_session_automatic");
+});
+
+test.each([401, 403])("a refused pairing validation does not wait on a stalled body cleanup (status: %s)", async status => {
+  let cancelCalls = 0, releaseStall: (() => void) | undefined;
+  const { sent, raw } = pairingTransport((url, token) => url.endsWith("/certificate") && token === "ocx_session_paired"
+    ? refusedResponse(status, () => { cancelCalls++; return new Promise<void>(resolve => { releaseStall = () => resolve(); }); }) : null);
+  try {
+    const container = await mountPairing(raw), input = await submitPairing(container);
+    expect(cancelCalls).toBe(1);
+    expectRefusedRollbackState(container, input);
+    await page.fetch("/api/codex/desktop-compatibility/certificate");
+    expect(sent.at(-1)!.token).toBe("ocx_session_automatic");
+  } finally { releaseStall?.(); }
+});
+
+test("a network failure during pairing validation keeps the pending handoff for an explicit retry", async () => {
+  let failed = false;
+  const { sent, raw } = pairingTransport((url, token) => {
+    if (url.endsWith("/certificate") && token === "ocx_session_paired" && !failed) { failed = true; throw new TypeError("connection reset"); }
+    return null;
+  });
+  const container = await mountPairing(raw), input = await submitPairing(container);
+  expect(failed).toBe(true);
+  expect(requests.filter(request => request.method === "POST").map(request => request.url)).toEqual(["/opencodex-session"]);
+  const alert = container.querySelector('[role="alert"]');
+  expect(alert?.textContent).toContain("session validation could not complete");
+  expect(alert?.textContent).not.toContain("rejected the code");
+  expect(input.disabled).toBe(true);
+  button(container, "Retry validation");
+  await page.fetch("/api/codex/desktop-compatibility/certificate");
+  expect(sent.at(-1)!.token).toBe("ocx_session_paired");
+});
+
 test("machine session replacement drops consent and authorization while unrelated shared changes preserve them", async () => {
   server(); const container = await mount();
   await act(async () => button(container, "Register trust").click());
