@@ -1,7 +1,7 @@
 import { recordCommittedDesktopGateway } from "../claude/desktop-gateway-state";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { getConfigDir } from "../config/paths";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { loadConfig, mutatePersistedConfig, withConfigMutationLockSync } from "../config";
 import { claudeDesktopIntegrationEnabledNow, setIntegrationEnabled } from "../codex/desired-state";
 import { readClientConnectionState, assertClientConnectionUnchanged, assertNoClientDisconnectPending, type ClientConnectionState } from "../client/state";
@@ -99,6 +99,7 @@ type DesktopApplyResult = {
   warning?: string;
   picker?: DesktopPickerStatus;
   delegated?: boolean;
+  diagnostic?: import("../claude/desktop-first-party").InterceptSecretDiagnostic;
 };
 
 type PickerRouteResponse = {
@@ -155,7 +156,7 @@ async function trustPickerLocally(
 ): Promise<{ ok: true; callerAddedTrust: boolean; caPath: string; sha1: string } | { ok: false; reason: string }> {
   try {
     const configDir = getConfigDir();
-    const paths = pickerTrustPaths(deps, configDir);
+    const paths = await withConfigDirHardeningSettled(configDir, () => pickerTrustPaths(deps, configDir));
     if (!acceptsPickerAuthority(paths.certPem)) return { ok: false, reason: "ca_unverified" };
     if (!deps.ensurePickerCaImpl) {
       // The bytes in ca.pem are only safe to trust when they match the authority the running
@@ -426,14 +427,14 @@ async function applyFirstPartyDesktop(
   // Establish the replacement before deleting the working gateway. A refused
   // cleanup restores only our managed env keys, preserving unrelated settings.
   const rollback = captureDesktopFirstPartyRollback(config);
-  const applied = applyDesktopFirstParty(config);
-  if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason };
+  const applied = await withConfigDirHardeningSettled(getConfigDir(), () => applyDesktopFirstParty(config));
+  if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason, ...(applied.diagnostic ? { diagnostic: applied.diagnostic } : {}) };
   const appliedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
   const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });
   if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
     const removed = removeDesktop3pStandardPivot({ appliedFingerprint, replaceWhileEnabled: true });
     if (!removed.ok) {
-      const restored = removed.changed || !applied.changed || rollback();
+      const restored = removed.changed || !applied.changed || await withConfigDirHardeningSettled(getConfigDir(), rollback);
       const modeSaved = !removed.changed || saveDesktopMode("first-party", deps);
       const warning = [restored ? "" : "first-party settings rollback did not complete",
         modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");

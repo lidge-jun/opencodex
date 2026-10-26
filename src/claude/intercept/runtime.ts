@@ -1,7 +1,7 @@
 import type { Server } from "bun";
 import { supportsDesktopPicker } from "../desktop-picker-platform";
 import type { OcxConfig } from "../../types";
-import { getConfigDir } from "../../config/paths";
+import { getConfigDir, withConfigDirHardeningSettled } from "../../config/paths";
 import type { DesktopPickerController } from "../desktop-picker";
 import type { ClaudeFirstPartyDesired } from "../first-party-settings";
 import { classifyInterceptClient, interceptRouteFor } from "./client-class";
@@ -149,7 +149,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   const configDir = options.configDir ?? getConfigDir();
   const ca = await ensureLocalInterceptCaForStartup(configDir);
   const startProxy = options.startProxy ?? startConnectProxy;
-  const authToken = ensureClaudeInterceptProxyToken(configDir);
+  const authToken = await withConfigDirHardeningSettled(configDir, () => ensureClaudeInterceptProxyToken(configDir));
   const leaf = issueLocalInterceptLeaf(ca, CLAUDE_INTERCEPT_HOSTS);
   const listener = startClaudeInterceptListener<T>({
     leaf,

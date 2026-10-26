@@ -1,4 +1,5 @@
 {
+  "claude-intercept-acl-barrier.test.ts": "claude-integration",
   "agent-clients.test.ts": "clients",
   "workbuddy-selector-recovery.test.ts": "clients",
   "server-live-close.test.ts": "server",

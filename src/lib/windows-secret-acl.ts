@@ -493,7 +493,7 @@ function pathIsAtOrBelow(target: string, root: string): boolean {
   return suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
 }
 
-function retainedWorkIsAtOrBelow(entry: AsyncAclWork, root: RemovalIdentity): boolean {
+function retainedWorkIsAtOrBelow(entry: AsyncAclWork, root: RemovalIdentity, includeAncestors = false): boolean {
   const target = entry.identity;
   // Failure at capture stays conservative, even if the alias later becomes readable.
   if (target.canonical === undefined || root.canonical === undefined) return true;
@@ -501,7 +501,23 @@ function retainedWorkIsAtOrBelow(entry: AsyncAclWork, root: RemovalIdentity): bo
   if (current === undefined) return true;
   const targets = [target.lexical, target.canonical, current];
   return [root.lexical, root.canonical].some(rootPath =>
-    targets.some(targetPath => pathIsAtOrBelow(targetPath, rootPath)));
+    targets.some(targetPath => pathIsAtOrBelow(targetPath, rootPath)
+      || (includeAncestors && pathIsAtOrBelow(rootPath, targetPath))));
+}
+
+/** Run a synchronous mutation only after overlapping ACL operations and retained children exit. */
+export async function withWindowsSecretAclSettled<T>(rootPath: string, mutate: () => T): Promise<T> {
+  const root = captureRemovalIdentity(rootPath);
+  while (true) {
+    const pending = [...activeAsyncAclWork.values(), ...pendingAsyncIcaclsReaps.values()]
+      .flatMap(entries => [...entries])
+      .filter(entry => retainedWorkIsAtOrBelow(entry, root, true))
+      .map(entry => entry.reap);
+    // No await between this final observation and the mutation. A newly queued hardener's
+    // microtasks cannot run icacls until the synchronous callback has completely returned.
+    if (pending.length === 0) return mutate();
+    await Promise.all(pending);
+  }
 }
 
 /** True while an async icacls runner still owns this exact path after its caller's belt fired. */

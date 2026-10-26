@@ -59,10 +59,10 @@ It rechecks the file before committing, retries a changed snapshot up to three t
 returns unavailable for missing, invalid, or persistently conflicting config. Its one-shot
 test seam and the mutation types remain re-exported through `src/config.ts`. Successful, repaired, and salvaged file loads record their source path in the private WeakMap owned by `src/config/rebase-provenance.ts`; defaults and synthetic objects do not acquire it. This metadata is never serialized. Inventory drift cannot turn a file-backed instance into a synthetic discovery writer. Read publication may use the detached policy projection described by the [catalog contract](catalog.md#shared-catalog), without changing the live merge baseline; changing the resolved config home refuses publication.
 
-`src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
-the config directory and `config.json` path and retains the existing cache rule: a relative home is
-resolved once for each distinct raw environment value, so a later working-directory change cannot
+`src/config/paths.ts` owns `OPENCODEX_HOME` expansion and resolution, the config directory and `config.json` path. A relative home is resolved once per distinct raw environment value, so a later working-directory change cannot
 silently move the active installation. Config reads in this leaf and `src/config/load-degrade.ts` use NTFS ACLs on Windows and private POSIX modes elsewhere. Windows reads omit `chmod` before ACL hardening so repeated loads preserve successful object/freshness observations; external metadata changes still invalidate them. Directory flights keep their existing flush/reap lifecycle, and file/required-write failure policy is unchanged. `tests/windows/windows-config-read-acl-memo.test.ts` covers repeated loads, external invalidation and POSIX permissions.
+
+Intercept secret writers use `withConfigDirHardeningSettled` from `src/config/paths.ts` after their last unrelated await. It drains the optional config-directory hardening flight and overlapping Windows ACL registry work, including ancestors and retained timeout children, then runs the synchronous writer in the same turn as the final empty-registry check. The callback contains no await: queued microtasks cannot start a new inheritable parent ACL update during child CA, token or picker publication. The registry preserves lexical and canonical alias matching; uncertain identity drains conservatively. Removal retains its separate at-or-below scope.
 
 `src/config/process-state.ts` derives `ocx.pid` and `runtime-port.json` from that resolved directory.
 It owns their byte-compatible writes, parsing, expected-PID filters, cheap liveness, full OCX command

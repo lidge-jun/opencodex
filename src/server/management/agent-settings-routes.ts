@@ -1105,7 +1105,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         return await runPickerTransition(config, async ops => {
           const { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } = await import("../../claude/desktop-3p");
           const rollback = captureDesktopFirstPartyRollback(config);
-          const applied = applyDesktopFirstParty(config);
+          const { getConfigDir, withConfigDirHardeningSettled } = await import("../../config/paths");
+          const applied = await withConfigDirHardeningSettled(getConfigDir(), () => applyDesktopFirstParty(config));
           if (!applied.ok) {
             const { firstPartyRefusalMessage } = await import("./native-integration-routes");
             return jsonResponse({
@@ -1113,6 +1114,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
               code: "claude_desktop_first_party_refused",
               reason: applied.reason,
               path: applied.path,
+              ...(applied.diagnostic ? { diagnostic: applied.diagnostic } : {}),
             }, applied.reason === "foreign_env" || applied.reason === "intercept_disabled" ? 409 : 500);
           }
           // Remove the gateway only after the replacement env was written.
@@ -1122,7 +1124,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
             const removed = (deps.removeDesktop3pStandardPivot ?? removeDesktop3pStandardPivot)({ appliedFingerprint, replaceWhileEnabled: true });
             if (!removed.ok) {
-              const restored = removed.changed || !applied.changed || rollback();
+              const restored = removed.changed || !applied.changed || await withConfigDirHardeningSettled(getConfigDir(), rollback);
               const modeSaved = !removed.changed || (await persistDesktopModeField(config, "first-party")).ok;
               const warning = [restored ? "" : "first-party settings rollback did not complete",
                 modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");
@@ -1622,13 +1624,15 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (committed.pinnedMode) live.desktopMode = committed.pinnedMode;
       config.claudeCode = live;
       let result: ReturnType<typeof reconcileClaudeFirstPartySettings> | undefined;
-      try { result = (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
-        firstPartyDesired(config, observeClaudeDesktopMode(config))); }
+      const { getConfigDir, withConfigDirHardeningSettled } = await import("../../config/paths");
+      try { result = await withConfigDirHardeningSettled(getConfigDir(), () =>
+        (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
+          firstPartyDesired(config, observeClaudeDesktopMode(config)))); }
       catch { /* An unexpected settings failure is mapped after conditional rollback. */ }
       if (!result?.ok) {
         let settingsRestored = true;
         if (body.cliFirstParty) {
-          try { settingsRestored = restoreSettings?.() ?? false; } catch { settingsRestored = false; }
+          try { settingsRestored = await withConfigDirHardeningSettled(getConfigDir(), () => restoreSettings?.() ?? false); } catch { settingsRestored = false; }
           let rollback: ReturnType<typeof mutatePersistedConfig<OcxConfig["claudeCode"]>>;
           try {
             rollback = mutatePersistedConfig(persisted => {
@@ -1650,6 +1654,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         }
         const code = result?.reason ?? "write_failed";
         return jsonResponse({ error: "Claude first-party reconciliation failed", code,
+          ...(result?.diagnostic ? { diagnostic: result.diagnostic } : {}),
           ...(!body.cliFirstParty && code === "unreadable"
             ? { cliFirstParty: false, warnings: ["settings_residual"] } : {}),
           ...(body.cliFirstParty && !settingsRestored

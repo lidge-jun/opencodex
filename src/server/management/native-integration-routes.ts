@@ -38,6 +38,7 @@ import {
   removeDesktopFirstParty,
   resolveClaudeDesktopApplyMode,
   type ClaudeDesktopMode,
+  type InterceptSecretDiagnostic,
 } from "../../claude/desktop-first-party";
 import { FIRST_PARTY_ACCOUNT_RISK } from "../../claude/desktop-risk";
 import type { DesktopPickerStatus } from "../../claude/desktop-picker";
@@ -49,6 +50,7 @@ import { grokConfigPath } from "../../grok/status";
 import { assertNativeTeardownOwned } from "../../integrations/native/ownership-preflight";
 import type { CodexNativeRestoreResult } from "../../codex/inject";
 import type { OcxConfig } from "../../types";
+import { getConfigDir, withConfigDirHardeningSettled } from "../../config/paths";
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { managementInferencePort, type ManagementContext } from "./context";
@@ -108,6 +110,7 @@ export interface NativeRefusalEnvelope {
   /** Present on every post-commit refusal; absent only for pre-commit refusals. */
   desiredEnabled?: boolean;
   residualPaths?: string[];
+  diagnostic?: InterceptSecretDiagnostic;
 }
 
 export type NativePostCommitRefusalEnvelope = Omit<NativeRefusalEnvelope, "desiredEnabled"> & {
@@ -133,7 +136,7 @@ function postCommitRefusal(
   clientId: NativeIntegrationClientId,
   reason: NativeRefusalReason,
   message: string,
-  extra: Pick<NativePostCommitRefusalEnvelope, "desiredEnabled" | "residualPaths">,
+  extra: Pick<NativePostCommitRefusalEnvelope, "desiredEnabled" | "residualPaths" | "diagnostic">,
 ): Response {
   return jsonResponse({
     error: status >= 500 ? "native integration change failed" : "native integration change refused",
@@ -755,17 +758,17 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
       // The whole switch runs under the picker lock, in today's order: env first, then gateway cleanup.
       return await runPickerTransition(current, async ops => {
         const rollback = captureDesktopFirstPartyRollback(current);
-        const applied = applyDesktopFirstParty(current);
+        const applied = await withConfigDirHardeningSettled(getConfigDir(), () => applyDesktopFirstParty(current));
         if (!applied.ok) {
           const reason = applied.reason === "foreign_env" || applied.reason === "intercept_disabled" ? applied.reason : "write_failed";
           return postCommitRefusal(applied.reason === "unreadable" || applied.reason === "ca_unavailable" ? 500 : 409, "claude-desktop", reason,
-            firstPartyRefusalMessage(applied.reason, applied.path), { desiredEnabled });
+            firstPartyRefusalMessage(applied.reason, applied.path), { desiredEnabled, ...(applied.diagnostic ? { diagnostic: applied.diagnostic } : {}) });
         }
         const library = inspectDesktop3pConfigLibrary({ appliedFingerprint: fingerprint });
         let gatewayRemoved = false;
         if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
           const removed = (ctx.deps.removeDesktop3pStandardPivot ?? removeDesktop3pStandardPivot)({ appliedFingerprint: fingerprint, replaceWhileEnabled: true });
-          if (!removed.ok && !removed.changed && applied.changed && !rollback()) {
+          if (!removed.ok && !removed.changed && applied.changed && !await withConfigDirHardeningSettled(getConfigDir(), rollback)) {
             return postCommitRefusal(500, "claude-desktop", "write_failed",
               "Gateway cleanup and first-party settings rollback did not complete.", { desiredEnabled });
           }

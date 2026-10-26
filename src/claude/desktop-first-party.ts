@@ -211,9 +211,24 @@ export function observeClaudeDesktopMode(
   return observed;
 }
 
+const SECRET_FAILURE_CAUSES = ["EACCES", "EPERM", "ENOENT", "EEXIST", "EIO", "EBUSY", "ETIMEDOUT",
+  "EICACLS", "EACLIDENTITY", "local_ca_path_unsafe", "client_lifecycle_busy", "client_lifecycle_lock_failed",
+  "claude_intercept_proxy_token_invalid", "Error", "TypeError", "RangeError", "unknown"] as const;
+export interface InterceptSecretDiagnostic {
+  stage: "ca" | "token";
+  cause: typeof SECRET_FAILURE_CAUSES[number];
+}
+function secretFailureCause(error: unknown): InterceptSecretDiagnostic["cause"] {
+  const code = error instanceof Error && "code" in error ? error.code : undefined;
+  // Allowlist labels, never arbitrary messages, paths, ACL stdout, or error-supplied names.
+  for (const allowed of SECRET_FAILURE_CAUSES) if (code === allowed) return allowed;
+  for (const allowed of ["TypeError", "RangeError", "Error"] as const)
+    if (error instanceof Error && error.name === allowed) return allowed;
+  return "unknown";
+}
 export type DesktopFirstPartyApplyResult =
   | { ok: true; changed: boolean; path: string; env: ClaudeInterceptEnv; proxyPort: number }
-  | { ok: false; reason: "intercept_disabled" | "ca_unavailable" | "unreadable" | "foreign_env"; path: string };
+  | { ok: false; reason: "intercept_disabled" | "ca_unavailable" | "unreadable" | "foreign_env"; path: string; diagnostic?: InterceptSecretDiagnostic };
 
 /**
  * Write the first-party env into Claude Code's settings. Creates the local CA first so the
@@ -226,11 +241,15 @@ export function applyDesktopFirstParty(
   const opencodexConfigDir = options.opencodexConfigDir ?? getConfigDir();
   if (!claudeInterceptEnabled(config)) return { ok: false, reason: "intercept_disabled", path: "" };
   let target: DesktopFirstPartyTarget;
+  let stage: InterceptSecretDiagnostic["stage"] = "ca";
   try {
     ensureLocalInterceptCa(opencodexConfigDir);
+    stage = "token";
     target = desktopFirstPartyTarget(config, opencodexConfigDir);
-  } catch {
-    return { ok: false, reason: "ca_unavailable", path: claudeInterceptCaCertPath(opencodexConfigDir) };
+  } catch (error) {
+    const diagnostic = { stage, cause: secretFailureCause(error) };
+    console.warn(`[claude-intercept] secret preparation failed: stage=${diagnostic.stage} cause=${diagnostic.cause}`);
+    return { ok: false, reason: "ca_unavailable", path: claudeInterceptCaCertPath(opencodexConfigDir), diagnostic };
   }
   const written = applyClaudeInterceptSettings(target.env, options.claudeConfigDir);
   if (!written.ok) return { ok: false, reason: written.reason, path: written.path };

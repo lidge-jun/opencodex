@@ -1,7 +1,7 @@
 import { chmodSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { flushWindowsSecretAclReapsBeforeRemoval, hardenSecretDirAsync, windowsSecretAclApplies } from "../lib/windows-secret-acl";
+import { flushWindowsSecretAclReapsBeforeRemoval, hardenSecretDirAsync, windowsSecretAclApplies, withWindowsSecretAclSettled } from "../lib/windows-secret-acl";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { isPassiveRead } from "../lib/passive-read";
 import { trackBackgroundWork } from "../lib/background-work";
@@ -71,6 +71,19 @@ export function hardenConfigDir(): void {
 export async function flushConfigDirHardening(dir: string = getConfigDir()): Promise<void> {
   const flight = configDirHardeningFlights.get(dir);
   if (flight) await flight;
+}
+
+/**
+ * Intercept CA/token/picker writers call this after their last unrelated await. Parent
+ * inheritable ACL propagation can overwrite a child's concurrent explicit grant. Drain the
+ * config flight, then all overlapping registry work (including ancestors and timeout reaps).
+ * The final registry check and synchronous callback share a turn: promise continuations and
+ * newly queued hardeners cannot start icacls between that check and secret publication.
+ * Keep the callback synchronous; an await inside it would reopen the propagation race.
+ */
+export async function withConfigDirHardeningSettled<T>(dir: string, mutate: () => T): Promise<T> {
+  await flushConfigDirHardening(dir);
+  return withWindowsSecretAclSettled(dir, mutate);
 }
 
 /** A settled ACL deadline is not proof its child has exited; stop must drain both before removal. */
