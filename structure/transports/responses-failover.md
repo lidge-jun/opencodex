@@ -265,10 +265,10 @@ including when the destination is a combo, so request history names the phase th
 For routed v2 summaries served by the resolved Anthropic Messages adapter, `src/server/responses/response-effects.ts`
 preserves client tool definitions, system text, `toolChoice` and `parallelToolCalls`. Other adapters retain tool removal.
 Search/media sidecar execution stays disabled; Anthropic server-tool declarations and replay remain,
-with `toolChoice: none` when server tools exist, preventing upstream execution.
+with wire `tool_choice: none` when server tools exist, preventing upstream execution.
 [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#what-invalidates-the-cache)
 orders the prefix as tools, system, messages: changing tool definitions invalidates all three;
-changing tool choice invalidates message cache only. Client-only summaries keep an optional choice unchanged; a mandatory choice (required, named, or required allowed tools) becomes `toolChoice: none` after the request freezes the catalog the choice advertised, so tools and system stay byte-identical. Search sidecar declarations are not injected for summaries, so a request whose ordinary turn advertised a sidecar search tool still changes its tool prefix.
+changing tool choice invalidates message cache only. Client-only summaries keep an optional choice unchanged; a mandatory choice (required, named, or required allowed tools) keeps the caller's choice for catalog derivation and sets `_summaryProhibitsToolCalls`; `src/adapters/anthropic.ts` builds tools and system from that choice, provider name transforms included, then sends `tool_choice: none`, so tools and system stay byte-identical. Search sidecar declarations are not injected for summaries, so a request whose ordinary turn advertised a sidecar search tool still changes its tool prefix.
 `src/responses/compaction-summary.ts` suppresses tool/search events and rejects tool attempts,
 empty summaries and abnormal completions before delivery;
 only successful prose reaches the single synthetic compaction item. Truncated completions retain the existing incomplete outcome.

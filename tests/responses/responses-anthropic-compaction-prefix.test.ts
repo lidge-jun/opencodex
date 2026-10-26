@@ -45,14 +45,14 @@ test("Anthropic compaction preserves client tool and system cache prefixes and t
 test("hosted server declarations stay cacheable but their execution is explicitly prohibited", () => {
   const parsed = applyEffects(true, true);
   expect(parsed._anthropicServerTools).toEqual([{ type: "web_search_20250305", name: "web_search" }]);
-  expect(parsed.options.toolChoice).toBe("none");
+  expect(parsed._summaryProhibitsToolCalls).toBe(true);
   expect(parsed._webSearch).toBeUndefined();
 });
 
 for (const choice of ["required", { type: "function", name: "read" }]) test(`a mandatory tool choice cannot force the summary into a tool call: ${JSON.stringify(choice)}`, () => {
   const parsed = applyEffects(true, false, choice);
   expect(parsed.context.tools).toEqual(tools);
-  expect(parsed.options.toolChoice).toBe("none");
+  expect(parsed._summaryProhibitsToolCalls).toBe(true);
 });
 
 test("other adapters retain the existing compaction deletion behavior", () => {
@@ -115,7 +115,7 @@ for (const [label, modelId, choice] of [
     {} as Args[1], { parsed: summary, route: { provider: {} } } as Args[2],
     { routedCompaction: true, preserveCompactionPrefix: true } as Args[3],
   );
-  expect(summary.options.toolChoice).toBe("none");
+  expect(summary._summaryProhibitsToolCalls).toBe(true);
   const before = JSON.parse((await adapter.buildRequest(ordinary)).body as string);
   const after = JSON.parse((await adapter.buildRequest(summary)).body as string);
   expect(before.tools.map((tool: { name: string }) => tool.name)).toEqual(["read"]);
@@ -140,10 +140,34 @@ for (const [label, modelId, functions, choice] of [
     {} as Args[1], { parsed: summary, route: { provider: {} } } as Args[2],
     { routedCompaction: true, preserveCompactionPrefix: true } as Args[3],
   );
-  expect(summary.options.toolChoice).toBe("none");
+  expect(summary._summaryProhibitsToolCalls).toBe(true);
   const before = JSON.parse((await adapter.buildRequest(ordinary)).body as string);
   const after = JSON.parse((await adapter.buildRequest(summary)).body as string);
   expect(before.tools.map((tool: { name: string }) => tool.name)).toEqual(["read"]);
+  expect(after.tools).toEqual(before.tools);
+  expect(after.system).toEqual(before.system);
+  expect(after.tool_choice).toEqual({ type: "none" });
+});
+
+for (const [label, auth, escape, hosted] of [
+  ["OAuth renames a hosted web_fetch selector", "oauth", false, { type: "web_fetch_20250910", name: "web_fetch" }],
+  ["escaped built-in names rename a hosted web_search selector", "key", true, { type: "web_search_20250305", name: "web_search" }],
+] as const) test(`provider wire-name transforms keep the ordinary tool prefix: ${label}`, async () => {
+  const provider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: auth, apiKey: "synthetic-test-key",
+    ...(auth === "oauth" ? { oauthToken: "synthetic-oauth-token" } : {}), ...(escape ? { escapeBuiltinToolNames: true } : {}) };
+  const adapter = withTestTranslatorBudget(createAnthropicAdapter(provider as never, "short"));
+  const ordinary = { modelId: "claude-opus-5-5", options: { toolChoice: { type: "function", name: hosted.name }, parallelToolCalls: false },
+    _anthropicServerTools: [hosted],
+    context: { tools: structuredClone(tools), systemPrompt: ["stable system"], messages: [{ role: "user", content: "earlier turn", timestamp: 1 }] } } as unknown as OcxParsedRequest;
+  const summary = structuredClone(ordinary);
+  type Args = Parameters<typeof createResponsesEffects>;
+  createResponsesEffects(
+    { options: {}, req: new Request("http://localhost/v1/responses"), config: {} } as Args[0],
+    {} as Args[1], { parsed: summary, route: { provider: {} } } as Args[2],
+    { routedCompaction: true, preserveCompactionPrefix: true } as Args[3],
+  );
+  const before = JSON.parse((await adapter.buildRequest(ordinary)).body as string);
+  const after = JSON.parse((await adapter.buildRequest(summary)).body as string);
   expect(after.tools).toEqual(before.tools);
   expect(after.system).toEqual(before.system);
   expect(after.tool_choice).toEqual({ type: "none" });

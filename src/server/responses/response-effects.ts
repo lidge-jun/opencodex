@@ -1,5 +1,4 @@
 import { requiresToolCall } from "../../types";
-import { freezeAnthropicAdvertisedCatalog } from "../../adapters/anthropic-tool-catalog";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
@@ -97,13 +96,11 @@ export function createResponsesEffects(
       delete parsed.options.toolChoice;
       delete parsed.options.parallelToolCalls;
     } else if (parsed._anthropicServerTools?.length || requiresToolCall(parsed.options.toolChoice)) {
-      // A mandatory choice would force the summary into a tool call the guard must reject.
-      // Freeze the catalog the ordinary request advertised: an allowed-tools or named choice
-      // narrows it, and "none" alone would advertise every tool and move the cached prefix.
-      freezeAnthropicAdvertisedCatalog(parsed);
-      // Hosted tools execute upstream: retain their cached definitions but prohibit execution.
+      // Hosted tools execute upstream, and a mandatory choice would force a call the summary
+      // guard must reject. Keep the choice itself so the adapter derives the same tools and
+      // system bytes; the adapter replaces only the final wire tool_choice with "none".
       // tool_choice changes invalidate message cache, not tools/system (Anthropic caching docs).
-      parsed.options.toolChoice = "none";
+      parsed._summaryProhibitsToolCalls = true;
     }
     // Client tool events are rejected by guardCompactionSummary before reaching Codex.
     // The compaction turn is a plain prose summary; a surviving structured-output format
