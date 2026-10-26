@@ -262,6 +262,19 @@ including when the destination is a combo, so request history names the phase th
 
 ## Compaction routing overrides
 
+For routed v2 summaries served by the resolved Anthropic Messages adapter, `src/server/responses/response-effects.ts`
+preserves client tool definitions, system text, `toolChoice` and `parallelToolCalls`. Other adapters retain tool removal.
+Search/media sidecar execution stays disabled; Anthropic server-tool declarations and replay remain,
+with `toolChoice: none` when server tools exist, preventing upstream execution.
+[Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching#what-invalidates-the-cache)
+orders the prefix as tools, system, messages: changing tool definitions invalidates all three;
+changing tool choice invalidates message cache only. Client-only summaries keep the choice unchanged.
+`src/responses/compaction-summary.ts` suppresses tool/search events and rejects tool attempts,
+empty summaries and abnormal completions before delivery;
+only successful prose reaches the single synthetic compaction item. Truncated completions retain the existing incomplete outcome.
+Signed progress is not summary prose.
+`tests/responses/responses-anthropic-compaction-prefix.test.ts` covers the prefix and both delivery modes; image normalization and 413 recovery retain their existing policy.
+
 `src/server/responses/compaction-routing.ts` applies `compactionRouting` before model routing in
 both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"` in
 `x-codex-turn-metadata`, supplied as a header or embedded in Responses `client_metadata`, and on

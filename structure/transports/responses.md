@@ -92,8 +92,8 @@ a `functions` child of the same name are the duplicate the parser already tolera
 
 Replayed call items are lowered whether or not this turn declares the group they name. A catalog can
 be absent or change mid-session, but the client is still replaying items this layer's own response
-restoration stamped with a private `namespace`. Routed compaction runs this boundary before removing
-the tool surface so request-local aliases remain available for response restoration. Only
+restoration stamped with a private `namespace`. Routed compaction runs this boundary before applying
+the summary tool policy so request-local aliases remain available for response restoration. Only
 `tool_choice` resolves a bare name through the catalog: a history
 item records which tool actually ran, so re-pointing it at a same-named namespace child would
 rewrite that record on a coincidence rather than translate it.
@@ -418,7 +418,7 @@ The continuation-note and continuation-wire tests establish prompt and wire cont
 | `shadow-target-availability.ts` | Shadow-call target resolution for `request-prepare.ts`: an unavailable target fails once with `409 intercept_target_unavailable` instead of reaching the native source model or the default provider. |
 | `request-transport.ts` | Live credential selection, dispatch bindings, adapter replacement and same-target request identity. Copilot Auto renewal onto Chat (including negotiation-401 refresh) signals the native owner before inference; `passthrough-dispatch.ts` reuses its inference-401/429 adapter handoff so JSON and SSE retain the Responses envelope. |
 | `request-sidecar-auth.ts` | Routed-compaction image projection, sidecar credential resolution and vision preprocessing. |
-| `response-effects.ts` | Completion notification, replay publication and live request-tool aliases. |
+| `response-effects.ts` | Completion notification, replay publication, live request-tool aliases and routed summary controls; Anthropic keeps client tools/system/options, prohibiting upstream-hosted tools with `toolChoice: none`. |
 | `request-send-budget.ts` | Request-wide send accounting, remaining allowance, the pending recovery permit and the shared ambiguous-resend grant. |
 | `reset-replay.ts` | Self-contained-request eligibility and the shared operator replacement grant for native Responses and generic translated initial/rebuilt pre-header sends; adapter-owned transports and translated post-header failures are excluded. |
 | `request-spend.ts` | This request's entries in the durable spend ledger: one per physical send, settled from the terminal usage. |
@@ -429,7 +429,7 @@ The continuation-note and continuation-wire tests establish prompt and wire cont
 | `sidecar-execution.ts`, `sidecar-send-budget.ts` | Image/video versus web-search execution, shared rotation, and adapter-aware prepaid inference/producer ownership under the [spend contract](responses-spend.md#prepaid-initial-sends). |
 | `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns; refreshed retries reject previously failed key bindings and revalidate after each queued admission; adapter-owned CLI spawns receive the post-setup `IncomingMeta.beforePhysicalSend` fence, with [replacement-key readmission](responses-failover.md#upstream-key-attempt-accounting). |
 | `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery (including [Anthropic thinking-signature recovery](anthropic-thinking-recovery.md)) and the shared continuation retry counter. Initial and rebuilt adapter budget refusals retain the HTTP 413 [byte-accounting contract](byte-accounting.md#request-copy-accounting); ordinary build errors remain 400. |
-| `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; a streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
+| `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; Anthropic routed summaries pass through `src/responses/compaction-summary.ts` before either bridge. A streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
 
 Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`,
 `core-combo-failure.ts`, `core-combo-native.ts`, `combo-requested-effort.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`,

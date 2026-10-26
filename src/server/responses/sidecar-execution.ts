@@ -201,7 +201,7 @@ export async function executeResponsesSidecars(
   }
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
-  // Routed-compaction turns must NOT hit the image bridge: compaction clears tools/_webSearch but
+  // Routed-compaction turns must NOT hit the image bridge: compaction disables tool execution but
   // leaves _imageGeneration, so planImageBridge would activate and return a normal Responses
   // completion instead of the synthetic compaction item Codex expects (#424).
   //
