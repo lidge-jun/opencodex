@@ -55,9 +55,7 @@ describe("graceful completion on max_output_tokens: bridgeToResponsesSSE", () =>
     for (const block of text.split("\n\n")) {
       for (const line of block.split("\n")) {
         if (line.startsWith("data: ") && line !== "data: [DONE]") {
-          try {
-            parsed.push(JSON.parse(line.slice(6)));
-          } catch {}
+          parsed.push(JSON.parse(line.slice(6)));
         }
       }
     }
