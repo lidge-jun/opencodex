@@ -28,11 +28,13 @@ function installHttpsMock(bodyChunks: Buffer[], statusCode = 200) {
         statusCode: number;
         headers: Record<string, string>;
         setTimeout: Function;
+        pause: Function;
         resume: Function;
       };
       res.statusCode = statusCode;
       res.headers = { "content-type": "image/png" };
       res.setTimeout = mock(() => {});
+      res.pause = mock(() => {});
       res.resume = mock(() => {});
       queueMicrotask(() => {
         onResponse?.(res);

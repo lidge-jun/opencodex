@@ -34,6 +34,7 @@ import {
 } from "../../oauth/generic-account-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { isNonReplayableResponse, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { isVerifiedModelNotInPlanResponse, markVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
 import { noteKiroMonthlyRefusal, noteKiroServedSuccess } from "../../providers/kiro-usage";
@@ -51,7 +52,7 @@ import { namespacedToolName } from "../../types";
 import { providerFetch } from "./fetch-helpers";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
-import { normalizeLogConversationId } from "../request-log-conversation";
+import { assignNativeLogConversationId, normalizeLogConversationId } from "../request-log-conversation";
 import { attemptAccountChanged } from "../request-log-account-rotation";
 import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
@@ -592,9 +593,7 @@ export async function executeResponsesSidecars(
         // Cursor may assign _cursorConversationId inside the image loop's first runTurn;
         // backfill so Logs can filter/total that opening request (parity with the normal
         // runTurn branch).
-        if (!logCtx.conversationId && parsed._cursorConversationId) {
-          logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
-        }
+        assignNativeLogConversationId(logCtx, normalizeLogConversationId(parsed._cursorConversationId));
         transportState.bindKeyUsageFromBridge(usage);
       },
       on429: rotateSidecarProviderOn429,
@@ -632,10 +631,13 @@ export async function executeResponsesSidecars(
     if (imgResponse.body) {
       const imgTurnAc = new AbortController();
       imgTurnAc.signal.addEventListener("abort", cancelResponseCompletion, { once: true });
-      return new Response(trackStreamLifetime(imgResponse.body, imgTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
+      const tracked = new Response(trackStreamLifetime(imgResponse.body, imgTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
         status: imgResponse.status,
         headers: imgResponse.headers,
       });
+      // The wrapper is a new object; a verified plan refusal keeps its provenance across it.
+      if (isVerifiedModelNotInPlanResponse(imgResponse)) markVerifiedModelNotInPlanResponse(tracked);
+      return tracked;
     }
     releaseSearchProbeLease();
     return imgResponse;
@@ -751,10 +753,12 @@ export async function executeResponsesSidecars(
     if (wsResponse.body) {
       const wsTurnAc = new AbortController();
       wsTurnAc.signal.addEventListener("abort", cancelResponseCompletion, { once: true });
-      return new Response(trackStreamLifetime(wsResponse.body, wsTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
+      const tracked = new Response(trackStreamLifetime(wsResponse.body, wsTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
         status: wsResponse.status,
         headers: wsResponse.headers,
       });
+      if (isVerifiedModelNotInPlanResponse(wsResponse)) markVerifiedModelNotInPlanResponse(tracked);
+      return tracked;
     }
     releaseSearchProbeLease();
     return wsResponse;

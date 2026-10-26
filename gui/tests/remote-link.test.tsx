@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { Root } from "react-dom/client";
 import { act } from "react";
@@ -24,9 +24,14 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  if (root) await act(async () => { root?.unmount(); });
-  root = null;
-  for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+  try {
+    if (root) await act(async () => { root?.unmount(); });
+  } finally {
+    root = null;
+    try { await win.happyDOM.close(); } finally {
+      for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+    }
+  }
 });
 
 function response(body: unknown, status = 200): Response { return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }); }
@@ -558,7 +563,9 @@ test("Retry on a failed Home link restarts its tunnel instead of only re-reading
   await act(async () => { retry.click(); });
   await settleUntil(() => host.querySelector(".remote-link-status[data-state='connecting']") !== null);
   expect(calls.filter(call => call.method === "POST").map(call => call.path)).toEqual(["/api/link/link-1/reconnect"]);
-  expect(calls.at(-1)).toEqual({ method: "GET", path: "/api/link/status" });
+  // The page also hosts the per-device fallback panel, whose own GET /api/fallback may land
+  // after the refresh; the link flow's last request is still the status re-read.
+  expect(calls.filter(call => call.path.startsWith("/api/link")).at(-1)).toEqual({ method: "GET", path: "/api/link/status" });
   expect(host.querySelector(".remote-link-status[data-state='connecting']")).not.toBeNull();
 });
 
@@ -568,11 +575,13 @@ test.each([false, true])("Retry stays disabled through the deferred refresh (POS
   const refreshed = new Promise<Response>(resolve => { release = resolve; });
   let posts = 0;
   let gets = 0;
-  globalThis.fetch = (async (_input, init) => {
+  globalThis.fetch = (async (input, init) => {
     if (init?.method === "POST") {
       posts += 1;
       return postFails ? response({ error: { code: "link_unavailable" } }, 503) : response({ linkId: "link-1" });
     }
+    // Count only the link status reads; the fallback panel's GET is a separate resource.
+    if (new URL(String(input)).pathname !== "/api/link/status") return response({ error: "not_found" }, 404);
     gets += 1;
     return gets === 1 ? response(failed) : refreshed;
   }) as typeof fetch;
@@ -878,6 +887,51 @@ async function enterAlias(sheet: HTMLElement, value: string): Promise<void> {
     input.dispatchEvent(new win.Event("input", { bubbles: true }));
   });
 }
+
+test.each(["close", "unmount"] as const)("pending sheet focus is cancelled on %s", async transition => {
+  type Timer = ReturnType<Window["setTimeout"]>;
+  const pending = new Map<Timer, () => void>();
+  const schedule = win.setTimeout.bind(win);
+  const cancel = win.clearTimeout.bind(win);
+  const timers = spyOn(win, "setTimeout").mockImplementation((callback, delay = 0, ...args) => {
+    if (delay !== 0) return schedule(callback, delay, ...args);
+    const timer = {} as Timer;
+    pending.set(timer, () => callback(...args));
+    return timer;
+  });
+  const cancellations = spyOn(win, "clearTimeout").mockImplementation(timer => {
+    if (!pending.delete(timer)) cancel(timer);
+  });
+  globalThis.fetch = (async input => response(String(input).endsWith("/candidates") ? { candidates: [] } : baseStatus)) as typeof fetch;
+  try {
+    const host = await mount();
+    const sheet = await openHomeSheet(host);
+    const trigger = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))!;
+    expect(pending.size).toBe(1);
+    // Prove the held callback is live and still gives an open sheet its initial focus.
+    for (const [timer, callback] of pending) { pending.delete(timer); callback(); }
+    expect(win.document.activeElement).toBe(sheet.querySelector("input, button"));
+    await act(async () => { sheet.dispatchEvent(new win.Event("cancel", { cancelable: true })); });
+    expect(win.document.activeElement).toBe(trigger);
+    await act(async () => { trigger.click(); });
+    expect(pending.size).toBe(1);
+    if (transition === "close") {
+      await act(async () => { sheet.dispatchEvent(new win.Event("cancel", { cancelable: true })); });
+    } else {
+      await act(async () => { root?.unmount(); });
+      root = null;
+    }
+    // Check cancellation before draining; executing an uncancelled timer cannot make this pass.
+    expect(pending.size).toBe(0);
+    for (const callback of pending.values()) callback();
+    if (transition === "close") expect(win.document.activeElement).toBe(trigger);
+  } finally {
+    if (root) await act(async () => { root?.unmount(); });
+    root = null;
+    timers.mockRestore();
+    cancellations.mockRestore();
+  }
+});
 
 test("discovery loading, empty setup and rescan retain keyboard-accessible manual entry", async () => {
   let complete!: (value: Response) => void;

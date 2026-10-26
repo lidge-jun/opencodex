@@ -284,7 +284,10 @@ canonical `openai` provider exists (#2901), not when its quota is exhausted. A h
 `triggers` the schema would reject disables the whole block instead of widening it, so a
 malformed edit can never route more than it names.
 
-The override changes only the model and optional reasoning effort; native forwarding, routed summaries, capability handling, and retry
+The override changes only the model and optional reasoning effort. Final-route normalization
+checks that effort against the selected canonical native model's published ladder before each
+Responses send, including a combo fallback (`gpt-6.1-sol` `none` → `low`). Native forwarding,
+routed summaries, capability handling, and retry
 budgets stay authoritative, and native compact still removes reasoning before sending. Handoffs carry the override record (with the source
 model) as a recursion guard so combo children and fallbacks keep their targets. Overrides bypass shadow interception and conversation
 combo recall, and do not publish replacement combo/handoff recall. They never change the conversation's model or compactions outside the
@@ -340,7 +343,10 @@ every 5xx, which the Codex client retries whatever the headers say), a client fo
 307/308 with the same body, a 413 answered as a context overflow the client compacts and resends,
 and this proxy's credential and quota recovery (401 refresh or rotation, 402/429 account
 rotation). The gateway statuses in `isTransientUpstreamStatus` are only
-a subset; 429 and 529 escaped them before. A kept status stays the upstream's evidence for the
+a subset; 429 and 529 escaped them before. An upstream gateway status carrying the exact
+`x-should-retry: false` verdict stops the transient retry ladder before its body is released and
+returns the original response unchanged; the retry layer does not inspect or rewrite its body.
+A kept status stays the upstream's evidence for the
 caller, and the marker stops every recovery loop that checks it, such as the opaque-blob rebuild
 of a 400 or the Codex pool's gated-model retry. A combo rebuilds a failed attempt as a new
 response, so `consumeComboFailure` records `nonReplayable` and the combo stops rather than hopping

@@ -40,7 +40,8 @@ export class UsageActivation {
     const beforeVerification=this.generation,binding=this.binding;
     let verified:string|null;
     try{verified=await this.verifyIdentity();}catch{verified=null;}
-    if(verified!==binding||this.binding!==binding||this.generation!==beforeVerification)return{accepted:false,reason:'identity-not-verified',...this.snapshot()};
+    if(this.binding!==binding||this.generation!==beforeVerification)return{accepted:false,reason:'identity-not-verified',...this.snapshot()};
+    if(verified!==binding){this.invalidateIdentity();return{accepted:false,reason:'identity-not-verified',...this.snapshot()};}
     if(this.mode==='apply')return{accepted:false,reason:'activation-already-pending',...this.snapshot()};
     const age=this.latest?this.clock()-this.latest.at:Infinity;
     if(!this.latest||this.latest.kind!=='exhausted'||age<0||age>300000)return{accepted:false,reason:'no-fresh-eligible-exhaustion',...this.snapshot()};

@@ -53,28 +53,35 @@ import {
 } from "../runtime";
 
 export function nativeEffortClamp(slug: string, effort: string | undefined): string | null {
-  if (!effort || (effort !== "max" && effort !== "ultra")) return null;
+  if (!effort) return null;
   if (slug.includes("/")) return null; // routed models map efforts in their adapters
+  // `ultra` is a client-facing catalog choice (max reasoning plus proactive delegation) that
+  // codex-rs converts to `max` before any request (core/src/client.rs
+  // `reasoning_effort_for_request`). The ChatGPT backend rejects it with HTTP 400 even for a
+  // model whose pinned ladder lists it (#7590), so it is never a native wire value: fold it to
+  // `max`, then clamp `max` like a direct selection.
+  const wire = effort === "ultra" ? "max" : effort;
   const entry = UPSTREAM_NATIVE_ENTRIES.get(slug);
   const levels = Array.isArray(entry?.supported_reasoning_levels)
     ? entry.supported_reasoning_levels as Array<{ effort?: string }>
     : [];
   if (levels.length === 0) {
+    if (wire !== "max") return null;
     // Not snapshot-covered. gpt-5.6 natives have a REAL max rung (ensureGpt56ReasoningLevels
     // restores it even off-snapshot) -> never clamp. Every other bare native (gpt-5.5,
     // a retired slug a client still asks for, and future old-ladder slugs)
     // really stops at xhigh — the ChatGPT backend error names exactly none..xhigh — so clamp
     // the synthetic top tier.
-    return isGpt56NativeSlug(slug) ? null : "xhigh";
+    if (!isGpt56NativeSlug(slug)) return "xhigh";
+    return effort === wire ? null : wire;
   }
   const supported = levels.flatMap(l => typeof l.effort === "string" ? [l.effort] : []);
-  if (supported.includes(effort)) return null;
-  const rank = ["minimal", "low", "medium", "high", "xhigh", "max"];
-  const highest = supported
-    .filter(e => rank.includes(e))
-    .sort((a, b) => rank.indexOf(a) - rank.indexOf(b))
-    .at(-1);
-  return highest ?? null;
+  if (supported.includes(wire)) return effort === wire ? null : wire;
+  const rank = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
+  const requestedRank = rank.indexOf(wire);
+  if (requestedRank < 0) return null;
+  const available = supported.filter(e => rank.includes(e)).sort((a, b) => rank.indexOf(a) - rank.indexOf(b));
+  return available.filter(e => rank.indexOf(e) <= requestedRank).at(-1) ?? available[0] ?? null;
 }
 
 export function shouldApplyNativeEffortClamp(

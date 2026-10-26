@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
 import { compatibilityActivationScript, launchWindowsCodexCompatibility, validatedCompatibilityPacUrl } from "../../src/codex/desktop-compatibility/windows-package-launch";
 import { WINDOWS_ACTIVATION_SOURCE } from "../../src/codex/desktop-compatibility/windows-activation-source";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
@@ -147,15 +148,25 @@ describe("Codex Desktop compatibility package launch", () => {
     expect(launchWindowsCodexCompatibility(pac, { platform: "linux" })).toEqual({ status: "refused", reason: "unsupported_platform" });
     expect(launchWindowsCodexCompatibility(pac, { platform: "win32" })).toEqual({ status: "refused", reason: "test_environment" });
   });
+});
 
-  test.skipIf(process.platform !== "win32")("the real Windows parser and COM service accept the adapter without launching an app", () => {
-    const script = compatibilityActivationScript(install, pac);
-    const encoded = Buffer.from(script, "utf8").toString("base64");
-    const validation = ["$ErrorActionPreference='Stop'",
-      `$null=[scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')))`,
-      "Add-Type -TypeDefinition @'", WINDOWS_ACTIVATION_SOURCE, "'@",
-      "[OpenCodexPackageActivation]::ValidateActivationService()", "'validated-without-launch'"].join("\n");
-    const output = execFileSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", validation], { encoding: "utf8", timeout: 10_000, windowsHide: true });
-    expect(output.trim()).toBe("validated-without-launch");
+describe.skipIf(process.platform !== "win32")("Codex Desktop compatibility activation on real Windows", () => {
+  const encoded = Buffer.from(compatibilityActivationScript(install, pac), "utf8").toString("base64");
+  const validation = ["$ErrorActionPreference='Stop'",
+    `$null=[scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')))`,
+    "Add-Type -TypeDefinition @'", WINDOWS_ACTIVATION_SOURCE, "'@",
+    "[OpenCodexPackageActivation]::ValidateActivationService()", "'validated-without-launch'"].join("\n");
+  const validate = (timeout: number) => execFileSync(powershell, ["-NoProfile", "-NonInteractive", "-Command", validation],
+    { encoding: "utf8", timeout, windowsHide: true });
+
+  // The first run in a fresh test profile pays PowerShell start, Add-Type's module discovery,
+  // the C# compiler and COM activation, which reached the 10s bound on cold runners. Replaying
+  // the same call once here leaves the bound below measuring a warm validation.
+  beforeAll(async () => {
+    await warmColdSpawn("powershell/desktop-activation-validation", deadlineMs => { validate(deadlineMs); });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+  test("the real Windows parser and COM service accept the adapter without launching an app", () => {
+    expect(validate(10_000).trim()).toBe("validated-without-launch");
   }, 15_000);
 });

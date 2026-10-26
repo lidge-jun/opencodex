@@ -75,6 +75,18 @@ function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget, now: 
 }
 
 /**
+ * OCX-11: the coarse fallback trigger for a target the picker passed over for a reason other
+ * than a cooldown (provider missing or disabled, cached quota spent, ineligible for the request).
+ */
+export function comboTargetSkipTrigger(
+  config: OcxConfig,
+  target: OcxComboTarget,
+  now = Date.now(),
+): "quota_exhausted" | "unavailable" {
+  return providerExclusionReason(config, target, now) === "quota exhausted" ? "quota_exhausted" : "unavailable";
+}
+
+/**
  * Why each target of a combo cannot be picked right now, for a zero-attempt refusal. Only the
  * configured provider/model and a coarse label are named, never account or request data.
  */

@@ -1,6 +1,6 @@
 # ADR-7456 — Mandatory translated Chat tool results
 
-- Contract owner: [providers-and-adapters.md](../providers-and-adapters.md#mandatory-translated-chat-tool-results)
+- Contract owner: [providers/chat-required-tool-results.md](../providers/chat-required-tool-results.md)
 - Intent: Stop reporting a successful turn when an upstream Chat model ignores the caller's mandatory client-tool selection (#7456).
 - Prior constraints: Forwarding `tool_choice` does not establish that a call occurred. A streamed answer may already be committed when the clean terminal arrives. Existing adapter parsers restore tool identities and own argument validation and byte accounting.
 - Alternatives: Model/provider allowlists, replaying the same turn with a prompt nudge, rerouting a committed stream, or buffering every response until completion. These require separate capability evidence or violate the existing output/commit and memory boundaries.

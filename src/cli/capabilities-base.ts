@@ -87,6 +87,16 @@ export const CAPABILITIES: readonly Capability[] = [
     details: ["Requires a valid link ID and loopback admin authority. Stops the current ssh child, clears any backoff or failed state and starts a fresh attempt; read ocx link status for the outcome.","A Child-initiated link is refused with link_not_home_initiated: its own computer owns and retries that tunnel.","Always emits {linkId} JSON."],
   },
   {
+    command: ["link","cleanup"],
+    summary: "Find Windows Remote Link Children and explain how to move them to Hub mode.",
+    routes: [],
+    flags: [{"name":"--link-id","value":"string","summary":"Check only this link."},{"name":"--json","value":"boolean","summary":"Emit {links, changed:false} as JSON."}],
+    mutates: false,
+    json: "payload",
+    usage: "ocx link cleanup [--link-id <id>] [--json]",
+    details: ["Runs on the Home from its local link store. Asks each Home-initiated Child for uname -s over the link's pinned SSH trust; a Windows answer (Git Bash, MSYS, Cygwin, cmd or PowerShell) is reported with recovery steps.","Never revokes, disconnects or edits a link. A Windows Child needs ocx disconnect on itself, then ocx link revoke --force --yes on the Home, then ocx hub invite and ocx connect."],
+  },
+  {
     command: ["remote-workspace","pair"],
     summary: "Enroll this executor with one Hub using a one-time code from stdin and locally approved roots.",
     routes: [],
@@ -156,7 +166,7 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{ name: "--json", value: "boolean", summary: "Emit the status envelope as JSON." }],
     mutates: false,
     json: "envelope",
-    details: ["Reads /healthz plus local config; drives no management API route."],
+    details: ["Reads /healthz plus local config; drives no management API route.", "--json includes install: {method: bun|npm|pnpm|mise|source|standalone|unknown, evidence: {basis, mise?, error?}} from the updater's install detector."],
   },
   {
     command: ["resolve"],
@@ -225,7 +235,10 @@ export const CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the provider list as JSON."},{"name":"--jsonl","value":"boolean","summary":"Emit one configured provider per JSON line."}],
     mutates: false,
     json: "envelope",
-    details: ["Local config and registry read, not GET /api/providers. --json and --jsonl are mutually exclusive."],
+    details: [
+      "Local config and registry read, not GET /api/providers. --json and --jsonl are mutually exclusive.",
+      "Each configured row carries active: false while this device is linked to a Home (a Remote Link Child or a Hub-mode client), whose providers serve instead; true when the row serves. Credential values are never printed.",
+    ],
     usage: "ocx provider list [--json|--jsonl]",
   },
   {
@@ -725,10 +738,16 @@ export const CAPABILITIES: readonly Capability[] = [
       { name: "--restart-codex", value: "boolean", summary: "Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog, cache, or changed configuration write, on macOS, Linux and Windows." },
       { name: "--restart-app-server-only", value: "boolean", summary: "Restart only the Codex app-servers and leave the desktop app running; wins over --restart-codex when both are given." },
       { name: "--restart-desktop-app", value: "boolean", summary: "Deprecated alias of --restart-codex." },
+      { name: "--expect-link", value: "string", summary: "Sync only when this machine is a connected Remote Link Child of this link id; otherwise exit 5 with nothing changed." },
+      { name: "--expect-hub-key", value: "string", summary: "Sync only when this machine is a hub client connected with this API key id; otherwise exit 5 with nothing changed." },
     ],
     mutates: true,
     json: "none",
-    details: ["The Aside refresh uses the live server; other catalog synchronization also performs local work."],
+    details: [
+      "The Aside refresh uses the live server; other catalog synchronization also performs local work.",
+      "--expect-link/--expect-hub-key are checked under the lock that selects the sync path. A mismatch writes nothing, never falls back to local providers, exits 5, and ends stderr with {\"phase\":\"child_link_mismatch\"|\"hub_client_mismatch\",\"reason\":...}; reasons are disconnected, invalid_state, disconnect_pending, pending_operation, hub_client, link_client, other_link and other_key. Usage errors exit 2.",
+    ],
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--restart-codex] [--restart-app-server-only]",
   },
   {
     command: ["agent","subagents","force"],

@@ -17,10 +17,11 @@ import {
   flushThoughtSignatureReplayForTests,
   forgetThoughtSignatureForReplay,
   lookupReplayThoughtSignature,
+  rememberExtraContentForReplay,
   rememberThoughtSignatureForReplay,
   resetThoughtSignatureReplayForTests,
 } from "../../../src/responses/thought-signature-replay";
-import { durableReplayDestinationIdentity } from "../../../src/responses/reasoning-replay-cache";
+import { bindReasoningReplayScope, durableReplayDestinationIdentity } from "../../../src/responses/reasoning-replay-cache";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../../src/lib/windows-secret-acl";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxReasoningReplayScopeRef } from "../../../src/types";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
@@ -335,8 +336,17 @@ describe("#1735 thought signature survives history replay", () => {
     expect(part?.thoughtSignature).toBe(SIGNATURE);
   });
 
-  test("a custom_tool_call replay is re-signed from the proxy-side store", async () => {
-    rememberThoughtSignatureForReplay("call_custom_1", SIGNATURE_B, scopeFor());
+  test("keyless physical binding restores a freeform tool signature from the durable store", async () => {
+    const captured: OcxReasoningReplayScopeRef = { clientThreadId: "thread-a" };
+    bindReasoningReplayScope(captured, scopeFor().current);
+    expect(captured.clientPrincipalId).toBeUndefined();
+    expect(captured.current).toEqual(scopeFor().current);
+    await rememberExtraContentForReplay("call_custom_1", { google: { thoughtSignature: SIGNATURE_B } }, captured);
+    await flushThoughtSignatureReplayForTests();
+    resetThoughtSignatureReplayForTests();
+    __resetAntigravityReplayCache();
+    const replay: OcxReasoningReplayScopeRef = { clientThreadId: "thread-a" };
+    bindReasoningReplayScope(replay, scopeFor().current);
     const parsed = parseRequestScoped({
       model: MODEL,
       input: [
@@ -345,7 +355,7 @@ describe("#1735 thought signature survives history replay", () => {
         { type: "custom_tool_call_output", call_id: "call_custom_1", output: "/workspace" },
       ],
       tools: [{ type: "function", name: "shell_command", description: "run", parameters: { type: "object" } }],
-    });
+    }, replay);
     const request = await createGoogleAdapter(provider).buildRequest(parsed);
     const part = modelParts(request.body as string).find(candidate => "functionCall" in candidate);
     expect(part?.thoughtSignature).toBe(SIGNATURE_B);

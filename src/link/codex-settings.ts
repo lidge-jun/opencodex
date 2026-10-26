@@ -23,6 +23,7 @@
  * It rides on its own authenticated link read rather than inside the catalog because the
  * catalog bytes are written verbatim to `model_catalog_json`, which Codex parses itself.
  */
+import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import type { OcxConfig } from "../types";
 
@@ -152,4 +153,40 @@ export function describeHomeCodexSettings(settings: HomeCodexSettings): string[]
     `web search sidecar: ${settings.webSearchSidecarEnabled ? "on" : "off"}`,
     `native sub-agent defaults: ${d ? `${d.model}${d.reasoningEffort ? ` (${d.reasoningEffort})` : ""}` : "not synced"}`,
   ];
+}
+
+/** 64 lowercase hex digits: the only form a settings digest takes on the wire. */
+export const CODEX_SETTINGS_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * The exact bytes {@link codexSettingsDigest} hashes: compact UTF-8 JSON in a fixed key order,
+ *
+ *   {"version":1,"settings":{"fastMode":…,"multiAgentMode":…,"webSearchSidecarEnabled":…,
+ *    "subagentDefaults":null|{"model":…,"reasoningEffort":…}}}
+ *
+ * This is a published contract (GOAT's hub recomputes it byte for byte), so the order is written
+ * out here rather than left to a canonicalizer, and every value is copied by name: whatever key
+ * order or extra field the input object has, the output is the same.
+ */
+export function codexSettingsDigestPayload(settings: HomeCodexSettings): string {
+  const d = settings.subagentDefaults;
+  return JSON.stringify({
+    version: HOME_CODEX_SETTINGS_VERSION,
+    settings: {
+      fastMode: settings.fastMode,
+      multiAgentMode: settings.multiAgentMode,
+      webSearchSidecarEnabled: settings.webSearchSidecarEnabled,
+      subagentDefaults: d ? { model: d.model, reasoningEffort: d.reasoningEffort } : null,
+    },
+  });
+}
+
+/**
+ * `appliedCodexSettingsDigest` (OCX-6b): lowercase hex SHA-256 of
+ * {@link codexSettingsDigestPayload}. It covers the applied values only, never the Home's name or
+ * version, so a Home and a Child that applied the same values agree, and any value change differs.
+ * It carries no setting value, so it is safe wherever `ocx status --json` goes.
+ */
+export function codexSettingsDigest(settings: HomeCodexSettings): string {
+  return createHash("sha256").update(codexSettingsDigestPayload(settings), "utf8").digest("hex");
 }

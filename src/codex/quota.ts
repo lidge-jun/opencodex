@@ -25,6 +25,8 @@ const QUOTA_CACHE_FILENAME = "codex-quota-cache.json";
 /** Keep last-known bars across restarts; WHAM still refreshes on TTL in live/prime paths. */
 const QUOTA_DISK_MAX_AGE_MS = 6 * 60 * 60_000;
 const QUOTA_PERSIST_DEBOUNCE_MS = 250;
+/** Match the reset ledger's maximum deferral under sustained quota observations. */
+const QUOTA_PERSIST_MAX_DEFERRAL_MS = 1_000;
 
 type QuotaDiskFile = {
   version: 1;
@@ -39,6 +41,7 @@ type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shor
 let mainPolicyQuota: MainPolicyQuota | null = null;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistStartedAt: number | null = null;
 
 const MONTHLY_WINDOW_MIN_SECONDS = 28 * 24 * 60 * 60;
 /**
@@ -778,9 +781,14 @@ function hydrateAccountQuotasFromDisk(): void {
 }
 
 function schedulePersistAccountQuotas(): void {
+  const now = performance.now();
+  persistStartedAt ??= now;
+  const delay = Math.max(0, Math.min(QUOTA_PERSIST_DEBOUNCE_MS,
+    QUOTA_PERSIST_MAX_DEFERRAL_MS - (now - persistStartedAt)));
   if (persistTimer) clearTimeout(persistTimer);
   persistTimer = setTimeout(() => {
     persistTimer = null;
+    persistStartedAt = null;
     try {
       const quotas: Record<string, StoredAccountQuota> = {};
       for (const [accountId, quota] of accountQuota.entries()) {
@@ -796,7 +804,7 @@ function schedulePersistAccountQuotas(): void {
     } catch {
       // Best-effort persistence only.
     }
-  }, QUOTA_PERSIST_DEBOUNCE_MS);
+  }, delay);
 }
 
 export function getAccountQuota(accountId: string): StoredAccountQuota | null {
@@ -861,6 +869,7 @@ export function clearAccountQuota(accountId?: string): void {
     clearTimeout(persistTimer);
     persistTimer = null;
   }
+  persistStartedAt = null;
   try {
     const path = join(getConfigDir(), QUOTA_CACHE_FILENAME);
     if (existsSync(path)) unlinkSync(path);
@@ -1098,4 +1107,14 @@ export function getAccountQuotaHistory(accountId: string, limit: number = QUOTA_
   const result = quotaHistory.read(accountId, poolQuotaHistoryIdentity(accountId), Date.now(), limit);
   return { observations: result.samples.map(({ credentialGeneration: _generation, ...sample }) => sample),
     truncated: result.truncated, retention: { maxObservations: QUOTA_HISTORY_LIMITS.perAccount, maxAgeDays: 30 } };
+}
+
+/**
+ * Where the newest stored reading for a pool account came from (a WHAM usage body or upstream
+ * response headers), or undefined when no current history exists. Read-only: unlike
+ * `getAccountQuotaHistory` it never prunes or clears a mismatched bucket.
+ */
+export function latestCodexQuotaObservationSource(accountId: string): "wham" | "response-header" | undefined {
+  hydrateAccountQuotasFromDisk();
+  return quotaHistory.peekLatestSource(accountId, poolQuotaHistoryIdentity(accountId));
 }

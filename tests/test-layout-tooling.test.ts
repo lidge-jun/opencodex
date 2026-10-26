@@ -7,6 +7,7 @@ import { repoPath, repoRoot } from "./helpers/repo-root";
 import { listTestFiles, planMoves } from "../scripts/test-layout/plan";
 import { runMove } from "../scripts/test-layout/move";
 import { runVerify } from "../scripts/test-layout/verify";
+import * as runnerBun from "../scripts/lib/test-runner-bun";
 import { testRunnerBun } from "../package.json";
 import {
   anchors,
@@ -469,24 +470,43 @@ describe("move end to end", () => {
     }
   });
 
-  test("domain verification launches isolate tests through the pinned runner", () => {
+  const otherBunVersion = testRunnerBun === "1.4.3" ? "1.4.4" : "1.4.3";
+  test.each([
+    ["matching caller", testRunnerBun, testRunnerBun, false],
+    ["different caller", otherBunVersion, testRunnerBun, false],
+    ["wrong override version", otherBunVersion, otherBunVersion, true],
+  ] as const)("domain verification preserves the configured runner role: %s", (_name, currentVersion, overrideVersion, refused) => {
     const { root, cleanup } = scratchRepo();
     const layoutPath = join(root, "scripts", "test-layout", "layout.json");
     try {
       runMove({ root, domains: ["server", "providers"], dryRun: false, layoutPath, skipVerify: true, log: () => {} });
+      const binaryName = process.platform === "win32" ? "bun.exe" : "bun";
+      const pinnedRunner = join(root, "test-runner", binaryName);
+      const caller = currentVersion === testRunnerBun ? pinnedRunner : join(root, "runtime", binaryName);
+      const probes: string[] = [];
+      // Keep role resolution real, but version probes independent of the host and the spawn mock.
+      const select = spyOn(runnerBun, "getTestRunnerBun").mockImplementation(() => runnerBun.resolveTestRunnerBun({
+        pin: testRunnerBun, currentVersion, execPath: caller,
+        env: { OCX_TEST_RUNNER_BUN: pinnedRunner }, pathEntries: [], homeDir: root, platform: process.platform,
+        probeVersion: binary => { probes.push(binary); return binary === pinnedRunner ? overrideVersion : undefined; },
+      }));
       const spawn = spyOn(Bun, "spawnSync").mockReturnValue({
         exitCode: 0, stdout: Buffer.from(""), stderr: Buffer.from(""),
       } as ReturnType<typeof Bun.spawnSync>);
       try {
-        const report = runVerify({ root, domains: ["server", "providers"], layoutPath, log: () => {} });
-        expect(report.testExit).toBe(0);
-        // The test itself runs on the required pin, so its executable is the resolver's first choice.
-        expect(Bun.version).toBe(testRunnerBun);
-        expect(spawn.mock.calls.at(-1)?.[0]).toEqual([
-          process.execPath, "test", "--isolate", "tests/server", "tests/providers",
+        const verify = () => runVerify({ root, domains: ["server", "providers"], layoutPath, log: () => {} });
+        if (refused) expect(verify).toThrow(`OCX_TEST_RUNNER_BUN reports ${overrideVersion}`);
+        else expect(verify()).toMatchObject({ ok: true, testExit: 0 });
+        expect(select).toHaveBeenCalledTimes(1);
+        expect(probes).toEqual(currentVersion === testRunnerBun ? [] : [pinnedRunner]);
+        const testSpawns = spawn.mock.calls.filter(([command]) => Array.isArray(command) && command[1] === "test");
+        expect(testSpawns.map(([command]) => command)).toEqual(refused ? [] : [
+          [pinnedRunner, "test", "--isolate", "tests/server", "tests/providers"],
         ]);
+        if (!refused) expect(testSpawns[0]?.[1]).toMatchObject({ cwd: root, stdout: "inherit", stderr: "inherit" });
       } finally {
         spawn.mockRestore();
+        select.mockRestore();
       }
     } finally {
       cleanup();

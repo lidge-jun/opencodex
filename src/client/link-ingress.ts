@@ -76,7 +76,7 @@ function liftRequestIdleTimer(req: Request, server: Pick<Server<unknown>, "timeo
  *   fetch, so a rebinding or cross-site browser page cannot reach the Home through this port.
  * - Without the committed link key nothing is fetched, and the caller gets
  *   `503 link_credential_unavailable`.
- * - `/readyz` stays local: it reports this listener, not the tunnel.
+ * - `/readyz` stays local and is never relayed; the listener answers it from `link-readiness.ts`.
  * - A relayed request is exempt from the listener's idle limit, like a standalone data route.
  */
 export function handleLinkIngress(

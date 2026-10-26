@@ -99,7 +99,7 @@ describe("cheapestSufficientCandidate", () => {
 });
 
 describe("buildRoleProposals", () => {
-  const sized = (tier: "fast" | "frontier", effort: "glance" | "exhaustive"): RoleSizingOutcome => ({
+  const sized = (tier: "fast" | "standard" | "frontier", effort: "glance" | "exhaustive"): RoleSizingOutcome => ({
     sizing: { tier, effort, rationale: "r", moveUpIf: "u", moveDownIf: "d" },
   });
 
@@ -117,6 +117,24 @@ describe("buildRoleProposals", () => {
     expect(proposals[0]).toMatchObject({ status: "proposed", proposedModel: "cheap", proposedEffort: "low", tier: "fast" });
     expect(proposals[1]).toMatchObject({ status: "proposed", proposedModel: "dear", proposedEffort: "xhigh" });
     expect(proposals[2]).toEqual({ role: "vague", model: null, effort: null, status: "unsized", reason: "no JSON" });
+  });
+
+  test("keeps the role's current model when another one ties it on tier and price", () => {
+    const classified = classifyRoleModelCandidates([
+      candidate("native-low", 0.6), candidate("native-mid", 12), candidate("native-top", 60),
+      candidate("routed-low", 0.6), candidate("routed-mid", 12), candidate("routed-top", 60),
+    ]);
+    expect(classified.map(c => c.tier)).toEqual(["fast", "standard", "frontier", "fast", "standard", "frontier"]);
+    const proposals = buildRoleProposals(
+      [
+        { role: "worker", model: "routed-mid", effort: null },
+        { role: "fresh", model: null, effort: null },
+        { role: "reviewer", model: "routed-top", effort: null },
+      ],
+      new Map([["worker", sized("standard", "glance")], ["fresh", sized("standard", "glance")], ["reviewer", sized("frontier", "exhaustive")]]),
+      classified,
+    );
+    expect(proposals.map(p => "proposedModel" in p ? p.proposedModel : null)).toEqual(["routed-mid", "native-mid", "routed-top"]);
   });
 
   test("reports a role no candidate can serve as unassigned", () => {

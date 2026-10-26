@@ -5,6 +5,7 @@
 Standalone recovery (#7260) is separate from
 [structured-call/identified-wrapper reconciliation](chat-compat.md#serialized-tool-call-content).
 `src/adapters/openai-chat.ts` composes both paths without changing the identified-wrapper contract.
+Its fragmented-line carry follows the [stream-buffer accounting contract](../transports/byte-accounting.md#stream-buffer-accounting); avoiding repeated carry scans does not change reconciliation or terminal dispatch.
 `src/adapters/openai-chat/standalone-bare-tool-calls.ts` enables it only for MiMo `mimo-v2` or
 dotted `mimo-v2.*` model IDs when no structured calls exist. Complete bare `<tool_call>` blocks
 must name an exact declared freeform wire tool. They may follow prose on the same line;
@@ -27,7 +28,7 @@ in order at streaming bounds, but eligible candidate inputs survive in a separat
 Only detached candidate data is retained, never trailing prose: at most 128 calls, 4 MiB total
 and a conservative 2 MiB per-record cap. Exceeding a cap disables the entire synthetic batch;
 candidate traversal stops at the 129th header, including after earlier candidates were released.
-disposal releases all bytes. Already released markup cannot be retracted. Buffered recovery
+Disposal releases all bytes. Already released markup cannot be retracted. Buffered recovery
 shares eligibility and byte/count bounds without the streaming text-release limit.
 When a size bound releases an unresolved outer block, standalone recovery is disabled for that
 response so later inner headers cannot become calls. A nested header also makes later apparent

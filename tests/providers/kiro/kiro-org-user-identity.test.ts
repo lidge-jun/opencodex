@@ -80,6 +80,7 @@ function seedSession(access: string, refresh: string, profileArn: string | null 
 function fakeCli(
   whoamiByRefresh: Record<string, WhoamiFixture | "fail">,
   nextLogin: Array<{ access: string; refresh: string; profileArn?: string }> = [],
+  whoamiTrailer = "",
 ): { runner: KiroCliRunner; calls: string[][] } {
   const calls: string[][] = [];
   const runner: KiroCliRunner = async args => {
@@ -87,7 +88,7 @@ function fakeCli(
     if (args[0] === "whoami") {
       const fixture = whoamiByRefresh[readKiroCliSqliteCredential()?.refresh ?? ""];
       if (!fixture || fixture === "fail") return { exitCode: 1, stdout: "" };
-      return { exitCode: 0, stdout: JSON.stringify(WHOAMI[fixture]) };
+      return { exitCode: 0, stdout: JSON.stringify(WHOAMI[fixture]) + whoamiTrailer };
     }
     if (args[0] === "logout") {
       removeKiroCliDb();
@@ -153,6 +154,33 @@ describe("Kiro organization users (#6641)", () => {
     expect(alice.credential).toMatchObject({ access: "aoa-alice", refresh: "rt-alice", kiro: { profileArn: ORG_ARN } });
     const bob = accounts.find(account => account.credential.email === "bob@org.test")!;
     expect(getAccountSet("kiro")?.activeAccountId).toBe(bob.id);
+  });
+
+  // kiro-cli 2.32 prints the selected profile as text after the whoami JSON. Reading the whole
+  // stream as JSON lost both users' emails, so the second user's import overwrote the first.
+  const PROFILE_TRAILER = `\n\nProfile:\nKiroProfile-us-east-1\n${ORG_ARN}\n\n`;
+
+  test("an import after a CLI user switch keeps both users when whoami appends its Profile block", async () => {
+    seedSession("aoa-alice", "rt-alice");
+    const cli = fakeCli({ "rt-alice": "alice", "rt-bob": "bob" }, [], PROFILE_TRAILER);
+    await dashboardLogin(cli.runner);
+    seedSession("aoa-bob", "rt-bob");
+    await dashboardLogin(cli.runner);
+
+    const accounts = rows();
+    expect(accounts.map(account => account.credential.email).sort()).toEqual(["alice@org.test", "bob@org.test"]);
+    expect(accounts.find(account => account.credential.email === "alice@org.test")!.credential)
+      .toMatchObject({ access: "aoa-alice", refresh: "rt-alice", accountId: ORG_ARN });
+  });
+
+  test("Add account keeps both users when whoami appends its Profile block", async () => {
+    seedSession("aoa-alice", "rt-alice");
+    const cli = fakeCli({ "rt-alice": "alice", "rt-bob": "bob" }, [{ access: "aoa-bob", refresh: "rt-bob" }], PROFILE_TRAILER);
+    await dashboardLogin(cli.runner);
+    await dashboardLogin(cli.runner, true);
+
+    expect(rows().map(account => account.credential.email).sort()).toEqual(["alice@org.test", "bob@org.test"]);
+    expect(rows().map(account => account.credential.accountId)).toEqual([ORG_ARN, ORG_ARN]);
   });
 
   test("re-importing the same user updates that user's slot", async () => {

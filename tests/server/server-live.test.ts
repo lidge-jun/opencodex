@@ -287,6 +287,8 @@ test("call-create forwards Frameless protocol headers and keeps auth pool-owned"
         "thread-id": "thread_def",
         originator: "codex_app",
         "x-oai-attestation": "attest-blob",
+        // openai/codex#53784: client voice session id, distinct from the realtime x-session-id.
+        "voice-session-id": "voice_456",
         // Must NOT be forwarded: account-derived compliance header.
         "x-openai-fedramp": "true",
       },
@@ -302,6 +304,7 @@ test("call-create forwards Frameless protocol headers and keeps auth pool-owned"
     expect(headers.get("thread-id")).toBe("thread_def");
     expect(headers.get("originator")).toBe("codex_app");
     expect(headers.get("x-oai-attestation")).toBe("attest-blob");
+    expect(headers.get("voice-session-id")).toBe("voice_456");
     expect(headers.get("x-openai-fedramp")).toBeNull();
     // Auth stays proxy-resolved, not blindly copied from the whitelist path.
     expect(headers.get("authorization")).toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
@@ -338,6 +341,7 @@ test("call-create without protocol headers does not invent them upstream", async
     expect(headers.get("thread-id")).toBeNull();
     expect(headers.get("originator")).toBeNull();
     expect(headers.get("x-oai-attestation")).toBeNull();
+    expect(headers.get("voice-session-id")).toBeNull();
   } finally {
     await server.stop(true);
     await upstream.stop(true);
@@ -1440,7 +1444,7 @@ describe("GET /readyz", () => {
       expectReadyProtocolMetadata(readyzBody, new URL(base).origin);
       // Sanitization: the body must never carry sync diagnostics, paths, or warnings.
       expect(Object.keys(readyzBody).sort()).toEqual([
-        "managementUrl", "minimumClientProtocol", "pid", "port", "protocol", "service", "status", "uptime", "version",
+        "features", "managementUrl", "minimumClientProtocol", "pid", "port", "protocol", "service", "status", "uptime", "version",
       ]);
       expect(JSON.stringify(readyzBody)).not.toContain("warning");
       expect(JSON.stringify(readyzBody)).not.toContain("path");

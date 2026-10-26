@@ -573,22 +573,22 @@ export const deepseekReasoningMapFor = (modelId: string): Record<string, string>
 // text-only input, strict json_schema accepted. glm-5.3-flash REMAINS OUT:
 // still never served by the Token Plan gateway (docs.z.ai VLM id, not plan
 // entitlement).
-// The Beijing preset keeps the Personal Edition subset; non-chat ids (audio/image/
-// video families) stay out: they answer only on async endpoints openai-chat cannot
-// reach. deepseek-v4-pro-0813 is callable but NOT listed by /models, which is the
-// reason liveModels must stay false for this provider. deepseek-v4.1-flash is the
-// 260910 DeepSeek rename row: listed on /models on both tiers and regions from 260915,
-// hybrid thinking, vision via user message and tool result, json_object but not
-// json_schema (see noJsonSchemaModels on the entries).
-// Beijing serves the Personal Edition, so this is the Personal-tier roster probed
-// 260909 (a strict subset of Team). deepseek-v4-pro-0813 stays out of the Beijing
-// entry: its callability is only proven on Team keys, and no Personal key has been
-// shown to reach it. The Beijing entry also shares the intl maps, so it carries a
-// few orphan keys (kimi/glm-5/MiniMax rows); harmless, and one map beats two
-// drifting ones.
+// Both regions support Personal and Team subscriptions. Keep the existing Beijing
+// Personal and International Team model rosters. Discovery stays disabled because
+// the upstream list includes non-chat models.
+// 261020: 0813 is now listed on Global Personal/Team and CN Team, and the CN Personal
+// overview documents entitlement. Add it to the existing Personal curation without
+// claiming new Personal inference. Retired 261011: deepseek-v3.2 and bare v4-flash.
+// 1017 evidence: https://www.qianwenai.com/models/deepseek-v4.1-flash-1017 and
+// https://docs.qwencloud.com/api-reference/chat/openai-chat (checked 2026-10-20).
+// Global Personal probes: completion, thinking-off, low effort, tools, user/tool images
+// and Responses succeed; strict json_schema rejects 400. json_object and replay are
+// untested on this exact id. Published 1M context and 393K output use 393216 here,
+// consistent with the existing plan budget convention, not a measured boundary;
+// the lab's 384000 precision differs. Do not inherit the bare model's JSON fallback.
 export const ALIBABA_TOKEN_PLAN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-  "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
+  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
 ];
 export const ALIBABA_TOKEN_PLAN_QWEN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
@@ -604,12 +604,13 @@ export const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   "deepseek-v4-flash-0731": ["text"],
   // Vision probed on the plan gateway 260915 (user message and tool result, both 200).
   "deepseek-v4.1-flash": ["text", "image"],
+  "deepseek-v4.1-flash-1017": ["text", "image"],
   "glm-5.2": ["text"],
   "glm-5.3": ["text"],
 };
 
 // 260721 Alibaba Token Plan International (ap-southeast-1 / Singapore, hardened 260721).
-// Multi-vendor lineup distinct from Beijing — includes DeepSeek V4 flash, Kimi K2.7, MiniMax.
+// International Team model roster; tier and region are independent.
 // Evidence: https://www.alibabacloud.com/help/en/model-studio/token-plan-overview
 //           https://qwencloud.com/pricing/token-plan (qwen3.8 metadata)
 // The Team Edition roster (Singapore), verified identical to the CN Team set on 260909.
@@ -617,7 +618,7 @@ export const ALIBABA_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
 // listed on /models on both regions) after being dropped as "retired" upstream.
 export const ALIBABA_INTL_TOKEN_PLAN_MODELS = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
-  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v3.2",
+  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017",
   "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
   "glm-5.2", "glm-5.3", "glm-5.1", "glm-5",
   "MiniMax-M2.5",
@@ -702,8 +703,6 @@ export const VOLCENGINE_PLAN_TEXT_ONLY_MODELS = [
 export const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> = {
   ...ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
   "qwen3.6-plus": ["text", "image"],
-  "deepseek-v4-flash": ["text"],
-  "deepseek-v3.2": ["text"],
   "kimi-k2.7-code": ["text", "image"],
   "kimi-k2.6": ["text", "image"],
   "kimi-k2.5": ["text", "image"],
@@ -712,14 +711,14 @@ export const ALIBABA_INTL_TOKEN_PLAN_INPUT_MODALITIES: Record<string, string[]> 
   "MiniMax-M2.5": ["text"],
 };
 
-// Shared Token Plan metadata (260909 gateway probes; output ceilings are max_tokens
-// boundary probes: accept at N, reject at N+1).
+// Shared Token Plan metadata: legacy rows use 260909 max_tokens boundary probes.
+// The 1017 row uses published card normalization, not a boundary probe (see above).
 export const QWEN38_FAMILY = ["qwen3.8-max", "qwen3.8-flash"];
 export const ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS: Record<string, number> = {
   "qwen3.8-max": 1_000_000, "qwen3.8-flash": 1_000_000, "qwen3.7-max": 1_000_000, "qwen3.7-plus": 1_000_000,
   "qwen3.6-plus": 1_000_000, "qwen3.6-flash": 1_000_000,
-  "deepseek-v4-pro": 1_000_000, "deepseek-v4-pro-0813": 1_000_000, "deepseek-v4-flash": 1_000_000,
-  "deepseek-v4-flash-0731": 1_000_000, "deepseek-v4.1-flash": 1_000_000, "deepseek-v3.2": 131_072,
+  "deepseek-v4-pro": 1_000_000, "deepseek-v4-pro-0813": 1_000_000,
+  "deepseek-v4-flash-0731": 1_000_000, "deepseek-v4.1-flash": 1_000_000, "deepseek-v4.1-flash-1017": 1_000_000,
   "kimi-k2.7-code": 262_144, "kimi-k2.6": 262_144, "kimi-k2.5": 262_144,
   "glm-5.2": 1_000_000, "glm-5.3": 1_000_000, "glm-5.1": 202_752, "glm-5": 202_752,
   "MiniMax-M2.5": 196_608,
@@ -727,20 +726,20 @@ export const ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS: Record<string, number> = {
 export const ALIBABA_TOKEN_PLAN_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "qwen3.8-max": 131_072, "qwen3.8-flash": 131_072, "qwen3.7-max": 131_072, "qwen3.7-plus": 131_072,
   "qwen3.6-plus": 65_536, "qwen3.6-flash": 65_536,
-  "deepseek-v4-pro": 393_216, "deepseek-v4-pro-0813": 393_216, "deepseek-v4-flash": 393_216,
-  "deepseek-v4-flash-0731": 393_216, "deepseek-v4.1-flash": 393_216, "deepseek-v3.2": 65_536,
+  "deepseek-v4-pro": 393_216, "deepseek-v4-pro-0813": 393_216,
+  "deepseek-v4-flash-0731": 393_216, "deepseek-v4.1-flash": 393_216, "deepseek-v4.1-flash-1017": 393_216,
   "kimi-k2.7-code": 262_144, "kimi-k2.6": 262_144, "kimi-k2.5": 98_304,
   "glm-5.2": 131_072, "glm-5.3": 131_072, "glm-5.1": 128_000, "glm-5": 16_384,
   "MiniMax-M2.5": 32_768,
 };
 export const ALIBABA_TOKEN_PLAN_NO_VISION = [
-  "qwen3.7-max", "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash",
-  "deepseek-v4-flash-0731", "deepseek-v3.2", "glm-5.2", "glm-5.3", "glm-5.1", "glm-5", "MiniMax-M2.5",
+  "qwen3.7-max", "deepseek-v4-pro", "deepseek-v4-pro-0813",
+  "deepseek-v4-flash-0731", "glm-5.2", "glm-5.3", "glm-5.1", "glm-5", "MiniMax-M2.5",
 ];
 export const ALIBABA_TOKEN_PLAN_PRESERVE_REASONING = [
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.6-flash",
-  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash", "deepseek-v4-flash-0731",
-  "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
+  "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731",
+  "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
 ];
 
 // 260717 Kimi K3: the subscription endpoint uses one upstream id (`k3`) for both
@@ -754,6 +753,12 @@ export const ALIBABA_TOKEN_PLAN_PRESERVE_REASONING = [
 export const KIMI_K3_STANDARD_CONTEXT_WINDOW = 262_144;
 export const KIMI_K3_1M_CONTEXT_WINDOW = 1_048_576;
 export const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]", "k3-256k"];
+// 261024 Kimi K3.1 Pro: live GET /coding/v1/models now also lists k3.1-pro and
+// k3.1-pro-highspeed, both advertising context_length 1048576 (flat 1M, no entitlement
+// alias). Both run thinking-only: the endpoint rejects thinking-disabled requests with
+// HTTP 400, and an absent effort defaults to max — the same low/high/max ladder as k3.
+// Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html
+export const KIMI_CODING_K31_MODELS = ["k3.1-pro", "k3.1-pro-highspeed"];
 // 260921 Kimi K2.8: `kimi-for-coding` is the stable subscription alias Moonshot re-points
 // at each coding release. Live GET /coding/v1/models lists only kimi-for-coding[-highspeed],
 // k3, k3-256k — the k2.x ids are retired from the subscription endpoint. Since K2.8 Preview
@@ -762,10 +767,27 @@ export const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]", "k3-256k"];
 // with "model token limit: 1048576" beyond that.
 // Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html
 export const KIMI_CODING_K28_MODELS = ["kimi-for-coding"];
-export const KIMI_CODING_LIVE_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CODING_K28_MODELS];
+export const KIMI_CODING_LIVE_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CODING_K31_MODELS, ...KIMI_CODING_K28_MODELS];
 export const KIMI_CODING_ADJUSTABLE_THINKING_MODELS = [...KIMI_CODING_LIVE_MODELS];
 export const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
-export const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
+// 261025 Kimi K3.1 Pro on the Moonshot API (#7653): the platform model list names kimi-k3.1-pro
+// and kimi-k3.1-pro-highspeed (same model, 2-3x speed) on both the International and China
+// platforms. Every K3-series model has a 1,048,576-token window, and both ids share kimi-k3's
+// parameter constraints: thinking is always on, top-level reasoning_effort takes low/high/max
+// (default max), temperature/top_p/n/penalties are fixed, tool_choice "required" is supported.
+// Verified 2026-10-25 against official docs only:
+// Evidence: https://platform.kimi.ai/docs/models.md
+//           https://platform.kimi.ai/docs/guide/kimi-k3-1-pro-quickstart.md
+//           https://platform.kimi.ai/docs/api/models-overview.md
+//           https://platform.kimi.ai/docs/pricing/chat.md
+//           https://platform.kimi.com/docs/models.md (China)
+export const KIMI_API_K31_MODELS = ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"];
+export const KIMI_API_K3_SERIES_MODELS = ["kimi-k3", ...KIMI_API_K31_MODELS];
+export const KIMI_API_MODELS = [...KIMI_API_K3_SERIES_MODELS, ...KIMI_LEGACY_API_MODELS];
+// The moonshot roster saved by installs between the K3 seed (260717) and K3.1 Pro. A literal on
+// purpose: stale-model-roster-migration refreshes only rows still identical to it, and a later
+// K2 retirement must not change what that refresh matches.
+export const KIMI_API_MODELS_BEFORE_K31 = ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
 // Every kimi coding preset record - picker, context windows, locked-parameter lists -
 // derives from the live ids only. seeding a retired id in a metadata list would re-arm
 // the model-rename migration on every boot (#5066): the list holds the retired id but
@@ -774,7 +796,7 @@ export const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
 // repairs saved rows still naming them.
 export const KIMI_THINKING_MODELS = KIMI_CODING_LIVE_MODELS;
 export const KIMI_CODING_NO_REASONING_MODELS = KIMI_CODING_LIVE_MODELS.filter(id => !KIMI_CODING_ADJUSTABLE_THINKING_MODELS.includes(id));
-export const KIMI_API_NO_REASONING_MODELS = KIMI_API_MODELS.filter(id => id !== "kimi-k3");
+export const KIMI_API_NO_REASONING_MODELS = KIMI_API_MODELS.filter(id => !KIMI_API_K3_SERIES_MODELS.includes(id));
 export const KIMI_CODING_K3_REASONING_EFFORTS = ["low", "high", "max"];
 export const KIMI_CODING_K3_REASONING_EFFORT_MAP: Record<string, string> = {
   none: "none",
@@ -793,15 +815,33 @@ export const KIMI_CODING_DEFAULT_REASONING_EFFORTS = Object.fromEntries(
 export const KIMI_CODING_REASONING_EFFORT_MAPS = Object.fromEntries(
   KIMI_CODING_ADJUSTABLE_THINKING_MODELS.map(id => [id, KIMI_CODING_K3_REASONING_EFFORT_MAP]),
 );
+// kimi-k3 keeps its launch-time max-only list; K3.1 Pro gets the documented low/high/max ladder.
 export const KIMI_API_REASONING_EFFORTS = Object.fromEntries(
-  KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? ["max"] : []]),
+  KIMI_API_MODELS.map(id => [
+    id,
+    KIMI_API_K31_MODELS.includes(id) ? KIMI_CODING_K3_REASONING_EFFORTS : id === "kimi-k3" ? ["max"] : [],
+  ]),
+);
+export const KIMI_API_DEFAULT_REASONING_EFFORTS = Object.fromEntries(KIMI_API_K31_MODELS.map(id => [id, "max"]));
+// K3.1 Pro cannot disable thinking and documents only low/high/max, so an explicit "none" omits
+// reasoning_effort (upstream default max) rather than sending an undocumented value. The value is
+// REASONING_EFFORT_OMIT_SENTINEL (src/reasoning-effort.ts); the registry does not import the
+// request-path module, and provider-registry-parity asserts the two stay equal.
+export const KIMI_API_K31_REASONING_EFFORT_MAP: Record<string, string> = {
+  ...KIMI_CODING_K3_REASONING_EFFORT_MAP,
+  none: "__omit__",
+};
+export const KIMI_API_REASONING_EFFORT_MAPS = Object.fromEntries(
+  KIMI_API_K31_MODELS.map(id => [id, KIMI_API_K31_REASONING_EFFORT_MAP]),
 );
 export const KIMI_LOCKED_PARAMETER_MODELS = KIMI_CODING_LIVE_MODELS;
 export const KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS = ["kimi-for-coding"];
 export const KIMI_API_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? KIMI_K3_1M_CONTEXT_WINDOW : 262_144]),
+  KIMI_API_MODELS.map(id => [id, KIMI_API_K3_SERIES_MODELS.includes(id) ? KIMI_K3_1M_CONTEXT_WINDOW : 262_144]),
 );
-export const KIMI_API_MODEL_INPUT_MODALITIES = { "kimi-k3": ["text", "image"] };
+export const KIMI_API_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  KIMI_API_K3_SERIES_MODELS.map(id => [id, ["text", "image"]]),
+);
 
 // 260715 NVIDIA NIM kimi family (issue #126): documented served ids on integrate
 // chat/completions per docs.api.nvidia.com/nim/reference/llm-apis; live /v1/models
@@ -885,7 +925,7 @@ export const NVIDIA_NIM_NO_VISION_MODELS = [
   "poolside/laguna-xs-2.1", "z-ai/glm-5.3", "z-ai/glm-5.2",
 ];
 export const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  KIMI_CODING_LIVE_MODELS.map(id => [id, (id === "k3[1m]" || KIMI_CODING_K28_MODELS.includes(id)) ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
+  KIMI_CODING_LIVE_MODELS.map(id => [id, (id === "k3[1m]" || KIMI_CODING_K31_MODELS.includes(id) || KIMI_CODING_K28_MODELS.includes(id)) ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
 );
 export const KIMI_CODING_MODEL_INPUT_MODALITIES = Object.fromEntries(
   KIMI_CODING_ADJUSTABLE_THINKING_MODELS.map(id => [id, ["text", "image"]]),

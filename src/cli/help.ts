@@ -49,6 +49,7 @@ Usage:
   ocx remote-workspace <sub>  Pair/run an OCX-only remote execution computer
   ocx disconnect              Restore local state and clear the hub connection
   ocx sync [--restart-codex]  Fetch models from providers and inject into Codex config
+                              --expect-link <id> | --expect-hub-key <id>: only from that Home/hub key (exit 5 otherwise)
   ocx sync-cache [--restart-codex]
                               Refresh Codex's model cache from the active catalog
   ocx catalog pull <https-url> Install a validated remote catalog and refresh the Codex cache
@@ -81,6 +82,7 @@ Usage:
   ocx agent <sub>             Subagents, injection, effort caps, and sidecars
   ocx message <sub>           Codex queued messages, explicit SSH peers and foreground ownership
   ocx effort [sub]            Inspect and configure reasoning effort caps and defaults
+  ocx fallback <sub>          Turn model or provider fallback off per scope; per-device local fallback
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx inspect <sub>           Effective config, catalog, analytics, pacing, client-config
   ocx route <sub>             Routing features (combo, policy)

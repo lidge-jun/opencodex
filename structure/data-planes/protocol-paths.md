@@ -223,7 +223,7 @@ argument gating, the integral-float repair, every terminal with its usage and du
 the wire-silence heartbeat and stall watchdog, pull-based stepping, cancellation) and calls one
 `ClientWireWriter` method wherever the bridge would emit a frame a client converter reads.
 `chat.ts` (`encodeChatCompletionSse`, `foldChatCompletion`) and `messages.ts`
-(`encodeAnthropicMessageSse`, `foldAnthropicMessage`) are the writers. They reuse the
+(`encodeAnthropicMessageSse`, `foldAnthropicMessage`) are the writers; the Chat one also emits `reasoning_details` ([#7429](chat-reasoning-details.md)). They reuse the
 converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/outbound.ts`
 (ids, chunk and frame builders, usage mapping, `chatCompletionsStreamErrorPayload`,
 `chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,

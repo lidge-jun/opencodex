@@ -8,7 +8,8 @@ import { CodexWsMetadata, type CodexWsQuotaObserver } from "./codex-ws-metadata"
 import { CODEX_RESPONSES_HTTP_URL, type PreparedCodexWsRequest } from "./codex-ws-request";
 import { CodexWsCorrelation } from "./codex-ws-correlation";
 import type { CodexWsSession } from "./codex-ws-session";
-import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES,
+import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
+  CODEX_WS_COMMITTED_SILENT_INTERVALS, MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, markCodexWsPreludeProjection, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage,
   codexWsCreateFrameExceedsLimit, codexWsFailureDetail, codexWsPreResponseFailure, markCodexWsStage, codexWsOcxVersion,
   markCodexWsSocketDeath, codexWsWrapperStatus, isCodexWsTerminalEvent, type CodexWsFailureStage, type CodexWsStageRecord,
@@ -155,8 +156,11 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
     // Liveness while waiting for the first response event (metadata path only): the
     // silence timer is re-armed by every inbound frame or pong; the pinger runs on a fixed
     // interval so a peer that answers pings can never trip the silence bound while alive.
+    // After the commit, each ping tick checks whether any frame or pong arrived since the last.
     let silenceTimer: ReturnType<typeof setTimeout> | undefined;
     let pingTimer: ReturnType<typeof setTimeout> | undefined;
+    let inboundAtLastTick = 0;
+    let silentIntervals = 0;
     // The resolved 200, retained so a later body failure can replace its
     // success-shaped stage record with the failure-shaped one (#4191).
     let committedResponse: Response | null = null;
@@ -260,6 +264,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       markCodexWsStage(response, stageRecord(null));
       committedResponse = response;
       resolve(response);
+      startCommittedLiveness();
     };
 
     /**
@@ -377,17 +382,39 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
       );
     };
-    /** Ping on a fixed interval until the response starts; a socket without ping() is never pinged. */
+    const pingable = () => typeof (ws as WebSocket & { ping?: unknown }).ping === "function";
+    /** False when ping() threw. It may also close the socket and settle the exchange. */
+    const sendPing = (): boolean => {
+      if (!pingable()) return false;
+      try { (ws as WebSocket & { ping: (data?: string) => void }).ping(); } catch { return false; }
+      pings += 1;
+      return true;
+    };
+    /** Ping on a fixed interval for the life of the exchange; a socket without ping() is never pinged. */
     const schedulePing = () => {
-      const ping = (ws as WebSocket & { ping?: (data?: string) => void }).ping;
-      if (typeof ping !== "function" || responseCommitted || terminal) return;
+      if (!pingable() || terminal) return;
       pingTimer = setTimeout(() => {
-        if (responseCommitted || terminal) return;
-        try { ping.call(ws); } catch { return; }
-        pings += 1;
-        // ping() may close the socket synchronously and settle the exchange; re-check.
+        if (terminal) return;
+        if (responseCommitted && pongs > 0) {
+          const inbound = upstreamFrames + pongs;
+          silentIntervals = inbound === inboundAtLastTick ? silentIntervals + 1 : 0;
+          inboundAtLastTick = inbound;
+          if (silentIntervals >= CODEX_WS_COMMITTED_SILENT_INTERVALS) {
+            failStream(`codex websocket stopped answering after the response started${codexWsFailureDetail(failureStage())}`);
+            return;
+          }
+        }
+        sendPing();
         if (!terminal) schedulePing();
       }, CODEX_WS_LIVENESS_PING_INTERVAL_MS);
+    };
+    /** Only a peer that has ponged is judged by its silence, so probe again if none has yet. */
+    const startCommittedLiveness = () => {
+      if (!metadata || terminal || !pingable()) return;
+      inboundAtLastTick = upstreamFrames + pongs;
+      silentIntervals = 0;
+      if (pongs === 0) sendPing();
+      if (!terminal) schedulePing();
     };
     const onPong = () => {
       if (terminal) return;
@@ -458,6 +485,9 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         return;
       }
       if (terminal || settledPreOpen || signal?.aborted) return;
+      // New sockets have just validated their upgrade; retained sockets carry the
+      // same connection signal into a fresh exchange, never its predecessor's frames.
+      metadata?.seed(session.upgradeHeaders());
       sent = true;
       try {
         if (nativeControl) {
@@ -556,7 +586,10 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       if (!metadata) commitResponse();
       else if (!responseCommitted && !terminal) {
         armSilence();
-        schedulePing();
+        // Probe now, not one interval in: the path can die seconds after the send, before a
+        // held commit, and the committed check needs a pong from before that.
+        sendPing();
+        if (!terminal) schedulePing();
       }
     };
 

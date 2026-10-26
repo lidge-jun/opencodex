@@ -53,6 +53,8 @@ function projectStats(value: unknown, id: string, range: string) {
   const rawSummary = record(dto.summary);
   const summary = {
     ...counts(rawSummary, SUMMARY_COUNTS),
+    // Absent means zero: a proxy started before session pins (#7525) does not report the field.
+    pinnedRequests: Object.hasOwn(rawSummary, "pinnedRequests") ? number(rawSummary.pinnedRequests) : 0,
     averageLatencyMs: nullable(rawSummary.averageLatencyMs),
     averageConfidence: nullable(rawSummary.averageConfidence, 1),
     averageChosenProbability: nullable(rawSummary.averageChosenProbability, 1),
@@ -111,6 +113,7 @@ export async function handleComboStatsCommand(argv: string[], deps: RuntimeApiDe
       `Combo ${id} — JEV observations (${range})`,
       ...(summary.decisions === 0 ? ["No recorded JEV decisions in this window."] : []),
       `Decisions: ${summary.decisions}; applied: ${summary.appliedDecisions}; fail-open: ${summary.failOpenDecisions}`,
+      ...(summary.pinnedRequests > 0 ? [`Session-pinned requests (no decision call): ${summary.pinnedRequests}`] : []),
       `Successful requests: ${summary.successfulRequests}; requests with model fallback: ${summary.requestsWithModelFallback}`,
       `Model tokens: ${summary.modelTotalTokens}; measured attempts: ${summary.measuredModelAttempts}/${summary.modelAttempts}`,
       `Decision tokens: ${summary.decisionTotalTokens}; decisions reporting usage: ${summary.decisionUsageReported}/${summary.decisions}`,

@@ -32,6 +32,7 @@ import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
+import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
@@ -291,11 +292,7 @@ function normalizeTtlOrdering(body: Record<string, unknown>): void {
   }
 }
 
-export function isLikelyRealAnthropicThinkingSignature(signature: string | undefined): signature is string {
-  if (typeof signature !== "string" || signature.length < 16) return false;
-  if (/^(fc|call|msg|rs|resp|reasoning|item|ws|tool|func|function)[-_]/i.test(signature)) return false;
-  return /^[A-Za-z0-9+/_=-]+$/.test(signature);
-}
+export { isLikelyRealAnthropicThinkingSignature };
 
 /**
  * Bridge error fidelity (web-search/images loops): extract a display-safe summary from an

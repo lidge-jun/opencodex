@@ -192,6 +192,56 @@ const SCENARIOS: Record<string, { events: AdapterEvent[]; options?: ToolOptions 
     ],
     options: { hideRawReasoning: true },
   },
+  // #7429: provider-issued thinking state reaches the client as reasoning_details on both lanes.
+  "signed thinking before a tool call becomes reasoning_details": {
+    events: [
+      { type: "thinking_delta", thinking: "Plan the " },
+      { type: "thinking_delta", thinking: "lookup." },
+      { type: "thinking_signature", signature: "SyntheticChatSignatureAAAA==" },
+      { type: "tool_call_start", id: "call_1", name: "lookup" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end" },
+      { type: "done", usage },
+    ],
+  },
+  "redacted thinking becomes a reasoning.encrypted entry": {
+    events: [
+      { type: "redacted_thinking", data: "opaque-redacted-payload" },
+      { type: "thinking_delta", thinking: "Visible part." },
+      { type: "thinking_signature", signature: "SyntheticChatSignatureBBBB==" },
+      { type: "text_delta", text: "Answer" },
+      { type: "done" },
+    ],
+  },
+  "signature-only thinking keeps its empty text": {
+    events: [
+      { type: "thinking_delta", thinking: "" },
+      { type: "thinking_signature", signature: "SyntheticChatSignatureCCCC==" },
+      { type: "tool_call_start", id: "call_2", name: "lookup" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ],
+  },
+  "a signature over hidden thinking is withheld": {
+    events: [
+      { type: "thinking_delta", thinking: "secret" },
+      { type: "thinking_signature", signature: "SyntheticChatSignatureDDDD==" },
+      { type: "redacted_thinking", data: "opaque-hidden-redacted" },
+      { type: "text_delta", text: "Visible" },
+      { type: "done" },
+    ],
+    options: { hideThinkingSummary: true },
+  },
+  "an Opus progress update is content plus its signed entry": {
+    events: [
+      { type: "text_delta", text: "Checking the index.", phase: "commentary", anthropicThinkingSignature: "SyntheticChatSignatureEEEE==" },
+      { type: "tool_call_start", id: "call_3", name: "lookup" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ],
+  },
   "freeform tool calls have no Chat representation": {
     events: [
       { type: "tool_call_start", id: "call_patch", name: "apply_patch" },
@@ -314,6 +364,32 @@ describe("direct Chat encoder matches bridge + converter (stream)", () => {
     expect(finish.choices[0]!.finish_reason).toBe("tool_calls");
     expect(finish.usage.prompt_tokens).toBe(120);
     expect(frames.at(-1)).toBe("[DONE]");
+  });
+
+  test("#7429 reasoning_details carry exactly the provider-issued state", async () => {
+    const details = async (name: string) => (await expectStreamParity(SCENARIOS[name]!.events, SCENARIOS[name]!.options))
+      .flatMap(frame => ((frame as { choices?: { delta?: { reasoning_details?: unknown[] } }[] }).choices?.[0]?.delta
+        ?.reasoning_details) ?? []);
+    const format = "anthropic-claude-v1";
+    expect(await details("signed thinking before a tool call becomes reasoning_details")).toEqual([
+      { type: "reasoning.text", text: "Plan the lookup.", signature: "SyntheticChatSignatureAAAA==", format, index: 0 },
+    ]);
+    expect(await details("redacted thinking becomes a reasoning.encrypted entry")).toEqual([
+      { type: "reasoning.encrypted", data: "opaque-redacted-payload", format, index: 0 },
+      { type: "reasoning.text", text: "Visible part.", signature: "SyntheticChatSignatureBBBB==", format, index: 1 },
+    ]);
+    expect(await details("signature-only thinking keeps its empty text")).toEqual([
+      { type: "reasoning.text", text: "", signature: "SyntheticChatSignatureCCCC==", format, index: 0 },
+    ]);
+    // The signature signs text the client never saw: only the redacted payload is returned.
+    expect(await details("a signature over hidden thinking is withheld")).toEqual([
+      { type: "reasoning.encrypted", data: "opaque-hidden-redacted", format, index: 0 },
+    ]);
+    expect(await details("an Opus progress update is content plus its signed entry")).toEqual([
+      { type: "reasoning.text", text: "Checking the index.", signature: "SyntheticChatSignatureEEEE==", format, index: 0 },
+    ]);
+    // A value that is not an Anthropic signature (the existing fixtures' "sig-1") is never emitted.
+    expect(await details("summary and raw reasoning become reasoning_content")).toEqual([]);
   });
 
   test("a failure ends with an error frame and no [DONE]", async () => {

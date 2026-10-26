@@ -1,4 +1,5 @@
 import { createLinkRelaySessions } from "./link-relay-sessions";
+import { createLinkPeerObservations, type LinkPeerEntry } from "../../link/peer-report";
 import type { Server } from "bun";
 import {
   emptyLinkStore,
@@ -9,6 +10,7 @@ import {
 import { linkStorePath } from "../../link/paths";
 import { linkRouteAllowed } from "../../link/routes";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
+import { registerFallbackLinkResolver } from "../../routing/fallback-policy";
 
 export const LINK_INGRESS_HOSTNAME = "opencodex-link.invalid";
 
@@ -51,6 +53,8 @@ export interface LinkListenerLifecycle<T> {
   linkAdmissionKeyIds(): ReadonlySet<string>;
   onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
   notifyAuthenticatedCatalog(apiKeyId: string): void;
+  /** What this Home last learned of a Child over the link; empty until it relays a request. */
+  peerObservation(linkId: string): LinkPeerEntry;
   status(): LinkListenerStatus;
   close(): Promise<void>;
   stop(): Promise<void>;
@@ -76,6 +80,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   let stopped = false;
   const authenticatedCatalogListeners = new Set<(apiKeyId: string) => void>();
   let lifecycleStatus: LinkListenerStatus = { state: "off", port: null, reason: null };
+  const peers = createLinkPeerObservations();
 
   const setStatus = (state: LinkListenerStatus["state"], port: number | null, reason: string | null): void => {
     lifecycleStatus = { state, port, reason };
@@ -89,6 +94,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   const readStoreForAdmission = (): LinkStore => {
     try { return readStore(storePath); } catch { return emptyLinkStore(); }
   };
+  // OCX-11: the fallback policy resolves a link data key to its link id through this slot.
+  const releaseFallbackLinkResolver = registerFallbackLinkResolver(keyId =>
+    readStoreForAdmission().links.find(link => link.apiKeyId === keyId)?.id);
 
   const bindIfNeeded = (): void => {
     if (stopped || listener || !startContext) return;
@@ -104,7 +112,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       return;
     }
     const requestedPort = store.listenerPort ?? 0;
-    const sessions = createLinkRelaySessions({ fingerprints: (keyId, linkId) => {
+    const sessions = createLinkRelaySessions({ peers, fingerprints: (keyId, linkId) => {
       if (!readStoreForAdmission().links.some(link => link.id === linkId && link.apiKeyId === keyId)) return [];
       return startContext?.keyFingerprints?.(keyId) ?? [];
     } });
@@ -214,12 +222,14 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     notifyAuthenticatedCatalog(apiKeyId) {
       for (const listener of authenticatedCatalogListeners) listener(apiKeyId);
     },
+    peerObservation: linkId => peers.get(linkId),
     status() {
       return { ...lifecycleStatus };
     },
     close,
     async stop() {
       stopped = true;
+      releaseFallbackLinkResolver();
       // Process shutdown is deliberately forceful, unlike last-link removal. Every
       // authenticated socket is closed, and the client transport cannot reconnect it.
       relaySessions?.abortReservations();

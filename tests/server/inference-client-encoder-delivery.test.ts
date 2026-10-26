@@ -196,6 +196,7 @@ describe("deliverClientEncodedResponse", () => {
     // has to survive in the proxy-side replay cache instead, which the terminal fold fills here
     // exactly as the bridge fills it on the Responses path.
     const scope: OcxReasoningReplayScopeRef = {
+      clientPrincipalId: "principal-direct-hidden",
       clientThreadId: "direct-hidden-thread",
       current: {
         providerName: "routed",
@@ -231,6 +232,7 @@ describe("deliverClientEncodedResponse", () => {
     // encoding reserves about ten times the text, so a block that fit the live stream overflowed
     // only there; the delivery then reported success without writing the replay cache.
     const scope: OcxReasoningReplayScopeRef = {
+      clientPrincipalId: "principal-direct-hidden-tight-budget",
       clientThreadId: "direct-hidden-tight-budget",
       current: {
         providerName: "routed",

@@ -24,6 +24,9 @@ import type { ProviderRegistryEntry } from "../../src/providers/registry/types";
 import { META_MODEL_API_MODELS } from "../../src/providers/registry/model-seeds";
 import { FREE_PROVIDER_DIRECTORY } from "../../src/providers/free-directory";
 import { applyProviderConfigHints } from "../../src/codex/catalog";
+import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import type { AdapterRequest } from "../../src/adapters/base";
+import { configuredReasoningEfforts, REASONING_EFFORT_OMIT_SENTINEL } from "../../src/reasoning-effort";
 import { routeModel } from "../../src/router";
 import { resolveAdapter } from "../../src/server";
 import { isModelVisionSidecarConsumer } from "../../src/vision/eligibility";
@@ -45,7 +48,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "zhipu-bigmodel-responses", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper", "opengateway", "tokenlab", "modelflare",
-  "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
+  "xiaomi", "xiaomi-mimo", "kilo", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
   "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun", "claude-cli",
 ];
 
@@ -62,6 +65,22 @@ describe("provider registry parity", () => {
   test("registry ids are unique", () => {
     const ids = PROVIDER_REGISTRY.map(entry => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("deprecated entries stay resolvable but are hidden from every new-provider surface", () => {
+    const deprecated = PROVIDER_REGISTRY.filter(entry => entry.deprecated);
+    expect(deprecated.length).toBeGreaterThan(0);
+    const presets = deriveProviderPresets();
+    const featured = deriveFeaturedProviderIds();
+    const keyLogins = Object.keys(deriveKeyLoginMap());
+    const initProviders = buildInitProviders();
+    for (const entry of deprecated) {
+      expect(providerConfigSeed(entry).adapter).toBe(entry.adapter);
+      expect(presets.find(preset => preset.id === entry.id)).toBeUndefined();
+      expect(featured).not.toContain(entry.id);
+      expect(keyLogins).not.toContain(entry.id);
+      expect(initProviders.find(provider => provider.id === entry.id)).toBeUndefined();
+    }
   });
 
   test("every field carried by the shipped registry has a model-id role classification", () => {
@@ -306,6 +325,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noPenaltyModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].preserveReasoningContentModels).toContain("kimi-k3");
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].openaiChatEofTolerance).toBe(true);
+    expect(KEY_LOGIN_PROVIDERS.moonshot.foldDeveloperRoleToSystem).toBe(true);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-coder"]).toBe(262_144);
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);
@@ -540,7 +560,7 @@ describe("provider registry parity", () => {
       liveModels: false,
       models: [
         "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-        "deepseek-v4-pro", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "glm-5.2", "glm-5.3",
+        "deepseek-v4-pro", "deepseek-v4-pro-0813", "deepseek-v4-flash-0731", "deepseek-v4.1-flash", "deepseek-v4.1-flash-1017", "glm-5.2", "glm-5.3",
       ],
       modelInputModalities: {
         "qwen3.8-max": ["text", "image"],
@@ -560,8 +580,8 @@ describe("provider registry parity", () => {
         "deepseek-v4-pro": 393_216,
       },
       noVisionModels: expect.arrayContaining(["qwen3.7-max", "deepseek-v4-pro", "glm-5.2"]),
-      // Beijing is the Personal Edition roster: the Team-only 0813 snapshot and the
-      // still-phantom glm-5.3-flash must stay out of this preset's models list.
+      // Beijing retains Personal curation; 0813 is now listed on Personal too.
+      // The still-phantom glm-5.3-flash stays out of this preset.
       // glm-5.3 itself joined the plan on 260917 and is Personal-entitled (probed 260918).
 
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
@@ -985,10 +1005,10 @@ describe("provider registry parity", () => {
   test("Kimi coding aliases preserve model context and capability parity", () => {
     // 260921: the picker AND every preset metadata list seed only ids the subscription
     // endpoint still serves (live /coding/v1/models: kimi-for-coding[-highspeed], k3,
-    // k3-256k). Seeding a retired id in a metadata list would re-arm the model-rename
+    // k3-256k, and since 261024 k3.1-pro[-highspeed]). Seeding a retired id in a metadata list would re-arm the model-rename
     // migration on every boot (#5066); saved rows still naming one are repaired by
     // MODEL_RENAMES instead.
-    const codingModels = ["k3", "k3[1m]", "k3-256k", "kimi-for-coding"];
+    const codingModels = ["k3", "k3[1m]", "k3-256k", "k3.1-pro", "k3.1-pro-highspeed", "kimi-for-coding"];
     const parityLists = [
       "noReasoningModels",
       "noTemperatureModels",
@@ -1008,7 +1028,8 @@ describe("provider registry parity", () => {
       for (const modelId of codingModels) {
         // 260921: kimi-for-coding (K2.8 Preview) shares the verified 1M ceiling with k3[1m];
         // all other ids stay at the 256K standard window.
-        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" || modelId === "kimi-for-coding" ? 1_048_576 : 262_144);
+        // 261024: k3.1-pro[-highspeed] list context_length 1048576 live (flat 1M).
+        expect(entry?.modelContextWindows?.[modelId]).toBe(["k3[1m]", "k3.1-pro", "k3.1-pro-highspeed", "kimi-for-coding"].includes(modelId) ? 1_048_576 : 262_144);
       }
       for (const field of parityLists) {
         // Every preset list is live-id only: kimi-for-coding must be there, the retired
@@ -1032,7 +1053,8 @@ describe("provider registry parity", () => {
       expect(entry?.noReasoningModels).not.toContain("k3[1m]");
       expect(entry?.modelReasoningEfforts?.k3).toEqual(["low", "high", "max"]);
       expect(entry?.modelReasoningEfforts?.["k3[1m]"]).toEqual(["low", "high", "max"]);
-      for (const modelId of ["k3", "k3[1m]", "k3-256k"]) {
+      // K3.1 Pro is thinking-only and shares K3's low/high/max ladder (default max).
+      for (const modelId of ["k3", "k3[1m]", "k3-256k", "k3.1-pro", "k3.1-pro-highspeed"]) {
         expect(entry?.noReasoningModels).not.toContain(modelId);
         expect(entry?.modelReasoningEfforts?.[modelId]).toEqual(["low", "high", "max"]);
         expect(entry?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
@@ -1090,11 +1112,19 @@ describe("provider registry parity", () => {
     expect(moonshot?.allowBaseUrlOverride).toBe(true);
     expect(moonshot?.baseUrlChoices?.map(c => c.id)).toEqual(["international", "china", "custom"]);
     expect(moonshot?.baseUrlChoices?.find(c => c.id === "china")?.baseUrl).toBe("https://api.moonshot.cn/v1");
-    expect(moonshot?.models).toContain("kimi-k3");
+    // 261025 (#7653): platform.kimi.ai/docs/models.md lists kimi-k3.1-pro and its highspeed
+    // variant as current models; the K2 ids and the kimi-k2.7-code default stay (owner decision).
+    expect(moonshot?.models).toEqual([
+      "kimi-k3", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed",
+      "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5",
+    ]);
+    expect(moonshot?.defaultModel).toBe("kimi-k2.7-code");
     expect(moonshot?.models).not.toContain("k3");
     expect(moonshot?.models).not.toContain("kimi-for-coding");
     expect(moonshot?.modelContextWindows).toEqual({
       "kimi-k3": 1_048_576,
+      "kimi-k3.1-pro": 1_048_576,
+      "kimi-k3.1-pro-highspeed": 1_048_576,
       "kimi-k2.7-code": 262_144,
       "kimi-k2.7-code-highspeed": 262_144,
       "kimi-k2.6": 262_144,
@@ -1102,9 +1132,82 @@ describe("provider registry parity", () => {
     });
     expect(moonshot?.modelInputModalities?.["kimi-k3"]).toEqual(["text", "image"]);
     expect(moonshot?.noReasoningModels).not.toContain("kimi-k3");
+    // kimi-k3 keeps its launch-time max-only list; no default or wire map is seeded for it.
     expect(moonshot?.modelReasoningEfforts?.["kimi-k3"]).toEqual(["max"]);
-    expect(moonshot?.modelReasoningEffortMap).toBeUndefined();
+    expect(moonshot?.modelDefaultReasoningEfforts?.["kimi-k3"]).toBeUndefined();
+    expect(moonshot?.modelReasoningEffortMap?.["kimi-k3"]).toBeUndefined();
     expect(moonshot?.preserveReasoningContentModels).toContain("kimi-k3");
+    // K3.1 Pro shares kimi-k3's parameter constraints (api/models-overview.md): always thinking,
+    // low/high/max with default max, fixed sampling, vision, tool_choice "required" supported.
+    for (const modelId of ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"]) {
+      expect(moonshot?.noReasoningModels).not.toContain(modelId);
+      expect(moonshot?.modelReasoningEfforts?.[modelId]).toEqual(["low", "high", "max"]);
+      expect(moonshot?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
+      expect(moonshot?.modelInputModalities?.[modelId]).toEqual(["text", "image"]);
+      for (const field of ["noTemperatureModels", "noTopPModels", "noPenaltyModels", "preserveReasoningContentModels"] as const) {
+        expect(moonshot?.[field]).toContain(modelId);
+      }
+      expect(moonshot?.autoToolChoiceOnlyModels).not.toContain(modelId);
+      // Thinking cannot be disabled, so an explicit "none" omits the field instead of sending it.
+      expect(moonshot?.modelReasoningEffortMap?.[modelId]).toEqual({
+        none: REASONING_EFFORT_OMIT_SENTINEL,
+        low: "low",
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+        max: "max",
+      });
+    }
+    const moonshotModel = applyProviderConfigHints("moonshot", providerConfigSeed(moonshot!), { provider: "moonshot", id: "kimi-k3.1-pro" });
+    const moonshotEntry = buildCatalogEntries(nativeTemplate(), [], [moonshotModel]).find(entry => entry.slug === "moonshot/kimi-k3.1-pro");
+    expect(moonshotEntry?.default_reasoning_level).toBe("max");
+  });
+
+  test("a saved Moonshot row from the previous seed routes K3.1 Pro with the documented effort wire", () => {
+    // The row a pre-K3.1 install persisted: old roster and per-model records without the new ids.
+    // The router's registry backfill must still supply the ladder, map, and fixed-sampling lists.
+    const config = {
+      port: 10100,
+      defaultProvider: "moonshot",
+      providers: {
+        moonshot: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.moonshot.ai/v1",
+          apiKey: "k",
+          models: ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"],
+          modelContextWindows: { "kimi-k3": 1_048_576, "kimi-k2.7-code": 262_144 },
+          modelReasoningEfforts: { "kimi-k3": ["max"], "kimi-k2.7-code": [] },
+        },
+      },
+    } as unknown as OcxConfig;
+    for (const modelId of ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"]) {
+      const route = routeModel(config, `moonshot/${modelId}`);
+      expect(route.modelId).toBe(modelId);
+      expect(configuredReasoningEfforts(route.provider, route.modelId)).toEqual(["low", "high", "max"]);
+      for (const [requested, wire] of Object.entries({
+        none: undefined,
+        low: "low",
+        medium: "high",
+        high: "high",
+        xhigh: "max",
+        max: "max",
+        ultra: "max",
+      })) {
+        const request = createOpenAIChatAdapter(route.provider).buildRequest({
+          modelId: route.modelId,
+          context: { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+          stream: false,
+          options: { reasoning: requested, temperature: 0.2, topP: 0.7, presencePenalty: 1, frequencyPenalty: 1 },
+        }) as AdapterRequest;
+        const body = JSON.parse(request.body as string) as Record<string, unknown>;
+        expect(body.reasoning_effort).toBe(wire);
+        expect(body).not.toHaveProperty("thinking");
+        expect(body).not.toHaveProperty("temperature");
+        expect(body).not.toHaveProperty("top_p");
+        expect(body).not.toHaveProperty("presence_penalty");
+        expect(body).not.toHaveProperty("frequency_penalty");
+      }
+    }
   });
 
   test("LiteLLM is the only registry seed with optional key authentication", () => {
@@ -1402,7 +1505,6 @@ describe("provider registry parity", () => {
     expect(featured).toEqual([
       "openai", "xai", "command-code", "orcarouter-oauth", "anthropic", "anthropic2", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio",
-      "mimo-free",
     ]);
 
     const presets = deriveProviderPresets();
@@ -1822,7 +1924,7 @@ describe("free-provider directory isolation", () => {
       { provider: "opencode-go", model: "deepseek-v4.1-flash", flash: true },
       { provider: "opencode-go", model: "deepseek-v4-flash", flash: true },
       { provider: "volcengine-coding-plan", model: "deepseek-v4-flash", flash: true },
-      { provider: "alibaba-token-plan-intl", model: "deepseek-v4-flash", flash: true },
+      { provider: "alibaba-token-plan-intl", model: "deepseek-v4.1-flash-1017", flash: true },
     ];
 
     for (const { provider, model, flash } of cases) {

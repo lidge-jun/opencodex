@@ -13,9 +13,11 @@ import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { hardenSecretDir } from "../lib/windows-secret-acl";
 import {
+  codexSettingsDigest,
   parseHomeCodexSettingsDocument,
   type HomeCodexSettingsDocument,
 } from "../link/codex-settings";
+import { LINK_CHILD_PARITY_PATH, type LinkChildParityReport } from "../link/child-parity";
 import {
   LINK_CODEX_SETTINGS_PATH,
   LINK_MANAGEMENT_PREFIX,
@@ -23,10 +25,17 @@ import {
 } from "../link/management-routes";
 import { linkDir } from "../link/paths";
 import type { OcxClientConnectionConfig } from "../types";
+import { withClientLifecycle } from "./lifecycle-lock";
 import { fetchBoundLinkRelay } from "./link-relay-transport";
 import { readClientLinkState, type ClientLinkState } from "./link-state";
 
 const RECORD_MAX_BYTES = 64 * 1024;
+
+function isIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length !== 24) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
 const SETTINGS_MAX_BYTES = 64 * 1024;
 const READ_TIMEOUT_MS = 10_000;
 
@@ -42,6 +51,11 @@ export type LinkHomeConnection = Pick<OcxClientConnectionConfig, "transport" | "
 export interface HomeCodexSettingsRecord {
   linkId: string;
   fetchedAt: string;
+  /**
+   * When this Child first applied these settings (OCX-6, P5). A re-apply of the same digest for
+   * the same link keeps it, so an idempotent `ocx sync` never makes a fresh runtime look stale.
+   */
+  appliedAt: string;
   document: HomeCodexSettingsDocument;
 }
 
@@ -69,7 +83,9 @@ export function readHomeCodexSettingsRecord(linkId: string, path = homeCodexSett
     const record = raw as Record<string, unknown>;
     if (record.linkId !== linkId || typeof record.fetchedAt !== "string" || Number.isNaN(Date.parse(record.fetchedAt))) return null;
     const document = parseHomeCodexSettingsDocument(record.document);
-    return document ? { linkId, fetchedAt: record.fetchedAt, document } : null;
+    // Records written before OCX-6 carry no apply time; their read time is the closest one.
+    const appliedAt = isIsoTimestamp(record.appliedAt) ? record.appliedAt : record.fetchedAt;
+    return document ? { linkId, fetchedAt: record.fetchedAt, appliedAt, document } : null;
   } catch {
     return null;
   }
@@ -87,6 +103,68 @@ export function writeHomeCodexSettingsRecord(record: HomeCodexSettingsRecord, pa
 
 export function clearHomeCodexSettingsRecord(path = homeCodexSettingsPath()): void {
   try { unlinkSync(path); } catch (error) { if (!isMissingPathError(error)) throw error; }
+}
+
+/**
+ * The record an apply of `document` produces: the apply time is `appliedAt` unless the previous
+ * record is for the same link and the same settings digest, in which case it is kept.
+ */
+export function homeCodexSettingsReceipt(
+  linkId: string,
+  document: HomeCodexSettingsDocument,
+  fetchedAt: string,
+  appliedAt: string,
+  previous: HomeCodexSettingsRecord | null = readHomeCodexSettingsRecord(linkId),
+): HomeCodexSettingsRecord {
+  const unchanged = previous !== null && previous.linkId === linkId
+    && codexSettingsDigest(previous.document.settings) === codexSettingsDigest(document.settings);
+  return { linkId, fetchedAt, appliedAt: unchanged ? previous.appliedAt : appliedAt, document };
+}
+
+export function linkApplyLockPath(): string {
+  return join(linkDir(), "apply-lock.sqlite");
+}
+
+/**
+ * Before an apply writes settings that differ from the recorded ones, withdraw the record, so a
+ * failed injection or record write reads as "no recorded apply" instead of the previous digest
+ * (OCX-6). Re-applying the same settings keeps it. Returns whether the record was withdrawn.
+ */
+export function withdrawChangingHomeCodexSettingsRecord(linkId: string, document: HomeCodexSettingsDocument): boolean {
+  const previous = readHomeCodexSettingsRecord(linkId);
+  if (!previous || codexSettingsDigest(previous.document.settings) === codexSettingsDigest(document.settings)) return false;
+  clearHomeCodexSettingsRecord();
+  return true;
+}
+
+/** The apply lock is held by another apply or a link connect in flight; nothing ran. */
+export class LinkApplyBusyError extends Error {
+  readonly code = "link_apply_busy";
+  constructor() {
+    super("another Home settings apply is in progress on this machine; retry when it finishes");
+    this.name = "LinkApplyBusyError";
+  }
+}
+
+/**
+ * Serialize applies of the Home's settings on this Child, from the Home read through the Codex
+ * injection to the record write, so a receipt always names the settings the injection wrote.
+ * Outermost in the client lock order (before N, L and C); a second apply fails fast.
+ */
+export async function withLinkApply<T>(work: () => Promise<T>, lockPath: string = linkApplyLockPath()): Promise<T> {
+  const dir = linkDir();
+  assertNotRealHomeUnderTest(join(dir, ".."));
+  // Only a refusal of the apply lock itself means "another apply"; an error from inside `work`
+  // (including a busy ordinary lifecycle lock) passes through as itself.
+  let entered = false;
+  try {
+    return await withClientLifecycle(() => { entered = true; return work(); }, { lockPath });
+  } catch (error) {
+    if (!entered && error instanceof Error && error.message === "client_lifecycle_busy") {
+      throw new LinkApplyBusyError();
+    }
+    throw error;
+  }
 }
 
 /**
@@ -239,10 +317,54 @@ export async function resolveHomeCodexSettings(
     : { source: "local", reason: fetched.reason };
 }
 
-/** Record settings a successful injection applied. Best effort: the config is already written. */
-export function recordHomeCodexSettings(linkId: string, settings: HomeCodexSettingsSource): void {
-  if (settings.source !== "home") return;
+/**
+ * Record settings a successful injection applied and return the committed record; null when the
+ * source was not a fresh Home read. A write failure throws: the caller reports it, because
+ * `ocx status` and the Home read this record as the proof of what was applied.
+ */
+export function recordHomeCodexSettings(
+  linkId: string,
+  settings: HomeCodexSettingsSource,
+  now: () => Date = () => new Date(),
+): HomeCodexSettingsRecord | null {
+  if (settings.source !== "home") return null;
+  const record = homeCodexSettingsReceipt(linkId, settings.document, settings.fetchedAt, now().toISOString());
+  writeHomeCodexSettingsRecord(record);
+  return record;
+}
+
+/**
+ * Tell the Home what this Child last applied and when its runtime started (OCX-6). Resolves to
+ * `"accepted"`, `"unsupported"` for a Home that predates the route, or `"failed"`.
+ */
+export async function sendLinkChildParityReport(
+  connection: LinkHomeConnection,
+  admissionKey: string,
+  report: LinkChildParityReport,
+  deps: LinkHomeDeps = {},
+): Promise<"accepted" | "unsupported" | "failed"> {
+  let response: Response;
   try {
-    writeHomeCodexSettingsRecord({ linkId, fetchedAt: settings.fetchedAt, document: settings.document });
-  } catch { /* the next sync records it */ }
+    const target = linkTarget(connection, admissionKey);
+    const destination = `http://127.0.0.1:${target.tunnelPort}${LINK_CHILD_PARITY_PATH}`;
+    const body = JSON.stringify(report);
+    const request: RequestInit = {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${admissionKey}`,
+        "content-type": "application/json",
+        "content-length": String(Buffer.byteLength(body)),
+      },
+      body,
+      redirect: "manual",
+      signal: AbortSignal.timeout(deps.timeoutMs ?? READ_TIMEOUT_MS),
+    };
+    response = deps.fetchImpl ? await deps.fetchImpl(destination, request) : await fetchBoundLinkRelay(target, destination, request);
+  } catch {
+    return "failed";
+  }
+  try { await response.body?.cancel(); } catch { /* best effort */ }
+  if (response.status === 404) return "unsupported";
+  return response.status === 204 ? "accepted" : "failed";
 }
