@@ -1,3 +1,4 @@
+import { requiresToolCall } from "../../types";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
@@ -94,7 +95,8 @@ export function createResponsesEffects(
       delete parsed._anthropicServerReplay;
       delete parsed.options.toolChoice;
       delete parsed.options.parallelToolCalls;
-    } else if (parsed._anthropicServerTools?.length) {
+    } else if (parsed._anthropicServerTools?.length || requiresToolCall(parsed.options.toolChoice)) {
+      // A mandatory choice would force the summary into a tool call the guard must reject.
       // Hosted tools execute upstream: retain their cached definitions but prohibit execution.
       // tool_choice changes invalidate message cache, not tools/system (Anthropic caching docs).
       parsed.options.toolChoice = "none";

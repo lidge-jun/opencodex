@@ -16,9 +16,9 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { drainCompactionResponseState, installCompactionRoutingAclFixture, removeCompactionFixture } from "../helpers/compaction-routing-fixtures";
 
 const tools = [{ name: "read", description: "Read a file", parameters: { type: "object", properties: {} } }];
-function applyEffects(preserveCompactionPrefix: boolean, hosted = false) {
+function applyEffects(preserveCompactionPrefix: boolean, hosted = false, toolChoice: unknown = "auto") {
   const parsed = {
-    options: { toolChoice: "auto", parallelToolCalls: false },
+    options: { toolChoice, parallelToolCalls: false },
     context: { tools: structuredClone(tools), systemPrompt: ["stable system"], messages: [] },
     _webSearch: { type: "web_search" },
     ...(hosted ? { _anthropicServerTools: [{ type: "web_search_20250305", name: "web_search" }] } : {}),
@@ -47,6 +47,12 @@ test("hosted server declarations stay cacheable but their execution is explicitl
   expect(parsed._anthropicServerTools).toEqual([{ type: "web_search_20250305", name: "web_search" }]);
   expect(parsed.options.toolChoice).toBe("none");
   expect(parsed._webSearch).toBeUndefined();
+});
+
+for (const choice of ["required", { type: "function", name: "read" }]) test(`a mandatory tool choice cannot force the summary into a tool call: ${JSON.stringify(choice)}`, () => {
+  const parsed = applyEffects(true, false, choice);
+  expect(parsed.context.tools).toEqual(tools);
+  expect(parsed.options.toolChoice).toBe("none");
 });
 
 test("other adapters retain the existing compaction deletion behavior", () => {
