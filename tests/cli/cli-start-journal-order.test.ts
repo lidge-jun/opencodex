@@ -306,13 +306,23 @@ function freeLoopbackPort(): number {
   return port;
 }
 
+/**
+ * Spawn `ocx start` and wait for its runtime record and settled readiness.
+ *
+ * `port` pins the listener with `--port`. A pinned port comes from freeLoopbackPort(), which
+ * releases its probe before the child binds, so another process on the runner can take it in
+ * between; a hard-pinned start then waits out port reclaim (up to 60 s) before it binds and
+ * publishes, which outlasts OWNER_WAIT_MS with the child alive and no record. Pass `undefined`
+ * when the case does not need a predetermined port: the child keeps config.port and binds its
+ * own, and the runtime record supplies the port it chose.
+ */
 async function startSibling(
   env: Record<string, string>,
   siblingHome: string,
-  port: number,
+  port: number | undefined,
   cwd: string,
 ): Promise<{ child: ReturnType<typeof Bun.spawn>; runtime: { pid: number; port: number; siblingOfPort?: number } }> {
-  const child = Bun.spawn([process.execPath, cliPath, "start", "--port", String(port)], {
+  const child = Bun.spawn([process.execPath, cliPath, "start", ...(port === undefined ? [] : ["--port", String(port)])], {
     cwd,
     env,
     stdout: "pipe",
@@ -320,25 +330,56 @@ async function startSibling(
   });
   children.push(child);
   const runtimePath = join(siblingHome, "runtime-port.json");
-  const runtime = await waitFor(async () => {
-    if (child.exitCode !== null) {
-      throw new Error(`sibling exited ${child.exitCode}: ${await new Response(child.stderr).text()}`);
-    }
-    if (!existsSync(runtimePath)) return null;
-    try {
-      const value = JSON.parse(readFileSync(runtimePath, "utf8")) as { pid: number; port: number; siblingOfPort?: number };
-      return value.pid === child.pid && value.port === port ? value : null;
-    } catch {
-      return null;
-    }
-  }, "sibling runtime record");
+  // Allowlisted fields only: the record also carries the per-process attestationSecret.
+  let lastRecord: string | null = null;
+  let exitedEarly = false;
+  let runtime: { pid: number; port: number; siblingOfPort?: number };
+  try {
+    runtime = await waitFor(async () => {
+      if (child.exitCode !== null) {
+        exitedEarly = true;
+        throw new Error(`sibling exited ${child.exitCode}: ${await new Response(child.stderr).text()}`);
+      }
+      if (!existsSync(runtimePath)) return null;
+      try {
+        const value = JSON.parse(readFileSync(runtimePath, "utf8")) as { pid: number; port: number; hostname?: string; siblingOfPort?: number };
+        lastRecord = JSON.stringify({ pid: value.pid, port: value.port, hostname: value.hostname, siblingOfPort: value.siblingOfPort });
+        const portOk = Number.isInteger(value.port) && value.port >= 1 && value.port <= 65535
+          && (port === undefined || value.port === port);
+        return value.pid === child.pid && portOk ? value : null;
+      } catch {
+        return null;
+      }
+    }, "sibling runtime record");
+  } catch (error) {
+    // An early exit already reported its stderr and consumed the stream.
+    if (exitedEarly) throw error;
+    // Report what the child was doing, which the bare deadline message cannot.
+    if (child.exitCode === null) child.kill("SIGKILL");
+    const tail = async (stream: unknown): Promise<string> => {
+      try {
+        return await Promise.race([
+          new Response(stream as ReadableStream<Uint8Array>).text().then(text => text.slice(-4000)),
+          Bun.sleep(2000).then(() => "<no EOF within 2s>"),
+        ]);
+      } catch {
+        return "<unreadable>";
+      }
+    };
+    const [stdout, stderr] = await Promise.all([tail(child.stdout), tail(child.stderr)]);
+    throw new Error(
+      `${(error as Error).message} (requested port ${port ?? "config"}, pid ${child.pid}, last record ${lastRecord ?? "none"})\n`
+        + `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
+    );
+  }
+  const readyPort = runtime.port;
   // /readyz settles after the startup sync. Without the sibling gate that sync is exactly
   // what rewrote the shared config.toml, so the bytes are compared only once it has settled,
   // and it has to settle as "ready": a sibling that wrote nothing has nothing to fail.
   let settled: string | undefined;
   await waitFor(async () => {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/readyz`, { signal: AbortSignal.timeout(500) });
+      const response = await fetch(`http://127.0.0.1:${readyPort}/readyz`, { signal: AbortSignal.timeout(500) });
       const body = await response.json() as { status?: string; pid?: number };
       if (body.pid !== child.pid || body.status === undefined || body.status === "pending") return null;
       settled = body.status;
@@ -477,11 +518,12 @@ describe("a sibling instance leaves the live owner's client routing alone", () =
   test("a direct start cannot claim sibling status with only a forged port env", async () => {
     const fx = fixture();
     const forgedOwnerPort = freeLoopbackPort();
-    const childPort = freeLoopbackPort();
+    // Sibling admission is the claim here, not a particular listener number, so the child binds
+    // its own port (config.port 0) instead of a released probe port another process may take.
     const launched = await startSibling(
       { ...fx.env, OCX_SIBLING_OF_PORT: String(forgedOwnerPort) },
       fx.ocxHome,
-      childPort,
+      undefined,
       fx.root,
     );
     expect(launched.runtime.siblingOfPort).toBeUndefined();

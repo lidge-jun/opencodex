@@ -100,6 +100,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/xai-grok.md`](providers/xai-grok.md) | Grok Build contract parity and hardening. |
 | [`providers/chat-compat.md`](providers/chat-compat.md) | Cross-vendor Chat Completions behavior: reasoning, tool results, structured output, parallel tools. |
 | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) | Standalone MiMo bare-block recovery into declared freeform calls, separate from identified-wrapper reconciliation. |
+| [`providers/chat-required-tool-results.md`](providers/chat-required-tool-results.md) | Translated Chat terminal guard that fails a clean completion missing a mandatory client tool call. |
 | [`adapters/registry.md`](adapters/registry.md) | The single adapter construction authority and contract inheritance. |
 | [`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) | Versioned provider compatibility claims and fixture-evidence boundaries. |
 | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) | Optional Lab evidence, automation, and its core-runtime isolation boundary. |
@@ -136,6 +137,7 @@ Background service, docs, release, and design discipline.
 | [`desktop-terminal-command.md`](desktop-terminal-command.md) | Desktop-owned ocx command on PATH: record and journal, POSIX shim and shell blocks, Windows user Path, private-path ACL policy, and the local Terminal command page. |
 | [`desktop-start-at-login.md`](desktop-start-at-login.md) | macOS tray Start at Login judgment shared with Startup safety, its parity fixture, click rules, and the guarded launch-origin migration. |
 | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) | Service install/repair, platform launchers, tray, and sidecar processes. |
+| [`ops/desktop-supervision.md`](ops/desktop-supervision.md) | Durable Desktop ownership read, takeover-consent handling, live-supervision evidence, the Windows probe's trusted system-directory acquisition, and the supervision latch blocking contract consumed by service and update guards. |
 | [`ops/service-logging.md`](ops/service-logging.md) | Service-only console timestamps and bounded copy-truncate log retention. |
 | [`ops/service-health-recovery.md`](ops/service-health-recovery.md) | Opt-in sentinel that turns a hung but listening managed service proxy into an exit its manager restarts. |
 | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) | Manager-first recovery after a failed post-update service refresh, and the non-zero unsupervised fallback. |
@@ -143,7 +145,7 @@ Background service, docs, release, and design discipline.
 | [`ops/docs-and-release.md`](ops/docs-and-release.md) | Docs site, workflow map, branch policy, release flow, and cross-platform CI. |
 | [`design-methodology.md`](design-methodology.md) | Stage ordering for new GUI, CLI, and user-facing surfaces. |
 | [`ops/cross-platform-ci.md`](ops/cross-platform-ci.md) | Test lanes, platform coverage, aggregate gating, and release CI proof. |
-| [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) | Test-runner home and case-scoped lifecycle teardown ordering. |
+| [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) | Test-runner home, case-scoped lifecycle teardown, and Bun test lock generation ownership. |
 
 ## Which doc describes which source
 
@@ -155,13 +157,20 @@ A source area can be described by more than one doc, because these docs are orga
 | `.github/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `app/` | [`overview.md`](overview.md)<br>[`companion.md`](companion.md) |
 | `bin/` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `bin/ocx.mjs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/` | [`desktop-shell.md`](desktop-shell.md)<br>[`companion.md`](companion.md) |
+| `desktop/src-tauri/src/claim.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/cli_command.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `desktop/src-tauri/src/cli_command_posix.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `desktop/src-tauri/src/cli_command_record.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `desktop/src-tauri/src/cli_command_windows.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
-| `desktop/src-tauri/src/first_run.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
+| `desktop/src-tauri/src/first_run.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/identity.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/login_registration.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
+| `desktop/src-tauri/src/ownership.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/resolve.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/runtime_stop.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/startup.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/tray_login.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
 | `desktop/ui/cli.html` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `desktop/ui/cli.js` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
@@ -172,6 +181,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `gui/src/hooks/useProviderAccountPools.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `scripts/` | [`overview.md`](overview.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
+| `scripts/test-run-lock-gate.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
+| `scripts/test-run-lock.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
 | `skills/ocx/` | [`cli-management.md`](cli-management.md) |
 | `src/adapters/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers/claude-cli-replay.md`](providers/claude-cli-replay.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/cursor.md`](providers/cursor.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md)<br>[`adapters/registry.md`](adapters/registry.md) |
 | `src/adapters/anthropic-rejection-memo.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
@@ -180,6 +191,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
 | `src/adapters/openai-chat.ts` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
 | `src/adapters/openai-chat/` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
+| `src/adapters/openai-chat/required-tool-result.ts` | [`providers/chat-required-tool-results.md`](providers/chat-required-tool-results.md) |
 | `src/adapters/openai-responses/opengateway-input.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/adapters/openai-responses/passthrough.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/opengateway.md`](providers/opengateway.md) |
 | `src/adapters/openai-responses/request-strips.ts` | [`transports/responses-citations.md`](transports/responses-citations.md) |
@@ -196,9 +208,11 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`remote-messaging.md`](remote-messaging.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/cli/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
 | `src/cli/codex-provider.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
+| `src/cli/desktop-runtime-guidance.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
 | `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
+| `src/cli/update-restart.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/client/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md) |
 | `src/client/link-home.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/link-parity-reporter.ts` | [`remote-link.md`](remote-link.md) |
@@ -310,7 +324,11 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/service-manager-probe.ts` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/service.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/service/` | [`runtime.md`](runtime.md) |
-| `src/service/desktop-startup.ts` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
+| `src/service/cli.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/service/desktop-command-guard.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/service/desktop-startup.ts` | [`desktop-start-at-login.md`](desktop-start-at-login.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/service/desktop-supervision.d.mts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/service/desktop-supervision.mjs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/health-sentinel-launch.ts` | [`ops/service-health-recovery.md`](ops/service-health-recovery.md) |
 | `src/service/health-sentinel-linux.ts` | [`ops/service-health-recovery.md`](ops/service-health-recovery.md) |
 | `src/service/health-sentinel-main.ts` | [`ops/service-health-recovery.md`](ops/service-health-recovery.md) |
@@ -318,6 +336,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/service/health-sentinel-probe.ts` | [`ops/service-health-recovery.md`](ops/service-health-recovery.md) |
 | `src/service/health-sentinel-windows.ts` | [`ops/service-health-recovery.md`](ops/service-health-recovery.md) |
 | `src/service/logging.ts` | [`ops/service-logging.md`](ops/service-logging.md) |
+| `src/service/orchestration.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/service/repair.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/sidecar/` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/sidecar/anthropic-binding.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/stall-timeout.ts` | [`runtime.md`](runtime.md) |
@@ -328,8 +348,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/types/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/types/provider.ts` | [`pricing.md`](pricing.md) |
 | `src/update/` | [`runtime.md`](runtime.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
+| `src/update/index.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/update/job-supervised-restart.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/update/job.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
+| `src/update/restart-ownership.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/update/supervised-recovery.mjs` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |
 | `src/usage/` | [`runtime.md`](runtime.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`companion.md`](companion.md) |
 | `src/usage/cost.ts` | [`pricing.md`](pricing.md) |
