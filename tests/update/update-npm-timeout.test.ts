@@ -16,6 +16,29 @@ function fixture() {
   return { root, packageDir };
 }
 
+async function readyTimeoutRunner(root: string, receipt: string): Promise<typeof runNpmInstall> {
+  // Only fixture setup is outside the install clock: first prove the leaf holds
+  // the stage, then exercise the unchanged 2000 ms timeout/terminate/join path.
+  // Instrument a private helper copy instead of adding a production test switch.
+  const helperSource = readFileSync(repoPath("src/update/npm-install-job.ps1"), "utf8");
+  const resume = "Require(ResumeThread(process.thread) != UInt32.MaxValue);";
+  expect(helperSource.split(resume)).toHaveLength(2);
+  const receipt64 = Buffer.from(receipt, "utf16le").toString("base64");
+  const helper = join(root, "fixture-job.ps1");
+  writeFileSync(helper, helperSource.replace(resume, `${resume}
+            string fixtureReceipt = System.Text.Encoding.Unicode.GetString(Convert.FromBase64String("${receipt64}"));
+            Stopwatch fixtureStartup = Stopwatch.StartNew();
+            while (!System.IO.File.Exists(fixtureReceipt)) {
+                if (fixtureStartup.ElapsedMilliseconds >= joinMs) throw new Exception("fixture leaf readiness failed");
+                Thread.Sleep(10);
+            }`), "utf8");
+  const runnerSource = readFileSync(repoPath("src/update/npm-install.mjs"), "utf8");
+  const helperLine = 'const helper = join(dirname(fileURLToPath(import.meta.url)), "npm-install-job.ps1");';
+  expect(runnerSource.split(helperLine)).toHaveLength(2);
+  const instrumented = runnerSource.replace(helperLine, `const helper = ${JSON.stringify(helper)};`);
+  return (await import("data:text/javascript;base64," + Buffer.from(instrumented).toString("base64"))).runNpmInstall;
+}
+
 test("timeout preserves ETIMEDOUT and permits recovery through the untouched launcher", async () => {
   const { root, packageDir } = fixture();
   let stage = "";
@@ -48,31 +71,47 @@ test.skipIf(process.platform !== "win32").each(["tree", "orphan"])("Windows cmd-
   writeFileSync(join(shimDir, "npm.cmd"), `@echo off\r\n"${node}" "${fixturePath("npm-timeout-tree.mjs")}" %*\r\n`, "utf8");
   let pids: number[] = [];
   let removals = 0;
+  let stageRoot = "";
+  let treeReady = false;
+  let aliveAtFirstRemoval: number[] | undefined;
+  let observedInstall: { processTreeExited?: boolean; error?: { code?: string } } | undefined;
   try {
+    const runReadyInstall = await readyTimeoutRunner(root, receipt);
     const result = await transactionalNpmUpdateAsync({
       packageDir, pkgName: "@fixture/opencodex", tag: "latest",
       runNpm: async (args: string[]) => {
         const stage = args[args.indexOf("--prefix") + 1]!;
+        stageRoot = stage;
         const env = { ...process.env, PATH: shimDir, PATHEXT: ".CMD" };
         const invocation = npmInvocation([mode, stage, receipt], "win32", env, { cwd: packageDir });
         expect(invocation?.file.toLowerCase()).toEndWith("system32\\cmd.exe");
-        const install = await runNpmInstall(invocation, { env, timeoutMs: 2000 });
+        const install = await runReadyInstall(invocation, { env, timeoutMs: 2000 });
+        observedInstall = install;
         // Receipt is a handshake from the leaf after acquiring its cwd/file.
         // A startup failure cannot masquerade as a passing timeout test.
-        expect(existsSync(receipt)).toBe(true);
-        pids = JSON.parse(readFileSync(receipt, "utf8")).pids;
-        expect(install.processTreeExited).toBe(true);
-        expect(install.error?.code).toBe("ETIMEDOUT");
+        treeReady = existsSync(receipt);
+        if (treeReady) pids = JSON.parse(readFileSync(receipt, "utf8")).pids;
         return install;
       },
       deps: { rm: (path: string, options: { recursive: true; force: true }) => {
         removals++;
-        for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
+        aliveAtFirstRemoval ??= pids.filter(pid => {
+          try { process.kill(pid, 0); return true; }
+          catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+        });
         // No retry: the leaf's stage cwd has actually been released.
         rmSync(path, options);
       } },
     });
+    // Assert outside injected callbacks: transaction error handling must not
+    // swallow fixture assertions and turn a retained stage into a false pass.
+    expect(treeReady, JSON.stringify(observedInstall)).toBe(true);
+    expect(pids).toHaveLength(3);
+    expect(observedInstall?.processTreeExited).toBe(true);
+    expect(observedInstall?.error?.code).toBe("ETIMEDOUT");
+    expect(aliveAtFirstRemoval).toEqual([]);
     expect(removals).toBeGreaterThan(0);
+    expect(existsSync(stageRoot)).toBe(false);
     expect(result.error).toContain("ETIMEDOUT");
     expect(launcherUsableAfterNpmUpdate(result)).toBe(true);
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe('{"version":"1.0.0"}');
