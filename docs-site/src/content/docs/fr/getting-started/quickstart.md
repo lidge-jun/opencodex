@@ -5,6 +5,8 @@ description: Configurez votre premier fournisseur et acheminez OpenAI Codex via 
 
 Ce guide part d’une installation neuve et vous conduit jusqu’à l’exécution de Codex sur un modèle autre qu’OpenAI.
 
+Vous pouvez aussi choisir `gpt-6.1-terra` aux côtés de `gpt-5.6-terra`, sans modifier le modèle par défaut ni la liste des sous-agents. Voir les [limites, le raisonnement et le mode Fast de GPT-6.1 Terra](/fr/reference/configuration/providers/#gpt-61-terra).
+
 ## 1. Exécutez l'assistant de configuration
 
 ```bash

@@ -712,6 +712,7 @@
   "devin-reasoning-continuation.test.ts": "providers", "devin-stream-deadline.test.ts": "providers",
   "digitalocean-scaleway-provider.test.ts": "providers", "docs-429-failover-claims.test.ts": "ci-workflows",
   "docs-bun-source-requirement.test.ts": "ci-workflows", "docs-developer-role-policy.test.ts": "ci-workflows",
+  "docs-gpt61-terra.test.ts": "ci-workflows",
   "docs-gui-screenshot-policy.test.ts": "ci-workflows", "docs-link-targets.test.ts": "ci-workflows",
   "docs-gjc-reasoning-export.test.ts": "ci-workflows", "docs-provider-billing-claims.test.ts": "ci-workflows",
   "docs-provider-discovery-limits.test.ts": "ci-workflows", "docs-provider-preset-counts.test.ts": "ci-workflows",

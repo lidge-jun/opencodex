@@ -6,6 +6,8 @@ description: opencodex 進行身分驗證並與 LLM 供應商通訊的所有方�
 **供應商（provider）** 是一個上游 LLM 端點，加上存取它的方式：adapter、base URL、認證模式，以及
 可選的模型列表。供應商設定放在 `~/.opencodex/config.json` 的 `providers` 下。
 
+除了 `gpt-5.6-terra`，也可以選擇 `gpt-6.1-terra`；預設模型與子代理模型清單均不變。參見 [GPT-6.1 Terra 的限制、推理與 Fast](/zh-tw/reference/configuration/providers/#gpt-61-terra)。
+
 ## OpenAI 帳號模式
 
 | Provider id | 用途 | 憑證／帳號規則 |
@@ -533,6 +535,9 @@ GPT-5.6 Sol/Terra/Luna 會預置在 provider fallback list 中，因此即使即
 | Codex 登入（Pool 或 Direct） | `gpt-5.6-*` | 922,000 |
 | OpenAI (API key) | `openai-apikey/gpt-5.6-*` 加 `*-pro` | 922,000（922,000 max input） |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna` | 922,000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna` | 1,000,000 |
 
 原生 GPT-5.6 條目保留固定的上游 reasoning ladder，例如 Luna 有 `max` 但沒有 `ultra`。路由條目使用各
@@ -550,7 +555,7 @@ Antigravity／Cloud Code Assist 模式）、`azure` / `azure-openai`、`kiro`、
 key／subscription-token gateway。**Cloudflare AI Gateway** 需要在 URL 填入 account 與 gateway id。
 
 Copilot 的 catalog 混合多種 wire：模型（`gpt-5.3-codex`、`gpt-5.4`、`gpt-5.4-mini`、
-`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）會拒絕 agent traffic 的
+`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、 `gpt-6.1-sol`、 `gpt-6.1-terra`、 `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）會拒絕 agent traffic 的
 `/chat/completions`，因此 opencodex 會依內建預設把這些模型路由到 Responses API；其他 Copilot 模型
 仍使用 chat completions。優先順序為：hard wire pin → 你明確設定的
 [`modelAdapters`](/zh-tw/reference/configuration/providers/) → registry default → provider-wide adapter。

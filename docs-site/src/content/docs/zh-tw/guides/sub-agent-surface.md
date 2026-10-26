@@ -20,7 +20,7 @@ opencodex 允許你為目錄中的所有模型選擇多代理協作介面。儀�
 | 模式 | 介面 | 行為 |
 | --- | --- | --- |
 | **v1** | `multi_agent_v1` | 使用經典的名稱空間代理工具，以及 `send_input` / `close_agent` / `resume_agent`。`spawn_agent` 的模型覆蓋可以在其他模型上生成子代理。 |
-| **base**（預設） | 上游固定值 | 恢復上游模型的固定值：gpt-5.6-sol 和 gpt-5.6-terra 使用 v2，gpt-5.6-luna 使用 v1；未固定的模型遵循 Codex 的 `multi_agent_v2` 功能開關。生成行為取決於該模型最終使用的介面。 |
+| **base**（預設） | 上游固定值 | 恢復上游模型的固定值：gpt-5.6-sol、gpt-5.6-terra 和 gpt-6.1-terra 使用 v2，gpt-5.6-luna 使用 v1；未固定的模型遵循 Codex 的 `multi_agent_v2` 功能開關。生成行為取決於該模型最終使用的介面。 |
 | **v2** | `multi_agent_v2` | 使用扁平的 `spawn_agent` 工具、併發會話，以及 `send_message` / `followup_task` / `wait_agent` / `interrupt_agent`。全量歷史 fork 時子代理繼承父模型；`fork_turns: "none"`（或部分 fork）時接受 `model` / `reasoning_effort` 覆蓋。如果原生→路由子代理只收到後端加密的任務內容，未明確信任的外部路由會回傳 `unreadable_encrypted_agent_task`；明確信任的直接金鑰驗證 Responses 路由可以原樣接收，而混合組合仍優先選擇可解密的原生目標（[#92](https://github.com/lidge-jun/opencodex/issues/92)）。 |
 
 ## 運作原理
@@ -256,7 +256,7 @@ opencodex 會將磁碟上的模型目錄與目前使用者擁有的每個 Codex 
 | 模型 | 線路上的 `max` | 選擇 `ultra` 後的線路值 |
 | --- | --- | --- |
 | gpt-5.5 | xhigh | xhigh（先轉為 max，再經 `nativeEffortClamp`） |
-| gpt-5.6-sol、gpt-5.6-terra | max | max |
+| gpt-5.6-sol、gpt-5.6-terra、gpt-6.1-terra | max | max |
 | gpt-5.6-luna | max | 其精確上游階梯不提供該選項 |
 | 路由模型 | 由適配器對映或限制 | 先轉為 max，再由適配器對映或限制 |
 

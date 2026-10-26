@@ -5,6 +5,8 @@ description: Configure your first provider and route OpenAI Codex through openco
 
 This guide takes you from a fresh install to running Codex against a non-OpenAI model.
 
+You can also select `gpt-6.1-terra` alongside `gpt-5.6-terra`; it does not replace any default or sub-agent roster entry. See [GPT-6.1 Terra limits, reasoning and Fast](/reference/configuration/providers/#gpt-61-terra).
+
 ## Standalone binary (no npm)
 
 You can also use a release archive containing the `ocx` binary and Bun runtime without npm.

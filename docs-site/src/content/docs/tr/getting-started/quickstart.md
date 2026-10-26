@@ -6,6 +6,8 @@ description: İlk sağlayıcınızı yapılandırın ve OpenAI Codex'i üç komu
 Bu kılavuz, yeni bir kurulumdan başlayarak Codex'i OpenAI harici bir model
 üzerinde çalıştırmanızı sağlar.
 
+`gpt-5.6-terra` yanında `gpt-6.1-terra` da seçilebilir. Varsayılan model ve alt ajan model listesi değişmez. [GPT-6.1 Terra sınırları, akıl yürütme ve Fast](/tr/reference/configuration/providers/#gpt-61-terra) bölümüne bakın.
+
 ## 1. Kurulum sihirbazını çalıştırın
 
 ```bash

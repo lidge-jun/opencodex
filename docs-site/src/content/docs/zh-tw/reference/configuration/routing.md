@@ -5,6 +5,8 @@ description: 預設供應商選擇、模型解析順序、combo 別名、目標�
 
 路由將客戶端送出的模型 id 轉為一個具體的供應商與上游模型。
 
+除了 `gpt-5.6-terra`，也可以選擇 `gpt-6.1-terra`；預設模型與子代理模型清單均不變。參見 [GPT-6.1 Terra 的限制、推理與 Fast](/zh-tw/reference/configuration/providers/#gpt-61-terra)。
+
 ## 頂層路由欄位
 
 | 欄位 | 型別 | 預設值 | 意義 |

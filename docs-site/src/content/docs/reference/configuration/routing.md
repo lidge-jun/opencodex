@@ -5,6 +5,8 @@ description: Default-provider selection, model resolution order, combo aliases, 
 
 Routing turns the model id sent by a client into one concrete provider and upstream model.
 
+You can also select `gpt-6.1-terra` alongside `gpt-5.6-terra`; it does not replace any default or sub-agent roster entry. See [GPT-6.1 Terra limits, reasoning and Fast](/reference/configuration/providers/#gpt-61-terra).
+
 ## Top-level routing fields
 
 | Field | Type | Default | Meaning |

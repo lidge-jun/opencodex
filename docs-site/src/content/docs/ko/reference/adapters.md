@@ -23,6 +23,8 @@ interface ProviderAdapter {
 스트림으로 표현할 수 없는 전송 방식을 지원합니다. 이후
 [`bridge.ts`](/ko/reference/architecture/#브리지)가 이벤트를 Responses SSE로 바꿉니다.
 
+`gpt-5.6-terra`와 함께 `gpt-6.1-terra`도 선택할 수 있습니다. 기본 모델이나 하위 에이전트 모델 목록은 바뀌지 않습니다. [GPT-6.1 Terra 한도·추론·Fast](/ko/reference/configuration/providers/#gpt-61-terra)를 참고하세요.
+
 ## `openai-chat`
 
 **대상:** OpenAI **Chat Completions**(`POST {baseUrl}/chat/completions`)와 모든 호환 프로바이더

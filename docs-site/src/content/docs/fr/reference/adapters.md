@@ -20,6 +20,8 @@ interface ProviderAdapter {
 
 `incoming` est un `IncomingMeta` obligatoire qui transporte notamment les en-têtes, le signal d’abandon et le budget de traduction. Le contexte facultatif de `fetchResponse` est un `AdapterFetchContext`. Les méthodes d’analyse reçoivent elles aussi un `TranslatorBudget` obligatoire afin de borner les données traduites.
 
+Vous pouvez aussi choisir `gpt-6.1-terra` aux côtés de `gpt-5.6-terra`, sans modifier le modèle par défaut ni la liste des sous-agents. Voir les [limites, le raisonnement et le mode Fast de GPT-6.1 Terra](/fr/reference/configuration/providers/#gpt-61-terra).
+
 ## `openai-chat`
 
 **Cibles :** l’API **Chat Completions** d’OpenAI (`POST {baseUrl}/chat/completions` ; un suffixe `/chat/completions` ou `/` est d’abord retiré de `baseUrl`) et tous les fournisseurs compatibles — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local), entre autres.

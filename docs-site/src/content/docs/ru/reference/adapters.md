@@ -25,6 +25,8 @@ interface ProviderAdapter {
 с последующим одним потоком ответа. Затем [`bridge.ts`](/ru/reference/architecture/#мост)
 превращает события в Responses SSE.
 
+Наряду с `gpt-5.6-terra` можно выбрать `gpt-6.1-terra`. Модель по умолчанию и список моделей подагентов не меняются. См. [лимиты, уровни рассуждения и Fast для GPT-6.1 Terra](/ru/reference/configuration/providers/#gpt-61-terra).
+
 ## `openai-chat`
 
 **Назначение:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`) и все совместимые

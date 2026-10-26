@@ -26,6 +26,8 @@ getirmesini takip eden tek bir yanıt akışı olarak temsil edilemeyen aktarım
 destekler. [`bridge.ts`](/tr/reference/architecture/#köprü-bridge) daha sonra
 olayları Responses SSE'ye dönüştürür.
 
+`gpt-5.6-terra` yanında `gpt-6.1-terra` da seçilebilir. Varsayılan model ve alt ajan model listesi değişmez. [GPT-6.1 Terra sınırları, akıl yürütme ve Fast](/tr/reference/configuration/providers/#gpt-61-terra) bölümüne bakın.
+
 ## `openai-chat`
 
 **Hedefler:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`;

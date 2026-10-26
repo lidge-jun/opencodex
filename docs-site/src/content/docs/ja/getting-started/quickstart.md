@@ -5,6 +5,8 @@ description: 最初のプロバイダーを構成し、3 つのコマンドで O
 
 このガイドでは、新規インストールから非 OpenAI モデルに対して Codex を実行するまでを説明します。
 
+`gpt-5.6-terra` に加えて `gpt-6.1-terra` も選択できます。既定モデルやサブエージェントのモデル一覧は変わりません。[GPT-6.1 Terra の上限・推論・Fast](/ja/reference/configuration/providers/#gpt-61-terra)を参照してください。
+
 ## スタンドアロンバイナリ（npm 不要）
 
 npm を使わず、Bun ランタイムを含むリリースアーカイブの `ocx` バイナリも利用できます。

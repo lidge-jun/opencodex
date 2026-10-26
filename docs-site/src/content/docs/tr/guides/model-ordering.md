@@ -8,6 +8,8 @@ veya model dizilerinin sırasını korumaz. Nihai sırası, aynı önceliği pay
 yönlendirilmiş modeller için belirleyici bir alfabetik sırayla birlikte katalog
 önceliklerinden gelir.
 
+`gpt-5.6-terra` yanında `gpt-6.1-terra` da seçilebilir. Varsayılan model ve alt ajan model listesi değişmez. [GPT-6.1 Terra sınırları, akıl yürütme ve Fast](/tr/reference/configuration/providers/#gpt-61-terra) bölümüne bakın.
+
 ## Codex'in uyguladığı kural
 
 Codex'in models-manager'ı, seçicide görünen katalog girdilerini artan sırada

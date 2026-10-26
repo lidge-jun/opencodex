@@ -5,6 +5,8 @@ description: 기본 provider 선택, model 해석 순서, combo 별칭, 대상 �
 
 라우팅은 클라이언트가 보낸 model id를 하나의 실제 provider와 upstream model로 바꿉니다.
 
+`gpt-5.6-terra`와 함께 `gpt-6.1-terra`도 선택할 수 있습니다. 기본 모델이나 하위 에이전트 모델 목록은 바뀌지 않습니다. [GPT-6.1 Terra 한도·추론·Fast](/ko/reference/configuration/providers/#gpt-61-terra)를 참고하세요.
+
 ## 최상위 라우팅 필드
 
 | Field | Type | Default | Meaning |
