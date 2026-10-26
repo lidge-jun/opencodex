@@ -82,9 +82,10 @@ export function selectDefaultGuiUrl(
   const ingress = config.runtimeRole === "hub" ? config.hub?.managementIngress : undefined;
   if (ingress?.enabled) return `http://127.0.0.1:${ingress.port}`;
 
+  // Keep literal loopback addresses: standalone pairing admits the configured
+  // origin, so replacing 127.0.0.1 with localhost strands its browser flow.
   const guiHost = probeHostname(live?.hostname ?? config.hostname);
-  const hostname = guiHost === "127.0.0.1" ? "localhost" : guiHost;
-  return `http://${hostname}:${live?.port ?? config.port ?? 10100}`;
+  return `http://${guiHost}:${live?.port ?? config.port ?? 10100}`;
 }
 
 const commandRunners: Record<string, CommandRunner> = {

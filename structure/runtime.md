@@ -81,7 +81,7 @@ verified matching processes regardless of the advisory freshness result. Read-on
 
 ## Hub management dashboard address
 
-When hub management ingress is enabled, `src/cli/dispatch.ts` opens the dashboard on the literal IPv4 loopback address and configured ingress port, matching the listener in `src/server/index.ts`. Other dashboard address selection is unchanged.
+When hub management ingress is enabled, `src/cli/dispatch.ts` opens the dashboard on the literal IPv4 loopback address and configured ingress port, matching the listener in `src/server/index.ts`. Otherwise it retains the live proxy's address and port, including literal loopback hosts: the default `127.0.0.1` is not rewritten to `localhost`, and `::1` is bracketed for the URL. This keeps the default standalone browser origin eligible for the existing exact-origin pairing check; aliases and mismatched runtime addresses or ports remain ineligible. `tests/gui/gui-pair-client.test.ts` exercises opening and pairing through actual CLI dispatch for existing and auto-started proxies.
 
 ## Codex desktop process membership
 
