@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  shadowBackgroundModelBadge,
   shadowSourceModelBadge,
   shadowSourceModelLabel,
   shadowSourceModelList,
@@ -61,5 +62,22 @@ describe("shadow source model rendering", () => {
   test("both renderings use the fallback when the runtime reported nothing", () => {
     expect(shadowSourceModelLabel(undefined)).toBe("gpt-6-luna, gpt-5.6-luna");
     expect(shadowSourceModelBadge(undefined)).toBe("6-luna, 5.6-luna");
+  });
+});
+
+describe("shadowBackgroundModelBadge", () => {
+  test("adds the separately routed memory model to the shadow source list", () => {
+    expect(shadowBackgroundModelBadge(["gpt-6-luna", "gpt-5.6-luna"], "Konsolidierung: Terra"))
+      .toBe("6-luna, 5.6-luna (+ Konsolidierung: Terra)");
+  });
+
+  test("uses the runtime fallback for the shadow sources", () => {
+    expect(shadowBackgroundModelBadge(undefined, "Consolidation: Terra"))
+      .toBe("6-luna, 5.6-luna (+ Consolidation: Terra)");
+  });
+
+  test("keeps a configured source override while adding the memory model", () => {
+    expect(shadowBackgroundModelBadge(["custom-helper"], "Terra"))
+      .toBe("custom-helper (+ Terra)");
   });
 });
