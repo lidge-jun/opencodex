@@ -207,6 +207,14 @@ Serialized request and buffered-response observations use byte counts without me
 The same rule applies to Anthropic, Google, and Chat response accounting; serialization itself is
 preserved where the existing metric is the serialized JSON size.
 
+Google SSE in `src/adapters/google.ts` measures each decoded fragment once and scans the retained
+line only when new text contains a newline. After consuming complete lines, only the remaining
+suffix is remeasured. Decoder EOF replacement bytes use the same admission-before-concatenation
+path; old/new overlap remains charged until replacement commits. Fragmented UTF-8, residual EOF
+frames, existing frame limits, terminal events and reader-release ownership retain their behavior.
+`tests/adapters/google/google-stream-fragmentation.test.ts` bounds measurement and scan work by
+input size and checks Unicode, exact EOF overlap admission, overflow and early-return cleanup.
+
 MiMo standalone bare-call recovery in `src/adapters/openai-chat/standalone-bare-tool-calls.ts`
 retains detached candidate inputs across bounded streaming prose release. Candidate records are
 measured without serialization, charged to `live_transient`, bounded to 128 records / 4 MiB total

@@ -753,6 +753,7 @@
   "google-antigravity-wire.test.ts": "adapters/google", "google-buffered-stop-reason.test.ts": "adapters/google",
   "google-claude-prefill-guard.test.ts": "adapters/google", "google-empty-content.test.ts": "adapters/google",
   "google-errors.test.ts": "adapters/google", "google-hardening.test.ts": "adapters/google",
+  "google-stream-fragmentation.test.ts": "adapters/google",
   "google-models-listing.test.ts": "adapters/google", "google-output-clamp.test.ts": "adapters/google",
   "google-provider-metadata-roundtrip.test.ts": "adapters/google",
   "google-ai-studio-foreign-call-signature.test.ts": "adapters/google", "google-signature-history-roundtrip.test.ts": "adapters/google",
