@@ -330,17 +330,20 @@ async function startSibling(
   });
   children.push(child);
   const runtimePath = join(siblingHome, "runtime-port.json");
+  // Allowlisted fields only: the record also carries the per-process attestationSecret.
   let lastRecord: string | null = null;
+  let exitedEarly = false;
   let runtime: { pid: number; port: number; siblingOfPort?: number };
   try {
     runtime = await waitFor(async () => {
       if (child.exitCode !== null) {
+        exitedEarly = true;
         throw new Error(`sibling exited ${child.exitCode}: ${await new Response(child.stderr).text()}`);
       }
       if (!existsSync(runtimePath)) return null;
       try {
-        lastRecord = readFileSync(runtimePath, "utf8");
-        const value = JSON.parse(lastRecord) as { pid: number; port: number; siblingOfPort?: number };
+        const value = JSON.parse(readFileSync(runtimePath, "utf8")) as { pid: number; port: number; hostname?: string; siblingOfPort?: number };
+        lastRecord = JSON.stringify({ pid: value.pid, port: value.port, hostname: value.hostname, siblingOfPort: value.siblingOfPort });
         const portOk = Number.isInteger(value.port) && value.port >= 1 && value.port <= 65535
           && (port === undefined || value.port === port);
         return value.pid === child.pid && portOk ? value : null;
@@ -349,12 +352,20 @@ async function startSibling(
       }
     }, "sibling runtime record");
   } catch (error) {
+    // An early exit already reported its stderr and consumed the stream.
+    if (exitedEarly) throw error;
     // Report what the child was doing, which the bare deadline message cannot.
     if (child.exitCode === null) child.kill("SIGKILL");
-    const tail = (stream: unknown) => Promise.race([
-      new Response(stream as ReadableStream<Uint8Array>).text().then(text => text.slice(-4000)).catch(() => "<unreadable>"),
-      Bun.sleep(2000).then(() => "<no EOF within 2s>"),
-    ]);
+    const tail = async (stream: unknown): Promise<string> => {
+      try {
+        return await Promise.race([
+          new Response(stream as ReadableStream<Uint8Array>).text().then(text => text.slice(-4000)),
+          Bun.sleep(2000).then(() => "<no EOF within 2s>"),
+        ]);
+      } catch {
+        return "<unreadable>";
+      }
+    };
     const [stdout, stderr] = await Promise.all([tail(child.stdout), tail(child.stderr)]);
     throw new Error(
       `${(error as Error).message} (requested port ${port ?? "config"}, pid ${child.pid}, last record ${lastRecord ?? "none"})\n`
