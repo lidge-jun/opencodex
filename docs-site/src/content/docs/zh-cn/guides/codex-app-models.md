@@ -30,8 +30,6 @@ cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 
 更早的 v1 三 provider 配置会自动迁移到这个支持单一选项的行。
 
-除了 `gpt-5.6-terra`，还可以选择 `gpt-6.1-terra`；默认模型和子代理模型列表均不变。参见 [GPT-6.1 Terra 的限制、推理与 Fast](/zh-cn/reference/configuration/providers/#gpt-61-terra)。
-
 ## Desktop 远程 allowlist 限制
 
 如果 `codex debug models` 和 app-server 的 `model/list` 都包含某个路由模型，但 Desktop

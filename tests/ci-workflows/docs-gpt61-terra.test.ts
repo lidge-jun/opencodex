@@ -25,13 +25,11 @@ describe("GPT-6.1 Terra documentation", () => {
       expect(section).not.toMatch(/Ultrafast|ultrafast/);
     });
 
-    test(`${locale || "en"}: affected guides link to Terra without replacing older models`, () => {
-      for (const page of ["guides/providers", "guides/codex-app-models", "guides/model-ordering",
-        "getting-started/quickstart", "reference/adapters", "reference/configuration/routing"]) {
+    test(`${locale || "en"}: model tables list Terra without replacing older models`, () => {
+      for (const page of ["guides/providers", "guides/codex-app-models"]) {
         const doc = read(locale, page);
         expect(doc, `${locale}/${page}`).toContain("gpt-6.1-terra");
         expect(doc).toContain("gpt-5.6-terra");
-        expect(doc).toContain("/reference/configuration/providers/#gpt-61-terra");
         expect(doc.split("\n").filter(line => line.startsWith("| Cursor |"))
           .join("\n")).not.toContain("gpt-6.1-terra");
       }

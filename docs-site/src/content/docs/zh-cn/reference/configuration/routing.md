@@ -5,8 +5,6 @@ description: 默认提供方选择、模型解析顺序、组合别名、目标�
 
 路由会把客户端发送的 model id 转换为一个具体的提供方和上游模型。
 
-除了 `gpt-5.6-terra`，还可以选择 `gpt-6.1-terra`；默认模型和子代理模型列表均不变。参见 [GPT-6.1 Terra 的限制、推理与 Fast](/zh-cn/reference/configuration/providers/#gpt-61-terra)。
-
 ## 顶层路由字段
 
 | 字段 | 类型 | 默认值 | 含义 |

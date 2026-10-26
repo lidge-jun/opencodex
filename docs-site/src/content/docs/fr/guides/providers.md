@@ -7,8 +7,6 @@ Un **fournisseur** associe un point de terminaison LLM en amont à la façon de 
 une URL de base, un mode d'authentification et, facultativement, une liste de modèles. Les fournisseurs sont
 définis sous `providers` dans `~/.opencodex/config.json`.
 
-Vous pouvez aussi choisir `gpt-6.1-terra` aux côtés de `gpt-5.6-terra`, sans modifier le modèle par défaut ni la liste des sous-agents. Voir les [limites, le raisonnement et le mode Fast de GPT-6.1 Terra](/fr/reference/configuration/providers/#gpt-61-terra).
-
 ## Modes de compte OpenAI
 
 | Identifiant du fournisseur | Utilisation | Règle relative aux identifiants et aux comptes |

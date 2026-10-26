@@ -7,8 +7,6 @@ Le sélecteur de modèles Codex ne conserve ni l’ordre de déclaration des fou
 configuration opencodex. L’ordre final découle des priorités du catalogue ; les modèles routés qui partagent la même priorité
 sont classés selon un ordre alphabétique déterministe.
 
-Vous pouvez aussi choisir `gpt-6.1-terra` aux côtés de `gpt-5.6-terra`, sans modifier le modèle par défaut ni la liste des sous-agents. Voir les [limites, le raisonnement et le mode Fast de GPT-6.1 Terra](/fr/reference/configuration/providers/#gpt-61-terra).
-
 ## La règle Codex s'applique
 
 Le gestionnaire de modèles de Codex trie les entrées de catalogue visibles dans le sélecteur par `priority`, dans l’ordre croissant. Il

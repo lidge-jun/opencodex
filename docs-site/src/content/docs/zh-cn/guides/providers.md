@@ -5,8 +5,6 @@ description: opencodex 进行身份验证并与 LLM 提供商通信的所有方�
 
 **提供商（provider）** 是一个上游 LLM 端点，加上访问它的方式：一个 adapter、一个基础 URL、一种认证模式，以及一个可选的模型列表。提供商配置位于 `~/.opencodex/config.json` 的 `providers` 下。
 
-除了 `gpt-5.6-terra`，还可以选择 `gpt-6.1-terra`；默认模型和子代理模型列表均不变。参见 [GPT-6.1 Terra 的限制、推理与 Fast](/zh-cn/reference/configuration/providers/#gpt-61-terra)。
-
 ## OpenAI 账户模式
 
 | Provider id | 用途 | 凭证/账户规则 |

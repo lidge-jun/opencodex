@@ -5,8 +5,6 @@ description: 첫 프로바이더를 설정하고 명령어 세 개로 OpenAI Cod
 
 이 가이드는 새로 설치한 상태에서 OpenAI가 아닌 모델로 Codex를 실행하기까지의 과정을 안내합니다.
 
-`gpt-5.6-terra`와 함께 `gpt-6.1-terra`도 선택할 수 있습니다. 기본 모델이나 하위 에이전트 모델 목록은 바뀌지 않습니다. [GPT-6.1 Terra 한도·추론·Fast](/ko/reference/configuration/providers/#gpt-61-terra)를 참고하세요.
-
 ## 독립 실행형 바이너리(npm 없음)
 
 npm 없이 Bun 런타임이 포함된 릴리스 아카이브의 `ocx` 바이너리를 사용할 수도 있습니다.

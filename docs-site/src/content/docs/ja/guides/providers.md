@@ -6,8 +6,6 @@ description: opencodex が LLM プロバイダーを認証し通信するすべ�
 **プロバイダー**は一つの上流 LLM エンドポイントとそこへの到達方法を合わせたものです: アダプター、ベース URL、認証
 モード、そしてオプションのモデル一覧で構成されます。プロバイダーは `~/.opencodex/config.json` の `providers` の下にあります。
 
-`gpt-5.6-terra` に加えて `gpt-6.1-terra` も選択できます。既定モデルやサブエージェントのモデル一覧は変わりません。[GPT-6.1 Terra の上限・推論・Fast](/ja/reference/configuration/providers/#gpt-61-terra)を参照してください。
-
 ## OpenAI アカウントモード
 
 | プロバイダー ID | 用途 | 認証情報/アカウットルール |

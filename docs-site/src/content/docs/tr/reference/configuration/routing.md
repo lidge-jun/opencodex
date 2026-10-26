@@ -6,8 +6,6 @@ description: Varsayılan sağlayıcı seçimi, model çözümleme sırası, komb
 Yönlendirme, bir istemci tarafından gönderilen model kimliğini somut bir
 sağlayıcıya ve yukarı akış modeline dönüştürür.
 
-`gpt-5.6-terra` yanında `gpt-6.1-terra` da seçilebilir. Varsayılan model ve alt ajan model listesi değişmez. [GPT-6.1 Terra sınırları, akıl yürütme ve Fast](/tr/reference/configuration/providers/#gpt-61-terra) bölümüne bakın.
-
 ## Üst düzey yönlendirme alanları
 
 | Alan | Tip | Varsayılan | Anlamı |

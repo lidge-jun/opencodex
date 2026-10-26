@@ -19,8 +19,6 @@ interface ProviderAdapter {
 `buildRequest` は `OcxParsedRequest` を上流の HTTP リクエストに落とし、`parseStream` /
 `parseResponse` はプロバイダーのレスポンスを内部 `AdapterEvent` に持ち上げます。`fetchResponse` があると、アダプターがリトライとタイムアウトを直接担います。`runTurn` は 1 回の HTTP fetch とその後のレスポンスストリームでは表現できない伝送方式をサポートします。その後 [`bridge.ts`](/ja/reference/architecture/#ブリッジ) がイベントを Responses SSE に変えます。
 
-`gpt-5.6-terra` に加えて `gpt-6.1-terra` も選択できます。既定モデルやサブエージェントのモデル一覧は変わりません。[GPT-6.1 Terra の上限・推論・Fast](/ja/reference/configuration/providers/#gpt-61-terra)を参照してください。
-
 ## `openai-chat`
 
 **対象:** OpenAI **Chat Completions**（`POST {baseUrl}/chat/completions`）および互換プロバイダー

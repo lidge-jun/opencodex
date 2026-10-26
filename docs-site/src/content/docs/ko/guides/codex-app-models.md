@@ -74,8 +74,6 @@ cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 
 이전 v1의 3-provider 설정은 자동으로 옵션을 인식하는 단일 행으로 마이그레이션됩니다.
 
-`gpt-5.6-terra`와 함께 `gpt-6.1-terra`도 선택할 수 있습니다. 기본 모델이나 하위 에이전트 모델 목록은 바뀌지 않습니다. [GPT-6.1 Terra 한도·추론·Fast](/ko/reference/configuration/providers/#gpt-61-terra)를 참고하세요.
-
 ## 통합 경로
 
 `ocx init`, `ocx start`, `ocx sync`는 공유 Codex 설정과 카탈로그를 프록시에 연결합니다. 설정 주입,

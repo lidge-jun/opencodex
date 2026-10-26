@@ -22,8 +22,6 @@ interface ProviderAdapter {
 无法表示成一次 HTTP fetch 加一条响应流的 transport。随后
 [`bridge.ts`](/zh-cn/reference/architecture/#桥接器) 把 event 转成 Responses SSE。
 
-除了 `gpt-5.6-terra`，还可以选择 `gpt-6.1-terra`；默认模型和子代理模型列表均不变。参见 [GPT-6.1 Terra 的限制、推理与 Fast](/zh-cn/reference/configuration/providers/#gpt-61-terra)。
-
 ## `openai-chat`
 
 **目标：** OpenAI **Chat Completions**（`POST {baseUrl}/chat/completions`）以及所有兼容 provider，

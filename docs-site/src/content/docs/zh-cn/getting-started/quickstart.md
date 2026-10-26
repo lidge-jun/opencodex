@@ -5,8 +5,6 @@ description: 配置你的第一个 provider，并在三条命令内让 OpenAI Co
 
 本指南将带你从全新安装，一路走到用一个非 OpenAI 模型运行 Codex。
 
-除了 `gpt-5.6-terra`，还可以选择 `gpt-6.1-terra`；默认模型和子代理模型列表均不变。参见 [GPT-6.1 Terra 的限制、推理与 Fast](/zh-cn/reference/configuration/providers/#gpt-61-terra)。
-
 ## 独立二进制文件（无需 npm）
 
 你也可以使用包含 Bun 运行时的发布压缩包中的 `ocx`，无需 npm。

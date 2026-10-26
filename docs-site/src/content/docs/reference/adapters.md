@@ -23,8 +23,6 @@ adapter own retries/timeouts, while `runTurn` supports transports that cannot be
 HTTP fetch followed by one response stream. [`bridge.ts`](/reference/architecture/#the-bridge)
 then turns the events into Responses SSE.
 
-You can also select `gpt-6.1-terra` alongside `gpt-5.6-terra`; it does not replace any default or sub-agent roster entry. See [GPT-6.1 Terra limits, reasoning and Fast](/reference/configuration/providers/#gpt-61-terra).
-
 ## External task input on translated Responses routes
 
 Codex task coordination can deliver input as `function_call_output` with nonblank

@@ -97,8 +97,6 @@ cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 Daha önceki v1 üç sağlayıcılı yapılandırmalar otomatik olarak tek seçenek
 duyarlı satıra geçer.
 
-`gpt-5.6-terra` yanında `gpt-6.1-terra` da seçilebilir. Varsayılan model ve alt ajan model listesi değişmez. [GPT-6.1 Terra sınırları, akıl yürütme ve Fast](/tr/reference/configuration/providers/#gpt-61-terra) bölümüne bakın.
-
 ## Desktop uzak izin listesi sınırlaması
 
 `codex debug models` ve uygulama sunucusu `model/list` yönlendirilen bir modeli

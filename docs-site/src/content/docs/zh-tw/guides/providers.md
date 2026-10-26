@@ -6,8 +6,6 @@ description: opencodex 進行身分驗證並與 LLM 供應商通訊的所有方�
 **供應商（provider）** 是一個上游 LLM 端點，加上存取它的方式：adapter、base URL、認證模式，以及
 可選的模型列表。供應商設定放在 `~/.opencodex/config.json` 的 `providers` 下。
 
-除了 `gpt-5.6-terra`，也可以選擇 `gpt-6.1-terra`；預設模型與子代理模型清單均不變。參見 [GPT-6.1 Terra 的限制、推理與 Fast](/zh-tw/reference/configuration/providers/#gpt-61-terra)。
-
 ## OpenAI 帳號模式
 
 | Provider id | 用途 | 憑證／帳號規則 |

@@ -5,8 +5,6 @@ description: Sélection du fournisseur par défaut, ordre de résolution des mod
 
 Le routage transforme l’identifiant de modèle envoyé par un client en un fournisseur concret et un modèle en amont.
 
-Vous pouvez aussi choisir `gpt-6.1-terra` aux côtés de `gpt-5.6-terra`, sans modifier le modèle par défaut ni la liste des sous-agents. Voir les [limites, le raisonnement et le mode Fast de GPT-6.1 Terra](/fr/reference/configuration/providers/#gpt-61-terra).
-
 ## Champs de routage de premier niveau
 
 | Champ | Type | Valeur par défaut | Signification |

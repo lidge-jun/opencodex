@@ -54,8 +54,6 @@ cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 Более ранние трёхпровайдерные конфигурации v1 автоматически мигрируют в одну строку с
 переключаемым режимом.
 
-Наряду с `gpt-5.6-terra` можно выбрать `gpt-6.1-terra`. Модель по умолчанию и список моделей подагентов не меняются. См. [лимиты, уровни рассуждения и Fast для GPT-6.1 Terra](/ru/reference/configuration/providers/#gpt-61-terra).
-
 ## Путь интеграции
 
 `ocx init`, `ocx start` и `ocx sync` подключают общий конфиг и каталог Codex к прокси; подробности

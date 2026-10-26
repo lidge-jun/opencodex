@@ -5,8 +5,6 @@ description: 設定你的第一個 provider,用三條命令讓 OpenAI Codex 透�
 
 本指南將帶你從全新安裝,一路走到用一個非 OpenAI 模型執行 Codex。
 
-除了 `gpt-5.6-terra`，也可以選擇 `gpt-6.1-terra`；預設模型與子代理模型清單均不變。參見 [GPT-6.1 Terra 的限制、推理與 Fast](/zh-tw/reference/configuration/providers/#gpt-61-terra)。
-
 ## 1. 執行設定嚮導
 
 ```bash

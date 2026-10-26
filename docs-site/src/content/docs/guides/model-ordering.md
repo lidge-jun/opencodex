@@ -7,8 +7,6 @@ The Codex model picker does not preserve the order of provider declarations or m
 opencodex configuration. Its final order comes from catalog priorities, with a deterministic
 alphabetical order for routed models that share the same priority.
 
-You can also select `gpt-6.1-terra` alongside `gpt-5.6-terra`; it does not replace any default or sub-agent roster entry. See [GPT-6.1 Terra limits, reasoning and Fast](/reference/configuration/providers/#gpt-61-terra).
-
 ## The rule Codex applies
 
 Codex's models-manager sorts picker-visible catalog entries by `priority` in ascending order. It

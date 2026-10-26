@@ -118,8 +118,6 @@ cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 
 Earlier v1 three-provider configurations migrate automatically into the single option-aware row.
 
-You can also select `gpt-6.1-terra` alongside `gpt-5.6-terra`; it does not replace any default or sub-agent roster entry. See [GPT-6.1 Terra limits, reasoning and Fast](/reference/configuration/providers/#gpt-61-terra).
-
 ## Desktop remote-allowlist limitation
 
 If `codex debug models` and app-server `model/list` contain a routed model but Desktop does not show

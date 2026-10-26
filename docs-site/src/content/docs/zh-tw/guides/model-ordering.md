@@ -6,8 +6,6 @@ description: opencodex 如何確定 Codex 模型選擇器和 spawn_agent 模型 
 Codex 模型選擇器不會保留 opencodex 設定中 provider 的宣告順序或模型陣列順序。最終順序由目錄
 priority 決定；priority 相同的路由模型則使用確定性的字母順序。
 
-除了 `gpt-5.6-terra`，也可以選擇 `gpt-6.1-terra`；預設模型與子代理模型清單均不變。參見 [GPT-6.1 Terra 的限制、推理與 Fast](/zh-tw/reference/configuration/providers/#gpt-61-terra)。
-
 ## Codex 應用的規則
 
 Codex 的 models-manager 按 `priority` 升序排列選擇器中可見的目錄條目。目錄陣列本身的順序會被

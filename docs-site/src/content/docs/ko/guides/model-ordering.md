@@ -7,8 +7,6 @@ Codex 모델 선택기는 opencodex 설정에 적힌 프로바이더 선언 순�
 않습니다. 최종 순서는 카탈로그 priority로 정해지며, 같은 priority를 가진 라우팅 모델에는 결정적인
 알파벳순 정렬이 적용됩니다.
 
-`gpt-5.6-terra`와 함께 `gpt-6.1-terra`도 선택할 수 있습니다. 기본 모델이나 하위 에이전트 모델 목록은 바뀌지 않습니다. [GPT-6.1 Terra 한도·추론·Fast](/ko/reference/configuration/providers/#gpt-61-terra)를 참고하세요.
-
 ## Codex가 적용하는 규칙
 
 Codex의 models-manager는 선택기에 표시되는 카탈로그 항목을 `priority` 오름차순으로 정렬합니다.

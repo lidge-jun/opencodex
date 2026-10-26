@@ -6,8 +6,6 @@ description: opencodex가 LLM 프로바이더를 인증하고 통신하는 모�
 **프로바이더**는 하나의 업스트림 LLM 엔드포인트와 거기에 도달하는 방법을 합친 것입니다: 어댑터, 베이스 URL, 인증
 모드, 그리고 선택적인 모델 목록으로 구성됩니다. 프로바이더는 `~/.opencodex/config.json`의 `providers` 아래에 위치합니다.
 
-`gpt-5.6-terra`와 함께 `gpt-6.1-terra`도 선택할 수 있습니다. 기본 모델이나 하위 에이전트 모델 목록은 바뀌지 않습니다. [GPT-6.1 Terra 한도·추론·Fast](/ko/reference/configuration/providers/#gpt-61-terra)를 참고하세요.
-
 ## OpenAI 계정 모드
 
 | 프로바이더 id | 용도 | 자격증명/계정 규칙 |

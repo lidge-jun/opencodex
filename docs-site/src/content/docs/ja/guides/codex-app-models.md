@@ -30,8 +30,6 @@ cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 
 以前の v1 の 3 プロバイダー設定は、単一のオプション対応行に自動的に移行されます。
 
-`gpt-5.6-terra` に加えて `gpt-6.1-terra` も選択できます。既定モデルやサブエージェントのモデル一覧は変わりません。[GPT-6.1 Terra の上限・推論・Fast](/ja/reference/configuration/providers/#gpt-61-terra)を参照してください。
-
 ## 統合パス
 
 `ocx init`、`ocx start`、および `ocx sync` は、共有 Codex 設定とカタログをプロキシに接続します。設定の挿入、カタログの同期、シム、WebSocket フォールバック、および復元の仕組みについては、[Codexの統合](/guides/codex-integration/) を参照してください。

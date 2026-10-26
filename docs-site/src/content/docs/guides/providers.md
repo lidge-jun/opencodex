@@ -13,8 +13,6 @@ These links preserve the preset's referral parameters. Sponsor information is sh
 the configured provider name, adapter and endpoint match the preset; it never changes routing,
 account selection or defaults.
 
-You can also select `gpt-6.1-terra` alongside `gpt-5.6-terra`; it does not replace any default or sub-agent roster entry. See [GPT-6.1 Terra limits, reasoning and Fast](/reference/configuration/providers/#gpt-61-terra).
-
 ## OpenAI account modes
 
 | Provider id | Use | Credential/account rule |
@@ -847,8 +845,6 @@ The preset uses [Chat Completions](https://tokenlab.sh/docs/en/quickstart) and d
 `GET /v1/models?category=chat`, keeping only entries that declare `tool-use` capability.
 Image, video, audio, embedding and decision models are excluded from this chat preset.
 
-<!-- 261027 preemptive: GPT-6.1 Terra (TokenLab; mirrors GPT-6.1 Sol). -->
-
 Each model then uses the request format TokenLab declares for it
 (`tokenlab.accepted_request_formats` on `GET /v1/models/{model}`):
 
@@ -879,7 +875,6 @@ environment. The preset uses Chat Completions. The following existing models
 were verified with chat, streaming and tool calls: `glm-5.3-flash` (the default),
 `claude-sonnet-5-5`, `gpt-6.1-sol` and `deepseek-v4-flash`.
 `gpt-6.1-terra` is a preemptive seed mirroring Sol; it has not been inference-verified here.
-<!-- 261027 preemptive: GPT-6.1 Terra (Modelflare; mirrors GPT-6.1 Sol). -->
 You can add other Chat-compatible
 Modelflare models as custom models. Image and video models use separate Modelflare endpoints and
 do not work through this Chat preset. An ordinary Modelflare key is bound to one routing group and

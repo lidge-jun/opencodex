@@ -7,8 +7,6 @@ Codex モデルピッカーは opencodex 設定に書かれたプロバイダー
 最終順序はカタログ priority で決まり、同じ priority を持つルーティングモデルには決定論的
 アルファベット順ソートが適用されます。
 
-`gpt-5.6-terra` に加えて `gpt-6.1-terra` も選択できます。既定モデルやサブエージェントのモデル一覧は変わりません。[GPT-6.1 Terra の上限・推論・Fast](/ja/reference/configuration/providers/#gpt-61-terra)を参照してください。
-
 ## Codex が適用するルール
 
 Codex の models-manager はピッカーに表示されるカタログ項目を `priority` 昇順でソートします。
