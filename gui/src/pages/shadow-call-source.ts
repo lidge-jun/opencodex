@@ -7,6 +7,9 @@
  * Memory consolidation is a separate background path: Codex asks for Terra
  * there, and `memoryModels.consolidation` owns that route. Terra is also a
  * normal foreground/subagent model, so it stays out of the shadow source set.
+ * The Terra generation changes with Codex; both `gpt-5.6-terra` and
+ * `gpt-6.1-terra` are recognized here so the badge does not claim the memory
+ * model is outside the sources after an operator opts one in.
  * The GUI renders whatever the runtime reports rather than a baked-in label;
  * this fallback only covers a runtime too old to send `sourceModels`.
  */
@@ -91,10 +94,11 @@ export function toggleShadowCallSource(
 export function shadowBackgroundModelBadge(
   sourceModels: string[] | undefined,
   memoryLabel: string,
-  memoryModelId = "gpt-5.6-terra",
+  memoryModelIds: readonly string[] = ["gpt-6.1-terra", "gpt-5.6-terra"],
 ): string {
-  const memoryAlreadyIntercepted = memoryModelId !== ""
-    && shadowSourceModelList(sourceModels).some(prefix => memoryModelId.startsWith(prefix));
+  const selected = shadowSourceModelList(sourceModels);
+  const memoryAlreadyIntercepted = memoryModelIds.some(id => id !== ""
+    && selected.some(prefix => id.startsWith(prefix)));
   const sourceLabel = shadowSourceModelBadge(sourceModels);
   return memoryAlreadyIntercepted ? sourceLabel : `${sourceLabel} (+ ${memoryLabel})`;
 }

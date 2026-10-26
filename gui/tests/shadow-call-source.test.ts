@@ -119,12 +119,18 @@ describe("shadowBackgroundModelBadge", () => {
       .toBe("6-luna, 5.6-luna, 5.6-terra");
   });
 
+  test("does not list the newer Terra twice when it is an explicit source", () => {
+    expect(shadowBackgroundModelBadge(["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-terra"], "Memory: Terra"))
+      .toBe("6-luna, 5.6-luna, 6.1-terra");
+  });
+
   test("treats a broader source prefix as covering the memory model", () => {
     expect(shadowBackgroundModelBadge(["gpt-5.6"], "Memory: Terra")).toBe("5.6");
   });
 });
 
 const terra: ShadowCallSourceOption = { id: "gpt-5.6-terra", role: "memory", defaultIntercepted: false };
+const terra61: ShadowCallSourceOption = { id: "gpt-6.1-terra", role: "memory", defaultIntercepted: false };
 const luna: ShadowCallSourceOption = { id: "gpt-5.6-luna", role: "helper", defaultIntercepted: true };
 
 describe("shadow source toggles", () => {
@@ -136,6 +142,12 @@ describe("shadow source toggles", () => {
   test("switching an inactive source on appends its exact prefix", () => {
     expect(toggleShadowCallSource(terra, ["gpt-6-luna", "gpt-5.6-luna"])).toEqual({
       sourceModels: ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"],
+    });
+  });
+
+  test("switching the newer Terra on appends its exact prefix", () => {
+    expect(toggleShadowCallSource(terra61, ["gpt-6-luna", "gpt-5.6-luna"])).toEqual({
+      sourceModels: ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-terra"],
     });
   });
 

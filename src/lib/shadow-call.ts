@@ -26,12 +26,15 @@ export interface ShadowCallSourceOption {
  * this list so the GUI cannot drift from the prefixes the request path matches.
  * Terra is the memory-consolidation model and stays opt-in: Codex also selects
  * it for ordinary foreground work, and routing it by default would move a
- * user-chosen model. The retired gpt-5.4-mini helper stays available for
- * clients through 0.144.x.
+ * user-chosen model. Codex currently asks for `gpt-5.6-terra`; newer clients
+ * can move to `gpt-6.1-terra`, so both generations stay selectable and off by
+ * default. The retired gpt-5.4-mini helper stays available for clients through
+ * 0.144.x.
  */
 export const SHADOW_SOURCE_MODEL_OPTIONS: readonly ShadowCallSourceOption[] = [
   { id: "gpt-6-luna", role: "helper", defaultIntercepted: true },
   { id: "gpt-5.6-luna", role: "helper", defaultIntercepted: true },
+  { id: "gpt-6.1-terra", role: "memory", defaultIntercepted: false },
   { id: "gpt-5.6-terra", role: "memory", defaultIntercepted: false },
   { id: "gpt-5.4-mini", role: "legacy", defaultIntercepted: false },
 ];

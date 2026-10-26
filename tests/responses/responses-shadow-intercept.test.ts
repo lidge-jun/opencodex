@@ -51,6 +51,7 @@ describe("isShadowSourceModel", () => {
   });
 
   test("does not match non-helper models", () => {
+    expect(isShadowSourceModel("gpt-6.1-terra")).toBe(false);
     expect(isShadowSourceModel("gpt-5.6-terra")).toBe(false);
     expect(isShadowSourceModel("gpt-5.5")).toBe(false);
     expect(isShadowSourceModel("gpt-5.6-sol")).toBe(false);
@@ -80,11 +81,12 @@ describe("isShadowSourceModel", () => {
 });
 
 describe("shadowSourceModelOptions", () => {
-  test("exposes Terra and the legacy helper as opt-in sources", () => {
+  test("exposes both Terra generations and the legacy helper as opt-in sources", () => {
     const options = shadowSourceModelOptions(undefined);
     expect(options.map(option => [option.id, option.role, option.defaultIntercepted])).toEqual([
       ["gpt-6-luna", "helper", true],
       ["gpt-5.6-luna", "helper", true],
+      ["gpt-6.1-terra", "memory", false],
       ["gpt-5.6-terra", "memory", false],
       ["gpt-5.4-mini", "legacy", false],
     ]);
@@ -101,7 +103,8 @@ describe("shadowSourceModelOptions", () => {
   });
 
   test("does not list a known source twice", () => {
-    const options = shadowSourceModelOptions(["gpt-5.6-terra", "gpt-5.6-terra"]);
+    const options = shadowSourceModelOptions(["gpt-6.1-terra", "gpt-6.1-terra", "gpt-5.6-terra", "gpt-5.6-terra"]);
+    expect(options.filter(option => option.id === "gpt-6.1-terra")).toHaveLength(1);
     expect(options.filter(option => option.id === "gpt-5.6-terra")).toHaveLength(1);
   });
 });
@@ -117,6 +120,7 @@ describe("shouldInterceptShadowCall", () => {
   test("does not intercept non-source models", () => {
     const source = { providerName: "openai", modelId: "gpt-5.6-luna" };
     const target = { providerName: "xai", modelId: "grok-4.5" };
+    expect(shouldInterceptShadowCall("gpt-6.1-terra", undefined, source, target)).toBe(false);
     expect(shouldInterceptShadowCall("gpt-5.6-terra", undefined, source, target)).toBe(false);
     expect(shouldInterceptShadowCall("gpt-5.5", undefined, source, target)).toBe(false);
   });
@@ -522,29 +526,32 @@ describe("shadow call intercept request path (issue #311)", () => {
     expect(response.status).toBe(404);
   });
 
-  test("intercepts Terra only after the operator opts that source in", async () => {
-    takeSpendHome();
-    const bodies: Array<Record<string, unknown>> = [];
-    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
-      bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
-      return Response.json({
-        choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-        usage: { prompt_tokens: 1, completion_tokens: 1 },
-      });
-    }) as typeof fetch;
-    const config = interceptConfig();
-    config.shadowCallIntercept = {
-      enabled: true,
-      model: "xai/grok-4.5",
-      sourceModels: ["gpt-6-luna", "gpt-5.6-luna", "gpt-5.6-terra"],
-    };
+  test.each(["gpt-5.6-terra", "gpt-6.1-terra"])(
+    "intercepts Terra only after the operator opts %s in",
+    async terra => {
+      takeSpendHome();
+      const bodies: Array<Record<string, unknown>> = [];
+      globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+        return Response.json({
+          choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        });
+      }) as typeof fetch;
+      const config = interceptConfig();
+      config.shadowCallIntercept = {
+        enabled: true,
+        model: "xai/grok-4.5",
+        sourceModels: ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-terra", "gpt-5.6-terra"],
+      };
 
-    const response = await post(config, "gpt-5.6-terra", "memory");
+      const response = await post(config, terra, "memory");
 
-    expect(response.status).toBe(200);
-    expect(bodies).toHaveLength(1);
-    expect(String(bodies[0]?.model ?? "")).toContain("grok-4.5");
-  });
+      expect(response.status).toBe(200);
+      expect(bodies).toHaveLength(1);
+      expect(String(bodies[0]?.model ?? "")).toContain("grok-4.5");
+    },
+  );
 
   test("an explicit user turn keeps Terra even when the source is opted in", async () => {
     let sawFetch = false;
@@ -841,6 +848,9 @@ describe("shadow-call settings API reports the intercepted source models", () =>
   test("GET reports Terra as an opt-in source option", async () => {
     await withTempHome(async () => {
       const body = await shadowApi({ port: 0, defaultProvider: "xai", providers: {} } as OcxConfig, "GET");
+      expect(body.sourceModelOptions).toContainEqual({
+        id: "gpt-6.1-terra", role: "memory", defaultIntercepted: false,
+      });
       expect(body.sourceModelOptions).toContainEqual({
         id: "gpt-5.6-terra", role: "memory", defaultIntercepted: false,
       });

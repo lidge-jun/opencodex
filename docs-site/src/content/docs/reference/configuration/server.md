@@ -47,7 +47,7 @@ runs helper features around provider requests.
 | `resetCreditAutoRedeem?` | `{ enabled?: boolean; leadTimeMinutes?: number }` | off | Opt-in: redeem the main Codex account's soonest-expiring reset credit `leadTimeMinutes` (1–60, default 10) before it expires. Every attempt re-reads the upstream credit list first and skips when the credit is gone (for example, redeemed by hand); the `redeem_request_id` is journaled in `$OPENCODEX_HOME/reset-credit-auto-redeem.json` before the call so a crash replays the same idempotent request instead of spending a second credit. Servers sharing this configuration directory coordinate reservations and settlements so one process does not replace another's request record. Logs carry a hashed account key only. |
 | `syncResumeHistory?` | `boolean` | `true` | Reversible Codex App history compatibility. Original metadata is backed up and restored by `ocx stop` / `ocx restore`. |
 | `spendPoolAliases?` | `Record<string, string>` | unset | Explicit historical salted pool-alias to canonical provider mappings. Keep this key at the top level, outside `spend`. See [Historical pool continuity](#historical-pool-continuity). |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefixes are `gpt-6-luna` and `gpt-5.6-luna`. The dashboard exposes one toggle per source and keeps Terra (`gpt-5.6-terra`) and the retired `gpt-5.4-mini` helper off until selected. At least one source must stay enabled; disable the main switch to stop all shadow calls. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Redirect recognized Codex helper/shadow calls to a chosen model while preserving the request's configured reasoning effort. The default source prefixes are `gpt-6-luna` and `gpt-5.6-luna`. The dashboard exposes one toggle per source and keeps both Terra generations (`gpt-6.1-terra` and `gpt-5.6-terra`) and the retired `gpt-5.4-mini` helper off until selected. At least one source must stay enabled; disable the main switch to stop all shadow calls. |
 | `memoryModels?` | `{ extract?: { model: string; reasoningEffort?: string }; consolidation?: { model: string; reasoningEffort?: string } }` | off | Route Codex's two memory phases to a chosen model, with an optional reasoning effort per phase. See [Memory routing](#memory-routing). |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Image-description sidecar options. |
@@ -946,10 +946,11 @@ instead of treating every `400` or HTTP error as a network failure.
 At least one source stays active; use the main switch to stop every shadow call.
 Memory consolidation is separate: Codex asks for Terra there, and
 `memoryModels.consolidation` controls that phase. Terra is also a normal foreground and subagent
-model, so its source toggle stays off by default. Selecting it routes consolidation through the
-shadow target only while no consolidation model is configured; a configured Memory-Routing phase
-still wins. The dashboard keeps Terra in the source inventory and labels it as `Memory` rather than
-silently omitting it.
+model, so its source toggles stay off by default. Selecting the active Terra generation routes
+consolidation through the shadow target only while no consolidation model is configured; a
+configured Memory-Routing phase still wins. The dashboard keeps both `gpt-6.1-terra` and
+`gpt-5.6-terra` in the source inventory and labels them as `Memory` rather than silently omitting
+them.
 Matching bare model ids are eligible for interception, but explicit user turns keep their selected
 model: `x-codex-turn-metadata` must contain both `request_kind: "turn"` and `thread_source: "user"`.
 Spawned children also keep their model, identified by the `x-openai-subagent: collab_spawn` connection header (HTTP request or WebSocket

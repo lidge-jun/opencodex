@@ -91,6 +91,8 @@ describe("memory phase detection", () => {
   test("recognizes each phase from Codex's own turn metadata", () => {
     expect(detectMemoryModelPhase(body(), new Headers({ "x-codex-turn-metadata": extractMetadata() }))).toBe("extract");
     expect(detectMemoryModelPhase(body("gpt-5.6-terra"), new Headers({ "x-codex-turn-metadata": consolidationMetadata() }))).toBe("consolidation");
+    expect(detectMemoryModelPhase(body("gpt-6.1-terra"), new Headers({ "x-codex-turn-metadata": consolidationMetadata() }))).toBe("consolidation");
+    expect(detectMemoryModelPhase(body("gpt-6.1-terra"), new Headers({ "x-codex-turn-metadata": extractMetadata() }))).toBe("extract");
   });
 
   test("explicit non-memory metadata outranks the sub-agent header", () => {
