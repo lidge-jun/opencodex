@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,11 +14,19 @@ import {
 } from "../../src/codex/native-main-refresh-mode";
 import {
   forceRefreshMainAccountToken,
+  getMainAccountCredentialStatus,
   getValidMainAccountToken,
   isMainAccountRefreshGrantRejected,
+  MainAuthJsonChangedDuringRefreshError,
   MainAccountTokenRefreshError,
 } from "../../src/codex/main-account";
 import { codexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
+import { resolveCodexAuthContext, materializeCodexUpstreamAuthAsync, CodexAuthContextError } from "../../src/codex/auth-context";
+import { clearThreadAccountMap } from "../../src/codex/routing";
+import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
+import { withNativeMainSharedClaim } from "../../src/codex/native-main-claim";
+import { resolveNativeProfileContext } from "../../src/codex/native-profile-store";
+import type { OcxConfig } from "../../src/types";
 import type { ResolveCodexRuntimeResult } from "../../src/codex/runtime";
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -239,13 +247,191 @@ describe("main account in codex refresh mode (#2999)", () => {
     seedAuth(expired());
     const fresh = fakeChatGptJwt("acct-other");
     const { calls, codexAuthStatus } = seam(() => {
-      rmSync(join(home, "auth.json"));
+      rmSync(join(home, "auth.json"), { force: true });
       return { authMethod: "chatgpt", authToken: fresh, requiresOpenaiAuth: true };
     });
 
     expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: fresh, chatgptAccountId: "acct-other" });
     expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: fresh, chatgptAccountId: "acct-other" });
-    expect(calls).toEqual([{ refresh: true }]);
+    expect(calls).toEqual([{ refresh: true }, { refresh: false }]);
+  });
+
+  test("a keyring-only login is discovered without an earlier file-backed refresh", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const fresh = fakeChatGptJwt("acct-main");
+    const { calls, codexAuthStatus } = seam(() => ({ authMethod: "chatgpt", authToken: fresh, requiresOpenaiAuth: true }));
+
+    expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: fresh, chatgptAccountId: "acct-main" });
+    expect(calls).toEqual([{ refresh: false }]);
+  });
+
+  test("Pool discovers a keyring-only main login before synchronous candidacy", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("__main__");
+    const fresh = fakeChatGptJwt("acct-keyring-pool");
+    const { calls, codexAuthStatus } = seam(() => ({ authMethod: "chatgpt", authToken: fresh, requiresOpenaiAuth: true }));
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai", codexAccounts: [], codexMainAccountHardLock: false,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+    };
+    let claimed = false;
+    const context = await resolveCodexAuthContext(new Headers(), config, "pool", {
+      modelId: "gpt-5.5", nativeMainRefreshDependencies: { codexAuthStatus },
+      beginCodexAccountSelection: () => ({ mainProfileDraining: false,
+        claimMainProfile: () => { claimed = true; return true; }, release() {} }),
+    });
+    expect(context).toMatchObject({ kind: "main-pool", accessToken: fresh, chatgptAccountId: "acct-keyring-pool" });
+    expect(claimed).toBe(true);
+    expect(calls).toEqual([{ refresh: false }, { refresh: false }]);
+  });
+
+  test("stored Direct materialization uses the currently verified keyring account", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const fresh = fakeChatGptJwt("acct-keyring-direct");
+    const { codexAuthStatus } = seam(() => ({ authMethod: "chatgpt", authToken: fresh, requiresOpenaiAuth: true }));
+    const inbound = new Headers({ authorization: "Bearer ocx_data_fixture", "chatgpt-account-id": "caller-account" });
+    const selected = await materializeCodexUpstreamAuthAsync(inbound, { kind: "main", accountId: null }, {
+      substituteMainCredential: true, nativeMainRefreshDependencies: { codexAuthStatus },
+    });
+    expect(selected.get("authorization")).toBe(`Bearer ${fresh}`);
+    expect(selected.get("chatgpt-account-id")).toBe("acct-keyring-direct");
+    expect(inbound.get("chatgpt-account-id")).toBe("caller-account");
+  });
+
+  test("a cold keyring discovery transport failure retains its retryable auth-context cause", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("__main__");
+    const config: OcxConfig = {
+      port: 10100, defaultProvider: "openai", codexAccounts: [], codexMainAccountHardLock: false,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+    };
+    const failure = await resolveCodexAuthContext(new Headers(), config, "pool", {
+      nativeMainRefreshDependencies: { codexAuthStatus: async () => { throw new CodexAuthStatusError("fixture unavailable"); } },
+      beginCodexAccountSelection: () => ({ mainProfileDraining: false, claimMainProfile: () => true, release() {} }),
+    }).catch(error => error);
+    expect(failure).toBeInstanceOf(CodexAuthContextError);
+    expect(failure.cause).toMatchObject({ reason: "transient" });
+  });
+
+  test("a near-expiry keyring read refreshes once through Codex", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const fresh = fakeChatGptJwt("acct-main");
+    const calls: boolean[] = [];
+    const token = await getValidMainAccountToken({ codexAuthStatus: async ({ refresh }) => {
+      calls.push(refresh);
+      return { authMethod: "chatgpt", authToken: refresh ? fresh : expired(), requiresOpenaiAuth: true };
+    } });
+    expect(token?.accessToken).toBe(fresh);
+    expect(calls).toEqual([false, true]);
+  });
+
+  test("a keyring result is never attributed to a different home after an awaited read", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const otherHome = join(root, "other-codex-home");
+    mkdirSync(otherHome);
+    const { codexAuthStatus } = seam(() => {
+      process.env.CODEX_HOME = otherHome;
+      return { authMethod: "chatgpt", authToken: fakeChatGptJwt("acct-old-home"), requiresOpenaiAuth: true };
+    });
+    await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toBeInstanceOf(MainAuthJsonChangedDuringRefreshError);
+    expect(getMainAccountCredentialStatus().usable).toBe(false);
+    process.env.CODEX_HOME = home;
+    expect(getMainAccountCredentialStatus().usable).toBe(false);
+  });
+
+  test("cancellation interrupts a read-only keyring lookup without starting a refresh", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const controller = new AbortController();
+    const reason = new Error("fixture caller disconnected");
+    let started!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const calls: boolean[] = [];
+    const pending = getValidMainAccountToken({ signal: controller.signal,
+      codexAuthStatus: ({ refresh, signal }) => new Promise((_resolve, reject) => {
+        calls.push(refresh);
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        started();
+      }),
+    });
+    await entered;
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(calls).toEqual([false]);
+    expect(getMainAccountCredentialStatus().usable).toBe(false);
+  });
+
+  test("a keyring claim deadline is transient and never starts Codex while a reader owns the home", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    let started!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const reader = withNativeMainSharedClaim(resolveNativeProfileContext(), async () => { started(); await held; });
+    await entered;
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeout = spyOn(AbortSignal, "timeout").mockImplementation(ms => originalTimeout(ms === 30_000 ? 10 : ms));
+    const { calls, codexAuthStatus } = seam(() => ({ authMethod: "chatgpt", authToken: fakeChatGptJwt("acct-main"), requiresOpenaiAuth: true }));
+    try {
+      await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toMatchObject({ reason: "transient" });
+      expect(calls).toEqual([]);
+    } finally {
+      timeout.mockRestore();
+      release();
+      await reader;
+    }
+  });
+
+  test("a subsequent keyring read follows an external account switch", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    seedAuth(expired());
+    let current = fakeChatGptJwt("acct-main");
+    const { calls, codexAuthStatus } = seam(() => {
+      rmSync(join(home, "auth.json"), { force: true });
+      return { authMethod: "chatgpt", authToken: current, requiresOpenaiAuth: true };
+    });
+    expect((await getValidMainAccountToken({ codexAuthStatus }))?.chatgptAccountId).toBe("acct-main");
+    current = fakeChatGptJwt("acct-switched");
+
+    expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: current, chatgptAccountId: "acct-switched" });
+    expect(calls).toEqual([{ refresh: true }, { refresh: false }]);
+  });
+
+  test("external logout invalidates the previously observed keyring bearer", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    seedAuth(expired());
+    let status: CodexAuthStatus = { authMethod: "chatgpt", authToken: fakeChatGptJwt("acct-main"), requiresOpenaiAuth: true };
+    const { codexAuthStatus } = seam(() => {
+      rmSync(join(home, "auth.json"), { force: true });
+      return status;
+    });
+    await getValidMainAccountToken({ codexAuthStatus });
+    status = { authMethod: null, authToken: null, requiresOpenaiAuth: true };
+
+    await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toBeInstanceOf(MainAccountTokenRefreshError);
+    expect(getMainAccountCredentialStatus().usable).toBe(false);
+  });
+
+  test("a keyring refresh refusal cannot resurrect the rejected bearer", async () => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    seedAuth(expired());
+    const rejected = fakeChatGptJwt("acct-main");
+    let status: CodexAuthStatus = { authMethod: "chatgpt", authToken: rejected, requiresOpenaiAuth: true };
+    const { codexAuthStatus } = seam(() => {
+      rmSync(join(home, "auth.json"), { force: true });
+      return status;
+    });
+    await getValidMainAccountToken({ codexAuthStatus });
+    status = { authMethod: "chatgpt", authToken: null, requiresOpenaiAuth: true };
+
+    await expect(forceRefreshMainAccountToken(rejected, { codexAuthStatus })).rejects.toMatchObject({ reason: "reauth" });
+    expect(getMainAccountCredentialStatus().usable).toBe(false);
+    expect(isMainAccountRefreshGrantRejected()).toBe(true);
+    await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toMatchObject({ reason: "reauth" });
+    status = { authMethod: "chatgpt", authToken: fakeChatGptJwt("acct-new-login"), requiresOpenaiAuth: true };
+    expect((await getValidMainAccountToken({ codexAuthStatus }))?.chatgptAccountId).toBe("acct-new-login");
+    expect(isMainAccountRefreshGrantRejected()).toBe(false);
   });
 
   test("a chatgpt login with a withheld token means reauthentication", async () => {

@@ -152,7 +152,7 @@ there. Feature code is grouped by responsibility:
 while `index/serve-options.ts` owns route ordering; `responses.ts` and `responses/core.ts` compose
 Responses handling from the owners inventoried in [Responses transport](transports/responses.md),
 and `responses/compact.ts` and `responses/compaction-retention.ts` own v1/v2 compaction under the [routed reasoning-retention contract](transports/responses-failover.md#compaction-routing-overrides) implemented by `src/responses/reasoning-retention.ts`; `images.ts` owns the standalone Images relay;
-`responses/codex-auth-error.ts` owns the shared Responses/compact Codex auth-context HTTP mapping.
+`responses/codex-auth-error.ts` owns the shared Responses/compact Codex auth-context HTTP mapping and audio's native-main refresh refusals.
 Model entitlement denial is a 400 request error and temporary exhaustion of every model-capable
 account is a retryable 429; neither is reported as an invalid API key. Images, Live, and Search
 reuse that model-availability mapping while retaining their existing credential handling. Account

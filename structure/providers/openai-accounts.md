@@ -304,20 +304,20 @@ grant rather than rotating the existing grant and keeps its pre-publication fenc
 
 ## Native-main refresh ownership
 
-`src/codex/native-main-refresh-mode.ts` decides who refreshes the native main
-login (#2999). `nativeMainRefresh: "codex"`, the default whenever the Codex
-runtime resolved by `src/codex/runtime.ts` is 0.130.0 or newer, starts a
-short-lived `codex -c model_provider="openai" app-server` under the same
-CODEX_HOME and calls `getAuthStatus` with `includeToken` and `refreshToken`.
-OpenCodex uses the returned `authToken` for the request and writes nothing; it
-does not read auth.json again afterwards, because Codex keyring mode deletes the
-file. It retains that bearer and asks Codex again when it needs refresh. A `chatgpt` method with a null token is the only permanent-failure
-signal on the wire and marks the grant rejected (reauth). An unreachable binary,
-a non-ChatGPT method, or the same or an expired bearer is transient. The
-exchange runs on the refresh timeout alone, under the same claim and grant lock
-as the writer. `"opencodex"`, a missing binary, or an older binary keeps the
-guarded writer above. While the test home guard is armed, auto resolution
-never spawns Codex. `ocx doctor` prints the active mode and its reason.
+`src/codex/native-main-refresh-mode.ts` selects the refresh owner. Auto uses Codex 0.130.0 or newer, resolved by `src/codex/runtime.ts`.
+Codex mode starts a short-lived `codex -c model_provider="openai" app-server` and calls `getAuthStatus` with `includeToken` and `refreshToken`.
+OpenCodex uses the returned bearer for that request, writes nothing and does not reread auth.json after refresh: keyring mode deletes it.
+
+With no file credential, every lookup reads the current login with `refreshToken: false`; an expiring or explicitly rejected bearer requests refresh.
+Only home-scoped expiry/refusal metadata survives the lookup. Logout, account switches and unavailable reads cannot reuse an earlier bearer.
+A `chatgpt` method with a null token marks the file grant or keyring observation rejected (reauth); a verified new keyring login replaces that observation.
+An unreachable binary, non-ChatGPT method, unchanged rejected bearer or expired bearer is transient. Read-only lookups honor caller cancellation.
+Actual refresh runs on its independent 30-second timeout so Codex can save its grant. Both paths pin CODEX_HOME and hold its exclusive claim.
+Only file-backed refresh has a local grant fingerprint lock; keyring claim deadlines are transient. `"opencodex"`, missing or old Codex keeps the guarded writer.
+
+Pool discovers keyring credentials before synchronous candidacy when none is usable, then revalidates the selected token before dispatch.
+Startup, drain, caller-owned credential, pause and hard-lock fences govern discovery. Async stored-Direct materialization, including audio, uses the same resolver; synchronous readers remain file-only.
+`tests/codex-integration/native-main-refresh-mode.test.ts` covers these boundaries. Armed test-home guards prevent auto-spawn; `ocx doctor` prints the active mode and reason.
 
 ## Preserve signed-in quota
 

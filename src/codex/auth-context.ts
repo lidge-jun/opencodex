@@ -26,6 +26,7 @@ import {
   MainAccountTokenRefreshError,
   MainAuthJsonChangedDuringRefreshError,
   getMainAccountToken,
+  getMainAccountCredentialStatus,
   getValidMainAccountToken,
   isMainAccountTokenLive,
   type NativeMainRefreshDependencies,
@@ -1329,6 +1330,7 @@ async function resolveCodexAuthContextUnannotated(
   const nativeMainSelectionOnly = !nativeMainTrafficBlocked
     && selectionAdmission?.mainProfileDraining === true;
   let accountId: string;
+  let mainDiscoveryFailure: unknown;
   // Answering this with the manual-pin predicate made `codexAccountUnusableReason` report
   // `main_credential_unavailable` for every UNPINNED request, so `getEligiblePoolAccounts` never
   // listed main and the strategy compared only the stored accounts. With one stored sibling the
@@ -1345,6 +1347,21 @@ async function resolveCodexAuthContextUnannotated(
       && callerOwnsAnyCooledPoolSubscription(headers, config, quotaScope),
   });
   try {
+    // A keyring-only login has no auth.json to make synchronous Pool candidacy live.
+    // Discover it while this selector still fences profile switching. The selected
+    // account is independently revalidated before dispatch, just like a file-backed one.
+    if (selectionAdmission && !nativeMainReadsForbidden && !options.isMainAccountTokenLive
+      && (fixedAccountId === undefined || fixedAccountId === MAIN_CODEX_ACCOUNT_ID)
+      && options.excludeAccountId !== MAIN_CODEX_ACCOUNT_ID
+      && !policy.pausedCodexAccountIds?.includes(MAIN_CODEX_ACCOUNT_ID)
+      && !isMainAccountHardLocked(policy) && !getMainAccountCredentialStatus().usable) {
+      try {
+        await (options.getValidMainAccountToken ?? getValidMainAccountToken)({
+          signal: options.signal, ...(options.nativeMainRefreshDependencies ?? {}),
+        });
+      } catch (cause) { mainDiscoveryFailure = cause; }
+      options.signal?.throwIfAborted();
+    }
     const excludeAccountIds = nativeMainReadsForbidden
       ? new Set([MAIN_CODEX_ACCOUNT_ID])
       : undefined;
@@ -1457,6 +1474,7 @@ async function resolveCodexAuthContextUnannotated(
       return context;
     }
     if (!selected) {
+      if (mainDiscoveryFailure !== undefined) throw new CodexAuthContextError(MAIN_CODEX_ACCOUNT_ID, mainDiscoveryFailure);
       // A retry that excluded a failed Pool account may still use the validated caller-owned
       // main credential. Treating every exclusion as if main itself had failed strands a healthy
       // native bearer after the first Pool attempt. Preserve the exactly-once boundary by refusing
