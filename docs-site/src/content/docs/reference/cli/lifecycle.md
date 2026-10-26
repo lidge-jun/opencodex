@@ -1107,7 +1107,7 @@ When a newer package version is known, the tray adds a blue dot to its online, w
 
 ### `ocx gui`
 
-Open the [web dashboard](/guides/web-dashboard/) at `http://localhost:<port>` — or at
+Open the [web dashboard](/guides/web-dashboard/) at `http://127.0.0.1:<port>` — or at
 `http://127.0.0.1:<management port>` when hub management ingress is enabled — auto-starting the proxy
 if it is not running.
 

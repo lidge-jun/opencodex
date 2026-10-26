@@ -298,7 +298,7 @@ Unix 包管理器升级保留私有 wrapper；未激活时，请加载输出的�
 
 ### `ocx gui`
 
-在 `http://localhost:<port>` 打开 [web dashboard](/guides/web-dashboard/)，如果代理未运行则会自动启动。在启用了管理 ingress 的 hub 上，打开的是 `http://127.0.0.1:<管理端口>`。
+在 `http://127.0.0.1:<port>` 打开 [web dashboard](/guides/web-dashboard/)，如果代理未运行则会自动启动。在启用了管理 ingress 的 hub 上，打开的是 `http://127.0.0.1:<管理端口>`。
 
 ## 更新
 
