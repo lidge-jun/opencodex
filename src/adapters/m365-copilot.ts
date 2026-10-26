@@ -6,6 +6,7 @@ import { createOpenAIChatAdapter } from "./openai-chat";
 import { M365_COPILOT_BASE_URL } from "../providers/m365-copilot-models";
 import { m365CopilotClaims } from "../oauth/m365-copilot";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { estimateTokens } from "../lib/token-estimate";
 import { formatMessages, formatToolResponse, parseToolCalls, isProseDocument, fabricatedToolResponseAt, truncateAtFabricatedToolResponse, type Message, type ToolDef, type ToolChoice } from "./m365-copilot/tools";
 import { defaultFramingForModel } from "./m365-copilot/fenced";
 import { createM365Conversation, runM365CopilotTurn, M365CopilotTurnError, type M365Conversation, type M365TurnOptions } from "./m365-copilot/transport";
@@ -61,10 +62,11 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
         if (Buffer.byteLength(text) > 16 * 1024 * 1024) throw new M365CopilotTurnError("Microsoft 365 Copilot request exceeded its size limit", 413);
         const toolMode = !!tools?.length && toolChoice !== "none";
         let emittedToolCalls = 0;
+        let thinkingText = "";
         heartbeat = setInterval(() => emit({ type: "heartbeat" }), 5_000);
         const answer = await (deps.turn ?? runM365CopilotTurn)({ token, model: parsed.modelId, text, conversation: state.conversation, signal: incoming.abortSignal, budget: incoming.translatorBudget,
           onText: delta => { if (!toolMode) emit({ type: "text_delta", text: delta }); },
-          onThinking: thinking => emit({ type: "thinking_delta", thinking }),
+          onThinking: thinking => { thinkingText += thinking; emit({ type: "thinking_delta", thinking }); },
           beforeSend: () => {
             incoming.beforePhysicalSend?.();
             const admission = incoming.sendBudget?.reserveDispatch({ sendClass: "initial", targetKey: "m365-copilot|" + parsed.modelId + "|" + digest(claims.oid + claims.tid) });
@@ -93,7 +95,10 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
             }
           }
         }
-        emit({ type: "done", stopReason: emittedToolCalls ? "tool_use" : "stop", endTurn: emittedToolCalls === 0 });
+        // ChatHub reports no token counts; estimate from the full prompt the model sees and its reply.
+        const inputTokens = estimateTokens(JSON.stringify([messages, tools ?? []]), parsed.modelId);
+        const outputTokens = estimateTokens(answer + thinkingText, parsed.modelId);
+        emit({ type: "done", stopReason: emittedToolCalls ? "tool_use" : "stop", endTurn: emittedToolCalls === 0, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, estimated: true } });
       } catch (error) {
         conversations.delete(key);
         if (error instanceof M365CopilotTurnError) emit({ type: "error", message: error.message, status: error.status, retryable: false });

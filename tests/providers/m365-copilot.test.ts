@@ -146,7 +146,9 @@ describe("Microsoft 365 Copilot adapter", () => {
       const start = first.find(event => event.type === "tool_call_start")!;
       expect(start).toMatchObject({ type: "tool_call_start", name: "read_file" });
       expect(first.find(event => event.type === "tool_call_delta")).toMatchObject({ arguments: '{"path":"/trial.txt"}' });
-      expect(first.at(-1)).toEqual({ type: "done", stopReason: "tool_use", endTurn: false });
+      expect(first.at(-1)).toMatchObject({ type: "done", stopReason: "tool_use", endTurn: false, usage: { estimated: true } });
+      const usage = (first.at(-1) as Extract<AdapterEvent, { type: "done" }>).usage!;
+      expect(usage.inputTokens).toBeGreaterThan(0); expect(usage.outputTokens).toBeGreaterThan(0);
       const id = (start as Extract<AdapterEvent, { type: "tool_call_start" }>).id;
       parsed.context.messages.push({ role: "assistant", content: [], toolCalls: [{ id, name: "read_file", arguments: { path: "/trial.txt" } }], timestamp: 1 });
       parsed.context.messages.push({ role: "toolResult", toolCallId: id, toolName: "read_file", content: [{ type: "text", text: "fixture-result" }], isError: false, timestamp: 2 });
