@@ -29,6 +29,7 @@ import { isLinkConnection, readClientConnectionState } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, type ClientRestartController } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
+import { restoreLinkClientRouting } from "./stop-routing";
 
 let activeServer: Server<unknown> | null = null;
 let activePort: number | null = null;
@@ -455,6 +456,8 @@ export async function startClientRuntime(
         console.warn(`[client] link supervisor stop failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       activeSupervisor = null;
+      const restored = linkMode ? restoreLinkClientRouting(state.value) : null;
+      if (restored && !restored.success) console.error(`[client] ${restored.message}`);
       try {
         activeServer?.stop(true);
       } catch (error) {
@@ -463,7 +466,7 @@ export async function startClientRuntime(
         cleanup();
         await flushLinkDiagnostics();
         // launchd relaunches only unsuccessful exits; an external signal must still count.
-        process.exit(handledSignalExitCode(signal));
+        process.exit(restored?.success === false ? 1 : handledSignalExitCode(signal));
       }
     })();
   };

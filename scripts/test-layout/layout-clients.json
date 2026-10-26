@@ -124,6 +124,7 @@
   "client-link-connect.test.ts": "clients",
   "client-link-relay.test.ts": "clients",
   "client-link-runtime.test.ts": "clients",
+  "client-link-stop.test.ts": "clients",
   "link-routes.test.ts": "clients",
   "client-link-state.test.ts": "clients",
   "client-link-status.test.ts": "clients",

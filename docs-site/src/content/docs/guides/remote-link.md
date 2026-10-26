@@ -49,7 +49,9 @@ Connecting restarts OpenCodex on this computer. Codex turns that are already run
 
 The Child waits for its configured port while the old process releases it. If a CLI-managed restart still fails, run `ocx start` on the Child and check `~/.opencodex/restart-handoff.log`. In the desktop app, the app starts and supervises the replacement automatically.
 
-`ocx stop` on a Child stops its proxy and leaves Codex routing, the catalog and the Grok config in place, so `ocx start` (or `ocx service start`) brings the Child back unchanged. If `ocx status` on the Child reports that Codex routing is native, run `ocx sync --restart-codex`; `ocx start` does not rewrite a Child's Codex routing.
+An orderly Child stop restores the Codex routing recorded in that connection's journal before releasing the local listener. The connection, key, catalog and other integrations remain in place. To resume Home routing after `ocx stop`, run `ocx start` (or `ocx service start`), then `ocx sync --restart-codex`. Starting the Child alone does not reapply its Codex routing. The bound `ocx restart` handoff preserves routing and does not need this extra sync.
+
+If stop reports an ownership or journal conflict, it preserves the conflicting files and recovery evidence instead of overwriting them. Resolve that reported conflict before reapplying the connection. An abrupt crash or forced termination cannot run orderly restoration.
 
 If **Child** says to pair this machine first, open this computer's configured literal-loopback HTTP dashboard, for example `http://127.0.0.1:<configured-port>`. The local pairing form appears only when pairing is missing and the dashboard and API use the same loopback origin. Copy the form's `ocx gui pair --origin "http://127.0.0.1:<configured-port>"` command, run it in a terminal on this computer, and paste the one-use code into the form. Use the exact origin shown in the form; a provider API key or admin token is not a pairing code. Missing pairing is separate from a configured-port mismatch.
 

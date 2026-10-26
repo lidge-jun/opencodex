@@ -112,11 +112,11 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("ownershipBlocked = true");
     // Ownership is one reason to skip the restore; others are an inherited obligation whose
     // proxy could not be confirmed down (#3008), a sibling runtime, whose shared client
-    // routing belongs to the live proxy it ran beside, and a connected client, whose routing,
+    // routing belongs to the live proxy it ran beside, and a connected hub client, whose routing,
     // catalog and Grok config belong to its connection and are never written back on start (#7563).
     expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
     expect(stopFn).toContain("if (!restoreBlocked) {");
-    expect(stopFn).toContain("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)");
+    expect(stopFn).toContain("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable,");
     expect(restoreFn).toContain("restoreNativeCodexAsync()");
     expect(restoreFn).not.toContain("revertSystemEnv()");
     expect(restoreFn).toContain("stripGrokConfig()");
@@ -274,9 +274,9 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks");
     expect(stopFn).toContain("if (!restoreBlocked) {");
     // The restore is reached only through that gate — no other call site may bypass it.
-    const restoreCalls = stopFn.split("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)").length - 1;
+    const restoreCalls = stopFn.split("await restoreSharedClientStateAfterStop(").length - 1;
     expect(restoreCalls).toBe(1);
-    expect(stopFn.indexOf("const restoreBlocked")).toBeLessThan(stopFn.indexOf("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)"));
+    expect(stopFn.indexOf("const restoreBlocked")).toBeLessThan(stopFn.indexOf("await restoreSharedClientStateAfterStop("));
     // An obligation that cannot be discharged fails the stop and is preserved.
     const gateBlock = stopFn.slice(stopFn.indexOf("const recoveredNonces"), stopFn.indexOf("const restoreBlocked"));
     expect(gateBlock).toContain("inheritedBlocks = true;");

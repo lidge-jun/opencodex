@@ -81,6 +81,44 @@ function fakeServer(stopImpl?: (closeActiveConnections?: boolean) => void | Prom
 }
 
 describe("server listener shutdown", () => {
+  test("routing cleanup waits for admitted work and finishes while the real listener still owns its port", async () => {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("still bound") });
+    const turn = tryAdmitTurn()!;
+    let entered = false;
+    let finishRestore!: () => void;
+    let signalRestore!: () => void;
+    const restoreStarted = new Promise<void>(resolve => { signalRestore = resolve; });
+    const restoreGate = new Promise<void>(resolve => { finishRestore = resolve; });
+    let completed = false;
+    const draining = drainAndShutdown(server, 2_000, async () => {
+      entered = true;
+      signalRestore();
+      await restoreGate;
+    }).then(result => { completed = true; return result; });
+    try {
+      await Bun.sleep(10);
+      expect(entered).toBe(false);
+      turn.release();
+      await restoreStarted;
+      expect(await fetch(`http://127.0.0.1:${server.port}`, { signal: AbortSignal.timeout(1000) }).then(r => r.text())).toBe("still bound");
+      expect(completed).toBe(false);
+      finishRestore();
+      expect(await draining).toBe(true);
+      expect(completed).toBe(true);
+    } finally {
+      turn.release();
+      finishRestore();
+      await draining;
+      await server.stop(true);
+    }
+  });
+
+  test("a failed routing cleanup still closes the listener and reports failure", async () => {
+    const fake = fakeServer();
+    expect(await drainAndShutdown(fake.server, 0, () => { throw new Error("fixture restore failure"); })).toBe(false);
+    expect(fake.stops()).toBe(1);
+  });
+
   test("single-flights stop(true) and keeps every waiter pending until close completes", async () => {
     let resolveStop!: () => void;
     const fake = fakeServer(() => new Promise<void>(resolve => { resolveStop = resolve; }));

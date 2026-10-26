@@ -83,7 +83,7 @@ async function runParentStop(options: {
   expect(existsSync(reportPath), child.stderr).toBe(true);
   const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
     calls: { killed: number; native: number; grok: number; cleared: number; exited: number; service: number };
-    probes: string[];
+    probes: string[]; directPosts: number; linkRestores: string[];
     urls: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
@@ -179,9 +179,9 @@ describe("parent CLI shared teardown completion", () => {
       expect(outcome.exitCode).toBe(1);
     });
   }
-  for (const mode of ["tracked", "orphan", "guarded"] as const) {
-    test(`connected ${mode} stop refuses an old server before a cascading manager`, async () => {
-      const outcome = await runParentStop({ receipt: true, clientTransport: "hub", clientServer: "legacy", json: true,
+  for (const clientTransport of ["hub", "link"] as const) for (const mode of ["tracked", "orphan", "guarded"] as const) {
+    test(`connected ${clientTransport} ${mode} stop refuses an old server before a cascading manager`, async () => {
+      const outcome = await runParentStop({ receipt: true, clientTransport, clientServer: "legacy", json: true,
         orphan: mode === "orphan", guarded: mode === "guarded", managerCascades: true,
         response: { success: true, sharedTeardown: "performed" }, restore: restoreResult(true) });
       expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, cleared: 0 });
@@ -189,10 +189,11 @@ describe("parent CLI shared teardown completion", () => {
       expect(outcome.exitCode).toBe(1);
     });
   }
-  test("actual Link Child exit cleanup restores routing before releasing its loopback port", async () => {
+  test("ordinary runtime exit cleanup restores only Link-owned Codex routing", async () => {
     const outcome = await runParentStop({ receipt: true, clientTransport: "link", exitCleanup: true,
       response: null, restore: restoreResult(true) });
-    expect(outcome.calls).toMatchObject({ native: 1, grok: 1, service: 0, cleared: 0, killed: 0 });
+    expect(outcome.calls).toMatchObject({ native: 1, grok: 0, service: 0, cleared: 0, killed: 0 });
+    expect(outcome.linkRestores).toEqual(["before-stop"]);
     expect(outcome.exitCode).toBe(0);
   });
   test("ordinary startup exit cleanup retains native and Grok restoration", async () => {
@@ -219,6 +220,7 @@ describe("parent CLI shared teardown completion", () => {
     const outcome = await runParentStop({ receipt: true, clientTransport: "hub", serverTeardown: true, json: true,
       response: null, restore: restoreResult(true) });
     expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
+    expect(outcome.directPosts).toBe(1);
     expect(outcome.nonce).toBeUndefined();
     expect(outcome.calls).toMatchObject({ native: 0, grok: 0, cleared: 0 });
     expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
@@ -235,10 +237,12 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
 
-  test("a successful Link Child stop restores integrations before releasing its loopback port", async () => {
+  test("Link stop uses direct transport and completes owned restoration in the serving runtime", async () => {
     const outcome = await runParentStop({ receipt: true, clientTransport: "link", serverTeardown: true, json: true,
       response: null, restore: restoreResult(true) });
-    expect(outcome.calls).toMatchObject({ native: 1, grok: 1, cleared: 1 });
+    expect(outcome.calls).toMatchObject({ native: 1, grok: 0, cleared: 1 });
+    expect(outcome.linkRestores).toEqual(["before-stop", "after-stop"]);
+    expect(outcome.directPosts).toBe(1);
     expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "restored" });
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
@@ -463,16 +467,31 @@ describe("performStopTeardown", () => {
     expect(readPendingTeardown(receipt.nonce).state).toBe("valid");
   });
 
-  test("persisted Link ownership does not preserve an unauthenticated loopback route", async () => {
+  test("persisted Link ownership restores only its journal before receipt deferral", async () => {
     connectClient("link");
     let restored = 0;
     let stripped = 0;
+    let linked = 0;
+    for (const query of ["", "?deferSharedTeardown=1&teardownNonce=fixture"]) {
+      const body = await performStopTeardown(new URL(`http://127.0.0.1:10100/api/stop${query}`), {
+        ownsReceipt: () => true,
+        restoreLinkRouting: connection => { expect(connection.apiKeyId).toBe("fixture-client"); linked++; return { success: true, restored: true, message: "owned journal restored" }; },
+        restoreNativeCodex: async () => { restored++; return restoreResult(true); },
+        stripGrok: () => { stripped++; return { ok: true, changed: true, message: "stripped" }; },
+      });
+      expect(body).toMatchObject({ success: true, sharedTeardown: "performed" });
+    }
+    expect([linked, restored, stripped]).toEqual([2, 0, 0]);
+  });
+
+  test("Link teardown exposes ownership refusal without falling back to standalone restoration", async () => {
+    connectClient("link");
     const body = await performStopTeardown(new URL("http://127.0.0.1:10100/api/stop"), {
-      restoreNativeCodex: async () => { restored++; return restoreResult(true); },
-      stripGrok: () => { stripped++; return { ok: true, changed: true, message: "stripped" }; },
+      restoreLinkRouting: () => ({ success: false, restored: false, message: "fixture owner changed" }),
+      restoreNativeCodex: async () => { throw new Error("unrelated native restoration"); },
+      stripGrok: () => { throw new Error("unrelated Grok restoration"); },
     });
-    expect(body).toMatchObject({ success: true, sharedTeardown: "performed" });
-    expect([restored, stripped]).toEqual([1, 1]);
+    expect(body).toEqual({ success: false, sharedTeardown: "performed", message: "fixture owner changed" });
   });
 
   test("a hub server without a client connection still restores its own integrations", async () => {

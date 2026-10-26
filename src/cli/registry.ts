@@ -50,7 +50,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "stop",
     usage: "ocx stop [--json]",
-    summary: "Stop the proxy; preserve connected-client integrations, restore native Codex config for standalone owners.",
+    summary: "Stop the proxy; restore owned Link Child routing, preserve hub client integrations, and restore standalone Codex config.",
     details: [
       "--json keeps the stop path unchanged and prints one structured summary document on stdout; human output moves to stderr.",
       "Exit codes are identical with and without --json: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).",

@@ -1,4 +1,4 @@
-import { restoreNativeCodexAsync } from "../codex/inject";
+import { restoreNativeCodex, restoreNativeCodexAsync } from "../codex/inject";
 import type { RetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
 import { readClientConnectionState, type ClientConnectionState } from "../client/state";
@@ -12,13 +12,24 @@ import { findLiveProxy, probeEndpointLiveness, proveLiveProxyOwnedByHome } from 
 import { observeGuardedManagerStopped } from "../service/guarded-manager-target";
 import type { StartExitTeardown } from "./dispatch";
 import type { StopOutcome } from "./stop-report";
+import { restoreLinkClientRouting } from "../client/stop-routing";
+import type { OcxClientConnectionConfig } from "../types";
 
 /** Re-read ownership when an ordinary runtime actually exits, including after API drain. */
 export function preserveConnectedClientRoutingOnExit(teardown: StartExitTeardown): StartExitTeardown {
   const connection = readClientConnectionState();
-  return connection.kind === "connected" && connection.value.transport !== "link"
-    ? { ...teardown, restoreNativeCodex: false, stripGrokConfig: false }
+  return connection.kind === "connected"
+    ? { ...teardown, restoreNativeCodex: connection.value.transport === "link" && teardown.restoreNativeCodex, stripGrokConfig: false }
     : teardown;
+}
+
+/** Signal cleanup must not apply standalone restoration to connection-owned integrations. */
+export function restoreCodexRoutingOnExit(): { success: boolean; message: string } {
+  const connection = readClientConnectionState();
+  if (connection.kind === "connected") return connection.value.transport === "link"
+    ? restoreLinkClientRouting(connection.value)
+    : { success: true, message: "Hub connection-owned routing preserved." };
+  return restoreNativeCodex();
 }
 
 type ConnectedStopTarget = { pid: number; port: number; hostname?: string };
@@ -51,7 +62,7 @@ export async function assertConnectedClientStopSupported(target: ConnectedStopTa
     } catch { return null; }
   };
   const health = await probe("/healthz", false);
-  // The native machine listener has always preserved integrations on signal and 404s /api/stop.
+  // The native machine listener owns its transport-specific signal cleanup and 404s /api/stop.
   if (health?.service === "opencodex" && health.role === "client" && health.pid === target.pid) return;
   const capability = await probe("/api/stop", true);
   if (capability?.schema === "ocx-stop-capabilities/1"
@@ -135,7 +146,16 @@ export function connectedClientStopSkipLine(state: ClientConnectionState): strin
  */
 export async function restoreSharedClientStateAfterStop(
   reportRetainedCodexProviderTable: (retained: RetainedCodexProviderTable) => void,
+  expectedConnection?: OcxClientConnectionConfig,
 ): Promise<{ historyOnly: boolean; historyDeferred: boolean; other: boolean }> {
+  const connection = readClientConnectionState();
+  const link = expectedConnection?.transport === "link" ? expectedConnection
+    : connection.kind === "connected" && connection.value.transport === "link" ? connection.value : null;
+  if (link) {
+    const result = restoreLinkClientRouting(link);
+    (result.success ? console.log : console.error)(`↩️  ${result.message}`);
+    return { historyOnly: false, historyDeferred: false, other: !result.success };
+  }
   let historyOnly = false;
   let historyDeferred = false;
   let other = false;

@@ -104,7 +104,7 @@ State-changing: yes. JSON mode: `none`.
 
 Usage: `ocx stop [--json]`
 
-Stop the proxy; preserve connected-client integrations, restore native Codex config for standalone owners.
+Stop the proxy; restore owned Link Child routing, preserve hub client integrations, and restore standalone Codex config.
 
 State-changing: yes. JSON mode: `envelope`.
 
@@ -117,8 +117,8 @@ State-changing: yes. JSON mode: `envelope`.
 |---|---|---|
 | `--json` | boolean | Emit one structured stop summary; human output moves to stderr. |
 
-- Connected clients verify runtime preservation support before stopping; unavailable or unsupported live targets refuse without stopping the service. Proven-stopped clients remain successful when the manager is inactive.
-- Siblings and connected clients preserve shared integrations. Standalone owners restore native Codex configuration and remove the managed Grok block.
+- Connected clients verify runtime ownership handling before stopping; unavailable or unsupported live targets refuse without stopping the service. Proven-stopped clients remain successful when the manager is inactive.
+- Siblings and hub clients preserve shared integrations. A Link Child restores only its connection-owned Codex journal before listener release; its connection, catalog and other integrations remain. After starting the Child again, run ocx sync --restart-codex. Standalone owners restore native Codex configuration and remove the managed Grok block.
 - JSON uses ocx-stop/1 and retains the same exit codes: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).
 
 ### `ocx service install`
