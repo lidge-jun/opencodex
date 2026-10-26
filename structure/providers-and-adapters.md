@@ -350,10 +350,10 @@ Provider-scoped capability hints remain authoritative when discovery returns an 
 capabilities. In particular, `src/providers/registry/entries-core.ts` assigns OpenCode Go's live
 `deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
 routed-model fallback. Custom-named Azure OpenAI providers obtain missing image/text input metadata and context/output limits through the destination-gated lookup in `src/providers/derive.ts`, consumed by shared catalog hints. Discovery refreshes public models.dev Azure rows through `src/providers/azure-model-metadata.ts`; stale cache and bundled hints remain available offline. This uses known model ids without changing transport selection or persisting model declarations; see [the shared catalog contract](catalog.md#shared-catalog).
-Meta's two direct surfaces keep separate reasoning contracts: `meta-model` caps Muse Spark at `xhigh`
-and gives Muse Wonder (`muse-wonder-1.0`) its documented `minimal`..`max` ladder, while `meta-muse`
-advertises `max` and sends the transparent Muse compatibility User-Agent required by that
-credential surface. The existing registry header merge keeps an operator-supplied User-Agent authoritative.
+Meta's two direct surfaces keep separate reasoning contracts: `meta-model` caps Muse Spark at `xhigh` and gives Muse Wonder (`muse-wonder-1.0`) its documented `minimal`..`max` ladder, while `meta-muse`
+advertises `max` and sends the transparent Muse compatibility User-Agent required by that credential surface. The existing registry header merge keeps an operator-supplied User-Agent authoritative.
+At startup, `src/providers/stale-model-roster-migration.ts` refreshes the untouched two-Spark `meta-model` seed to include Muse Wonder only on `https://api.meta.ai/v1` or the registry default.
+Custom destinations and edited rosters stay unchanged; an existing context-window map gains only the missing Wonder entry, preserving saved values and output limits.
 The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
 so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
