@@ -6266,7 +6266,7 @@ describe("Codex catalog routed normalization", () => {
 
     expect(provider.modelSupportsReasoningSummaries).toEqual({
       "deepseek-v4-flash": false,
-      "deepseek-flash": true,
+      "deepseek-flash": true, "deepseek-v4-pro": true,
     });
   });
 
