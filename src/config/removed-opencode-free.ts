@@ -95,6 +95,17 @@ export function sanitizeRemovedOpenCodeFreeForLoad(parsed: unknown): void {
     delete config.syncCodexSubagentDefaults;
     delete config.injectionEffort;
   }
+  // These sidecars default on or inherit global settings when absent. Preserve the
+  // off switch at both supported owners before pruning their retired model target.
+  for (const owner of [config, record(config.claudeCode)]) {
+    for (const key of ["visionSidecar", "webSearchSidecar"]) {
+      const sidecar = record(owner?.[key]);
+      if (!sidecar || !retired(sidecar.model)) continue;
+      sidecar.enabled = false;
+      delete sidecar.model;
+      changed = true;
+    }
+  }
   for (const [key, value] of Object.entries(config)) {
     if (key === "providers" || !/model|provider|combo|routing|claudeCode|fallback|redirect|compaction|autoReview|advisor|tokenGuardian|images|codexRoleTiers|sidecar|shadowCallIntercept/i.test(key)) continue;
     const next = prune(value, key === "claudeCode");

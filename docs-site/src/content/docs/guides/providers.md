@@ -1118,6 +1118,10 @@ ladder, and `meta-model/muse-wonder-1.0` (Muse Wonder, preview) with `minimal` t
 Muse Wonder is Standard mode only on the Model API: it has no Contributor tier and costs
 $4 per 1M input and $20 per 1M output tokens. Muse Wonder Full is available only inside Muse
 Code subscriptions, so it is not seeded.
+On startup, an untouched saved two-Spark model list gains Muse Wonder when `meta-model` uses
+`https://api.meta.ai/v1` or has no saved endpoint override. Custom gateway destinations and
+hand-edited model lists stay unchanged. Existing per-model context-window overrides and output
+limits are preserved; Wonder's context window is filled only into an existing window map.
 Discovery stays off until an authenticated roster is verified, because Meta serves image and
 voice models on the same host.
 
