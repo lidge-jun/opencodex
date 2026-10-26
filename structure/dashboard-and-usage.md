@@ -578,7 +578,7 @@ projection version changes and encodes older raw-selector rows from canonical JS
 still find them. CLI access-key usage is unavailable without an ISO-8601 UTC attribution timestamp,
 rather than a measured zero or never-used key.
 
-Kimi Coding K3 price rows use API-reference estimates with the default five-minute cache-write rate,
+Kimi Coding K3/K3.1 Pro (and `moonshot` `kimi-k3.1-pro*`) price rows are API-reference estimates at the 5-minute cache-write rate,
 not Code Plan billing or quota. The three Coding presets have explicit price namespaces. The
 retargeted `kimi-for-coding` alias stays unpriced until a verified K2.8 price or a user `modelCosts`
 override exists; the retired K2.7 mapping is not reused. Request, attempt and combo estimates remain

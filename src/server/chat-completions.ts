@@ -350,6 +350,13 @@ async function handleChatCompletionsWithBudget(
     // and sends the core only the request settings.
     if (directRoute) {
       directConversation = chatConversationToIr(chatBody, chatBody.model as string);
+      // Unlike the bridge body below, the settings-only projection does not contain the
+      // conversation. Account for the retained IR itself before an adapter materializes it
+      // again; reasoning placeholders can be larger than the source Chat message.
+      translatorBudget.chargeRetained(
+        Buffer.byteLength(JSON.stringify(directConversation), "utf8"),
+        { kind: "request_copies" },
+      );
       internalBody = chatSettingsBody(chatBody);
     } else {
       internalBody = chatToResponsesBody(chatBody, {

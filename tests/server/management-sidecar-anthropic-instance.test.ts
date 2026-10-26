@@ -1,9 +1,17 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import * as store from "../../src/oauth/store";
 import * as modelRows from "../../src/server/management/model-rows";
 import * as managementShared from "../../src/server/management/shared";
-import { saveConfig } from "../../src/config";
+import { armClaudeCodeBaseline, getConfigPath, loadConfig, saveConfig } from "../../src/config";
+import * as systemEnv from "../../src/server/system-env";
+import { buildClaudeReplayConfig } from "../../src/server/claude-messages";
+import { parseRequest } from "../../src/responses/parser";
+import { planVisionSidecar } from "../../src/vision";
+import { planWebSearch } from "../../src/web-search";
+import { claudeCodeSaveBody } from "../../gui/src/pages/claude-code-save";
+import { applySidecarBackendChange, applySidecarModelChange, sidecarSelectValue } from "../../gui/src/pages/claude-code-sidecar";
+import type { ClaudeCodeState } from "../../gui/src/pages/claude-code-types";
 import { anthropicOAuthInstanceConfigError, anthropicSidecarPatchError } from "../../src/config/schema/anthropic-account-pool";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { sidecarAnthropicPoolOptions, sidecarOptionsAuth } from "../../src/server/management/web-search-sidecar-options";
@@ -52,6 +60,127 @@ async function request(config: OcxConfig, path: string, body?: unknown) {
 function persisted(): OcxConfig {
   return JSON.parse(readFileSync(home.path("config.json"), "utf8")) as OcxConfig;
 }
+
+test.each([false, true])("normal Claude management saves retain retired disable intent; explicit reset and model edits work (backend: %s)", async withBackend => {
+  let outbound = 0;
+  const network = spyOn(globalThis, "fetch").mockImplementation(async () => { outbound++; throw new Error("Network forbidden in settings roundtrip"); });
+  const env = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false });
+  try {
+    const global = { enabled: true, backend: "openai" as const, model: "gpt-5.6-luna" };
+    const provider: OcxConfig["providers"][string] = { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "fixture-key", noVisionModels: ["blind"] };
+    const forward = { providerName: "openai" as const, accountMode: "direct" as const,
+      provider: { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" } as const,
+      authContext: { kind: "main" as const, accountId: null }, headers: new Headers({ authorization: "Bearer fixture" }) };
+    const retired = { model: "opencode-free/old", ...(withBackend ? { backend: "openai" as const } : {}) };
+    writeFileSync(getConfigPath(), JSON.stringify({ port: 10100, defaultProvider: "routed", providers: { routed: provider },
+      webSearchSidecar: global, visionSidecar: global, claudeCode: { enabled: false, webSearchSidecar: retired, visionSidecar: retired } }));
+    let live = loadConfig();
+    armClaudeCodeBaseline(live);
+    const parsed = parseRequest({ model: "routed/blind", tools: [{ type: "web_search" }], input: [{ role: "user", content: [
+      { type: "input_text", text: "Search and inspect." }, { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+    ] }] });
+    const checkPlans = (config: OcxConfig, enabled: boolean) => {
+      const effective = buildClaudeReplayConfig(config);
+      expect(!!planVisionSidecar(effective, provider, "blind", parsed, forward)).toBe(enabled);
+      expect(!!planWebSearch(effective, parsed, false, provider, "blind", forward)).toBe(enabled);
+      expect(config.visionSidecar).toEqual(global);
+      expect(config.webSearchSidecar).toEqual(global);
+    };
+    for (const fastMode of [true, false]) {
+      const state = await (await request(live, "/api/claude-code")).json() as ClaudeCodeState;
+      const body = claudeCodeSaveBody({ ...state, fastMode }, []);
+      expect((await request(live, "/api/claude-code", body)).status).toBe(200);
+      live = loadConfig();
+      checkPlans(live, false);
+      expect(live.claudeCode?.visionSidecar?.enabled).toBe(false);
+      expect(live.claudeCode?.webSearchSidecar?.enabled).toBe(false);
+      expect(live.fastMode).toBe(fastMode);
+    }
+    const state = await (await request(live, "/api/claude-code")).json() as ClaudeCodeState;
+    const inherit = claudeCodeSaveBody({ ...state,
+      visionSidecar: applySidecarBackendChange(state.visionSidecar, "inherit"),
+      webSearchSidecar: applySidecarBackendChange(state.webSearchSidecar, "inherit"),
+    }, []);
+    expect((await request(live, "/api/claude-code", inherit)).status).toBe(200);
+    live = loadConfig();
+    expect(live.claudeCode?.visionSidecar).toBeUndefined();
+    expect(live.claudeCode?.webSearchSidecar).toBeUndefined();
+    checkPlans(live, true);
+    expect((await request(live, "/api/claude-code", { visionSidecar: { enabled: false }, webSearchSidecar: { enabled: false } })).status).toBe(200);
+    const disabled = await (await request(live, "/api/claude-code")).json() as ClaudeCodeState;
+    const abandoned = claudeCodeSaveBody({ ...disabled,
+      visionSidecar: applySidecarModelChange(applySidecarModelChange(disabled.visionSidecar, "gpt-5.6-luna"), ""),
+      webSearchSidecar: applySidecarModelChange(applySidecarModelChange(disabled.webSearchSidecar, "gpt-5.6-luna"), ""),
+    }, []);
+    expect((await request(live, "/api/claude-code", abandoned)).status).toBe(200);
+    live = loadConfig();
+    checkPlans(live, false);
+    const beforeInvalidEdit = readFileSync(getConfigPath(), "utf8");
+    for (const field of ["visionSidecar", "webSearchSidecar"] as const) {
+      const invalid = claudeCodeSaveBody({ ...disabled, [field]: applySidecarModelChange(disabled[field],
+        field === "visionSidecar" ? "routed/blind" : "not-a-search-candidate") }, []);
+      expect((await request(live, "/api/claude-code", invalid)).status).toBe(400);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeInvalidEdit);
+      expect(loadConfig().claudeCode?.[field]?.enabled).toBe(false);
+    }
+    const reenable = claudeCodeSaveBody({ ...disabled,
+      visionSidecar: applySidecarModelChange(disabled.visionSidecar, "gpt-5.6-luna"),
+      webSearchSidecar: applySidecarModelChange(disabled.webSearchSidecar, "gpt-5.6-luna"),
+    }, []);
+    expect((await request(live, "/api/claude-code", reenable)).status).toBe(200);
+    live = loadConfig();
+    expect(live.claudeCode?.visionSidecar?.enabled).toBe(true);
+    expect(live.claudeCode?.webSearchSidecar?.enabled).toBe(true);
+    checkPlans(live, true);
+    expect(outbound).toBe(0);
+  } finally { env.mockRestore(); network.mockRestore(); }
+}, 60_000);
+
+test("Claude sidecar enabled writes reject non-booleans without changing config", async () => {
+  const config = anthropicInstanceConfig();
+  saveConfig(config);
+  const bytes = readFileSync(getConfigPath(), "utf8");
+  for (const field of ["visionSidecar", "webSearchSidecar"]) for (const enabled of [null, 0, "false", {}, []]) {
+    expect((await request(config, "/api/claude-code", { [field]: { enabled } })).status).toBe(400);
+    expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
+    expect(config.claudeCode?.[field as "visionSidecar"]).toBeUndefined();
+  }
+});
+
+test.each(["backend", "model", "both"] as const)("Claude Auto edits clear persisted %s while retaining activation intent", async scenario => {
+  let outbound = 0;
+  const network = spyOn(globalThis, "fetch").mockImplementation(async () => { outbound++; throw new Error("Network forbidden in Auto roundtrip"); });
+  const env = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false });
+  try {
+    const global = { enabled: true, backend: "openai" as const, model: "gpt-5.6-luna" };
+    for (const field of ["visionSidecar", "webSearchSidecar"] as const) {
+      const stored = { enabled: scenario !== "backend",
+        ...(scenario === "model" ? {} : { backend: field === "visionSidecar" ? "routed" : "anthropic" }),
+        ...(scenario === "backend" ? {} : { model: scenario === "both" ? (field === "visionSidecar" ? "routed/vision" : "claude-haiku-4-5") : "gpt-5.6-luna" }),
+      };
+      writeFileSync(getConfigPath(), JSON.stringify({ port: 10100, defaultProvider: "routed", providers: {
+        routed: { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "fixture-key" },
+      }, webSearchSidecar: global, visionSidecar: global, claudeCode: { enabled: false, [field]: stored } }));
+      const live = loadConfig();
+      armClaudeCodeBaseline(live);
+      const state = await (await request(live, "/api/claude-code")).json() as ClaudeCodeState;
+      let draft = applySidecarBackendChange(state[field], "auto")!;
+      if (scenario !== "backend") draft = applySidecarModelChange(draft, "");
+      const body = claudeCodeSaveBody({ ...state, [field]: draft, fastMode: true }, []);
+      expect((await request(live, "/api/claude-code", body)).status).toBe(200);
+      const reloaded = loadConfig();
+      expect(reloaded.claudeCode?.[field]).toEqual({ enabled: stored.enabled });
+      expect(Object.getOwnPropertySymbols(body[field]!)).toHaveLength(0);
+      expect(reloaded.visionSidecar).toEqual(global);
+      expect(reloaded.webSearchSidecar).toEqual(global);
+      const after = await (await request(reloaded, "/api/claude-code")).json() as ClaudeCodeState;
+      expect(sidecarSelectValue(after[field])).toBe("auto");
+      expect(after[field]?.model).toBeUndefined();
+      expect(reloaded.fastMode).toBe(true);
+    }
+    expect(outbound).toBe(0);
+  } finally { env.mockRestore(); network.mockRestore(); }
+}, 60_000);
 
 for (const instance of ["anthropic", "anthropic2"] as const) {
   test(`global web-search and vision round-trip ${instance}; omission preserves and null deletes`, async () => {

@@ -1,10 +1,12 @@
+import { basename, dirname } from "node:path";
 import type { ExportModel } from "../clients/config-export";
 import { guardAsideProfileIO, listAsideProfiles } from "../clients/aside-profiles";
 import { loadConfig } from "../config";
 import { listAsideProfileStores } from "../integrations/aside-profile-context";
+import { hermesProfileBoundary, listHermesProfileStores } from "../integrations/hermes-profiles";
 import { isIntegrationClientId, type IntegrationClientId } from "../integrations/registry";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../integrations/store";
-import { disableIntegrationCoordinated, type WriteOutcome } from "../integrations/writer";
+import { disableIntegrationCoordinated, type CoordinatedIntegrationOptions, type WriteOutcome } from "../integrations/writer";
 import { loadExportModels } from "../server/management/model-rows";
 import type { OcxConfig } from "../types";
 
@@ -12,7 +14,7 @@ export interface UninstallIntegrationCleanupDeps {
   createStore: () => IntegrationStateStore;
   loadConfig: () => OcxConfig;
   loadModels: (config: OcxConfig) => Promise<ExportModel[]>;
-  disable: (input: Parameters<typeof disableIntegrationCoordinated>[0]) => Promise<WriteOutcome>;
+  disable: (input: Parameters<typeof disableIntegrationCoordinated>[0], options?: CoordinatedIntegrationOptions) => Promise<WriteOutcome>;
   env?: NodeJS.ProcessEnv;
   home?: string;
 }
@@ -21,7 +23,7 @@ const defaults: UninstallIntegrationCleanupDeps = {
   createStore: () => createIntegrationStateStore(),
   loadConfig,
   loadModels: config => loadExportModels(config),
-  disable: input => disableIntegrationCoordinated(input),
+  disable: (input, options) => disableIntegrationCoordinated(input, options),
 };
 
 export interface UninstallIntegrationCleanupResult {
@@ -46,7 +48,7 @@ export async function cleanupOwnedIntegrationsBeforeUninstall(
     }
   }
   type CleanupTarget = Pick<Parameters<typeof disableIntegrationCoordinated>[0], "clientId" | "store" | "io" | "resolvedPaths">
-    & { store: IntegrationStateStore; profileId?: number };
+    & { store: IntegrationStateStore; profileId?: number; guard?: CoordinatedIntegrationOptions["guard"] };
   const targets: CleanupTarget[] = (rawIds as IntegrationClientId[]).sort()
     .map(clientId => ({ clientId, store }));
   // Read every child before any mutation. A broken child must not look like no ownership.
@@ -56,6 +58,38 @@ export async function cleanupOwnedIntegrationsBeforeUninstall(
       throw new Error("integration cleanup refused: Aside profile storage names another client");
     }
     if (childRecords.aside) targets.push({ clientId: "aside", ...child });
+  }
+  // Named Hermes profiles keep their own stores (#7674). The record names the file we wrote; it
+  // must be that profile's config.yaml, so a record cannot aim this disable at any other file.
+  for (const child of listHermesProfileStores(store)) {
+    const childRecords = child.store.readRecordsStrict();
+    if (Object.keys(childRecords).some(id => id !== "hermes")) {
+      throw new Error("integration cleanup refused: Hermes profile storage names another client");
+    }
+    const configPath = childRecords.hermes?.configPath;
+    if (configPath === undefined) continue;
+    const profileHome = dirname(configPath);
+    if (basename(configPath) !== "config.yaml" || basename(profileHome) !== child.name
+      || basename(dirname(profileHome)) !== "profiles") {
+      throw new Error("integration cleanup refused: Hermes profile ownership is mismatched");
+    }
+    // Pinned now, before any await, and checked again inside the disable itself: a profile or
+    // `profiles` directory swapped for a link while models load cannot redirect this cleanup.
+    let holds: () => void;
+    try { holds = hermesProfileBoundary({ name: child.name, home: profileHome, configPath }, child.store); }
+    catch (error) {
+      throw new Error(`integration cleanup refused for Hermes profile ${child.name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    targets.push({
+      clientId: "hermes", store: child.store, resolvedPaths: { configPath, detectDir: profileHome },
+      guard: () => {
+        try { holds(); return null; }
+        catch (error) {
+          return { ok: false, reason: "unsafe", state: "unsafe", clientId: "hermes",
+            message: error instanceof Error ? error.message : "Hermes profile cannot be changed safely" };
+        }
+      },
+    });
   }
   if (targets.length === 0) return { attempted: 0, changed: 0 };
 
@@ -85,7 +119,7 @@ export async function cleanupOwnedIntegrationsBeforeUninstall(
   const config = deps.loadConfig();
   const models = await deps.loadModels(config);
   let changed = 0;
-  for (const { clientId, store: targetStore, io, resolvedPaths } of targets) {
+  for (const { clientId, store: targetStore, io, resolvedPaths, guard } of targets) {
     const result = await deps.disable({
       clientId,
       models,
@@ -96,7 +130,7 @@ export async function cleanupOwnedIntegrationsBeforeUninstall(
       ...(resolvedPaths ? { resolvedPaths } : {}),
       ...(deps.env ? { env: deps.env } : {}),
       ...(deps.home ? { home: deps.home } : {}),
-    });
+    }, guard ? { guard } : undefined);
     if (!result.ok) {
       throw new Error(`integration cleanup refused for ${clientId}: ${result.message}`
         + (result.residual ? "; recovery did not complete; inspect the client file and retained snapshots before retrying" : ""));
@@ -107,7 +141,7 @@ export async function cleanupOwnedIntegrationsBeforeUninstall(
     if (result.changed) changed++;
   }
   // A profile can gain ownership while catalog loading or an earlier disable awaited its lock.
-  if ([store, ...listAsideProfileStores(store).map(child => child.store)]
+  if ([store, ...listAsideProfileStores(store).map(child => child.store), ...listHermesProfileStores(store).map(child => child.store)]
     .some(current => Object.keys(current.readRecordsStrict()).length > 0)) {
     throw new Error("integration cleanup refused: ownership changed before removal");
   }

@@ -3,13 +3,14 @@
  * just per destination, and must not expose signatures across a v3 -> v4 upgrade or an
  * unscoped credential. Companion: the terminal-barrier bound on persist visibility.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   awaitThoughtSignatureDurability,
   flushThoughtSignatureReplayForTests,
+  forgetThoughtSignatureForReplay,
   lookupReplayThoughtSignature,
   rememberThoughtSignatureForReplay,
   resetThoughtSignatureReplayForTests,
@@ -17,6 +18,7 @@ import {
 } from "../../src/responses/thought-signature-replay";
 import { durableReplayCredentialIdentity, durableReplayDestinationIdentity } from "../../src/responses/reasoning-replay-cache";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
+import * as config from "../../src/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const SIG = "CiQAx-credential-scope-signature-0123456789abcdef";
@@ -34,6 +36,12 @@ function scopeFor(credential: string | undefined, threadId = "thread-a") {
       ...(credential ? { credentialDurableIdentity: credential } : {}),
     },
   };
+}
+
+function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
 }
 
 describe("#1926 durable credential scope", () => {
@@ -143,5 +151,141 @@ describe("#1926 durable credential scope", () => {
     const storeFile = join(testDir, "thought-signature-replay.json");
     const snapshot = JSON.parse(readFileSync(storeFile, "utf8")) as { entries: unknown[] };
     expect(snapshot.entries.length).toBe(1);
+  });
+
+  test("coalesces a synchronous burst into one snapshot and reloads every entry", async () => {
+    const original = config.atomicWriteFileAsync;
+    const write = spyOn(config, "atomicWriteFileAsync").mockImplementation(original);
+    const scope = scopeFor("credential:batch");
+    try {
+      const writes = Array.from({ length: 32 }, (_, index) =>
+        rememberThoughtSignatureForReplay(`burst-${index}`, SIG, scope).durable);
+      expect(new Set(writes).size).toBe(1);
+      await Promise.all(writes);
+      expect(write).toHaveBeenCalledTimes(1);
+      resetThoughtSignatureReplayForTests();
+      for (let index = 0; index < 32; index++) {
+        expect(lookupReplayThoughtSignature(`burst-${index}`, scope)).toBe(SIG);
+      }
+    } finally {
+      await flushThoughtSignatureReplayForTests();
+      write.mockRestore();
+    }
+  });
+
+  test("arrivals during a write form one later batch without extending earlier barriers", async () => {
+    const original = config.atomicWriteFileAsync;
+    const started = [gate(), gate(), gate()];
+    const release = [gate(), gate(), gate()];
+    const sizes: number[] = [];
+    const write = spyOn(config, "atomicWriteFileAsync").mockImplementation(async (...args) => {
+      const index = sizes.length;
+      sizes.push((JSON.parse(args[1]) as { entries: unknown[] }).entries.length);
+      started[index]?.resolve();
+      await release[index]?.promise;
+      await original(...args);
+    });
+    const scope = scopeFor("credential:batch");
+    try {
+      const first = rememberThoughtSignatureForReplay("first", SIG, scope).durable;
+      await started[0]!.promise;
+      const second = Array.from({ length: 8 }, (_, index) =>
+        rememberThoughtSignatureForReplay(`second-${index}`, SIG, scope).durable);
+      expect(new Set(second).size).toBe(1);
+      expect(second[0]).not.toBe(first);
+      release[0]!.resolve();
+      await first;
+      await started[1]!.promise;
+      let secondDone = false;
+      void second[0]!.then(() => { secondDone = true; });
+      await Promise.resolve();
+      expect(secondDone).toBe(false);
+      const third = rememberThoughtSignatureForReplay("third", SIG, scope).durable;
+      expect(third).not.toBe(second[0]);
+      release[1]!.resolve();
+      await Promise.all(second);
+      await started[2]!.promise;
+      expect(sizes).toEqual([1, 9, 10]);
+      release[2]!.resolve();
+      await third;
+      expect(write).toHaveBeenCalledTimes(3);
+      resetThoughtSignatureReplayForTests();
+      expect(lookupReplayThoughtSignature("third", scope)).toBe(SIG);
+    } finally {
+      for (const latch of release) latch.resolve();
+      await flushThoughtSignatureReplayForTests();
+      write.mockRestore();
+    }
+  });
+
+  test("a deletion during an in-flight snapshot is persisted in the following batch", async () => {
+    const original = config.atomicWriteFileAsync;
+    const started = gate();
+    const release = gate();
+    let count = 0;
+    const write = spyOn(config, "atomicWriteFileAsync").mockImplementation(async (...args) => {
+      if (++count === 1) {
+        started.resolve();
+        await release.promise;
+      }
+      await original(...args);
+    });
+    const scope = scopeFor("credential:batch");
+    try {
+      const first = rememberThoughtSignatureForReplay("forgotten", SIG, scope).durable;
+      await started.promise;
+      expect(forgetThoughtSignatureForReplay("forgotten", scope)).toBe(true);
+      const later = rememberThoughtSignatureForReplay("kept", SIG, scope).durable;
+      release.resolve();
+      await Promise.all([first, later]);
+      expect(count).toBe(2);
+      resetThoughtSignatureReplayForTests();
+      expect(lookupReplayThoughtSignature("forgotten", scope)).toBeUndefined();
+      expect(lookupReplayThoughtSignature("kept", scope)).toBe(SIG);
+    } finally {
+      release.resolve();
+      await flushThoughtSignatureReplayForTests();
+      write.mockRestore();
+    }
+  });
+
+  test("a failed batch settles best-effort and a later batch can recover", async () => {
+    const original = config.atomicWriteFileAsync;
+    let count = 0;
+    const write = spyOn(config, "atomicWriteFileAsync").mockImplementation(async (...args) => {
+      if (++count === 1) throw new Error("synthetic snapshot failure");
+      await original(...args);
+    });
+    const scope = scopeFor("credential:batch");
+    try {
+      await rememberThoughtSignatureForReplay("failed-write", SIG, scope).durable;
+      expect(lookupReplayThoughtSignature("failed-write", scope)).toBe(SIG);
+      await rememberThoughtSignatureForReplay("recovered", SIG, scope).durable;
+      expect(count).toBe(2);
+      resetThoughtSignatureReplayForTests();
+      expect(lookupReplayThoughtSignature("failed-write", scope)).toBe(SIG);
+      expect(lookupReplayThoughtSignature("recovered", scope)).toBe(SIG);
+    } finally {
+      await flushThoughtSignatureReplayForTests();
+      write.mockRestore();
+    }
+  });
+
+  test("ignored, unscoped, equal and conflicting remembers schedule no extra snapshot", async () => {
+    const original = config.atomicWriteFileAsync;
+    const write = spyOn(config, "atomicWriteFileAsync").mockImplementation(original);
+    const scope = scopeFor("credential:batch");
+    try {
+      await rememberThoughtSignatureForReplay("existing", SIG, scope).durable;
+      expect(rememberThoughtSignatureForReplay("", SIG, scope).result).toBe("ignored");
+      expect(rememberThoughtSignatureForReplay("unscoped", SIG, undefined).result).toBe("unscoped");
+      expect(rememberThoughtSignatureForReplay("existing", SIG, scope).result).toBe("already-equal");
+      expect(rememberThoughtSignatureForReplay("existing", `${SIG}-other`, scope).result).toBe("conflict");
+      await flushThoughtSignatureReplayForTests();
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {
+      await flushThoughtSignatureReplayForTests();
+      write.mockRestore();
+    }
   });
 });

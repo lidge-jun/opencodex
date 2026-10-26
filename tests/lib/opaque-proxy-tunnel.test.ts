@@ -1,7 +1,8 @@
-import { afterEach, test } from "bun:test";
+import { afterEach, spyOn, test } from "bun:test";
 import assert from "node:assert/strict";
 import net from "node:net";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
+import tls from "node:tls";
 import { dialTunnel, type OpaqueProxyRoute } from "../../src/lib/opaque-proxy-tunnel";
 import { deadProxy, digest, echo, httpProxy, listen, readBytes, target, TunnelFixtureScope, until } from "../helpers/opaque-proxy-tunnel";
 
@@ -99,4 +100,164 @@ test("configuration requires one route and a well-formed authority", async () =>
   await assert.rejects(dialTunnel(target, [] as unknown as OpaqueProxyRoute), { code: "CONFIG" });
   await assert.rejects(dialTunnel(target, undefined as unknown as OpaqueProxyRoute), { code: "CONFIG" });
   assert.equal(proxy.seen.calls, 0);
+});
+
+/** Feed exact transport fragments without relying on OS packet boundaries. */
+class HeaderSocket extends EventEmitter {
+  destroyed = false;
+  readonly queued: Buffer[] = [];
+  readonly writes: string[] = [];
+  pause() { return this; }
+  resume() { return this; }
+  write(bytes: string | Buffer) { this.writes.push(String(bytes)); return true; }
+  unshift(bytes: Buffer) { this.queued.unshift(bytes); }
+  destroy() { this.destroyed = true; this.emit("close"); return this; }
+  feed(bytes: Buffer) {
+    if (this.destroyed) return;
+    if (this.listenerCount("data")) this.emit("data", bytes);
+    else this.queued.push(bytes);
+  }
+}
+
+function inspectHeaderFragments(chunks: Buffer[], maxHeaderBytes = 65536, secure = false) {
+  const socket = new HeaderSocket();
+  const copies = { concatCalls: 0, concatBytes: 0, copiedBytes: 0, allocations: [] as number[] };
+  const originalConcat = Buffer.concat;
+  const originalCopy = Buffer.prototype.copy;
+  const originalAlloc = Buffer.allocUnsafe;
+  let measuring = false;
+  const connect = secure
+    ? spyOn(tls, "connect").mockImplementation((options: tls.ConnectionOptions) => {
+      assert.equal(options.rejectUnauthorized, true);
+      assert.deepEqual(options.ALPNProtocols, ["http/1.1"]);
+      assert.equal(typeof options.checkServerIdentity, "function");
+      return socket as unknown as tls.TLSSocket;
+    })
+    : spyOn(net, "createConnection").mockImplementation(() => socket as unknown as net.Socket);
+  const concat = spyOn(Buffer, "concat").mockImplementation((list, length) => {
+    const result = originalConcat(list, length);
+    if (measuring) { copies.concatCalls++; copies.concatBytes += result.length; }
+    return result;
+  });
+  const copy = spyOn(Buffer.prototype, "copy").mockImplementation(function (this: Buffer, target, targetStart, sourceStart, sourceEnd) {
+    const size = originalCopy.call(this, target, targetStart, sourceStart, sourceEnd);
+    if (measuring) copies.copiedBytes += size;
+    return size;
+  });
+  const allocate = spyOn(Buffer, "allocUnsafe").mockImplementation(size => {
+    if (measuring) copies.allocations.push(size);
+    return originalAlloc(size);
+  });
+  let pending: Promise<net.Socket>;
+  try {
+    pending = dialTunnel(target, { host: "127.0.0.1", port: 1, kind: secure ? "https" : "http" }, { maxHeaderBytes });
+    // Observe a refusal immediately, while still restoring every spy synchronously.
+    void pending.catch(() => {});
+    socket.emit(secure ? "secureConnect" : "connect");
+    measuring = true;
+    for (const chunk of chunks) socket.feed(chunk);
+    measuring = false;
+  } catch (error) {
+    socket.destroy();
+    throw error;
+  } finally {
+    measuring = false;
+    allocate.mockRestore(); copy.mockRestore(); concat.mockRestore(); connect.mockRestore();
+  }
+  return { socket, copies, pending };
+}
+
+function paddedConnectHeader(size: number): Buffer {
+  const prefix = "HTTP/1.1 200 Connection Established\r\nX-Fixture: ";
+  return Buffer.from(prefix + "x".repeat(size - Buffer.byteLength(prefix) - 4) + "\r\n\r\n");
+}
+
+for (const secure of [false, true]) {
+  test(`${secure ? "HTTPS" : "HTTP"} CONNECT copies fragmented headers linearly`, async () => {
+    const header = paddedConnectHeader(65536);
+    const chunks = Array.from({ length: header.length / 1024 }, (_, index) => header.subarray(index * 1024, (index + 1) * 1024));
+    const before = Buffer.from(header);
+    const fixture = inspectHeaderFragments(chunks, header.length, secure);
+    await fixture.pending;
+    assert.deepEqual(header, before, "borrowed input must not be mutated");
+    assert.equal(fixture.copies.concatCalls, 0);
+    assert.ok(fixture.copies.copiedBytes < 3 * header.length, JSON.stringify(fixture.copies));
+    assert.ok(fixture.copies.allocations.every(size => size <= header.length));
+    assert.equal(fixture.socket.listenerCount("data"), 0);
+    fixture.socket.destroy();
+  });
+}
+
+test("CONNECT complete headers borrow the original chunk without a copy", async () => {
+  const header = paddedConnectHeader(64);
+  const packet = Buffer.concat([header, Buffer.from("opaque-target-banner")]);
+  const fixture = inspectHeaderFragments([packet], 64);
+  await fixture.pending;
+  assert.equal(fixture.copies.concatCalls, 0);
+  assert.equal(fixture.copies.copiedBytes, 0);
+  assert.equal(fixture.copies.allocations.length, 0);
+  assert.deepEqual(Buffer.concat(fixture.socket.queued), packet.subarray(64));
+  assert.equal(fixture.socket.queued[0]!.buffer, packet.buffer);
+  fixture.socket.destroy();
+});
+
+test("CONNECT split delimiters and both sides of the header cap preserve opaque bytes", async () => {
+  const header = paddedConnectHeader(96);
+  const payload = Buffer.alloc(4096);
+  for (let index = 0; index < payload.length; index++) payload[index] = index % 251;
+  const packet = Buffer.concat([header, payload]);
+  for (const cap of [96, 128, 65536]) {
+    for (let split = 1; split < header.length; split++) {
+      const fixture = inspectHeaderFragments([packet.subarray(0, split), Buffer.alloc(0), packet.subarray(split)], cap);
+      await fixture.pending;
+      assert.deepEqual(Buffer.concat(fixture.socket.queued), payload, `cap=${cap} split=${split}`);
+      assert.equal(fixture.socket.listenerCount("data"), 0);
+      fixture.socket.destroy();
+    }
+  }
+});
+
+test("CONNECT over-limit input is refused without copying its oversized tail", async () => {
+  const packet = Buffer.from("HTTP/1.1 200 OK\r\nX-Fixture: " + "x".repeat(1024 * 1024));
+  const fixture = inspectHeaderFragments([packet.subarray(0, 8), packet.subarray(8)], 64);
+  await assert.rejects(fixture.pending, { code: "PROTOCOL" });
+  assert.equal(fixture.socket.destroyed, true);
+  assert.equal(fixture.copies.concatCalls, 0);
+  assert.ok(fixture.copies.copiedBytes <= 64);
+  assert.ok(fixture.copies.allocations.every(size => size <= 64));
+});
+
+test("CONNECT partial status, refusal, and malformed headers still fail closed", async () => {
+  for (const [wire, code] of [
+    ["HTTP/1.1 407 Refused\r\nUnfinished", "REFUSED"],
+    ["NOT HTTP\r\n\r\n", "PROTOCOL"],
+    ["HTTP/1.1 200 OK\r\nInvalidHeader\r\n\r\n", "PROTOCOL"],
+  ]) {
+    const bytes = Buffer.from(wire!);
+    const fixture = inspectHeaderFragments(Array.from(bytes, byte => Buffer.from([byte])));
+    await assert.rejects(fixture.pending, { code });
+    assert.equal(fixture.socket.destroyed, true);
+    assert.equal(fixture.socket.listenerCount("data"), 0);
+  }
+});
+
+test("CONNECT real socket preserves a large early payload after a split at the header ceiling", async () => {
+  const header = paddedConnectHeader(128);
+  const payload = Buffer.alloc(128 * 1024);
+  for (let index = 0; index < payload.length; index++) payload[index] = index % 251;
+  const server = net.createServer({ allowHalfOpen: true }, peer => {
+    let request = "";
+    const onData = (bytes: Buffer) => {
+      request += bytes.toString("latin1");
+      if (!request.includes("\r\n\r\n")) return;
+      peer.removeListener("data", onData);
+      peer.write(header.subarray(0, header.length - 2));
+      scope.later(() => { if (!peer.destroyed) peer.write(Buffer.concat([header.subarray(-2), payload])); }, 5);
+    };
+    peer.on("data", onData);
+    peer.once("end", () => peer.end());
+  });
+  const port = await listen(scope, server);
+  const socket = scope.own(await dialTunnel(target, { host: "127.0.0.1", port }, { maxHeaderBytes: header.length }));
+  assert.deepEqual(await readBytes(socket, payload.length), payload);
 });

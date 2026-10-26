@@ -6,9 +6,15 @@ const {
   addedLines,
   assessHygiene,
   collectDeterministicHygieneFailures,
+  countHeadRewrites,
+  formatApprovalRecord,
+  HEAD_BOUND_APPROVAL_LABELS,
   HYGIENE_FAILURE_HINTS,
   HYGIENE_GATE_LABELS,
   hasEmptyCatch,
+  needsHeadRewriteCount,
+  parseApprovalRecord,
+  reconcileHeadBoundApprovals,
   resultLines,
   resultLinesByHunk,
 } = require("./pr-hygiene.cjs");
@@ -389,5 +395,102 @@ describe("pr-hygiene workflow trust boundary", () => {
       workflow,
       /authorHasPushPermission:\s*\["OWNER",\s*"MEMBER",\s*"COLLABORATOR"\]\.includes\(\s*pr\.author_association/,
     );
+  });
+});
+
+describe("head-bound approvals", () => {
+  const HEAD = "c".repeat(40);
+  const OTHER = "d".repeat(40);
+  const record = (head, headRewrites) =>
+    "<!-- pr-hygiene-approvals " + JSON.stringify({ head, headRewrites }) + " -->";
+
+  it("covers exactly the exception approvals, not sponsorship", () => {
+    assert.deepEqual(
+      [...HEAD_BOUND_APPROVAL_LABELS].sort(),
+      HYGIENE_GATE_LABELS.filter(
+        (label) => label !== "intake: hygiene-blocked" && label !== "maintainer-sponsored",
+      ).sort(),
+    );
+  });
+
+  it("round-trips a record, including an unknown rewrite count", () => {
+    const line = formatApprovalRecord({ head: HEAD, headRewrites: 2 });
+    assert.equal(line, record(HEAD, 2));
+    assert.deepEqual(parseApprovalRecord("status\n\n" + line), { head: HEAD, headRewrites: 2 });
+    assert.deepEqual(parseApprovalRecord(formatApprovalRecord({ head: HEAD, headRewrites: undefined })), {
+      head: HEAD,
+      headRewrites: null,
+    });
+    assert.deepEqual(parseApprovalRecord(record("e".repeat(64), 0)), { head: "e".repeat(64), headRewrites: 0 });
+  });
+
+  it("rejects anything but one well-formed record on the last line", () => {
+    for (const source of [
+      null,
+      "",
+      record(HEAD, 0) + "\nlater line",
+      record(HEAD, 0) + "\n" + record(HEAD, 0),
+      "mentions pr-hygiene-approvals elsewhere\n" + record(HEAD, 0),
+      "<!-- pr-hygiene-approvals {not json} -->",
+      "<!-- pr-hygiene-approvals " + JSON.stringify({ head: HEAD, headRewrites: 0, approvals: [] }) + " -->",
+      "<!-- pr-hygiene-approvals " + JSON.stringify({ head: HEAD }) + " -->",
+      "<!-- pr-hygiene-approvals [1] -->",
+      record("abc", 0),
+      record(HEAD.toUpperCase(), 0),
+      record(HEAD, -1),
+      record(HEAD, 1.5),
+      record(HEAD, "1"),
+    ]) {
+      assert.equal(parseApprovalRecord(source), null, String(source));
+    }
+  });
+
+  it("counts only head rewrite events", () => {
+    assert.equal(
+      countHeadRewrites([
+        { event: "head_ref_force_pushed" },
+        { event: "labeled" },
+        { event: "head_ref_restored" },
+        null,
+      ]),
+      2,
+    );
+    assert.equal(countHeadRewrites(undefined), 0);
+  });
+
+  it("keeps approvals only under an unchanged head and rewrite count", () => {
+    const labels = ["test-exception-approved", "maintainer-sponsored"];
+    const base = { labels, headSha: HEAD, record: { head: HEAD, headRewrites: 1 }, eventAction: "edited" };
+    const kept = { kept: ["test-exception-approved"], stale: [] };
+    const stale = { kept: [], stale: ["test-exception-approved"] };
+    assert.deepEqual(reconcileHeadBoundApprovals({ ...base, headRewriteCount: 1 }), kept);
+    assert.deepEqual(reconcileHeadBoundApprovals({ ...base, headRewriteCount: 2 }), stale);
+    assert.deepEqual(reconcileHeadBoundApprovals({ ...base, headRewriteCount: null }), stale);
+    assert.deepEqual(reconcileHeadBoundApprovals({ ...base, headRewriteCount: 1, eventAction: "synchronize" }), stale);
+    assert.deepEqual(reconcileHeadBoundApprovals({ ...base, headRewriteCount: 1, headSha: OTHER }), stale);
+    assert.deepEqual(reconcileHeadBoundApprovals({ ...base, headRewriteCount: 1, record: null }), stale);
+    assert.deepEqual(
+      reconcileHeadBoundApprovals({ ...base, headRewriteCount: 1, record: { head: HEAD, headRewrites: null } }),
+      stale,
+    );
+    assert.deepEqual(
+      reconcileHeadBoundApprovals({ ...base, labels: ["maintainer-sponsored"], headRewriteCount: 1 }),
+      { kept: [], stale: [] },
+    );
+  });
+
+  it("asks for a rewrite count only when one could confirm an approval", () => {
+    const base = {
+      labels: ["suppression-approved"],
+      headSha: HEAD,
+      record: { head: HEAD, headRewrites: 0 },
+      eventAction: "labeled",
+    };
+    assert.equal(needsHeadRewriteCount(base), true);
+    assert.equal(needsHeadRewriteCount({ ...base, labels: [] }), false);
+    assert.equal(needsHeadRewriteCount({ ...base, eventAction: "synchronize" }), false);
+    assert.equal(needsHeadRewriteCount({ ...base, headSha: OTHER }), false);
+    assert.equal(needsHeadRewriteCount({ ...base, record: null }), false);
+    assert.equal(needsHeadRewriteCount({ ...base, record: { head: HEAD, headRewrites: null } }), false);
   });
 });

@@ -204,6 +204,7 @@ export function AddComboModal({
               decisionProvider={draft.decisionProvider ?? null}
               decisionModel={draft.decisionModel ?? null}
               decisionTimeoutMs={draft.decisionTimeoutMs ?? null}
+              sessionPin={draft.sessionPin}
               disabled={busy}
               onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
             />

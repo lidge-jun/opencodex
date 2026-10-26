@@ -44,7 +44,7 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-실행 중인 프록시를 PID 기준으로 중지하고, PID 파일을 삭제한 뒤 기본 Codex를 복원합니다. 관리형
+실행 중인 프록시를 PID 기준으로 중지하고 PID 파일을 삭제합니다. 독립 실행 소유자라면 기본 Codex를 복원합니다. 관리형
 백그라운드 서비스가 설치되어 있으면 `ocx stop`이 먼저 그 서비스를 중지하므로 프록시가 다시
 올라올 수 없습니다. 웹 대시보드의 **Stop** 버튼도 같은 동작(`POST /api/stop`)을 하지만, Windows 작업 스케줄러는 예외입니다. 작업이 끝나도 래퍼가 프록시를 다시 띄울 수 있어서, 대시보드는 `respawnable_service`로 거절하고 아무것도 바꾸지 않은 채 `ocx stop` 실행을 안내합니다.
 
@@ -53,6 +53,12 @@ ocx start --socks5-off
 검사를 거친 부모 CLI가 복원을 맡습니다. 이미 종료가 확인된 프로세스를 강제 종료하는 경로로는
 넘어가지 않습니다. 영수증에 근거한 지연 복원도 최종 복원과 영수증 정리를 부모가 담당하며,
 부모의 공유 설정 복원이 실패하면 종료 실패로 남기고 미완료 영수증을 보존합니다.
+
+연결된 hub 클라이언트나 Remote Link Child에서는 성공한 API 종료를 포함해 `ocx stop`이 연결 소유의 Codex 라우팅, 모델 카탈로그와 Grok 설정을 보존합니다. `ocx start`는 라우팅을 다시 주입하지 않고 보존한 설정으로 서비스를 재개합니다. Codex를 자체 계정으로 돌리려면 `ocx disconnect`를, 이미 기본 라우팅으로 복원했다면 다시 연결하려고 `ocx sync --restart-codex`를 실행하세요.
+
+보존 기능을 확인할 수 없는 오래된 일반 프록시는 서비스나 프로세스를 중지하기 전에 거절합니다. 런타임을 관리하는 앱이나 서비스에서 업데이트·재시작한 뒤 다시 시도하세요.
+
+이미 중지된 클라이언트는 서비스 관리자가 비활성이고 알려진 로컬 주소에 런타임이 없음을 확인한 뒤 정상적인 미실행 결과를 반환합니다.
 
 ### `ocx restart`
 
@@ -263,6 +269,8 @@ app-server / code-mode-host 프로세스에만 `SIGTERM`을 보내고 데스크�
 
 명령을 Codex 앱 안에서 실행하면 재시작은 분리된 helper에 넘기고, 이 세션은 앱과 함께
 종료됩니다.
+
+**대상을 고정한 동기화.** `ocx sync --expect-link <linkId>`(Remote Link Child)와 `ocx sync --expect-hub-key <apiKeyId>`(hub 클라이언트)는 이 머신이 여전히 그 링크나 그 키로 연결되어 있을 때만 동기화합니다. 그렇지 않으면 아무것도 바꾸지 않고 로컬 공급자도 동기화하지 않으며, 종료 코드 5로 끝나고 stderr 마지막 줄에 `{"phase":"child_link_mismatch"|"hub_client_mismatch","reason":...}`를 출력합니다. 형식이 잘못되었거나 반복된 플래그는 종료 코드 2로 끝납니다. 자세한 내용은 [영어 레퍼런스](/reference/cli/lifecycle/#sync-only-from-the-expected-home---expect-link-and---expect-hub-key)를 참고하세요.
 
 ### `ocx sync-cache [--restart-codex] [--restart-app-server-only]`
 

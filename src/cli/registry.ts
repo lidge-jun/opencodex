@@ -50,7 +50,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "stop",
     usage: "ocx stop [--json]",
-    summary: "Stop the proxy and restore native Codex config.",
+    summary: "Stop the proxy; preserve connected-client integrations, restore native Codex config for standalone owners.",
     details: [
       "--json keeps the stop path unchanged and prints one structured summary document on stdout; human output moves to stderr.",
       "Exit codes are identical with and without --json: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).",
@@ -181,13 +181,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "sync",
-    usage: "ocx sync [--restart-codex] [--restart-app-server-only]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--restart-codex] [--restart-app-server-only]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
       "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, after catalog/cache writes or a committed configuration change. It ends live conversations.",
       "--restart-app-server-only keeps the narrow behaviour: SIGTERM to matching app-server / code-mode-host processes, desktop app left running. It wins over --restart-codex when both are given.",
       "--restart-desktop-app is a deprecated alias of --restart-codex and prints a notice.",
+      "--expect-link <linkId> syncs only when this machine is a connected Remote Link Child of that link (ocx connect status --json reports link.linkId); --expect-hub-key <apiKeyId> does the same for a hub client's key. The check runs under the lock that chooses the sync path.",
+      "Any other state (disconnected, another link or key, the other client kind, a pending key rotation, connect or disconnect) changes nothing, never syncs local providers, exits 5, and prints {\"phase\":\"child_link_mismatch\"|\"hub_client_mismatch\",\"reason\":...} as the last stderr line. A malformed or repeated flag exits 2.",
     ],
   },
   {
