@@ -445,7 +445,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
     toggleCodexClientCompaction,
     sidecar, sidecarSaving, sidecarModels, visionModels, models, saveSidecar,
     sidecarCodexApply,
-    shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
+    shadowCall, shadowCallSaving, shadowCallError, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
   const shadowMemoryLabel = t("shadowCall.memoryLabel");
   const visionEnabled = sidecar?.vision?.enabled !== false;
@@ -775,6 +775,11 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
           saving={shadowCallSaving}
           onChange={sourceModels => void saveShadowCall({ sourceModels })}
         />
+        {shadowCallError && (
+          <div className="notice notice-err" role="alert" style={{ marginTop: 8 }}>
+            <IconAlert /><span>{shadowCallError}</span>
+          </div>
+        )}
       </div>
     </>
   );
