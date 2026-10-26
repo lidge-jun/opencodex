@@ -76,13 +76,15 @@ export async function flushConfigDirHardening(dir: string = getConfigDir()): Pro
 /**
  * Intercept CA/token/picker writers call this after their last unrelated await. Parent
  * inheritable ACL propagation can overwrite a child's concurrent explicit grant. Drain the
- * config flight, then all overlapping registry work (including ancestors and timeout reaps).
+ * registered config flight and overlapping work (including ancestors and timeout reaps),
+ * within one ACL deadline. Timeout refuses admission without dropping child cleanup ownership.
  * The final registry check and synchronous callback share a turn: promise continuations and
  * newly queued hardeners cannot start icacls between that check and secret publication.
  * Keep the callback synchronous; an await inside it would reopen the propagation race.
  */
 export async function withConfigDirHardeningSettled<T>(dir: string, mutate: () => T): Promise<T> {
-  await flushConfigDirHardening(dir);
+  // Async work registers before its factory starts, including the optional config flight.
+  // A separate flush here would escape the registry's total admission deadline.
   return withWindowsSecretAclSettled(dir, mutate);
 }
 

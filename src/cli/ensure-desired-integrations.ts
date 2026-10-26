@@ -10,7 +10,7 @@
  */
 import { loadConfig } from "../config";
 import { cliFirstPartyDesired, firstPartyDesired, reconcileClaudeFirstPartySettings } from "../claude/first-party-settings";
-import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
+import { getConfigDir } from "../config/paths";
 import { claudeInterceptEnabled } from "../claude/intercept/runtime";
 import { removeDesktopPickerArtifacts } from "../claude/desktop-picker";
 import { findLiveProxy } from "../server/proxy-liveness";
@@ -18,7 +18,7 @@ import { runtimeRequest } from "./runtime-api";
 import { stripGrokConfig, type GrokInjectResult } from "../grok/inject";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } from "../claude/desktop-3p";
 import {
-  applyDesktopFirstParty,
+  applyDesktopFirstParty, withFirstPartySecretsSettled,
   inspectDesktopFirstParty,
   observeClaudeDesktopMode,
   removeDesktopFirstParty,
@@ -155,7 +155,7 @@ export async function ensureClaudeDesktopMatchesDesired(
   if (cliFirstPartyDesired(config)) {
     const seen = (deps.inspectDesktopFirstParty ?? inspectDesktopFirstParty)(config);
     if (seen.settings.kind === "absent" || seen.stale || !claudeInterceptEnabled(config)) {
-      const result = await withConfigDirHardeningSettled(getConfigDir(), () =>
+      const result = await withFirstPartySecretsSettled(getConfigDir(), () =>
         (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
           firstPartyDesired(config, (deps.observeClaudeDesktopMode ?? observeClaudeDesktopMode)(config))));
       if (result.ok && result.changed) log(`   + Claude CLI first-party env refreshed (${result.path})`);
@@ -175,7 +175,7 @@ export async function ensureClaudeDesktopMatchesDesired(
     }
     const seen = (deps.inspectDesktopFirstParty ?? inspectDesktopFirstParty)(config);
     if (!seen.stale) return;
-    const applied = await withConfigDirHardeningSettled(getConfigDir(), () => (deps.applyDesktopFirstParty ?? applyDesktopFirstParty)(config));
+    const applied = await withFirstPartySecretsSettled(getConfigDir(), () => (deps.applyDesktopFirstParty ?? applyDesktopFirstParty)(config));
     if (applied.ok && applied.changed) log(`   + Claude Desktop first-party env refreshed (${applied.path})`);
     else if (!applied.ok) error(`⚠️  Claude Desktop first-party env refresh skipped: ${applied.reason}.`);
     return;

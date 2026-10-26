@@ -19,7 +19,8 @@
  * into Claude Code's settings keeps `first-party` (observeClaudeDesktopMode), so moving the default
  * to gateway never flips a working Desktop under the operator.
  */
-import { getConfigDir } from "../config/paths";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
+import { WindowsSecretAclSettleTimeoutError } from "../lib/windows-secret-acl";
 import { join } from "node:path";
 import type { OcxConfig } from "../types";
 import { claudeConfigDir } from "./auth-detect";
@@ -229,6 +230,17 @@ function secretFailureCause(error: unknown): InterceptSecretDiagnostic["cause"] 
 export type DesktopFirstPartyApplyResult =
   | { ok: true; changed: boolean; path: string; env: ClaudeInterceptEnv; proxyPort: number }
   | { ok: false; reason: "intercept_disabled" | "ca_unavailable" | "unreadable" | "foreign_env"; path: string; diagnostic?: InterceptSecretDiagnostic };
+
+/** Async apply/reconcile boundaries translate admission timeout into the existing refusal. */
+export async function withFirstPartySecretsSettled<T>(configDir: string, prepare: () => T):
+  Promise<T | Extract<DesktopFirstPartyApplyResult, { ok: false }>> {
+  try { return await withConfigDirHardeningSettled(configDir, prepare); }
+  catch (error) {
+    if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+    return { ok: false, reason: "ca_unavailable", path: claudeInterceptCaCertPath(configDir),
+      diagnostic: { stage: "ca", cause: "ETIMEDOUT" } };
+  }
+}
 
 /**
  * Write the first-party env into Claude Code's settings. Creates the local CA first so the

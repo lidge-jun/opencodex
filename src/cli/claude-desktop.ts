@@ -19,7 +19,7 @@ import {
 } from "../claude/desktop-profile";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig, type Desktop3pConfigMode, parseDesktop3pModeArgs } from "../claude/desktop-3p";
 import {
-  applyDesktopFirstParty,
+  applyDesktopFirstParty, withFirstPartySecretsSettled,
   captureDesktopFirstPartyRollback,
   isClaudeDesktopMode,
   observeClaudeDesktopMode,
@@ -427,7 +427,7 @@ async function applyFirstPartyDesktop(
   // Establish the replacement before deleting the working gateway. A refused
   // cleanup restores only our managed env keys, preserving unrelated settings.
   const rollback = captureDesktopFirstPartyRollback(config);
-  const applied = await withConfigDirHardeningSettled(getConfigDir(), () => applyDesktopFirstParty(config));
+  const applied = await withFirstPartySecretsSettled(getConfigDir(), () => applyDesktopFirstParty(config));
   if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason, ...(applied.diagnostic ? { diagnostic: applied.diagnostic } : {}) };
   const appliedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
   const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });

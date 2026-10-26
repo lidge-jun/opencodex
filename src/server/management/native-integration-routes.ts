@@ -30,7 +30,7 @@ import { providerContextCap } from "../../providers/context-cap";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
 import {
-  applyDesktopFirstParty,
+  applyDesktopFirstParty, withFirstPartySecretsSettled,
   captureDesktopFirstPartyRollback,
   inspectDesktopFirstParty,
   observeClaudeDesktopMode,
@@ -758,7 +758,7 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
       // The whole switch runs under the picker lock, in today's order: env first, then gateway cleanup.
       return await runPickerTransition(current, async ops => {
         const rollback = captureDesktopFirstPartyRollback(current);
-        const applied = await withConfigDirHardeningSettled(getConfigDir(), () => applyDesktopFirstParty(current));
+        const applied = await withFirstPartySecretsSettled(getConfigDir(), () => applyDesktopFirstParty(current));
         if (!applied.ok) {
           const reason = applied.reason === "foreign_env" || applied.reason === "intercept_disabled" ? applied.reason : "write_failed";
           return postCommitRefusal(applied.reason === "unreadable" || applied.reason === "ca_unavailable" ? 500 : 409, "claude-desktop", reason,

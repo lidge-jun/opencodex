@@ -1062,7 +1062,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         rethrowManagementBodyTooLarge(error);
         return jsonResponse({ error: "invalid JSON body" }, 400);
       }
-      const { resolveClaudeDesktopApplyMode, observeClaudeDesktopMode, applyDesktopFirstParty, captureDesktopFirstPartyRollback, removeDesktopFirstParty } = await import("../../claude/desktop-first-party");
+      const { resolveClaudeDesktopApplyMode, observeClaudeDesktopMode, applyDesktopFirstParty, withFirstPartySecretsSettled, captureDesktopFirstPartyRollback, removeDesktopFirstParty } = await import("../../claude/desktop-first-party");
       const requested = (parsed as { mode?: unknown } | null)?.mode;
       let desktopMode: "first-party" | "gateway" = resolveClaudeDesktopApplyMode(config, observeClaudeDesktopMode(config));
       if (requested !== undefined) {
@@ -1106,7 +1106,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           const { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } = await import("../../claude/desktop-3p");
           const rollback = captureDesktopFirstPartyRollback(config);
           const { getConfigDir, withConfigDirHardeningSettled } = await import("../../config/paths");
-          const applied = await withConfigDirHardeningSettled(getConfigDir(), () => applyDesktopFirstParty(config));
+          const applied = await withFirstPartySecretsSettled(getConfigDir(), () => applyDesktopFirstParty(config));
           if (!applied.ok) {
             const { firstPartyRefusalMessage } = await import("./native-integration-routes");
             return jsonResponse({
@@ -1554,7 +1554,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       return jsonResponse({ error: "cliFirstParty must be sent alone", code: "cli_first_party_not_alone" }, 400);
     if (body.cliFirstParty !== undefined) {
       const { claudeInterceptEnabled, claudeInterceptProxyPort, getClaudeInterceptState } = await import("../../claude/intercept/runtime");
-      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../../claude/desktop-first-party");
+      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode, withFirstPartySecretsSettled } = await import("../../claude/desktop-first-party");
       const { firstPartyDesired, readFirstPartyProxyStatus, reconcileClaudeFirstPartySettings } = await import("../../claude/first-party-settings");
       const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
       let bound = (deps.getClaudeInterceptState ?? getClaudeInterceptState)();
@@ -1625,14 +1625,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       config.claudeCode = live;
       let result: ReturnType<typeof reconcileClaudeFirstPartySettings> | undefined;
       const { getConfigDir, withConfigDirHardeningSettled } = await import("../../config/paths");
-      try { result = await withConfigDirHardeningSettled(getConfigDir(), () =>
+      try { result = await withFirstPartySecretsSettled(getConfigDir(), () =>
         (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
           firstPartyDesired(config, observeClaudeDesktopMode(config)))); }
       catch { /* An unexpected settings failure is mapped after conditional rollback. */ }
       if (!result?.ok) {
         let settingsRestored = true;
         if (body.cliFirstParty) {
-          try { settingsRestored = await withConfigDirHardeningSettled(getConfigDir(), () => restoreSettings?.() ?? false); } catch { settingsRestored = false; }
+          try { settingsRestored = result?.reason === "ca_unavailable" || await withConfigDirHardeningSettled(getConfigDir(), () => restoreSettings?.() ?? false); } catch { settingsRestored = false; }
           let rollback: ReturnType<typeof mutatePersistedConfig<OcxConfig["claudeCode"]>>;
           try {
             rollback = mutatePersistedConfig(persisted => {

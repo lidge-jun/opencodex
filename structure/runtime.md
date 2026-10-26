@@ -228,7 +228,7 @@ key ids recorded by `links.json`, never the environment token. Context relays re
 final deletion closes the listener, and `src/server/index/optional-listeners.ts` runs supervisor teardown before closing this listener and the Claude intercept pair.
 ### Claude intercept pair
 
-Intercept CA startup and token creation in `src/claude/intercept/runtime.ts` follow the [config-directory hardening barrier](config.md#opencodex-home-and-live-process-state). Each synchronous writer runs after the last unrelated await with no pending overlapping ACL work, including retained ancestor children. Persistent picker preparation and subsequent leaf publication apply the same rule independently across trust/credential-store awaits.
+Intercept CA startup and token creation in `src/claude/intercept/runtime.ts` follow the [config-directory hardening barrier](config.md#opencodex-home-and-live-process-state). Each synchronous writer requires settled overlapping work, including retained ancestor children, within one ACL deadline; `ETIMEDOUT` refuses startup without entering the CA lease-contention retry. Persistent picker preparation, cleanup leases, leaf/profile publication and model snapshots re-enter independently after OS trust or discovery awaits.
 
 At the end of the startup transaction, `startServer` starts the optional Claude intercept pair through `src/server/index/claude-intercept-lifecycle.ts` (fire-and-forget start, `ownsListener` for ingress, `stop` joined into listener shutdown) from `src/claude/intercept/runtime.ts`: a loopback HTTP CONNECT proxy (`src/claude/intercept/connect-proxy.ts`)
 and a loopback TLS listener (`src/claude/intercept/listener.ts`) that presents a leaf for
