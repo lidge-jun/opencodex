@@ -98,6 +98,31 @@ test("hosted tools keep the wire prefix with tool_choice none, prohibiting upstr
   expect(after.tool_choice).toEqual({ type: "none" });
 });
 
+for (const [label, modelId, choice] of [
+  ["required allowed tools", "claude-sonnet-4-6", { allowedTools: ["read"], mode: "required" }],
+  ["named tool on a model that rejects forced choice", "claude-opus-5-5", { type: "function", name: "read" }],
+] as const) test(`a narrowed catalog keeps the same tools and system after prohibiting calls: ${label}`, async () => {
+  const provider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "key" as const, apiKey: "synthetic-test-key" };
+  const adapter = withTestTranslatorBudget(createAnthropicAdapter(provider, "short"));
+  const catalog = [...tools, { name: "write", description: "Write a file", parameters: { type: "object", properties: {} } }];
+  const ordinary = { modelId, options: { toolChoice: structuredClone(choice), parallelToolCalls: false },
+    context: { tools: structuredClone(catalog), systemPrompt: ["stable system"],
+      messages: [{ role: "user", content: "earlier turn", timestamp: 1 }] } } as unknown as OcxParsedRequest;
+  const summary = structuredClone(ordinary);
+  type Args = Parameters<typeof createResponsesEffects>;
+  createResponsesEffects(
+    { options: {}, req: new Request("http://localhost/v1/responses"), config: {} } as Args[0],
+    {} as Args[1], { parsed: summary, route: { provider: {} } } as Args[2],
+    { routedCompaction: true, preserveCompactionPrefix: true } as Args[3],
+  );
+  expect(summary.options.toolChoice).toBe("none");
+  const before = JSON.parse((await adapter.buildRequest(ordinary)).body as string);
+  const after = JSON.parse((await adapter.buildRequest(summary)).body as string);
+  expect(before.tools.map((tool: { name: string }) => tool.name)).toEqual(["read"]);
+  expect(after.tools).toEqual(before.tools);
+  expect(after.system).toEqual(before.system);
+});
+
 for (const kind of ["text", "tool", "search", "empty", "progress", "abnormal", "eof", "truncated", "error", "incomplete"] as const) {
   test(`summary guard validates completion and releases discarded event leases: ${kind}`, async () => {
     const budget = createTranslatorBudget();

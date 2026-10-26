@@ -331,7 +331,9 @@ MiMo model Command Code serves.
 - Converts messages to Anthropic content blocks (text, base64 image, `tool_use`, `thinking`).
 - Routed Codex compaction keeps the client tool catalog, system prompt and tool-selection
   options to preserve their prompt-cache prefix. Summary requests disable search/media
-  sidecars; upstream-hosted tools retain their declarations with `tool_choice: none`.
+  sidecars; upstream-hosted tools retain their declarations with `tool_choice: none`, as does a
+  mandatory tool choice, while the advertised catalog stays the same. A request that advertises a
+  sidecar web-search tool (for example Exa) still changes its tool prefix on compaction.
   A summary that attempts a tool call fails without publishing a function call or replacing
   history. A successful summary returns exactly one compaction item. Image normalization
   and the existing one-shot tighter-image retry after HTTP 413 remain unchanged.
