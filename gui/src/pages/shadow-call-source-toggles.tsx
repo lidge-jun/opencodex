@@ -56,6 +56,9 @@ export function ShadowCallSourceToggles({
           const title = covered
             ? t("shadowCall.sourceCovered", { prefix: covered })
             : last ? t("shadowCall.sourceLastRequired") : undefined;
+          const reason = covered
+            ? t("shadowCall.sourceCoveredShort", { prefix: covered })
+            : last ? t("shadowCall.sourceRequired") : undefined;
           return (
             <span className={`shadow-source-toggle${active ? " on" : ""}`} key={option.id}>
               <Switch
@@ -67,6 +70,7 @@ export function ShadowCallSourceToggles({
               />
               <code className="shadow-source-id">{shadowSourceModelBadge([option.id])}</code>
               <span className="muted text-caption shadow-source-role">{roleLabel(t, option.role)}</span>
+              {reason ? <span className="muted text-caption shadow-source-reason">{reason}</span> : null}
             </span>
           );
         })}

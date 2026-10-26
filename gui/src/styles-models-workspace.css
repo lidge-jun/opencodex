@@ -270,6 +270,7 @@
 .shadow-source-toggle .switch { flex: 0 0 auto; }
 .shadow-source-id { font-size: 11.5px; white-space: nowrap; }
 .shadow-source-role { white-space: nowrap; }
+.shadow-source-reason { white-space: normal; line-height: 1.2; }
 .shadow-source-hint { display: block; line-height: 1.4; }
 .models-shadow-sources { grid-column: 1 / -1; margin: 0 0 var(--space-3); }
 .dash-shadow-sources { margin-top: var(--space-2); }

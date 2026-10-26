@@ -83,6 +83,7 @@ test("the last active source is disabled", async () => {
   const changes = await render(["gpt-5.6-terra"]);
   const button = sourceSwitch("gpt-5.6-terra", "Memory");
   expect(button.disabled).toBe(true);
+  expect(host.textContent).toContain("Must stay on");
   act(() => button.click());
   expect(changes).toEqual([]);
 });
@@ -98,4 +99,5 @@ test("a broader custom prefix keeps covered toggles disabled with an explanation
   const button = sourceSwitch("gpt-5.6-terra", "Memory");
   expect(button.disabled).toBe(true);
   expect(button.title).toContain("gpt-5.6");
+  expect(host.textContent).toContain("Covered by gpt-5.6");
 });

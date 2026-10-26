@@ -3,6 +3,10 @@ import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { routeConcreteModel, routeModel } from "../../router";
 import type { OcxConfig } from "../../types";
 
+/** Keep a persisted override small enough for the per-request prefix scan. */
+export const SHADOW_SOURCE_MODEL_LIMIT = 32;
+export const SHADOW_SOURCE_PREFIX_MAX_LENGTH = 128;
+
 /** Validate a prospective persisted shadow-call target against its resolved source identities. */
 export function shadowCallTargetError(
   config: OcxConfig,
@@ -45,13 +49,19 @@ export function shadowCallTargetError(
 export function shadowCallSourceModelsError(value: unknown): string | null {
   if (!Array.isArray(value)) return "sourceModels must be an array";
   if (value.length === 0) return "sourceModels must contain at least one model prefix";
+  if (value.length > SHADOW_SOURCE_MODEL_LIMIT) {
+    return `sourceModels must contain at most ${SHADOW_SOURCE_MODEL_LIMIT} model prefixes`;
+  }
   const seen = new Set<string>();
   for (const [index, entry] of value.entries()) {
     if (typeof entry !== "string" || entry.trim() === "") {
       return `sourceModels.${index} must be a nonblank model prefix`;
     }
-    const prefix = entry.trim();
-    if (/\s/.test(prefix)) return `sourceModels.${index} must not contain whitespace`;
+    if (/\s/.test(entry)) return `sourceModels.${index} must not contain whitespace`;
+    if (entry.length > SHADOW_SOURCE_PREFIX_MAX_LENGTH) {
+      return `sourceModels.${index} must be at most ${SHADOW_SOURCE_PREFIX_MAX_LENGTH} characters`;
+    }
+    const prefix = entry;
     if (prefix.includes("/")) return `sourceModels.${index} must be a bare model prefix, not a provider-qualified model`;
     if (seen.has(prefix)) return "sourceModels must not contain duplicate prefixes";
     seen.add(prefix);

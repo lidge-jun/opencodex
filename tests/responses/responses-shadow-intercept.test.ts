@@ -868,6 +868,10 @@ describe("shadow-call settings API reports the intercepted source models", () =>
     [["gpt-5.6-terra", "gpt-5.6-terra"], "duplicate"],
     [["xai/gpt-5.6-terra"], "bare model prefix"],
     [["gpt-5.6 terra"], "whitespace"],
+    [[" gpt-6-luna"], "whitespace"],
+    [["gpt-6-luna "], "whitespace"],
+    [Array.from({ length: 33 }, (_, index) => `custom-${index}`), "at most 32"],
+    [["x".repeat(129)], "at most 128"],
   ])("PUT rejects an invalid source list %#", async (sourceModels, message) => {
     await withTempHome(async () => {
       const config = { port: 0, defaultProvider: "xai", providers: {} } as OcxConfig;

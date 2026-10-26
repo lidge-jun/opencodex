@@ -280,7 +280,7 @@ See [Codex prompt layers](/guides/codex-prompt/) for the layer model and the key
 | `POST /api/update/run` | Asynchronously check a fresh package version, then start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
 | `GET /api/update/status` | Poll an update job by id | 404 unknown job |
 | `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
-| `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings, including `sourceModels`; GET also returns the runtime-owned `sourceModelOptions` inventory | 400 invalid shape or value, including an empty, duplicate, whitespace-bearing, or provider-qualified source prefix |
+| `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings, including `sourceModels`; GET also returns the runtime-owned `sourceModelOptions` inventory | 400 invalid shape or value, including an empty, duplicate, whitespace-bearing, or provider-qualified source prefix, or more than 32 prefixes / 128 characters per prefix |
 
 ### Logs, usage, and storage
 

@@ -72,9 +72,9 @@ export function toggleShadowCallSource(
   sourceModels?: string[],
 ): ShadowCallSourceToggleResult {
   const selected = shadowSourceModelList(sourceModels);
-  const covering = selected.find(prefix => option.id.startsWith(prefix));
-  if (covering === undefined) return { sourceModels: [...selected, option.id] };
-  if (covering !== option.id) return { blocked: "covered", prefix: covering };
+  const broader = selected.find(prefix => prefix !== option.id && option.id.startsWith(prefix));
+  if (broader !== undefined) return { blocked: "covered", prefix: broader };
+  if (!selected.includes(option.id)) return { sourceModels: [...selected, option.id] };
   const next = selected.filter(prefix => prefix !== option.id);
   return next.length === 0 ? { blocked: "last" } : { sourceModels: next };
 }

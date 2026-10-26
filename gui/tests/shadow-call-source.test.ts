@@ -127,6 +127,11 @@ describe("shadow source toggles", () => {
       .toEqual({ blocked: "covered", prefix: "gpt-5.6" });
   });
 
+  test("a covered option stays blocked when the exact prefix comes first", () => {
+    expect(toggleShadowCallSource(terra, ["gpt-5.6-terra", "gpt-5.6"]))
+      .toEqual({ blocked: "covered", prefix: "gpt-5.6" });
+  });
+
   test("a custom entry can be switched off by its exact prefix", () => {
     const custom: ShadowCallSourceOption = { id: "custom-helper", role: "custom", defaultIntercepted: false };
     expect(toggleShadowCallSource(custom, ["gpt-6-luna", "custom-helper"]))

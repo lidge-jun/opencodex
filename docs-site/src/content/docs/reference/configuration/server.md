@@ -938,7 +938,8 @@ runtime supports and persists one switch per source through
 `sourceModelOptions` inventory. A non-empty `sourceModels` replaces the default prefixes instead of
 extending them, so include `gpt-6-luna` (and `gpt-5.6-luna` for 0.145.0-0.153.x clients) when
 current clients should still be intercepted. The API rejects an empty, duplicate, whitespace-bearing,
-or provider-qualified source prefix, and it refuses a target that would intersect a selected source.
+or provider-qualified source prefix, caps the list at 32 prefixes of 128 characters each, and it
+refuses a target that would intersect a selected source.
 At least one source stays active; use the main switch to stop every shadow call.
 Memory consolidation is separate: Codex asks for Terra there, and
 `memoryModels.consolidation` controls that phase. Terra is also a normal foreground and subagent

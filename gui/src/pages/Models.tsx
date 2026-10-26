@@ -1086,7 +1086,11 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
-      if (!res.ok) throw new Error("shadow-call save failed");
+      if (!res.ok) {
+        setShadowCall(previous);
+        publishFeedback(false, res.status === 400 ? t("models.shadowCallSaveFailed") : t("models.networkError"));
+        return;
+      }
       const data = await res.json().catch(() => null) as ShadowCallData | null;
       if (data && typeof data.enabled === "boolean") setShadowCall(data);
     } catch {
