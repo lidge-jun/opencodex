@@ -1,4 +1,4 @@
-import { captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive, observeMainDecisionCredentialUsable, type MainQuotaWriter } from "./main-account-cache";
+import { captureMainAccountIdentityGeneration, getMainQuotaCredentialGeneration, isMainAccountIdentityGenerationLive, isMainQuotaWriterLive, matchesMainQuotaCredential, observeMainDecisionCredentialUsable, type MainQuotaWriter } from "./main-account-cache";
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createHash } from "node:crypto";
@@ -51,12 +51,23 @@ let jwtPlanAttempted = false;
 const MAIN_TOKEN_REFRESH_SKEW_MS = 60_000;
 let beforeMainAuthJsonRenameForTests: (() => void) | null = null;
 let codexOwnedMainCredential: { home: string; expiresAt: number; refreshRefused?: true } | null = null;
-type MainAccountToken = Readonly<{ accessToken: string; chatgptAccountId: string }>;
-const codexOwnedQuotaWriters = new WeakMap<MainAccountToken, MainQuotaWriter>();
+export type MainAccountToken = Readonly<{ accessToken: string; chatgptAccountId: string }>;
+const codexOwnedQuotaWriters = new WeakMap<MainAccountToken, { writer: MainQuotaWriter; home: string; credentialGeneration: number }>();
 
 /** Exact RPC result provenance; copied/request-created tokens cannot recapture native quota ownership. */
 export function mainAccountTokenQuotaWriter(token: MainAccountToken): MainQuotaWriter | undefined {
-  return codexOwnedQuotaWriters.get(token);
+  return codexOwnedQuotaWriters.get(token)?.writer;
+}
+
+/** A metadata probe may use only the exact owned observation while its home and credential remain current. */
+export function mainAccountTokenIsCurrent(token: MainAccountToken): boolean {
+  const proof = codexOwnedQuotaWriters.get(token);
+  return proof !== undefined && proof.home === resolveCodexHomeDir()
+    && codexOwnedMainCredential?.home === proof.home && !codexOwnedMainCredential.refreshRefused
+    && codexOwnedMainCredential.expiresAt > Date.now()
+    && proof.credentialGeneration === getMainQuotaCredentialGeneration()
+    && isMainQuotaWriterLive(proof.writer)
+    && matchesMainQuotaCredential(token.accessToken, token.chatgptAccountId);
 }
 
 function forgetCodexOwnedMainUsability(home: string): void {
@@ -98,11 +109,13 @@ export class MainAuthJsonChangedDuringRefreshError extends Error {
 }
 
 export class MainAccountTokenRefreshError extends Error {
-  constructor(readonly reason: "reauth" | "transient", options?: ErrorOptions) {
+  readonly credentialObservedAbsent: boolean;
+  constructor(readonly reason: "reauth" | "transient", options?: ErrorOptions & { credentialObservedAbsent?: boolean }) {
     super(reason === "reauth"
       ? "Codex main account needs reauthentication"
       : "Codex main token refresh did not complete", options);
     this.name = "MainAccountTokenRefreshError";
+    this.credentialObservedAbsent = options?.credentialObservedAbsent === true;
   }
 }
 
@@ -685,12 +698,12 @@ async function refreshThroughCodex(
     const grantKey = locked && mainRefreshGrantKey(locked);
     if (grantKey) markMainRefreshGrantRejected(grantKey);
     else codexOwnedMainCredential = { home: codexHome, expiresAt: 0, refreshRefused: true };
-    throw new MainAccountTokenRefreshError("reauth");
+    throw new MainAccountTokenRefreshError("reauth", { credentialObservedAbsent: true });
   }
   const token = status.authToken;
   if (status.authMethod !== "chatgpt" || !token) {
     noteNativeMainRefresh("codex-no-chatgpt-login");
-    throw new MainAccountTokenRefreshError("transient");
+    throw new MainAccountTokenRefreshError("transient", { credentialObservedAbsent: true });
   }
   // A transient Codex refresh failure still answers with its cached bearer.
   if (token === rejectedAccessToken || !mainAccessTokenFresh(token, Date.now(), 0)) {
@@ -704,7 +717,7 @@ async function refreshThroughCodex(
     chatgptAccountId: extractAccountId(undefined, token) ?? locked?.chatgptAccountId ?? "",
   });
   const writer = observeCodexOwnedMainAccountCredential(token);
-  if (writer) codexOwnedQuotaWriters.set(result, writer);
+  if (writer) codexOwnedQuotaWriters.set(result, { writer, home: codexHome, credentialGeneration: getMainQuotaCredentialGeneration() });
   if (writer && dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   const exp = decodeJwtPayload(token)?.exp;
   codexOwnedMainCredential = { home: codexHome, expiresAt: typeof exp === "number" ? exp * 1000 : Infinity };
