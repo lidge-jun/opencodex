@@ -215,6 +215,10 @@ describe("catalog ultra (always-on)", () => {
 });
 
 describe("mock-max wire clamp (nativeEffortClamp)", () => {
+  test("native model rejects none and selects its lowest supported effort", () => {
+    expect(nativeEffortClamp("gpt-6.1-sol", "none")).toBe("low");
+  });
+
   test("gpt-5.5 max/ultra clamp to its real top rung (xhigh)", () => {
     expect(nativeEffortClamp("gpt-5.5", "max")).toBe("xhigh");
     expect(nativeEffortClamp("gpt-5.5", "ultra")).toBe("xhigh");

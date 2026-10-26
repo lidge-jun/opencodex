@@ -396,6 +396,12 @@ Cursor 서버 주도 로컬 도구는 기본값으로 비활성화됩니다. Cod
 
 필드는 최상위가 아니라 `providers.cursor`에 설정하십시오. 대시보드에서는 **Providers → Cursor → Edit JSON**을 사용해 저장한 뒤 다시 시작합니다. 레거시 `unsafeAllowNativeLocalExec: true`는 `nativeLocalExec`이 설정되지 않았을 때만 `nativeLocalExec: "on"`과 같습니다. MCP, 화면 녹화, computer use는 `mcpServers`와 `desktopExecutor`가 따로 제어합니다.
 
+네이티브 `grep`이 허용된 디렉터리 검색에서는 `glob`으로 파일을 고릅니다. `*.ts`는 모든 하위 폴더의
+파일명에 적용되고, `src/**/*.ts`는 선택한 검색 폴더를 기준으로 한 상대 경로에 적용됩니다(`./`로 시작해도 됩니다). 모든 운영체제에서
+패턴의 경로 구분자는 `/`를 사용합니다. 문자 범위와 중괄호 선택 패턴을 지원하며, Bun 1.4.4에서는
+`**/!(*.test).ts` 같은 제외 패턴과 `part-{1..3}.ts` 같은 숫자 범위도 지원합니다.
+필터는 검색 폴더를 바꾸거나 네이티브 실행을 활성화하지 않습니다.
+
 각 `mcpServers.<name>`는 `command`(stdio) 또는 `url`(Streamable HTTP) 중 하나를 받습니다. stdio는 `args`, `env`, `cwd`도 받습니다. HTTP는 `headers`를 받습니다. 둘 다 `enabled`(기본값 true)와 `toolPrefix`를 지원합니다. `desktopExecutor`는 `computerUseCommand`, `recordScreenCommand`, `cwd`, `env`, `timeoutMs`(기본값 `30000`)를 받습니다. 명령은 `sh -c`를 거치며 stdin에서 JSON 요청 하나를 읽고, stdout에 JSON 결과 하나를 써야 합니다.
 
 :::caution[보안]
