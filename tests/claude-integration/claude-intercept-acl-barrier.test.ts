@@ -28,6 +28,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const success: IcaclsResult = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 const sid = "S-1-5-21-1-2-3-1001";
+// Drain every queued microtask, however many awaits the code under test adds, without waiting on the gate.
+const macrotask = () => new Promise<void>(resolve => setImmediate(resolve));
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
@@ -98,7 +100,7 @@ test.each(["config root", "ancestor"])("startup CA waits for an ACL flight on it
   await entered.promise;
   const startup = localCa.ensureLocalInterceptCaForStartup(configDir);
   try {
-    await Promise.resolve();
+    await macrotask();
     expect(existsSync(join(configDir, "claude-intercept"))).toBe(false);
   } finally { release.resolve(); await flight; await startup; }
   expect(existsSync(join(configDir, "claude-intercept", "ca.pem"))).toBe(true);
@@ -120,7 +122,7 @@ test("a settled optional deadline still waits for its live ancestor child", asyn
   expect((await flight).ok).toBe(false);
   let mutated = false;
   const work = withConfigDirHardeningSettled(configDir, () => { mutated = true; });
-  try { await Promise.resolve(); expect(mutated).toBe(false); }
+  try { await macrotask(); expect(mutated).toBe(false); }
   finally { release.resolve(); await work; }
   expect(mutated).toBe(true);
 });
@@ -456,7 +458,7 @@ test("runtime token creation drains a parent flight started during the CA await"
   });
   try {
     await returnedCa.promise;
-    await Promise.resolve();
+    await macrotask();
     expect(readClaudeInterceptProxyToken(root)).toBeNull();
   } finally {
     release.resolve();
