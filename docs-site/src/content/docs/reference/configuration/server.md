@@ -935,6 +935,10 @@ replacement keeps the request's configured reasoning effort. Set `sourceModels` 
 uses different helper ids. A non-empty `sourceModels` replaces the default prefixes instead of
 extending them, so include `gpt-6-luna` (and `gpt-5.6-luna` for 0.145.0-0.153.x clients) in the
 list when current clients should still be intercepted.
+Memory consolidation is separate: Codex asks for Terra there, and
+`memoryModels.consolidation` controls that phase. Terra is also a normal foreground and subagent
+model, so it stays out of the default shadow source set; the dashboard shows it as its own
+Memory-Routing entry next to the shadow-call sources.
 Matching bare model ids are eligible for interception, but explicit user turns keep their selected
 model: `x-codex-turn-metadata` must contain both `request_kind: "turn"` and `thread_source: "user"`.
 Spawned children also keep their model, identified by the `x-openai-subagent: collab_spawn` connection header (HTTP request or WebSocket
