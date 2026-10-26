@@ -253,6 +253,6 @@ export async function codexWsUpstreamFetch(
     beforeContinuation, onPhysicalDispatch,
     preOutputRefusalHold,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
-    completeOnMaxOutputTokens: loadConfig().completeOnMaxOutputTokens ?? true,
+    completeOnMaxOutputTokens: loadConfig().completeOnMaxOutputTokens ?? false,
   });
 }
