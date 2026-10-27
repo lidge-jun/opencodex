@@ -243,6 +243,19 @@ export async function withFirstPartySecretsSettled<T>(configDir: string, prepare
 }
 
 /**
+ * Run a captured first-party rollback once overlapping ACL work settles. A settle timeout
+ * leaves the rollback unrun and reports it as incomplete, so callers keep their existing
+ * "rollback did not complete" response instead of escaping into a generic error path.
+ */
+export async function rollbackDesktopFirstPartySettled(configDir: string, rollback: () => boolean): Promise<boolean> {
+  try { return await withConfigDirHardeningSettled(configDir, rollback); }
+  catch (error) {
+    if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+    return false;
+  }
+}
+
+/**
  * Write the first-party env into Claude Code's settings. Creates the local CA first so the
  * path we point `NODE_EXTRA_CA_CERTS` at exists before Claude Code ever reads it.
  */

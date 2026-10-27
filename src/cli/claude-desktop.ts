@@ -20,7 +20,7 @@ import {
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig, type Desktop3pConfigMode, parseDesktop3pModeArgs } from "../claude/desktop-3p";
 import {
   applyDesktopFirstParty, withFirstPartySecretsSettled,
-  captureDesktopFirstPartyRollback,
+  captureDesktopFirstPartyRollback, rollbackDesktopFirstPartySettled,
   isClaudeDesktopMode,
   observeClaudeDesktopMode,
   recordClaudeDesktopMode,
@@ -434,7 +434,7 @@ async function applyFirstPartyDesktop(
   if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
     const removed = removeDesktop3pStandardPivot({ appliedFingerprint, replaceWhileEnabled: true });
     if (!removed.ok) {
-      const restored = removed.changed || !applied.changed || await withConfigDirHardeningSettled(getConfigDir(), rollback);
+      const restored = removed.changed || !applied.changed || await rollbackDesktopFirstPartySettled(getConfigDir(), rollback);
       const modeSaved = !removed.changed || saveDesktopMode("first-party", deps);
       const warning = [restored ? "" : "first-party settings rollback did not complete",
         modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");
