@@ -201,7 +201,7 @@ function writePrivateTempFile(
   onCreated();
   try {
     if (windowsHardeningApplies()) {
-      hardenSecretPath(path, { required: true, timeoutMemoKey });
+      hardenSecretPath(path, { required: true, timeoutMemoKey, retryTimedOutOnce: true });
     }
     // Keyed on the REAL platform, not the override: on a POSIX host the mode is
     // the boundary and `assertPrivateTempDescriptor` demands 0o600, which an
@@ -241,7 +241,7 @@ function writePrivateTempFileWith(
   onCreated();
   try {
     if (windowsHardeningApplies()) {
-      hardenSecretPath(path, { required: true, timeoutMemoKey });
+      hardenSecretPath(path, { required: true, timeoutMemoKey, retryTimedOutOnce: true });
     }
     if (process.platform !== "win32") fchmodSync(descriptor, 0o600);
     assertPrivateTempDescriptor(path, descriptor);
@@ -264,7 +264,7 @@ async function writePrivateTempFileAsync(
   onCreated();
   try {
     if (windowsHardeningApplies()) {
-      await hardenSecretPathAsync(path, { required: true, timeoutMemoKey });
+      await hardenSecretPathAsync(path, { required: true, timeoutMemoKey, retryTimedOutOnce: true });
     }
     if (process.platform !== "win32") {
       fchmodSync(descriptor, 0o600);
@@ -299,7 +299,7 @@ function atomicWriteFileToTarget(
       // its ChangeTime bump is what used to invalidate the harden memo one line
       // later. On POSIX the mode IS the boundary, so it stays.
       if (windowsHardeningApplies()) {
-        hardenSecretPath(tempPath, { required: true, timeoutMemoKey: path });
+        hardenSecretPath(tempPath, { required: true, timeoutMemoKey: path, retryTimedOutOnce: true });
         return;
       }
       try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
@@ -442,7 +442,7 @@ export async function atomicWriteFileAsync(
     harden: async tempPath => {
       // Same reasoning as the synchronous writer above.
       if (windowsHardeningApplies()) {
-        await hardenSecretPathAsync(tempPath, { required: true, timeoutMemoKey: path });
+        await hardenSecretPathAsync(tempPath, { required: true, timeoutMemoKey: path, retryTimedOutOnce: true });
         return;
       }
       try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }

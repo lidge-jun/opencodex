@@ -33,6 +33,7 @@ import {
   type IcaclsResult,
 } from "../../src/lib/windows-secret-acl";
 import { atomicWriteFile } from "../../src/config";
+import { setWindowsHardeningForTests } from "../../src/config/atomic-write";
 import { hardenStableLockFile } from "../../src/codex/native-main-lock-file";
 import { nativeMainClaimPath, withNativeMainSharedClaim } from "../../src/codex/native-main-claim";
 import { NATIVE_MAIN_OWNER_DB, retainNativeMainOwner } from "../../src/codex/native-main-owner";
@@ -1218,6 +1219,33 @@ describe("ephemeral ACL memo release (#840 refinement)", () => {
       if (previousUsername === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = previousUsername;
       setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+    }
+  });
+
+  test("the default atomic writer retries a destination whose memo timed out (#7834)", () => {
+    setPlatformForTests("win32");
+    setWindowsHardeningForTests(true);
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    let stalled = true;
+    setIcaclsRunnerForTests(() =>
+      stalled ? timeout : { success: true, exitCode: 0, timedOut: false, stdout: "" },
+    );
+    const dest = join(testDir, "provider-account-quota-cache.json");
+    try {
+      expect(() => atomicWriteFile(dest, "first")).toThrow(/ETIMEDOUT/);
+      // One stall used to freeze this destination until the process restarted:
+      // the five production harden calls carried no recovery attempt, so the
+      // consumed memo refused every later write with no way to re-arm.
+      stalled = false;
+      atomicWriteFile(dest, "second");
+      expect(readFileSync(dest, "utf-8")).toBe("second");
+    } finally {
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+      setIcaclsRunnerForTests(null);
+      setWindowsHardeningForTests(null);
       setPlatformForTests(null);
     }
   });
