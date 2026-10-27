@@ -1654,6 +1654,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (prov.authMode === "oauth" && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
+    if (prov.adapter === "m365-copilot") return (await import("./m365-copilot-provider-probe")).probeM365CopilotProvider(name, prov, snapshot, req.signal);
     if (prov.adapter === "zed") return (await import("./zed-provider-probe")).probeZedProvider(prov, apiKey, snapshot?.providerUserId);
     if (prov.adapter === "cursor") {
       const started = Date.now();

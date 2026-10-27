@@ -8,6 +8,7 @@ import { normalizeM365WebSession, parseM365ModelBootstrap, readM365ModelBootstra
 import { getToneForModel } from "../../src/providers/m365-copilot-models";
 import { applyNewModelPolicy } from "../../src/providers/new-model-policy";
 import { readM365BrowserWebSession } from "../../src/oauth/m365-copilot-web-session";
+import { probeM365CopilotProvider } from "../../src/server/management/m365-copilot-provider-probe";
 
 const oid = "11111111-1111-1111-1111-111111111111", tid = "22222222-2222-2222-2222-222222222222";
 const accountId = oid + "@" + tid;
@@ -92,4 +93,16 @@ test("captures web discovery sessions using Chrome and Firefox protocol shapes",
     expect(await readM365BrowserWebSession(browser, "context", new AbortController().signal, firefox)).toEqual({ accountId, cookie: "OhpAuth=fixture" });
     expect(methods).toContain(firefox ? "storage.getCookies" : "Network.getCookies");
   }
+});
+
+test("dashboard connectivity probe uses live account metadata and never treats a stale catalog as connectivity", async () => {
+  await saveCredential("m365-copilot", credential());
+  const snapshot = await getValidAccessTokenSnapshot("m365-copilot");
+  globalThis.fetch = (async () => new Response(html())) as typeof fetch;
+  const provider = { ...OAUTH_PROVIDERS["m365-copilot"]!.providerConfig, fetch: ((u, o) => globalThis.fetch(u, o)) as typeof fetch };
+  const ok = await probeM365CopilotProvider("m365-copilot", provider, snapshot, new AbortController().signal);
+  expect(await ok.json()).toMatchObject({ ok: true, models: 2 });
+  globalThis.fetch = (async () => new Response("sign in")) as typeof fetch;
+  const failed = await probeM365CopilotProvider("m365-copilot", provider, snapshot, new AbortController().signal);
+  expect(await failed.json()).toMatchObject({ ok: false });
 });

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { M365_COPILOT_BASE_URL } from "../../providers/m365-copilot-models";
-import { M365_COPILOT_WEB_URL, normalizeM365WebSession, readM365ModelBootstrap } from "../../providers/m365-copilot-discovery";
-import { providerOutboundGet } from "../../lib/provider-outbound";
+import { normalizeM365WebSession } from "../../providers/m365-copilot-discovery";
+import { fetchM365ModelRoster } from "../../providers/m365-copilot-discovery-fetch";
 import { credentialGeneration, getAccountCredentialWithStatus, getAccountSet } from "../../oauth/store";
 import { m365CopilotClaims } from "../../oauth/m365-copilot";
 import { getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, markProviderDiscoveryFailed, markProviderDiscoveryOk, setCached } from "../model-cache";
@@ -16,8 +16,10 @@ export async function fetchM365CopilotCatalog(captured: CapturedProviderGather, 
     if (isCurrent()) markProviderDiscoveryFailed(name, { reason: "provider" });
     return { models: [], state: "degraded" };
   }
-  const claims = m365CopilotClaims(auth.apiKey);
-  if (session.accountId.toLowerCase() !== (claims.oid + "@" + claims.tid).toLowerCase()) return { models: [], state: "degraded" };
+  try {
+    const claims = m365CopilotClaims(auth.apiKey);
+    if (session.accountId.toLowerCase() !== (claims.oid + "@" + claims.tid).toLowerCase()) throw new Error("Account mismatch");
+  } catch { return { models: [], state: "degraded" }; }
   const identity = createHash("sha256").update(JSON.stringify([auth.oauthAccountId, session.accountId, session.cookie])).digest("hex");
   const hinted = (models: CatalogModel[]) => applyConfigHintsToCachedModels(name, provider, models, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir, false);
   const fresh = getFreshCached(name, ttlMs, Date.now(), identity);
@@ -32,15 +34,14 @@ export async function fetchM365CopilotCatalog(captured: CapturedProviderGather, 
   };
   try {
     const signal = AbortSignal.timeout(15_000);
-    const response = await providerOutboundGet(name, provider, M365_COPILOT_WEB_URL, { headers: { cookie: session.cookie }, signal }, { beforeSend: maySend });
-    if (!response.ok || response.status >= 300) { await response.body?.cancel(); throw new Error("Microsoft 365 Copilot web sign-in expired; retry login"); }
-    const items = await readM365ModelBootstrap(response, session.accountId, signal);
+    const items = await fetchM365ModelRoster(name, provider, { accessToken: auth.apiKey, m365: session }, signal, maySend);
     const models = items.map(item => applyProviderConfigHints(name, provider, { id: item.id, provider: name, displayName: item.name as string, inputModalities: ["text"] }, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir, false));
     if (!maySend()) return { models: [], state: "degraded" };
     setCached(name, models, Date.now(), undefined, identity);
     markProviderDiscoveryOk(name, models.length);
     return { models, state: "authoritative" };
   } catch {
+    if (!maySend()) return { models: [], state: "degraded" };
     if (isCurrent()) { markModelsFetchFailure(name, undefined, identity); markProviderDiscoveryFailed(name, { reason: "provider" }); }
     return { models: hinted(getStaleCached(name, identity) ?? []), state: "degraded" };
   }
