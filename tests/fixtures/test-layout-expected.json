@@ -309,7 +309,7 @@
   "bump-dev-version.test.ts": "ci-workflows", "bun-runtime.test.ts": "ci-workflows",
   "bun-transpiler-cache-scope.test.ts": "cli",
   "bun-stream-caps.test.ts": "lib", "cache-diagnostic.test.ts": "usage",
-  "cancel-body-on-abort.test.ts": "server", "catalog-auto-refresh-client-fanout.test.ts": "codex-integration", "catalog-auto-refresh-scheduler.test.ts": "codex-integration",
+  "cancel-body-on-abort.test.ts": "server", "catalog-auto-refresh-client-fanout.test.ts": "codex-integration", "catalog-auto-refresh-scheduler.test.ts": "codex-integration", "catalog-context-window-ladder.test.ts": "codex-integration",
   "catalog-cursor-search.test.ts": "codex-integration", "catalog-custom-ordering.test.ts": "codex-integration",
   "catalog-duplicate-slug-dedup.test.ts": "codex-integration",
   "catalog-free-pricing-status.test.ts": "codex-integration", "catalog-full-picker-order.test.ts": "codex-integration",

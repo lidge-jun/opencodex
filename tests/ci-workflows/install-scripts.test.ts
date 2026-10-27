@@ -100,7 +100,8 @@ describe("install scripts", () => {
     expect(pkg.testRunnerBun).toBe("1.4.4");
     expect(pkg.dependencies?.zod).toBe("4.6.6");
     expect(pkg.devDependencies?.typescript).toBe("7.0.2");
-    expect(pkg.devDependencies?.["@types/bun"]).toBe("1.4.0");
+    // Bun's type definitions track the runtime pin rather than a literal of their own.
+    expect(pkg.devDependencies?.["@types/bun"]).toBe(pkg.dependencies?.bun);
     expect(pkg.scripts?.dev).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:proxy"]).toBe("bun run src/cli/index.ts start");
     expect(pkg.scripts?.["dev:gui"]).toBe("cd gui && bun run dev");
