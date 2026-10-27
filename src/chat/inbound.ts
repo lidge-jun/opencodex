@@ -672,9 +672,12 @@ function applyChatSettings(raw: ChatCompletionsRoutingBody, body: Rec): void {
 
   const effort = resolveReasoningEffort(raw);
   const summary = resolveReasoningSummary(raw);
-  if (effort || summary !== undefined) {
+  const enabled = isRec(raw.reasoning) && typeof raw.reasoning.enabled === "boolean" ? raw.reasoning.enabled
+    : isRec(raw.thinking) && ["enabled", "disabled"].includes(String(raw.thinking.type)) ? raw.thinking.type === "enabled" : undefined;
+  if (effort || summary !== undefined || enabled !== undefined) {
     body.reasoning = {
       ...(effort ? { effort } : {}),
+      ...(enabled !== undefined ? { enabled } : {}),
       summary: summary ?? "auto",
     };
   }

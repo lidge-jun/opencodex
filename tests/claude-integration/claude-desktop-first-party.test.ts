@@ -53,8 +53,8 @@ async function dispatch(path: string, init?: RequestInit, inputConfig: OcxConfig
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 
-// Attach the response body to every status failure so a hosted-runner flake classifies
-// itself (an environmental ca_unavailable, say, instead of a bare "Expected: 200 / Received: 500").
+// Attach the response body to status failures to preserve refusal codes and sanitized
+// secret-preparation stage/cause diagnostics alongside the expected/actual status.
 function expectStatus(result: { status: number; body: unknown }, status: number): void {
   expect(result.status, `body=${JSON.stringify(result.body)}`).toBe(status);
 }

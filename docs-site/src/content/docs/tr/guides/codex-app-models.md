@@ -152,11 +152,12 @@ meta verileri sağladığı GPT-5.6 için kullanılır.
 
 | Rota | Seçici kimlikleri ve katalog meta verileri |
 | --- | --- |
-| Codex girişi (hesap nitelikli satırlar devre dışı) | `gpt-5.6-sol`, `gpt-5.6-terra` ve `gpt-5.6-luna` gibi yalın yerel kimlikler; Pool veya Direct `codexAccountMode` aracılığıyla seçilir. GPT-5.6 satırları 922.000 tokenlik bir katalog penceresi kullanır. |
+| Codex girişi (hesap nitelikli satırlar devre dışı) | `gpt-5.6-sol`, `gpt-5.6-terra` ve `gpt-5.6-luna` gibi yalın yerel kimlikler; Pool veya Direct `codexAccountMode` aracılığıyla seçilir. GPT-5.6 satırları 922.000 tokenlik bir katalog penceresi kullanır. `gpt-6.1-terra`: varsayılan bağlam 500,000 / uzun bağlam 872,000. |
 | Codex girişi (uygun seçicilerle hesap nitelikli satırlar etkin) | Uygun seçici ve desteklenen yerel model başına bir `<seçici>/<yerel-openai-modeli>` satırı; her satır yalnızca eşlenen hesabını kullanır ve yalın yerel satırlar seçiciden gizlenir. Yerel meta veriler ve bağlam pencereleri korunur. |
 | Codex girişi (açık Daybreak iletme satırı) | Yalnızca tam `customModels` satırı kurallı `openai` sağlayıcısında yapılandırıldığında `openai/gpt-daybreak-blue-latest`. Daybreak hat kimliğini korur ve sabitlenmiş Sol yetenek anlık görüntüsünü kullanır (922.000 bağlam; 829.800 otomatik sıkıştırma). |
-| OpenAI (API anahtarı) | Tam olarak on ad alanlı satır: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, üç `*-pro` sanal kimliği ve iki Daybreak takma adı (onunun tümü için 922.000 bağlam; 922.000 maksimum girdi) |
+| OpenAI (API anahtarı) | Ad alanlı modeller arasında `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, `*-pro` sanal kimlikleri ve Daybreak takma adları bulunur (1,050,000 bağlam; 922,000 maksimum girdi). `openai-apikey/gpt-6.1-terra` için bağlam 1,050,000, maksimum çıktı 128,000’dır. |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (922.000) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` (1,050,000) |
 | Cursor | Statik geri dönüş `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` ve `cursor/gpt-5.6-luna` (1.000.000) ile Grok 4.5, 4.6 ve 4.7 için normal/Fast satırları (500.000) içerir; 4.6 ve 4.7 ayrıca `xhigh` sunar. Canlı hesap keşfi hangi satırların görünür kalacağını belirler. |
 | xAI | Canlı keşif yetkilidir. Geri dönüş kataloğu `xai/grok-4.6` ve `xai/grok-4.7` içerir; varsayılan model `xai/grok-4.5` olarak kalır. Üçünün de bağlam penceresi 500.000 tokendir. Grok 4.6 ve 4.7 `low` / `medium` / `high` / `xhigh` (yukarı akış varsayılanı: `high`) sunarken, Grok 4.5 `high` ile durur. |
 

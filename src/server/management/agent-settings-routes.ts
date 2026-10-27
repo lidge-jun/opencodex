@@ -1062,7 +1062,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         rethrowManagementBodyTooLarge(error);
         return jsonResponse({ error: "invalid JSON body" }, 400);
       }
-      const { resolveClaudeDesktopApplyMode, observeClaudeDesktopMode, applyDesktopFirstParty, captureDesktopFirstPartyRollback, removeDesktopFirstParty } = await import("../../claude/desktop-first-party");
+      const { resolveClaudeDesktopApplyMode, observeClaudeDesktopMode, applyDesktopFirstParty, withFirstPartySecretsSettled, captureDesktopFirstPartyRollback, rollbackDesktopFirstPartySettled, removeDesktopFirstPartySettled } = await import("../../claude/desktop-first-party");
       const requested = (parsed as { mode?: unknown } | null)?.mode;
       let desktopMode: "first-party" | "gateway" = resolveClaudeDesktopApplyMode(config, observeClaudeDesktopMode(config));
       if (requested !== undefined) {
@@ -1105,7 +1105,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         return await runPickerTransition(config, async ops => {
           const { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } = await import("../../claude/desktop-3p");
           const rollback = captureDesktopFirstPartyRollback(config);
-          const applied = applyDesktopFirstParty(config);
+          const { getConfigDir } = await import("../../config/paths");
+          const applied = await withFirstPartySecretsSettled(getConfigDir(), () => applyDesktopFirstParty(config));
           if (!applied.ok) {
             const { firstPartyRefusalMessage } = await import("./native-integration-routes");
             return jsonResponse({
@@ -1113,6 +1114,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
               code: "claude_desktop_first_party_refused",
               reason: applied.reason,
               path: applied.path,
+              ...(applied.diagnostic ? { diagnostic: applied.diagnostic } : {}),
             }, applied.reason === "foreign_env" || applied.reason === "intercept_disabled" ? 409 : 500);
           }
           // Remove the gateway only after the replacement env was written.
@@ -1122,7 +1124,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
             const removed = (deps.removeDesktop3pStandardPivot ?? removeDesktop3pStandardPivot)({ appliedFingerprint, replaceWhileEnabled: true });
             if (!removed.ok) {
-              const restored = removed.changed || !applied.changed || rollback();
+              const restored = removed.changed || !applied.changed || await rollbackDesktopFirstPartySettled(getConfigDir(), rollback);
               const modeSaved = !removed.changed || (await persistDesktopModeField(config, "first-party")).ok;
               const warning = [restored ? "" : "first-party settings rollback did not complete",
                 modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");
@@ -1219,10 +1221,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const committed = persistCommittedDesktopGateway(config, state.profile, result.fingerprint);
         const modeWarning = committed.ok ? undefined : `Gateway applied, but its mode/profile state was not saved (${committed.reason}).`;
         // The durable marker describes the committed gateway even if old-mode cleanup fails.
-        const firstPartyRemoved = removeDesktopFirstParty(loadConfig());
+        const firstPartyRemoved = await removeDesktopFirstPartySettled(loadConfig);
         if (!firstPartyRemoved.ok) {
           return { response: jsonResponse({
-            error: `Claude Code settings could not be parsed (${firstPartyRemoved.path}); first-party cleanup remains incomplete after gateway apply.`,
+            error: `Claude Code first-party settings cleanup did not complete (${firstPartyRemoved.path}); the gateway was applied.`,
             code: "claude_desktop_first_party_refused", reason: firstPartyRemoved.reason,
             applied: true, saved: committed.ok, mode: "gateway", path: result.path,
             ...(modeWarning ? { warning: modeWarning } : {}),
@@ -1407,7 +1409,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           !("fingerprint" in body) || typeof body.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(body.fingerprint)) {
         return jsonResponse({ error: "fingerprint is required" }, 400);
       }
-      return jsonResponse(applyClaudeModelDefaults(config.claudeCode?.tierModels, body.fingerprint));
+      // Fresh admission after the body await: a nested Claude home shares the config-root ACL flight.
+      const fingerprint = body.fingerprint;
+      const { withConfigDirHardeningSettled } = await import("../../config/paths"), { claudeConfigDir } = await import("../../claude/auth-detect");
+      return jsonResponse(await withConfigDirHardeningSettled(claudeConfigDir(), () => applyClaudeModelDefaults(config.claudeCode?.tierModels, fingerprint)));
     } catch (error) {
       rethrowManagementBodyTooLarge(error);
       if (error instanceof ModelDefaultsRecoveryError) return jsonResponse({ error: error.message, code: error.message, backupPath: error.backupPath }, 500);
@@ -1552,7 +1557,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       return jsonResponse({ error: "cliFirstParty must be sent alone", code: "cli_first_party_not_alone" }, 400);
     if (body.cliFirstParty !== undefined) {
       const { claudeInterceptEnabled, claudeInterceptProxyPort, getClaudeInterceptState } = await import("../../claude/intercept/runtime");
-      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode } = await import("../../claude/desktop-first-party");
+      const { captureDesktopFirstPartyRollback, inspectDesktopFirstParty, observeClaudeDesktopMode, resolveClaudeDesktopMode, withFirstPartySecretsSettled } = await import("../../claude/desktop-first-party");
       const { firstPartyDesired, readFirstPartyProxyStatus, reconcileClaudeFirstPartySettings } = await import("../../claude/first-party-settings");
       const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
       let bound = (deps.getClaudeInterceptState ?? getClaudeInterceptState)();
@@ -1622,13 +1627,15 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (committed.pinnedMode) live.desktopMode = committed.pinnedMode;
       config.claudeCode = live;
       let result: ReturnType<typeof reconcileClaudeFirstPartySettings> | undefined;
-      try { result = (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
-        firstPartyDesired(config, observeClaudeDesktopMode(config))); }
+      const { getConfigDir, withConfigDirHardeningSettled } = await import("../../config/paths");
+      try { result = await withFirstPartySecretsSettled(getConfigDir(), () =>
+        (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
+          firstPartyDesired(config, observeClaudeDesktopMode(config)))); }
       catch { /* An unexpected settings failure is mapped after conditional rollback. */ }
       if (!result?.ok) {
         let settingsRestored = true;
         if (body.cliFirstParty) {
-          try { settingsRestored = restoreSettings?.() ?? false; } catch { settingsRestored = false; }
+          try { settingsRestored = result?.reason === "ca_unavailable" || await withConfigDirHardeningSettled(getConfigDir(), () => restoreSettings?.() ?? false); } catch { settingsRestored = false; }
           let rollback: ReturnType<typeof mutatePersistedConfig<OcxConfig["claudeCode"]>>;
           try {
             rollback = mutatePersistedConfig(persisted => {
@@ -1650,6 +1657,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         }
         const code = result?.reason ?? "write_failed";
         return jsonResponse({ error: "Claude first-party reconciliation failed", code,
+          ...(result?.diagnostic ? { diagnostic: result.diagnostic } : {}),
           ...(!body.cliFirstParty && code === "unreadable"
             ? { cliFirstParty: false, warnings: ["settings_residual"] } : {}),
           ...(body.cliFirstParty && !settingsRestored

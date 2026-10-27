@@ -694,7 +694,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 105 built-in presets: 84 key-based, 17 OAuth, three local, and one default
+opencodex ships 106 built-in presets: 85 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -786,6 +786,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Opper | `https://api.opper.ai/v3/compat` |
 | TokenLab | `https://api.tokenlab.sh/v1` |
 | Modelflare | `https://modelflare.dev/v1` |
+| AI Stupid Level | `https://aistupidlevel.info/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -849,7 +850,7 @@ Each model then uses the request format TokenLab declares for it
 
 | Models | Codex (Responses clients) | Chat clients | Claude Code (Anthropic clients) |
 | --- | --- | --- | --- |
-| `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `grok-4.7`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `kimi-k3`, `glm-5.3` | [Responses](https://tokenlab.sh/docs/en/api-reference/responses/create-response) | Chat Completions | Chat Completions |
+| `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-sol`, `gpt-6-luna`, `grok-4.7`, `deepseek-v4.1-flash`, `deepseek-v4-pro`, `kimi-k3`, `glm-5.3` | [Responses](https://tokenlab.sh/docs/en/api-reference/responses/create-response) | Chat Completions | Chat Completions |
 | `claude-*` | [Messages](https://tokenlab.sh/docs/en/api-reference/messages/create-message) | Messages | Messages |
 | Every other model, including `gemini-3.8-flash` | Chat Completions | Chat Completions | Chat Completions |
 
@@ -870,15 +871,42 @@ picker and marks it as a sponsor, and nothing else about routing or defaults cha
 **Modelflare** is an OpenAI-compatible relay at `https://modelflare.dev/v1`. Select **Modelflare**
 in `ocx init` or the dashboard's **Add provider** picker, or run `ocx provider add modelflare`, and
 give it your key directly or as the reference `${MODELFLARE_API_KEY}` so the key stays in your
-environment. The preset uses Chat Completions and seeds four models that
+environment. The preset uses Chat Completions. The following existing models
 were verified with chat, streaming and tool calls: `glm-5.3-flash` (the default),
-`claude-sonnet-5-5`, `gpt-6.1-sol` and `deepseek-v4-flash`. You can add other Chat-compatible
+`claude-sonnet-5-5`, `gpt-6.1-sol` and `deepseek-v4-flash`.
+`gpt-6.1-terra` is a preemptive seed mirroring Sol; it has not been inference-verified here.
+You can add other Chat-compatible
 Modelflare models as custom models. Image and video models use separate Modelflare endpoints and
 do not work through this Chat preset. An ordinary Modelflare key is bound to one routing group and
 can call only that group's models, so use a Smart key for the full seeded set, or pass
 `--default-model` with a model your key's group serves.
 `deepseek-v4.1-flash` is listed upstream but currently answers 503, so the preset leaves it out.
 Upstream latency varies from a few seconds to about 30 seconds, with occasional transient 503s.
+
+**AI Stupid Level** is a Smart Router at `https://aistupidlevel.info/v1`, operated by S.C. Studio
+Platforms S.R.L. Create a router key at [aistupidlevel.info/router/keys](https://aistupidlevel.info/router/keys)
+and add your own OpenAI, Anthropic, Google, DeepSeek, Kimi or GLM keys to the same account. Then select
+**AI Stupid Level** in `ocx init` or the dashboard's **Add provider** picker, or run
+`ocx provider add aistupidlevel`, and give it the router key directly or as the reference
+`${AISTUPIDLEVEL_API_KEY}`. The router calls each model with your own provider key, so the provider
+bills you directly and AI Stupid Level adds no markup ([terms](https://aistupidlevel.info/terms#router)).
+The preset uses Chat Completions for every client, Claude Code included, and discovers models from the
+authenticated `GET /v1/models`. Its seeded models are the
+[routing modes](https://aistupidlevel.info/router/docs#strategies): `auto-coding` (the default) sends
+each request to the model with the best measured score on AI Stupid Level's coding benchmark,
+`auto-tooling` and `auto-reasoning` do the same for tool use and reasoning, and `auto-value-coding` or
+`auto-fastest-quality` pick the best-value or fastest model within 5 points of the best. A real model id
+from the live list, such as `aistupidlevel/claude-opus-5-5`, pins one model, and the `X-AISM-Model`
+response header names the model that answered. Routing modes declare a 262,144-token window and 64,000
+output tokens, which hold for any model the router picks. The router accepts text only, so for a
+routing mode or pinned model at the preset destination the proxy hands images to the vision sidecar instead of sending them. Its Anthropic
+Messages endpoint is a passthrough to Anthropic without routing, so the preset does not use it.
+
+The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
+`text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values
+are rejected on save; a malformed value in a hand-edited config loads as `["text"]` with a warning.
+The preset's text-only fallback is applied at runtime, including when saved under another provider
+name at the same URL and Chat adapter. It does not follow a custom URL or another adapter.
 
 The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
 key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly
@@ -968,6 +996,13 @@ Most use the `openai-chat` adapter with a bearer key; Anthropic-compatible prese
 preset, `xiaomi-mimo`, and a token-plan preset, `mimo`. All three default to MiMo V2.6 (`mimo-v2.6-pro`,
 or `mimo-v2.6-flash` on `xiaomi-mimo`). Xiaomi retires `mimo-v2.5` and `mimo-v2.5-pro` on 2026-10-21
 with no redirect, so switch a saved V2.5 default before then; opencodex does not rewrite it for you.
+
+**Reasoning capabilities.** Model metadata describes three independent capabilities: `supportsReasoning`, `supportsThinkingToggle`, and `supportsReasoningEffort`. An omitted value is unknown; `false` is an explicit declaration. `defaultThinkingEnabled` records the default switch state, while `reasoningEfforts` lists actual strength choices. Per-model declarations live in the provider's `modelCapabilities` map; reasoning axes merge over registry defaults using case-insensitive model IDs, with operator values taking precedence. `/v1/models` exposes the corresponding `supports_reasoning`, `supports_thinking_toggle`, `supports_reasoning_effort`, and `default_thinking_enabled` fields under `capabilities`, without inventing an effort list for fixed-strength models.
+
+Legacy configurations with an explicit empty effort list and no reasoning capability declarations retain `capabilities.supports_reasoning: false` in `/v1/models` discovery. An explicit `supportsReasoning: true` or `supportsThinkingToggle: true` still advertises thinking when the effort list is empty.
+
+Public MiMo V2.6 is one instance: its three models support reasoning and an on/off switch, but no adjustable intensity; thinking defaults to enabled. The wire adapter sends `thinking.type: enabled/disabled`. OCX's Responses ingress also accepts `reasoning.enabled` independently of `reasoning.effort`. For clients that only offer effort enums, Codex catalogs and OpenCode/Kilo exports represent this switch as `none/high`; those values are client compatibility aliases, not MiMo strength levels. Client-owned labels may still say “High.” Fixed reasoning models without a switch get no fabricated control. Xiaomi's [deep-thinking guide](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking) describes the public MiMo switch; free, token-plan, third-party routes and older MiMo models keep their existing declarations.
+
 Volcengine Coding Plan and Agent Plan use their native Responses endpoints through `openai-responses`.
 During validated Ark Coding Plan tool continuations, replaying the returned Responses `reasoning` item
 answered `400 InvalidParameter`, so the Coding Plan preset drops replayed reasoning items before
@@ -1551,6 +1586,9 @@ visible even while live catalogs lag:
 | Codex login (Pool or Direct) | `gpt-5.6-*` | 922,000 |
 | OpenAI (API key) | `openai-apikey/gpt-5.6-*` plus `*-pro` | 922,000 (922,000 max input) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 922,000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1,000,000 |
 
 The native GPT-5.6 entries preserve the pinned upstream reasoning ladders (for example, Luna has
@@ -1597,7 +1635,7 @@ seconds per call, including pacing and body reads. These are OpenCodex safeguard
 GitHub limits; oversized catalogs, slow negotiation or a truncated intent excerpt can affect compatibility.
 
 For named selections, Copilot fronts a mixed-wire catalog: the following models (`gpt-5.3-codex`, `gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) reject
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) reject
 `/chat/completions` for agent traffic, so opencodex routes those models over the
 Responses API by built-in default while every other Copilot model stays on chat
 completions. The precedence is: hard wire pin → your explicit
