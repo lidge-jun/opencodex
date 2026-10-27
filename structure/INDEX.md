@@ -28,7 +28,7 @@ Persisted config, the Codex home it writes into, and the model catalog it publis
 | [`codex-provider-routing.md`](codex-provider-routing.md) | Explicit provider-ID routing consent, URL-only publication and recovery. |
 | [`codex-home.md`](codex-home.md) | CODEX_HOME resolution, the files opencodex manages there, and Codex-home diagnostics. |
 | [`codex-prompts.md`](codex-prompts.md) | Prompt-layer repair, base import previews and bounded text-probe sources. |
-| [`codex-cli-update.md`](codex-cli-update.md) | Read-only update planning, isolated npm environment, and complete process observation. |
+| [`codex-cli-update.md`](codex-cli-update.md) | Content-bound planning and explicit POSIX apply with isolated npm, artifact validation, installation leases and readback. |
 | [`catalog.md`](catalog.md) | Shared Codex catalog assembly, account namespaces, pool rotation, and effort ladders. |
 | [`catalog-vendor-context.md`](catalog-vendor-context.md) | Bundled model-ID window fallback, ambiguity handling, and inferred-capacity provenance. |
 | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) | Persisted effort-clamp observation identity and idempotent sync notices. |
@@ -137,6 +137,7 @@ Background service, docs, release, and design discipline.
 | Doc | Scope |
 | --- | --- |
 | [`desktop-shell.md`](desktop-shell.md) | Tauri desktop shell, proxy attachment and sidecar lifecycle, tray controls, bootstrap navigation, and desktop companion presence. |
+| [`desktop-recovery.md`](desktop-recovery.md) | Native recovery intent, independently anchored executable and accepted-connection proof, cold-start decisions and installation scope. |
 | [`desktop-terminal-command.md`](desktop-terminal-command.md) | Desktop-owned ocx command on PATH: record and journal, POSIX shim and shell blocks, Windows user Path, private-path ACL policy, and the local Terminal command page. |
 | [`desktop-start-at-login.md`](desktop-start-at-login.md) | macOS tray Start at Login judgment shared with Startup safety, its parity fixture, click rules, and the guarded launch-origin migration. |
 | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) | Service install/repair, platform launchers, tray, and sidecar processes. |
@@ -160,7 +161,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `.github/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `app/` | [`overview.md`](overview.md)<br>[`companion.md`](companion.md) |
 | `bin/` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
-| `bin/ocx.mjs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `bin/ocx.mjs` | [`codex-cli-update.md`](codex-cli-update.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/` | [`desktop-shell.md`](desktop-shell.md)<br>[`companion.md`](companion.md) |
 | `desktop/src-tauri/src/claim.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/cli_command.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
@@ -171,9 +172,13 @@ A source area can be described by more than one doc, because these docs are orga
 | `desktop/src-tauri/src/identity.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/login_registration.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
 | `desktop/src-tauri/src/ownership.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/recovery.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
+| `desktop/src-tauri/src/recovery_activity.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
+| `desktop/src-tauri/src/recovery_presence.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `desktop/src-tauri/src/resolve.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `desktop/src-tauri/src/runtime_stop.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
-| `desktop/src-tauri/src/startup.rs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/startup.rs` | [`desktop-recovery.md`](desktop-recovery.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `desktop/src-tauri/src/supervisor.rs` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `desktop/src-tauri/src/tray_login.rs` | [`desktop-start-at-login.md`](desktop-start-at-login.md) |
 | `desktop/ui/cli.html` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `desktop/ui/cli.js` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
@@ -215,8 +220,10 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/cli.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`remote-messaging.md`](remote-messaging.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/cli/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
+| `src/cli/codex-cli-update.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/cli/codex-provider.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/cli/desktop-runtime-guidance.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/cli/ensure-desktop-cold-start.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `src/cli/link-apply-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/cli/models-runtime.ts` | [`pricing.md`](pricing.md) |
 | `src/cli/status-codex-settings.ts` | [`remote-link.md`](remote-link.md) |
@@ -238,7 +245,19 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/catalog/parsing.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/routed-gather.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`providers/opengateway.md`](providers/opengateway.md) |
 | `src/codex/catalog/vendor-context.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
+| `src/codex/cli-update-apply.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-artifacts.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-files.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-inspection-context.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-job-execution.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-job-worker.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-job.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-lease.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-plan.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-recovery.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-selection-gate.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-worker-recovery.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-worker.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/quota.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
@@ -318,6 +337,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/inference/advisor-diagnostics.ts` | [`advisor.md`](advisor.md) |
 | `src/server/management/` | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md) |
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
+| `src/server/management/codex-cli-update-routes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
@@ -341,6 +361,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/service/` | [`runtime.md`](runtime.md) |
 | `src/service/cli.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-command-guard.ts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
+| `src/service/desktop-recovery-process.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
+| `src/service/desktop-recovery.ts` | [`desktop-recovery.md`](desktop-recovery.md) |
 | `src/service/desktop-startup.ts` | [`desktop-start-at-login.md`](desktop-start-at-login.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-supervision.d.mts` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/service/desktop-supervision.mjs` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |

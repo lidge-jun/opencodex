@@ -1,7 +1,7 @@
 # Per-file Bun test durations in milliseconds, read from hosted CI job logs.
 # Consumed by scripts/ci/run-bun-test-batches.sh to balance shards; a file without a row weighs the median.
 # Regenerate with scripts/ci/test-durations.ts (usage in its header); do not edit by hand.
-# Source: run 38250055508 (dev dc45bb2ca9, lane=all), Linux test 1/4-4/4 and macos 1/3-3/3
+# Source: run 38250055508 (dev dc45bb2ca9, lane=all), Linux test 1/4-4/4 and macos 1/3-3/3; selected row tests/codex-integration/codex-cli-update-apply.test.ts from run 40084641010 @700dc1d8bfe3 job 120850286088 (test 2/4, Bun 1.4.4); other rows retained
 271	tests/adapters/abort-race.test.ts
 643	tests/adapters/adapter-buffered-tool-conformance.test.ts
 270	tests/adapters/adapter-error-inline.test.ts
@@ -693,6 +693,7 @@
 169	tests/codex-integration/codex-cli-install-provenance.test.ts
 100	tests/codex-integration/codex-cli-installation-identity.test.ts
 127	tests/codex-integration/codex-cli-installation-targets.test.ts
+94979	tests/codex-integration/codex-cli-update-apply.test.ts
 104	tests/codex-integration/codex-cli-update-launcher-policy.test.ts
 1197	tests/codex-integration/codex-cli-update-zero-effect.test.ts
 92	tests/codex-integration/codex-cli-windows-installation-files.test.ts

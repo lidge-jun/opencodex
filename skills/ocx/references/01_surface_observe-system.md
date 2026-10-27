@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 96.
+Declared capabilities: 98.
 
 ### `ocx companion`
 
@@ -392,11 +392,52 @@ Drives no management route.
 | `--channel` | string | Registry channel to resolve. Only the stable latest channel is offered. |
 | `--json` | boolean | Emit the plan as JSON. |
 
+- Local counterpart of GET /api/codex/cli-update/plan: runs the same proof-bound plan builder without HTTP transport.
 - Adds the three inputs check leaves out: an exact registry version with its sha512 integrity, a fail-closed process-table read, and a decision.
 - The registry evidence is pinned to the official npm registry with project/user npm configuration isolated, so a redirected .npmrc cannot supply the answer.
 - Installs nothing and mutates no application state; registry evidence is gathered under an isolated temporary npm root (npmrc, cwd, cache and logs) removed best-effort afterwards. A refusal is a normal dry-run answer and still exits 0.
-- The plan id is a digest of the evidence the decision rests on — ownership, the installed version, a digest of the canonical install root, the resolved target — not a stored job. There is no plan state on disk to expire, collide or clean up.
+- The plan id is a digest of the evidence; apply re-observes it before any mutation.
+- Apply durably admits a bounded, same-user job before running; request IDs deduplicate retries and a conflicting payload is rejected. Unresolved records are retained rather than expired.
 - An unreadable process table refuses rather than reading as no live session.
+
+### `ocx system codex-cli-update apply`
+
+Usage: `ocx system codex-cli-update apply --plan-id <32-hex> --yes [--request-id <key>] [--json]`
+
+Apply a confirmed Codex CLI update as a durable job.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--plan-id` | string | Required 32-hex id from the current plan. |
+| `--yes` | boolean | Required confirmation. |
+| `--request-id` | string | Optional stable retry key. |
+| `--json` | boolean | Emit the public job status. |
+
+- Local counterpart of POST /api/codex/cli-update/apply: invokes the same durable job owner with --yes confirmation; HTTP admission separately requires a trusted loopback GUI session.
+- Admission is stored under the protected current-user config root before the installer can run.
+- Exit 0 requires an applied job; refused, not_applied, ambiguous and pending duplicate jobs exit 1, including with --json.
+- Only POSIX npm-global managed installs are currently supported; Windows, shims and other managers remain refused.
+
+### `ocx system codex-cli-update status`
+
+Usage: `ocx system codex-cli-update status <job-id> [--json]`
+
+Read a Codex CLI update job by opaque id.
+
+State-changing: no. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the path-free job status. |
+
+- Local counterpart of GET /api/codex/cli-update/jobs/{jobId}: reads the same path-free job status without HTTP transport.
+- Reads the protected job record directly; the job id is not an authorization credential.
 
 ### `ocx system codex-restart`
 

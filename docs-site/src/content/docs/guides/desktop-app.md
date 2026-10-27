@@ -116,18 +116,32 @@ is missing** means the login item names an app that no longer exists, so delete
 means the registration could not be read. While the app runs the proxy, the Startup page keeps the
 background service installer disabled; to use it instead, quit OpenCodex and run
 `ocx service install` in a terminal. The Codex launcher shim can still be installed there.
-When a Codex launch finds no proxy, the shim waits for OpenCodex to restart it, opens
-OpenCodex on macOS if it quit and its recorded ownership matches a valid **Start at Login**
-registration, and otherwise reports an error instead of starting a second proxy. Automatic
+When a Codex launch finds no proxy, the bundled CLI waits for independently verified Desktop
+recovery, including when Desktop has no recorded ownership claim. A matching Desktop that has
+stopped its proxy, or whose recovery cannot be verified, produces an error — except that on a
+platform without live-image verification a recorded ownership claim with the app still running
+keeps the existing bounded wait. A process name or
+locator file alone does not block ordinary CLI startup. The shim opens OpenCodex on macOS if it
+quit and its recorded ownership matches a valid **Start at Login** registration. Automatic
 reopening selects that registration's app bundle path and checks that its declared main
 executable matches the registered Desktop executable. If registration is missing, stale or
 inconsistent, open OpenCodex manually; another copy with the same bundle identifier is not
 selected as a fallback. If the shim reads "activation not confirmed", add
 `. ~/.opencodex/codex-shell-env.sh` to your shell startup file after other PATH setup.
 
+Recovery verification covers the matching bundled CLI on macOS/Linux and the protected system
+Debian installation. An old npm-created shim can pin a separate Bun/CLI installation and bypass
+Desktop's terminal-command handoff. That entrypoint cannot verify a macOS or Windows Desktop,
+including an official signed copy, or an arbitrary per-user Linux copy. Recreate the shim from
+Desktop's Startup page or invoke its bundled CLI. Windows cannot yet establish the live image
+identity required for this recovery proof; an identified running sibling earns no recovery credit
+and, without a recorded Desktop claim, reports an error instead of starting a CLI proxy — even
+when its on-disk signatures are valid. With a recorded claim and the app running, the CLI keeps
+its existing bounded wait for Desktop's proxy.
+
 The bundled CLI is `/Applications/OpenCodex.app/Contents/MacOS/ocx` on macOS and
 `/usr/bin/ocx` for the Linux deb package. Run that executable with `status` to check
-the app's proxy. Windows also verifies live supervision, but **Start at Login** remains
+the app's proxy. Windows verifies live supervision when the proxy child is already running, but **Start at Login** remains
 unverified there and Desktop receives no startup protection credit.
 
 While the CLI detects Desktop supervising the proxy, `ocx service install`, `repair`,

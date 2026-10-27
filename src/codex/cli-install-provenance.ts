@@ -128,6 +128,26 @@ export interface CodexCliInstallReport {
   readonly evidence: readonly CodexCliInstallEvidence[];
 }
 
+/** Process-local evidence; deliberately absent from the public/redacted report. */
+export interface CodexCliMutationEvidence {
+  readonly prefix: string;
+  readonly launcher: string;
+  readonly canonicalLauncher: string;
+  readonly packageRoot: string;
+  readonly backingRoot: string | null;
+}
+const mutationEvidence = new WeakMap<CodexCliInstallReport, CodexCliMutationEvidence>();
+export function codexCliMutationEvidence(report: CodexCliInstallReport): CodexCliMutationEvidence | null {
+  return mutationEvidence.get(report) ?? null;
+}
+/** Final synchronous selector/link observation after a potentially long full-file readback. */
+export function codexCliMutationSelectionMatches(evidence: CodexCliMutationEvidence, deps: CodexCliInstallProvenanceDeps): boolean {
+  const selected = observeCodexCliSelectedCommand(deps);
+  const path = selected ? resolveCandidateCommandPath(selected, deps) : null;
+  return !!path && canonicalize(path, deps) === evidence.canonicalLauncher
+    && canonicalize(evidence.launcher, deps) === evidence.canonicalLauncher;
+}
+
 export interface CodexCliInstallProvenanceDeps {
   readonly env?: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform;
@@ -700,6 +720,9 @@ const CODEX_PLATFORM_BACKING: Readonly<Record<string, Readonly<{ triple: string;
   "win32:x64": { triple: "x86_64-pc-windows-msvc", package: "@openai/codex-win32-x64" },
   "win32:arm64": { triple: "aarch64-pc-windows-msvc", package: "@openai/codex-win32-arm64" },
 };
+export function codexCliPlatformBacking(platform: NodeJS.Platform, arch: string) {
+  return CODEX_PLATFORM_BACKING[platform + ":" + arch] ?? null;
+}
 
 /** Node's Module._nodeModulePaths: every ancestor's node_modules child, closest first. */
 function nodeModuleDirs(fromDir: string, platform: NodeJS.Platform): string[] {
@@ -781,6 +804,13 @@ interface ObservedContentFile {
 
 function fileContentDomain(role: InstallContentFile["role"]): string {
   return role === "manifest" ? "codex-cli-package-manifest-v1" : "codex-cli-observed-file-v1";
+}
+export function codexCliContentFileDigest(role: InstallContentFile["role"], bytes: Buffer): string {
+  return sha256(fileContentDomain(role), bytes);
+}
+export function codexCliContentSetDigest(platform: NodeJS.Platform, arch: string, triple: string,
+  backingKind: "optional-package" | "package-vendor", files: readonly { role: string; digest: string | undefined }[]): string {
+  return sha256("codex-cli-install-content-v1", JSON.stringify({ layout: "npm-global", platform, arch, triple, backingKind, files }));
 }
 
 /**
@@ -907,6 +937,7 @@ function observeInstallContent(
   env: NodeJS.ProcessEnv,
   deps: CodexCliInstallProvenanceDeps,
   selection: { readonly lexical: string; readonly canonical: string },
+  observedBacking?: (root: string | null) => void,
 ): string | null {
   const arch = deps.arch ?? process.arch;
   const backing = CODEX_PLATFORM_BACKING[platform + ":" + arch];
@@ -1022,15 +1053,10 @@ function observeInstallContent(
       return null;
     }
   }
-  const record = {
-    layout: "npm-global" as const,
-    platform,
-    arch,
-    triple: backing.triple,
-    backingKind: backingManifestPath ? "optional-package" as const : "package-vendor" as const,
-    files: requests.map(req => ({ role: req.role, digest: observed.get(req.role)?.digest })),
-  };
-  return sha256("codex-cli-install-content-v1", JSON.stringify(record));
+  observedBacking?.(backingPackageDir);
+  return codexCliContentSetDigest(platform, arch, backing.triple,
+    backingManifestPath ? "optional-package" : "package-vendor",
+    requests.map(req => ({ role: req.role, digest: observed.get(req.role)?.digest })));
 }
 
 /** Inspect ownership of one configured Codex CLI candidate, without mutation. */
@@ -1227,6 +1253,7 @@ export async function inspectCodexCliInstall(
     const npmPrefix = manifestOwned
       ? manifest.root.slice(0, manifest.root.length - "/lib/node_modules/@openai/codex".length)
       : "";
+    let backingRoot: string | null = null;
     const installContentDigest = manifestOwned && deps.observeInstallContent === true
       // The selection's own lexical->canonical link is part of the claim:
       // verified again at the end of the observation so a retargeted launcher
@@ -1234,14 +1261,14 @@ export async function inspectCodexCliInstall(
       ? observeInstallContent(manifest, npmPrefix, platform, env, deps, {
         lexical: ownershipPath,
         canonical: canonicalOwnershipPath,
-      })
+      }, root => { backingRoot = root; })
       : null;
     const versionMatches = candidate.version === null || candidate.version === manifest.version;
     const reason: CodexCliInstallReason = !global || !linked
       ? "npm_global_unverified"
       : !versionMatches ? "version_mismatch"
         : selectionAttested ? "managed_npm_global" : "selection_unattested";
-    return freezeReport({
+    const report = freezeReport({
       schemaVersion: 1,
       candidateAvailable: true,
       candidateVersion: candidate.version,
@@ -1272,6 +1299,11 @@ export async function inspectCodexCliInstall(
         ...(installContentDigest ? ["install_content_digest" as const] : []),
       ]),
     });
+    if (report.managed && report.installContentDigest && shim.status === "not-tracked") {
+      mutationEvidence.set(report, Object.freeze({ prefix: npmPrefix, launcher: ownershipPath,
+        canonicalLauncher: canonicalOwnershipPath, packageRoot: manifest.root, backingRoot }));
+    }
+    return report;
   }
 
   const stat = deps.stat ?? statSync;

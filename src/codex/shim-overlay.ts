@@ -5,6 +5,10 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getConfigDir } from "../config";
+import {
+  beginCodexCliSelectionParentWrite,
+  CodexCliSelectionMutationBusyError,
+} from "./cli-update-selection-gate";
 import { durableBunRuntime } from "../lib/bun-runtime";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { truncateRetainedUtf8 } from "../lib/admission";
@@ -442,6 +446,12 @@ function installLocked(
   return publishOverlay(launcher, overlay, check, pinnedState);
 }
 export function installUnixOverlay(discover: () => string | null, describeMiss?: () => string | null): InstallResult {
+  // The update worker's commit window re-observes selection evidence right up
+  // to its installer spawn; a shim install must not cross that window. Busy is
+  // surfaced before namespace creation, the restore lock and any journal
+  // mutation, so a held gate refuses without touching state.
+  const selectionWrite = beginCodexCliSelectionParentWrite();
+  if (!selectionWrite.entered) return failure(new CodexCliSelectionMutationBusyError());
   let lock: ReturnType<typeof tryAcquireShimRestoreLock> = null;
   try {
     const check = namespace(true);
@@ -450,7 +460,7 @@ export function installUnixOverlay(discover: () => string | null, describeMiss?:
     check();
     return installLocked(discover, false, check, describeMiss);
   } catch (error) { return failure(error); }
-  finally { lock?.release(); }
+  finally { selectionWrite.exit(); lock?.release(); }
 }
 export function autoRestoreUnixOverlay(options: RestoreOptions): CodexShimAutoRestoreResult {
   const result = readStateResult();
@@ -468,6 +478,11 @@ export function autoRestoreUnixOverlay(options: RestoreOptions): CodexShimAutoRe
   } catch (error) { return { status: "ineligible", message: failure(error).message }; }
   if (!nativeProbe(state.launcherPath)) return { status: "ineligible", message: "Recorded native Codex launcher is unusable; repair it with its package manager" };
   if (!options.enabled()) return { status: "disabled" };
+  // Same selection gate as install: acquired before namespace creation, the
+  // restore lock and journal mutation; a held update commit window defers the
+  // restore rather than racing it.
+  const selectionWrite = beginCodexCliSelectionParentWrite();
+  if (!selectionWrite.entered) return { status: "deferred", message: "a Codex CLI update is committing an install; shim restore deferred" };
   let lock: ReturnType<typeof tryAcquireShimRestoreLock> = null;
   try {
     const check = namespace(true);
@@ -484,9 +499,13 @@ export function autoRestoreUnixOverlay(options: RestoreOptions): CodexShimAutoRe
     const installed = installLocked(() => null, true, check);
     return installed.installed ? { status: "restored", message: installed.message } : { status: "healthy" };
   } catch (error) { return { status: "deferred", message: failure(error).message }; }
-  finally { lock?.release(); }
+  finally { selectionWrite.exit(); lock?.release(); }
 }
 export function uninstallUnixCodexShim(): { removed: boolean; message: string } {
+  // Same selection gate: removal mutates the same state the update worker
+  // re-observes in its commit window, so a held gate reports busy unchanged.
+  const selectionWrite = beginCodexCliSelectionParentWrite();
+  if (!selectionWrite.entered) return { removed: false, message: new CodexCliSelectionMutationBusyError().message };
   let lock: ReturnType<typeof tryAcquireShimRestoreLock> = null;
   try {
     const check = namespace(false);
@@ -522,5 +541,5 @@ export function uninstallUnixCodexShim(): { removed: boolean; message: string } 
     if (!removePinned(statePath(), stateFile)) throw new Error("Concurrent Codex state replacement preserved");
     return { removed: true, message: "Codex PATH shim removed. Native Codex launcher was preserved. Remove the codex-shell-env source line from your shell startup file." };
   } catch (error) { return { removed: false, message: failure(error).message }; }
-  finally { lock?.release(); }
+  finally { selectionWrite.exit(); lock?.release(); }
 }

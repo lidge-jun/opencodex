@@ -64,6 +64,7 @@ import {
   CODEX_CLI_TRANSPORT_ENV_KEYS,
   CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
   codexCliInspectionLookupSeeds,
+  carriesCodexCliUpdateInspectionContext,
   isCodexCliUpdateInspectionArgv,
 } from "../src/update/codex-cli-update-launch-policy.mjs";
 import {
@@ -1091,6 +1092,10 @@ if (updateHelpRequested) {
 }
 
 const codexCliUpdateInspection = isCodexCliUpdateInspectionArgv(process.argv);
+// Windows inspection currently refuses before candidate I/O, so a long-lived
+// Windows server does not duplicate PATH into its inherited environment block.
+const codexCliUpdateInspectionContext = codexCliUpdateInspection
+  || (process.platform !== "win32" && carriesCodexCliUpdateInspectionContext(process.argv));
 if (codexCliUpdateInspection && typeof process.versions.bun === "string") {
   console.error("opencodex: codex-cli-update inspection must use the published Node launcher.");
   process.exit(1);
@@ -1222,7 +1227,7 @@ function createNodeLaunchContext() {
     version: 1,
     proof: launchProof,
     anthropicEnvSlots: preBunAnthropicSlots,
-    codexCliInspectionEnv: codexCliUpdateInspection ? {
+    codexCliInspectionEnv: codexCliUpdateInspectionContext ? {
       codexCliPath: preBunCodexCliPath,
       path: preBunPath,
       pathExt: preBunPathExt,
