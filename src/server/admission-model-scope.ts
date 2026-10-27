@@ -25,6 +25,8 @@ import { markResponseNonReplayable } from "../lib/upstream-retry";
  * the management credential.
  */
 export interface AdmissionModelScope {
+  /** Every inherited scope must also admit the final destination. */
+  readonly allOf?: readonly AdmissionModelScope[];
   /** Resolved provider names this key may reach. Empty means every provider. */
   readonly providers: readonly string[];
   /** Resolved destinations this key may reach. Empty means every model. */
@@ -42,6 +44,11 @@ const normalize = (value: string): string => value.trim().toLowerCase();
 /** Does this scope admit this provider on its own terms? */
 function providerAllowedByScope(scope: AdmissionModelScope, providerName: string): boolean {
   return scope.providers.length === 0 || scope.providers.includes(normalize(providerName));
+}
+
+function unnamedDestinationAllowedByScope(scope: AdmissionModelScope, providerName: string): boolean {
+  return providerAllowedByScope(scope, providerName) && scope.models.length === 0
+    && (scope.allOf?.every(part => unnamedDestinationAllowedByScope(part, providerName)) ?? true);
 }
 
 function normalizedList(values: readonly string[] | undefined): readonly string[] {
@@ -73,9 +80,13 @@ export function resolveAdmissionModelScope(
   config: Pick<OcxConfig, "apiKeys">,
   admission: DataPlaneAdmission | undefined,
 ): AdmissionModelScope | undefined {
-  if (!admission || admission.kind !== "configured") return undefined;
-  const entry = (config.apiKeys ?? []).find(key => key.id === admission.keyId);
-  return entry ? admissionModelScopeOf(entry) : undefined;
+  const entry = admission?.kind === "configured"
+    ? (config.apiKeys ?? []).find(key => key.id === admission.keyId) : undefined;
+  return intersectAdmissionModelScopes(entry ? admissionModelScopeOf(entry) : undefined, admission?.callerPolicy?.modelScope);
+}
+
+export function intersectAdmissionModelScopes(a: AdmissionModelScope | undefined, b: AdmissionModelScope | undefined): AdmissionModelScope | undefined {
+  return a && b ? { providers: [], models: [], allOf: [a, b] } : a ?? b;
 }
 
 /** Consent comes from stored operator config, never request headers. Use the full listener config. */
@@ -84,6 +95,8 @@ export function admissionMayUseMeteredComboTargets(
   admission: DataPlaneAdmission | undefined,
   combo?: { allowMeteredTargets?: boolean },
 ): boolean {
+  const caller = admission?.callerPolicy;
+  if (caller && (!caller.allowMeteredComboTargets || caller.meteredRequiresComboOptIn && combo?.allowMeteredTargets !== true)) return false;
   if (admission?.kind === "configured") {
     const entry = (config.apiKeys ?? []).find(key => key.id === admission.keyId);
     return entry?.allowMeteredComboTargets === true;
@@ -111,6 +124,7 @@ export function routeAllowedByScope(
   route: ScopedRoute,
 ): boolean {
   if (!scope) return true;
+  if (scope.allOf?.some(part => !routeAllowedByScope(part, route))) return false;
   const model = normalize(route.modelId);
   if (!providerAllowedByScope(scope, route.providerName)) return false;
   if (scope.models.length === 0) return true;
@@ -226,7 +240,7 @@ export function admissionScopeDenial(
   const scope = resolveAdmissionModelScope(config, admission);
   if (!scope) return undefined;
   const allowed = destination.modelId === undefined
-    ? providerAllowedByScope(scope, destination.providerName) && scope.models.length === 0
+    ? unnamedDestinationAllowedByScope(scope, destination.providerName)
     : routeAllowedByScope(scope, { providerName: destination.providerName, modelId: destination.modelId });
   if (allowed) return undefined;
   return admissionModelDeniedResponse(new AdmissionModelDeniedError(

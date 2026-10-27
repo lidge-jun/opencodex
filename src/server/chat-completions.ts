@@ -22,7 +22,8 @@ import {
   responsesSseToChatCompletionsSse,
 } from "../chat/outbound";
 import { ADVISOR_INTERNAL_CAPABILITY_HEADER, isInternalCallCapability } from "../lib/local-internal-call-capability";
-import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope } from "./advisor-admission-scope";
+import { ADVISOR_ADMISSION_SCOPE_HEADER, decodeAdvisorAdmissionScope, ADVISOR_ADMISSION_POLICY_HEADER, readAdvisorAdmissionPolicy } from "./advisor-admission-scope";
+import { inheritAdmissionPolicy } from "./capture-admission-policy";
 import { classifyError, cyberPolicyErrorType, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
@@ -73,6 +74,7 @@ import {
   MODEL_NOT_ALLOWED_FOR_KEY,
   assertRouteAllowedByScope,
   resolveAdmissionModelScope,
+  intersectAdmissionModelScopes,
 } from "./admission-model-scope";
 import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
 import { tryClaimNativeMainProfileForTurn } from "../codex/native-main-admission";
@@ -154,14 +156,20 @@ async function handleChatCompletionsWithBudget(
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
 ): Promise<Response> {
   const advisorInternal = isInternalCallCapability(req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
-  const inheritedAdmissionScope = advisorInternal
+  const callerPolicy = readAdvisorAdmissionPolicy(req.headers.get(ADVISOR_ADMISSION_POLICY_HEADER), req.headers.get(ADVISOR_INTERNAL_CAPABILITY_HEADER));
+  const decodedScope = advisorInternal
     ? decodeAdvisorAdmissionScope(req.headers.get(ADVISOR_ADMISSION_SCOPE_HEADER))
     : undefined;
-  if (advisorInternal && req.headers.has(ADVISOR_ADMISSION_SCOPE_HEADER) && !inheritedAdmissionScope) {
+  if (advisorInternal && (req.headers.has(ADVISOR_ADMISSION_SCOPE_HEADER) && !decodedScope
+    || req.headers.has(ADVISOR_ADMISSION_POLICY_HEADER) && !callerPolicy)) {
     // Refused requests still own a final log row like every other early rejection.
     if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
     return chatCompletionsErrorResponse(403, "invalid inherited advisor admission scope", "permission_error", MODEL_NOT_ALLOWED_FOR_KEY);
   }
+  const admission = callerPolicy ? inheritAdmissionPolicy(logIds?.admission, callerPolicy) : logIds?.admission;
+  const inheritedAdmissionScope = advisorInternal ? intersectAdmissionModelScopes(
+    resolveAdmissionModelScope(config, admission), callerPolicy ? undefined : decodedScope,
+  ) : undefined;
   let chatBody: Rec;
   try {
     const rawBody = await readChatBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
@@ -522,7 +530,7 @@ async function handleChatCompletionsWithBudget(
     ...(logIds?.turnAdmissionLease ? { turnAdmissionLease: logIds.turnAdmissionLease } : {}),
     // #1686: the Chat surface translates its body and replays here, so the admission fact has
     // to ride along or a bearer-admitted Chat caller would still be refused by Direct.
-    ...(logIds?.admission ? { admission: logIds.admission } : {}),
+    ...(admission ? { admission } : {}),
     // The bridge request carries no caller credential, so resolve the replay principal here.
     replayPrincipal: { clientPrincipalId: resolveContextPrincipal(req, config, logIds?.admission) },
     abortSignal: req.signal,
@@ -541,7 +549,7 @@ async function handleChatCompletionsWithBudget(
         req, config, envelope, requestedModel, requestedStream: stream, translatorBudget,
         // Children run without logIds; the request's admission rides the source so their
         // replay scope resolves the same caller principal as every other surface.
-        ...(logIds?.admission ? { admission: logIds.admission } : {}),
+        ...(admission ? { admission } : {}),
       }),
     } : {}),
     // Terminal vision-describe marker (roadmap 180): the bridge rebuilds
