@@ -127,7 +127,7 @@ export async function prepareAdapterExchange(
     PreparedResponsesRequest,
     | "parsed"
     | "toolBridgeMaps"
-    | "translatorBudget"
+    | "translatorBudget" | "completedToolBlocks"
     | "selectedForwardHeaders"
     | "route"
     | "inboundWire"
@@ -336,8 +336,8 @@ export async function prepareAdapterExchange(
   }
   try {
     initialRequest = await transportState.activeAdapter.buildRequest(parsed, {
-      headers: requestState.selectedForwardHeaders,
-            providerName: route.providerName,
+      headers: requestState.selectedForwardHeaders, completedToolBlocks: requestState.completedToolBlocks,
+      providerName: route.providerName,
       translatorBudget,
       abortSignal: upstream.signal,
     });
@@ -654,7 +654,7 @@ export async function prepareAdapterExchange(
       } else {
         try {
           retryRequest = await transportState.activeAdapter.buildRequest(parsed, {
-            headers: requestState.selectedForwardHeaders,
+            headers: requestState.selectedForwardHeaders, completedToolBlocks: requestState.completedToolBlocks,
             providerName: route.providerName,
             translatorBudget,
             abortSignal: upstream.signal,

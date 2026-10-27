@@ -40,7 +40,7 @@ registry read can change a running gather flight. Anthropic OAuth discovery in `
 Policy is keyed by the final upstream wire model. Public alias and virtual-model identities remain
 diagnostic/catalog provenance and must be resolved before policy capture. Exact nonempty explicit
 input-modality declarations outrank the registry/config modality map; an empty declaration
-falls through to that map.
+falls through to that map. `src/routing/capability.ts` also reads exact `modelCapabilities` modalities before legacy vision hints and provider-wide defaults, matching runtime image eligibility.
 Anthropic numeric point releases inherit the nearest configured family context window before the
 provider-wide fallback. Exact model output limits precede the provider default output limit. For Azure OpenAI destinations (`*.openai.azure.com`), `src/providers/azure-model-metadata.ts` refreshes public models.dev Azure metadata during discovery under a two-second/16 MiB budget, coalesces callers per resolved config directory, caches for 24 hours, and keeps stale data offline. Snapshot, in-flight refresh and retry cooldown state are isolated by that directory; discovery admission captures that directory and threads it through refresh and all later hint lookups, including cached rows, configured retention, custom rows and combo members. Azure provider-result TTL and stale caches store only upstream rows; fresh, stale and cooldown reads apply root-specific metadata and configured retention after retrieval. Public metadata fetches reject redirects. `src/providers/derive.ts` merges published Azure fields over bundled Azure/vendor hints by exact or case-insensitive model id. Shared catalog hints fill missing input modalities and context/output limits, while explicit declarations, reported modalities/limits, sidecar coverage and configured caps retain precedence. Azure inference flags alone do not imply vision. Generation never fetches this snapshot, static policy remains unchanged, and arbitrary deployment aliases receive no guessed metadata.
 
@@ -53,7 +53,7 @@ provider-wide fallback. Exact model output limits precede the provider default o
   (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
   `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds
   verbatim rows the codex-rs snapshot lacks (`gpt-6-sol`/`gpt-6-luna` from the 2026-09-23 roster,
-  `gpt-6.1-sol` from openai/codex `models.json` after #49318), so a wholesale snapshot re-pin
+  `gpt-6.1-sol` from openai/codex `models.json` after #49318 and `gpt-6.1-terra` from that file on 2026-10-27), so a wholesale snapshot re-pin
   never erases them and a snapshot row for the same slug always wins;
 - excludes retired `gpt-5.3-codex-spark` from native fallback, observed/cache rows, and
   account-selector projections, including retained sync and native restore;
@@ -329,6 +329,8 @@ ships it. Both are ungated flagships. `gpt-6-astra-minor` is an account-gated ca
 Astra with its own presentation (`GPT-6-Astra-Minor`); it has no pinned row of its own and stays
 hidden and request-refused until an authenticated roster lists it.
 
+GPT-6.1 Terra (2026-10-26) is self-described and ungated alongside GPT-5.6 Terra. Its verbatim pin names it `GPT-6.1 Terra`, with `low` default effort, low-through-ultra, multi-agent `v2`, 500,000 default context / 450,000 compaction and an 872,000 native ceiling/input limit (`NATIVE_GPT61_TERRA_CONTEXT`); explicit long-window opt-in compacts at 784,800. It offers Fast only, including with `ultraFastTier` enabled; default models and subagent rosters stay unchanged.
+
 The API registry separately owns Astra's 1,050,000 context / 922,000 input / 128,000 output and
 five API effort levels. Trusted discovery snapshots carry the output ceiling as well as input
 and context, so reconstruction cannot drop it. User output limits may only lower that ceiling.
@@ -484,7 +486,7 @@ Catalog rows retain independent reasoning facts from [per-model declarations](co
 
 `src/codex/catalog/effort.ts` uses the [client export projection](clients/integrations.md#model-output-limits) at Codex's effort-enum boundary: toggle-only models receive `none/high` off/on choices and a declared thinking default, without recording those choices as model strengths. Explicit toggle-axis declarations or negative reasoning/effort declarations constrain this projection and suppress synthetic top tiers. Positive strength support inferred from a legacy ladder alone retains its previous synthesis.
 
-Legacy catalog ladders advertise ultra regardless of the `multi_agent_v2` toggle, which controls only the multi-agent collab surface. `nativeEffortClamp` wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire). `ultra` itself is never a native wire value: the ChatGPT backend accepts `none` through `max`, so the clamp folds it to `max` even on rows whose pinned ladder lists it (`gpt-6-astra`, `gpt-6.1-sol`). `src/server/responses/core-normalize.ts` also applies the clamp to the raw passthrough body, which the parser's options-only fold does not reach (#7590; `tests/responses/responses-native-ultra-effort-wire.test.ts`). For canonical OpenAI forwarding, other unsupported efforts map to the nearest published rung at or below the request, or the lowest rung when below the model minimum (`gpt-6.1-sol` `none` → `low`), after final model selection, including combo failover.
+Legacy catalog ladders advertise ultra regardless of the `multi_agent_v2` toggle, which controls only the multi-agent collab surface. `nativeEffortClamp` wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire). `ultra` itself is never a native wire value: the ChatGPT backend accepts `none` through `max`, so the clamp folds it to `max` even on rows whose pinned ladder lists it (`gpt-6-astra`, `gpt-6.1-sol`, `gpt-6.1-terra`). `src/server/responses/core-normalize.ts` also applies the clamp to the raw passthrough body, which the parser's options-only fold does not reach (#7590; `tests/responses/responses-native-ultra-effort-wire.test.ts`). For canonical OpenAI forwarding, other unsupported efforts map to the nearest published rung at or below the request, or the lowest rung when below the model minimum (`gpt-6.1-sol` and `gpt-6.1-terra` `none` → `low`), after final model selection, including combo failover.
 
 For routed models retaining legacy ladder synthesis, `modelSuppressSyntheticMax` is a catalog-only per-model setting. A true value
 prevents `src/codex/catalog/effort.ts` from adding a missing synthetic `max` and prevents

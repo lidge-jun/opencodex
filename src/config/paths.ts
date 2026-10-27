@@ -1,7 +1,7 @@
-import { chmodSync, existsSync } from "node:fs";
+import { chmodSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { flushWindowsSecretAclReapsBeforeRemoval, hardenSecretDirAsync, windowsSecretAclApplies } from "../lib/windows-secret-acl";
+import { flushWindowsSecretAclReapsBeforeRemoval, hardenSecretDirAsync, windowsSecretAclApplies, withWindowsSecretAclSettled } from "../lib/windows-secret-acl";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { isPassiveRead } from "../lib/passive-read";
 import { trackBackgroundWork } from "../lib/background-work";
@@ -37,7 +37,8 @@ export function hardenConfigDir(): void {
   // The guard runs before any mutation: refusing after chmod/ACL would already
   // have changed the protected directory used by the test-home boundary.
   assertNotRealHomeUnderTest(dir);
-  if (!existsSync(dir)) return;
+  // Follow directory links as before, but never apply directory permissions to a file.
+  try { if (!statSync(dir).isDirectory()) return; } catch { return; }
   // Windows privacy is enforced by NTFS ACLs. chmod only changes DOS attributes there;
   // doing it before the ACL lookup can invalidate its ctime-based successful observation.
   if (!windowsSecretAclApplies()) {
@@ -71,6 +72,21 @@ export function hardenConfigDir(): void {
 export async function flushConfigDirHardening(dir: string = getConfigDir()): Promise<void> {
   const flight = configDirHardeningFlights.get(dir);
   if (flight) await flight;
+}
+
+/**
+ * Intercept CA/token/picker writers call this after their last unrelated await. Parent
+ * inheritable ACL propagation can overwrite a child's concurrent explicit grant. Drain the
+ * registered config flight and overlapping work (including ancestors and timeout reaps),
+ * within one ACL deadline. Timeout refuses admission without dropping child cleanup ownership.
+ * The final registry check and synchronous callback share a turn: promise continuations and
+ * newly queued hardeners cannot start icacls between that check and secret publication.
+ * Keep the callback synchronous; an await inside it would reopen the propagation race.
+ */
+export async function withConfigDirHardeningSettled<T>(dir: string, mutate: () => T): Promise<T> {
+  // Async work registers before its factory starts, including the optional config flight.
+  // A separate flush here would escape the registry's total admission deadline.
+  return withWindowsSecretAclSettled(dir, mutate);
 }
 
 /** A settled ACL deadline is not proof its child has exited; stop must drain both before removal. */

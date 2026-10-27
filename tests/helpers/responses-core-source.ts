@@ -42,6 +42,7 @@ export const RESPONSES_CORE_MODULES = [
   // Reached from core-combo.ts: JEV effort choices and resolved native quota identity.
   "jev-combo-choice.ts",
   "request-prepare.ts",
+  "turn-membership.ts",
   "policy-request-scope.ts",
   "skills-snapshot.ts",
   "shadow-target-availability.ts",

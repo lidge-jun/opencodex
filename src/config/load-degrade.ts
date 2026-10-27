@@ -16,6 +16,7 @@ import {
   autoReviewModelOverridesConfigError,
   autoReviewModelTargetConfigError,
   modelCapabilitiesConfigError,
+  providerInputModalitiesConfigError,
   sanitizeModelCapabilitiesForLoad,
   modelDisplayNamesConfigError,
 } from "./provider-validation";
@@ -359,6 +360,10 @@ export function sanitizeCapabilityDeclarationsForLoad(parsed: unknown): void {
   for (const [name, value] of Object.entries(providers)) {
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
     const provider = value as Record<string, unknown>;
+    if (providerInputModalitiesConfigError(provider.inputModalities) !== null) {
+      console.warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed inputModalities; restricting input modalities to text`);
+      provider.inputModalities = ["text"];
+    }
     if (provider.modelCapabilities === undefined) continue;
     if (modelCapabilitiesConfigError(provider.modelCapabilities) !== null) {
       console.warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed modelCapabilities; retaining valid axes and restricting malformed input modalities to text`);

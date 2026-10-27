@@ -298,6 +298,11 @@ export class SerializedToolCallContentBuffer {
     return this.observeText(textEvents(text));
   }
 
+  /** Early completed tools must not overtake retained text or reasoning events. */
+  hasHeldEvents(): boolean {
+    return this.text.length > 0 || this.queued.length > 0;
+  }
+
   /** Exposes held text as evidence for narrowly repairing duplicated argument prefixes. */
   current(): string {
     return this.text;
