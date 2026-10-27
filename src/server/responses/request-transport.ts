@@ -122,6 +122,7 @@ export async function prepareResponsesTransport(
     | "inboundWire"
     | "selectedForwardHeaders"
     | "translatorBudget"
+    | "completedToolBlocks"
     | "inboundSelector"
     | "admissionScope"
   >,
@@ -909,6 +910,7 @@ export async function prepareResponsesTransport(
         bindRouteReasoningReplayScope({ parsed: requestParsed, providerName: route.providerName, provider: route.provider,
           adapterName: nextAdapter.name, oauthCredentialSnapshot: replayOAuthCredentialSnapshot });
         const rebuilt = await nextAdapter.buildRequest(requestParsed, {
+          completedToolBlocks: requestState.completedToolBlocks,
           headers: requestState.selectedForwardHeaders, providerName: route.providerName, translatorBudget,
           dispatchPacingHeld: true,
           ...(imageTierBias > 0 ? { imageTierBias } : {}),
