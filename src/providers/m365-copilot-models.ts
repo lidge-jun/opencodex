@@ -1,5 +1,6 @@
 /** ChatHub selectors adapted from cramt/m365-copilot-proxy, MIT; see adapters/m365-copilot/LICENSE. */
 export const M365_COPILOT_BASE_URL = "https://substrate.office.com/m365Copilot";
+import { M365_NATIVE_MODEL_ID } from "./m365-copilot-discovery";
 export const M365_COPILOT_MODEL_TONES: Readonly<Record<string, string>> = {
   "m365-copilot": "magic", auto: "magic", quick: "Gpt_5_5_Chat", "think-deeper": "Gpt_5_5_Reasoning",
   claude: "Claude_Sonnet", "claude-sonnet": "Claude_Sonnet", "claude-sonnet-4.5": "Claude_Sonnet",
@@ -15,14 +16,15 @@ export const M365_COPILOT_MODEL_TONES: Readonly<Record<string, string>> = {
 };
 export const M365_COPILOT_MODELS = Object.keys(M365_COPILOT_MODEL_TONES);
 export function getToneForModel(model: string): string {
+  if (model.length <= 160 && M365_NATIVE_MODEL_ID.test(model)) return model === "Magic" ? "magic" : model;
   const tone = Object.hasOwn(M365_COPILOT_MODEL_TONES, model) ? M365_COPILOT_MODEL_TONES[model] : undefined;
   if (!tone) throw new Error("Unknown Microsoft 365 Copilot model alias");
   return tone;
 }
-export function isSonnet55Model(model: string): boolean { return model === "claude-sonnet-5.5"; }
+export function isSonnet55Model(model: string): boolean { return model === "claude-sonnet-5.5" || model === "Claude_Sonnet"; }
 export function m365CopilotScenario(model: string): { scenario: string; licenseType: string } {
   getToneForModel(model);
-  const paid = ["claude-opus", "claude-opus-5", "claude-opus-5.5", "claude-sonnet-5", "claude-sonnet-5.5", "gpt-6-think-deeper"].includes(model);
+  const paid = ["claude-opus", "claude-opus-5", "claude-opus-5.5", "claude-sonnet-5", "claude-sonnet-5.5", "gpt-6-think-deeper", "Claude_Opus", "Claude_Sonnet", "Claude_Sonnet_5", "Gpt_6_Reasoning", "DeepWork"].includes(model);
   return paid ? { scenario: "OfficeWebPaidCopilot", licenseType: "Premium" }
     : { scenario: "OfficeWebIncludedCopilot", licenseType: "Starter" };
 }

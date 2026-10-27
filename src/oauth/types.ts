@@ -61,7 +61,12 @@ export interface WorkBuddyOAuthMetadata {
   refreshExpiresAt?: number;
 }
 
+/** Private web-session authority for the account-specific M365 chat model picker. */
+export interface M365CopilotWebSession { cookie: string; accountId: string }
+
 export type OAuthCredentials = {
+  /** Kept only in the protected credential store and private catalog auth captures. */
+  m365?: M365CopilotWebSession;
   /** Account-scoped WorkBuddy identity, kept inside the protected credential store. */
   workbuddy?: WorkBuddyOAuthMetadata;
   refresh: string;

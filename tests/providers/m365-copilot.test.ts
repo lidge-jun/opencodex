@@ -19,12 +19,12 @@ const request = (): OcxParsedRequest => ({ modelId: "claude-sonnet", stream: tru
 afterEach(clearM365CopilotConversations);
 
 describe("Microsoft 365 Copilot registration and authentication", () => {
-  test("publishes maintained aliases separately from GitHub Copilot", () => {
+  test("discovers account models separately from GitHub Copilot and retains legacy request aliases", () => {
     const entry = getProviderRegistryEntry("m365-copilot")!;
     expect(entry.authKind).toBe("oauth"); expect(isPublicOAuthProvider(entry.id)).toBe(true);
-    expect(entry.models).toEqual(M365_COPILOT_MODELS); expect(entry.models).toHaveLength(34);
-    expect(providerSupportsLiveModelDiscovery(entry.id, provider())).toBe(false);
-    expect(entry.liveModels).toBe(false); expect(getToneForModel("claude-sonnet")).toBe("Claude_Sonnet");
+    expect(entry.models).toEqual([]);
+    expect(providerSupportsLiveModelDiscovery(entry.id, provider())).toBe(true);
+    expect(entry.liveModels).toBe(true); expect(getToneForModel("claude-sonnet")).toBe("Claude_Sonnet");
     expect(() => getToneForModel("not-a-model")).toThrow("Unknown");
     expect(() => getToneForModel("constructor")).toThrow("Unknown");
     expect(() => getToneForModel("__proto__")).toThrow("Unknown");

@@ -1,6 +1,6 @@
 ---
 title: Microsoft 365 Copilot
-description: Sign in to Microsoft 365 Copilot and use its maintained model aliases through OpenCodex.
+description: Sign in to Microsoft 365 Copilot and discover your account's live chat models through OpenCodex.
 ---
 
 Microsoft 365 Copilot is an experimental native provider, separate from GitHub Copilot. It connects directly to Microsoft's private ChatHub WebSocket service. It requires a work or school account with access to Microsoft 365 Copilot Chat; personal Microsoft accounts are not supported. Availability and quotas remain controlled by Microsoft.
@@ -13,20 +13,22 @@ In Providers, add **Microsoft 365 Copilot** and select its sign-in action. Alter
 ocx login m365-copilot
 ```
 
-OpenCodex detects the default supported browser (Firefox, Chrome or Edge) and opens one isolated sign-in window. Complete Microsoft's sign-in and MFA there. Keep the login in that window: moving its URL to another browser prevents local callback capture. OpenCodex captures the code locally, closes the temporary window and stores the credential through its normal protected OAuth account store. No callback URL or password needs to be pasted into OpenCodex or a chat.
+OpenCodex detects the default supported browser (Firefox, Chrome or Edge) and opens one isolated sign-in window. Complete Microsoft's sign-in and MFA there, and keep it open while the Copilot model picker loads. Moving its URL to another browser prevents local callback capture. OpenCodex captures the code and account-matched Copilot web session locally, closes the temporary window and stores them through its normal protected OAuth account store. No callback URL or password needs to be pasted into OpenCodex or a chat.
 
 This window does not reuse your regular browser profile. Microsoft's existing M365 Chat Client registration rejects OpenCodex's ordinary localhost redirect with `AADSTS50011`; the captured native-client callback is used instead. The account retains cached access and refresh tokens, so later requests normally refresh silently. A local desktop and a supported installed browser are required for interactive sign-in. Headless code-display login is not supported.
 
 ## Models and requests
 
-The provider publishes 34 maintained aliases after setup. They are preset selectors, not account-specific model discovery or proof of 34 distinct available models. Some aliases share Microsoft's selectors and may resolve differently across licenses or rollouts. The Live models switch is disabled for this static catalog. The default model is `claude-sonnet`.
+The provider reads available model choices directly from your account's Microsoft Copilot chat picker, including Claude/GPT submenus. The Live models switch enables refresh through the shared five-minute catalog cache. New choices follow OpenCodex's existing new-model policy and your saved selections; a new Microsoft selector does not require an OpenCodex release. The default selector is `Magic` (Auto). Quota-disabled choices can remain listed because Microsoft still grants access after the quota resets.
+
+Existing installs must sign in again once to capture the web session and enable Live models. Old request aliases still work, but discovery lists Microsoft's native selector IDs. Discovery requires a valid Copilot web session independently of the chat access token. If Microsoft expires that session, OpenCodex retains the last successfully fetched list and requires sign-in again to refresh it. No static alias list is presented as account discovery. Microsoft does not publish context windows in this picker metadata.
 
 Use the provider namespace when selecting a model:
 
 ```text
-m365-copilot/claude-sonnet
-m365-copilot/gpt-5.5
-m365-copilot/gpt-6.1-sol
+m365-copilot/Magic
+m365-copilot/Claude_Sonnet
+m365-copilot/Gpt_61_Sol_Reasoning
 ```
 
 Text streams and client-executed tools travel through OpenCodex's existing request interfaces. Tool calls are prompt-emulated: the model emits a fenced call, OpenCodex translates it into the client's tool format, and the client executes it under its own permissions. Conversations are scoped to the Microsoft account, model, client session and tool set. Temporary chats keep their live conversation context without adding a persistent Copilot history entry.

@@ -24,7 +24,8 @@ import { cursorFastCapableBases } from "../../adapters/cursor/catalog";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
 import { isCanonicalOpenRouterTarget } from "../openrouter-routing";
 import type { ProviderRegistryEntry } from "./types";
-import { M365_COPILOT_BASE_URL, M365_COPILOT_MODELS } from "../m365-copilot-models";
+import { M365_COPILOT_BASE_URL } from "../m365-copilot-models";
+import { M365_COPILOT_WEB_URL } from "../m365-copilot-discovery";
 import type { AnthropicInstanceId } from "../anthropic-instance-id";
 import { ANTHROPIC_FAST_MODE_BETA } from "../anthropic-fast";
 import {
@@ -155,9 +156,10 @@ function anthropicOAuthEntry(id: AnthropicInstanceId, label: string): ProviderRe
 export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   {
     id: "m365-copilot", label: "Microsoft 365 Copilot", adapter: "m365-copilot", baseUrl: M365_COPILOT_BASE_URL,
-    authKind: "oauth", featured: false, dashboardUrl: "https://m365.cloud.microsoft/", liveModels: false,
-    models: M365_COPILOT_MODELS, defaultModel: "claude-sonnet", noVisionModels: M365_COPILOT_MODELS,
-    note: "Experimental unofficial Microsoft 365 Copilot ChatHub connector. Work/school accounts only. Sign-in uses Microsoft's M365 Chat Client in an isolated window of a supported local browser (Firefox, Chrome or Edge). Models are maintained aliases, not account-specific discovery; availability depends on your Microsoft license and rollout. Tools are prompt-emulated and executed by your client. No Copilot Studio agents are created.",
+    authKind: "oauth", featured: false, dashboardUrl: "https://copilot.cloud.microsoft/", liveModels: true,
+    models: [], defaultModel: "Magic",
+    modelDiscovery: { url: M365_COPILOT_WEB_URL, maxResponseBytes: 2 * 1024 * 1024, maxModels: 256 },
+    note: "Experimental unofficial Microsoft 365 Copilot ChatHub connector. Work/school accounts only. Sign-in uses Microsoft's M365 Chat Client in an isolated Firefox, Chrome or Edge window and captures the Copilot web session locally. Models are discovered from your account's live chat picker. Tools are prompt-emulated and executed by your client. No Copilot Studio agents are created.",
   },
   {
     id: "openai",

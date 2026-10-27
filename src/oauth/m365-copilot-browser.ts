@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { OAuthController } from "./types";
+import type { M365CopilotWebSession } from "./types";
+import { readM365BrowserWebSession } from "./m365-copilot-web-session";
 
 export function m365BrowserExecutable(): string {
   let preferred = "";
@@ -89,7 +91,7 @@ class BrowserProtocol {
   close() { this.socket.close(); this.rejectPending(); }
 }
 
-async function captureInBrowser(authUrl: string, expectedState: string, signal: AbortSignal, onReady: (browser: string) => void, executable = m365BrowserExecutable()): Promise<string> {
+async function captureInBrowser(authUrl: string, expectedState: string, signal: AbortSignal, onReady: (browser: string) => void, executable = m365BrowserExecutable()): Promise<{ code: string; m365: M365CopilotWebSession }> {
   if (executable.toLowerCase().includes("firefox")) return captureInFirefox(executable, authUrl, expectedState, signal, onReady);
   const profile = mkdtempSync(join(tmpdir(), "ocx-m365-auth-"));
   chmodSync(profile, 0o700);
@@ -141,7 +143,8 @@ async function captureInBrowser(authUrl: string, expectedState: string, signal: 
     });
     onReady(executable.toLowerCase().includes("msedge") ? "Edge" : "Chrome");
     await protocol.command("Page.navigate", { url: authUrl }, sessionId);
-    return await code;
+    const capturedCode = await code;
+    return { code: capturedCode, m365: await readM365BrowserWebSession(protocol, sessionId, signal) };
   } finally {
     if (protocol) { await protocol.command("Browser.close").catch(() => {}); protocol.close(); }
     if (child && child.exitCode === null) {
@@ -152,7 +155,7 @@ async function captureInBrowser(authUrl: string, expectedState: string, signal: 
   }
 }
 
-async function captureInFirefox(executable: string, authUrl: string, expectedState: string, signal: AbortSignal, onReady: (browser: string) => void): Promise<string> {
+async function captureInFirefox(executable: string, authUrl: string, expectedState: string, signal: AbortSignal, onReady: (browser: string) => void): Promise<{ code: string; m365: M365CopilotWebSession }> {
   const profile = mkdtempSync(join(tmpdir(), "ocx-m365-auth-"));
   chmodSync(profile, 0o700);
   const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 404 }) });
@@ -201,7 +204,8 @@ async function captureInFirefox(executable: string, authUrl: string, expectedSta
     });
     onReady("Firefox");
     void protocol.command("browsingContext.navigate", { context: target.context, url: authUrl, wait: "none" }).catch(error => { if (!callbackCaptured) rejectCapture(error); });
-    return await code;
+    const capturedCode = await code;
+    return { code: capturedCode, m365: await readM365BrowserWebSession(protocol, target.context, signal, true) };
   } finally {
     if (protocol) { await protocol.command("browser.close").catch(() => {}); protocol.close(); }
     await Promise.race([child.exited, Bun.sleep(2_000)]);
@@ -211,7 +215,7 @@ async function captureInFirefox(executable: string, authUrl: string, expectedSta
 }
 
 /** A managed sign-in window needs no second URL or copy/paste channel. */
-export async function captureM365BrowserCode(authUrl: string, expectedState: string, ctrl: OAuthController, deps: { executable?: string } = {}): Promise<string> {
+export async function captureM365BrowserCode(authUrl: string, expectedState: string, ctrl: OAuthController, deps: { executable?: string } = {}): Promise<{ code: string; m365: M365CopilotWebSession }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10 * 60_000);
   const signal = ctrl.signal ? AbortSignal.any([ctrl.signal, controller.signal]) : controller.signal;
@@ -219,7 +223,7 @@ export async function captureM365BrowserCode(authUrl: string, expectedState: str
     signal.throwIfAborted();
     ctrl.onProgress?.("Opening the Microsoft sign-in window...");
     return await captureInBrowser(authUrl, expectedState, signal, browser => {
-      ctrl.onAuth?.({ url: "", instructions: "Complete Microsoft sign-in in the " + browser + " window OpenCodex opened. The callback is captured locally; no URL copying is needed." });
+      ctrl.onAuth?.({ url: "", instructions: "Complete Microsoft sign-in in the " + browser + " window OpenCodex opened. Keep it open while Copilot loads its model picker. The callback and web session are captured locally." });
     }, deps.executable);
   } finally { clearTimeout(timeout); controller.abort(); }
 }

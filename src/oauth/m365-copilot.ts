@@ -47,8 +47,10 @@ async function exchangeM365Token(parameters: Record<string, string>, signal?: Ab
 export async function loginM365Copilot(ctrl: OAuthController): Promise<OAuthCredentials> {
   const { verifier, challenge } = await generatePKCE();
   const state = crypto.randomUUID();
-  const code = await captureM365BrowserCode(m365CopilotAuthorizationUrl(challenge, state), state, ctrl);
-  return exchangeM365Token({ grant_type: "authorization_code", code, code_verifier: verifier, redirect_uri: M365_COPILOT_REDIRECT_URI }, ctrl.signal);
+  const { code, m365 } = await captureM365BrowserCode(m365CopilotAuthorizationUrl(challenge, state), state, ctrl);
+  const credential = await exchangeM365Token({ grant_type: "authorization_code", code, code_verifier: verifier, redirect_uri: M365_COPILOT_REDIRECT_URI }, ctrl.signal);
+  if (credential.accountId?.toLowerCase() !== m365.accountId.toLowerCase()) throw new Error("Microsoft 365 Copilot web sign-in account mismatch");
+  return { ...credential, m365 };
 }
 export function refreshM365CopilotToken(refresh: string, signal?: AbortSignal): Promise<OAuthCredentials> {
   return exchangeM365Token({ grant_type: "refresh_token", refresh_token: refresh }, signal);

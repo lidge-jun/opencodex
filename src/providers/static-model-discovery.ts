@@ -5,7 +5,7 @@ import {
   type ProviderRegistryEntry,
 } from "./registry";
 
-const STATIC_MODEL_CATALOG_PROVIDER_IDS = new Set(["cline-pass", "mimo-free", "m365-copilot"]);
+const STATIC_MODEL_CATALOG_PROVIDER_IDS = new Set(["cline-pass", "mimo-free"]);
 
 function normalizedEndpoint(value: string): string {
   const trimmed = value.trim();
