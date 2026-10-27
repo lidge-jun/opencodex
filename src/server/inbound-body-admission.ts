@@ -15,7 +15,7 @@ export { configureInboundBodyBudget, MAX_CONCURRENT_INBOUND_BODY_BYTES } from ".
 // and WebSocket frames have separate limits and are not part of this gate.
 // Exported so the contract tests classify the dispatcher's own route list
 // instead of copying it: a new loopback route has to land in one of these two
-// sets, or `tests/server/server-request-body-size.test.ts` fails.
+// sets, or `tests/server/inbound-body-admission.test.ts` fails.
 export const CONFIGURABLE_JSON_BODY_ROUTES: ReadonlySet<string> = new Set([
   "/v1/responses",
   "/v1/responses/compact",
