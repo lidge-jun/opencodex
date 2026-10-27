@@ -1188,12 +1188,61 @@ using the launcher's captured PATH and isolated temporary npm configuration, cac
 settings and `NODE_EXTRA_CA_CERTS` remain supported; cleanup is best-effort. No Codex command runs.
 
 An applicable plan reports `applicable: true` and a deterministic `planId` binding platform,
-installation-root digest, installed version, channel and target version/integrity. The plan is never
+installation-root/content digests, installed version, channel and exact main/platform artifacts. The plan is never
 persisted. It refuses downgrades, already-current versions, active Codex sessions and incomplete
 process observation. Windows returns `windows_inspection_deferred` before registry/process queries.
 A refusal exits 0: inspect `applicable` and `refusal`. The printed install argv is indicative; this
-command installs nothing, changes no application state and never signals a session. No apply command
-is exposed, and a plan ID is not installation authorization.
+command installs nothing, changes no application state and never signals a session. A plan ID alone
+is not installation authorization: apply requires separate explicit confirmation.
+
+#### Confirmed POSIX Codex CLI apply and job status
+
+```bash
+ocx system codex-cli-update apply --plan-id <32-hex> --yes --request-id <stable-key> --json
+ocx system codex-cli-update status <job-id> --json
+```
+
+Apply supports only the selected, managed, non-shim npm-global CLI on Linux/macOS. It revalidates the
+approved plan under an installation lease, verifies the exact main/platform archives, installs them
+offline with lifecycle scripts disabled, and checks installed files and the selected CLI's version.
+Existing Codex sessions are never stopped; active or unknown process observations refuse the update.
+Installation directories and staging require trusted POSIX ownership and permissions throughout their
+ancestry. Unsafe installation paths report `installation_prefix_unsupported` or
+`installation_paths_untrusted`; unsafe temporary roots report `staging_path_untrusted`. Use a private
+temporary directory below trusted ancestors (root-owned sticky temporary roots are supported).
+Owned session starts, desktop restarts and runtime/shim selection changes report busy while installation
+and readback run. An unconfirmed installer or verification child keeps admission closed. Admission
+recovers when the owned process group is proven gone, including a verification child that closes after
+its reap deadline. Worker loss before commit also restores admission; worker close after commit alone
+does not. Durable recovery records preserve this exclusion across proxy restarts. Missing child identity,
+partial records or inaccessible liveness evidence require inspection. A complete terminal write left
+before its publication rename can restore admission after restart when its exact owner and current
+parent/group absence are verified; incomplete or armed pending writes still require inspection.
+Recovery does not change an
+ambiguous job result, retry installation or reclaim an abandoned installation lease.
+Without recovery history, a symlinked `OPENCODEX_HOME` (or home ancestor) permits these ordinary
+operations. With history, admission reads the protected canonical home target; unsafe recovery
+paths still report busy. This does not relax the updater's installation or config-path eligibility.
+Windows apply, shim repair, native apps and other installation managers remain unsupported.
+
+Apply exits 0 only for an `applied` job; `not_applied`, `refused`, `ambiguous` and pending duplicate jobs
+exit 1, including with `--json`. Status reads the
+same private job record without a running proxy or GUI token. Reuse the same optional request ID after
+a lost response: the same key and plan return the original job; a changed plan with that key refuses.
+The private ledger retains up to 64 jobs, including finished jobs, without automatic pruning. At that
+limit, new request IDs are refused with `store_full`; existing matching retries still return their
+original job. Capacity and operator recovery remain a separate follow-up that must preserve this
+deduplication contract. A busy admission ledger reports `job_store_busy` (HTTP 503 with `Retry-After: 1`);
+permanent admission failures have no retry-delay header. Missing or unreadable CLI
+status returns `job_unavailable` and a nonzero exit. Completion persistence failures do not rerun the
+installer or turn an uncertain job into a confirmed success.
+An ambiguous result is never automatically retried or rolled back. After an owner restart, an unfinished
+job reports unknown ownership instead of claiming the old process stopped. Inspect the job's outcome,
+child/lease state and cleanup errors; command exit status alone does not establish an installation result.
+
+The management API provides authenticated plan/status reads and confirmed trusted-loopback GUI-session
+apply admission. A published Node `ocx start` supplies the required inspection snapshot; direct Bun or
+compiled sidecar startup does not provide that proof. The Dashboard update panel is a separate follow-up.
 
 #### Explicit installation observation on Windows x64
 

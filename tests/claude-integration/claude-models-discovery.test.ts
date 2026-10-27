@@ -114,6 +114,30 @@ test("anthropic-version header flips /v1/models to the discovery contract", asyn
   }
 });
 
+test("Claude discovery exposes native Fast + 1M with the configured input ceiling", async () => {
+  const config = configWithStaticModels({ autoContext: true });
+  config.providers.openai = {
+    adapter: "openai-responses",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward",
+    liveModels: false,
+    modelContextWindows: { "gpt-6.1-sol": 872_000 },
+  };
+  saveConfig(config);
+  const server = await startDiscoveryServer();
+  try {
+    const response = await fetch(new URL("/v1/models?flavor=anthropic&ids=cli&limit=1000", server.url));
+    expect(response.status).toBe(200);
+    const json = await response.json() as { data: Array<{ id: string; display_name: string; max_input_tokens: number }> };
+    expect(json.data.find(info => info.id === "ocx-claude-native--gpt-6.1-sol--fast[1m]")).toMatchObject({
+      display_name: "gpt-6.1-sol (native) · Fast · 1M",
+      max_input_tokens: 872_000,
+    });
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("?flavor=anthropic works without the header; disabled -> empty data", async () => {
   saveConfig(configWithStaticModels());
   let server = await startDiscoveryServer();

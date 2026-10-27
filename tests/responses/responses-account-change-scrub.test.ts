@@ -262,6 +262,25 @@ describe("Codex pool account-change conversation-state scrub", () => {
     expect(logCtx.conversationStateScrub).toBe("account-change");
   });
 
+  test("an account change scrubs x-codex-turn-state from both headers and body.client_metadata", () => {
+    rememberConversationStateIssuer(BINDING_KEY, "account-a");
+    const headers = new Headers({ "x-codex-turn-state": "turn-state-acct-a", session_id: "sess-1" });
+    const body = {
+      model: "gpt-5.4",
+      input: [userMessage("next turn")],
+      client_metadata: { "x-codex-turn-state": "turn-state-acct-a", other: "keep" },
+    };
+    expect(applyAccountChangeConversationStateScrub({
+      body,
+      headers,
+      bindingKey: BINDING_KEY,
+      servingAccountId: "account-b",
+    })).toBe(true);
+    expect(headers.has("x-codex-turn-state")).toBe(false);
+    expect(headers.get("session_id")).toBe("sess-1");
+    expect((body.client_metadata as Record<string, unknown>)["x-codex-turn-state"]).toBeUndefined();
+    expect((body.client_metadata as Record<string, unknown>).other).toBe("keep");
+  });
   test("canPortConversationState refuses continuation ids, provider ids and encrypted reasoning", () => {
     expect(canPortConversationState({})).toEqual({ portable: true });
     expect(canPortConversationState({ previousResponseId: "resp_1" })).toEqual({

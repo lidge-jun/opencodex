@@ -87,6 +87,7 @@ export interface ClientEncodedDelivery {
   fold: {
     replayCacheScope?: OcxReasoningReplayScopeRef;
     hideThinkingSummary?: boolean;
+    chatRawReasoningVisible?: boolean;
     hideRawReasoning?: boolean;
     toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>;
     declaredToolNames?: ReadonlySet<string>;

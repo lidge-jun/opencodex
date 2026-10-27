@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AUTO_CONTEXT_OFF } from "../../src/claude/context-windows";
+import { AUTO_CONTEXT_OFF, UNPAIRED_AUTO_CONTEXT } from "../../src/claude/context-windows";
 import { desktop3pAlias } from "../../src/claude/desktop-3p";
 import { buildAnthropicModelInfos } from "../../src/claude/model-info";
 import type { CatalogModel } from "../../src/codex/catalog";
@@ -16,6 +16,8 @@ import type { CatalogModel } from "../../src/codex/catalog";
 function routed(id: string, provider = "fixture"): CatalogModel {
   return { provider, id, contextWindow: 200_000, reasoningEfforts: ["low", "high"] } as CatalogModel;
 }
+
+const SOL_LONG_CONTEXT = { modelWindows: { "gpt-6.1-sol": 872_000 } };
 
 const build = (
   natives: string[],
@@ -47,6 +49,45 @@ describe("fast rows on Claude discovery", () => {
     const base = ids.find(id => !id.endsWith("--fast"));
     expect(base).toBeDefined();
     expect(ids).toContain(`${base}--fast`);
+  });
+
+  test.each(["readable", "desktop3p"] as const)("native Fast + 1M discovery preserves its input ceiling (%s)", idStyle => {
+    const infos = buildAnthropicModelInfos(
+      ["gpt-6.1-sol"], [], UNPAIRED_AUTO_CONTEXT, idStyle, desktop3pAlias,
+      SOL_LONG_CONTEXT, undefined, m => m.provider === "native",
+    );
+    const base = infos.find(info => info.display_name === "gpt-6.1-sol (native)")!;
+    const fast = infos.find(info => info.id === `${base.id}--fast`)!;
+    const fast1m = infos.find(info => info.id === `${base.id}--fast[1m]`);
+    expect(infos.map(info => info.id)).toEqual([
+      base.id, `${base.id}[1m]`, fast.id, `${base.id}--fast[1m]`,
+    ]);
+    expect(fast1m).toEqual({
+      ...fast,
+      id: `${fast.id}[1m]`,
+      display_name: "gpt-6.1-sol (native) · Fast · 1M",
+      max_input_tokens: base.max_input_tokens,
+    });
+    expect(fast1m!.max_input_tokens).toBe(872_000);
+  });
+
+  test("native Fast + 1M requires both Fast eligibility and long-context eligibility", () => {
+    for (const auto of [AUTO_CONTEXT_OFF, UNPAIRED_AUTO_CONTEXT]) {
+      const infos = buildAnthropicModelInfos(
+        ["gpt-6.1-sol", "gpt-5.5"], [], auto, "readable", desktop3pAlias,
+        SOL_LONG_CONTEXT, undefined, () => true,
+      );
+      expect(infos.some(info => info.id.endsWith("gpt-5.5--fast[1m]"))).toBe(false);
+      expect(infos.some(info => info.id.endsWith("gpt-6.1-sol--fast[1m]"))).toBe(auto.enabled);
+    }
+    for (const predicate of [undefined, () => false]) {
+      const infos = buildAnthropicModelInfos(
+        ["gpt-6.1-sol"], [], UNPAIRED_AUTO_CONTEXT, "readable", desktop3pAlias,
+        SOL_LONG_CONTEXT, undefined, predicate,
+      );
+      expect(infos.some(info => info.id.includes("--fast"))).toBe(false);
+      expect(infos.some(info => info.id.endsWith("[1m]"))).toBe(true);
+    }
   });
 
   test("an ineligible row gains nothing", () => {

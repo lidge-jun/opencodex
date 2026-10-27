@@ -860,7 +860,7 @@ export const zhTW: Record<TKey, string> = {
   "sub.featured": "精選",
   "sub.advanced": "進階",
   "sub.orderHintAria": "此順序的用途",
-  "sub.orderHint": "此處所選並顯示的順序決定 Codex 模型選擇器頂部第 1–5 位，以及 {cmd} 的預設模型候選。",
+  "sub.orderHint": "此處所選並顯示的順序決定 Codex 模型選擇器頂部第 1–5 位，以及 {cmd} 的預設模型候選。若模型選擇器中可見的精選模型少於 5 個，其餘欄位會依目錄優先順序顯示模型；5 個可見的精選模型即可填滿名單，除非自訂模型選擇器順序改變了目錄優先順序。",
   "sub.noneSelected": "未選擇 — 請從下方列表選擇。",
   "sub.models": "模型",
   "sub.search": "搜尋模型（原生 gpt + 已路由）…",

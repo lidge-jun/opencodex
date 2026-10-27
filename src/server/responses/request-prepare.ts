@@ -1602,6 +1602,7 @@ export async function prepareResponsesRequest(
       if (refusal) return refusal;
       applyAccountChangeConversationStateScrub({
         body: parsed._rawBody,
+        headers: selectedForwardHeaders,
         parsed,
         preserveReasoningEncryptedContent: isCanonicalOpenAiForwardProvider(route.provider)
           && parsed._nativeReasoningRetention?.accountSwitch === true,

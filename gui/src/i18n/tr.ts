@@ -1015,7 +1015,7 @@ export const tr: Record<TKey, string> = {
   "sub.featured": "Öne Çıkarılanlar",
   "sub.advanced": "Gelişmiş",
   "sub.orderHintAria": "Bu sıra nasıl kullanılır",
-  "sub.orderHint": "Burada gösterilen sıralama, Codex model seçicisinin üst kısmındaki 1-5 pozisyonlarını ve {cmd} için varsayılan model adaylarını belirler.",
+  "sub.orderHint": "Burada gösterilen sıralama, Codex model seçicisinin üst kısmındaki 1-5 pozisyonlarını ve {cmd} için varsayılan model adaylarını belirler. Seçicide 5’ten az öne çıkarılmış model görünüyorsa kalan yuvalarda katalog önceliğine göre modeller sunulur; model seçicisindeki özel bir sıralama katalog önceliğini değiştirmediği sürece görünür 5 öne çıkarılmış model listeyi doldurur.",
   "sub.noneSelected": "Hiçbiri seçilmedi — aşağıdaki listeden seçin.",
   "sub.models": "Modeller",
   "sub.search": "Modellerde ara…",

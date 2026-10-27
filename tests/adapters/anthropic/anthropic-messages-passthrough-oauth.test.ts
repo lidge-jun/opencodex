@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { createAnthropicAdapter } from "../../../src/adapters/anthropic";
 import { captureAnthropicClientIdentity } from "../../../src/adapters/anthropic/client-identity";
+import { claudeCodeSessionId } from "../../../src/adapters/client-fingerprint";
 import {
   anthropicMessagesNativeWireBody,
   anthropicOAuthWireBody,
@@ -102,6 +103,20 @@ describe("buildAnthropicMessagesPassthroughRequest with OAuth", () => {
       expect(built.headers[name]).toBe(value);
     }
     expect(Object.keys(built.headers).sort()).toEqual(Object.keys(adapterHeaders).sort());
+  });
+
+  test("derives conversation-scoped X-Claude-Code-Session-Id from sessionKey or caller metadata.user_id.session_id", () => {
+    const a = buildAnthropicMessagesPassthroughRequest(oauthProvider(), "claude-wire", SOURCE, undefined, { sessionKey: "conv-alpha" });
+    const b = buildAnthropicMessagesPassthroughRequest(oauthProvider(), "claude-wire", SOURCE, undefined, { sessionKey: "conv-beta" });
+    const fromMeta = buildAnthropicMessagesPassthroughRequest(
+      oauthProvider(),
+      "claude-wire",
+      { ...SOURCE, metadata: { user_id: JSON.stringify({ session_id: "conv-alpha" }) } },
+    );
+    expect(a.headers["X-Claude-Code-Session-Id"]).toBe(claudeCodeSessionId(ACCESS, "conv-alpha"));
+    expect(fromMeta.headers["X-Claude-Code-Session-Id"]).toBe(claudeCodeSessionId(ACCESS, "conv-alpha"));
+    expect(a.headers["X-Claude-Code-Session-Id"]).not.toBe(b.headers["X-Claude-Code-Session-Id"]);
+    expect(a.headers["X-Claude-Code-Session-Id"]).not.toBe(claudeCodeSessionId(ACCESS));
   });
 
   test("an OAuth token is refused for any destination but api.anthropic.com", () => {

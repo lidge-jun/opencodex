@@ -31,6 +31,7 @@ const SALVAGEABLE_CONFIG_SECTIONS = ["routingProfiles", "combos"] as const;
 /** Optional nested fields that can be dropped whole without changing the rest of the document. */
 const SALVAGEABLE_OPTIONAL_FIELDS: ReadonlyArray<readonly [string, string]> = [
   ["claudeCode", "desktopProfile"],
+  ["claudeCode", "appendOnlyToolLoadingModels"],
 ];
 
 function isSalvageableConfigPath(section: string, id: string): boolean {

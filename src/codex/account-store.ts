@@ -1377,12 +1377,15 @@ async function resolveCodexToken(
     }
     const res = await fetch(CHATGPT_TOKEN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
         client_id: CHATGPT_CLIENT_ID,
+        grant_type: "refresh_token",
         refresh_token: lockedCred.refreshToken,
-      }).toString(),
+      }),
       signal,
     });
     if (!res.ok) {
@@ -1393,7 +1396,10 @@ async function resolveCodexToken(
       noteChatgptRefreshFailure("pool", res.status, failure, poolAccountLogLabel(id));
       throw new TokenRefreshError(reason, `Codex token refresh failed (${reason}); reauthenticate the account.`, res.status, failure.code);
     }
-    const data = (await res.json()) as { access_token: string; refresh_token?: string; expires_in: number };
+    const data = (await res.json()) as { access_token?: unknown; refresh_token?: string; expires_in?: unknown };
+    if (!data || typeof data !== "object" || typeof data.access_token !== "string" || !data.access_token.trim()) {
+      throw new Error("Codex token refresh response missing access_token");
+    }
     // Guard against a missing/non-finite/negative expires_in (malformed upstream
     // response): a NaN expiry would never compare as expired, and a negative
     // duration would stamp an already-past expiry — both block refresh semantics.

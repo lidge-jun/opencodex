@@ -28,7 +28,6 @@ import {
   type OwnershipRecord,
 } from "./ownership";
 import {
-  isHermesAffinityUpgrade,
   protectedContributionFingerprint,
   refreshablePathsOf,
   semanticProtectedContributionFingerprint,
@@ -48,6 +47,7 @@ import { buildIntegrationContribution, exportContextOf, qoderLegacyCatalogConfli
 import type { IntegrationState } from "./state";
 import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
+import { hermesRefreshRefusal } from "./hermes-refresh";
 import { matchesOperationResult, newOpId, type JournalEntry } from "./journal";
 import { observeIntegration, restoreStoreDirectoryRefusal, type IntegrationWriteInput, type RefusalReason } from "./mutation-plan";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
@@ -369,14 +369,8 @@ function applyOrRefreshIntegration(
   if (classified.state === "current") {
     return { ok: true, changed: false, state: "current", clientId, message: "already applied" };
   }
-  // Catalog refresh must not opt an existing Hermes integration into affinity.
-  // Explicit Apply (or Replace) records the new contract before refresh resumes.
-  if (!allowAbsent && record && isHermesAffinityUpgrade(parsed, record, contribution)) {
-    return {
-      ok: true, changed: false, state: "stale", clientId,
-      message: "Hermes session affinity requires Apply in Integrations; refresh left the configuration unchanged",
-    };
-  }
+  const hermesRefusal = hermesRefreshRefusal(pre, allowAbsent);
+  if (hermesRefusal) return hermesRefusal;
 
   // A stale refresh drops what the PREVIOUS record owned before merging: a
   // model that left the catalog would otherwise stay behind as an orphan the

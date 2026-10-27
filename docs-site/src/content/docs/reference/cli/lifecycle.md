@@ -911,6 +911,22 @@ so the summary remains readable across Windows code pages. Transactional-backup 
 logs a fixed success message rather than the backup directory name; backup names containing
 shell metacharacters do not become commands in that log message.
 
+On Windows, uninstalling an elevated-registered `opencodex-proxy` task can require an
+elevated terminal. If deletion is denied, or exits with code 1 while the task is still
+present, OpenCodex reports the elevation requirement and preserves the service assets.
+Open PowerShell or Terminal with **Run as administrator** and run:
+
+```powershell
+schtasks /delete /tn opencodex-proxy /f
+```
+
+Then rerun `ocx service uninstall` from the original account to finish cleanup, and check
+`ocx service status`. Access-denied start/stop commands name their corresponding elevated
+`schtasks` command. Scheduler failures use stable diagnostics and exit codes rather than
+echoing localized child stderr, which may use a different Windows code page. An absent or
+unreadable task after a failed delete keeps exit code 1 alone from confirming an access
+denial; recognized access-denied text from the delete is still classified as one.
+
 On Windows, creating the Task Scheduler entry requires elevation. Recognized localized
 access-denied text keeps the existing guidance path. If that text is unreadable, the fallback
 requires the owned command shape `/create /tn opencodex-proxy /xml <non-empty-path> /f`, status 1,
