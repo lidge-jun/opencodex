@@ -56,6 +56,14 @@ export interface OcxClaudeCodeConfig {
    * Default: false; only literal true enables it. Native passthrough is unchanged.
    */
   stabilizePromptCache?: boolean;
+  /**
+   * Opt-in resolved provider/model routes verified to accept Responses additional_tools.
+   * A single trailing '*' matches a provider-qualified prefix (for example 'gateway/gpt-*').
+   * Replays successful client ToolSearch discoveries in place without growing the initial
+   * catalog. Requires metadata.user_id. Absent/empty is off; native passthrough is unchanged.
+   * Applies only after routing settles on a direct openai-responses route; combos and policies are skipped.
+   */
+  appendOnlyToolLoadingModels?: string[];
   /** Opt-in translated Messages admission; unset keeps legacy behavior. Native passthrough is exempt. */
   compatibility?: "shadow" | "enforce";
   /** Kill switch for the /v1/messages inbound (GUI "Claude ON" toggle). Default: enabled. */
@@ -147,15 +155,15 @@ export interface OcxClaudeCodeConfig {
    * that back on: "Set ENABLE_TOOL_SEARCH=true (or auto / auto:N) if your proxy
    * forwards tool_reference blocks."
    *
-   * Default OFF, because opencodex only forwards them on the NATIVE ANTHROPIC
-   * PASSTHROUGH route, where the body reaches Anthropic untouched. On a translated
-   * route the deferral shape is not representable: compatibility.ts marks
-   * tool_search/tool_reference/deferred_tools unsupported, and toolsToResponses
-   * drops the tool_search server tool while ignoring defer_loading — deferred tools
-   * still carry input_schema on the wire, so the routed provider receives every
-   * schema anyway while Claude Code stops accounting for them and therefore stops
-   * compacting. Under `claudeCode.compatibility: "enforce"` the same request is
-   * rejected with 400 instead.
+   * Default OFF. Native Anthropic passthrough retains server-side search; the
+   * ordinary translated route drops the typed search tool and sends function schemas
+   * eagerly. appendOnlyToolLoadingModels is a separate opt-in for verified final
+   * Responses destinations and an eager client-executed ToolSearch function: it
+   * projects currently declared deferred definitions at successful discovery results.
+   * This launcher switch alone enables neither that projection nor server-side search.
+   * Compatibility-enforcement admission remains unchanged and can reject unsupported
+   * tool_search/tool_reference/deferred_tools requests; no native-search parity or
+   * cache-hit guarantee is implied.
    *
    * `true` injects "true"; a string is passed through verbatim so Claude Code's own
    * vocabulary (`auto`, `auto:N`, `force`) stays reachable. `false` and absent

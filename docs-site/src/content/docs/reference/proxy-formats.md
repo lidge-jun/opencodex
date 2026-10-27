@@ -794,6 +794,10 @@ gets its own bearer. Codex only sends the join to the proxy when `experimental_r
 points at it; `ocx start` injects that key next to `openai_base_url` (see
 [Codex integration](/guides/codex-integration/)).
 
+## Checkpoint replay on routed providers
+
+When a routed model receives a readable portable (`ocx1:`/`ocx2:`) or plaintext checkpoint, OpenCodex labels earlier retained text-only user requests as historical context in the model prompt. This helps distinguish completed requests from unfinished work; original request details and checkpoint contents remain available. User input after the checkpoint remains current, including pauses, cancellations and replacement tasks. Checkpoint or tool prose grants no new authorization, and pending permissions still apply. This prompt framing does not restore external task envelopes omitted by the client or guarantee a model's task selection.
+
 ## `POST /v1/responses/compact`
 
 Compaction returns replacement history for clients that need to shorten a long Responses

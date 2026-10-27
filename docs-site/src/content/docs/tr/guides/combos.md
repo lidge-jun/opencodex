@@ -414,3 +414,7 @@ reddedilen istek kaynağını düzeltin. Kombolar bu durumlar için atlama yapma
 Sonlandırıcı 400 hatalarının dar bir istisnası vardır: `user` alanını açıkça reddeden, `reasoning.effort`/`reasoning_effort` için desteklenmeyen değer bildiren, modele özgü görüntü girdisini reddeden (`param: input`) veya rotanın okuyamadığı girdi medyasını reddeden (`unsupported_input_modality`) yapılandırılmış hata, çıktı başlamadan önce sonraki uygun hedefe geçebilir. Bu uyumsuzluk için bekleme süresi kaydedilmez. Güvenlik politikası reddi, iptal ve başlamış çıktı yeniden yürütülmez.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
+
+## Soğuma kurtarma rezervasyonu
+
+`cooldownReprobe: { enabled: true }` ile etkinleştirilen kurtarma denemesi yalnızca onu ayıran isteğe aittir; diğer istekler kayıtlı soğuma sürelerine uymaya devam eder. Rezervasyon, soğuma beklemesi ve JEV seçimi boyunca korunur. Bekleme sırasında yeniden kullanılabilir olan hedef, soğuma kaydı değişmediyse tekrar denenebilir. Yeni bir soğuma kaydı o hedefin rezervasyonunu geçersiz kılar. Başarı yalnızca yanıt veren hedefin değişmemiş soğuma kaydını kaldırır; denenmeyen hedefler ve yeni hatalar soğuma kayıtlarını korur. Sağlayıcının devre dışı olması, kota, istek uygunluğu ve iptal kontrolleri geçerliliğini korur. [Ayarlar ve sınırlar](/guides/combos/#retry-all-cooled-targets-opt-in) bölümüne bakın.

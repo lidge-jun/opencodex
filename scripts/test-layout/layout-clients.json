@@ -25,6 +25,7 @@
   "aside-profiles-catalog-refresh.test.ts": "clients",
   "client-catalog-compatibility.test.ts": "clients",
   "opencode-kilo-refresh.test.ts": "clients",
+  "hermes-catalog-refresh.test.ts": "clients",
   "client-export-reasoning-metadata.test.ts": "clients",
   "client-export-reasoning-controls.test.ts": "clients",
   "client-export-live-wire.test.ts": "clients",

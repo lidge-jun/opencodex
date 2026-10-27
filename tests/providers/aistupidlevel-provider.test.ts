@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
@@ -19,7 +19,8 @@ import { isModelVisionSidecarConsumer, isVisionSidecarConsumer } from "../../src
 import { requiresVisionPreprocessing } from "../../src/vision/plan";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 
 const originalFetch = globalThis.fetch;
 const baseUrl = "https://aistupidlevel.info/v1";
@@ -124,12 +125,14 @@ describe("AI Stupid Level text-only contract for pinned models", () => {
   const PINNED = "claude-sonnet-4-6";
   const IMAGE = "data:image/png;base64,aGVsbG8taW1hZ2UtYnl0ZXM=";
   let previousHome: string | undefined;
+  let previousCodexHome: string | undefined;
   let home = "";
-  let codexHome: IsolatedCodexHome;
+  let codexHome: IsolatedCodexHome | null = null;
   let mainCalls: Array<Record<string, unknown>>;
 
   beforeEach(() => {
     previousHome = process.env.OPENCODEX_HOME;
+    previousCodexHome = process.env.CODEX_HOME;
     codexHome = installIsolatedCodexHome("ocx-asl-text-only-codex-");
     home = mkdtempSync(join(tmpdir(), "ocx-asl-text-only-"));
     process.env.OPENCODEX_HOME = home;
@@ -154,14 +157,73 @@ describe("AI Stupid Level text-only contract for pinned models", () => {
     }) as typeof fetch;
   });
 
-  afterEach(() => {
+  async function cleanupFixture(removeTree = removeTreeAfterBackgroundWork): Promise<void> {
+    const failures: unknown[] = [];
+    try {
+      // A case can leave tracked teardown work (config-dir ACL hardening, an icacls
+      // reap) holding a file in either fixture tree. Settle and reap before removing,
+      // and remove both through the same drain-aware path: codexHome.restore() would
+      // delete its tree synchronously ahead of the drain and swallow a sharing
+      // violation. The env restore is unconditional so a retained, named tree never
+      // leaks into the next case's config resolution.
+      for (const root of [home, codexHome?.path]) {
+        if (!root) continue;
+        try { await removeTree(root); }
+        catch (error) { failures.push(error); }
+      }
+      // A sharing violation in one tree must not strand the other. Preserve a
+      // single error's identity, and report both causes when both removals fail.
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, "AI Stupid Level fixture cleanup failed");
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      codexHome?.restoreEnvironment();
+    }
+  }
+
+  // Cover both drain/retry sequences with reap headroom; a stuck ACL child must still time out.
+  afterEach(async () => {
     clearModelCache();
     resetVisionDescriptionCache();
-    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = previousHome;
-    codexHome.restore();
-    removeTreeWithRetry(home);
-  });
+    try {
+      await cleanupFixture();
+    } finally {
+      home = "";
+      codexHome = null;
+    }
+  }, 3 * SERVER_BUDGET_MS);
+
+  test.each(["home", "codex", "both"] as const)(
+    "attempts both removals and restores the environment when %s cleanup fails",
+    async failingRoot => {
+      const roots = [home, codexHome!.path];
+      const attempted: string[] = [];
+      const homeError = new Error("fixture home removal failed");
+      const codexError = new Error("fixture Codex home removal failed");
+      const expectedError = failingRoot === "codex" ? codexError : homeError;
+      const cleanupError = await cleanupFixture(async root => {
+        attempted.push(root);
+        if (root === roots[0] && failingRoot !== "codex") throw homeError;
+        if (root === roots[1] && failingRoot !== "home") throw codexError;
+        await removeTreeAfterBackgroundWork(root);
+      }).catch(error => error);
+      if (failingRoot === "both") {
+        expect(cleanupError).toBeInstanceOf(AggregateError);
+        expect(cleanupError.errors).toHaveLength(2);
+        expect(cleanupError.errors[0]).toBe(homeError);
+        expect(cleanupError.errors[1]).toBe(codexError);
+      } else {
+        expect(cleanupError).toBe(expectedError);
+      }
+      expect(attempted).toEqual(roots);
+      expect(process.env.OPENCODEX_HOME).toBe(previousHome);
+      expect(process.env.CODEX_HOME).toBe(previousCodexHome);
+      expect(existsSync(roots[0]!)).toBe(failingRoot !== "codex");
+      expect(existsSync(roots[1]!)).toBe(failingRoot !== "home");
+      // afterEach retries any deliberately retained tree through the real remover.
+    },
+  );
 
   test("a pinned live id needs vision preprocessing at the preset destination", () => {
     const saved = config();
@@ -225,5 +287,5 @@ describe("AI Stupid Level text-only contract for pinned models", () => {
     } finally {
       await server.stop(true);
     }
-  });
+  }, SERVER_BUDGET_MS); // the file's only cases binding a real server; Windows startup measured ~4.8s of Bun's 5s default.
 });

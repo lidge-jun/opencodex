@@ -405,6 +405,8 @@ applies to it as well. Desktop and CLI catalog rewrites share bounded row and me
 if adding routed models would exceed a limit, OpenCodex returns the original Anthropic catalog
 unchanged rather than publishing a partial list.
 
+Before the first upstream response, a picker upload that makes no progress for 60 seconds is closed. An expired upload fails without a success response; HTTP/2 resets only the affected stream. This idle timer pauses when the upstream applies backpressure and is removed when the upload completes or the upstream first responds. This idle guard adds no overall upload-duration limit; existing runtime and protocol limits remain in effect. Response streams are excluded from this timer.
+
 ### Use opencodex models from the Desktop Code tab (first-party bindings)
 
 In first-party mode the Code tab's model picker belongs to claude.ai: its rows (Opus 5.5,
@@ -966,7 +968,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | Assistant text | `output_text` |
 | Assistant `tool_use` | `function_call` (`input` → JSON-stringified `arguments`) |
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
-| `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result; preserves loaded-tool names without adding declarations or enabling translated server-side deferral |
+| `tool_reference` in a tool result | Text `Tool loaded: <tool_name>` in the paired result by default. The [append-only opt-in](#preserve-cache-prefixes-when-client-tools-load) may place a currently declared deferred function at its successful client discovery result on an eligible final Responses route; a reference alone never grants a tool or enables server-side search |
 | `thinking` / `redacted_thinking` replay | `reasoning` items with bounded `ocxr1` envelopes for signatures and redacted payloads |
 | Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`). On a route to `api.anthropic.com`, the typed `web_search_*` and `web_fetch_*` declarations are also sent to Anthropic as declared and run server-side, unless the web-search sidecar supplies `web_search` itself. A search or fetch with a matching call and complete input comes back to the client as its `server_tool_use` block and its `web_search_tool_result` or `web_fetch_tool_result`, verbatim. Orphan results are dropped without synthesizing a call, while the surrounding text is preserved. When the client sends a complete pair back in its history, the next `api.anthropic.com` request carries it in place only if the following block uniquely identifies its original turn. Repeated anchors, unmatched or duplicate call/result ids, malformed call input, or a result appearing before its call drop the exchange. Call input must be an object with a nonempty search query or fetch URL string; other destinations never see the exchange |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
@@ -1134,15 +1136,22 @@ configured, every tool schema is inlined before you type anything. Re-enable def
 { "claudeCode": { "toolSearch": true } }
 ```
 
-This is off by default because it only pays off on **native Anthropic passthrough** routes.
-Deferral is a server-side optimisation, not a smaller request: Claude Code still sends every
-tool definition, and Anthropic's API is what keeps deferred schemas out of the model's context
-and answers the `tool_search` server tool with `tool_reference` blocks. A translated (routed)
-model never reaches that machinery — opencodex drops the `tool_search` tool and ignores
-`defer_loading` — so the provider still receives every schema while Claude Code stops counting
-them and therefore stops compacting. With `claudeCode.compatibility: "enforce"` the same
-request is rejected with 400 instead. Turn it on when `ocx claude` is routed to an Anthropic
-model; leave it off for third-party routes until translated deferral is supported.
+This remains off by default. **Native Anthropic passthrough** preserves Anthropic's server-side
+tool search: the client still sends deferred definitions, and Anthropic keeps them out of the
+model context until discovery. The default translated path does not implement that server tool;
+it drops the typed search declaration and ordinarily sends function schemas eagerly, which can
+make the client's context accounting undercount the provider's input.
+
+There is a separate, narrow exception for **client-executed `ToolSearch`** on a verified Responses
+destination selected by [`claudeCode.appendOnlyToolLoadingModels`](#preserve-cache-prefixes-when-client-tools-load).
+For that final physical route, the opt-in keeps unused deferred definitions out of the initial
+catalog and adds current definitions at successful structured discovery results. Client-side
+search must already work and an eager `ToolSearch` function must be declared. The launcher
+`toolSearch` setting can enable client discovery where the client supports it, but does not by
+itself activate the opt-in or provide server-side search. Verify this client-and-gateway combination
+before enabling it; leave it off on other third-party routes. Compatibility-enforcement admission
+is unchanged and can still reject unsupported deferral requests. Neither setting guarantees
+cache hits or full native-tool-search parity.
 
 Accepted values follow Claude Code's own parser: `true`, `"auto"`, `"auto:N"` (N at least 100)
 and `"force"`. A value you export yourself always wins over the injected one.
@@ -1166,6 +1175,77 @@ and the turn never starts, so an unrecorded destination folds. This applies with
 reuse still requires stable session identity and upstream cache availability.
 Changes to earlier instructions or tools, and conversation compaction, can still
 affect cache hits; preserving reminder order alone does not guarantee reuse.
+
+### Preserve cache prefixes when client tools load
+
+For a **direct Responses route verified to accept `additional_tools`**, an opt-in can preserve
+client ToolSearch loading history instead of adding each discovered function to the initial
+catalog:
+
+```json
+{
+  "claudeCode": {
+    "appendOnlyToolLoadingModels": ["my-gateway/gpt-example"]
+  }
+}
+```
+
+Selectors match resolved `provider/model` names, not picker aliases. A single trailing wildcard
+such as `my-gateway/gpt-*` selects a verified model family; a global `*` is not accepted. The
+list defaults to off, with a maximum of 128 entries of 512 characters each. Only a request whose
+final physical route is a direct Responses provider gets the outbound rewrite. The destination
+is checked again when the adapter is bound after a late subagent fallback or replacement; selecting
+the original route does not authorize a different fallback. The request's original catalog remains
+available to other attempts. A combo or policy request keeps the original catalog even when
+selected, because its fallbacks may not keep the chronological placement.
+
+OpenCode Go's Responses endpoint and the official xAI Responses hosts keep the
+original complete tool catalog even when selected. These destinations flatten or reject
+`additional_tools`, so they cannot preserve this chronological loading prefix. Keep this opt-in
+off for any other gateway that promotes discoveries to top-level `tools`.
+
+The optimization needs a string `metadata.user_id` and an eager declared `ToolSearch` function.
+Unused deferred definitions stay out of the initial catalog before discovery as well as after it;
+a successful structured ToolSearch result adds their currently declared definitions at that position.
+It never grants tools from reference text or restores revoked definitions. Tools used before
+being discovered and explicitly forced undiscovered tools remain in the initial catalog. Schemas, strictness and call/result pairing are
+preserved. Missing metadata, absent/empty configuration, and native Anthropic passthrough keep
+existing behavior. Malformed configuration is rejected on write; load recovery disables only
+this optional setting rather than discarding providers.
+
+This is not server-side deferred-tool-search support and does not change compatibility-enforcement
+admission or turn on tool search in the client. It applies when the client already discovers tools.
+It does not guarantee cache hits: schema changes, revocations, model switches, compaction and
+upstream cache availability can still require a new prefix.
+
+#### Claude models behind a gateway that also serves GPT
+
+`appendOnlyToolLoadingModels` cannot fix Claude models that are routed through a Responses
+gateway. Such a gateway can lift `additional_tools` back into Claude's initial `tools` array, and
+Claude caches tools before the system prompt, so the request that loads a tool still misses. For a
+key-authenticated gateway that also serves Anthropic Messages, send Claude models natively and keep
+the other models on Responses with `modelAdapters`:
+
+```json
+{
+  "protocols": { "rollout": { "managedMessagesNative": true } },
+  "providers": {
+    "my-gateway": {
+      "adapter": "anthropic",
+      "modelAdapters": { "gpt-example": "openai-responses" }
+    }
+  }
+}
+```
+
+List every non-Claude model the provider serves in `modelAdapters`; an unlisted one would be sent
+as Messages. Native Messages keep Claude Code's deferred tool definitions and `tool_reference`
+results in place, so loading a tool adds to the cached prefix rather than replacing it.
+`claudeCode.stabilizePromptCache` does not apply on that path and is not needed there; it still
+helps any Claude request that stays on the bridge. Combos, policies, pinned efforts, synthetic
+rows, the web-search sidecar and vision preprocessing keep requests on the bridge, as listed under
+[rollout switches](/guides/protocol-paths/#rollout-switches). Third-party compatible providers do
+not receive caller `anthropic-beta` values, so the gateway must accept these requests without them.
 
 ### Intercept token recovery
 

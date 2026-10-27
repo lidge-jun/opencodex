@@ -217,6 +217,8 @@ Picker 모드를 끄거나 Desktop을 완전히 다시 시작할 때까지 Deskt
 
 Picker 모드는 1P의 일부이므로 [1P 계정 위험](#1p직접-선택)도 그대로 적용돼요.
 
+상위 서버의 첫 응답 전에는 60초 동안 전송이 진행되지 않는 Picker 업로드를 종료해요. 유휴 시간 만료는 성공 응답을 보내지 않고 업로드를 실패 처리하며, HTTP/2에서는 해당 스트림만 재설정해요. 상위 서버가 데이터를 받지 못해 전송을 일시 중지한 동안에는 이 타이머도 멈추고, 업로드가 끝나거나 첫 응답이 오면 해제해요. 이 유휴 타이머는 전체 업로드 시간에 추가 제한을 두지 않으며, 기존 런타임·프로토콜 제한은 그대로 적용돼요. 응답 스트림은 이 타이머의 적용 대상이 아니에요.
+
 ### Code 탭에서 opencodex 모델 쓰기 (1P 바인딩)
 
 1P 모드에서 Code 탭의 모델 선택기는 claude.ai가 채워요. Opus 5.5, Sonnet 5, Haiku 4.5와
@@ -573,7 +575,7 @@ Messages → Responses로 변환되는 요청에서는 Claude Code의 `/effort` 
 | Assistant 텍스트 | `output_text` |
 | Assistant `tool_use` | `function_call`(`input` → JSON 문자열로 변환한 `arguments`) |
 | 사용자 `tool_result` | `function_call_output`(`is_error` → `[tool error]` 접두사) |
-| 도구 결과의 `tool_reference` | 짝지어진 결과에 `Tool loaded: <tool_name>` 텍스트로 보존합니다. 도구 선언을 추가하거나 번역 경로의 서버 측 지연 로딩을 활성화하지는 않습니다. |
+| 도구 결과의 `tool_reference` | 기본적으로 짝지어진 결과에 `Tool loaded: <tool_name>` 텍스트를 보존합니다. [append-only 옵션](/guides/claude-code/#preserve-cache-prefixes-when-client-tools-load)을 켠 적격 최종 Responses 경로에서는 성공한 클라이언트 검색 결과 위치에 현재 선언된 지연 함수의 정의를 배치할 수 있습니다. 참조만으로 도구 권한이나 서버 측 검색 기능을 추가하지는 않습니다. |
 | `thinking` / `redacted_thinking` 재생 | 서명과 비공개 페이로드를 제한된 `ocxr1` 봉투에 담은 `reasoning` 항목 |
 | Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`). `api.anthropic.com`으로 번역하여 보내는 경로에서는 타입이 지정된 `web_search_*`와 `web_fetch_*` 선언도 Anthropic에 전달되어 서버에서 실행됩니다. 웹 검색 사이드카가 `web_search`를 제공하면 사이드카가 우선합니다. 검색과 가져오기 결과는 `server_tool_use` 및 대응하는 `web_search_tool_result` / `web_fetch_tool_result` 블록으로 클라이언트에 반환됩니다 |
 | `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, 이름 지정 함수→`{type:"function",name}`, 호스팅 WebSearch/web_search→`{type:"web_search"}` |
@@ -718,6 +720,12 @@ Anthropic 백엔드를 명시하면 의도적으로 실패 후 중단해요.
 **스킬을 불러올 때 토큰 수가 많음** — 번들 `claude-api` 스킬(약 136k 토큰)은 Claude 모델을
 언급하면 자동으로 불러와요. 네이티브 패스스루에서는 정상이며, 라우팅 모델에서는 opencodex가
 기본적으로 스텁으로 바꿔요(`blockedSkills: ["claude-api"]`).
+
+**첫 턴부터 MCP 도구 스키마가 컨텍스트를 채움** — `claudeCode.toolSearch: true`는 클라이언트의 도구 검색을 켜는 선택 설정이며 기본값은 꺼짐입니다. 네이티브 Anthropic 경로는 서버 측 검색과 지연 도구 참조를 그대로 전달합니다. 기본 번역 경로는 같은 서버 기능을 제공하지 않으므로 모든 타사 경로에서 켜도 된다는 뜻은 아닙니다.
+
+예외적으로, 클라이언트가 직접 실행하는 eager `ToolSearch` 함수와 구조화된 검색 결과를 제공하고 최종 Responses 목적지가 `additional_tools`를 지원한다면 `claudeCode.appendOnlyToolLoadingModels`로 그 목적지를 명시하여 사용할 수 있습니다. 이 옵션은 사용하지 않은 지연 정의를 초기 카탈로그에서 제외하고 성공한 검색 위치에 현재 정의를 배치합니다. 런처의 `toolSearch` 설정만으로 이 동작이나 서버 측 검색이 활성화되지는 않습니다. 지원되는 클라이언트와 게이트웨이 조합에서만 켜고, 그 밖의 타사 경로에서는 꺼 두세요. 기존 compatibility-enforcement 검사는 그대로 적용되므로 지원하지 않는 요청을 거절할 수 있습니다. 캐시 적중이나 네이티브 검색과의 완전한 동등성은 보장하지 않습니다. [영문 설정 안내](/guides/claude-code/#preserve-cache-prefixes-when-client-tools-load)를 참고하세요.
+
+OpenCode Go의 Responses 엔드포인트와 공식 xAI Responses 호스트는 선택 목록에 있어도 원래 전체 도구 카탈로그를 유지합니다. 이 목적지들은 `additional_tools`를 초기 `tools`로 승격하거나 거절하므로 시간순 로딩 prefix를 보존할 수 없습니다. 검색 결과의 정의를 초기 `tools`로 승격하는 다른 게이트웨이에서도 이 옵션을 꺼 두세요.
 
 **서브에이전트가 잘못된 모델로 디스패치됨** — 로스터 에이전트(`ocx-*`)는 Agent 도구의 `model`
 인자가 아니라 `<!-- ocx-route: ... -->` 지시문을 사용해요. 지시문이 원하는 라우트와 일치하는지

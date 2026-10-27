@@ -35,6 +35,7 @@ import {
   comboExclusionReasons,
   comboTargetSkipTrigger,
   noteComboSuccess,
+  settleComboReprobeSuccess,
   comboFailureDecision,
   advanceComboAfterFailure,
   comboFailureCooldownScope,
@@ -319,19 +320,23 @@ interface JevComboChoice {
   candidate: JevCandidate;
 }
 
-/** Enumerate the current ordinary Combo eligibility set without retaining attempted picks. */
+/** Enumerate this request's eligible targets without reserving another recovery pass. */
 function eligibleJevComboChoices(
   config: OcxConfig,
   comboId: string,
   eligible: (target: NonNullable<ReturnType<typeof getCombo>>["targets"][number]) => boolean,
   now: number,
+  cooldownReprobeTargets?: ComboPick["cooldownReprobeTargets"],
 ): JevComboChoice[] {
   const combo = getCombo(config, comboId);
   if (!combo) return [];
   const excluded = new Set<string>();
   const choices: JevComboChoice[] = [];
+  const reserved = cooldownReprobeTargets ? Object.entries(cooldownReprobeTargets) : undefined;
   while (excluded.size < combo.targets.length) {
-    const pick = pickComboTarget(config, comboId, { exclude: excluded, eligible, now });
+    const pick = pickComboTarget(config, comboId, {
+      exclude: excluded, eligible, now, allowCooldownReprobe: false, cooldownReprobeTargets: reserved,
+    });
     if (!pick) break;
     const key = targetKey(pick.target);
     excluded.add(key);
@@ -582,6 +587,8 @@ export async function executeComboResponses(
     exclude?: Iterable<string>;
     eligible?: (target: NonNullable<typeof combo>["targets"][number]) => boolean;
     allowCooldownReprobe?: boolean;
+    /** This request's own cooldown-reprobe reservation, carried through its failover hops. */
+    cooldownReprobeTargets?: Iterable<readonly [string, number]>;
     now?: number;
   }) => pickComboTargetWithWait(config, comboId, {
     ...pickOptions,
@@ -672,22 +679,20 @@ export async function executeComboResponses(
   }
   let jevDecision: JevDecision | undefined;
   if (combo.strategy === "jev" && !toolLoopPin) {
-    const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now());
+    const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
     const first = choices[0];
     if (!first) {
       return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, target =>
         targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target, false) !== undefined));
     }
-    const resolvedFailOpenEffort = resolveEffortAtOrBelow(
-      "medium",
-      first.candidate.reasoningEfforts,
-    );
-    const fallback: Pick<JevDecision, "targetKey" | "effort"> = {
-      targetKey: first.candidate.key,
-      effort: resolvedFailOpenEffort && isCodexReasoningEffort(resolvedFailOpenEffort)
-        ? resolvedFailOpenEffort as OcxComboDefaultEffort
-        : null,
+    const fallbackFor = (choice: JevComboChoice): Pick<JevDecision, "targetKey" | "effort"> => {
+      const effort = resolveEffortAtOrBelow("medium", choice.candidate.reasoningEfforts);
+      return {
+        targetKey: choice.candidate.key,
+        effort: effort && isCodexReasoningEffort(effort) ? effort as OcxComboDefaultEffort : null,
+      };
     };
+    const fallback = fallbackFor(first);
     const decisionStartedAt = Date.now();
     const pinReuse = jevPin?.reuse(
       choices.map(choice => choice.candidate),
@@ -729,9 +734,32 @@ export async function executeComboResponses(
         latencyMs: Math.max(0, Date.now() - decisionStartedAt),
       };
     }
+    let selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
+    let selectionUnavailable = false;
+    if (pick.cooldownReprobeTargets && !options.abortSignal?.aborted) {
+      // Another request can replace a cooldown while the decision is awaited. Recheck the
+      // original reservation, current availability and request eligibility without reserving again.
+      const currentChoices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
+      const current = currentChoices.find(choice => choice.candidate.key === decision.targetKey
+        && (decision.effort === null ? choice.candidate.reasoningEfforts.length === 0
+          : choice.candidate.reasoningEfforts.includes(decision.effort)));
+      const available = current ?? currentChoices[0];
+      if (available) selected = available;
+      else selectionUnavailable = true;
+      if (!current) {
+        // Keep completed decision usage even when no target remains. Old scores and quota
+        // selection describe neither a fail-open replacement nor a rejected selection.
+        decision = {
+          backend: decision.backend,
+          ...(available ? fallbackFor(available) : { targetKey: decision.targetKey, effort: decision.effort }),
+          gate: decision.gate === "apply" ? "invalid" : decision.gate,
+          latencyMs: decision.latencyMs,
+          ...(decision.usage ? { usage: decision.usage } : {}),
+        };
+      }
+    }
     if (pinReuse?.released) decision = { ...decision, pinReason: pinReuse.released };
     jevDecision = decision;
-    const selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
     logCtx.jevDecision = normalizePersistedJevDecision({
       version: 1,
@@ -766,6 +794,11 @@ export async function executeComboResponses(
         : {}),
       ...(decision.usage ? { usage: decision.usage } : {}),
     });
+    // A completed decision belongs to the parent log even if no model can be dispatched.
+    if (selectionUnavailable) {
+      return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, target =>
+        targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target, false) !== undefined));
+    }
   }
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.
@@ -1170,6 +1203,7 @@ export async function executeComboResponses(
       );
       attemptRetained = true;
       noteComboSuccess(comboId, combo, pick.target, pick.writerGeneration);
+      settleComboReprobeSuccess(pick);
       Object.assign(logCtx, childLog, {
         requestedModel,
         model: requestedModel,
@@ -1368,10 +1402,13 @@ export async function executeComboResponses(
       && failedTargetCooldownRecorded
       && isComboTargetInCooldown(comboId, pick.target, failureNow);
     // Drop exclusions for the single-target retry, but wait for normal cooldown
-    // expiry: an in-flight request cannot reserve a fresh recovery pass.
-    const retryAfterCooldown = () =>
+    // expiry: an in-flight request cannot reserve a fresh recovery pass, though the
+    // reservation it already owns still applies to entries unchanged since it was made.
+    const carriedReprobe: ComboPick["cooldownReprobeTargets"] = pick.cooldownReprobeTargets;
+    const retryAfterCooldown = (): Promise<ComboPick | null> =>
       pickWithWait({
         allowCooldownReprobe: false,
+        cooldownReprobeTargets: carriedReprobe ? Object.entries(carriedReprobe) : undefined,
         eligible: targetEligible,
         now: failureNow,
       });
@@ -1381,6 +1418,7 @@ export async function executeComboResponses(
       pick = await pickWithWait({
         exclude: pick.attempted,
         eligible: targetEligible,
+        cooldownReprobeTargets: carriedReprobe ? Object.entries(carriedReprobe) : undefined,
         now: failureNow,
       });
       // A single-target combo with waitForCooldownMs has no alternate target to fail over to,
@@ -1414,6 +1452,7 @@ export async function executeComboResponses(
         const recoveredTarget = await pickWithWait({
           exclude: attemptedTargets,
           eligible: recoveryEligible,
+          cooldownReprobeTargets: carriedReprobe ? Object.entries(carriedReprobe) : undefined,
           now: failureNow,
         });
         if (recoveredTarget && await recoverUnreadableEncryptedTask()) {
