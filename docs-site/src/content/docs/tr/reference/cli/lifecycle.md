@@ -50,9 +50,13 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-Çalışan proxy'yi (PID'ye göre) durdurun, PID dosyasını kaldırın ve yerel Codex'i
+Çalışan proxy'yi (PID'ye göre) durdurun, PID dosyasını kaldırın ve bağımsız bir örnek için yerel Codex'i
 geri yükleyin. Yönetilen bir arka plan servisi kuruluysa `ocx stop` proxy'yi
 yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin **Durdur** düğmesi aynı eylemi (`POST /api/stop`) Windows Görev Zamanlayıcı dışındaki tüm arka uçlarda çalıştırır: orada görev bittikten sonra sarmalayıcı proxy'yi yeniden başlatabilir, bu yüzden panel `respawnable_service` ile reddeder, hiçbir şeyi değiştirmez ve `ocx stop` çalıştırmanızı ister.
+
+Bağlı bir hub istemcisinde `ocx stop`, bağlantının sahip olduğu Codex yönlendirmesini, kataloğu ve Grok yapılandırmasını korur. Remote Link Child normal biçimde durdurulduğunda, dinleyici kapanmadan önce yalnızca o bağlantının Codex günlüğü geri yüklenir; bağlantı, anahtar, katalog ve diğer entegrasyonlar korunur. Home yönlendirmesini yeniden kullanmak için `ocx start` veya `ocx service start`, ardından `ocx sync --restart-codex` çalıştırın; yalnızca başlatmak yönlendirmeyi yeniden uygulamaz. `ocx restart` komutunun normal devir işlemi yönlendirmeyi korur. Bağlantıyı bırakmak için `ocx disconnect` kullanın.
+
+Sahiplik çakışması, bekleyen anahtar yenileme, değiştirilmiş yapılandırma/profil dosyaları veya okunamayan ya da doğrulanmamış günlük durumu (aşırı büyük veya normal dosya olmayan günlükler dahil) geri yükleme hatasına yol açar ve kurtarma kanıtlarını korur. Bağlantıyı yeniden uygulamadan önce bu kanıtları inceleyip bildirilen çakışmayı çözün. Çökme veya zorla sonlandırma normal kapatma temizliğini çalıştıramaz.
 
 ### `ocx restart`
 

@@ -32,7 +32,11 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-Arrête le proxy actif à partir de son PID, supprime le fichier de PID et rétablit le fonctionnement natif de Codex. Si un service d’arrière-plan géré est installé, `ocx stop` l’arrête d’abord afin qu’il ne puisse pas relancer le proxy. Le bouton **Stop** du tableau de bord Web exécute la même opération (`POST /api/stop`) sur tous les backends, sauf le Planificateur de tâches Windows : le wrapper peut y relancer le proxy après la fin de la tâche, donc le tableau de bord refuse avec `respawnable_service`, ne modifie rien et vous demande d'exécuter `ocx stop`.
+Arrête le proxy actif à partir de son PID, supprime le fichier de PID et rétablit le fonctionnement natif de Codex pour une instance autonome. Si un service d’arrière-plan géré est installé, `ocx stop` l’arrête d’abord afin qu’il ne puisse pas relancer le proxy. Le bouton **Stop** du tableau de bord Web exécute la même opération (`POST /api/stop`) sur tous les backends, sauf le Planificateur de tâches Windows : le wrapper peut y relancer le proxy après la fin de la tâche, donc le tableau de bord refuse avec `respawnable_service`, ne modifie rien et vous demande d'exécuter `ocx stop`.
+
+Sur un client hub connecté, `ocx stop` conserve le routage Codex, le catalogue et la configuration Grok appartenant à la connexion. Sur un Remote Link Child, un arrêt normal restaure uniquement le journal Codex de cette connexion avant de fermer l’écouteur ; la connexion, la clé, le catalogue et les autres intégrations sont conservés. Pour rétablir le routage vers Home, exécutez `ocx start` ou `ocx service start`, puis `ocx sync --restart-codex` : le démarrage seul ne réapplique pas le routage. Le transfert normal de `ocx restart` le conserve. Utilisez `ocx disconnect` pour libérer la connexion.
+
+Un conflit de propriétaire, une rotation de clé en attente, des fichiers de configuration ou de profil modifiés, ou un journal illisible ou non vérifié (y compris un journal trop volumineux ou qui n’est pas un fichier ordinaire) entraîne un échec de restauration et conserve les éléments de récupération. Examinez ces éléments et résolvez le conflit signalé avant de réappliquer la connexion. Un plantage ou un arrêt forcé ne peut pas exécuter ce nettoyage normal.
 
 ### `ocx restart`
 

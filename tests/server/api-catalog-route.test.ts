@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -7,6 +7,8 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { ManagementRequest, managementHeaders } from "../helpers/management-auth";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import type { ManagementModelRow } from "../../src/server/management/model-rows";
+import type { KiloGeneratedConfig, OpencodeGeneratedConfig } from "../../src/clients/config-export";
 
 const TEST_DIR = join(import.meta.dir, `.tmp-api-catalog-route-${process.pid}`);
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -107,6 +109,115 @@ describe("GET /api/catalog route (#709)", () => {
     expect(await response!.json()).toEqual({ error: "catalog not found" });
   });
 });
+
+test("static Xiaomi MiMo capability truth, client exports and endpoint thinking controls", async () => {
+  isolatedCodexHome = installIsolatedCodexHome("ocx-mimo-catalog-export-");
+  process.env.OPENCODEX_HOME = join(isolatedCodexHome.path, "proxy");
+  const ids = ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed"];
+  const realFetch = globalThis.fetch;
+  const blockedRequests: string[] = [];
+  const inferenceBodies: Record<string, unknown>[] = [];
+  // Only the captured fetch below can reach our local test server. Every fetch made by
+  // production code is stubbed, including discovery, background work and paid endpoints.
+  const upstreamFetch = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    blockedRequests.push(url);
+    if (new URL(url).hostname === "api.xiaomimimo.com" && new URL(url).pathname.endsWith("/chat/completions")) {
+      inferenceBodies.push(JSON.parse(String(init?.body ?? (input instanceof Request ? await input.text() : "{}"))));
+      return Response.json({ id: "mock-chat", object: "chat.completion", created: 1, model: ids[0],
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    }
+    return Response.json({ data: [] });
+  });
+  let server: ReturnType<typeof import("../../src/server").startServer> | undefined;
+  try {
+    saveConfig({
+      port: 0, hostname: "127.0.0.1", defaultProvider: "xiaomi-mimo", fastRows: false,
+      providers: { "xiaomi-mimo": {
+        adapter: "openai-chat", baseUrl: "https://api.xiaomimimo.com/v1",
+        apiKey: "test-only-mimo-key", authMode: "key", liveModels: false, models: ids,
+      } },
+    } as OcxConfig);
+    const { startServer } = await import("../../src/server");
+    server = startServer(0);
+    const publicResponse = await realFetch(new URL("/v1/models", server.url));
+    expect(publicResponse.status).toBe(200);
+    const publicList = await publicResponse.json() as {
+      data: Array<{ id: string; capabilities?: { supports_reasoning?: boolean; supports_thinking_toggle?: boolean;
+        supports_reasoning_effort?: boolean; default_thinking_enabled?: boolean; reasoning_effort?: string[] } }>;
+    };
+    for (const id of ids) {
+      const capabilities = publicList.data.find(row => row.id === `xiaomi-mimo/${id}`)?.capabilities;
+      expect(capabilities).toMatchObject({
+        supports_reasoning: true, supports_thinking_toggle: true, supports_reasoning_effort: false,
+        default_thinking_enabled: true,
+      });
+      expect(capabilities).not.toHaveProperty("reasoning_effort");
+      expect(capabilities).not.toHaveProperty("reasoning_control");
+    }
+
+    const rowsResponse = await realFetch(new URL("/api/models", server.url), { headers: managementHeaders() });
+    expect(rowsResponse.status).toBe(200);
+    const rows = await rowsResponse.json() as ManagementModelRow[];
+    for (const id of ids) {
+      const row = rows.find(row => row.namespaced === `xiaomi-mimo/${id}`);
+      expect(row).toMatchObject({
+        supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: true,
+      });
+      expect(row?.reasoningEfforts ?? []).toEqual([]);
+      expect(row?.exportMetadata?.reasoningEfforts ?? []).toEqual([]);
+      expect(row?.exportMetadata?.defaultReasoningEffort).toBeUndefined();
+    }
+
+    for (const client of ["opencode", "kilo"]) {
+      const response = await realFetch(new URL(`/api/client-config?client=${client}`, server.url), { headers: managementHeaders() });
+      expect(response.status).toBe(200);
+      const { config } = await response.json() as { config: OpencodeGeneratedConfig | KiloGeneratedConfig };
+      for (const id of ids) {
+        const entry = config.provider.opencodex!.models[`xiaomi-mimo/${id}`]!;
+        expect(entry.reasoning).toBe(true);
+        expect(entry.options).toEqual({ reasoningEffort: "high" });
+        expect(entry.variants!.none).toEqual({ reasoningEffort: "none" });
+        expect(entry.variants!.high).toEqual({ reasoningEffort: "high" });
+        for (const effort of ["minimal", "low", "medium", "xhigh", "max", "ultra"]) {
+          expect(entry.variants![effort]).toEqual({ disabled: true });
+        }
+        if (client === "opencode") {
+          const v2 = (config as OpencodeGeneratedConfig).providers.opencodex!.models[`xiaomi-mimo/${id}`]!;
+          expect(v2.variants.map(variant => variant.id)).toEqual(["none", "high"]);
+          expect(v2.settings).toEqual({ reasoningEffort: "high" });
+        }
+      }
+    }
+    expect(blockedRequests.filter(url => new URL(url).hostname === "api.xiaomimimo.com")).toEqual([]);
+    for (const path of ["/v1/responses", "/v1/chat/completions"]) {
+      for (const [control, enabled] of [
+        [{ reasoning: { enabled: false, effort: "high" } }, false],
+        [{ reasoning: { enabled: true, effort: "none" } }, true],
+        [path === "/v1/responses" ? { reasoning: { effort: "none" } } : { reasoning_effort: "none" }, false],
+        [path === "/v1/responses" ? { reasoning: { effort: "high" } } : { reasoning_effort: "high" }, true],
+      ] as const) {
+        const before = inferenceBodies.length;
+        const response = await realFetch(new URL(path, server.url), { method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: `xiaomi-mimo/${ids[0]}`, stream: false,
+            ...(path === "/v1/responses" ? { input: "hello" } : { messages: [{ role: "user", content: "hello" }] }),
+            ...control }),
+        });
+        await response.text();
+        expect(response.status).toBe(200);
+        expect(inferenceBodies.length).toBe(before + 1);
+        expect({ path, control, thinking: inferenceBodies.at(-1)?.thinking })
+          .toEqual({ path, control, thinking: { type: enabled ? "enabled" : "disabled" } });
+        expect(inferenceBodies.at(-1)).not.toHaveProperty("reasoning_effort");
+      }
+    }
+    expect(blockedRequests.filter(url => new URL(url).hostname === "api.xiaomimimo.com")).toHaveLength(8);
+  } finally {
+    try { await server?.stop(true); } finally { upstreamFetch.mockRestore(); }
+  }
+}, 30_000);
 
 describe("GET|HEAD /v1/catalog least-privilege data-plane route (#809)", () => {
   const DATA_KEY = "ocx_data_catalogreadonly";

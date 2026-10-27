@@ -2,7 +2,7 @@ import { codexAccountUsesCreditsAfterLimit, codexUsageLimitResetAt } from "../ac
 import { nextCodexUsageQueryAt, nextQuotaQueryDelay, pruneRemovedCodexPoolUsageAccounts } from "../quota-query-backoff";
 import { CODEX_PRIORITY_FAILBACK_REFRESH_MS } from "../account-priority";
 import { codexQuotaHasFreshUsage } from "../quota-observation-freshness";
-import { getCodexAccountCredential, getValidCodexToken, readCodexAccountRecord } from "../account-store";
+import { getCodexAccountCredential, getValidCodexToken, isCodexAccountGenerationLive, readCodexAccountRecord } from "../account-store";
 import { getAccountQuota, getMainPolicyQuota, isCompleteCodexQuotaRecoverySnapshot } from "../quota";
 import { isCodexAccountPaused } from "../account-pause";
 import { hasSpendableCodexCredits } from "../quota-types";
@@ -80,6 +80,13 @@ const MAIN_CREDIT_RENEWAL_AGE_MS = 3 * 60_000;
 
 /** Traffic headers renew usage, never the independent credit observation (#7377). */
 function poolCreditRenewalDue(config: OcxConfig, accountId: string, now = Date.now()): boolean {
+  const openai = config.providers[OPENAI_CODEX_PROVIDER_ID];
+  if (!openai || openai.disabled === true || !isCanonicalOpenAiForwardProvider(openai)) return false;
+  const mode = providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai);
+  // Direct may renew only explicitly bound stored accounts. Check queued work too:
+  // credit opt-in alone does not authorize reads for every saved login.
+  if (mode !== "pool" && (mode !== "direct"
+    || !Object.values(config.codexAccountNamespaces ?? {}).includes(accountId))) return false;
   const account = configuredPoolAccount(config, accountId);
   if (!account || !codexAccountUsesCreditsAfterLimit(config, accountId)
     || isCodexAccountPaused(config, accountId) || isAccountNeedsReauth(accountId)) return false;
@@ -313,7 +320,9 @@ export async function primeCodexPoolQuotas(
     !openai
     || openai.disabled === true
     || !isCanonicalOpenAiForwardProvider(openai)
-    || providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
+    || (providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
+      && !(reason === "credit-renewal"
+        && providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) === "direct"))
   ) return;
   if (primeInFlight) return primeInFlight;
   // Count attempted passes, including failed reads; incoming traffic must not flood WHAM.
@@ -384,7 +393,11 @@ export async function primeCodexPoolQuotas(
             const quota = getAccountQuota(a.id);
             const bypassCachedQuota = reason === "credit-renewal" || (reason === "priority-failback" && quota !== null
               && !codexQuotaHasFreshUsage(quota, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS));
-            result = await fetchPoolAccountQuota(a.id, bypassCachedQuota, a.plan, getValidPoolTokenForPrime);
+            result = await fetchPoolAccountQuota(a.id, bypassCachedQuota, a.plan, getValidPoolTokenForPrime,
+              false, undefined, undefined, false, reason === "credit-renewal"
+                ? generation => isCodexAccountGenerationLive(a.id, generation)
+                  && poolCreditRenewalDue(getRuntimeConfig(config), a.id)
+                : undefined);
           } catch (error) {
             // Local quota-flight saturation proves no WHAM request existed for this account.
             // Consume it per item so sibling workers remain inside the shared prime lifetime.

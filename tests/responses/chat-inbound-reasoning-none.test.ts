@@ -22,6 +22,16 @@ function reasoningOf(body: Record<string, unknown>): Record<string, unknown> | u
   return body.reasoning as Record<string, unknown> | undefined;
 }
 
+test("Chat thinking toggles survive translation independently of effort", () => {
+  for (const enabled of [true, false]) {
+    const native = chatCompletionsToResponsesBody(chat({ thinking: { type: enabled ? "enabled" : "disabled" } }));
+    expect(reasoningOf(native)).toMatchObject({ enabled });
+    expect(reasoningOf(native)?.effort).toBeUndefined();
+    const both = chatCompletionsToResponsesBody(chat({ reasoning: { enabled, effort: "low" } }));
+    expect(reasoningOf(both)).toMatchObject({ enabled, effort: "low" });
+  }
+});
+
 describe("F7 explicit reasoning disable survives the Chat boundary", () => {
   test("preserves a flat reasoning_effort of none", () => {
     const body = chatCompletionsToResponsesBody(chat({ reasoning_effort: "none" }));

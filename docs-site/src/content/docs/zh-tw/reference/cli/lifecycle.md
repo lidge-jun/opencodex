@@ -28,11 +28,15 @@ ocx start --socks5-off
 
 ### `ocx stop`
 
-停止執行中的代理（依 PID）、移除 PID 檔案，並還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板的 **Stop** 按鈕在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
+停止執行中的代理（依 PID）、移除 PID 檔案，並為獨立執行個體還原原生 Codex。若已安裝受管背景服務，`ocx stop` 也會先停止它，使其無法重新生成代理。網頁儀表板的 **Stop** 按鈕在多數後端執行相同動作（`POST /api/stop`），但 Windows 工作排程器除外：工作結束後包裝程序仍可能重新啟動 Proxy，因此儀表板會以 `respawnable_service` 拒絕、不做任何變更，並請你改用 `ocx stop`。
+
+已連線的 hub 用戶端在 `ocx stop` 時會保留連線擁有的 Codex 路由、目錄和 Grok 設定。Remote Link Child 正常停止時，會在關閉監聽器前，僅從該連線擁有的日誌還原 Codex 路由；連線資訊、金鑰、目錄和其他整合設定保持不變。要恢復 Home 路由，請先執行 `ocx start` 或 `ocx service start`，再執行 `ocx sync --restart-codex`；僅啟動不會重新套用路由。`ocx restart` 的正常交接會保留路由。使用 `ocx disconnect` 才會解除連線。
+
+擁有權衝突、待完成的金鑰輪替、已修改的設定或設定檔，以及無法讀取或未經驗證的還原日誌狀態（包括過大或不是一般檔案的日誌），都會回報還原失敗並保留復原依據。重新套用連線之前，請檢查保留的復原依據並解決回報的衝突。當機或強制終止無法執行正常停止時的清理。
 
 ### `ocx restart`
 
-執行 `stop` 後接 `ensure`：停止代理／服務、還原原生 Codex、在背景啟動代理，並將即時連接埠同步回 Codex。
+代理執行時，向已驗證身分的執行階段要求在相同連接埠重新啟動，並保留路由與服務監督設定。這不是先執行 `stop` 再執行 `start`。已連線的 Child 或 hub 用戶端會嘗試在相同連接埠交接給新執行階段；交接失敗時回復原有執行階段並回報失敗。由服務或桌面應用程式管理的用戶端應透過其管理者重新啟動。詳見[英文參考](/reference/cli/lifecycle/#ocx-restart)。
 
 ### `ocx ensure`
 

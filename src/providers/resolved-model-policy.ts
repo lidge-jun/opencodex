@@ -1,5 +1,6 @@
-import type { ModelCapabilities, OcxProviderConfig } from "../types";
-import { MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
+import type { ModelCapabilities, OcxProviderConfig, ReasoningCapabilities } from "../types";
+import { declaredModelCapabilities, mergeReasoningModelCapabilities, reasoningCapabilitiesFromConfig, REASONING_CAPABILITY_FIELDS } from "./reasoning-capabilities";
+import { MODEL_ADAPTER_OVERRIDE_ALLOWED, modelInList, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "./openai-tiers";
 import { resolveProviderAuthTransport } from "./fastwire";
 import { fastSwitchOff } from "./fast-opt-in";
@@ -48,7 +49,7 @@ export type ResolvedProviderStaticPolicy = Readonly<Partial<StaticProviderPolicy
   adapter: string;
   baseUrl: string;
 }>;
-export interface ResolvedPerModelStaticPolicy {
+export interface ResolvedPerModelStaticPolicy extends Readonly<ReasoningCapabilities> {
   readonly adapter: string;
   readonly contextWindow?: number;
   readonly inputModalities?: readonly string[];
@@ -215,9 +216,11 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   putMergedMap("modelSupportsReasoningSummaries", entry?.modelSupportsReasoningSummaries, provider.modelSupportsReasoningSummaries);
   putMergedMap("modelSupportsVerbosity", entry?.modelSupportsVerbosity, provider.modelSupportsVerbosity);
   for (const key of [
-    "modelCapabilities", "modelAutoCompactTokenLimits", "modelSuppressSyntheticMax",
+    "modelAutoCompactTokenLimits", "modelSuppressSyntheticMax",
     "modelReasoningSummaryDelivery", "codexToolMode", "modelAdapters",
   ] as const) putScalar(key, undefined);
+  put("modelCapabilities", mergeReasoningModelCapabilities(entry?.modelCapabilities, provider.modelCapabilities),
+    provider.modelCapabilities !== undefined ? "operator-capability" : entry?.modelCapabilities !== undefined ? "registry" : "unknown");
   for (const key of ["modelContextWindows", "modelMaxInputTokens"] as const) {
     const [value, source] = input.providerName === "openai-apikey"
       ? positiveCapMap(entry?.[key], provider[key])
@@ -325,7 +328,16 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     : exactMaxInputTokens;
   const exactMaxOutputTokens = modelValue(providerPolicy.modelMaxOutputTokens);
   const modelMaxOutputTokens = exactMaxOutputTokens ?? providerPolicy.defaultMaxOutputTokens;
-  const modelReasoningEfforts = modelValue(providerPolicy.modelReasoningEfforts) ?? providerPolicy.reasoningEfforts;
+  const reasoningCapabilities = reasoningCapabilitiesFromConfig({
+    ...providerPolicy,
+    adapter: providerPolicy.adapter ?? provider.adapter,
+    baseUrl: providerPolicy.baseUrl ?? provider.baseUrl,
+    ...(input.modelCapabilities ? { modelCapabilities: mergeReasoningModelCapabilities(
+      providerPolicy.modelCapabilities, { [input.modelId]: input.modelCapabilities },
+    ) } : {}),
+  }, input.modelId);
+  const modelReasoningEfforts = reasoningCapabilities.supportsReasoningEffort === false ? []
+    : modelValue(providerPolicy.modelReasoningEfforts) ?? providerPolicy.reasoningEfforts;
   const modelSupportsReasoningSummaries = modelValue(providerPolicy.modelSupportsReasoningSummaries)
     ?? (modelValue(providerPolicy.modelReasoningSummaryDelivery) !== undefined ? true : undefined);
   const modelSupportsVerbosity = modelValue(providerPolicy.modelSupportsVerbosity) ?? providerPolicy.supportsVerbosity;
@@ -334,6 +346,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     : modelValue(providerPolicy.modelSupportsServiceTier) ?? providerPolicy.supportsServiceTier;
   const model: ResolvedPerModelStaticPolicy = {
     adapter,
+    ...reasoningCapabilities,
     ...(modelContextWindow !== undefined ? { contextWindow: modelContextWindow } : {}),
     ...(capabilityModalities ?? modelValue(providerPolicy.modelInputModalities) !== undefined
       ? { inputModalities: capabilityModalities ?? modelValue(providerPolicy.modelInputModalities) }
@@ -341,7 +354,7 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
     ...(modelMaxInputTokens !== undefined ? { maxInputTokens: modelMaxInputTokens } : {}),
     ...(modelMaxOutputTokens !== undefined ? { maxOutputTokens: modelMaxOutputTokens } : {}),
     ...(modelReasoningEfforts !== undefined ? { reasoningEfforts: modelReasoningEfforts } : {}),
-    ...(modelValue(providerPolicy.modelDefaultReasoningEfforts) !== undefined ? { defaultReasoningEffort: modelValue(providerPolicy.modelDefaultReasoningEfforts) } : {}),
+    ...(reasoningCapabilities.supportsReasoningEffort !== false && modelValue(providerPolicy.modelDefaultReasoningEfforts) !== undefined ? { defaultReasoningEffort: modelValue(providerPolicy.modelDefaultReasoningEfforts) } : {}),
     ...(modelSupportsReasoningSummaries !== undefined ? { supportsReasoningSummaries: modelSupportsReasoningSummaries } : {}),
     ...(modelSupportsVerbosity !== undefined ? { supportsVerbosity: modelSupportsVerbosity } : {}),
     ...(modelSupportsServiceTier !== undefined ? { supportsServiceTier: modelSupportsServiceTier } : {}),
@@ -359,6 +372,13 @@ export function resolveModelPolicy(input: ResolveModelPolicyInput): ResolvedMode
   const modelProvenance: Partial<Record<keyof ResolvedPerModelStaticPolicy, StaticPolicySource>> = {
     adapter: adapterSource,
   };
+  for (const field of REASONING_CAPABILITY_FIELDS) {
+    modelProvenance[field] = reasoningCapabilities[field] === undefined ? "unknown"
+      : modelInList(provider.noReasoningModels, input.modelId) ? "operator"
+      : modelInList(entry?.noReasoningModels, input.modelId) ? "registry"
+      : input.modelCapabilities?.[field] !== undefined || declaredModelCapabilities(provider.modelCapabilities, input.modelId)?.[field] !== undefined
+        ? "operator-capability" : declaredModelCapabilities(entry?.modelCapabilities, input.modelId)?.[field] !== undefined ? "registry" : "operator";
+  }
   modelProvenance.contextWindow = modelOrProviderSource(provider.modelContextWindows, entry?.modelContextWindows, provider.contextWindow, entry?.contextWindow);
   if (modelProvenance.contextWindow === "unknown" && familyContextWindow !== undefined) {
     modelProvenance.contextWindow = anthropicFamilyContextWindow(provider.modelContextWindows, input.modelId) !== undefined

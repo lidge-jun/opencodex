@@ -90,8 +90,10 @@ restores only that connection's Codex journal before the listener closes; its co
 catalog and other integrations remain in place. After a Child stop, run `ocx start` (or
 `ocx service start`), then `ocx sync --restart-codex` to resume Home routing. Client start does not
 re-inject routing. The bound `ocx restart` handoff preserves it. Use `ocx disconnect` to release the
-connection. Conflicting ownership or edited/unverified journal files produce a restoration failure
-and retain recovery evidence; abrupt crashes and forced termination cannot run orderly cleanup.
+connection. Conflicting ownership, pending key rotation, edited configuration/profile files, or
+unreadable or unverified journal state (including oversized or nonregular journal files) produce a
+restoration failure and retain recovery evidence. Resolve the reported conflict using that preserved
+evidence before reapplying the connection. Abrupt crashes and forced termination cannot run orderly cleanup.
 A connected stop verifies the local runtime before changing its service: a client-role listener
 with the matching PID is supported, while an ordinary proxy must explicitly advertise connected-client ownership handling
 across API, signal and service shutdown. Older or unverified ordinary runtimes are refused before
@@ -128,8 +130,12 @@ failure to restore shared client configuration keeps the stop failed and its rec
 carries the outcome class (`stopped`, `not-running`, `history-incomplete`, `history-deferred`,
 or `failed`), the service and proxy classifications, whether the runtime is down, and a stable
 one-line message. Exit codes are identical with and without `--json`: 0 on success, 1 on failure,
-79 when only Codex history cleanup did not complete, and 80 when the shared teardown was deferred
-and is still owed.
+79 when only Codex history cleanup did not complete, 80 when the shared teardown was deferred
+and is still owed, and 81 when a dashboard update that will restart the proxy handed Codex routing
+and its catalog to the restarted proxy instead of restoring native Codex. With 81 the proxy is
+down, and the restarted proxy releases the kept teardown after its first sync; if it never starts,
+the next `ocx stop` restores native Codex. Connected hub clients and Link Children do not use this
+standalone update handover: their start path does not publish the startup sync that releases it.
 
 For a desktop-approved takeover, `ocx stop --json` also accepts the complete set of
 `--expect-*` values supplied by `ocx resolve --json`. On Windows, this guarded stop can

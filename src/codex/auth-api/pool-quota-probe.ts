@@ -88,6 +88,8 @@ export function publishQuotaDispatch(sequence: number): void {
 
 export interface PoolQuotaProbeEvidence {
   onDispatch?: (sequence: number) => void;
+  /** Optional caller authority rechecked after token preparation, including 401 replay. */
+  mayDispatch?: (credentialGeneration: number) => boolean;
   mayPublish?: () => boolean;
   attempted?: NonNullable<PoolQuotaResult["quotaProbeAttempted"]>;
 }
@@ -109,6 +111,7 @@ export function withQuotaProbeEvidence(
 
 export interface PoolQuotaRefreshFlight {
   state: {
+    dispatchGuarded?: boolean;
     dispatchSequence?: number;
     superseded?: boolean;
     startCredentialGeneration?: number;
@@ -254,6 +257,10 @@ export async function recoverPoolQuotaFrom401(ctx: {
   // coalescing layer where the credential actually is, or a late caller joins on a stale
   // generation and opens a redundant flight.
   ctx.onCredentialGeneration?.(refreshed.generation);
+
+  if (ctx.quotaProbeEvidence.mayDispatch?.(refreshed.generation) === false) {
+    return { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: refreshed.generation, quotaProbeSkipped: true };
+  }
 
   const writerGeneration = captureConfigGeneration();
   const poolWriter = capturePoolQuotaWriter(accountId, refreshed);
@@ -403,6 +410,9 @@ export async function fetchFreshPoolAccountQuota(
       const poolWriter = capturePoolQuotaWriter(accountId, { accessToken, chatgptAccountId, generation });
       requestCredentialGeneration = generation;
       onCredentialGeneration?.(generation);
+      if (quotaProbeEvidence.mayDispatch?.(generation) === false) {
+        return { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: generation, quotaProbeSkipped: true };
+      }
       const admission = await fetchCodexUsage<PoolQuotaResult>(
         `pool:${accountId}:${writerGeneration}:${generation}${afterDispatchSequence === undefined ? "" : `:post-reset:${afterDispatchSequence}`}`, {
         headers: { Authorization: `Bearer ${accessToken}`, "ChatGPT-Account-Id": chatgptAccountId },
@@ -496,6 +506,7 @@ export async function fetchPoolAccountQuota(
   afterDispatchSequence?: number,
   recoveryProbeNow?: number,
   explicitRefresh = false,
+  mayDispatch?: PoolQuotaProbeEvidence["mayDispatch"],
 ): Promise<PoolQuotaResult> {
   const existing = getAccountQuota(accountId);
   if (afterDispatchSequence === undefined && !forceRefresh && existing && Date.now() - existing.updatedAt < POOL_CACHE_TTL) {
@@ -527,6 +538,8 @@ export async function fetchPoolAccountQuota(
     const generation = flight.state.resolvedCredentialGeneration
       ?? flight.state.startCredentialGeneration;
     return !flight.state.superseded
+      // An ordinary read must not inherit a renewal owner's revocable authority.
+      && (mayDispatch !== undefined || !flight.state.dispatchGuarded)
       && (afterDispatchSequence === undefined || (flight.state.dispatchSequence ?? 0) > afterDispatchSequence)
       && generation !== undefined && isCodexAccountGenerationLive(accountId, generation);
   });
@@ -543,6 +556,7 @@ export async function fetchPoolAccountQuota(
     for (const flight of flights ?? []) flight.state.superseded = true;
   }
   const state: PoolQuotaRefreshFlight["state"] = {
+    dispatchGuarded: mayDispatch !== undefined,
     startCredentialGeneration: record?.generation,
     validatePending,
   };
@@ -554,6 +568,7 @@ export async function fetchPoolAccountQuota(
     getValidToken,
     {
       onDispatch: sequence => { state.dispatchSequence = sequence; },
+      mayDispatch,
       mayPublish: () => state.superseded !== true,
     },
     afterDispatchSequence,

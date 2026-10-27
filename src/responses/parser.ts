@@ -185,8 +185,8 @@ function attachPendingReasoningToCallOwner(
 
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-export function hasValidatedActiveReasoningEffort(options: Pick<OcxRequestOptions, "reasoning">): boolean {
-  return options.reasoning !== undefined && options.reasoning !== "none";
+export function hasValidatedActiveReasoningEffort(options: Pick<OcxRequestOptions, "reasoning" | "thinkingEnabled">): boolean {
+  return options.thinkingEnabled ?? (options.reasoning !== undefined && options.reasoning !== "none");
 }
 
 
@@ -695,6 +695,7 @@ export function parseRequest(
   // `reasoning_effort_for_request`), so current clients never send it — but a catalog that
   // advertises ultra plus an older/direct caller can. Degrade it to max like upstream instead of
   // silently dropping reasoning altogether.
+  if (data.reasoning?.enabled !== undefined) options.thinkingEnabled = data.reasoning.enabled;
   const requestedEffort = data.reasoning?.effort === "ultra" ? "max" : data.reasoning?.effort;
   if (requestedEffort && REASONING_EFFORTS.has(requestedEffort)) {
     options.reasoning = requestedEffort;

@@ -16,6 +16,7 @@
  * and config already in hand.
  */
 import { enrichProviderFromRegistry } from "../../providers/derive";
+import { reasoningCapabilitiesFromConfig } from "../../providers/reasoning-capabilities";
 import { modelRecordValue } from "../../reasoning-effort";
 import { configuredReasoningSummarySupport } from "../../codex/catalog/model-hints";
 import type { CatalogModel } from "../../codex/catalog";
@@ -87,24 +88,42 @@ export function customRowExportMetadata(
   // same reader the materializer uses answers from the provider config, so both paths agree.
   const supportsReasoningSummaries = catalogRow?.supportsReasoningSummaries
     ?? configuredReasoningSummarySupport(provider, source.id);
+  // The effective ladder below already includes custom overrides; do not derive new axes
+  // from a provider-wide legacy ladder that a custom row may explicitly have cleared.
+  const configured = enriched === undefined ? undefined : reasoningCapabilitiesFromConfig({
+    ...enriched, modelReasoningEfforts: undefined, reasoningEfforts: undefined,
+  }, source.id);
+  const supportsThinkingToggle = configured?.supportsThinkingToggle === false ? false
+    : catalogRow?.supportsThinkingToggle ?? configured?.supportsThinkingToggle;
+  const supportsReasoningEffort = configured?.supportsReasoningEffort === false ? false
+    : catalogRow?.supportsReasoningEffort ?? configured?.supportsReasoningEffort;
+  const defaultThinkingEnabled = configured?.defaultThinkingEnabled === false ? false
+    : catalogRow?.defaultThinkingEnabled ?? configured?.defaultThinkingEnabled;
+  const supportsReasoning = configured?.supportsReasoning === false ? false : catalogRow?.supportsReasoning
+    ?? configured?.supportsReasoning
+    ?? knownReasoningSupport({ reasoningEfforts: effectiveReasoningEfforts, supportsReasoningSummaries,
+      supportsThinkingToggle, supportsReasoningEffort });
+  const reasoningEfforts = supportsReasoningEffort === false || supportsReasoning === false
+    ? (effectiveReasoningEfforts === undefined ? undefined : []) : effectiveReasoningEfforts;
   const defaultReasoningEffort = declaredDefaultWithin(
-    effectiveReasoningEfforts,
-    defaultEffort(source, catalogRow, provider),
+    reasoningEfforts,
+    supportsReasoningEffort === false || supportsReasoning === false ? undefined : defaultEffort(source, catalogRow, provider),
   );
   return {
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(catalogRow?.maxInputTokens !== undefined ? { maxInputTokens: catalogRow.maxInputTokens } : {}),
     ...(catalogRow?.maxOutputTokens !== undefined ? { maxTokens: catalogRow.maxOutputTokens } : {}),
     ...(inputModalities !== undefined ? { inputModalities: [...inputModalities] } : {}),
-    ...(effectiveReasoningEfforts !== undefined ? { reasoningEfforts: [...effectiveReasoningEfforts] } : {}),
+    ...(reasoningEfforts !== undefined ? { reasoningEfforts: [...reasoningEfforts] } : {}),
+    ...(supportsThinkingToggle !== undefined ? { supportsThinkingToggle } : {}),
+    ...(supportsReasoningEffort !== undefined ? { supportsReasoningEffort } : {}),
+    ...(defaultThinkingEnabled !== undefined ? { defaultThinkingEnabled } : {}),
     ...(defaultReasoningEffort !== undefined ? { defaultReasoningEffort } : {}),
     ...(knownToolsSupport({
       capabilities: catalogRow?.capabilities,
       parallelToolCalls: catalogRow?.parallelToolCalls,
     }) === true ? { supportsTools: true } : {}),
-    ...(knownReasoningSupport({ reasoningEfforts: effectiveReasoningEfforts, supportsReasoningSummaries }) === true
-      ? { supportsReasoning: true }
-      : {}),
+    ...(typeof supportsReasoning === "boolean" ? { supportsReasoning } : {}),
     ...(supportsReasoningSummaries !== undefined ? { supportsReasoningSummaries } : {}),
   };
 }

@@ -9,6 +9,7 @@ import {
   MOONSHOT_INTL_BASE_URL,
 } from "../base-url-choices";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
+import { MIMO_THINKING_CAPABILITIES, MIMO_THINKING_MODELS } from "../mimo-thinking";
 import {
   CODEBUDDY_CN_MODELS,
   CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS,
@@ -110,6 +111,10 @@ import {
   OPPER_MODEL_CONTEXT_WINDOWS,
   OPPER_MODEL_MAX_OUTPUT_TOKENS,
   OPPER_MODEL_INPUT_MODALITIES,
+  AISTUPIDLEVEL_ROUTING_MODES,
+  AISTUPIDLEVEL_MODEL_CONTEXT_WINDOWS,
+  AISTUPIDLEVEL_MODEL_MAX_OUTPUT_TOKENS,
+  AISTUPIDLEVEL_MODEL_INPUT_MODALITIES,
   STEPFUN_MODELS,
   STEPFUN_MODEL_CONTEXT_WINDOWS,
   STEPFUN_MODEL_INPUT_MODALITIES,
@@ -1287,15 +1292,42 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "deepseek-v4-flash"],
     note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The seeded models were verified with chat, streaming and tool calls; deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches all seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
   },
+  {
+    // AI Stupid Level Smart Router, operated by S.C. Studio Platforms S.R.L. Contract checked
+    // 2026-10-26: https://aistupidlevel.info/router/docs and https://aistupidlevel.info/terms#router.
+    // The router calls the model it picks with the provider keys saved on the user's own ASL
+    // account, so each provider bills the user directly; ASL resells no model access. GET /v1/models
+    // answers 401 without a valid key, so the default discovery URL doubles as key validation. The
+    // router's /v1/messages is a plain Anthropic passthrough with no routing, so every inbound,
+    // Claude Code included, stays on Chat. The env reference derived from the id is
+    // ${AISTUPIDLEVEL_API_KEY}.
+    id: "aistupidlevel",
+    label: "AI Stupid Level",
+    adapter: "openai-chat",
+    baseUrl: "https://aistupidlevel.info/v1",
+    authKind: "key",
+    dashboardUrl: "https://aistupidlevel.info/router/keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "auto-coding",
+    models: AISTUPIDLEVEL_ROUTING_MODES,
+    modelContextWindows: AISTUPIDLEVEL_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: AISTUPIDLEVEL_MODEL_MAX_OUTPUT_TOKENS,
+    modelInputModalities: AISTUPIDLEVEL_MODEL_INPUT_MODALITIES,
+    // Text only for every id, including the pinned models live discovery adds: the router
+    // answers an image, audio or file part with 400 `unsupported_content`.
+    inputModalities: ["text"],
+    note: "Smart Router that sends each request to a model chosen from AI Stupid Level's benchmarks, using the provider keys saved on your AI Stupid Level account (OpenAI, Anthropic, Google, DeepSeek, Kimi, GLM), so each provider bills you directly with no markup. Routing modes: auto-coding (the default), auto-tooling, auto-reasoning, auto-best, plus value and speed modes. A real model id from the live list, such as claude-opus-5-5, pins one model. The X-AISM-Model response header names the model that answered. Text only.",
+  },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
   // Saved defaults are not rewritten; V2.5 stays listed until it stops answering.
   // Both first-party presets read the xiaomi metadata bundle for window, output, modalities and price.
-  { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.6-pro", models: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5-pro", "mimo-v2.5"], jawcodeBundle: "xiaomi" },
+  { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.6-pro", models: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5-pro", "mimo-v2.5"], jawcodeBundle: "xiaomi", modelCapabilities: MIMO_THINKING_CAPABILITIES, thinkingToggleModels: [...MIMO_THINKING_MODELS] },
   // Xiaomi's public OpenAI-compatible endpoint is a distinct transport from both the Anthropic
   // preset above and the paid token-plan host below. Keep a separate fixed-destination contract
-  // so existing custom providers are never retargeted while the official route receives the
-  // strict reasoning ladder its validator enforces (#1483).
+  // so existing custom providers are never retargeted. V2.6 uses the documented thinking
+  // toggle; older models retain the reasoning ladder validated in #1483.
   {
     id: "xiaomi-mimo",
     label: "Xiaomi MiMo (OpenAI Chat)",
@@ -1305,11 +1337,13 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://platform.xiaomimimo.com/console/balance",
     defaultModel: "mimo-v2.6-flash",
     models: ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5"],
+    modelCapabilities: MIMO_THINKING_CAPABILITIES,
+    thinkingToggleModels: [...MIMO_THINKING_MODELS],
     jawcodeBundle: "xiaomi",
     reasoningEfforts: ["low", "medium", "high"],
     reasoningEffortMap: { xhigh: "high", max: "high", ultra: "high" },
     preserveCustomDestination: true,
-    note: "Official Xiaomi MiMo OpenAI-compatible Chat endpoint. The upstream validator accepts reasoning_effort none/low/medium/high; higher Codex tiers are clamped to high.",
+    note: "Official Xiaomi MiMo OpenAI-compatible Chat endpoint. V2.6 thinking is on/off: none disables it; high is the client-compatible on value, not a distinct reasoning strength. Older models retain their existing effort contract.",
   },
   { id: "kilo", label: "Kilo", baseUrl: "https://api.kilo.ai/api/gateway", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://kilo.ai" },
   {
