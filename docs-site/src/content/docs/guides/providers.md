@@ -195,6 +195,11 @@ Two exceptions are worth knowing because you can hit them:
 | OrcaRouter | `ocx login orcarouter-oauth` — consent mints a user-owned, long-lived `sk-orca-…` key, and the request then carries a key | `orcarouter` — the same key pasted by hand |
 | Meta Muse | `ocx login meta-muse` can import a local Muse Code CLI key or start device login. Meta scopes that credential to its own CLI, so this is an unsupported use: how the calls settle is not observable from the API, and you should treat every call as billable against your account | `meta-model` is the supported path — every call is metered per token, and a Muse Code subscription does not work there |
 
+When the Grok subscription catalog publishes selectable context windows, opencodex uses the
+widest published rung: `[256000, 500000]` exposes 500k for Grok 4.5–4.7, including the 4.7 Fast
+lane. Your configured model window and enabled Context cap still lower that value. If your plan
+serves a shorter window, configure that limit; the catalog does not verify account entitlement.
+
 Cursor, Kiro, Zed Hosted AI and Nous Portal are login-only and have no API-key equivalent. Google Antigravity is
 login-only too: `ocx login google-antigravity` signs in with your Google account over the Cloud Code
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product

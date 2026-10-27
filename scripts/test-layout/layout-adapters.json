@@ -4,6 +4,7 @@
   "eventstream-fragmentation.test.ts": "responses",
   "responses-sidecar-usage.test.ts": "responses",
   "google-vertex-key-project.test.ts": "adapters/google",
+  "google-stream-fragmentation.test.ts": "adapters/google",
   "provider-quota-abliteration.test.ts": "providers",
   "command-code-plan-denial.test.ts": "providers"
 }

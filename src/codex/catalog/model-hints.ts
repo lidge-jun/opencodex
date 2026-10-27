@@ -95,6 +95,7 @@ import { disabledNativeSlugs, hasComboTargets, hasNativeOpenAiCapabilityMetadata
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 import { clampObservedModelLimits, resolveModelPolicy } from "../../providers/resolved-model-policy";
+import { mapFill } from "../../providers/resolved-model-policy-merge";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
 import type {
   CatalogAdmissionSnapshot,
@@ -110,8 +111,8 @@ import type {
 /**
  * Fill the registry seed's per-model numeric capability maps beneath the provider's own
  * values, mutating `prov` in place. The merge is per key — an operator's entry always
- * wins; a model the persisted map never mentions picks up its seed value — matching
- * `mergeRecordFill` in src/router.ts exactly.
+ * wins; a model the persisted map never mentions picks up its seed value, bounded
+ * by the operator's provider-wide context limit before enrichment can hide its origin.
  *
  * Routing already performs this fill at resolve time (routedProviderConfig in
  * src/router.ts) and the catalog did not, and that divergence is #4570:
@@ -134,10 +135,14 @@ export function applyRegistryCapabilitySeedFill(name: string, prov: OcxProviderC
   const entry = getProviderRegistryEntry(name);
   if (!entry) return;
   if (entry.modelContextWindows || prov.modelContextWindows) {
-    prov.modelContextWindows = { ...(entry.modelContextWindows ?? {}), ...(prov.modelContextWindows ?? {}) };
+    const providerWindow = typeof prov.contextWindow === "number" && prov.contextWindow > 0
+      ? prov.contextWindow : undefined;
+    const seeds = Object.fromEntries(Object.entries(entry.modelContextWindows ?? {}).map(([id, window]) =>
+      [id, providerWindow !== undefined ? Math.min(window, providerWindow) : window]));
+    [prov.modelContextWindows] = mapFill(seeds, prov.modelContextWindows);
   }
   if (entry.modelMaxOutputTokens || prov.modelMaxOutputTokens) {
-    prov.modelMaxOutputTokens = { ...(entry.modelMaxOutputTokens ?? {}), ...(prov.modelMaxOutputTokens ?? {}) };
+    [prov.modelMaxOutputTokens] = mapFill(entry.modelMaxOutputTokens, prov.modelMaxOutputTokens);
   }
 }
 const NUMERIC_MODEL_ID_SEGMENT = /^\d+$/;
@@ -562,6 +567,25 @@ export function positiveSafeInteger(...values: unknown[]): number | undefined {
   return values.find(value => typeof value === "number" && Number.isSafeInteger(value) && value > 0) as number | undefined;
 }
 
+/** Bound inspection of untrusted upstream context ladders. */
+const MAX_CONTEXT_WINDOW_RUNGS = 8;
+
+/**
+ * The widest rung of a selectable context ladder an upstream published, if it published one.
+ *
+ * A lane that offers a long-context rung announces the whole ladder and reports its default
+ * rung as the effective window. The capacity is the widest rung, not the default one.
+ */
+function widestContextWindowRung(value: unknown): number | undefined {
+  if (!Array.isArray(value)) return undefined;
+  let widest: number | undefined;
+  for (const rung of value.slice(0, MAX_CONTEXT_WINDOW_RUNGS)) {
+    const window = positiveSafeInteger(rung);
+    if (window !== undefined && (widest === undefined || window > widest)) widest = window;
+  }
+  return widest;
+}
+
 function normalizedMetadataString(raw: string, maxLength: number): string | undefined {
   if (raw.length > maxLength * 4 || MODEL_DISCOVERY_METADATA_CONTROL_CHARS.test(raw)) return undefined;
   const normalized = raw.trim().toLowerCase().replace(/\s+/g, "-").slice(0, maxLength);
@@ -771,6 +795,14 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       // real values. Appended after the recognized fields for the same reason as the
       // llama.cpp entries above: no provider that already resolves changes behavior.
       capabilityRecord?.context_length,
+      // The Grok CLI subscription lane publishes its default rung in `context_window` and the
+      // selectable ladder in `context_windows` (`[256000, 500000]` for grok-4.5/4.6/4.7 on
+      // 2026-10-24). Reading only the default rung published half of what the lane offers, and
+      // because a configured or registered window may only LOWER the observed one, the 500k the
+      // registry already carries could not raise it back. The widest rung is the model's capacity,
+      // so it outranks the default rung beside it; every other recognized field keeps the
+      // precedence it already had, and a lane that publishes no ladder is unaffected.
+      widestContextWindowRung(item.context_windows),
       // OpenGateway publishes a top-level context_window. Keep this last so catalogs
       // already resolving through any recognized field retain their existing window.
       item.context_window,

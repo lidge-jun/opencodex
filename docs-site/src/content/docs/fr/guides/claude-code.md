@@ -200,6 +200,8 @@ quittez complètement puis rouvrez Claude Desktop.
 Le mode picker fait partie de first-party : le [risque pour le compte du mode first-party](#first-party-sur-demande)
 s'applique donc aussi à ce mode.
 
+Avant la première réponse du serveur amont, un téléversement picker sans progression pendant 60 secondes est fermé. Une expiration interrompt le téléversement sans réponse de succès ; en HTTP/2, seul le flux concerné est réinitialisé. Ce délai d’inactivité est suspendu lorsque le serveur amont exerce une contre-pression et supprimé dès la fin du téléversement ou la première réponse amont. Ce mécanisme de surveillance de l’inactivité n’ajoute aucune limite à la durée totale du téléversement ; les limites existantes de l’environnement d’exécution et du protocole restent applicables. Ce délai d’inactivité ne s’applique pas aux flux de réponse.
+
 ### Utiliser les modèles opencodex depuis l'onglet Code de Desktop (associations first-party)
 
 En mode first-party, le sélecteur de modèles de l'onglet Code appartient à claude.ai : ses lignes
