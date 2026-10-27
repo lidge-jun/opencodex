@@ -685,16 +685,14 @@ export async function executeComboResponses(
       return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, target =>
         targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target, false) !== undefined));
     }
-    const resolvedFailOpenEffort = resolveEffortAtOrBelow(
-      "medium",
-      first.candidate.reasoningEfforts,
-    );
-    const fallback: Pick<JevDecision, "targetKey" | "effort"> = {
-      targetKey: first.candidate.key,
-      effort: resolvedFailOpenEffort && isCodexReasoningEffort(resolvedFailOpenEffort)
-        ? resolvedFailOpenEffort as OcxComboDefaultEffort
-        : null,
+    const fallbackFor = (choice: JevComboChoice): Pick<JevDecision, "targetKey" | "effort"> => {
+      const effort = resolveEffortAtOrBelow("medium", choice.candidate.reasoningEfforts);
+      return {
+        targetKey: choice.candidate.key,
+        effort: effort && isCodexReasoningEffort(effort) ? effort as OcxComboDefaultEffort : null,
+      };
     };
+    const fallback = fallbackFor(first);
     const decisionStartedAt = Date.now();
     const pinReuse = jevPin?.reuse(
       choices.map(choice => choice.candidate),
@@ -736,9 +734,32 @@ export async function executeComboResponses(
         latencyMs: Math.max(0, Date.now() - decisionStartedAt),
       };
     }
+    let selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
+    let selectionUnavailable = false;
+    if (pick.cooldownReprobeTargets && !options.abortSignal?.aborted) {
+      // Another request can replace a cooldown while the decision is awaited. Recheck the
+      // original reservation, current availability and request eligibility without reserving again.
+      const currentChoices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
+      const current = currentChoices.find(choice => choice.candidate.key === decision.targetKey
+        && (decision.effort === null ? choice.candidate.reasoningEfforts.length === 0
+          : choice.candidate.reasoningEfforts.includes(decision.effort)));
+      const available = current ?? currentChoices[0];
+      if (available) selected = available;
+      else selectionUnavailable = true;
+      if (!current) {
+        // Keep completed decision usage even when no target remains. Old scores and quota
+        // selection describe neither a fail-open replacement nor a rejected selection.
+        decision = {
+          backend: decision.backend,
+          ...(available ? fallbackFor(available) : { targetKey: decision.targetKey, effort: decision.effort }),
+          gate: decision.gate === "apply" ? "invalid" : decision.gate,
+          latencyMs: decision.latencyMs,
+          ...(decision.usage ? { usage: decision.usage } : {}),
+        };
+      }
+    }
     if (pinReuse?.released) decision = { ...decision, pinReason: pinReuse.released };
     jevDecision = decision;
-    const selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
     logCtx.jevDecision = normalizePersistedJevDecision({
       version: 1,
@@ -773,6 +794,11 @@ export async function executeComboResponses(
         : {}),
       ...(decision.usage ? { usage: decision.usage } : {}),
     });
+    // A completed decision belongs to the parent log even if no model can be dispatched.
+    if (selectionUnavailable) {
+      return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, target =>
+        targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target, false) !== undefined));
+    }
   }
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.

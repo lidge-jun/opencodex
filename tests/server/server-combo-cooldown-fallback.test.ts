@@ -8,6 +8,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget, isComboTargetInCooldown } from "../../src/combos";
+import { comboTargetCooldownExpiry, comboTargetCooldownRevision } from "../../src/combos/failover";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
@@ -172,6 +173,92 @@ describe("combo cooldown-ready fallback", () => {
     expect(hits).toEqual(failedChoice ? ["b", "a"] : ["b"]);
     expect(isComboTargetInCooldown("free", config.combos!.free!.targets[0]!)).toBe(!failedChoice);
     expect(isComboTargetInCooldown("free", config.combos!.free!.targets[1]!)).toBe(failedChoice);
+  });
+
+  test.each([false, true])("JEV rejects a reservation replaced while its decision is pending (all replaced=%s)", async replaceAll => {
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const hits: string[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    const first = serve(async request => {
+      hits.push("a");
+      bodies.push(await request.json() as Record<string, unknown>);
+      return Response.json(responsesSuccess("current reserved fallback"));
+    });
+    const selected = serve(() => {
+      hits.push("b");
+      return Response.json(responsesSuccess("stale reserved choice"));
+    });
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(first), "key-a", {
+        liveModels: false, models: ["m1"], modelReasoningEfforts: { m1: ["low"] },
+      }),
+      b: provider("openai-responses", baseUrl(selected), "key-b", {
+        liveModels: false, models: ["m2"], modelReasoningEfforts: { m2: ["high"] },
+      }),
+    }, undefined, { strategy: "jev", reasoningEffortMode: "adaptive", cooldownReprobe: { enabled: true } });
+    const decisions: Array<{ questions: { route: { criteria: Record<string, unknown> } } }> = [];
+    config.providers.jev = provider("jev-decision", "https://api.typesafe.ai/v1/systemone", "jev-fixture-key", {
+      liveModels: false,
+      fetch: (async (_input, init) => {
+        decisions.push(JSON.parse(String(init?.body)));
+        entered.resolve();
+        await finish.promise;
+        return Response.json({
+          answers: { route: { choice: "b/m2:high", confidence: 0.8 } },
+          usage: { input_tokens: 3, output_tokens: 1 },
+        });
+      }) as typeof fetch,
+    });
+    const targets = config.combos!.free!.targets;
+    const retryAfter = new Date(Date.now() + 60_000).toUTCString();
+    for (const target of targets) coolComboTarget("free", target, { retryAfter, status: 429 });
+    const originalRevision = comboTargetCooldownRevision("free", targets[1]!);
+    const originalExpiry = comboTargetCooldownExpiry("free", targets[1]!);
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const pending = handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: false }),
+    }), config, logCtx);
+    let barrierValidated = false;
+    try {
+      await Promise.race([entered.promise, pending.then(() => {
+        throw new Error("request completed before the JEV decision barrier");
+      })]);
+      // A concurrent failure writes new evidence while JEV is deciding. Matching expiry
+      // must not make this request's older reservation own the replacement cooldown.
+      for (const target of replaceAll ? targets : [targets[1]!]) {
+        coolComboTarget("free", target, { retryAfter, status: 429 });
+      }
+      expect(comboTargetCooldownRevision("free", targets[1]!)).not.toBe(originalRevision);
+      expect(comboTargetCooldownExpiry("free", targets[1]!)).toBe(originalExpiry);
+      barrierValidated = true;
+    } finally {
+      finish.resolve();
+      if (!barrierValidated) {
+        // Join the request before fixture teardown without replacing the original assertion.
+        try { await (await pending).body?.cancel(); } catch { /* Preserve the barrier failure. */ }
+      }
+    }
+    const response = await pending;
+    const text = await response.text();
+    expect(hits).toEqual(replaceAll ? [] : ["a"]);
+    expect(response.status).toBe(replaceAll ? 503 : 200);
+    expect(text).toContain(replaceAll ? "combo_unavailable" : "current reserved fallback");
+    expect(decisions).toHaveLength(1);
+    expect(Object.keys(decisions[0]!.questions.route.criteria)).toEqual(["a/m1:low", "b/m2:high"]);
+    expect(isComboTargetInCooldown("free", targets[1]!)).toBe(true);
+    expect(isComboTargetInCooldown("free", targets[0]!)).toBe(replaceAll);
+    expect(logCtx.jevDecision).toMatchObject({
+      selected: replaceAll ? { provider: "b", model: "m2", effort: "high" }
+        : { provider: "a", model: "m1", effort: "low" },
+      gate: "invalid", backend: "typesafe", latencyMs: expect.any(Number),
+      usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 },
+    });
+    expect(logCtx.jevDecision?.confidence).toBeUndefined();
+    expect(logCtx.jevDecision?.chosenProbability).toBeUndefined();
+    if (replaceAll) expect((logCtx.attempts ?? []).reduce((total, attempt) => total + attempt.sendCount, 0)).toBe(0);
+    else expect(bodies[0]!.reasoning).toMatchObject({ effort: "low" });
   });
 
   test("successful reprobe stays exclusive until dispatch succeeds, then releases its target", async () => {
