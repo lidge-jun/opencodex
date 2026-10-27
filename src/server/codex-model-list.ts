@@ -3,8 +3,8 @@ import type { OcxConfig } from "../types";
 import { buildCatalogEntries } from "../codex/catalog/build-entries";
 import { loadCatalogTemplate } from "../codex/catalog/bundled";
 import { applyNativeVisibility, nativeContextLimits } from "../codex/catalog/metadata";
-import { readCatalog, readCodexCatalogPath, readNativeBaseline, type CatalogModel } from "../codex/catalog/parsing";
-import { retainedNativeSourcePriorities } from "../codex/catalog/native-priority";
+import { readCatalog, readCodexCatalogPath, type CatalogModel } from "../codex/catalog/parsing";
+import { readNativeBaseline, retainedNativeSourcePriorities } from "../codex/catalog/native-priority";
 
 interface CodexModelListInput {
   config: OcxConfig;

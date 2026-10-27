@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { buildCatalogEntriesFromObservedState, mergeCatalogEntriesFromObservedState } from "../../src/codex/catalog/build-entries";
 import { deriveEntry } from "../../src/codex/catalog/derive-entry";
 import { setConfiguredNativeOpenAiModels, setDiscoveredNativeOpenAiModels, resetConfiguredNativeOpenAiModelsForTests } from "../../src/codex/catalog/native-models";
-import { catalogBackupPathFor, parseCatalogJson, readNativeBaseline, type RawEntry } from "../../src/codex/catalog/parsing";
-import { retainedNativeSourcePriorities } from "../../src/codex/catalog/native-priority";
+import { catalogBackupPathFor, parseCatalogJson, type RawEntry } from "../../src/codex/catalog/parsing";
+import { readNativeBaseline, retainedNativeSourcePriorities } from "../../src/codex/catalog/native-priority";
 import { stripUnsupportedReasoningSummaryDelivery } from "../../src/adapters/openai-responses/reasoning";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -156,19 +156,19 @@ for (const models of [[null, 3, [], { slug: 5 }], {}, null, "unavailable"]) {
   });
 }
 
-test("catalog parsing preserves every object row including id-only rows beside malformed elements", () => {
+test("catalog parsing preserves all rows including id-only rows and malformed elements", () => {
   const native = row(ids[0]!, 3);
   const idOnly = { id: "gpt-id-only", base_instructions: "Configured instructions.", supports_reasoning_summaries: false };
   const objects = [{}, { slug: 5 }, idOnly, native];
-  expect(parseCatalogJson(JSON.stringify({ version: 7, models: [null, 3, "bad", [], ...objects] })))
-    .toEqual({ version: 7, models: objects });
+  const models = [null, 3, "bad", [], ...objects];
+  expect(parseCatalogJson(JSON.stringify({ version: 7, models }))).toEqual({ version: 7, models });
 });
 
 test("an id-only catalog opt-out strips unsupported reasoning summary delivery", () => {
   const previousCodexHome = process.env.CODEX_HOME;
   process.env.CODEX_HOME = home;
   try {
-    writeFileSync(join(home, "opencodex-catalog.json"), JSON.stringify({ models: [null, 3, [],
+    writeFileSync(join(home, "opencodex-catalog.json"), JSON.stringify({ models: [
       { id: "gpt-id-only", supports_reasoning_summaries: false }] }), "utf8");
     const body = { stream_options: { include_usage: true, reasoning_summary_delivery: "sequential_cutoff" } };
     expect(stripUnsupportedReasoningSummaryDelivery(body, "gpt-id-only"))

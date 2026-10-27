@@ -1,6 +1,6 @@
 import { discoveredNativeOpenAiModels } from "./native-models";
 import { UPSTREAM_NATIVE_ENTRIES } from "./metadata";
-import type { RawEntry } from "./parsing";
+import { readCatalogBackup, type RawEntry } from "./parsing";
 import { isPlainObject } from "../../lib/plain-data";
 
 // Private provenance, like opencodex_spawn_priority: Codex ignores unknown fields.
@@ -11,6 +11,18 @@ export const NATIVE_SOURCE_PRIORITY_MAX = 1_000;
 export interface NativePrioritySource {
   readonly baseline?: ReadonlyMap<string, unknown>;
   readonly retainedBySlug?: ReadonlyMap<string, unknown>;
+}
+
+/** Optional native provenance validates its rows without changing shared catalog parsing. */
+export function readNativeBaseline(catalogPath: string): Map<string, number> {
+  const baseline = new Map<string, number>();
+  for (const row of readCatalogBackup(catalogPath)?.models ?? []) {
+    if (isPlainObject(row) && typeof row.slug === "string" && !row.slug.includes("/")
+      && typeof row.priority === "number" && Number.isFinite(row.priority)) {
+      baseline.set(row.slug, row.priority);
+    }
+  }
+  return baseline;
 }
 
 function validSourcePriority(value: unknown): value is number {

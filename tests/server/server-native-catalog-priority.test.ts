@@ -138,10 +138,28 @@ test("retained sync ignores malformed backup rows and preserves the backup bytes
   const next = config(slug);
   saveConfig(next);
   writeFileSync(catalogPath, JSON.stringify({ models: [native] }), "utf8");
-  const backup = JSON.stringify({ models: [null, 3, [], { slug: 5 }, { ...native, priority: 9 }] });
+  const backup = JSON.stringify({ models: [3, [], { slug: 5 }, { ...native, priority: 9 }] });
   writeFileSync(catalogBackupPathFor(catalogPath), backup, "utf8");
   const result = await syncCatalogModels(next, { allowWhenDesiredDisabled: true });
   expect(result.refreshOutcome).toBe("committed");
   expect(readRows(catalogPath).find(row => row.slug === slug)?.priority).toBe(110);
+  expect(readFileSync(catalogBackupPathFor(catalogPath), "utf8")).toBe(backup);
+});
+
+test("retained sync preserves pre-existing rejection of null recovery rows outside provenance", async () => {
+  const next = config("gpt-5.6-sol");
+  saveConfig(next);
+  const active = JSON.stringify({ models: [upstreamNativeEntry("gpt-5.6-sol")] });
+  const backup = JSON.stringify({ models: [null] });
+  writeFileSync(catalogPath, active, "utf8");
+  writeFileSync(catalogBackupPathFor(catalogPath), backup, "utf8");
+  try {
+    await syncCatalogModels(next, { allowWhenDesiredDisabled: true });
+    throw new Error("Expected the existing native recovery rejection");
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error).stack).toContain("mergeCatalogModelsWithNativeRecovery");
+  }
+  expect(readFileSync(catalogPath, "utf8")).toBe(active);
   expect(readFileSync(catalogBackupPathFor(catalogPath), "utf8")).toBe(backup);
 });

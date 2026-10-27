@@ -37,10 +37,10 @@ import {
   readCatalogBackup,
   readCodexCatalogPath,
   readCodexCatalogPathForHome,
-  readNativeBaseline,
   nativeMultiAgentDefaults,
 } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
+import { readNativeBaseline } from "./native-priority";
 import { ocxRoutedNamespaceCounts, routedRemovalBackedByConfigFile, unconfiguredRoutedRemoval } from "./routed-removal";
 import { ConfigMutationLockError } from "../../config/mutation-lock";
 import {
