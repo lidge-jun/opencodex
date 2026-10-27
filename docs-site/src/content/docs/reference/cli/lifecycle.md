@@ -90,9 +90,10 @@ restores only that connection's Codex journal before the listener closes; its co
 catalog and other integrations remain in place. After a Child stop, run `ocx start` (or
 `ocx service start`), then `ocx sync --restart-codex` to resume Home routing. Client start does not
 re-inject routing. The bound `ocx restart` handoff preserves it. Use `ocx disconnect` to release the
-connection. Conflicting ownership, pending key rotation, edited configuration/profile files, or
-unreadable or unverified journal state (including oversized or nonregular journal files) produce a
-restoration failure and retain recovery evidence. Resolve the reported conflict using that preserved
+connection. Conflicting ownership, pending key rotation, an incomplete disconnect receipt
+(`client_disconnect_pending`), edited configuration/profile files, or unreadable or unverified
+journal state (including oversized or nonregular journal files) produce a restoration failure and
+retain recovery evidence. Resolve the reported conflict using that preserved
 evidence before reapplying the connection. Abrupt crashes and forced termination cannot run orderly cleanup.
 A connected stop verifies the local runtime before changing its service: a client-role listener
 with the matching PID is supported, while an ordinary proxy must explicitly advertise connected-client ownership handling

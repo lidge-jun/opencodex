@@ -56,7 +56,7 @@ yeniden oluşturamaması için önce onu da durdurur. Web kontrol panelinin **Du
 
 Bağlı bir hub istemcisinde `ocx stop`, bağlantının sahip olduğu Codex yönlendirmesini, kataloğu ve Grok yapılandırmasını korur. Remote Link Child normal biçimde durdurulduğunda, dinleyici kapanmadan önce yalnızca o bağlantının Codex günlüğü geri yüklenir; bağlantı, anahtar, katalog ve diğer entegrasyonlar korunur. Home yönlendirmesini yeniden kullanmak için `ocx start` veya `ocx service start`, ardından `ocx sync --restart-codex` çalıştırın; yalnızca başlatmak yönlendirmeyi yeniden uygulamaz. `ocx restart` komutunun normal devir işlemi yönlendirmeyi korur. Bağlantıyı bırakmak için `ocx disconnect` kullanın.
 
-Sahiplik çakışması, bekleyen anahtar yenileme, değiştirilmiş yapılandırma/profil dosyaları veya okunamayan ya da doğrulanmamış günlük durumu (aşırı büyük veya normal dosya olmayan günlükler dahil) geri yükleme hatasına yol açar ve kurtarma kanıtlarını korur. Bağlantıyı yeniden uygulamadan önce bu kanıtları inceleyip bildirilen çakışmayı çözün. Çökme veya zorla sonlandırma normal kapatma temizliğini çalıştıramaz.
+Sahiplik çakışması, bekleyen anahtar yenileme, tamamlanmamış bağlantı kesme kaydı (`client_disconnect_pending`), değiştirilmiş yapılandırma/profil dosyaları veya okunamayan ya da doğrulanmamış günlük durumu (aşırı büyük veya normal dosya olmayan günlükler dahil) geri yükleme hatasına yol açar ve kurtarma kanıtlarını korur. Bağlantıyı yeniden uygulamadan önce bu kanıtları inceleyip bildirilen çakışmayı çözün. Çökme veya zorla sonlandırma normal kapatma temizliğini çalıştıramaz.
 
 ### `ocx restart`
 

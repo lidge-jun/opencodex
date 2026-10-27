@@ -36,7 +36,7 @@ Arrête le proxy actif à partir de son PID, supprime le fichier de PID et réta
 
 Sur un client hub connecté, `ocx stop` conserve le routage Codex, le catalogue et la configuration Grok appartenant à la connexion. Sur un Remote Link Child, un arrêt normal restaure uniquement le journal Codex de cette connexion avant de fermer l’écouteur ; la connexion, la clé, le catalogue et les autres intégrations sont conservés. Pour rétablir le routage vers Home, exécutez `ocx start` ou `ocx service start`, puis `ocx sync --restart-codex` : le démarrage seul ne réapplique pas le routage. Le transfert normal de `ocx restart` le conserve. Utilisez `ocx disconnect` pour libérer la connexion.
 
-Un conflit de propriétaire, une rotation de clé en attente, des fichiers de configuration ou de profil modifiés, ou un journal illisible ou non vérifié (y compris un journal trop volumineux ou qui n’est pas un fichier ordinaire) entraîne un échec de restauration et conserve les éléments de récupération. Examinez ces éléments et résolvez le conflit signalé avant de réappliquer la connexion. Un plantage ou un arrêt forcé ne peut pas exécuter ce nettoyage normal.
+Un conflit de propriétaire, une rotation de clé en attente, un reçu de déconnexion incomplet (`client_disconnect_pending`), des fichiers de configuration ou de profil modifiés, ou un journal illisible ou non vérifié (y compris un journal trop volumineux ou qui n’est pas un fichier ordinaire) entraîne un échec de restauration et conserve les éléments de récupération. Examinez ces éléments et résolvez le conflit signalé avant de réappliquer la connexion. Un plantage ou un arrêt forcé ne peut pas exécuter ce nettoyage normal.
 
 ### `ocx restart`
 
