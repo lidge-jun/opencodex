@@ -329,6 +329,14 @@ MiMo model Command Code serves.
 **Auth:** `key` (`x-api-key` by default, or `Authorization: Bearer` with `apiKeyTransport: "bearer"`) or `oauth` (Bearer + `anthropic-beta`, for Claude Pro/Max).
 
 - Converts messages to Anthropic content blocks (text, base64 image, `tool_use`, `thinking`).
+- Routed Codex compaction keeps the client tool catalog, system prompt and tool-selection
+  options to preserve their prompt-cache prefix. Summary requests disable search/media
+  sidecars; upstream-hosted tools retain their declarations with `tool_choice: none`, as does a
+  mandatory tool choice, while the advertised catalog stays the same. A request that advertises a
+  sidecar web-search tool (for example Exa) still changes its tool prefix on compaction.
+  A summary that attempts a tool call fails without publishing a function call or replacing
+  history. A successful summary returns exactly one compaction item. Image normalization
+  and the existing one-shot tighter-image retry after HTTP 413 remain unchanged.
 - Translated Anthropic Messages reasoning replay shares the request translation budget, including
   encoding/decoding copy overhead. Requests exceeding it return HTTP 413 with
   `translation_buffer_limit`; signatures and opaque reasoning data are never truncated to fit.
@@ -497,7 +505,9 @@ MiMo model Command Code serves.
   The plan's precise credit balance is retained with that identity-fenced quota reading.
   Separately, Kiro `meteringEvent` credit values are measured request spend: the last value
   within a physical response is used, and credits from separately billed sends are added.
-  Token usage remains estimated; credits are never inferred from tokens.
+  Token usage remains estimated; credits are never inferred from tokens. Requests with hosted
+  search or image tools retain the adapter's full prompt estimate in Usage and daily activity,
+  including replayed history, even when the model does not invoke those tools.
 - After an admitted request, reads that account's available models from the regional management
   service without delaying the request. Cached results add model IDs to the shipped catalog.
   Empty or unrecognised replies retain the shipped list and any last good account list. Model

@@ -7,7 +7,7 @@ import type { OcxProviderConfig } from "../../src/types";
 import { captureFastPolicyAuthority, fastPolicyForModel } from "../../src/providers/service-tier";
 import { decideTier } from "../../src/providers/fastwire";
 import { applyProviderConfigHints } from "../../src/codex/catalog/model-hints";
-import { configuredUltraFastSlugs } from "../../src/codex/catalog/configured-tiers";
+import { configuredUltraFastSlugs, retainedFlexPolicyBySlug } from "../../src/codex/catalog/configured-tiers";
 import { buildCatalogEntriesFromObservedState, mergeCatalogEntriesFromObservedState, type ObservedCatalogMergeInput } from "../../src/codex/catalog/build-entries";
 import type { CatalogModel, RawEntry } from "../../src/codex/catalog/parsing";
 import { repoRoot } from "../helpers/repo-root";
@@ -116,6 +116,65 @@ describe("configured Ultra Fast in the native Codex speed picker", () => {
     expect(merge(operator, { configuredUltraFastSlugs: new Set(), ultraFastTier: false })[0]!.additional_speed_tiers).toEqual(["fast"]);
     // Current configuration takes precedence, but never imports the old expensive default.
     expect(merge([{ ...operator[0], default_service_tier: "ultrafast" }])[0]!.default_service_tier).toBeNull();
+  });
+
+  test("degraded retained rows drop revoked Flex but preserve authorized Flex", () => {
+    const stored = merge();
+    const flex = { id: "flex", name: "Flex" };
+    stored[0]!.service_tiers.push(flex);
+    stored[0]!.additional_speed_tiers.push("flex");
+    const configured = provider({
+      fastWire: { kind: "service-tier", canonicalToWire: { priority: "priority", flex: "flex" }, foreignCallerTiers: "verbatim" },
+    });
+    const run = (active: typeof configured) => merge(stored, {
+      routedEntries: [], degradedProviderNames: new Set(["gateway"]),
+      configuredUltraFastSlugs: new Set(),
+      retainedFlexPolicyBySlug: retainedFlexPolicyBySlug({ gateway: active }, stored, []),
+    })[0]!;
+    expect(run(configured).additional_speed_tiers).toContain("flex");
+    const revoked = run(provider());
+    expect(revoked.service_tiers.map((tier: { id: string }) => tier.id)).not.toContain("flex");
+    expect(revoked.additional_speed_tiers).not.toContain("flex");
+    expect(run(provider({ modelSupportsServiceTier: { "task-model": false } })).additional_speed_tiers)
+      .not.toContain("flex");
+    expect(stored[0]!.additional_speed_tiers).toContain("flex");
+  });
+
+  test("retained Flex policy excludes physical combo providers and combo aliases without discovery", () => {
+    const flexProvider = provider({
+      fastWire: { kind: "service-tier", canonicalToWire: { priority: "priority", flex: "flex" }, foreignCallerTiers: "verbatim" },
+    });
+    const check = (providers: Record<string, OcxProviderConfig>, rowSlug: string) =>
+      retainedFlexPolicyBySlug(providers, [{ slug: rowSlug }], []).get(rowSlug);
+
+    expect(check({ combo: flexProvider }, "combo/task-model")).toBe(false);
+    expect(check({ combo: { ...flexProvider, alias: "bundle" } }, "bundle/task-model")).toBe(false);
+    expect(check({ gateway: { ...flexProvider, alias: "combo" } }, "combo/task-model")).toBe(false);
+    expect(check({ gateway: flexProvider }, "gateway/task-model")).toBe(true);
+  });
+
+  test("degraded retained encoded slugs resolve adapter-only native IDs before Flex policy", () => {
+    const rowSlug = "gateway/a-b";
+    const base = provider({
+      models: [],
+      supportsServiceTier: true,
+      modelSupportsServiceTier: {},
+      modelAdapters: { "a/b": "openai-chat" },
+      fastWire: {
+        kind: "service-tier", canonicalToWire: { priority: "priority", flex: "flex" },
+        foreignCallerTiers: "verbatim",
+      },
+    });
+    const retainedPolicy = (config: OcxProviderConfig) =>
+      retainedFlexPolicyBySlug({ gateway: config }, [{ slug: rowSlug }], []).get(rowSlug);
+
+    // Without decoding, a-b incorrectly inherits the provider's Responses adapter
+    // and permits Flex, although the native a/b Chat route cannot forward that tier.
+    expect(fastPolicyForModel(base, "a-b", "gateway").forwardCallerTier).toBe(true);
+    expect(fastPolicyForModel(base, "a/b", "gateway").forwardCallerTier).toBe(false);
+    expect(retainedPolicy(base)).toBe(false);
+    // A verified Chat service-tier opt-in makes that exact native route eligible.
+    expect(retainedPolicy({ ...base, chatServiceTier: true })).toBe(true);
   });
 
   test("selection and disabled-model policy still remove the entire row", () => {

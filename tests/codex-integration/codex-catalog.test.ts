@@ -2043,7 +2043,7 @@ describe("provider discovered model display names", () => {
       maxOutputTokens: 500_000,
       // Classified by the 2026-09-13 OAuth-lane probe: grok-4.6 is Fast-eligible on
       // either xAI transport, so the hint fills the capability and its description.
-      supportsServiceTier: true, supportsUltraFastTier: false,
+      supportsServiceTier: true, supportsUltraFastTier: false, supportsFlexTier: false,
       fastTierDescription: "Priority processing; tier pricing applies on key auth only",
     });
     expect(catalogModelSlug(output)).toBe("xai/grok-4.6");
@@ -6266,7 +6266,7 @@ describe("Codex catalog routed normalization", () => {
 
     expect(provider.modelSupportsReasoningSummaries).toEqual({
       "deepseek-v4-flash": false,
-      "deepseek-flash": true,
+      "deepseek-flash": true, "deepseek-v4-pro": true,
     });
   });
 
@@ -6839,7 +6839,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
     "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
     "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro",
     "daybreak-red-latest", "daybreak-blue-latest",
-    "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
+    "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna",
   ];
 
   test("Astra API registry metadata reaches the emitted catalog independently of native limits", async () => {

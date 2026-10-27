@@ -341,7 +341,7 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 105 yerleşik önayar ile birlikte gelir: 84 anahtar tabanlı, 17
+opencodex 106 yerleşik önayar ile birlikte gelir: 85 anahtar tabanlı, 17
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
@@ -665,6 +665,9 @@ tohumlanmıştır:
 | Codex girişi (Pool veya Direct) | `gpt-5.6-*` | 922.000 |
 | OpenAI (API anahtarı) | `openai-apikey/gpt-5.6-*` artı `*-pro` | 922.000 (922.000 maksimum girdi) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 922.000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1.000.000 |
 
 Yerel GPT-5.6 girdileri sabitlenmiş yukarı akış akıl yürütme merdivenlerini
@@ -688,7 +691,7 @@ anahtar/abonelik belirteci ağ geçidi olarak kalır. **Cloudflare AI Gateway**,
 URL'ye doldurulan hesap + ağ geçidi kimliklerinize ihtiyaç duyar.
 
 Copilot karma hatlı bir katalog sunar: modeller (`gpt-5.3-codex`, `gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) ajan
+`gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) ajan
 trafiği için `/chat/completions`'ı reddeder, bu nedenle opencodex yerleşik
 varsayılan olarak bu modelleri Responses API üzerinden yönlendirirken diğer tüm
 Copilot modelleri sohbet tamamlamalarında kalır. Öncelik sırası: sabit hat

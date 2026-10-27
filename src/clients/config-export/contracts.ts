@@ -57,10 +57,13 @@ export interface OpencodeCatalogModel {
   inputModalities?: readonly string[];
   /** Declared effort ladder. Exported as opencode model variants where the client reads them. */
   reasoningEfforts?: readonly string[];
+  supportsThinkingToggle?: boolean;
+  supportsReasoningEffort?: boolean;
+  defaultThinkingEnabled?: boolean;
   /**
    * Declared default effort. Carried so every client export reads one deduped, visibility-
-   * filtered ladder per model. The opencode serializer deliberately does NOT turn it into a
-   * model-level setting — see {@link opencodeEffortVariants} for why.
+   * filtered ladder per model. Client serializers map it into their own model defaults
+   * and allow the selected variant to override it.
    */
   defaultReasoningEffort?: string;
   supportsTools?: boolean;
@@ -90,6 +93,9 @@ export interface ExportModel {
   inputModalities?: string[];
   /** Optional effort ladder exported only to clients that support it. */
   reasoningEfforts?: string[];
+  supportsThinkingToggle?: boolean;
+  supportsReasoningEffort?: boolean;
+  defaultThinkingEnabled?: boolean;
   defaultReasoningEffort?: string;
   supportsTools?: boolean;
   supportsReasoning?: boolean;
@@ -116,6 +122,9 @@ export interface EffectiveModelExportMetadata {
   inputModalities?: string[];
   /** Effective ladder; `[]` is an explicit "no rungs" declaration and survives as `[]`. */
   reasoningEfforts?: string[];
+  supportsThinkingToggle?: boolean;
+  supportsReasoningEffort?: boolean;
+  defaultThinkingEnabled?: boolean;
   /**
    * A default some canonical source declared — never one synthesized from the ladder's
    * preference order, and only when it is a member of the effective ladder. An empty
@@ -128,11 +137,14 @@ export interface EffectiveModelExportMetadata {
 }
 
 /**
- * The per-row evidence the capability booleans are derived from. Only positive, canonical
- * signals — no independent provider fact tables, no name-based inference.
+ * Canonical explicit capabilities and positive evidence for otherwise unknown booleans.
+ * No independent provider fact tables or name-based inference.
  */
 export interface ExportCapabilityEvidence {
   native?: boolean;
+  supportsReasoning?: boolean;
+  supportsThinkingToggle?: boolean;
+  supportsReasoningEffort?: boolean;
   reasoningEfforts?: readonly string[];
   supportsReasoningSummaries?: boolean;
   /** Normalized upstream capability names a catalog row carried (e.g. `"tools"`). */
@@ -156,8 +168,7 @@ export function knownToolsSupport(evidence: ExportCapabilityEvidence): boolean |
 }
 
 /**
- * Reasoning support a canonical source positively asserts, or undefined when nothing is
- * known.
+ * Explicit reasoning support, or positive canonical evidence when no boolean is declared.
  *
  * Never `false` from a missing or empty effort ladder: an empty ladder says "no ADJUSTABLE
  * effort", which is not the claim "cannot reason" — a model can reason at a fixed depth with
@@ -167,8 +178,10 @@ export function knownToolsSupport(evidence: ExportCapabilityEvidence): boolean |
  * nothing about whether the model reasons, so it is not positive evidence on its own.
  */
 export function knownReasoningSupport(evidence: ExportCapabilityEvidence): boolean | undefined {
+  if (typeof evidence.supportsReasoning === "boolean") return evidence.supportsReasoning;
+  if (evidence.supportsThinkingToggle === true || evidence.supportsReasoningEffort === true) return true;
   if (evidence.supportsReasoningSummaries === true) return true;
-  if (evidence.reasoningEfforts !== undefined
+  if (evidence.supportsReasoningEffort !== false && evidence.reasoningEfforts !== undefined
     && canonicalizeReasoningEfforts(evidence.reasoningEfforts).some(effort => effort !== "none")) {
     return true;
   }
@@ -203,6 +216,9 @@ export type DroidReasoningDefaults = Record<string, string>;
 
 export type ExportClientId =
   | "qoder"
+  | "qoder-cn"
+  | "workbuddy"
+  | "workbuddy-ai"
   | "opencode"
   | "pi"
   | "omp"
@@ -262,6 +278,8 @@ export interface ExportClientSpec {
    * reasoning as the Grok managed block's non-loopback refusal.
    */
   loopbackOnly: boolean;
+  /** Refuse apply/refresh without blocking status, disable or Undo. Pure and value-free. */
+  validateApply?: (ctx: ExportContext) => string | null;
   /**
    * True when the destination file may carry comments and trailing commas
    * even though `format` is "json" and serialization stays pretty JSON.

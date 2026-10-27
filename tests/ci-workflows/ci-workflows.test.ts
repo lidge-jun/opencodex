@@ -5035,6 +5035,9 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("withastro/action@e84f40bd8d2caa9e768ec82ad30dd81f0b280853");
     expect(workflow).toContain("actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+    const runtimeBun = (JSON.parse(await readText("package.json")) as { dependencies?: { bun?: string } }).dependencies?.bun;
+    expect(runtimeBun).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(workflow).toContain(`package-manager: bun@${runtimeBun}\n`);
   });
 
   test("issue-quality workflow rejects workflow_dispatch pull request numbers before mutation", async () => {

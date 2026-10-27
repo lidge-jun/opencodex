@@ -37,6 +37,7 @@ import {
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
 import { resolveContextPrincipal } from "../auth-cors";
+import { responseTurnMembership } from "./turn-membership";
 import { resolveSkillsSnapshotScopeKey, snapshotSkillsCatalogInBody } from "./skills-snapshot";
 import {
   isShadowSourceModel,
@@ -465,6 +466,11 @@ export async function prepareResponsesRequest(
   // Substitutes a known snapshot now; a new catalog is only stored once the request is prepared.
   const commitSkillsSnapshot = snapshotSkillsCatalogInBody(body, skillsSnapshotScopeKey, config);
 
+  const turnMembership = responseTurnMembership(req, config, options.admission);
+  if (turnMembership && body && typeof body === "object" && "input" in body && Array.isArray(body.input)) {
+    body.input = turnMembership.normalize(body.input);
+  }
+
   let parsed: OcxParsedRequest;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   let clientToolCatalogRestriction: ClientToolCatalogRestriction | undefined;
@@ -665,7 +671,10 @@ export async function prepareResponsesRequest(
     if (candidate.combo?.target.metered && !admissionMayUseMeteredComboTargets(
       config, options.admission, config.combos?.[candidate.combo.comboId],
     )) {
-      const pick = pickComboTarget(config, candidate.combo.comboId, { eligible: target => !target.metered });
+      const pick = pickComboTarget(config, candidate.combo.comboId, {
+        eligible: target => !target.metered,
+        allowCooldownReprobe: false,
+      });
       if (!pick) {
         throw new NoAvailableComboTargetsError(candidate.combo.comboId,
           comboExclusionReasons(config, candidate.combo.comboId, target => !target.metered));
@@ -1614,6 +1623,8 @@ export async function prepareResponsesRequest(
   commitSkillsSnapshot?.();
   return {
     inboundWire,
+    ...(turnMembership ? { turnMembership } : {}),
+    ...(turnMembership && inboundWire === "responses" && parsed.stream && !parsed._compactionRequest ? { completedToolBlocks: true as const } : {}),
     clientDeclaredEmptyToolCatalog: options.clientDeclaredEmptyToolCatalog === true,
     clientToolCatalogRestriction,
     // Admission facts later route rewrites must not re-derive: the selector the caller sent and

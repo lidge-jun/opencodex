@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
+import { watchdogMs } from "../helpers/ci-watchdog";
 import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
-import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
+import { CODEX_WS_SESSION_CLOSE_GRACE_MS, CodexWsSession } from "../../src/server/responses/codex-ws-session";
 import { CODEX_RESPONSES_HTTP_URL, prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
 import {
   CODEX_WS_METADATA_MAX_BYTES, CODEX_WS_METADATA_MAX_HEADERS, CODEX_WS_METADATA_MAX_VALUE_BYTES,
@@ -123,3 +124,257 @@ test("non-canonical Responses transports keep their existing header policy", asy
   const response = await exchange(upgrade([flag, "true"]), "https://api.openai.com/v1/responses");
   expect(response.headers.has(flag)).toBe(false);
 });
+
+interface CloseTimer { callback: () => void; delay: number; unref: () => void }
+class ClosingSocket extends EventTarget {
+  readyState = 0;
+  closeCalls = 0;
+  terminateCalls = 0;
+  closeMode: "stall" | "sync" | "throw" = "stall";
+  terminateThrows = false;
+  readonly closeListeners = new Set<EventListenerOrEventListenerObject>();
+  override addEventListener(type: string, listener: EventListenerOrEventListenerObject | null, options?: AddEventListenerOptions | boolean) {
+    super.addEventListener(type, listener, options);
+    if (type === "close" && listener) this.closeListeners.add(listener);
+  }
+  override removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null, options?: EventListenerOptions | boolean) {
+    super.removeEventListener(type, listener, options);
+    if (type === "close" && listener) this.closeListeners.delete(listener);
+  }
+  open() { this.readyState = 1; this.dispatchEvent(new Event("open")); }
+  peerClose() { this.readyState = 3; this.dispatchEvent(new Event("close")); }
+  close() {
+    this.closeCalls++;
+    if (this.closeMode === "throw") throw new Error("fixture close failure");
+    this.readyState = 2;
+    if (this.closeMode === "sync") this.peerClose();
+  }
+  terminate?: () => void = () => {
+    this.terminateCalls++;
+    if (this.terminateThrows) throw new Error("fixture terminate failure");
+    this.peerClose();
+  };
+}
+
+/** Synchronous clock scope: no awaited work runs while global timers are replaced. */
+function withClosingSession(run: (fixture: {
+  session: CodexWsSession; socket: ClosingSocket; timers: Set<CloseTimer>;
+  expire(): void; unrefs(): number; changes(): number;
+}) => void, retainable = false) {
+  const savedSocket = globalThis.WebSocket;
+  const savedSet = globalThis.setTimeout;
+  const savedClear = globalThis.clearTimeout;
+  const timers = new Set<CloseTimer>();
+  let unrefs = 0, changes = 0;
+  globalThis.WebSocket = ClosingSocket as unknown as typeof WebSocket;
+  globalThis.setTimeout = ((callback: () => void, delay: number) => {
+    const timer = { callback, delay, unref: () => { unrefs++; } };
+    timers.add(timer);
+    return timer;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((timer: CloseTimer) => { timers.delete(timer); }) as unknown as typeof clearTimeout;
+  try {
+    const session = new CodexWsSession("ws://127.0.0.1/fixture", {}, retainable, () => { changes++; });
+    run({ session, socket: session.socket as unknown as ClosingSocket, timers,
+      unrefs: () => unrefs, changes: () => changes,
+      expire() {
+        for (const timer of [...timers]) {
+          timers.delete(timer);
+          timer.callback();
+        }
+      },
+    });
+  } finally {
+    globalThis.setTimeout = savedSet;
+    globalThis.clearTimeout = savedClear;
+    globalThis.WebSocket = savedSocket;
+  }
+}
+
+test("private closing handshake has one unrefed grace timer and one forced teardown", () => {
+  withClosingSession(({ session, socket, timers, expire, unrefs, changes }) => {
+    socket.open();
+    expect(session.reserve()).toBe(true);
+    const reason = new Error("fixture cancellation");
+    let observed: Error | undefined;
+    session.bindOwner(error => { observed = error; });
+    session.dispose(reason);
+    expect(observed).toBe(reason);
+    expect(session.closed).toBe(true);
+    expect(session.busy).toBe(false);
+    expect(socket.closeCalls).toBe(1);
+    expect(socket.terminateCalls).toBe(0);
+    expect(timers.size).toBe(1);
+    expect([...timers][0]!.delay).toBe(CODEX_WS_SESSION_CLOSE_GRACE_MS);
+    expect(unrefs()).toBe(1);
+    session.dispose();
+    expect(timers.size).toBe(1);
+    expire();
+    expect(socket.terminateCalls).toBe(1);
+    expect(socket.readyState).toBe(3);
+    expect(timers.size).toBe(0);
+    expect(socket.closeListeners.size).toBe(0);
+    expect(changes()).toBe(1);
+  });
+});
+
+test("private closing handshake cancels fallback on asynchronous and synchronous close", () => {
+  for (const mode of ["stall", "sync"] as const) withClosingSession(({ session, socket, timers, expire }) => {
+    socket.open(); socket.closeMode = mode;
+    session.dispose();
+    if (mode === "stall") socket.peerClose();
+    expect(timers.size).toBe(0);
+    expect(socket.closeListeners.size).toBe(0);
+    expire();
+    expect(socket.terminateCalls).toBe(0);
+  });
+});
+
+test("retained closing handshake keeps immediate disposal and successful reuse", () => {
+  withClosingSession(({ session, socket, timers }) => {
+    socket.open(); session.reserve(); session.release("fixture-completed");
+    expect(session.hasCompleted("fixture-completed")).toBe(true);
+    expect(session.reserve()).toBe(true);
+    expect(socket.closeCalls).toBe(0);
+    expect(timers.size).toBe(0);
+    session.dispose();
+    expect(socket.closeCalls).toBe(1);
+    expect(socket.terminateCalls).toBe(1);
+    expect(timers.size).toBe(0);
+  }, true);
+});
+
+test("private closing handshake contains close and terminate exceptions", () => {
+  withClosingSession(({ session, socket, timers, changes }) => {
+    socket.closeMode = "throw";
+    session.dispose();
+    expect(socket.terminateCalls).toBe(1);
+    expect(timers.size).toBe(0);
+    expect(socket.closeListeners.size).toBe(0);
+    expect(changes()).toBe(1);
+  });
+  withClosingSession(({ session, socket, timers, expire }) => {
+    socket.open(); socket.terminateThrows = true;
+    session.dispose(); expire();
+    expect(socket.terminateCalls).toBe(1);
+    expect(timers.size).toBe(0);
+    expect(socket.closeListeners.size).toBe(0);
+  });
+});
+
+test("private closing handshake remains bounded when the exchange owner throws", () => {
+  withClosingSession(({ session, socket, expire, changes }) => {
+    socket.open(); session.reserve();
+    session.bindOwner(() => { throw new Error("fixture owner failure"); });
+    expect(() => session.dispose()).toThrow("fixture owner failure");
+    expect(changes()).toBe(1);
+    expire();
+    expect(socket.terminateCalls).toBe(1);
+  });
+});
+
+test("private closing handshake covers completed releases, failed releases and connecting sockets", () => {
+  for (const completedId of ["fixture-completed", null]) withClosingSession(({ session, socket, expire }) => {
+    socket.open(); session.reserve(); session.release(completedId); expire();
+    expect(socket.terminateCalls).toBe(1);
+  });
+  withClosingSession(({ session, socket, expire }) => {
+    session.dispose(); expire();
+    expect(socket.terminateCalls).toBe(1);
+  });
+});
+
+test("private closing handshake creates no timer after a remote close", () => {
+  withClosingSession(({ session, socket, timers }) => {
+    socket.open(); socket.peerClose(); session.dispose();
+    expect(socket.closeCalls).toBe(0);
+    expect(socket.terminateCalls).toBe(0);
+    expect(timers.size).toBe(0);
+  });
+});
+
+test("private closing handshake adds no observer or timer without optional terminate", () => {
+  for (const mode of ["stall", "throw"] as const) withClosingSession(({ session, socket, timers, unrefs, changes }) => {
+    socket.open(); socket.terminate = undefined; socket.closeMode = mode;
+    session.dispose();
+    expect(socket.closeCalls).toBe(1);
+    expect(timers.size).toBe(0);
+    expect(socket.closeListeners.size).toBe(0);
+    expect(unrefs()).toBe(0);
+    expect(changes()).toBe(1);
+  });
+});
+
+test.each(["dispose", "release"] as const)("private %s closes a real peer that withholds its close reply", async mode => {
+  // A raw peer accepts the upgrade and reads Close, but deliberately never answers it.
+  // Keep the native client's close and terminate operations intact on both Bun versions.
+  const keys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"];
+  const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  let listener: ReturnType<typeof Bun.listen> | undefined;
+  let session: CodexWsSession | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let resolvePeerClosed!: () => void;
+  const peerClosed = new Promise<void>(resolve => { resolvePeerClosed = resolve; });
+  let headers = Buffer.alloc(0), closeFrame = Buffer.alloc(0), upgraded = false;
+  try {
+    listener = Bun.listen({
+      hostname: "127.0.0.1", port: 0,
+      socket: {
+        data(socket, data) {
+          if (!upgraded) {
+            headers = Buffer.concat([headers, data]);
+            const boundary = headers.indexOf("\r\n\r\n");
+            if (boundary < 0) return;
+            const key = /^Sec-WebSocket-Key:\s*(.+)\r?$/im.exec(headers.subarray(0, boundary).toString())?.[1]?.trim();
+            if (!key) { socket.end("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"); return; }
+            const accept = new Bun.CryptoHasher("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+            upgraded = true;
+            socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
+              + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
+            data = headers.subarray(boundary + 4);
+          }
+          closeFrame = Buffer.concat([closeFrame, data]);
+        },
+        end(socket) { socket.end(); resolvePeerClosed(); },
+        close() { resolvePeerClosed(); },
+      },
+    });
+    session = new CodexWsSession(`ws://127.0.0.1:${listener.port}`, {});
+    const socket = session.socket;
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        clearTimeout(timer); timer = undefined;
+        socket.removeEventListener("open", onOpen);
+        socket.removeEventListener("error", onError);
+      };
+      const onOpen = () => { cleanup(); resolve(); };
+      const onError = () => { cleanup(); reject(new Error("fixture WebSocket failed to open")); };
+      socket.addEventListener("open", onOpen, { once: true });
+      socket.addEventListener("error", onError, { once: true });
+      timer = setTimeout(onError, watchdogMs(3000));
+    });
+    expect(session.reserve()).toBe(true);
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("disposed private socket left its peer open")), watchdogMs(3000));
+    });
+    if (mode === "release") session.release("fixture-completed");
+    else session.dispose();
+    expect(session.closed).toBe(true);
+    expect(session.busy).toBe(false);
+    expect(session.reserve()).toBe(false);
+    await Promise.race([peerClosed, deadline]);
+    expect(closeFrame.length).toBeGreaterThanOrEqual(2);
+    expect(closeFrame[0]! & 0x0f).toBe(0x08);
+    expect(socket.readyState).toBe(3);
+  } finally {
+    clearTimeout(timer);
+    session?.dispose();
+    try { (session?.socket as (WebSocket & { terminate?: () => void }) | undefined)?.terminate?.(); } catch { /* fixture teardown */ }
+    listener?.stop(true);
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+}, watchdogMs(5000));

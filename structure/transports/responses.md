@@ -7,7 +7,7 @@ Native steering follows [the shared WebSocket contract](streaming-health.md#expe
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages) is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 
 Plaintext collaboration restoration treats a null namespace as absent, rejects non-string namespace types, and restores the native namespace/name pair before HTTP/WS delivery and continuation publication.
-When a successful streamed native response has a missing or unrecognized non-JSON content type, the plaintext V2 path confirms a bounded Responses SSE prefix, under the server's `stallTimeoutSec` probe budget, before applying that restoration; an `application/json` body takes the bounded JSON path instead, and an unknown, stalled, or unreadable body retains the fail-closed response.
+When a successful streamed native response has a missing or unrecognized non-JSON content type, the plaintext V2 path confirms a bounded Responses SSE prefix, under the server's `stallTimeoutSec` probe budget, before applying that restoration; an `application/json` body takes the bounded JSON path instead, and an unknown, stalled, or unreadable body retains the fail-closed response. The [structural turn replay membership contract](response-turn-membership.md) owns optional authenticated pre-parser ordering; ordinary input remains unchanged.
 
 ## Responses HTTP/SSE
 
@@ -92,8 +92,8 @@ a `functions` child of the same name are the duplicate the parser already tolera
 
 Replayed call items are lowered whether or not this turn declares the group they name. A catalog can
 be absent or change mid-session, but the client is still replaying items this layer's own response
-restoration stamped with a private `namespace`. Routed compaction runs this boundary before removing
-the tool surface so request-local aliases remain available for response restoration. Only
+restoration stamped with a private `namespace`. Routed compaction runs this boundary before applying
+the summary tool policy so request-local aliases remain available for response restoration. Only
 `tool_choice` resolves a bare name through the catalog: a history
 item records which tool actually ran, so re-pointing it at a same-named namespace child would
 rewrite that record on a coincidence rather than translate it.
@@ -408,6 +408,8 @@ The continuation-note and continuation-wire tests establish prompt and wire cont
 
 ## Core module ownership
 
+Final-route normalization in `src/server/responses/core-normalize.ts` decodes client effort aliases through `src/clients/reasoning-controls.ts` before strength pins/caps. `options.thinkingEnabled` is independent of `options.reasoning`: explicit booleans outrank aliases and defaults, and an empty strength ladder does not erase a declared switch. `src/server/effort-policy.ts` restores both original choices on a destination change; credential-only retries retain the current normalization. Routed capability normalization removes unsupported effort from both parsed options and the raw request. Native Codex requests retain snapshot-owned effort clamping even with saved capability exclusions. Unsupported routed controls follow the [per-axis capability contract](../providers-and-adapters.md), while unknown axes retain legacy behavior. At serialization, `src/adapters/openai-responses/passthrough.ts` strips the OCX `reasoning.enabled` extension for both HTTP and WebSocket bodies unless a custom destination declares `reasoningWireFormat: "gateway-object"`; OpenAI-operated destinations always strip it. The extension-removal step leaves other reasoning members untouched; existing effort and summary normalization still applies.
+
 `src/server/responses/core.ts` is the public ingress and compatibility-export surface. The parent `src/server/responses.ts` facade retains its existing imports. Per-request execution is composed from the following owners in `src/server/responses/`; none is a generated artifact.
 
 | Owner | Responsibility |
@@ -418,7 +420,7 @@ The continuation-note and continuation-wire tests establish prompt and wire cont
 | `shadow-target-availability.ts` | Shadow-call target resolution for `request-prepare.ts`: an unavailable target fails once with `409 intercept_target_unavailable` instead of reaching the native source model or the default provider. |
 | `request-transport.ts` | Live credential selection, dispatch bindings, adapter replacement and same-target request identity. Copilot Auto renewal onto Chat (including negotiation-401 refresh) signals the native owner before inference; `passthrough-dispatch.ts` reuses its inference-401/429 adapter handoff so JSON and SSE retain the Responses envelope. |
 | `request-sidecar-auth.ts` | Routed-compaction image projection, sidecar credential resolution and vision preprocessing. |
-| `response-effects.ts` | Completion notification, replay publication and live request-tool aliases. |
+| `response-effects.ts` | Completion notification, replay publication, live request-tool aliases and routed summary controls; Anthropic keeps client tools/system/options, and flags hosted-tool or mandatory-choice summaries so the adapter sends wire `tool_choice: none`. |
 | `request-send-budget.ts` | Request-wide send accounting, remaining allowance, the pending recovery permit and the shared ambiguous-resend grant. |
 | `reset-replay.ts` | Self-contained-request eligibility and the shared operator replacement grant for native Responses and generic translated initial/rebuilt pre-header sends; adapter-owned transports and translated post-header failures are excluded. |
 | `request-spend.ts` | This request's entries in the durable spend ledger: one per physical send, settled from the terminal usage. |
@@ -426,14 +428,12 @@ The continuation-note and continuation-wire tests establish prompt and wire cont
 | `passthrough-dispatch.ts` | Native request preparation, upstream sends and pre-commit recovery. |
 | `passthrough-delivery.ts`, `terminal-error-redaction.ts`, `non-replayable-error.ts` | Native HTTP/SSE/JSON delivery and terminal accounting. Marked real errors use bounded reads to retain only allowlisted error type and code, keep status and non-replayability plus `x-should-retry: false` when present, and withhold upstream body text and all other upstream headers; the client receives a fixed generic message and synthetic refusals stay distinct. SSE diagnostics and xAI tool-envelope filtering precede client delivery/continuation storage. |
 | `policy-refusal.ts` | Rewrites an allowlisted non-combo HTTP 403 model refusal (`isUpstreamPolicyRefusal` in `src/lib/errors.ts`) from an xAI destination only (`isXaiResponsesDestination`: api.x.ai or the Grok CLI proxy, on either wire) to an HTTP 200 Responses `incomplete` / `content_filter` payload, JSON or SSE, for both `adapter-dispatch.ts` and `passthrough-delivery.ts`. A streamed rewrite takes the turn admission lease and releases it when the body finishes, so the refusal stays inside active-turn accounting. Combo attempts keep the original 403 so failover classifies it as a hop. |
-| `sidecar-execution.ts`, `sidecar-send-budget.ts` | Image/video versus web-search execution, shared rotation, and adapter-aware prepaid inference/producer ownership under the [spend contract](responses-spend.md#prepaid-initial-sends). |
+| `sidecar-execution.ts`, `sidecar-send-budget.ts` | Image/video versus web-search execution, per-build adapter prompt estimates for usage logging, shared rotation, and adapter-aware prepaid inference/producer ownership under the [spend contract](responses-spend.md#prepaid-initial-sends). |
 | `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns; refreshed retries reject previously failed key bindings and revalidate after each queued admission; adapter-owned CLI spawns receive the post-setup `IncomingMeta.beforePhysicalSend` fence, with [replacement-key readmission](responses-failover.md#upstream-key-attempt-accounting). |
 | `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery (including [Anthropic thinking-signature recovery](anthropic-thinking-recovery.md)) and the shared continuation retry counter. Initial and rebuilt adapter budget refusals retain the HTTP 413 [byte-accounting contract](byte-accounting.md#request-copy-accounting); ordinary build errors remain 400. |
-| `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; a streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
+| `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; Anthropic routed summaries pass through `src/responses/compaction-summary.ts` before either bridge. A streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
 
-Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`,
-`core-combo-failure.ts`, `core-combo-native.ts`, `combo-requested-effort.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`,
-`core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
+Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`, `core-combo-failure.ts`, `core-combo-native.ts`, `combo-requested-effort.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`, `core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
 and small composition contracts, including [finite model-refusal evidence](../providers-and-adapters.md#combo-model-refusal-evidence). Existing public helper names are re-exported by `core.ts`. After an admitted Anthropic OAuth pool rotation, `adapter-dispatch.ts` rebinds reasoning replay to the committed credential snapshot; `adapter-continuation.ts` rebinds both its continuation clone and the outer request that persists the response. The replacement send strips the previous account's private state, while persisted ownership and the next turn follow the serving account. Codex alternate-account sends in `core-codex-account.ts` record `oauth-account-402` for HTTP 402 quota recovery, `oauth-account-429` for HTTP 429 rate-limit recovery, and `transient-5xx` for transient recovery, preserving the first response's wire status when sealing its attempt; gated-model moves keep their existing unattributed kind.
 Adapter construction remains with the existing registry; `fetch-helpers.ts` remains a leaf. For Kiro OAuth with load settings, `request-transport.ts` acquires a lease on the admitted account and transfers it before a reactive replacement send; cancellation permanently fences the request holder so recovery cannot install a late lease after abort cleanup. `core.ts` and `core-lifetime.ts` release the lease on returned-body completion, error, or cancellation, outside the inner admission `finally`.
 
@@ -583,7 +583,7 @@ caller passes `recordBufferedDelivery: false`, which the direct client encoders 
 count their own frames. `src/protocols/encoders/adapter-events.ts` ports the bridge's item state
 machine for those encoders, so a change to item boundaries, tool naming or terminal handling in
 `sse.ts` has to be made there too; the parity tests fail when the two diverge. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
-keeps only allowlisted transport verdict codes and the explicit local `spend_ledger_storage_unavailable` identity ([storage refusal contract](responses-spend.md#durable-spend-reservations)). Adapter error events take a different path:
+keeps allowlisted transport verdict codes, the buffered combo [required-tool verdict and retry policy](responses-combo-boundaries.md#buffered-required-tool-contract), and the explicit local `spend_ledger_storage_unavailable` identity ([storage refusal contract](responses-spend.md#durable-spend-reservations)). Adapter error events take a different path:
 `src/bridge/internal.ts` preserves explicit verdicts except cyber-policy and known rate-limit mappings
 ([client retry advice](responses-wire-shapes.md#client-rate-limit-retry-advice)). Explicit incomplete reasons follow the [reason contract](responses-wire-shapes.md#adapter-incomplete-reasons).
 The shared usage shaping's `input_tokens_details` and `output_tokens_details` are always emitted,

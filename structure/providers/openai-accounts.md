@@ -68,11 +68,11 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   a request goes upstream as `gpt-6-astra-minor`.
 
 - The flagship roster that lists unconditionally is `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
-  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` and `gpt-6.1-sol` (Sol and Luna added 2026-09-23 from a
+  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and `gpt-6.1-terra` (Sol and Luna added 2026-09-23 from a
   live roster probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/; 6.1 Sol added
-  2026-09-30 from openai/codex models.json). None of them is gated, and all seven are native-main
+  2026-09-30 and 6.1 Terra on 2026-10-27 from openai/codex models.json). None is gated, and all are native-main
   drain sentinels. The confirmed-denial ordering below is still scoped to the first four
-  (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); the GPT-6 Sol rows and Luna do not feed it yet.
+  (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); the GPT-6 and GPT-6.1 rows do not feed it yet.
 
 - The always-visible flagships (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`)
   use the same rosters with the opposite polarity, and are never gated on them. Only a CONFIRMED
@@ -536,7 +536,7 @@ No requests means no new polling. For this reason only, stale observation proof 
 quota-cache freshness after the existing attempt backoff. Main refresh keeps its owned lease and
 passive intent: cache bypass does not clear an inference reauthentication mark. Other prime reasons
 retain their existing cache rules except the independently scheduled [pool credit renewal](pool-credit-renewal.md). The split config schema degrades malformed optional values to
-false. Exact-account and Direct routes are unchanged.
+false. Priority failback leaves exact-account and Direct routes unchanged; explicitly bound Direct stored accounts remain eligible for the separate credit-renewal sweep.
 
 ## Main-account policy observations
 

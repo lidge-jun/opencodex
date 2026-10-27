@@ -86,7 +86,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 105 total: 84 key-based, 17 OAuth, three local, and one default
+documented split is 106 total: 85 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
 quickstarts carry the same counts.
 
@@ -345,7 +345,7 @@ Invariants:
 
 - `bin/ocx.mjs` selects explicit override, bundled Bun, allowed installer recovery, then validated PATH Bun.
   `src/lib/bun-path-runtime.mjs` requires absolute entries, canonical regular/executable files, the >=1 MB gate, and rejects group/world-writable resolved files or parent directories on POSIX.
-  Bounded version-policy and identity checks require `--version` to match `-e`'s `Bun.version`, a stable version with the pinned major and minor ≥ pinned minor (currently 1.4.0 ≤ version < 2.0.0).
+  Bounded version-policy and identity checks require `--version` to match `-e`'s `Bun.version`, a stable version with the pinned major at or above the pinned version (currently 1.4.4 ≤ version < 2.0.0).
   PATH selection stamps `process`; failure may name an installed Desktop CLI without executing it.
   The [Windows service wrapper](#windows-service-wrapper-and-incomplete-updates) keeps its own placeholder wait gate; updater inspection never runs installer recovery.
 - `package.json` carries `"trustedDependencies": ["bun"]` so `bun install` runs the dependency's
@@ -567,7 +567,7 @@ The account history response can include a [low-confidence effective capacity es
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat removes effort only for an explicit empty declaration or no-reasoning model.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations.
 
 Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 

@@ -204,7 +204,7 @@ export async function executeResponsesSidecars(
   }
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
-  // Routed-compaction turns must NOT hit the image bridge: compaction clears tools/_webSearch but
+  // Routed-compaction turns must NOT hit the image bridge: compaction disables tool execution but
   // leaves _imageGeneration, so planImageBridge would activate and return a normal Responses
   // completion instead of the synthetic compaction item Codex expects (#424).
   //
@@ -588,6 +588,7 @@ export async function executeResponsesSidecars(
         return fetch.unpacedFetch ?? fetch;
       },
       onRequestBuilt: request => {
+        if (typeof request.usageLog?.inputTokens === "number") logCtx.usageLogInputTokens = request.usageLog.inputTokens;
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       },
@@ -701,6 +702,7 @@ export async function executeResponsesSidecars(
       abortSignal: options.abortSignal,
       onFirstOutput: noteSidecarOutput,
       onRequestBuilt: request => {
+        if (typeof request.usageLog?.inputTokens === "number") logCtx.usageLogInputTokens = request.usageLog.inputTokens;
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       },

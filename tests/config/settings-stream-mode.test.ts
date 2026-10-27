@@ -231,6 +231,7 @@ describe("GET /api/settings", () => {
   test("reports redacted codexRuntime diagnostics and clamp correlation", async () => {
     const { chmodSync } = await import("node:fs");
     const {
+      peekCodexRuntimeProcessCache,
       persistEffortClamp,
       resetCodexRuntimeResolveCacheForTests,
       resolveCodexRuntimeAsync,
@@ -261,7 +262,12 @@ describe("GET /api/settings", () => {
       process.env.PATH = "";
       // Settings serve the runtime stale-while-revalidate; land the probe first so this
       // asserts the validated projection rather than the cold deferred answer.
-      await resolveCodexRuntimeAsync();
+      const resolveStarted = performance.now();
+      const resolved = await resolveCodexRuntimeAsync();
+      const resolveMs = Math.round(performance.now() - resolveStarted);
+      // Read-only peek (never a probe) so the version assertion below can report
+      // whether the memo the GET is expected to serve was actually published.
+      const cachePeek = peekCodexRuntimeProcessCache();
       const body = await (await getSettings(baseConfig()))!.json() as {
         codexRuntime?: {
           path?: string;
@@ -276,7 +282,38 @@ describe("GET /api/settings", () => {
       // OPENCODEX_HOME lives under the OS user profile; username must stay redacted on all OS.
       expect(body.codexRuntime?.path?.toLowerCase()).not.toMatch(/[/\\]users[/\\][^/\\[\]]+[/\\]/i);
       expect(body.codexRuntime?.path?.toLowerCase()).not.toContain("alice");
-      expect(body.codexRuntime?.version).toBe("0.133.0");
+      // Failure-only context for the macOS 0.133.0 -> null control result. The
+      // message renders only when this assertion fails and stays path-free:
+      // fixed reason buckets instead of raw output, and no commands or env.
+      const knownReasons = new Set([
+        "path does not exist",
+        "program not found (ENOENT)",
+        "not a spawnable Codex launcher on this platform",
+        "Codex app bundle identity mismatch or unavailable",
+        "unrecognized --version output",
+        "probe sandbox unavailable",
+      ]);
+      const probeReasonSummary = (reason: string): string => {
+        if (reason.startsWith("failed --version")) {
+          return reason.includes("deadline") ? "failed --version (deadline)" : "failed --version";
+        }
+        return knownReasons.has(reason) ? reason : "other";
+      };
+      const diagnostics = JSON.stringify({
+        resolveMs,
+        resolved: {
+          source: resolved.runtime.source,
+          version: resolved.runtime.version,
+          failures: resolved.failures.map(item => ({ source: item.source, reason: probeReasonSummary(item.reason) })),
+        },
+        cache: { kind: cachePeek.kind, epoch: cachePeek.epoch },
+        projection: {
+          source: body.codexRuntime?.source ?? null,
+          version: body.codexRuntime?.version ?? null,
+          warningPresent: typeof body.codexRuntime?.warning === "string",
+        },
+      });
+      expect(body.codexRuntime?.version, `codexRuntime diagnostics: ${diagnostics}`).toBe("0.133.0");
       expect(body.codexRuntime?.source).toBe("environment");
       expect(body.codexRuntime?.catalogClamp).toEqual({
         active: true,

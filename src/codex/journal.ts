@@ -486,6 +486,12 @@ function warnIfJournalRetained(): void {
 
 export interface ReconcileJournalOptions {
   activeClientApiKeyId?: string;
+  /**
+   * #7423: an update stopped the previous proxy and handed its Codex routing to this one.
+   * A process-owned journal whose owner is gone is then adopted rather than replayed, so
+   * startup does not restore native config in the seconds before its own sync re-injects.
+   */
+  adoptUpdateHandover?: boolean;
 }
 
 export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean {
@@ -526,6 +532,15 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
     if ((e as NodeJS.ErrnoException).code === "EPERM") {
       return false;
     }
+  }
+  if (options.adoptUpdateHandover) {
+    // The original baseline and injected-state hashes stay as written; only ownership moves.
+    // Published like every other journal write, so a replaced Codex home is refused rather
+    // than overwritten; a refusal preserves both the journal and the config.
+    const adopted = JSON.stringify({ ...journal, pid: process.pid, owner: { kind: "process", pid: process.pid } });
+    try { publishCodexArtifact(JOURNAL_PATH, handle, (path, hooks) => atomicWriteFile(path, adopted, undefined, hooks)); }
+    catch { console.error("⚠️ The Codex journal handed over by an update could not be adopted; the journal and configuration were preserved."); }
+    return false;
   }
   const restored = restoreJournalState({ heldConfigWriteLock: handle });
   if (restored.unverified) {
