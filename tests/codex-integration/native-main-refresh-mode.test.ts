@@ -724,7 +724,7 @@ describe("main account in codex refresh mode (#2999)", () => {
     expect(getMainAccountCredentialStatus().usable).toBe(false);
   });
 
-  test("a keyring refresh refusal cannot resurrect the rejected bearer", async () => {
+  test.each(["rejected-bearer", "opaque", "conflicting-identity", "home-roundtrip"])("a keyring refresh refusal stays quarantined until a verified successor (%s)", async scenario => {
     setNativeMainRefreshResolutionForTests(CODEX_MODE);
     seedAuth(expired());
     const rejected = fakeChatGptJwt("acct-main");
@@ -740,9 +740,30 @@ describe("main account in codex refresh mode (#2999)", () => {
     expect(getMainAccountCredentialStatus().usable).toBe(false);
     expect(isMainAccountRefreshGrantRejected()).toBe(true);
     await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toMatchObject({ reason: "reauth" });
-    status = { authMethod: "chatgpt", authToken: fakeChatGptJwt("acct-new-login"), requiresOpenaiAuth: true };
-    expect((await getValidMainAccountToken({ codexAuthStatus }))?.chatgptAccountId).toBe("acct-new-login");
+    if (scenario === "home-roundtrip") {
+      const otherHome = join(root, "other-home");
+      mkdirSync(otherHome);
+      process.env.CODEX_HOME = otherHome;
+      try {
+        expect(isMainAccountRefreshGrantRejected()).toBe(false);
+        expect(await getValidMainAccountToken({ codexAuthStatus: async () => ({
+          authMethod: "chatgpt", authToken: rejected, requiresOpenaiAuth: true,
+        }) })).toEqual({ accessToken: rejected, chatgptAccountId: "acct-main" });
+      } finally {
+        process.env.CODEX_HOME = home;
+      }
+    }
+    const uncertain = scenario === "rejected-bearer" || scenario === "home-roundtrip" ? rejected : scenario === "opaque" ? "opaque-fixture-token"
+      : fakeChatGptJwt("acct-main", { chatgpt_account_id: "acct-conflicting" });
+    status = { authMethod: "chatgpt", authToken: uncertain, requiresOpenaiAuth: true };
+    await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toMatchObject({ reason: "reauth" });
+    expect(getMainAccountCredentialStatus()).toMatchObject({ refreshGrantRejected: true, usable: false });
+    // A different bearer for the same verified identity is sufficient successor evidence.
+    const successor = fakeChatGptJwt("acct-main", { jti: "verified-successor" });
+    status = { authMethod: "chatgpt", authToken: successor, requiresOpenaiAuth: true };
+    expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: successor, chatgptAccountId: "acct-main" });
     expect(isMainAccountRefreshGrantRejected()).toBe(false);
+    expect(getMainAccountCredentialStatus().usable).toBe(true);
   });
 
   test("a chatgpt login with a withheld token means reauthentication", async () => {

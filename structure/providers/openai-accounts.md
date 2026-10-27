@@ -309,9 +309,9 @@ Codex mode starts a short-lived `codex -c model_provider="openai" app-server` an
 OpenCodex uses the returned bearer for that request, writes nothing and does not reread auth.json after refresh: keyring mode deletes it.
 
 With no file credential, every lookup reads the current login with `refreshToken: false`; an expiring or explicitly rejected bearer requests refresh.
-Only home-scoped expiry/refusal metadata survives the lookup. Logout, account switches and unavailable reads cannot reuse an earlier bearer; a weak association gives the exact immutable RPC result its owned quota writer, home and credential generation without retaining the result or token.
-A `chatgpt` method with a null token marks the file grant or keyring observation rejected (reauth); a verified new keyring login replaces that observation.
-An unreachable binary, unchanged rejected bearer or expired bearer is transient. A non-ChatGPT or missing login answers an ordinary lookup as an observed absence, while a rejected-token or file-locked refresh still reports it transiently. Read-only lookups honor caller cancellation.
+Only home-scoped expiry/refusal metadata survives the lookup. Keyring refusal retains a domain-separated SHA-256 fingerprint of the rejected bearer, never the bearer itself; uncertain reads and home switches preserve it. Logout, account switches and unavailable reads cannot reuse an earlier bearer; a weak association gives the exact immutable RPC result its owned quota writer, home and credential generation without retaining the result or token.
+A `chatgpt` method with a null token marks the file grant or keyring observation rejected (reauth). Reappearance of that bearer, or an opaque or conflicting identity answer, preserves refusal and unusability. Only a different bearer with verified identity or a committed verified login clears keyring refusal.
+Without prior permanent refusal, an unreachable binary, unchanged rejected bearer or expired bearer is transient. A non-ChatGPT or missing login answers an ordinary lookup as an observed absence, while a rejected-token or file-locked refresh still reports it transiently. Read-only lookups honor caller cancellation.
 Actual refresh runs on its independent 30-second timeout so Codex can save its grant. Both paths pin CODEX_HOME and hold its exclusive claim; home and identity-generation changes reject a delayed observation.
 Only file-backed refresh has a local grant fingerprint lock; keyring claim deadlines are transient. `"opencodex"`, missing or old Codex keeps the guarded writer.
 
