@@ -100,7 +100,7 @@ first-party apply (disabled intercept, CA failure, unreadable settings or foreig
 the gateway; a failed gateway apply preserves the first-party env. After a successful first-party
 write, `removeDesktop3pStandardPivot({ replaceWhileEnabled: true })` retires the owned gateway.
 A refused pivot that has not changed Desktop rolls back only the managed env keys while they still match this apply;
-unrelated settings survive, and rollback failure is reported explicitly. Gateway-removal admission expiry uses that same settled rollback path, and an unadmitted rollback leaves an explicit incomplete-rollback warning. If Desktop already pivoted to standard but credential cleanup is incomplete, first-party stays active and its mode is recorded. After a successful gateway
+unrelated settings survive, and rollback failure is reported explicitly. Every gateway-cleanup exception, including unavailable authority, uses that same settled rollback path; a refused or throwing rollback leaves an explicit incomplete-rollback warning. If Desktop already pivoted to standard but credential cleanup is incomplete, first-party stays active and its mode is recorded. After a successful gateway
 write, only env values anchored on OpenCodex's CA path are removed. The committed gateway mode and profile fingerprint are persisted together before first-party
 cleanup via `src/claude/desktop-gateway-state.ts`. Cleanup failure remains a partial failure, while
 subsequent default applies and status retain the gateway choice. A separate persistence failure

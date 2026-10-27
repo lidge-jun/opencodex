@@ -246,8 +246,8 @@ async function applyConnectedDesktopProfile(
   mode: Desktop3pConfigMode,
   connection: Extract<ClientConnectionState, { kind: "connected" }>,
   deps: ApplyProfileDeps,
-): Promise<{ ok: boolean; path: string; reason?: string; warning?: string }> {
-  let committedIntent = false;
+): Promise<DesktopApplyResult> {
+  let committedIntent = false, gatewayApplied = false;
   try {
     const token = await settleConfigRoot(configRoot(), () => withClientLifecycleSync(() => withConfigMutationLockSync(() => {
       assertClientConnectionUnchanged(connection.value);
@@ -268,7 +268,8 @@ async function applyConnectedDesktopProfile(
     try {
       snapshot = await (deps.downloadDesktop3pModelsImpl ?? downloadDesktop3pModels)(baseUrl, token.token);
     } catch (error) {
-      return { ok: false, path: "", reason: error instanceof HubClientError ? error.code : "desktop_download_failed" };
+      return { ok: false, path: "", reason: error instanceof HubClientError ? error.code : "desktop_download_failed",
+        desiredEnabled: true, applied: false, warning: "Desktop enable intent was saved; the remote gateway was not applied." };
     }
     const result: DesktopStoreResult = await settleConfigRoot(configRoot(), () => withClientLifecycleSync(held => withConfigMutationLockSync(() => {
       assertClientConnectionUnchanged(connection.value);
@@ -284,7 +285,9 @@ async function applyConnectedDesktopProfile(
         baseUrl, apiKey: currentToken.token, mode, models: snapshot.models,
       });
     }), deps.lifecycleLockDeps));
-    if (!result.ok) return { ok: false, path: "", reason: `desktop_lifecycle_${result.reason}` };
+    if (!result.ok) return { ok: false, path: "", reason: `desktop_lifecycle_${result.reason}`,
+      desiredEnabled: true, applied: false, warning: "Desktop enable intent was saved; the remote gateway was not applied." };
+    gatewayApplied = true;
     // Policy probes may spawn a process; perform them only after L/C have been released.
     const policyWarning = claudeDesktopPolicyWarning((deps.probeClaudeDesktopPolicy ?? probeClaudeDesktopPolicy)());
     const fallbackWarning = result.baselineKind === "standard_fallback"
@@ -293,10 +296,11 @@ async function applyConnectedDesktopProfile(
     const warning = [fallbackWarning, policyWarning].filter(Boolean).join(" ");
     return { ok: true, path: result.path ?? "", ...(warning ? { warning } : {}) };
   } catch (error) {
-    if (error instanceof WindowsSecretAclSettleTimeoutError) return { ok: false, path: "", reason: "ca_unavailable",
-      ...(committedIntent ? { warning: "Desktop enable intent was saved; the remote gateway was not applied." } : {}) };
     const message = error instanceof Error ? error.message : "";
-    return { ok: false, path: "", reason: /^[a-z][a-z0-9_]{1,100}$/.test(message) ? message : "desktop_apply_failed" };
+    return { ok: false, path: "", reason: error instanceof WindowsSecretAclSettleTimeoutError ? "ca_unavailable"
+      : /^[a-z][a-z0-9_]{1,100}$/.test(message) ? message : "desktop_apply_failed",
+      ...(committedIntent ? { desiredEnabled: true, applied: gatewayApplied,
+        warning: `Desktop enable intent was saved; the remote gateway ${gatewayApplied ? "was applied but follow-up did not complete" : "was not applied"}.` } : {}) };
   }
 }
 
@@ -439,33 +443,47 @@ async function applyFirstPartyDesktop(
   let rollback!: ReturnType<typeof captureDesktopFirstPartyRollback>;
   const applied = await withFirstPartySecretsSettled(getConfigDir(), () => {
     const fresh = readConfigForAdmittedMutation(); rollback = captureDesktopFirstPartyRollback(fresh); return applyDesktopFirstParty(fresh);
-  });
-  if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason, ...(applied.diagnostic ? { diagnostic: applied.diagnostic } : {}) };
+  }).catch(() => ({ ok: false, path: "", reason: "unreadable" } as const));
+  if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason, desiredEnabled: true, applied: false,
+    ...("diagnostic" in applied && applied.diagnostic ? { diagnostic: applied.diagnostic } : {}) };
+  let gatewayRemoved = false, modeCommitted = false;
+  try {
   const appliedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
   const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });
   if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
     let removed: ReturnType<typeof removeDesktop3pStandardPivot>;
     try { removed = await settleConfigRoot(configRoot(), () => removeDesktop3pStandardPivot({ appliedFingerprint: readConfigForAdmittedMutation().claudeCode?.desktopProfile?.appliedFingerprint ?? null, replaceWhileEnabled: true })); }
     catch (error) {
-      if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
-      removed = { ok: false, changed: false, kind: "write_failed", libraryPath: library.libraryPath, reason: "acl_settlement_timeout" };
+      removed = { ok: false, changed: false, kind: "write_failed", libraryPath: library.libraryPath,
+        reason: error instanceof WindowsSecretAclSettleTimeoutError ? "acl_settlement_timeout" : "desktop_mutation_failed" };
     }
+    gatewayRemoved = removed.changed;
     if (!removed.ok) {
-      const restored = removed.changed || !applied.changed || await rollbackDesktopFirstPartySettled(getConfigDir(), rollback);
+      const restored = removed.changed || !applied.changed || await rollbackDesktopFirstPartySettled(getConfigDir(), rollback).catch(() => false);
       const modeSaved = !removed.changed || await saveDesktopMode("first-party", deps);
       const warning = [restored ? "" : "first-party settings rollback did not complete",
         modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");
       return { ok: false, path: library.selectedProfilePath ?? "", reason: removed.kind === "cleanup_incomplete" ? "gateway_cleanup_incomplete" : `gateway_profile_active:${removed.reason ?? removed.kind}`,
+        desiredEnabled: true, saved: removed.changed && modeSaved, applied: removed.changed || !restored || !applied.changed,
         ...(warning ? { warning } : {}) };
     }
   }
   const saved = await saveDesktopMode("first-party", deps);
+  modeCommitted = saved;
   return {
     ok: true,
     path: applied.path,
     picker: offlinePickerStatus(loadConfig(), deps.platform),
     ...(saved ? {} : { warning: "desktop mode marker was not saved" }),
   };
+  } catch {
+    const retained = gatewayRemoved || modeCommitted;
+    const restored = retained || !applied.changed || await rollbackDesktopFirstPartySettled(getConfigDir(), rollback).catch(() => false);
+    return { ok: false, path: applied.path, reason: "desktop_apply_failed", desiredEnabled: true,
+      saved: modeCommitted, applied: retained || !restored || !applied.changed,
+      warning: retained ? "First-party settings were applied; follow-up did not complete."
+        : restored ? "First-party settings were rolled back; Desktop enable intent remains saved." : "first-party settings rollback did not complete" };
+  }
 }
 
 export async function applyDesktop(
@@ -501,7 +519,7 @@ export async function applyProfile(
   if (connection.kind !== "disconnected") return { ok: false, path: "", reason: "client_connection_invalid" };
   // Explicit apply is an enable action. Persist intent before any Desktop write
   // so a process crash cannot leave a gateway profile that startup immediately removes.
-  let committedIntent = false, savedProfile = false;
+  let committedIntent = false, savedProfile = false, gatewayApplied = false;
   try {
     const desired = await settleConfigRoot(configRoot(), () => setIntegrationEnabled("claude-desktop", true));
     if (!desired.ok) return { ok: false, path: "", reason: desired.message };
@@ -560,6 +578,7 @@ export async function applyProfile(
         fresh.apiKeys?.[0]?.key, mode, fresh.claudeCode?.desktopProfile, nativeContextLimits(fresh), deps.lifecycleLockDeps);
     });
     if (result === null) return { ok: false, path: "", reason: "desktop_config_changed" };
+    gatewayApplied = result.written;
     let stateWarning: string | undefined;
     if (result.written) {
       try { await settleConfigRoot(configRoot(), () => saveLocalDesktopProfile(state.profile, state.profile, connection, deps, { fingerprint: result.fingerprint })); }
@@ -574,10 +593,11 @@ export async function applyProfile(
       ...(warning ? { warning } : {}),
     };
   } catch (error) {
-    if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
-    return { ok: false, path: "", reason: "ca_unavailable", diagnostic: { stage: "ca", cause: "ETIMEDOUT" },
-      ...(committedIntent ? { desiredEnabled: true, saved: savedProfile, applied: false,
-        warning: `Desktop enable intent${savedProfile ? " and profile were" : " was"} saved; Desktop was not applied.` } : {}) };
+    if (!committedIntent && !(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+    return { ok: false, path: "", reason: error instanceof WindowsSecretAclSettleTimeoutError ? "ca_unavailable" : "desktop_apply_failed",
+      ...(error instanceof WindowsSecretAclSettleTimeoutError ? { diagnostic: { stage: "ca", cause: "ETIMEDOUT" } as const } : {}),
+      ...(committedIntent ? { desiredEnabled: true, saved: savedProfile, applied: gatewayApplied,
+        warning: `Desktop enable intent${savedProfile ? " and profile were" : " was"} saved; Desktop ${gatewayApplied ? "was applied but follow-up did not complete" : "was not applied"}.` } : {}) };
   }
 }
 

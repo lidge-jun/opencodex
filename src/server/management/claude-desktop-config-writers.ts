@@ -1,6 +1,5 @@
 import { adoptPersistedClaudeCode, deleteConfigTopLevelKey, mutatePersistedConfig } from "../../config";
 import { getConfigDir as configRoot, withConfigDirHardeningSettled as settleConfigRoot } from "../../config/paths";
-import { WindowsSecretAclSettleTimeoutError } from "../../lib/windows-secret-acl";
 import type { OcxConfig } from "../../types";
 
 /**
@@ -46,8 +45,7 @@ export async function persistDesktopProfileField(
     });
     if (outcome.status !== "unavailable" && outcome.value !== null) adoptPersistedClaudeCode(config, outcome.value);
     return outcome;
-  }).catch(error => {
-    if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+  }).catch(() => {
     return { status: "unavailable", reason: "unavailable" } as const;
   });
   // Only mirror into memory once the durable write actually landed; an
@@ -69,8 +67,7 @@ export async function persistDesktopModeField(
     });
     if (outcome.status !== "unavailable") adoptPersistedClaudeCode(config, outcome.value);
     return outcome;
-  }).catch(error => {
-    if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+  }).catch(() => {
     return { status: "unavailable", reason: "unavailable" } as const;
   });
   if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };

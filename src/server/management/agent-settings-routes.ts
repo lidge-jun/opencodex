@@ -1047,6 +1047,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
   }
   if (url.pathname === "/api/claude-desktop/apply" && req.method === "POST") {
     let committedIntent = false, savedProfile = false, pickerDisabled = false;
+    let appliedMode: "first-party" | "gateway" | undefined, appliedPath = "", modeCommitted = false;
     try {
       // #859: the CLI delegates here so the registry is built in the serving
       // process. `mode` selects the Desktop mode: `first-party` (default when the
@@ -1120,27 +1121,32 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
               ...(applied.diagnostic ? { diagnostic: applied.diagnostic } : {}),
             }, applied.reason === "foreign_env" || applied.reason === "intercept_disabled" ? 409 : 500);
           }
+          appliedMode = "first-party"; appliedPath = applied.path;
+          let gatewayRemoved = false;
+          try {
           // Remove the gateway only after the replacement env was written.
           const appliedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
           const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });
-          let gatewayRemoved = false;
           if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
             let removed: ReturnType<typeof removeDesktop3pStandardPivot>;
             try { removed = await settleConfigRoot(configRoot(), () => (deps.removeDesktop3pStandardPivot ?? removeDesktop3pStandardPivot)({ appliedFingerprint: readConfigForAdmittedMutation().claudeCode?.desktopProfile?.appliedFingerprint ?? null, replaceWhileEnabled: true })); }
             catch (error) {
-              if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
-              removed = { ok: false, changed: false, kind: "write_failed", libraryPath: library.libraryPath, reason: "acl_settlement_timeout" };
+              removed = { ok: false, changed: false, kind: "write_failed", libraryPath: library.libraryPath,
+                reason: error instanceof WindowsSecretAclSettleTimeoutError ? "acl_settlement_timeout" : "desktop_mutation_failed" };
             }
             if (!removed.ok) {
-              const restored = removed.changed || !applied.changed || await rollbackDesktopFirstPartySettled(getConfigDir(), rollback);
+              const restored = removed.changed || !applied.changed || await rollbackDesktopFirstPartySettled(getConfigDir(), rollback).catch(() => false);
+              if (!removed.changed && restored && applied.changed) appliedMode = undefined;
               const modeSaved = !removed.changed || (await persistDesktopModeField(config, "first-party")).ok;
               const warning = [restored ? "" : "first-party settings rollback did not complete",
                 modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");
               return jsonResponse({
                 error: removed.kind === "cleanup_incomplete"
                   ? "Claude Desktop now points at standard mode, but gateway credential cleanup is incomplete; the first-party connection remains active."
+                  : !restored ? "The gateway profile could not be removed and first-party settings rollback did not complete; the mode switch is incomplete."
                   : "The gateway profile could not be removed safely, so first-party mode was not applied.",
                 code: "claude_desktop_gateway_removal_failed",
+                desiredEnabled: true, saved: removed.changed && modeSaved, applied: removed.changed || !restored || !applied.changed,
                 ...(warning ? { warning } : {}),
                 reason: removed.reason ?? removed.kind,
                 ...(removed.residualPaths ? { residualPaths: removed.residualPaths } : {}),
@@ -1149,6 +1155,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
             gatewayRemoved = removed.changed;
           }
           const modeSaved = await persistDesktopModeField(config, "first-party");
+          modeCommitted = modeSaved.ok;
           const { firstPartyAccountRisk } = await import("../../claude/desktop-risk");
           // Picker mode is on by default in first-party; only a committed mode turns it on.
           const picker = modeSaved.ok && pickerPreferenceOn(loadConfig())
@@ -1169,6 +1176,14 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
             picker,
             ...(modeSaved.ok ? {} : { warning: `First-party env was applied, but the mode marker was not saved (${modeSaved.reason}).` }),
           });
+          } catch {
+            const retained = gatewayRemoved || modeCommitted;
+            const restored = retained || !applied.changed || await rollbackDesktopFirstPartySettled(getConfigDir(), rollback).catch(() => false);
+            return jsonResponse({ error: "First-party mode follow-up did not complete", code: "claude_desktop_gateway_removal_failed",
+              desiredEnabled: true, saved: modeCommitted, applied: retained || !restored || !applied.changed,
+              warning: retained ? "First-party settings remain applied."
+                : restored ? "First-party settings were rolled back; Desktop enable intent remains saved." : "first-party settings rollback did not complete" }, 500);
+          }
         });
       }
       const { setIntegrationEnabled, claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
@@ -1238,10 +1253,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
         ); });
         if (result === null) return { response: jsonResponse({ error: "Desktop configuration changed during apply", code: "config_changed", saved: true, applied: false }, 409) };
         if (!result.written) return { response: jsonResponse({ error: result.reason ?? "Claude Desktop apply failed", saved: true, path: result.path }, 500) };
-        const committed = await settleConfigRoot(configRoot(), () => persistCommittedDesktopGateway(config, state.profile, result.fingerprint)).catch(error => {
-          if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+        appliedMode = "gateway"; appliedPath = result.path;
+        const committed = await settleConfigRoot(configRoot(), () => persistCommittedDesktopGateway(config, state.profile, result.fingerprint)).catch(() => {
           return { ok: false, reason: "unavailable" } as const;
         });
+        modeCommitted = committed.ok;
         const modeWarning = committed.ok ? undefined : `Gateway applied, but its mode/profile state was not saved (${committed.reason}).`;
         // The durable marker describes the committed gateway even if old-mode cleanup fails.
         const firstPartyRemoved = await removeDesktopFirstPartySettled(loadConfig);
@@ -1280,11 +1296,12 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       });
     } catch (error) {
       rethrowManagementBodyTooLarge(error);
-      if (error instanceof WindowsSecretAclSettleTimeoutError) return jsonResponse({
-        error: "Config-directory ACL settlement timed out", code: "write_failed",
-        diagnostic: { stage: "ca", cause: "ETIMEDOUT" },
-        ...(committedIntent ? { desiredEnabled: true, saved: savedProfile, applied: false,
-          warning: `Desktop enable intent${savedProfile ? " and profile were" : " was"} saved; Desktop was not applied.${pickerDisabled ? " Picker disable was already attempted." : ""}` } : {}),
+      if (committedIntent || error instanceof WindowsSecretAclSettleTimeoutError) return jsonResponse({
+        error: error instanceof WindowsSecretAclSettleTimeoutError ? "Config-directory ACL settlement timed out" : "Desktop apply did not complete", code: "write_failed",
+        ...(error instanceof WindowsSecretAclSettleTimeoutError ? { diagnostic: { stage: "ca", cause: "ETIMEDOUT" } } : {}),
+        ...(committedIntent ? { desiredEnabled: true, saved: appliedMode ? modeCommitted : savedProfile, applied: appliedMode !== undefined,
+          ...(appliedMode ? { mode: appliedMode, path: appliedPath } : {}),
+          warning: `Desktop enable intent${savedProfile ? " and profile were" : " was"} saved; Desktop ${appliedMode ? "was applied but follow-up did not complete" : "was not applied"}.${pickerDisabled ? " Picker disable was already attempted." : ""}` } : {}),
       }, 500);
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
     }

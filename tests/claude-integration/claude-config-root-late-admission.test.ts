@@ -8,6 +8,7 @@ import { applyDesktop, applyProfile } from "../../src/cli/claude-desktop";
 import * as firstParty from "../../src/claude/desktop-first-party";
 import * as desktop3p from "../../src/claude/desktop-3p";
 import * as configModule from "../../src/config";
+import * as persistedMutation from "../../src/config/persisted-mutation";
 import * as pickerRoutes from "../../src/server/management/claude-desktop-picker-routes";
 import { handleAgentSettingsRoutes } from "../../src/server/management/agent-settings-routes";
 import { handleConfigRoutes } from "../../src/server/management/config-routes";
@@ -171,6 +172,56 @@ function desktopRequest(config: OcxConfig, surface: "api" | "native", mode: "fir
     ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "claude-intercept", "ca.pem"), pickerProxyPort: null } }),
   }, "admin-token", undefined, { trustedLoopback: true });
 }
+
+test.each((["cli", "api", "native"] as const).flatMap(surface =>
+  (["invalid", "throw"] as const).flatMap(failure =>
+    (["restored", "refused", "throw"] as const).map(rollback => ({ surface, failure, rollback }))),
+))("$surface unavailable cleanup authority compensates first-party apply: $failure / $rollback", async ({ surface, failure, rollback: rollbackOutcome }) => {
+  const config = seedFirstParty(surface === "native" ? "first-party" : "gateway");
+  const seeded = writeDesktop3pConfig(10100, [], [], undefined, "static", undefined, undefined, { lockPath: join(root, "lifecycle.sqlite") });
+  expect(seeded.written).toBe(true);
+  config.claudeCode!.desktopProfile = { version: 1, assignments: {}, defaults: { opus: null, fable: null, sonnet: null, haiku: null }, appliedFingerprint: seeded.fingerprint };
+  writeFileSync(join(root, "config.json"), JSON.stringify(config));
+  const file = join(root, "claude", "settings.json"), original = { env: { KEEP: "fixture" } };
+  writeFileSync(file, JSON.stringify(original));
+  await paths.flushConfigDirHardeningAndReaps(root);
+  const apply = firstParty.applyDesktopFirstParty;
+  let committed = false;
+  const reader = persistedMutation.readConfigForAdmittedMutation;
+  const authority = spyOn(persistedMutation, "readConfigForAdmittedMutation").mockImplementation(() => {
+    if (committed && failure === "throw") throw new Error("fixture-secret-must-not-escape");
+    return reader();
+  });
+  const hook = spyOn(firstParty, "applyDesktopFirstParty").mockImplementation((...args) => {
+    const result = apply(...args);
+    expect(result.ok).toBe(true);
+    queueMicrotask(() => { committed = true; if (failure === "invalid") writeFileSync(join(root, "config.json"), "{"); });
+    return result;
+  });
+  const restore = firstParty.rollbackDesktopFirstPartySettled;
+  const rollback = spyOn(firstParty, "rollbackDesktopFirstPartySettled").mockImplementation((dir, action) =>
+    restore(dir, rollbackOutcome === "restored" ? action : () => {
+      if (rollbackOutcome === "throw") throw new Error("fixture-secret-must-not-escape");
+      return false;
+    }));
+  restores.push(() => hook.mockRestore(), () => rollback.mockRestore(), () => authority.mockRestore());
+  const result = surface === "cli"
+    ? await applyDesktop(undefined, { kind: "first-party" }, { findLiveProxyImpl: async () => null, lifecycleLockDeps: { lockPath: join(root, "lifecycle.sqlite") } })
+    : await desktopRequest(config, surface, "first-party").then(async response => ({ status: response!.status, body: await response!.json() }));
+  expect(rollback).toHaveBeenCalledTimes(1);
+  if (rollbackOutcome === "restored") expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(original);
+  else expect(JSON.parse(readFileSync(file, "utf8")).env.HTTPS_PROXY).toBeString();
+  expect(inspectDesktop3pConfigLibrary({ appliedFingerprint: seeded.fingerprint }).kind).toBe("gateway_ours");
+  if ("body" in result) {
+    expect(result.status).toBe(surface === "native" && rollbackOutcome !== "restored" ? 500 : 409);
+    expect(result.body).toMatchObject({ code: surface === "api" ? "claude_desktop_gateway_removal_failed"
+      : rollbackOutcome === "restored" ? "native_integration_refused" : "native_integration_failed" });
+    if (surface === "native") expect(result.body).toMatchObject({ desiredEnabled: true });
+  } else expect(result).toMatchObject({ ok: false, reason: expect.stringContaining("gateway_profile_active:") });
+  if (rollbackOutcome !== "restored") expect(JSON.stringify(result)).toContain("rollback did not complete");
+  expect(JSON.stringify(result)).not.toContain("fixture-secret-must-not-escape");
+});
+
 test.each(["cli", "api", "native"] as const)("%s late first-party marker timeout reports applied settings", async surface => {
   const config = seedFirstParty(surface === "native" ? "first-party" : "gateway");
   await paths.flushConfigDirHardeningAndReaps(root);
@@ -206,6 +257,123 @@ test.each(["cli", "api", "native"] as const)("%s late first-party marker timeout
     // must not touch its lock or any other descendant.
     expect(parent!.descendants.filter(path => path !== join(root, "config.json"))).toEqual([]);
   } finally { parent?.release(); await work; }
+});
+
+test.each((["cli", "api", "native"] as const).flatMap(surface =>
+  (["first-party", "gateway"] as const).map(mode => ({ surface, mode })),
+))("$surface $mode marker exception preserves apply and reaches cleanup", async ({ surface, mode }) => {
+  const config = seedFirstParty(mode === "first-party" && surface === "native" ? "first-party" : "gateway");
+  const state = spyOn(management, "buildClaudeDesktopState").mockResolvedValue({
+    profile: { version: 1, assignments: {}, defaults: { opus: null, fable: null, sonnet: null, haiku: null } }, models: [],
+  } as Awaited<ReturnType<typeof management.buildClaudeDesktopState>>);
+  const models = spyOn(management, "fetchAllModels").mockResolvedValue([]);
+  let armed = false;
+  const barrier = paths.withConfigDirHardeningSettled;
+  const admission = spyOn(paths, "withConfigDirHardeningSettled").mockImplementation(<T>(dir: string, action: () => T) => {
+    if (armed) { armed = false; return Promise.reject(new Error("fixture-secret-must-not-escape")); }
+    return barrier(dir, action);
+  });
+  const write = desktop3p.writeDesktop3pConfig;
+  const writer = spyOn(desktop3p, "writeDesktop3pConfig").mockImplementation((...args) => {
+    args[7] = { lockPath: join(root, "lifecycle.sqlite") };
+    const result = write(...args);
+    if (mode === "gateway" && result.written) queueMicrotask(() => { armed = true; });
+    return result;
+  });
+  const apply = firstParty.applyDesktopFirstParty;
+  const applier = spyOn(firstParty, "applyDesktopFirstParty").mockImplementation((...args) => {
+    const result = apply(...args);
+    if (mode === "first-party" && result.ok) queueMicrotask(() => { armed = true; });
+    return result;
+  });
+  const cleanup = spyOn(firstParty, "removeDesktopFirstPartySettled").mockResolvedValue({ ok: true, changed: false, path: "fixture" });
+  restores.push(() => state.mockRestore(), () => models.mockRestore(), () => admission.mockRestore(), () => writer.mockRestore(), () => applier.mockRestore(), () => cleanup.mockRestore());
+  const result = surface === "cli"
+    ? await applyDesktop(undefined, mode === "gateway" ? { kind: "gateway", mode: "static" } : { kind: "first-party" }, { findLiveProxyImpl: async () => null, lifecycleLockDeps: { lockPath: join(root, "lifecycle.sqlite") } })
+    : await desktopRequest(config, surface, mode).then(async response => ({ status: response!.status, body: await response!.json() }));
+  if ("body" in result) {
+    expect(result.status).toBe(200);
+    if (surface === "api") expect(result.body).toMatchObject({ applied: true, saved: false, mode });
+  } else expect(result.ok).toBe(true);
+  expect(JSON.stringify(result)).toContain(mode === "gateway" ? "mode/profile state was not saved" : "mode marker");
+  expect(JSON.stringify(result)).not.toContain("fixture-secret-must-not-escape");
+  if (mode === "gateway") {
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(inspectDesktop3pConfigLibrary().kind).toBe("gateway_drifted");
+  } else expect(JSON.parse(readFileSync(join(root, "claude", "settings.json"), "utf8")).env.HTTPS_PROXY).toBeString();
+});
+
+test.each(["cli", "api", "native"] as const)("%s general exception after intent reports committed state", async surface => {
+  const config = seedFirstParty("gateway");
+  const state = spyOn(management, "buildClaudeDesktopState").mockRejectedValue(new Error("fixture-secret-must-not-escape"));
+  restores.push(() => state.mockRestore());
+  const result = surface === "cli"
+    ? await applyProfile(undefined, "static", { findLiveProxyImpl: async () => null, lifecycleLockDeps: { lockPath: join(root, "lifecycle.sqlite") } })
+    : surface === "api" ? await desktopRequest(config, surface, "gateway").then(async response => ({ status: response!.status, body: await response!.json() }))
+    : await (async () => {
+      const path = "/api/native-integrations/claude-desktop", ctx = context(config, path, { enabled: false });
+      const hook = spyOn(pickerRoutes, "runPickerTransition").mockRejectedValue(new Error("fixture-secret-must-not-escape"));
+      restores.push(() => hook.mockRestore());
+      const response = await management.handleManagementAPI(ctx.req, ctx.url, config, {}, "admin-token", undefined, { trustedLoopback: true });
+      return { status: response!.status, body: await response!.json() };
+    })();
+  if ("body" in result) {
+    expect(result.status).toBe(500);
+    expect(result.body).toMatchObject({ desiredEnabled: surface !== "native" });
+    if (surface === "api") expect(result.body).toMatchObject({ saved: false, applied: false, code: "write_failed" });
+  } else expect(result).toMatchObject({ ok: false, desiredEnabled: true, saved: false, applied: false });
+  expect(JSON.stringify(result)).not.toContain("fixture-secret-must-not-escape");
+  expect(JSON.parse(readFileSync(join(root, "config.json"), "utf8")).clientIntegrations?.["claude-desktop"] !== false).toBe(surface !== "native");
+});
+
+test.each(["cli", "api", "native"] as const)("%s gateway inspection exception rolls back first-party settings", async surface => {
+  const config = seedFirstParty(surface === "native" ? "first-party" : "gateway");
+  const file = join(root, "claude", "settings.json"), original = { env: { KEEP: "fixture" } };
+  writeFileSync(file, JSON.stringify(original));
+  let committed = false;
+  const apply = firstParty.applyDesktopFirstParty, inspect = desktop3p.inspectDesktop3pConfigLibrary;
+  const applier = spyOn(firstParty, "applyDesktopFirstParty").mockImplementation((...args) => {
+    const result = apply(...args); queueMicrotask(() => { committed = result.ok; }); return result;
+  });
+  const inspector = spyOn(desktop3p, "inspectDesktop3pConfigLibrary").mockImplementation((...args) => {
+    if (committed) throw new Error("fixture-secret-must-not-escape");
+    return inspect(...args);
+  });
+  const rollback = spyOn(firstParty, "rollbackDesktopFirstPartySettled");
+  restores.push(() => applier.mockRestore(), () => inspector.mockRestore(), () => rollback.mockRestore());
+  const result = surface === "cli"
+    ? await applyDesktop(undefined, { kind: "first-party" }, { findLiveProxyImpl: async () => null, lifecycleLockDeps: { lockPath: join(root, "lifecycle.sqlite") } })
+    : await desktopRequest(config, surface, "first-party").then(async response => ({ status: response!.status, body: await response!.json() }));
+  expect(rollback).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(original);
+  expect(JSON.stringify(result)).not.toContain("fixture-secret-must-not-escape");
+  if ("body" in result) { expect(result.status).toBe(500); expect(result.body.desiredEnabled).toBe(true); }
+  else expect(result).toMatchObject({ ok: false, desiredEnabled: true, applied: false });
+});
+
+test.each(["cli", "api", "native"] as const)("%s gateway apply reports first-party cleanup exception as partial", async surface => {
+  const config = seedFirstParty("gateway");
+  const state = spyOn(management, "buildClaudeDesktopState").mockResolvedValue({
+    profile: { version: 1, assignments: {}, defaults: { opus: null, fable: null, sonnet: null, haiku: null } }, models: [],
+  } as Awaited<ReturnType<typeof management.buildClaudeDesktopState>>);
+  const models = spyOn(management, "fetchAllModels").mockResolvedValue([]);
+  const remove = firstParty.removeDesktopFirstPartySettled;
+  const cleanup = spyOn(firstParty, "removeDesktopFirstPartySettled").mockImplementation(() =>
+    remove(() => { throw new Error("fixture-secret-must-not-escape"); }));
+  restores.push(() => state.mockRestore(), () => models.mockRestore(), () => cleanup.mockRestore());
+  const result = surface === "cli"
+    ? await applyDesktop(undefined, { kind: "gateway", mode: "static" }, { findLiveProxyImpl: async () => null, lifecycleLockDeps: { lockPath: join(root, "lifecycle.sqlite") } })
+    : await desktopRequest(config, surface, "gateway").then(async response => ({ status: response!.status, body: await response!.json() }));
+  expect(cleanup).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(result)).not.toContain("fixture-secret-must-not-escape");
+  const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+  expect(saved.claudeCode.desktopMode).toBe("gateway");
+  expect(inspectDesktop3pConfigLibrary({ appliedFingerprint: saved.claudeCode.desktopProfile.appliedFingerprint }).kind).toBe("gateway_ours");
+  if ("body" in result) {
+    expect(result.status).toBe(500);
+    if (surface === "api") expect(result.body).toMatchObject({ applied: true, saved: true, mode: "gateway" });
+    else expect(result.body.message).toContain("Gateway applied");
+  } else expect(result).toMatchObject({ ok: false, reason: "first_party_settings_unreadable", warning: expect.stringContaining("gateway applied") });
 });
 
 test.each(["api", "native"] as const)("%s late gateway fingerprint timeout keeps partial apply and runs cleanup", async surface => {

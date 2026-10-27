@@ -297,7 +297,8 @@ export function removeDesktopFirstParty(
  * Remove Desktop's first-party env once ACL work overlapping the Claude settings home settles.
  * A `CLAUDE_CONFIG_DIR` nested in the opencodex home shares the config-root hardening flight, so
  * the credential-bearing settings rewrite gets the same admission as other intercept secrets.
- * The config is read inside the same synchronous turn. A settle timeout refuses without writing.
+ * The config is read inside the same synchronous turn. Admission, authority-read and removal
+ * exceptions return the existing unreadable refusal so a committed gateway remains explicit.
  */
 export async function removeDesktopFirstPartySettled(
   readConfig: () => Pick<OcxConfig, "claudeCode" | "runtimeRole">,
@@ -306,8 +307,5 @@ export async function removeDesktopFirstPartySettled(
 ): Promise<ReturnType<typeof removeDesktopFirstParty>> {
   const dir = options.claudeConfigDir ?? claudeConfigDir();
   try { return await withConfigDirHardeningSettled(dir, () => remove(readConfig(), options)); }
-  catch (error) {
-    if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
-    return { ok: false, reason: "unreadable", path: join(dir, "settings.json") };
-  }
+  catch { return { ok: false, reason: "unreadable", path: join(dir, "settings.json") }; }
 }
