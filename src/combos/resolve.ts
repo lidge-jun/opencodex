@@ -585,10 +585,6 @@ export async function pickComboTargetWithWait(
       cooldownReprobeTargets.set(key, revision);
     }
   }
-  const eligibleAt = (target: NormalizedComboTarget, at: number): boolean =>
-    !isComboTargetInCooldown(comboId, target, at)
-    && (customEligible?.(target) ?? true);
-  const eligible = (target: NormalizedComboTarget): boolean => eligibleAt(target, now);
   // Milliseconds already slept inside this call. `waitForCooldownMs` is documented as a cap
   // per *selection attempt*, so a deferral wait and the ordinary wait below must share it —
   // otherwise a 3s deferral followed by a 9s ordinary wait spends 12s against a 10s budget.
@@ -645,9 +641,7 @@ export async function pickComboTargetWithWait(
         cooldownReprobeTargets,
         exclude: excluded,
         now: now + normalDelay,
-        eligible: target => !target.lastResort
-          && !isComboTargetInCooldown(comboId, target, now + normalDelay)
-          && (customEligible?.(target) ?? true),
+        eligible: normalOnly,
       });
       if (waited) return waited;
     }
@@ -699,7 +693,7 @@ export async function pickComboTargetWithWait(
     allowCooldownReprobe: false,
     cooldownReprobeTargets,
     now: clock + delay,
-    eligible: targetCandidate => eligibleAt(targetCandidate, clock + delay),
+    eligible: customEligible,
   });
 }
 

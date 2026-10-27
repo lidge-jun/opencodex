@@ -320,19 +320,23 @@ interface JevComboChoice {
   candidate: JevCandidate;
 }
 
-/** Enumerate the current ordinary Combo eligibility set without retaining attempted picks. */
+/** Enumerate this request's eligible targets without reserving another recovery pass. */
 function eligibleJevComboChoices(
   config: OcxConfig,
   comboId: string,
   eligible: (target: NonNullable<ReturnType<typeof getCombo>>["targets"][number]) => boolean,
   now: number,
+  cooldownReprobeTargets?: ComboPick["cooldownReprobeTargets"],
 ): JevComboChoice[] {
   const combo = getCombo(config, comboId);
   if (!combo) return [];
   const excluded = new Set<string>();
   const choices: JevComboChoice[] = [];
+  const reserved = cooldownReprobeTargets ? Object.entries(cooldownReprobeTargets) : undefined;
   while (excluded.size < combo.targets.length) {
-    const pick = pickComboTarget(config, comboId, { exclude: excluded, eligible, now });
+    const pick = pickComboTarget(config, comboId, {
+      exclude: excluded, eligible, now, allowCooldownReprobe: false, cooldownReprobeTargets: reserved,
+    });
     if (!pick) break;
     const key = targetKey(pick.target);
     excluded.add(key);
@@ -675,7 +679,7 @@ export async function executeComboResponses(
   }
   let jevDecision: JevDecision | undefined;
   if (combo.strategy === "jev" && !toolLoopPin) {
-    const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now());
+    const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
     const first = choices[0];
     if (!first) {
       return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, target =>

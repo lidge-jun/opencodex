@@ -128,6 +128,52 @@ function serve(handler: (request: Request) => Response | Promise<Response>) {
 }
 
 describe("combo cooldown-ready fallback", () => {
+  test.each([false, true])("JEV carries an all-cooled reservation through decision and fallback (failed choice=%s)", async failedChoice => {
+    const hits: string[] = [];
+    const first = serve(() => {
+      hits.push("a");
+      return Response.json(responsesSuccess("reserved first target"));
+    });
+    const selected = serve(() => {
+      hits.push("b");
+      return failedChoice
+        ? Response.json({ error: { message: "fixture limit", type: "rate_limit_error" } },
+          { status: 429, headers: { "retry-after": "600" } })
+        : Response.json(responsesSuccess("reserved JEV choice"));
+    });
+    const decisions: Array<{ questions: { route: { criteria: Record<string, unknown> } } }> = [];
+    const config = comboConfig({
+      a: provider("openai-responses", baseUrl(first), "key-a", {
+        liveModels: false, models: ["m1"], modelReasoningEfforts: { m1: [] },
+      }),
+      b: provider("openai-responses", baseUrl(selected), "key-b", {
+        liveModels: false, models: ["m2"], modelReasoningEfforts: { m2: [] },
+      }),
+    }, undefined, { strategy: "jev", cooldownReprobe: { enabled: true } });
+    config.providers.jev = provider("jev-decision", "https://api.typesafe.ai/v1/systemone", "jev-fixture-key", {
+      liveModels: false,
+      fetch: (async (_input, init) => {
+        decisions.push(JSON.parse(String(init?.body)));
+        return Response.json({ answers: { route: { choice: "b/m2:none", confidence: 0.8 } } });
+      }) as typeof fetch,
+    });
+    for (const target of config.combos!.free!.targets) coolComboTarget("free", target, { retryAfter: "600", status: 429 });
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: false }),
+    }), config, logCtx);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain(failedChoice ? "reserved first target" : "reserved JEV choice");
+    expect(decisions).toHaveLength(1);
+    expect(Object.keys(decisions[0]!.questions.route.criteria)).toEqual(["a/m1:none", "b/m2:none"]);
+    expect(logCtx.jevDecision?.gate).toBe("apply");
+    expect(logCtx.jevDecision?.selected).toMatchObject({ provider: "b", model: "m2" });
+    expect(hits).toEqual(failedChoice ? ["b", "a"] : ["b"]);
+    expect(isComboTargetInCooldown("free", config.combos!.free!.targets[0]!)).toBe(!failedChoice);
+    expect(isComboTargetInCooldown("free", config.combos!.free!.targets[1]!)).toBe(failedChoice);
+  });
+
   test("successful reprobe stays exclusive until dispatch succeeds, then releases its target", async () => {
     const started = Promise.withResolvers<void>();
     const finish = Promise.withResolvers<void>();

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import { pickComboTarget, pickComboTargetWithWait, advanceComboAfterFailure, clearComboSelectionState, settleComboReprobeSuccess } from '../../src/combos/resolve';
-import { clearComboTargetCooldowns, coolComboTarget, isComboTargetInCooldown } from '../../src/combos/failover';
+import { clearComboTargetCooldowns, comboTargetCooldownRevision, coolComboTarget, isComboTargetInCooldown } from '../../src/combos/failover';
 import { comboConfigIssues, normalizeComboConfig } from '../../src/combos/types';
 import { routeModel } from '../../src/router';
 import type { OcxConfig, OcxComboConfig } from '../../src/types';
@@ -187,6 +187,62 @@ describe('opt-in cooldown recovery', () => {
     expect(sleeps).toEqual([1000]);
     expect(pick!.target.model).toBe('test-a');
   });
+  for (const policy of [undefined, 'before-last-resort'] as const) {
+    for (const afterWait of ['usable', 'disabled', 'ineligible', 'recooled'] as const) {
+      test(`wait rechecks a reserved target's current eligibility (${policy ?? 'ordinary'}, ${afterWait})`, async () => {
+        const id = `reprobe-wait-${++sequence}`;
+        const waitedTargets = ['a', 'b', 'c', ...(policy ? ['d'] : [])].map(provider => ({
+          provider, model: `test-${provider}`, lastResort: provider === 'd',
+        }));
+        const config = {
+          providers: Object.fromEntries(waitedTargets.map(target => [target.provider, {
+            baseUrl: 'https://example.invalid', apiKey: 'test',
+          }])),
+          combos: { [id]: { strategy: 'failover', targets: waitedTargets,
+            cooldownReprobe: { enabled: true }, ...(policy ? { cooldownWaitPolicy: policy } : {}) } },
+        } as OcxConfig;
+        for (const target of waitedTargets) coolComboTarget(id, target, { now, retryAfter: '36000', status: 429 });
+        const first = (await pickComboTargetWithWait(config, id, { now, waitForCooldownMs: 1000 }))!;
+        expect(first.target.provider).toBe('a');
+        const reservedB = first.cooldownReprobeTargets!['b/test-b'];
+        expect(reservedB).toBe(comboTargetCooldownRevision(id, waitedTargets[1]!, now));
+
+        // While A is in flight, B is disabled and C gets a newer, shorter cooldown.
+        // C's replacement invalidates its reservation and makes a real wait necessary.
+        config.providers.b!.disabled = true;
+        coolComboTarget(id, waitedTargets[2]!, { now, retryAfter: '1', status: 429 });
+        expect(advanceComboAfterFailure(config, first, {
+          now, status: 429, retryAfter: '36000', cooldownScope: 'target',
+        })).toBeNull();
+        let bEligible = true;
+        const sleeps: number[] = [];
+        const pick = await pickComboTargetWithWait(config, id, {
+          now, waitForCooldownMs: 1000, allowCooldownReprobe: false,
+          exclude: first.attempted, cooldownReprobeTargets: Object.entries(first.cooldownReprobeTargets!),
+          eligible: target => target.provider !== 'b' || bEligible,
+          sleep: async delay => {
+            sleeps.push(delay);
+            expect(comboTargetCooldownRevision(id, waitedTargets[1]!, now)).toBe(reservedB);
+            config.providers.b!.disabled = afterWait === 'disabled';
+            bEligible = afterWait !== 'ineligible';
+            if (afterWait === 'recooled') {
+              coolComboTarget(id, waitedTargets[1]!, { now, retryAfter: '36000', status: 429 });
+            }
+          },
+        });
+        expect(sleeps).toEqual([1000]);
+        expect(pick!.target.provider).toBe(afterWait === 'usable' ? 'b' : 'c');
+        expect(isComboTargetInCooldown(id, waitedTargets[1]!, now + 1000)).toBe(true);
+        if (afterWait === 'usable') {
+          expect(pick!.cooldownReprobeTargets!['b/test-b']).toBe(reservedB);
+          expect(comboTargetCooldownRevision(id, waitedTargets[1]!, now + 1000)).toBe(reservedB);
+          settleComboReprobeSuccess(pick!);
+          expect(isComboTargetInCooldown(id, waitedTargets[1]!, now + 1000)).toBe(false);
+          expect(isComboTargetInCooldown(id, waitedTargets[0]!, now + 1000)).toBe(true);
+        }
+      });
+    }
+  }
   test('wait path reserves synchronously across concurrent callers', async () => {
     const { id, config } = setup();
     const first = await pickComboTargetWithWait(config, id, { now, waitForCooldownMs: 0 });
