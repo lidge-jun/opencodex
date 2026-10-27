@@ -157,3 +157,7 @@ rechecks it under the config lock before saving. Noninteractive allow requires `
 no prompt is issued during background start/sync. The
 [configuration contract](codex-provider-routing.md) owns scope,
 eligibility, drift refusal and recovery. No endpoint or credential is printed by this command.
+
+`ocx system codex-cli-update apply` durably admits and records the apply result under the protected config root; `--request-id` provides a retry key, and reusing it with a different plan conflicts. `ocx system codex-cli-update status <job-id>` reads the same path-free terminal DTO without a GUI token. A record left queued/running after owner restart is reported ambiguous with unknown owner state. Apply remains limited to the supported POSIX npm-global installation.
+
+The capability declarations document `ocx system codex-cli-update plan`, `apply` and `status` as the local counterparts of `GET /api/codex/cli-update/plan`, `POST /api/codex/cli-update/apply` and `GET /api/codex/cli-update/jobs/{jobId}`. They share the plan builder and durable job owner with the dashboard rather than sending HTTP management requests, so their driven-route lists remain empty. CLI apply requires `--yes`; HTTP apply separately requires explicit confirmation from a trusted loopback GUI session. The GUI parity test resolves these registered capabilities, checks their mutation classifications and documented resource counterparts, and includes all three resources in endpoint coverage.

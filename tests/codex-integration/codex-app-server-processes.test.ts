@@ -26,6 +26,7 @@ import {
   resetCodexAppServerCatalogStateCache,
   restartCodexAppServers,
   scanCodexSessionProcesses,
+  scanCodexSessionProcessesAsync,
   STALE_CODEX_APP_SERVER_HINT,
   warnIfStaleCodexAppServersAfterStartupWrite,
   WINDOWS_CODEX_BASENAME_CANDIDATE_RE,
@@ -841,6 +842,41 @@ describe("Codex session process matching (#2811)", () => {
     if (scan.kind === "observed") {
       expect(scan.processes.map(process => process.pid)).toEqual([12, 13]);
     }
+  });
+
+  test("scanCodexSessionProcessesAsync prefers the async seam and keeps the fail-closed contract", async () => {
+    // The request-path scan must wait on an injected async source rather than a
+    // synchronous enumeration, so a stalled process-table read cannot park the loop.
+    const unavailable = await scanCodexSessionProcessesAsync({
+      platform: "linux",
+      listSnapshots: () => [{ pid: 12, commandLine: "codex" }],
+      listSnapshotsAsync: async () => { throw new Error("procfs unreadable"); },
+    });
+    expect(unavailable.kind).toBe("unavailable");
+    const scan = await scanCodexSessionProcessesAsync({
+      platform: "linux",
+      listSnapshots: () => [{ pid: 99, commandLine: "codex" }],
+      listSnapshotsAsync: async () => [
+        { pid: 11, commandLine: "vim notes.txt" },
+        { pid: 12, commandLine: "codex" },
+        { pid: 12, commandLine: "codex" },
+        { pid: 13, commandLine: "codex exec --json" },
+      ],
+    });
+    expect(scan.kind).toBe("observed");
+    if (scan.kind === "observed") {
+      // The async source answered (pid 99 was the sync-only decoy) and dedupe holds.
+      expect(scan.processes.map(process => process.pid)).toEqual([12, 13]);
+    }
+  });
+
+  test("scanCodexSessionProcessesAsync falls back to the injected sync seam", async () => {
+    const scan = await scanCodexSessionProcessesAsync({
+      platform: "linux",
+      listSnapshots: () => [{ pid: 21, commandLine: "codex app-server" }],
+    });
+    expect(scan.kind).toBe("observed");
+    if (scan.kind === "observed") expect(scan.processes.map(process => process.pid)).toEqual([21]);
   });
 });
 

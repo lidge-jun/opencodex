@@ -1968,7 +1968,7 @@ ocx config set providers.anthropic.accountAutoPause.consecutiveFailures 2
 
 `consecutiveFailures` is an integer from 1 to 100; omitting it uses 2. Only exact,
 account-scoped HTTP 401/403 refusals qualify: an organization forbidding OAuth, an inactive
-or expired subscription, an account denied API/Claude Code access, or a downgrade to a free
+or expired subscription, an account denied API/Claude Code access or disabled by Google for a Terms of Service violation, or a downgrade to a free
 plan with no credits. A model permission error, expired access token, quota window, 429,
 5xx, malformed response or network failure never pauses an account.
 

@@ -680,6 +680,10 @@ Models with a long context window (1M, or at least the 829,800-token default com
 Claude models on an Anthropic route need a genuine 1M) get an extra `…[1m]` picker row: selecting it makes
 Claude Code account a full 1M context for that model (auto-compaction stays on) — the proxy strips
 the marker before routing.
+Fast-eligible native OpenAI models also get a `…--fast[1m]` row labelled `· Fast · 1M`
+when they meet the same long-context rule. This combines the native Fast tier with Claude
+Code's long-context accounting; it does not raise the upstream input limit. The row keeps
+the native model's input ceiling and the existing auto-compaction policy.
 Selecting one persists it to Claude Code's `settings.json` `model` field; inbound requests resolve
 the alias back to the routed model. On older Claude Code versions the picker stays native — set
 slots via

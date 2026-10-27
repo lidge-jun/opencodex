@@ -1,4 +1,10 @@
 {
+  "codex-cli-update-artifacts.test.ts": "codex-integration",
+  "codex-cli-update-apply.test.ts": "codex-integration",
+  "codex-cli-update-paths.test.ts": "codex-integration",
+  "codex-cli-update-admission.test.ts": "codex-integration",
+  "codex-cli-update-recovery.test.ts": "codex-integration",
+  "codex-cli-update-worker.test.ts": "codex-integration",
   "native-source-priority.test.ts": "codex-integration",
   "server-native-catalog-priority.test.ts": "server",
   "codex-catalog-heal-reanchor.test.ts": "codex-integration",
