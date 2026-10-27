@@ -8,7 +8,8 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 export const POWERSHELL_ENCODED_MAX = 8_000;
 
 export function powershellArgv(script: string): string[] {
-  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  // Module preparation otherwise writes a CLIXML progress record to stderr, which Home would see.
+  const encoded = Buffer.from("$ProgressPreference='SilentlyContinue'\n" + script, "utf16le").toString("base64");
   if (encoded.length > POWERSHELL_ENCODED_MAX) throw new Error("Remote PowerShell command exceeds the cmd.exe-compatible command-line budget");
   return ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded];
 }
@@ -74,15 +75,15 @@ export const OCX_JOB_SOURCE = [
 const OCX_JOB_PACKED = deflateRawSync(Buffer.from(OCX_JOB_SOURCE, "utf8"), { level: 9 }).toString("base64");
 
 const NATIVE_PROCESS = String.raw`$ErrorActionPreference='Stop'
-function Fail{[Console]::Error.WriteLine('Refusing to run ocx.exe outside a kill-on-close job.');exit 126}
-try{Add-Type ([IO.StreamReader]::new([IO.Compression.DeflateStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String('` + OCX_JOB_PACKED + String.raw`')),0)).ReadToEnd())}catch{Fail}
+function Fail{try{[Console]::Error.WriteLine('Refusing to run ocx.exe outside a kill-on-close job.')}catch{$null=$_};exit 126}
+try{Add-Type ([IO.StreamReader]::new([IO.Compression.DeflateStream]::new([IO.MemoryStream]::new([Convert]::FromBase64String('` + OCX_JOB_PACKED + String.raw`')),[IO.Compression.CompressionMode]::Decompress)).ReadToEnd())}catch{Fail}
 function Quote-Native([string]$v){'"'+[regex]::Replace([regex]::Replace($v,'(\\*)"','$1$1\"'),'(\\+)$','$1$1')+'"'}
 function Invoke-Native([string]$e,[string[]]$a){try{$c=[OcxJob]::Run($e,((@($e)+$a|%{Quote-Native $_}) -join ' '))}catch{Fail};exit $c}
 `;
 
 /** The packed helper a script carries, inflated; for tests that check the transport. */
 export function windowsScriptHelperSource(script: string): string | undefined {
-  const match = /FromBase64String\('([A-Za-z0-9+/=]+)'\)\),0\)\)\.ReadToEnd\(\)/.exec(script);
+  const match = /FromBase64String\('([A-Za-z0-9+/=]+)'\)\),\[IO\.Compression\.CompressionMode\]::Decompress\)\)\.ReadToEnd\(\)/.exec(script);
   if (!match) return undefined;
   return inflateRawSync(Buffer.from(match[1]!, "base64")).toString("utf8");
 }

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE } from "../../src/link/remote-windows";
+import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
 import { quoteRemote, REMOTE_OCX_SCRIPT, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { spawnTestChild } from "../helpers/spawn-test-child";
@@ -213,13 +213,13 @@ test.skipIf(process.platform !== "win32")("a Windows ocx that cannot be containe
   const marker = join(home, "ran");
   const script = join(home, "mark.ts");
   writeFileSync(script, "require('node:fs').writeFileSync(process.argv[2], 'ran');");
-  // Constrained Language Mode blocks Add-Type, so the Job helper cannot exist.
-  const env = { ...process.env, __PSLockdownPolicy: "4" };
-  const mode = Bun.spawnSync(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$ExecutionContext.SessionState.LanguageMode"], { env, stdout: "pipe", stderr: "pipe" });
-  expect(mode.stdout.toString().trim()).toBe("ConstrainedLanguage");
-  const child = Bun.spawn(windowsNativeArgv(process.execPath, [script, marker]), { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  // Constrained Language Mode blocks Add-Type, so the Job helper cannot exist; the session enters
+  // it before the unchanged script runs.
+  const native = windowsNativeArgv(process.execPath, [script, marker]);
+  const constrained = powershellArgv("$ExecutionContext.SessionState.LanguageMode='ConstrainedLanguage'\n" + Buffer.from(native.at(-1)!, "base64").toString("utf16le"));
+  const child = Bun.spawn(constrained, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const code = await child.exited;
-  expect(code).not.toBe(0);
+  expect(code).toBe(WINDOWS_CONTAINMENT_EXIT);
   expect(existsSync(marker)).toBe(false);
 }, SPAWN_BUDGET_MS);
 
