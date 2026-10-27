@@ -228,9 +228,9 @@ key ids recorded by `links.json`, never the environment token. Context relays re
 final deletion closes the listener, and `src/server/index/optional-listeners.ts` runs supervisor teardown before closing this listener and the Claude intercept pair.
 ### Claude intercept pair
 
-At the end of the startup transaction, `startServer` also starts the optional Claude intercept pair
-through `src/server/index/claude-intercept-lifecycle.ts` (fire-and-forget start, `ownsListener` for
-the ingress decision, `stop` joined into the listener shutdown) from `src/claude/intercept/runtime.ts`: a loopback HTTP CONNECT proxy (`src/claude/intercept/connect-proxy.ts`)
+Intercept CA startup and token creation in `src/claude/intercept/runtime.ts` follow the [config-directory hardening barrier](config.md#opencodex-home-and-live-process-state). Each synchronous writer requires settled overlapping work, including retained ancestor children, within one ACL deadline; `ETIMEDOUT` refuses startup without entering the CA lease-contention retry. Persistent picker preparation, cleanup leases, leaf/profile publication and model snapshots re-enter independently after OS trust or discovery awaits.
+
+At the end of the startup transaction, `startServer` starts the optional Claude intercept pair through `src/server/index/claude-intercept-lifecycle.ts` (fire-and-forget start, `ownsListener` for ingress, `stop` joined into listener shutdown) from `src/claude/intercept/runtime.ts`: a loopback HTTP CONNECT proxy (`src/claude/intercept/connect-proxy.ts`)
 and a loopback TLS listener (`src/claude/intercept/listener.ts`) that presents a leaf for
 `api.anthropic.com` signed by a per-install authority (`src/claude/intercept/local-ca.ts`, persisted
 under `<OPENCODEX_HOME>/claude-intercept/` with a 0600 key; never installed into an OS trust store). CA reads and pair publication share a directory-bound SQLite lease; persisted certificates must match their private key and verify as a self-signed CA. Directory, certificate, key and lock paths reject symlinks, nonregular files and foreign ownership; pinned descriptors and exclusive unpredictable temporary files protect reads and publication. Windows verifies ownership and permits only the current user, SYSTEM and built-in Administrators in the private-file ACL, including before writing temporary key bytes; inspection or protection failure rejects the operation. Startup retries only lease contention with bounded asynchronous backoff before binding either listener.
