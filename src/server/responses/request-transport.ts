@@ -1,4 +1,8 @@
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { appendLoadedToolDefinitions, appendOnlyToolLoadingMatches } from "../../claude/inbound-tool-loading";
+import { isRec } from "../../claude/inbound-records";
+import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-tools";
+import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
@@ -58,7 +62,7 @@ import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-
 import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
 import { expandInferenceOAuthSendBudget } from "../inference/context";
 import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label";
-import { resolveProviderTransport } from "../../providers/xai-transport";
+import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { captureRouteStaticPolicy } from "../../router";
 import { CopilotAutoHttpError, resolveCopilotAuto } from "../../providers/github-copilot-auto";
 import {
@@ -97,6 +101,7 @@ import {
   noteProviderAttemptSend,
   recordKeyAttemptFailure,
   recordKeyAttemptUsage,
+  rebindCacheDiagnosticBody,
 } from "../request-log";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
@@ -563,6 +568,29 @@ export async function prepareResponsesTransport(
   const resolveSelectionAdapter = (provider: OcxProviderConfig, retention = config.cacheRetention): ProviderAdapter => {
     if (copilotAutoAdapter) provider = { ...provider, adapter: copilotAutoAdapter };
     const resolved = resolveAdapter(provider, retention, route.providerName);
+    // Capture this physical adapter's destination. A retry/rebind gets a fresh decision, and
+    // each build projects a copy so unselected fallbacks retain the original tool catalog.
+    const discovery = options.anthropicToolLoadingSource;
+    const appendOnly = inboundWire === "anthropic" && discovery && provider.adapter === "openai-responses"
+      && !options.comboAttempt && !route.combo && route.routeKind !== "combo" && route.routeKind !== "policy"
+      && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility
+      && appendOnlyToolLoadingMatches(config.claudeCode?.appendOnlyToolLoadingModels,
+        `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`);
+    if (appendOnly) {
+      const buildWithOriginalCatalog = resolved.buildRequest.bind(resolved);
+      resolved.buildRequest = (requestParsed, incoming) => {
+        // Gate the actual URL, including responsesPath and forward-mode construction.
+        const destination = buildResponsesTransport(provider, incoming).url;
+        if (isOpenCodeGoResponsesUrl(destination) || isXaiResponsesDestination({ baseUrl: destination })) {
+          return buildWithOriginalCatalog(requestParsed, incoming);
+        }
+        const original = requestParsed._rawBody;
+        const projected = isRec(original) ? appendLoadedToolDefinitions(original, discovery) : original;
+        if (projected === original) return buildWithOriginalCatalog(requestParsed, incoming);
+        rebindCacheDiagnosticBody(projected, logCtx.cacheDiagnosticDraft);
+        return buildWithOriginalCatalog({ ...requestParsed, _rawBody: projected }, incoming);
+      };
+    }
     if (route.provider.authMode === "forward") return resolved;
     const binding: DispatchBinding | undefined = route.provider.authMode === "oauth"
       ? oauthSelection && servingOAuthSnapshot

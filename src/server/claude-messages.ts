@@ -1138,6 +1138,10 @@ async function handleClaudeMessagesWithBudget(
     // Out of body like the replay above: the core hands these to an Anthropic destination only.
     anthropicServerTools: declaredAnthropicServerTools(anthropicBody),
     anthropicServerReplay: replayedAnthropicServerBlocks(anthropicBody),
+    // Preserve the original catalog through late fallback; only the physical adapter projects it.
+    anthropicToolLoadingSource: cacheKeySource === "metadata" && isRec(anthropicBody)
+      && Array.isArray(cc?.appendOnlyToolLoadingModels) && cc.appendOnlyToolLoadingModels.length > 0
+      ? { tools: anthropicBody.tools, messages: anthropicBody.messages, tool_choice: anthropicBody.tool_choice } : undefined,
     claudeGoAffinity: { sessionLane: claudeGoSessionLane },
     claudeNativeSessionId,
     stripClaudeMainAuthForNoncanonicalForward: true,

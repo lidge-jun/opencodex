@@ -119,6 +119,7 @@ describe("Codex CLI selection inspection boundary", () => {
   // chain, end to end against a real npm install -g of a synthetic fixture
   // package into an owned temporary prefix. Only the registry answer is stubbed
   // (a fake npm first on the bound PATH); the install itself is real npm's work.
+  // Packing, installing, and inspecting this fixture can exceed Bun's default 5s.
   test.skipIf(process.platform === "win32")("plan identity binds the bytes a real npm-global install placed", () => {
     const node = Bun.which("node");
     const npm = Bun.which("npm");
@@ -343,7 +344,7 @@ describe("Codex CLI selection inspection boundary", () => {
     const removedPlan = JSON.parse(removed.stdout);
     expect(removedPlan.applicable).toBe(false);
     expect(removedPlan.refusal).toBe("install_content_unverified");
-  });
+  }, 60_000);
 });
 
 function inspectionContext(transportEnv?: unknown, extra: Record<string, unknown> = {}) {

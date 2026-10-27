@@ -1068,3 +1068,10 @@ enforced. Explicit provider Retry-After values may therefore be retried early on
 when the operator enables this option. Preview/list operations never clear cooldowns.
 The interval is tracked per combo in memory and resets on proxy restart or combo
 selection-state reset. Existing cooldown-wait behavior is unchanged when disabled.
+
+A recovery pass belongs only to the request that reserved it; other requests still
+observe the saved cooldowns. That reservation follows the request through cooldown
+waits and JEV selection. A target that becomes usable again during a wait can still
+be retried if its cooldown has not changed. A newer cooldown cancels that target's
+reservation. Success clears only the unchanged cooldown of the target that answered;
+untried targets and newer failures keep their cooldowns.

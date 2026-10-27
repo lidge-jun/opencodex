@@ -2,6 +2,14 @@
 
 Created: 2026-10-16 | Updated: 2026-10-18 | Version: 1.2 (Vertex per-key project)
 
+## Streaming input accounting
+
+Google-family SSE parsing counts new decoded text incrementally and waits for a newly received
+newline before splitting an incomplete line. Fragmentation therefore does not cause repeated
+UTF-8 encoding or rescanning of the growing prefix. The existing per-frame limit, terminal
+requirements and heartbeat batching remain in force. Replacement strings, including decoder
+EOF output, retain the [shared byte-accounting contract](../transports/byte-accounting.md#stream-buffer-accounting).
+
 ## Vertex API-key endpoint selection
 
 `src/adapters/google-vertex-endpoint.ts` selects the Vertex endpoint once per request and the

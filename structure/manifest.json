@@ -439,6 +439,13 @@
       ]
     },
     {
+      "path": "data-planes/claude-tool-loading.md",
+      "tier": 3,
+      "title": "Append-only Claude Tool Loading",
+      "scope": "Physical-adapter tool-loading projection, preserved catalogs, fallback exclusions and opt-in prerequisites.",
+      "documents": ["src/claude/", "src/server/responses/"]
+    },
+    {
       "path": "data-planes/chat-reasoning-details.md",
       "tier": 3,
       "title": "Anthropic Thinking Signatures on the Chat Wire",
