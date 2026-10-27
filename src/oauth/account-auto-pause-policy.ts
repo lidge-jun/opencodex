@@ -17,6 +17,13 @@ export function classifyPermanentAccountRefusal(status: number, payload: unknown
   if (/^(?:(?:Your |The )?(?:Claude |ChatGPT )?subscription is inactive|Your account does not have an active subscription)[.!]?$/i.test(text)) return "subscription_inactive";
   if (/^Your (?:account|plan) (?:has been |was )?downgraded to (?:the )?free(?: plan)? (?:and |with )?(?:has )?(?:no|without) (?:remaining )?credits[.!]?$/i.test(text)) return "plan_downgraded";
   if (type === "permission_error" && /^Your account (?:does not have access to Claude Code|is (?:disabled|suspended)|is not permitted to use (?:the |this )?API)[.!]?$/i.test(text)) return "account_permission_denied";
+  // Cloud Code Assist (Antigravity / Gemini CLI OAuth) account ban, in the envelope Google's
+  // backend returned in google-gemini/gemini-cli#19501 (#7803). Only that whole sentence on a
+  // consistent 403 / numeric 403 / PERMISSION_DENIED envelope qualifies. Project-scoped
+  // CONSUMER_SUSPENDED, SERVICE_DISABLED and model-permission errors name a project or a model,
+  // not the sending identity, and stay excluded.
+  if (status === 403 && code === 403 && googleStatus === "PERMISSION_DENIED"
+    && /^This service has been disabled in this account for violation of (?:the )?Terms of Service[.!]?$/i.test(text.replace(/\s+/g, " "))) return "account_permission_denied";
 }
 
 export async function permanentAccountRefusal(response: Response, signal?: AbortSignal): Promise<AccountPauseReason | undefined> {
