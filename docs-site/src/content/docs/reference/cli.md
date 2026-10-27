@@ -164,6 +164,11 @@ Registry queries use isolated temporary npm configuration, cache and logs with b
 No software is installed and no process is signalled. Windows returns `windows_inspection_deferred`.
 See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
 
+For a reviewed POSIX non-shim npm-global plan, `ocx system codex-cli-update apply --plan-id <id> --yes`
+performs the exact update and returns a durable job. `ocx system codex-cli-update status <job-id> --json`
+reads its result; use a stable `--request-id` for a lost-response retry. See
+[confirmation and job states](/reference/cli/agents/#confirmed-posix-codex-cli-apply-and-job-status).
+
 For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 
 List or status is the default where unambiguous. Use `--json` only on leaves that support it, and

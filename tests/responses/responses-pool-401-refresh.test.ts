@@ -91,6 +91,8 @@ function config(options: { secondAccount?: boolean } = {}): OcxConfig {
         baseUrl: "https://chatgpt.com/backend-api/codex",
         authMode: "forward",
         codexAccountMode: "pool",
+        // This fixture intercepts HTTP fetch; no test may dial a live WebSocket.
+        upstreamWebsocket: false,
       },
     },
     codexAccounts: options.secondAccount
@@ -283,6 +285,7 @@ function encryptedRecoveryComboConfig(options: {
       adapter: "openai-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       authMode: "forward",
+      upstreamWebsocket: false,
     };
   }
   if (options.extraSpare) {

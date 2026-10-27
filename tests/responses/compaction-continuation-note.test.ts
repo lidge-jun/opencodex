@@ -8,6 +8,7 @@
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { CHECKPOINT_CONTINUATION_NOTE, SUMMARY_PREFIX, appendCheckpointContinuationNote, encodeCompactionSummary } from "../../src/responses/compaction";
+import { HISTORICAL_REQUEST_START, HISTORICAL_REQUEST_END } from "../../src/responses/compaction-history-framing";
 import { parseRequest } from "../../src/responses/parser";
 import { encodeRetainedCompaction } from "../../src/responses/retained-compaction";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
@@ -135,11 +136,11 @@ describe("retained checkpoint continuation merge contract", () => {
       const parsed = parseRequest(raw);
       expect(parsed.context.systemPrompt?.at(-1)).toBe(EXPECTED_NOTE);
       expect(parsed.context.messages.map(message => message.content)).toEqual([
-        oldRequest.content, `${SUMMARY_PREFIX}\n\n${summary}`, ...reasoning, later.content,
+        `${HISTORICAL_REQUEST_START}\n${oldRequest.content}\n${HISTORICAL_REQUEST_END}`, `${SUMMARY_PREFIX}\n\n${summary}`, ...reasoning, later.content,
       ]);
       const body = forwardedBody(raw);
       expect(body.instructions).toBe(`Be brief.\n\n${EXPECTED_NOTE}`);
-      expect(body.input).toEqual([oldRequest,
+      expect(body.input).toEqual([{ ...oldRequest, content: `${HISTORICAL_REQUEST_START}\n${oldRequest.content}\n${HISTORICAL_REQUEST_END}` },
         { type: "message", role: "user", content: [{ type: "input_text", text: `${SUMMARY_PREFIX}\n\n${summary}` }] },
         ...reasoning.map(text => ({ type: "message", role: "user", content: [{ type: "input_text", text }] })), later,
       ]);

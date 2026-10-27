@@ -207,6 +207,14 @@ applicable decision, so operators must keep secrets and private paths out of it.
 An absent note leaves the prior decision payload shape intact.
 
 `src/server/responses/core-combo.ts` computes current eligibility and asks JEV once for the initial pick.
+Candidate enumeration carries the initial pick's request-scoped cooldown reservation and cannot
+reserve another pass. After the decision returns, reserved requests recheck current eligibility and
+cooldown revisions before dispatch. A stale choice fails open to the first remaining eligible target
+and its supported effort, recording that actual fallback. No remaining choice returns unavailable
+without sending; the completed decision keeps its reported usage and zero model attempts. A previously
+applicable choice is marked invalid; existing failure gates remain. The selected pick retains the reservation through ordinary failover and
+conditional success settlement under the [Combo cooldown contract](../runtime.md#scoped-provider-quota-for-combo-selection).
+`tests/server/server-combo-cooldown-fallback.test.ts` covers an all-cooled JEV choice, its fallback and concurrent reservation invalidation.
 The validated effort shapes the first Responses child or the separate opt-in native Chat body in
 `src/server/responses/core-combo-native.ts`; both remove caller `service_tier` and conflicting effort controls.
 Explicit null strips effort using a non-force path, even when the Combo has a forced default; the ordinary

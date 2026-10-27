@@ -1,4 +1,5 @@
 {
+  "compaction-portable-history.test.ts": "responses",
   "turn-membership.test.ts": "responses",
   "turn-membership-ingress.test.ts": "responses",
   "responses-anthropic-compaction-prefix.test.ts": "responses",
