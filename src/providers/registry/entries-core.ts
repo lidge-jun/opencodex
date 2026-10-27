@@ -157,7 +157,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   {
     id: "m365-copilot", label: "Microsoft 365 Copilot", adapter: "m365-copilot", baseUrl: M365_COPILOT_BASE_URL,
     authKind: "oauth", featured: false, dashboardUrl: "https://copilot.cloud.microsoft/", liveModels: true,
-    models: [], defaultModel: "Magic",
+    models: [], defaultModel: "Magic", inputModalities: ["text", "image"],
     modelDiscovery: { url: M365_COPILOT_WEB_URL, maxResponseBytes: 2 * 1024 * 1024, maxModels: 256 },
     note: "Experimental unofficial Microsoft 365 Copilot ChatHub connector. Work/school accounts only. Sign-in uses Microsoft's M365 Chat Client in an isolated Firefox, Chrome or Edge window and captures the Copilot web session locally. Models are discovered from your account's live chat picker. Tools are prompt-emulated and executed by your client. No Copilot Studio agents are created.",
   },

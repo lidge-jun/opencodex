@@ -10,8 +10,9 @@ import { estimateTokens } from "../lib/token-estimate";
 import { formatMessages, formatToolResponse, parseToolCalls, isProseDocument, fabricatedToolResponseAt, truncateAtFabricatedToolResponse, type Message, type ToolDef, type ToolChoice } from "./m365-copilot/tools";
 import { defaultFramingForModel } from "./m365-copilot/fenced";
 import { createM365Conversation, runM365CopilotTurn, M365CopilotTurnError, type M365Conversation, type M365TurnOptions } from "./m365-copilot/transport";
+import { m365ImageUrls, uploadM365Images } from "./m365-copilot/images";
 
-interface ConversationState { conversation: M365Conversation; sent: number; prefix: string; accessed: number; tail: Promise<void>; pendingNote?: string }
+interface ConversationState { conversation: M365Conversation; sent: number; prefix: string; sentImages: number; imagePrefix: string; accessed: number; tail: Promise<void>; pendingNote?: string }
 const conversations = new Map<string, ConversationState>();
 function digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 export function clearM365CopilotConversations(): void { conversations.clear(); }
@@ -42,7 +43,7 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
       let state = conversations.get(key);
       if (!state) {
         if (conversations.size >= 64) conversations.delete(conversations.keys().next().value!);
-        state = { conversation: createM365Conversation(), sent: 0, prefix: "", accessed: Date.now(), tail: Promise.resolve() };
+        state = { conversation: createM365Conversation(), sent: 0, prefix: "", sentImages: 0, imagePrefix: "", accessed: Date.now(), tail: Promise.resolve() };
         conversations.set(key, state);
       }
       const previous = state.tail;
@@ -52,8 +53,10 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
       let heartbeat: ReturnType<typeof setInterval> | undefined;
       try {
         incoming.abortSignal?.throwIfAborted();
-        if (messages.length <= state.sent || state.prefix !== digest(JSON.stringify(messages.slice(0, state.sent)))) {
-          state.conversation = createM365Conversation(); state.sent = 0; state.pendingNote = undefined;
+        const imageUrls = m365ImageUrls(parsed.context.messages);
+        if (messages.length <= state.sent || state.prefix !== digest(JSON.stringify(messages.slice(0, state.sent)))
+          || state.sentImages > imageUrls.length || state.sentImages > 0 && state.imagePrefix !== digest(JSON.stringify(imageUrls.slice(0, state.sentImages)))) {
+          state.conversation = createM365Conversation(); state.sent = 0; state.sentImages = 0; state.imagePrefix = ""; state.pendingNote = undefined;
         }
         const fresh = messages.slice(state.sent).filter(message => message.role !== "assistant");
         let text = state.sent === 0 ? formatMessages(messages, tools, toolChoice, undefined, defaultFramingForModel(parsed.modelId))
@@ -64,7 +67,8 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
         let emittedToolCalls = 0;
         let thinkingText = "";
         heartbeat = setInterval(() => emit({ type: "heartbeat" }), 5_000);
-        const answer = await (deps.turn ?? runM365CopilotTurn)({ token, model: parsed.modelId, text, conversation: state.conversation, signal: incoming.abortSignal, budget: incoming.translatorBudget,
+        const images = await uploadM365Images(imageUrls.slice(state.sentImages), token, parsed.modelId, state.conversation.conversationId, provider, incoming.abortSignal, incoming.translatorBudget, incoming.beforePhysicalSend);
+        const answer = await (deps.turn ?? runM365CopilotTurn)({ token, model: parsed.modelId, text, images, conversation: state.conversation, signal: incoming.abortSignal, budget: incoming.translatorBudget,
           onText: delta => { if (!toolMode) emit({ type: "text_delta", text: delta }); },
           onThinking: thinking => { thinkingText += thinking; emit({ type: "thinking_delta", thinking }); },
           beforeSend: () => {
@@ -75,6 +79,7 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
           },
         });
         state.sent = messages.length; state.prefix = digest(JSON.stringify(messages)); state.accessed = Date.now();
+        state.sentImages = imageUrls.length; state.imagePrefix = digest(JSON.stringify(imageUrls));
         if (toolMode) {
           if (fabricatedToolResponseAt(answer, tools) >= 0) state.pendingNote = "Only tool calls returned to the client were executed. Any tool output you wrote yourself did not happen; the following is the real client output.";
           const cleaned = truncateAtFabricatedToolResponse(answer, tools);
@@ -96,7 +101,8 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
           }
         }
         // ChatHub reports no token counts; estimate from the full prompt the model sees and its reply.
-        const inputTokens = estimateTokens(JSON.stringify([messages, tools ?? []]), parsed.modelId);
+        // shortcut: image tokens use a fixed allowance, replace when Microsoft exposes image usage.
+        const inputTokens = estimateTokens(JSON.stringify([messages, tools ?? []], (key, value) => key === "image_url" ? "[image]" : value), parsed.modelId) + imageUrls.length * 256;
         const outputTokens = estimateTokens(answer + thinkingText, parsed.modelId);
         emit({ type: "done", stopReason: emittedToolCalls ? "tool_use" : "stop", endTurn: emittedToolCalls === 0, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, estimated: true } });
       } catch (error) {

@@ -51,7 +51,8 @@ export function parseM365ModelBootstrap(html: string): { accountId: string; item
       seen.add(row.id);
       const name = typeof row.menuItemTitle === "string" && row.menuItemTitle.length <= 256 && !/[\x00-\x1f\x7f]/.test(row.menuItemTitle) ? row.menuItemTitle : row.id;
       // A daily quota block does not remove the model from the account's entitlement roster.
-      items.push({ id: row.id, name, input_modalities: ["text"], m365_disabled: row.disabled === true });
+      // The picker has no per-model modality field; chat selectors share the image attachment protocol.
+      items.push({ id: row.id, name, input_modalities: ["text", "image"], m365_disabled: row.disabled === true });
     }
   };
   walk(options, 0);

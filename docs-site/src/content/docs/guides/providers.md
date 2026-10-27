@@ -1830,4 +1830,4 @@ Translated OpenAI-compatible Chat requests shrink inline images when their combi
 
 ## Microsoft 365 Copilot
 
-The experimental native `m365-copilot` provider uses Microsoft work/school sign-in and maintained model aliases. See [Microsoft 365 Copilot setup](/guides/m365-copilot/) for its isolated browser flow, account requirements and limitations. It is separate from GitHub Copilot.
+The experimental native `m365-copilot` provider uses Microsoft work/school sign-in, account-specific live model discovery and text/image chat input. See [Microsoft 365 Copilot setup](/guides/m365-copilot/) for its isolated browser flow, account requirements and limitations. It is separate from GitHub Copilot.

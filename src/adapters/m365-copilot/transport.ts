@@ -2,6 +2,7 @@ import { m365CopilotClaims } from "../../oauth/m365-copilot";
 import { getToneForModel, m365CopilotScenario } from "../../providers/m365-copilot-models";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
+import type { M365ImageAnnotation } from "./images";
 
 const RS = "\x1e";
 const MAX_FRAME_BYTES = 2 * 1024 * 1024;
@@ -39,7 +40,7 @@ export function m365WebSocketUrl(token: string, model: string, conversation: M36
   return "wss://substrate.office.com/m365Copilot/Chathub/" + claims.oid + "@" + claims.tid + "?" + parameters;
 }
 
-export function m365ChatFrame(text: string, model: string, conversation: M365Conversation, requestId: string): object {
+export function m365ChatFrame(text: string, model: string, conversation: M365Conversation, requestId: string, images?: M365ImageAnnotation[]): object {
   return { type: 4, target: "chat", invocationId: "0", arguments: [{
     source: "officeweb", clientCorrelationId: requestId, sessionId: conversation.sessionId, optionsSets: [],
     streamingMode: "ConciseWithPadding", spokenTextMode: "None", options: {}, extraExtensionParameters: {},
@@ -49,13 +50,14 @@ export function m365ChatFrame(text: string, model: string, conversation: M365Con
       clientAppType: "Web", deviceOS: process.platform, deviceType: "Desktop" },
     message: { author: "user", inputMethod: "Keyboard", text, entityAnnotationTypes: ["People", "File", "Event", "Email", "TeamsMessage"], requestId,
       locationInfo: { timeZoneOffset: -new Date().getTimezoneOffset() / 60, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone },
-      locale: "en-us", messageType: "Chat", experienceType: "Default", adaptiveCards: [], clientPreferences: {} },
+      locale: "en-us", messageType: "Chat", experienceType: "Default", adaptiveCards: [], clientPreferences: {}, ...(images?.length ? { messageAnnotations: images } : {}) },
     plugins: [{ Id: "BingWebSearch", Source: "BuiltIn" }], isSbsSupported: true, tone: getToneForModel(model),
     renderReferencesBehindEOS: true, disconnectBehavior: "continue",
   }] };
 }
 
 export interface M365TurnOptions {
+  images?: M365ImageAnnotation[];
   token: string; model: string; text: string; conversation: M365Conversation; signal?: AbortSignal;
   onText(text: string): void; onThinking?(text: string): void; beforeSend?(): void; budget?: TranslatorBudget;
   createSocket?: (url: string, headers: Record<string, string>) => WebSocket;
@@ -134,7 +136,7 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
             if (frame.error || frame.type !== undefined) throw new M365CopilotTurnError("Microsoft 365 Copilot handshake failed");
             handshake = true;
             try { options.beforeSend?.(); } catch (error) { finish(error as Error); return; }
-            socket.send(JSON.stringify(m365ChatFrame(options.text, options.model, options.conversation, requestId)) + RS);
+            socket.send(JSON.stringify(m365ChatFrame(options.text, options.model, options.conversation, requestId, options.images)) + RS);
             options.conversation.turns++;
             continue;
           }

@@ -35,7 +35,7 @@ export async function fetchM365CopilotCatalog(captured: CapturedProviderGather, 
   try {
     const signal = AbortSignal.timeout(15_000);
     const items = await fetchM365ModelRoster(name, provider, { accessToken: auth.apiKey, m365: session }, signal, maySend);
-    const models = items.map(item => applyProviderConfigHints(name, provider, { id: item.id, provider: name, displayName: item.name as string, inputModalities: ["text"] }, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir, false));
+    const models = items.map(item => applyProviderConfigHints(name, provider, { id: item.id, provider: name, displayName: item.name as string, inputModalities: ["text", "image"] }, contextCap, metadataModelIdCaseFold, effectiveAlias, metadataConfigDir, false));
     if (!maySend()) return { models: [], state: "degraded" };
     setCached(name, models, Date.now(), undefined, identity);
     markProviderDiscoveryOk(name, models.length);

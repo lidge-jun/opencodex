@@ -33,6 +33,7 @@ test("parses only the main account chat roster, nested groups, duplicates and qu
   expect(parsed.accountId).toBe(accountId);
   expect(parsed.items.map(m => m.id)).toEqual(["Magic", "Claude_Sonnet", "Claude_Opus"]);
   expect(parsed.items[2]?.m365_disabled).toBe(true);
+  expect(parsed.items.every(m => JSON.stringify(m.input_modalities) === JSON.stringify(["text", "image"]))).toBe(true);
   expect(parsed.items.some(m => m.id === "Forum")).toBe(false);
   expect(getToneForModel("Future_Model_99")).toBe("Future_Model_99");
 });
@@ -67,6 +68,7 @@ test("live refresh discovers a future selector and the existing new-model policy
   const next = await fetchProviderModels("m365-copilot", provider, 0);
   expect(next.map(m => m.id)).toEqual(["Magic", "Future_Model_99"]);
   expect(next[1]?.displayName).toBe("Future model"); expect(getProviderLiveModelCount("m365-copilot")).toBe(2);
+  expect(next[1]?.inputModalities).toEqual(["text", "image"]);
   const baseline = applyNewModelPolicy({ provider: "m365-copilot", discoveredIds: ["Magic"], policy: "off", now: "2026-10-27T00:00:00Z" }).nextBaseline;
   const policy = applyNewModelPolicy({ provider: "m365-copilot", discoveredIds: next.map(m => m.id), baseline, policy: "off", now: "2026-10-27T01:00:00Z" });
   expect(policy.newIds).toEqual(["Future_Model_99"]);
