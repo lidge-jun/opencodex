@@ -49,6 +49,7 @@ The wire surfaces a client actually talks to.
 | [`local-messaging.md`](local-messaging.md) | Command-local metadata discovery, Unix RPC queued submission, peer envelopes, receipts and owned lifecycle bounds. |
 | [`transports/byte-accounting.md`](transports/byte-accounting.md) | Request-copy and stream-buffer byte accounting shared by parsing, SSE rewriting, the adapters, and the translator budget, plus durable spill admission. |
 | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) | One-shot exact signature-binding recovery before output, and successful-retry memo boundaries. |
+| [`transports/response-turn-membership.md`](transports/response-turn-membership.md) | Embedding-owned signing material, dedicated authenticated caller/own-thread scope and pre-parser structural normalization. |
 | [`transports/responses.md`](transports/responses.md) | The Responses HTTP/SSE endpoint, dispatch, credential and upload boundaries, and core module ownership. |
 | [`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md) | Optional native reasoning ciphertext forwarding on model/account switches, configuration and management controls. |
 | [`transports/responses-citations.md`](transports/responses-citations.md) | Destination-gated citation repair for ordinary Responses and every native compact send. |
@@ -99,6 +100,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | [`providers/kiro.md`](providers/kiro.md) | Kiro parallel-tool hints, Responses text controls, and reasoning round-trip. |
 | [`providers/xai-grok.md`](providers/xai-grok.md) | Grok Build contract parity and hardening. |
 | [`providers/chat-compat.md`](providers/chat-compat.md) | Cross-vendor Chat Completions behavior: reasoning, tool results, structured output, parallel tools. |
+| [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) | Explicit response-only block completion, ordered safe-call delivery and terminal ownership. |
 | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) | Standalone MiMo bare-block recovery into declared freeform calls, separate from identified-wrapper reconciliation. |
 | [`providers/chat-required-tool-results.md`](providers/chat-required-tool-results.md) | Translated Chat terminal guard that fails a clean completion missing a mandatory client tool call. |
 | [`adapters/registry.md`](adapters/registry.md) | The single adapter construction authority and contract inheritance. |
@@ -188,18 +190,23 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/anthropic-rejection-memo.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/adapters/anthropic-replay.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/adapters/anthropic-tool-catalog.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
+| `src/adapters/base.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/dsh-account.ts` | [`providers/dsh-account.md`](providers/dsh-account.md) |
-| `src/adapters/openai-chat.ts` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
+| `src/adapters/openai-chat.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md)<br>[`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
 | `src/adapters/openai-chat/` | [`providers/mimo-bare-calls.md`](providers/mimo-bare-calls.md) |
+| `src/adapters/openai-chat/completed-tool-blocks.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/openai-chat/required-tool-result.ts` | [`providers/chat-required-tool-results.md`](providers/chat-required-tool-results.md) |
+| `src/adapters/openai-chat/serialized-tool-call-content.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/openai-responses/opengateway-input.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/adapters/openai-responses/passthrough.ts` | [`transports/responses-citations.md`](transports/responses-citations.md)<br>[`providers/opengateway.md`](providers/opengateway.md) |
 | `src/adapters/openai-responses/request-strips.ts` | [`transports/responses-citations.md`](transports/responses-citations.md) |
+| `src/adapters/unique-tool-call-ids.ts` | [`providers/completed-tool-blocks.md`](providers/completed-tool-blocks.md) |
 | `src/adapters/workbuddy-schema.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/adapters/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/advisor/` | [`advisor.md`](advisor.md) |
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
 | `src/bridge/` | [`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
+| `src/bridge/sse.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/chat/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/chat/reasoning-details.ts` | [`data-planes/chat-reasoning-details.md`](data-planes/chat-reasoning-details.md) |
 | `src/chatgpt/` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
@@ -298,10 +305,12 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/remote/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
 | `src/responses/reasoning-replay-cache.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
+| `src/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/router.ts` | [`runtime.md`](runtime.md) |
 | `src/routing/` | [`catalog.md`](catalog.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/routing/history/` | [`dashboard-and-usage.md`](dashboard-and-usage.md) |
 | `src/server/` | [`providers/generic-account-pool.md`](providers/generic-account-pool.md)<br>[`runtime.md`](runtime.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-combo-boundaries.md`](transports/responses-combo-boundaries.md)<br>[`transports/policy-fallback.md`](transports/policy-fallback.md)<br>[`transports/streaming-health.md`](transports/streaming-health.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`data-planes/images.md`](data-planes/images.md)<br>[`data-planes/inbound-compat.md`](data-planes/inbound-compat.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`adapters/registry.md`](adapters/registry.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
+| `src/server/auth-cors.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
@@ -313,6 +322,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
 | `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
+| `src/server/responses/adapter-dispatch.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/responses/advisor-plan-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/anthropic-thinking-recovery.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
@@ -320,7 +331,9 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/responses/opengateway-completion-guard.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/passthrough-completion.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/passthrough-dispatch.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
-| `src/server/responses/request-transport.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
+| `src/server/responses/request-prepare.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
+| `src/server/responses/request-transport.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`account-auto-pause.md`](account-auto-pause.md) |
+| `src/server/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/service-manager-probe.ts` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/service.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/service/` | [`runtime.md`](runtime.md) |

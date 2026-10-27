@@ -506,10 +506,10 @@ describe("resolveMatchedPrice", () => {
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     expect(keys.size).toBe(EXPECTED_PRICE_OVERLAYS.length);
     for (const expected of [
-      "openai-apikey/gpt-6.1-sol",
-      "openai/gpt-6.1-sol",
-      "devin/gpt-6-1-sol",
-      "devin-cli/gpt-6-1-sol",
+      "openai-apikey/gpt-6.1-sol", "openai-apikey/gpt-6.1-terra",
+      "openai/gpt-6.1-sol", "openai/gpt-6.1-terra",
+      "devin/gpt-6-1-sol", "devin/gpt-6-1-terra",
+      "devin-cli/gpt-6-1-sol", "devin-cli/gpt-6-1-terra",
       "anthropic/claude-fable-5-1",
       "anthropic-apikey/claude-fable-5-1",
       "cursor/claude-fable-5-1",
@@ -1080,7 +1080,7 @@ describe("priority (Fast) service tier multiplier", () => {
   });
 
   test("P9. PRIORITY_MULTIPLIERS table has expected entries", () => {
-    expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(9);
+    expect(Object.keys(PRIORITY_MULTIPLIERS)).toHaveLength(10); // incl. gpt-6.1-terra (gpt61-terra-pricing.test.ts)
     expect(PRIORITY_MULTIPLIERS["gpt-5.6-sol"]).toBe(2);
     expect(PRIORITY_MULTIPLIERS["gpt-daybreak-blue-latest"]).toBe(2);
     expect(PRIORITY_MULTIPLIERS["daybreak-blue-latest"]).toBe(2);

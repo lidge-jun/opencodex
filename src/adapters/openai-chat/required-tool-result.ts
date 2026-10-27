@@ -40,9 +40,9 @@ export function withRequiredChatToolResult(adapter: ProviderAdapter): ProviderAd
       required = requiresClientCall(parsed);
       return adapter.buildRequest(parsed, incoming);
     },
-    async *parseStream(response, budget, tierMetadata) {
+    async *parseStream(response, budget, tierMetadata, streamContext) {
       const guard = terminalGuard(required);
-      for await (const event of adapter.parseStream(response, budget, tierMetadata)) yield guard(event);
+      for await (const event of adapter.parseStream(response, budget, tierMetadata, streamContext)) yield guard(event);
     },
     ...(adapter.parseResponse ? {
       async parseResponse(response: Response, budget: TranslatorBudget, tierMetadata?: AdapterTierMetadata) {

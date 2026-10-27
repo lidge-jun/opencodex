@@ -326,6 +326,19 @@ export function stripDisabledVerbosity(
 }
 
 /**
+ * `reasoning.enabled` is an OCX inbound compatibility extension, not an OpenAI Responses
+ * parameter. Strip it at Responses egress unless a custom destination explicitly declares
+ * the gateway-object wire; thinking capability alone does not declare a wire format.
+ */
+export function stripInternalReasoningEnabled(body: unknown): unknown {
+  if (!isPlainObject(body) || !isPlainObject(body.reasoning) || !Object.hasOwn(body.reasoning, "enabled")) {
+    return body;
+  }
+  const { enabled: _enabled, ...reasoning } = body.reasoning;
+  return { ...body, ...(Object.keys(reasoning).length > 0 ? { reasoning } : { reasoning: undefined }) };
+}
+
+/**
  * Normalize only the delivery enum Codex already emitted. Do not inject a field into callers that
  * did not request summaries, and leave every unconfigured provider/model byte-for-byte unchanged.
  */

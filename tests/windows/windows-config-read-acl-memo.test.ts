@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../src/config";
@@ -69,6 +69,38 @@ test("repeated Windows config reads preserve successful ACL observations", async
   await flushConfigDirHardeningForTests();
   expect(calls).toEqual(first);
   expect(readFileSync(join(home, "config.json"), "utf8")).toBe(before);
+});
+
+for (const platform of ["win32", "darwin"]) {
+  test(`optional directory hardening leaves a regular file unchanged on ${platform}`, async () => {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    acl.setPlatformForTests(platform);
+    const path = join(home, "not-a-config-directory");
+    writeFileSync(path, "fixture-unsafe-root");
+    const mode = statSync(path).mode;
+    process.env.OPENCODEX_HOME = path;
+
+    hardenConfigDir();
+    await flushConfigDirHardeningForTests();
+
+    expect(calls).toEqual([]);
+    expect(readFileSync(path, "utf8")).toBe("fixture-unsafe-root");
+    expect(statSync(path).mode).toBe(mode);
+  });
+}
+
+test("optional directory hardening still follows a directory symlink or junction", async () => {
+  const target = join(home, "directory-target");
+  const link = join(home, "directory-link");
+  mkdirSync(target);
+  symlinkSync(target, link, originalPlatform === "win32" ? "junction" : "dir");
+  process.env.OPENCODEX_HOME = link;
+
+  hardenConfigDir();
+  await flushConfigDirHardeningForTests();
+
+  expect(calls.length).toBeGreaterThan(0);
+  expect(statSync(link).isDirectory()).toBe(true);
 });
 
 test("an external metadata change still invalidates a Windows file ACL observation", () => {

@@ -210,11 +210,10 @@ export async function fetchProviderModelsWithAuth(
     ...(prov.models ?? []),
     ...(prov.retainModels ?? []),
   ])];
-  const configured: CatalogModel[] = configuredIds.map(id => ({
-    id,
-    provider: name,
-    ...catalogHintsFromProviderConfig(name, prov, id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false),
-  }));
+  const configured: CatalogModel[] = configuredIds.map(id => applyProviderConfigHints(
+    name, prov, { id, provider: name }, contextCap, metadataModelIdCaseFold,
+    captured.effectiveAlias, metadataConfigDir, false,
+  ));
   const withConfiguredRetention = (
     models: CatalogModel[],
     options?: { retainComboTargets?: boolean; warnDrops?: boolean },

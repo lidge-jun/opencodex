@@ -208,7 +208,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 105 個含まれています。キー方式 84、OAuth 17、ローカル 3、
+opencodex には組み込みプリセットが 106 個含まれています。キー方式 85、OAuth 17、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -465,6 +465,9 @@ Sol/Terra/Luna をフォールバックリストに入れています。
 | Codex ログイン(Pool または Direct) | `gpt-5.6-*` | 922,000 |
 | OpenAI (API キー) | `openai-apikey/gpt-5.6-*` と `*-pro` | 922,000 (max input 922,000) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna` | 922,000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna` | 1,000,000 |
 
 ネイティブ GPT-5.6 項目は固定の上流推論段階に従います。例えば Luna には
@@ -484,7 +487,7 @@ Amazon Bedrock ネイティブ API のような、これらの実装のいずれ
 Gateway** は URL にアカウント + ゲートウェイ ID を埋める必要があります。
 
 Copilot は混在 wire カタログを提供します。モデル（`gpt-5.3-codex`、`gpt-5.4`、
-`gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）はエージェント
+`gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、 `gpt-6.1-sol`、 `gpt-6.1-terra`、 `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）はエージェント
 通信の `/chat/completions` を拒否するため、opencodex はこれらのモデルを組み込みデフォルトで
 Responses API 経由にルーティングし、他の Copilot モデルはすべて chat completions のままです。
 優先順位は次のとおりです: ハード wire ピン → 明示的な

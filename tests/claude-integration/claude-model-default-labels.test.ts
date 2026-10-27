@@ -116,6 +116,7 @@ test("a label without its matching alias is retained even if it resembles a gene
 test("legacy and fast aliases keep their exact IDs and derive matching names", () => {
   for (const [id, label] of [
     ["claude-ocx-native--gpt-6.1-sol", "gpt-6.1-sol (native)"],
+    ["claude-ocx-native--gpt-6.1-terra", "gpt-6.1-terra (native)"],
     ["ocx-claude-fixture--foo--fast", "foo--fast (fixture)"],
   ]) {
     const f = fixture();

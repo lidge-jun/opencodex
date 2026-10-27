@@ -385,7 +385,7 @@ Each selected destination resolves its own pin, then applicable caps and wire no
 Compaction requests are exempt. `none` means effort omission and provider-default behavior,
 not guaranteed reasoning disablement.
 For canonical OpenAI forwarding, the final model's supported effort list takes precedence:
-`gpt-6.1-sol` starts at `low`, so an incoming `none` or `minimal` is sent as `low`, including
+`gpt-6.1-sol` and `gpt-6.1-terra` start at `low`, so an incoming `none` or `minimal` is sent as `low`, including
 after a compaction model switch or combo failover.
 
 `GET /api/effort-caps` includes the map. `PUT /api/effort-caps` accepts `modelPinnedEfforts`

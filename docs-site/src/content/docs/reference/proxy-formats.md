@@ -20,6 +20,21 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## Required tools on buffered native combo routes
+
+A combo checks buffered native `openai-responses` JSON results when `tool_choice` is `required`
+or selects a named function/custom tool. A completed result without the required call becomes
+HTTP 502 with `error.code: "required_tool_contract_unsatisfied"`. The combo may try another eligible
+target before delivering the response, subject to its existing fallback policy and send budget.
+If no eligible target succeeds, the client receives the typed error instead of a false completion.
+A hosted call for a declared capability can satisfy `required`; a mismatched hosted call returns
+HTTP 400 with the same error code and `x-should-retry: false`, since the hosted action may already
+have executed. No fallback occurs in that case. Usage remains recorded.
+Auto/none choices, incomplete results and unknown tool contracts keep their existing behavior.
+This guard covers buffered native combo children. Streaming required-tool enforcement and direct
+native routes are separate scopes; visible output is never replayed. Translated Chat routes have
+their own guard, described next.
+
 ## Required tools on translated Chat routes
 
 A translated OpenAI Chat response must contain a complete selected client tool call when

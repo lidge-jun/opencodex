@@ -34,6 +34,7 @@ import {
 } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
+import { declaredModelCapabilities, REASONING_CAPABILITY_FIELDS } from "../../providers/reasoning-capabilities";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { isModelVisionSidecarConsumer } from "../../vision/eligibility";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider, type ModelMetadata } from "../../generated/model-metadata";
@@ -94,6 +95,7 @@ import { disabledNativeSlugs, hasComboTargets, hasNativeOpenAiCapabilityMetadata
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 import { clampObservedModelLimits, resolveModelPolicy } from "../../providers/resolved-model-policy";
+import { mapFill } from "../../providers/resolved-model-policy-merge";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
 import type {
   CatalogAdmissionSnapshot,
@@ -109,8 +111,8 @@ import type {
 /**
  * Fill the registry seed's per-model numeric capability maps beneath the provider's own
  * values, mutating `prov` in place. The merge is per key — an operator's entry always
- * wins; a model the persisted map never mentions picks up its seed value — matching
- * `mergeRecordFill` in src/router.ts exactly.
+ * wins; a model the persisted map never mentions picks up its seed value, bounded
+ * by the operator's provider-wide context limit before enrichment can hide its origin.
  *
  * Routing already performs this fill at resolve time (routedProviderConfig in
  * src/router.ts) and the catalog did not, and that divergence is #4570:
@@ -133,10 +135,14 @@ export function applyRegistryCapabilitySeedFill(name: string, prov: OcxProviderC
   const entry = getProviderRegistryEntry(name);
   if (!entry) return;
   if (entry.modelContextWindows || prov.modelContextWindows) {
-    prov.modelContextWindows = { ...(entry.modelContextWindows ?? {}), ...(prov.modelContextWindows ?? {}) };
+    const providerWindow = typeof prov.contextWindow === "number" && prov.contextWindow > 0
+      ? prov.contextWindow : undefined;
+    const seeds = Object.fromEntries(Object.entries(entry.modelContextWindows ?? {}).map(([id, window]) =>
+      [id, providerWindow !== undefined ? Math.min(window, providerWindow) : window]));
+    [prov.modelContextWindows] = mapFill(seeds, prov.modelContextWindows);
   }
   if (entry.modelMaxOutputTokens || prov.modelMaxOutputTokens) {
-    prov.modelMaxOutputTokens = { ...(entry.modelMaxOutputTokens ?? {}), ...(prov.modelMaxOutputTokens ?? {}) };
+    [prov.modelMaxOutputTokens] = mapFill(entry.modelMaxOutputTokens, prov.modelMaxOutputTokens);
   }
 }
 const NUMERIC_MODEL_ID_SEGMENT = /^\d+$/;
@@ -260,7 +266,17 @@ export function withVisionSidecarInput(
 ): CatalogModel {
   if (!enabled || !provider || !isModelVisionSidecarConsumer(provider, model.id)) return model;
   const modalities = model.inputModalities ?? ["text"];
-  return modalities.includes("image") ? model : { ...model, inputModalities: [...modalities, "image"] };
+  return modalities.includes("image") ? model
+    : copyReasoningHintSource(model, { ...model, inputModalities: [...modalities, "image"] });
+}
+
+const reasoningHintSources = new WeakMap<CatalogModel, Partial<CatalogModel>>();
+
+/** Forward discovery provenance only across transparent clones, never custom reasoning overrides. */
+export function copyReasoningHintSource(source: CatalogModel, clone: CatalogModel): CatalogModel {
+  const reasoningSource = reasoningHintSources.get(source);
+  if (reasoningSource) reasoningHintSources.set(clone, reasoningSource);
+  return clone;
 }
 
 /** Reapply configured limits and captured wire capabilities without trusting stale discovery hints. */
@@ -302,10 +318,25 @@ export function applyProviderConfigHints(
   const resolvedModalities = staticPolicy.model.inputModalities ?? model.inputModalities
     ?? (azureMetadata?.input ? modelInputModalities({ id: model.id, input_modalities: azureMetadata.input }, undefined) : undefined);
   const inputModalities = resolvedModalities ? [...resolvedModalities] : undefined;
-  const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
+  const reasoningSource = reasoningHintSources.get(model) ?? model;
+  const declaredCapabilities = declaredModelCapabilities(prov.modelCapabilities, model.id);
+  const reasoningCapabilities: Partial<CatalogModel> = {};
+  for (const field of REASONING_CAPABILITY_FIELDS) {
+    const value = modelInList(prov.noReasoningModels, model.id) ? staticPolicy.model[field]
+      : declaredCapabilities?.[field] ?? reasoningSource[field] ?? staticPolicy.model[field];
+    if (typeof value === "boolean") reasoningCapabilities[field] = value;
+  }
+  if (reasoningCapabilities.supportsReasoning === false) {
+    reasoningCapabilities.supportsThinkingToggle = false;
+    reasoningCapabilities.supportsReasoningEffort = false;
+    reasoningCapabilities.defaultThinkingEnabled = false;
+  }
+  const reasoningEfforts = reasoningCapabilities.supportsReasoningEffort === false ? []
+    : configuredReasoningEfforts(prov, model.id) ?? reasoningSource.reasoningEfforts;
   const suppressSyntheticMax = modelRecordValue(prov.modelSuppressSyntheticMax, model.id)
     ?? (model.antigravityEffortWireModelIds !== undefined);
-  const defaultReasoningEffort = staticPolicy.model.defaultReasoningEffort ?? model.defaultReasoningEffort;
+  const defaultReasoningEffort = reasoningCapabilities.supportsReasoningEffort === false ? undefined
+    : staticPolicy.model.defaultReasoningEffort ?? reasoningSource.defaultReasoningEffort;
   const supportsReasoningSummaries = staticPolicy.model.supportsReasoningSummaries;
   const supportsVerbosity = staticPolicy.model.supportsVerbosity;
   const fastPolicy = fastPolicyForModel(prov, model.id, name);
@@ -323,6 +354,12 @@ export function applyProviderConfigHints(
     fastTierDescription: _staleFastTierDescription,
     providerAlias: _staleProviderAlias,
     suppressSyntheticMax: _staleSuppressSyntheticMax,
+    supportsReasoning: _staleSupportsReasoning,
+    supportsThinkingToggle: _staleThinkingToggle,
+    supportsReasoningEffort: _staleReasoningEffort,
+    defaultThinkingEnabled: _staleDefaultThinking,
+    reasoningEfforts: _staleReasoningEfforts,
+    defaultReasoningEffort: _staleDefaultEffort,
     ...modelWithoutServiceTier
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
@@ -356,6 +393,7 @@ export function applyProviderConfigHints(
       }
       : {}),
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    ...reasoningCapabilities,
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
     ...(typeof supportsVerbosity === "boolean" ? { supportsVerbosity } : {}),
@@ -389,8 +427,7 @@ export function applyProviderConfigHints(
     : withCap;
   const softCandidates = [model.autoCompactTokenLimit, configuredAutoCompact]
     .filter((value): value is number => typeof value === "number" && value > 0);
-  if (contextWindow === undefined || softCandidates.length === 0) return withHardBounds;
-  return {
+  const result = contextWindow === undefined || softCandidates.length === 0 ? withHardBounds : {
     ...withHardBounds,
     autoCompactTokenLimit: clampAutoCompactTokenLimit(
       contextWindow,
@@ -398,6 +435,10 @@ export function applyProviderConfigHints(
       Math.min(...softCandidates),
     ),
   };
+  reasoningHintSources.set(result, Object.fromEntries([
+    ...REASONING_CAPABILITY_FIELDS, "reasoningEfforts", "defaultReasoningEffort",
+  ].map(field => [field, reasoningSource[field as keyof CatalogModel]])));
+  return result;
 }
 
 /** Project a configured row, optionally deferring sidecar attachment metadata until publication. */
@@ -524,6 +565,25 @@ const MODEL_DISCOVERY_METADATA_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u202
 
 export function positiveSafeInteger(...values: unknown[]): number | undefined {
   return values.find(value => typeof value === "number" && Number.isSafeInteger(value) && value > 0) as number | undefined;
+}
+
+/** Bound inspection of untrusted upstream context ladders. */
+const MAX_CONTEXT_WINDOW_RUNGS = 8;
+
+/**
+ * The widest rung of a selectable context ladder an upstream published, if it published one.
+ *
+ * A lane that offers a long-context rung announces the whole ladder and reports its default
+ * rung as the effective window. The capacity is the widest rung, not the default one.
+ */
+function widestContextWindowRung(value: unknown): number | undefined {
+  if (!Array.isArray(value)) return undefined;
+  let widest: number | undefined;
+  for (const rung of value.slice(0, MAX_CONTEXT_WINDOW_RUNGS)) {
+    const window = positiveSafeInteger(rung);
+    if (window !== undefined && (widest === undefined || window > widest)) widest = window;
+  }
+  return widest;
 }
 
 function normalizedMetadataString(raw: string, maxLength: number): string | undefined {
@@ -697,6 +757,15 @@ export function discoveredPricingStatus(item: ProviderModelsApiItem): "free" | "
 export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
   const metadata = plainRecord(item.metadata);
   const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const reasoningCapabilities: Partial<CatalogModel> = {};
+  for (const [wire, field] of [
+    ["supports_reasoning", "supportsReasoning"],
+    ["supports_thinking_toggle", "supportsThinkingToggle"],
+    ["supports_reasoning_effort", "supportsReasoningEffort"],
+    ["default_thinking_enabled", "defaultThinkingEnabled"],
+  ] as const) {
+    if (typeof capabilityRecord?.[wire] === "boolean") reasoningCapabilities[field] = capabilityRecord[wire];
+  }
   const limits = plainRecord(metadata?.limits);
   const capabilityLimits = plainRecord(plainRecord(item.capabilities)?.limits);
   const contextWindow =
@@ -726,6 +795,14 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       // real values. Appended after the recognized fields for the same reason as the
       // llama.cpp entries above: no provider that already resolves changes behavior.
       capabilityRecord?.context_length,
+      // The Grok CLI subscription lane publishes its default rung in `context_window` and the
+      // selectable ladder in `context_windows` (`[256000, 500000]` for grok-4.5/4.6/4.7 on
+      // 2026-10-24). Reading only the default rung published half of what the lane offers, and
+      // because a configured or registered window may only LOWER the observed one, the 500k the
+      // registry already carries could not raise it back. The widest rung is the model's capacity,
+      // so it outranks the default rung beside it; every other recognized field keeps the
+      // precedence it already had, and a lane that publishes no ladder is unaffected.
+      widestContextWindowRung(item.context_windows),
       // OpenGateway publishes a top-level context_window. Keep this last so catalogs
       // already resolving through any recognized field retain their existing window.
       item.context_window,
@@ -748,7 +825,8 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
     ?? item.reasoning_efforts
     ?? reasoningParameters?.efforts;
   const listedReasoningEfforts = normalizedStringList(rawReasoningEfforts, 8, 24);
-  const reasoningEfforts = listedReasoningEfforts
+  const reasoningEfforts = reasoningCapabilities.supportsReasoning === false || reasoningCapabilities.supportsReasoningEffort === false ? []
+    : listedReasoningEfforts
     ? sanitizeCodexReasoningEfforts(listedReasoningEfforts)
     : typeof rawReasoningEfforts === "boolean"
       ? (rawReasoningEfforts
@@ -766,6 +844,7 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
     ...(contextWindow && contextWindow > 0 ? { contextWindow } : {}),
     ...(maxInputTokens && maxInputTokens > 0 ? { maxInputTokens } : {}),
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    ...reasoningCapabilities,
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(capabilities ? { capabilities } : {}),
