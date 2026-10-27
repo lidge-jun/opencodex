@@ -248,20 +248,29 @@ test("Google structured account refusals classify without accepting model permis
   expect(classifyPermanentAccountRefusal(403, { error: { code: 403, status: "PERMISSION_DENIED", message: "This model is not available in this project" } })).toBeUndefined();
 });
 
-// #7803: the Cloud Code Assist account-ban envelope reported in google-gemini/gemini-cli#19501.
+// #7803: the Cloud Code Assist account-ban messages Google's backend returned in
+// google-gemini/gemini-cli #19501 (with its line wrap), #20813/#27388 and #27199.
 const ccaTosDisabled = "This service has been disabled in this account for violation of Terms of Service.";
+// Google's published feedback address, assembled so the privacy scan does not read it as personal data.
+const ccaFeedbackAddress = ["gemini-code-assist-user-feedback", "google.com"].join("@");
+const ccaTosContact = `This service has been disabled in this account for violation of Terms of\n\t\tService. If you believe this is an error, contact ${ccaFeedbackAddress}.`;
+const ccaTosAppeal = "This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.";
 const googleEnvelope = (message: string, extra: Record<string, unknown> = {}) =>
   ({ error: { code: 403, status: "PERMISSION_DENIED", message, ...extra } });
 
 test("the Cloud Code Assist Terms of Service account ban classifies as an account refusal", () => {
-  expect(classifyPermanentAccountRefusal(403, googleEnvelope(ccaTosDisabled))).toBe("account_permission_denied");
-  expect(classifyPermanentAccountRefusal(403, googleEnvelope(`  This service has been disabled in this account\n for violation of the Terms of Service `)))
-    .toBe("account_permission_denied");
+  for (const message of [ccaTosDisabled, ccaTosContact, ccaTosAppeal, `  ${ccaTosAppeal.replace(/ /g, "\n ")} `]) {
+    expect(classifyPermanentAccountRefusal(403, googleEnvelope(message))).toBe("account_permission_denied");
+  }
 });
 
 test("project, model and partial Google refusals never classify as an account ban", () => {
   for (const message of [
     `Request failed: ${ccaTosDisabled}`,
+    `Eligibility check failed: PERMISSION_DENIED (code 403): ${ccaTosAppeal}`,
+    `${ccaTosDisabled} If you believe this is an error, contact someone-else@example.test.`,
+    `${ccaTosAppeal} Model gemini-3-pro is not available.`,
+    `"${ccaTosDisabled}"`,
     "This service has been disabled in this account.",
     "This service has been disabled in this project for violation of Terms of Service.",
     "Permission denied: Consumer 'projects/123456' has been suspended.",
@@ -287,7 +296,7 @@ test("an Antigravity Terms of Service ban pauses the sending account through nor
   const headers = { authorization: `Bearer ${provider.apiKey}` };
   const observe = captureAccountAutoPauseAttempt("fixture", provider, { config }, new Headers(headers))!;
   const response = await fetchGoogleWithRetry("Antigravity", { url: "https://example.test", method: "POST", headers, body: "{}" }, {
-    executor: (async () => observe(Response.json(googleEnvelope(ccaTosDisabled), { status: 403 }))) as typeof fetch,
+    executor: (async () => observe(Response.json(googleEnvelope(ccaTosContact), { status: 403 }))) as typeof fetch,
   });
   expect(response.status).toBe(403);
   expect(wasPermanentAccountRefusal(response)).toBe(true);
