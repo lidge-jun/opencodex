@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildClientConfig, type ExportModel, type KiloGeneratedConfig, type OpencodeGeneratedConfig } from "../../src/clients/config-export";
+import { deriveEntry } from "../../src/codex/catalog/derive-entry";
+import { applyProviderConfigHints } from "../../src/codex/catalog/model-hints";
 
 const model: ExportModel = {
   namespaced: "mock/reasoner", provider: "mock", id: "reasoner", contextWindow: 100_000,
@@ -61,6 +63,135 @@ describe("OpenCode and Kilo export real per-model controls", () => {
     const { v1, v2, kilo } = configs({ ...model, defaultReasoningEffort: "none" });
     for (const entry of [v1, kilo]) expect(entry.options).toEqual({ reasoningEffort: "none" });
     expect(v2.settings).toEqual({ reasoningEffort: "none" });
+  });
+
+  test("toggle models offer only off/on and suppress regenerated legacy strength choices", () => {
+    const { v1, v2, kilo } = configs({ ...model, supportsThinkingToggle: true,
+      supportsReasoningEffort: false, defaultThinkingEnabled: true,
+      reasoningEfforts: [], defaultReasoningEffort: undefined });
+    expect(v2.variants).toEqual([
+      { id: "none", settings: { reasoningEffort: "none" } },
+      { id: "high", settings: { reasoningEffort: "high" } },
+    ]);
+    expect(v2.settings).toEqual({ reasoningEffort: "high" });
+    for (const entry of [v1, kilo]) {
+      expect(entry.reasoning).toBe(true);
+      expect(entry.options).toEqual({ reasoningEffort: "high" });
+      const generated = Object.fromEntries(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+        .map(effort => [effort, { reasoningEffort: effort }]));
+      const merged = { ...generated, ...entry.variants };
+      expect(Object.keys(merged).filter(id => !("disabled" in merged[id]!)).sort()).toEqual(["high", "none"]);
+      for (const effort of ["none", "high"]) {
+        expect({ ...entry.options, ...entry.variants![effort] }).toEqual({ reasoningEffort: effort });
+      }
+    }
+  });
+
+  test("toggle off defaults survive and stale strength metadata cannot add choices", () => {
+    const { v1, v2, kilo } = configs({ ...model, supportsThinkingToggle: true,
+      supportsReasoningEffort: false, defaultThinkingEnabled: false,
+      reasoningEfforts: ["none", "low", "medium", "high", "max", "ultra"], defaultReasoningEffort: "none" });
+    expect(v2.variants.map(variant => variant.id)).toEqual(["none", "high"]);
+    expect(v2.settings).toEqual({ reasoningEffort: "none" });
+    for (const entry of [v1, kilo]) {
+      expect(entry.options).toEqual({ reasoningEffort: "none" });
+      for (const effort of ["minimal", "low", "medium", "xhigh", "max", "ultra"]) {
+        expect(entry.variants![effort]).toEqual({ disabled: true });
+      }
+    }
+  });
+
+  test("reasoning capability survives without effort or summary evidence", () => {
+    for (const reasoningEfforts of [undefined, []]) {
+      const { v1, v2, kilo } = configs({ ...model, reasoningEfforts,
+        supportsReasoning: true, supportsReasoningSummaries: undefined, defaultReasoningEffort: undefined });
+      expect(v2.variants).toEqual([]);
+      for (const entry of [v1, kilo]) {
+        expect(entry.reasoning).toBe(true);
+        expect(entry.variants).toEqual(kiloSuppression);
+        expect(entry.options).toBeUndefined();
+      }
+    }
+  });
+
+  test("fixed, effort-only and combined controls keep independent choices across clients and Codex", () => {
+    const cases = [
+      { supportsThinkingToggle: false, supportsReasoningEffort: false, expected: [] },
+      { supportsThinkingToggle: false, supportsReasoningEffort: true, expected: ["low", "high"] },
+      { supportsThinkingToggle: true, supportsReasoningEffort: true, expected: ["none", "low", "high"] },
+      { supportsThinkingToggle: true, supportsReasoningEffort: false, expected: ["none", "high"] },
+    ];
+    for (const { expected, ...capabilities } of cases) {
+      const row = { ...model, ...capabilities, reasoningEfforts: ["none", "low", "high"],
+        defaultReasoningEffort: "low", defaultThinkingEnabled: false };
+      const { v1, v2, kilo } = configs(row);
+      expect(v2.variants.map(variant => variant.id)).toEqual(expected);
+      for (const entry of [v1, kilo]) {
+        expect(Object.entries(entry.variants!).filter(([, value]) => !("disabled" in value)).map(([id]) => id))
+          .toEqual(expected);
+        expect(entry.variants!.ultra).toEqual({ disabled: true });
+      }
+      for (const template of [null, { slug: "template", supported_reasoning_levels: [{ effort: "max" }] }]) {
+        const entry = deriveEntry(template, row.namespaced, "test", 1, { ...row });
+        expect(entry.supported_reasoning_levels.map((level: { effort: string }) => level.effort)).toEqual(expected);
+        if (capabilities.supportsThinkingToggle) expect(entry.default_reasoning_level).toBe("none");
+        if (expected.length === 0) expect(entry.default_reasoning_level).toBeUndefined();
+      }
+    }
+  });
+
+  test("an empty effort declaration leaves a declared toggle available, including an unknown default", () => {
+    for (const reasoningEfforts of [undefined, []]) {
+      const row = { ...model, reasoningEfforts, supportsThinkingToggle: true,
+        supportsReasoningEffort: false, defaultThinkingEnabled: undefined, defaultReasoningEffort: "low" };
+      const { v1, v2, kilo } = configs(row);
+      expect(v2.variants.map(variant => variant.id)).toEqual(["none", "high"]);
+      for (const entry of [v1, kilo]) expect(entry.options).toBeUndefined();
+      const codex = deriveEntry(null, row.namespaced, "test", 1, row);
+      expect(codex.supported_reasoning_levels.map((level: { effort: string }) => level.effort)).toEqual(["none", "high"]);
+      expect(codex.default_reasoning_level).toBeUndefined();
+    }
+  });
+
+  test("a negative toggle alone does not turn unknown effort support into false", () => {
+    const bare: ExportModel = { namespaced: "mock/unknown-effort", provider: "mock", id: "unknown-effort",
+      supportsThinkingToggle: false };
+    const { v1, kilo } = configs(bare);
+    for (const exported of [v1, kilo]) {
+      expect(exported.variants).toEqual({ none: { disabled: true } });
+      expect(exported.reasoning).toBeUndefined();
+    }
+    const row = { ...model, supportsThinkingToggle: false,
+      reasoningEfforts: undefined, defaultReasoningEffort: undefined };
+    const unknown = deriveEntry(null, model.namespaced, "test", 1, { ...row, supportsThinkingToggle: undefined });
+    const entry = deriveEntry(null, model.namespaced, "test", 1, row);
+    expect(entry.supported_reasoning_levels).toEqual(unknown.supported_reasoning_levels.filter(
+      (level: { effort: string }) => level.effort !== "none"));
+    expect(entry.default_reasoning_level).toBe(unknown.default_reasoning_level);
+  });
+
+  test("inferred positive effort support preserves legacy Codex max/ultra synthesis", () => {
+    const row = applyProviderConfigHints("synthetic", { adapter: "openai-chat", baseUrl: "https://example.test/v1",
+      reasoningEfforts: ["low", "medium", "high"], modelDefaultReasoningEfforts: { legacy: "medium" },
+    }, { provider: "synthetic", id: "legacy" });
+    expect(row.supportsReasoningEffort).toBe(true);
+    expect(row.supportsThinkingToggle).toBeUndefined();
+    for (const template of [null, { slug: "template", supported_reasoning_levels: [{ effort: "xhigh" }] }]) {
+      const entry = deriveEntry(template, "synthetic/legacy", "test", 1, row);
+      expect(entry.supported_reasoning_levels.map((level: { effort: string }) => level.effort))
+        .toEqual(["low", "medium", "high", "max", "ultra"]);
+      expect(entry.default_reasoning_level).toBe("medium");
+      const suppressedMax = deriveEntry(template, "synthetic/legacy", "test", 1, { ...row, suppressSyntheticMax: true });
+      expect(suppressedMax.supported_reasoning_levels.map((level: { effort: string }) => level.effort))
+        .toEqual(["low", "medium", "high", "ultra"]);
+      const exact = deriveEntry(template, "synthetic/legacy", "test", 1, { ...row, supportsThinkingToggle: false });
+      expect(exact.supported_reasoning_levels.map((level: { effort: string }) => level.effort))
+        .toEqual(["low", "medium", "high"]);
+      const fixed = deriveEntry(template, "synthetic/legacy", "test", 1, { ...row, supportsReasoningEffort: false });
+      expect(fixed.supported_reasoning_levels).toEqual([]);
+      const disabled = deriveEntry(template, "synthetic/legacy", "test", 1, { ...row, supportsReasoning: false });
+      expect(disabled.supported_reasoning_levels).toEqual([]);
+    }
   });
 
   test("an empty ladder suppresses inferred choices without falsely declaring inability to reason", () => {

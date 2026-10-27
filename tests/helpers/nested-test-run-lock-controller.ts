@@ -182,7 +182,7 @@ async function runNestedLiveLockController(
     const fixture = join(tempRoot, "nested-live-lock.test.ts");
     writeFileSync(fixture, [
       'import { test } from "bun:test";',
-      'import { existsSync, readFileSync } from "node:fs";',
+      'import { readdirSync, readFileSync } from "node:fs";',
       'import { join } from "node:path";',
       'test("nested lock receipt", () => {',
       '  const path = process.env.OCX_TEST_RUN_LOCK_PATH ?? "";',
@@ -192,7 +192,7 @@ async function runNestedLiveLockController(
       "    sameRun: owner.runId === " + JSON.stringify(runId)
         + " && process.env.OCX_TEST_RUN_ID === " + JSON.stringify(runId) + ",",
       "    sameToken: owner.token === process.env.OCX_TEST_RUN_LOCK_TOKEN,",
-      '    member: existsSync(join(path, "members", process.pid + "-" + owner.token)),',
+      '    member: readdirSync(join(path, "members")).some(file => Number.parseInt(file, 10) === process.pid && file.endsWith("-" + owner.token)),',
       "    preloadRan: process.env.OCX_TEST_PRELOAD_PID === String(process.pid),",
       '    guardArmed: process.env.OCX_TEST_HOME_GUARD === "1",',
       "  } }));",

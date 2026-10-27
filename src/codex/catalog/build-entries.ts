@@ -485,6 +485,8 @@ export interface ObservedCatalogMergeInput {
   readonly ultraFastTier?: boolean;
   /** Current captured wire declarations; disk rows and templates never populate this set. */
   readonly configuredUltraFastSlugs?: ReadonlySet<string>;
+  /** Current config-only verdict for persisted rows (not authority from the old disk tier). */
+  readonly retainedFlexPolicyBySlug?: ReadonlyMap<string, boolean>;
   readonly catalogModels: readonly RawEntry[];
   readonly baselineCatalogModels: readonly RawEntry[];
   readonly routedEntries: readonly RawEntry[];
@@ -532,6 +534,7 @@ export interface ObservedCatalogMergeInput {
 export function mergeCatalogEntriesFromObservedState({
   ultraFastTier = false,
   configuredUltraFastSlugs = new Set(),
+  retainedFlexPolicyBySlug = new Map(),
   catalogModels,
   baselineCatalogModels,
   routedEntries,
@@ -888,6 +891,25 @@ export function mergeCatalogEntriesFromObservedState({
       || isNativeAliasCatalogEntry(entry) || isExactComboCatalogEntry(entry, exactComboSlugs)
       || trustedAccountBoundNativeCatalogSlug(entry) !== undefined) continue;
     applyConfiguredUltraFast(entry, operatorRows.get(entry.slug), configuredUltraFastSlugs.has(entry.slug), ultraFastTier);
+  }
+  // Degraded discovery preserves disk rows, so they bypass fresh tier generation.
+  // Revoke only an explicitly disallowed Flex tier according to today's provider policy;
+  // a transient outage must not erase Flex while the configured wire still permits it.
+  const persistedRoutedSet = new Set(preservedRoutedEntries);
+  for (const entry of finalRoutedEntries) {
+    if (!persistedRoutedSet.has(entry)) continue;
+    const slug = typeof entry.slug === "string" ? entry.slug : "";
+    const excluded = isNativeAliasCatalogEntry(entry) || isExactComboCatalogEntry(entry, exactComboSlugs);
+    if (!excluded && retainedFlexPolicyBySlug.get(slug) !== false) continue;
+    if (Array.isArray(entry.service_tiers)) {
+      entry.service_tiers = entry.service_tiers.filter(tier => tier?.id !== "flex");
+    }
+    if (Array.isArray(entry.additional_speed_tiers)) {
+      entry.additional_speed_tiers = entry.additional_speed_tiers.filter(tier => tier !== "flex");
+    }
+    for (const field of ["service_tier", "default_service_tier"] as const) {
+      if (entry[field] === "flex") delete entry[field];
+    }
   }
   const finalRoutedEntrySet = new Set(finalRoutedEntries);
   const degradedPreservedCount = preservedRoutedEntries.filter(entry => {

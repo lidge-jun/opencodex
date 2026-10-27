@@ -25,20 +25,31 @@ export function sweepUpdateLeftovers(args: {
   notOwned: string[];
 };
 export function launcherUsableAfterNpmUpdate(tx: { ok: boolean; phase: string; rolledBack?: boolean } | null | undefined): boolean;
-export function transactionalNpmUpdate(args: {
+export type NpmInstallResult = {
+  status: number | null;
+  error?: { code?: string; message?: string };
+  signal?: string | null;
+  processTreeExited?: boolean;
+};
+type NpmUpdateOptions = {
   packageDir: string;
   pkgName: string;
   targetVersion?: string;
   tag: string;
-  runNpm: (args: string[]) => { status: number | null };
+  runNpm: (args: string[]) => NpmInstallResult;
   /** npm cache root the pre-flight resolved and checked; pinned with `--cache` for staging. */
   cachePath?: string;
   log?: (line: string) => void;
   deps?: UpdateFsDeps;
-}): {
+};
+type NpmUpdateResult = {
   ok: boolean;
   phase: "stage" | "verify" | "swap-backup" | "swap-live" | "post-verify" | "double-fault" | "done";
   error?: string;
   rolledBack?: boolean;
   backup?: string;
 };
+export function transactionalNpmUpdate(args: NpmUpdateOptions): NpmUpdateResult;
+export function transactionalNpmUpdateAsync(args: Omit<NpmUpdateOptions, "runNpm"> & {
+  runNpm: (args: string[]) => NpmInstallResult | Promise<NpmInstallResult>;
+}): Promise<NpmUpdateResult>;

@@ -136,6 +136,38 @@ function realRuntime(refresh: CatalogDisposition = { status: "committed", change
 }
 
 describe("integrated combo extension and actual management persistence", () => {
+  test("cooldown reprobe opt-in, interval, carry and explicit off survive persistence", async () => {
+    const f = realRuntime();
+    expect(await handleComboCommand(["set", "saved", "--cooldown-reprobe", "on", "--cooldown-reprobe-interval", "120000", "--json"], f.deps)).toBe(0);
+    expect(f.config.combos!.saved!.cooldownReprobe).toEqual({ enabled: true, intervalMs: 120000 });
+    expect(await handleComboCommand(["set", "saved", "--display-name", "Retained", "--json"], f.deps)).toBe(0);
+    expect(f.config.combos!.saved!.cooldownReprobe).toEqual({ enabled: true, intervalMs: 120000 });
+    // A GUI or older API client omitting the field also carries the saved opt-in.
+    const response = await handleComboRoutes({
+      req: new Request("http://localhost/api/combos", { method: "PUT", body: JSON.stringify({
+        id: "saved", combo: { targets: [target], strategy: "failover", defaultEffort: "high" },
+      }) }), url: new URL("http://localhost/api/combos"), config: f.config, deps: {}, version: "fixture",
+      trustedLoopbackIngress: true, guiSessionIssuance: null,
+      convergeCodexCatalog: async () => ({ status: "committed", changed: false, degraded: false, notices: [] }),
+      syncClaudeAgentDefsBestEffort: async () => {},
+    });
+    expect(response!.status).toBe(200);
+    expect(f.config.combos!.saved!.cooldownReprobe?.enabled).toBe(true);
+    expect(await handleComboCommand(["set", "saved", "--cooldown-reprobe", "off", "--json"], f.deps)).toBe(0);
+    expect(f.config.combos!.saved!.cooldownReprobe).toBeUndefined();
+  });
+  test("interval alone does not enable cooldown recovery", async () => {
+    const f = realRuntime();
+    expect(await handleComboCommand(["set", "saved", "--cooldown-reprobe-interval", "1000", "--json"], f.deps)).toBe(0);
+    expect(f.config.combos!.saved!.cooldownReprobe).toBeUndefined();
+  });
+  test("invalid cooldown reprobe flags refuse before contacting the proxy", async () => {
+    for (const args of [["--cooldown-reprobe", "yes"], ["--cooldown-reprobe-interval", "0"], ["--cooldown-reprobe-interval", "1.5"], ["--cooldown-reprobe-interval", "86400001"]]) {
+      const f = realRuntime();
+      expect(await handleComboCommand(["set", "saved", ...args], f.deps)).toBe(2);
+      expect(f.calls).toEqual([]);
+    }
+  });
   test("a target-file replacement preserves unrelated strategy and public identity", async () => {
     const f = realRuntime();
     Object.assign(f.config.combos!.saved!, { strategy: "round-robin", stickyLimit: 3, alias: "my-combo", displayName: "My combo" });

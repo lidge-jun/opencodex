@@ -1435,6 +1435,12 @@ export interface OcxComboConfig {
   cooldownMs?: number;
   /** Maximum wait for an eligible target cooldown to expire before failing closed. Default 0; range 0..600000, per selection attempt. */
   waitForCooldownMs?: number;
+  /** Opt-in retry pass when all otherwise eligible targets are cooling. Disabled by default. */
+  cooldownReprobe?: {
+    enabled: boolean;
+    /** Minimum interval between recovery passes, in milliseconds. Default 300000; range 1000..86400000. */
+    intervalMs?: number;
+  };
   /**
    * `before-last-resort` defers targets marked `lastResort` while a normal
    * target is merely cooling and that cooldown can be waited out inside

@@ -35,6 +35,9 @@ import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isLikelyRealAnthropicThinkingSignature } from "../responses/reasoning-envelope";
 import { isTranslatorBudgetExceededError, retainTranslatedEventBatch, type TranslatorBudget } from "../lib/translator-budget";
 import { isReasoningEffortOmitted, modelRecordValue } from "../reasoning-effort";
+import { resolveThinkingEnabled } from "../clients/reasoning-controls";
+import { resolveReasoningCapabilities } from "../providers/reasoning-capabilities";
+import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./reasoning-controls";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
 import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
@@ -1082,16 +1085,33 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // model both defaults to thinking and accepts being told not to.
       const family = claudeFamilyVersion(parsed.modelId);
       progressUpdates = usesNativeAnthropicEndpoint(provider) && family?.family === "opus" && family.major === 5 && family.minor === 5;
-      const effectiveReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
-      if (effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
+      const thinkingToggleWire = declaresThinkingToggleWire(provider, parsed.modelId);
+      const reasoningControlsUnsupported = reasoningControlsAreUnsupported(provider, parsed.modelId);
+      const capabilities = resolveReasoningCapabilities(provider, parsed.modelId);
+      const thinkingEnabled = thinkingToggleWire
+        ? resolveThinkingEnabled(provider, parsed.modelId, parsed.options)
+        : undefined;
+      const nativeThinkingContract = usesAdaptiveThinking(parsed.modelId)
+        || family?.family === "haiku" || family?.family === "sonnet" || family?.family === "opus";
+      const supportsReasoningEffort = capabilities.supportsReasoningEffort === true;
+      const requestedReasoning = parsed.options.reasoning ?? defaultReasoningEffort(provider, parsed.modelId);
+      // Native Claude wire constraints outrank a generic toggle declaration. Decode the boolean
+      // into native effort intent, then let the family contract choose budget/adaptive/off shapes.
+      const effectiveReasoning = nativeThinkingContract && thinkingEnabled !== undefined
+        ? thinkingEnabled ? (requestedReasoning && requestedReasoning !== "none" ? requestedReasoning : "high") : "none"
+        : requestedReasoning;
+      if (!reasoningControlsUnsupported && thinkingEnabled !== undefined && !nativeThinkingContract) {
+        body.thinking = { type: thinkingEnabled ? "enabled" : "disabled" };
+      }
+      if (!reasoningControlsUnsupported && (thinkingEnabled === undefined || nativeThinkingContract) && effectiveReasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
         body.thinking = { type: "disabled" };
-      } else if (effectiveReasoning === "none" && usesBetweenToolsFloor(parsed.modelId)) {
+      } else if (!reasoningControlsUnsupported && (thinkingEnabled === undefined || nativeThinkingContract) && effectiveReasoning === "none" && usesBetweenToolsFloor(parsed.modelId)) {
         // Sonnet 5.5 rejects `disabled`; `between_tools` is its lowest setting and turns off up-front
         // thinking. No effort is sent: the API default (high) is inside the range it accepts.
         body.thinking = { type: "between_tools" };
         delete body.temperature;
         delete body.top_p;
-      } else if (typeof effectiveReasoning === "string" && effectiveReasoning !== "none") {
+      } else if (!reasoningControlsUnsupported && thinkingEnabled !== false && (thinkingEnabled === undefined || supportsReasoningEffort || nativeThinkingContract) && typeof effectiveReasoning === "string" && effectiveReasoning !== "none") {
         if (usesAdaptiveThinking(parsed.modelId)) {
           // Adaptive-thinking models replace the token budget with an effort knob and reject
           // `thinking.type: "enabled"` outright. `max_tokens` still caps thinking plus visible
@@ -1148,7 +1168,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.top_p;
       }
 
-      if (progressUpdates) body.thinking = { type: "adaptive", display: "updates" };
+      if (progressUpdates && !reasoningControlsUnsupported && thinkingEnabled !== false) body.thinking = { type: "adaptive", display: "updates" };
 
       if (rejectsSamplingParameters(parsed.modelId)) {
         // Opus 4.7+, Sonnet 5+, Haiku 5.5+ and Fable 400 on non-default sampling, with or without
@@ -1212,6 +1232,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           && settledToolChoice.type !== "none") {
         body.tool_choice = { ...settledToolChoice, disable_parallel_tool_use: true };
       }
+      // A routed compaction summary keeps every tools/system byte derived from the caller's
+      // choice above, so only the final execution choice changes.
+      if (parsed._summaryProhibitsToolCalls && body.tools) body.tool_choice = { type: "none" };
 
       const url = resolveAnthropicMessagesUrl(provider);
       // Anthropic fast mode: `speed` is only accepted beside its beta; without it the API

@@ -1,5 +1,7 @@
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { isNativeControlResponse } from "./native-response-control";
+import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
+import { attachResponseToolOwnership } from "./response-tool-ownership";
 import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
@@ -148,6 +150,8 @@ import {
   inspectResponseLogJson,
   inspectResponseLogSsePayloadParsed,
   noteUpstreamRequestId,
+  recordKeyWireAttemptUsage,
+  usageFromResponsesPayload,
 } from "../request-log";
 import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
 import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-compat";
@@ -447,6 +451,15 @@ export async function deliverPassthroughResponse(
   const { requestBindings } = transportState;
 
   let upstreamResponse = nativeExchange.upstreamResponse;
+  // Judge the restored native payload before display projection can erase hosted-call evidence.
+  const requiredToolFailure = async (text: string): Promise<Response | undefined> => {
+    if (!options.comboAttempt || clientRequestedStream === true || isNonReplayableResponse(upstreamResponse)) return;
+    const candidate = attachResponseToolOwnership(new Response(text, {
+      status: upstreamResponse.status, headers: { "content-type": "application/json" },
+    }), providerExecutedCallTypes);
+    const verdict = await guardBufferedComboRequiredTool(candidate, parsed._rawBody, route.provider.adapter);
+    return verdict.ok ? undefined : verdict;
+  };
   const canonicalBufferedJson = clientRequestedStream !== true
     && isCanonicalOpenAiForwardProvider(route.provider);
   const originalContentType = upstreamResponse.headers.get("content-type");
@@ -887,7 +900,7 @@ export async function deliverPassthroughResponse(
         createTerminalErrorRedactionBlockRewrite(nativeExchange.request.headers, maskCredential),
         rememberPlaintextBlock,
         // Display-only projection must follow every continuation-cache observer.
-        isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
+        (!canonicalBufferedJson || !options.comboAttempt) && isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
           ? createHostedImageDisplayRewrite()
           : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
@@ -1030,6 +1043,29 @@ export async function deliverPassthroughResponse(
         };
         if (signal.aborted) return cancelAfterValidation();
 
+        const requiredFailure = await requiredToolFailure(JSON.stringify(client.terminal.response));
+        if (requiredFailure) {
+          const usage = usageFromResponsesPayload(client.terminal.response.usage);
+          if (usage && !logCtx.usageFromBridge) {
+            if (!recordKeyWireAttemptUsage(logCtx, usage)) {
+              logCtx.usage = usage;
+              if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+            }
+            logCtx.usageWireParsed = true;
+          }
+          return requiredFailure;
+        }
+        if (signal.aborted) return cancelAfterValidation();
+        let clientJson = JSON.stringify(client.terminal.response);
+        if (options.comboAttempt && isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)) {
+          const display = createHostedImageDisplayRewrite();
+          try { clientJson = display.json(clientJson); }
+          catch (error) {
+            if (error instanceof RangeError) return formatErrorResponse(502, "upstream_error", "hosted image result exceeds local display limits");
+            throw error;
+          } finally { display.dispose?.(); }
+        }
+
         // Effects intentionally run only after both bounded validations. They inspect the same
         // upstream-facing transcript as the streaming relay and fire once; continuation storage
         // receives the final client-visible response once after all restorations succeeded.
@@ -1086,7 +1122,7 @@ export async function deliverPassthroughResponse(
 
         const jsonHeaders = sanitizePassthroughHeaders(headers, codexSafetyBufferingOptions);
         jsonHeaders.set("content-type", "application/json");
-        return markPreinspectedJsonResponse(new Response(JSON.stringify(client.terminal.response), {
+        return markPreinspectedJsonResponse(new Response(clientJson, {
           status: upstreamResponse.status,
           statusText: upstreamResponse.statusText,
           headers: jsonHeaders,
@@ -1365,6 +1401,8 @@ export async function deliverPassthroughResponse(
           declaredBareWireToolNames,
         );
       }
+      const requiredFailure = await requiredToolFailure(clientJson);
+      if (requiredFailure) return requiredFailure;
       commitReasoningReplayServingRoute(nativeExchange.request.headers);
       try {
         rememberPassthroughResponseChecked(

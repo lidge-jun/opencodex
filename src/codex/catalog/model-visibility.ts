@@ -102,7 +102,7 @@ import type {
   CatalogSourceEvidence,
   CatalogTrustedOpenAiApiPolicySnapshot,
 } from "../convergence-types";
-import { CALLABLE_CONFIGURED_COMPATIBILITY_MODELS, applyProviderConfigHints } from "./model-hints";
+import { CALLABLE_CONFIGURED_COMPATIBILITY_MODELS, applyProviderConfigHints, copyReasoningHintSource } from "./model-hints";
 
 const DATED_VARIANT_YYYYMMDD = /^(\d{4})(\d{2})(\d{2})$/;
 const DATED_VARIANT_YYMMDD = /^(2\d)(\d{2})(\d{2})$/;
@@ -250,7 +250,8 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
     if (present.has(candidate.id)) continue;
     const dated = out.find(live => isDatedVariantId(live.id, candidate.id));
     if (dated) {
-      out.push(applyProviderConfigHints(name, prov, { ...dated, id: candidate.id }, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir, includeVisionSidecar));
+      const alias = copyReasoningHintSource(dated, { ...dated, id: candidate.id });
+      out.push(applyProviderConfigHints(name, prov, alias, contextCap, metadataModelIdCaseFold, undefined, metadataConfigDir, includeVisionSidecar));
       present.add(candidate.id);
       continue;
     }

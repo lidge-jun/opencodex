@@ -493,7 +493,7 @@ function pathIsAtOrBelow(target: string, root: string): boolean {
   return suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
 }
 
-function retainedWorkIsAtOrBelow(entry: AsyncAclWork, root: RemovalIdentity): boolean {
+function retainedWorkIsAtOrBelow(entry: AsyncAclWork, root: RemovalIdentity, includeAncestors = false): boolean {
   const target = entry.identity;
   // Failure at capture stays conservative, even if the alias later becomes readable.
   if (target.canonical === undefined || root.canonical === undefined) return true;
@@ -501,7 +501,43 @@ function retainedWorkIsAtOrBelow(entry: AsyncAclWork, root: RemovalIdentity): bo
   if (current === undefined) return true;
   const targets = [target.lexical, target.canonical, current];
   return [root.lexical, root.canonical].some(rootPath =>
-    targets.some(targetPath => pathIsAtOrBelow(targetPath, rootPath)));
+    targets.some(targetPath => pathIsAtOrBelow(targetPath, rootPath)
+      || (includeAncestors && pathIsAtOrBelow(rootPath, targetPath))));
+}
+
+/** Admission can refuse without surrendering the registry's retained-child cleanup ownership. */
+export class WindowsSecretAclSettleTimeoutError extends Error {
+  readonly code = "ETIMEDOUT";
+  readonly aclFailureOrigin = "acl_settle_timeout";
+  constructor() { super("ACL settlement timed out"); this.name = "WindowsSecretAclSettleTimeoutError"; }
+}
+
+/** Run a synchronous mutation after overlapping ACL work exits, within one harden budget. */
+export async function withWindowsSecretAclSettled<T>(rootPath: string, mutate: () => T): Promise<T> {
+  const deadline = nowFn() + resolveHardenDeadlineMs();
+  const root = captureRemovalIdentity(rootPath);
+  let cancelDeadline: (() => void) | undefined;
+  let timeout: Promise<never> | undefined;
+  let expired = false;
+  try {
+    while (true) {
+      if (expired || nowFn() >= deadline) throw new WindowsSecretAclSettleTimeoutError();
+      const pending = [...activeAsyncAclWork.values(), ...pendingAsyncIcaclsReaps.values()]
+        .flatMap(entries => [...entries])
+        .filter(entry => retainedWorkIsAtOrBelow(entry, root, true))
+        .map(entry => entry.reap);
+      // No await between this final observation and the mutation. A newly queued hardener's
+      // microtasks cannot run icacls until the synchronous callback has completely returned.
+      if (pending.length === 0) return mutate();
+      timeout ??= new Promise<never>((_resolve, reject) => {
+        cancelDeadline = asyncIcaclsBeltScheduler(() => {
+          expired = true;
+          reject(new WindowsSecretAclSettleTimeoutError());
+        }, Math.max(1, deadline - nowFn()));
+      });
+      await Promise.race([Promise.all(pending), timeout]);
+    }
+  } finally { cancelDeadline?.(); }
 }
 
 /** True while an async icacls runner still owns this exact path after its caller's belt fired. */
@@ -550,7 +586,7 @@ export function setAsyncIcaclsRunnerForTests(runner: AsyncIcaclsRunner | null): 
   asyncIcaclsRunner = runner ?? defaultAsyncIcaclsRunner;
 }
 
-/** Test seam: fire the outer caller-facing belt without sleeping. */
+/** Test seam: drive child belts and admission deadlines without sleeping. */
 export function setAsyncIcaclsBeltSchedulerForTests(
   scheduler: SubprocessDeadlineScheduler | null,
 ): void {

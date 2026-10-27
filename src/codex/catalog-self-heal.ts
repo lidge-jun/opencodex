@@ -3,7 +3,7 @@ import { readRuntimePort } from "../config/process-state";
 import { readClientConnectionState } from "../client/state";
 import { getActiveTurnCount, isDraining, isRecyclingForExit, isShutdownDraining } from "../server/lifecycle";
 import type { OcxConfig } from "../types";
-import { observeCatalogHealFile, sameCatalogHealPath, selectCatalogHealPath, type CatalogObservation } from "./catalog/heal-observation";
+import { compareCatalogHealPaths, observeCatalogHealFile, retainCatalogHealPath, selectCatalogHealPath, type CatalogObservation } from "./catalog/heal-observation";
 import { subscribeCatalogPublication } from "./catalog/publication-observer";
 import { configEnablesRoutedNamespace, ocxRoutedNamespaceCounts } from "./catalog/routed-removal";
 import { inspectCodexHomeOwner } from "./codex-home-owner";
@@ -51,6 +51,7 @@ export interface CatalogSelfHealDeps {
   now?: () => number;
   catalogPath?: () => string | null;
   observe?: (path: string, readContent: boolean) => CatalogObservation | null;
+  retainPath?: typeof retainCatalogHealPath;
   converge?: (config: OcxConfig, lifecycle: CatalogHealLifecycle) => Promise<CatalogHealOutcome>;
   subscribe?: typeof subscribeCatalogPublication;
   gates?: Partial<CatalogSelfHealGates>;
@@ -135,14 +136,19 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
   const attempts: number[] = [];
   const heals: number[] = [];
 
-  const read = (path: string): NamespaceObservation | null => {
+  const read = (path: string, fresh = false): NamespaceObservation | null => {
     const quick = observe(path, false);
     if (quick === null) return null;
-    if (observed !== null && sameCatalogHealPath(observed.path, path) && observed.signature === quick.signature) return observed;
+    if (!fresh && observed !== null) {
+      const relation = compareCatalogHealPaths(observed.path, path);
+      if (relation === "unknown") return null;
+      if (relation === "same" && observed.signature === quick.signature) return observed;
+    }
     const seen = observe(path, true);
     if (seen === null) return null;
-    observed = { path, signature: seen.signature, namespaces: seen.catalog ? new Set(ocxRoutedNamespaceCounts(seen.catalog).keys()) : null };
-    return observed;
+    const result = { path, signature: seen.signature, namespaces: seen.catalog ? new Set(ocxRoutedNamespaceCounts(seen.catalog).keys()) : null };
+    if (!fresh) observed = result;
+    return result;
   };
   const accept = (path: string): void => {
     const seen = read(path);
@@ -154,18 +160,23 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
     pendingRetry = null;
     recheckAt = 0;
   };
-  const updateTarget = (path: string | null): void => {
+  const updateTarget = (path: string | null): boolean => {
     // Unavailable selection is not evidence of a different target or lost authority.
-    if (path === null) return;
-    if (target !== null && sameCatalogHealPath(target, path)) return;
+    if (path === null) return false;
+    if (target !== null) {
+      const relation = compareCatalogHealPaths(target, path);
+      if (relation === "unknown") return false;
+      if (relation === "same") return true;
+    }
     clear();
     target = path;
+    return true;
   };
   const beforeCommit = (path: string, entryGeneration: number): boolean => {
     try {
       const selected = catalogPath();
       return !stopped && !released && generation === entryGeneration
-        && selected !== null && sameCatalogHealPath(selected, path) && evaluateCatalogSelfHealGates(gates).open;
+        && selected !== null && compareCatalogHealPaths(selected, path) === "same" && evaluateCatalogSelfHealGates(gates).open;
     } catch { return false; }
   };
   const capRetryAt = (now: number): number => {
@@ -182,8 +193,7 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
     running = true;
     try {
       const path = catalogPath();
-      updateTarget(path);
-      if (path === null) return;
+      if (!updateTarget(path) || path === null) return;
       // Pending cache/funnel failure is independent of catalog stat or apparent repaired rows.
       if (pendingRetry) {
         const config = gates.loadConfig();
@@ -226,7 +236,7 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
       })).committed; }
       catch { /* Failed attempts retain pending retry and consume the attempt budget. */ }
       const selected = catalogPath();
-      if (stopped || released || generation !== entryGeneration || selected === null || !sameCatalogHealPath(selected, path)) return;
+      if (stopped || released || generation !== entryGeneration || selected === null || compareCatalogHealPaths(selected, path) !== "same") return;
       last = { at: new Date().toISOString(), lostNamespaces: lostEnabled.length, committed };
       if (committed) {
         heals.push(clock());
@@ -241,33 +251,43 @@ export function startCodexCatalogSelfHeal(options: { port?: number; deps?: Catal
 
   const unsubscribe = (deps.subscribe ?? subscribeCatalogPublication)(event => {
     if (stopped) return;
+    const release = event.kind === "native-released" || event.intent === "restore";
+    // Bind publication evidence before comparisons can observe a retargeted alias.
+    const stillPublished = !release && event.path !== null ? (deps.retainPath ?? retainCatalogHealPath)(event.path) : null;
     // Native restoration can remove the journal before notification. Fence the known
     // target (and target-less releases) without resolving possibly unavailable evidence.
-    const release = event.kind === "native-released" || event.intent === "restore";
-    if (release && (event.path === null || (target !== null && sameCatalogHealPath(event.path, target)))) {
+    const known = event.path !== null && target !== null ? compareCatalogHealPaths(event.path, target) : "different";
+    if (release && (event.path === null || known !== "different")) {
       clear();
       released = true;
       return;
     }
     const path = catalogPath();
-    if (event.path !== null && (target === null || !sameCatalogHealPath(event.path, target))
-      && (path === null || !sameCatalogHealPath(event.path, path))) return;
+    const selected = event.path !== null && path !== null ? compareCatalogHealPaths(event.path, path) : "different";
+    if (event.path !== null && known === "different" && selected === "different") return;
     if (release) {
       clear();
       released = true; // Only a later accepted owner publication can re-arm this lifecycle.
       return;
     }
-    if (running) return; // Catalog-success/cache-failure must not accept a baseline.
+    if (running) {
+      if (known === "unknown" || selected === "unknown") clear();
+      return; // Catalog-success/cache-failure must not accept a baseline.
+    }
     // A committed owner publication supplies a read-only baseline even while heal writes are gated.
-    if (event.path === null || path === null || !sameCatalogHealPath(event.path, path)) return;
-    updateTarget(path);
+    if (event.path === null || path === null || selected !== "same" || stillPublished === null) return;
+    // Read independently of obsolete evidence, but retire it only after current selection proof.
+    const seen = read(event.path, true);
+    const current = catalogPath();
+    if (seen?.namespaces == null || current === null
+      || compareCatalogHealPaths(event.path, current) !== "same" || !stillPublished(seen.signature)) return;
+    clear();
+    target = current;
+    baseline = observed = seen;
     released = false;
-    pendingRetry = null;
-    recheckAt = 0;
-    accept(event.path);
   });
   // Capture immediately after startup sync, before a foreign write can become the first tick.
-  try { updateTarget(catalogPath()); if (target !== null) accept(target); }
+  try { const path = catalogPath(); if (updateTarget(path) && target !== null) accept(target); }
   catch { /* Unavailable observation can be retried by the scheduled tick. */ }
   const schedule = (): void => {
     if (stopped) return;

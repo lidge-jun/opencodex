@@ -207,6 +207,14 @@ Serialized request and buffered-response observations use byte counts without me
 The same rule applies to Anthropic, Google, and Chat response accounting; serialization itself is
 preserved where the existing metric is the serialized JSON size.
 
+Google SSE in `src/adapters/google.ts` measures each decoded fragment once and scans the retained
+line only when new text contains a newline. After consuming complete lines, only the remaining
+suffix is remeasured. Decoder EOF replacement bytes use the same admission-before-concatenation
+path; old/new overlap remains charged until replacement commits. Fragmented UTF-8, residual EOF
+frames, existing frame limits, terminal events and reader-release ownership retain their behavior.
+`tests/adapters/google/google-stream-fragmentation.test.ts` bounds measurement and scan work by
+input size and checks Unicode, exact EOF overlap admission, overflow and early-return cleanup.
+
 MiMo standalone bare-call recovery in `src/adapters/openai-chat/standalone-bare-tool-calls.ts`
 retains detached candidate inputs across bounded streaming prose release. Candidate records are
 measured without serialization, charged to `live_transient`, bounded to 128 records / 4 MiB total
@@ -362,17 +370,7 @@ The [compaction routing override](responses-failover.md#compaction-routing-overr
 
 `src/lib/sse-decoder.ts` recognizes CR, LF and CRLF line endings, including CRLF split between fetch chunks. Delimiters are consumed before field retention; event/comment ordering, EOF dispatch and translator-budget release remain shared across all three forms. The delimiter search keeps native `indexOf` cursors for the next CR and LF in each decoded chunk, so scanning stays linear for every framing.
 
-Native Chat's optional reasoning capture (`src/server/chat-native-reasoning.ts`) charges retained
-reasoning and tool ids before concatenation and reserves the previous string during replacement.
-Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay.
-Terminal, error and cancellation paths release collector retention; the shared replay cache owns
-its own bounded text after insertion. For a changed replay, native Chat measures the exact
-escaped-JSON net change and checks the final request size (`baseBytes + serializedBytes`)
-against the fixed `maxSerializedBytes` cap before expansion. It then reserves that full size as
-transient `request_copies` against the remaining translator budget before applying replay and
-serializing the request, releasing the reservation in `finally`. Exceeding either limit returns
-413 without truncating history. The post-build request charge remains owned and released by
-the existing retry/key-rotation lifecycle. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior.
+Native Chat's optional reasoning capture (`src/server/chat-native-reasoning.ts`) captures thinking from both `reasoning_content` and `reasoning` properties across SSE stream deltas and non-streaming choices. It charges retained reasoning and tool ids before concatenation and reserves the previous string during replacement. Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay. Terminal, error and cancellation paths release collector retention; the shared replay cache owns its own bounded text after insertion. In `src/adapters/openai-chat/passthrough.ts`, passthrough body sizing measures `baseBytes` unconditionally against `maxSerializedBytes - replayPlan.serializedBytes` via `jsonUtf8Bytes(transformedBody(), maxSerializedBytes - replayPlan.serializedBytes)` for both unchanged bodies and changed replays. Exceeding the remaining serialized byte budget immediately throws `TranslatorBudgetExceededError("request_copies", maxSerializedBytes)` (HTTP 413), enforcing `maxSerializedBytes` even on non-replay requests without eager string serialization. For a changed replay, native Chat measures the exact escaped-JSON net change, checks final request size (`baseBytes + serializedBytes`) against `maxSerializedBytes`, and reserves that full size as transient `request_copies` against the remaining translator budget before applying replay and serializing the request, releasing the reservation in `finally`. Exceeding either limit returns 413 without truncating history. The post-build request charge remains owned and released by the existing retry/key-rotation lifecycle. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior. Model-contract evidence and compatibility policy: Verification date: 2026-10-25. The Reflection/Stealth family default is a defensive compatibility fallback policy based on observed vendor behavior: live testing against Vercel AI Gateway (`reflection-beam`, 2026-10-23) observed rejection of tool-free multi-turn requests with HTTP 400. Because this destination-specific observation is not a vendor guarantee across all possible stealth or reflection hosts, OpenCodex applies this heuristic as a fallback policy while providing explicit operator overrides via `preserveReasoningContentModels` and `requiresReasoningPlaceholderModels`. Continuous CI verification exercises hermetic local fixtures in `tests/responses/chat-native-reasoning-scope.test.ts` (pinning multi-turn non-tool replay, `reasoning` delta capture, and passthrough size checks) without live network requests.
 
 The Opus 5.5 progress normalizer in `src/adapters/anthropic-progress.ts` reserves its one-block
 thinking/signature buffer before concatenation, replaces signatures rather than appending, and

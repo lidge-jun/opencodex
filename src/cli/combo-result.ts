@@ -40,6 +40,13 @@ function publicCombo(value: unknown): Record<string, unknown> {
       if (!tiers) invalid();
       result[key] = tiers;
       continue;
+    } else if (key === "cooldownReprobe") {
+      if (!record(child) || typeof child.enabled !== "boolean"
+        || Object.keys(child).some(field => field !== "enabled" && field !== "intervalMs")) invalid();
+      if (child.intervalMs !== undefined && (typeof child.intervalMs !== "number"
+        || !Number.isSafeInteger(child.intervalMs) || child.intervalMs < 1000 || child.intervalMs > 86_400_000)) invalid();
+      result[key] = { enabled: child.enabled, ...(child.intervalMs !== undefined ? { intervalMs: child.intervalMs } : {}) };
+      continue;
     } else if (key === "sessionPin") {
       const pin = normalizeJevSessionPin(child);
       if (!pin) invalid();

@@ -10,7 +10,8 @@ import {
 } from "../../src/responses/state";
 import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-task-recovery";
 import { agentTaskRecoveryCacheSnapshotForTests } from "../../src/server/responses/agent-task-recovery-cache";
-import { clearComboTargetCooldowns, coolComboTarget } from "../../src/combos/failover";
+import { clearComboTargetCooldowns, coolComboTarget, isComboTargetInCooldown } from "../../src/combos/failover";
+import { clearComboSelectionState } from "../../src/combos/resolve";
 import {
   clearCachedProviderQuotas,
   setCachedProviderQuotaForTests,
@@ -70,6 +71,7 @@ describe("combo path encrypted agent task recovery", () => {
     resetAgentTaskRecoveryState();
     clearCachedProviderQuotas();
     clearComboTargetCooldowns();
+    clearComboSelectionState();
   });
 
   afterEach(() => {
@@ -77,6 +79,7 @@ describe("combo path encrypted agent task recovery", () => {
     resetAgentTaskRecoveryState();
     clearCachedProviderQuotas();
     clearComboTargetCooldowns();
+    clearComboSelectionState();
     clearResponseStateForTests();
     // Released after the state flush and before the directory holding it is removed.
     releaseSpendHome?.();
@@ -125,6 +128,78 @@ describe("combo path encrypted agent task recovery", () => {
     const snapshot = existsSync(snapshotPath) ? readFileSync(snapshotPath, "utf8") : "";
     expect(snapshot).not.toContain(assignment);
     expect(snapshot).not.toContain(responsePayload.id!);
+  });
+
+  test.each([false, true])("encrypted recovery keeps replay-incompatible targets excluded (reprobe=%s)", async (reprobe) => {
+    const strict = { provider: "strict", model: "deepseek-v4-flash" };
+    const backup = { provider: "xai", model: "grok-4.5" };
+    const config = comboConfig([strict, backup]);
+    config.providers.strict = {
+      adapter: "openai-responses", baseUrl: "https://strict.example.test/v1", apiKey: "synthetic-key",
+      preserveResponsesReasoningContent: true, requiresAdjacentResponsesToolResults: true,
+    };
+    config.combos!.routed!.cooldownReprobe = { enabled: reprobe };
+    if (reprobe) {
+      for (const target of [strict, backup]) coolComboTarget("routed", target, { cooldownMs: 60_000 });
+    }
+    const urls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      urls.push(url);
+      return url.includes("chatgpt.com")
+        ? new Response(recoverySse("recovered assignment"), { headers: { "content-type": "text/event-stream" } })
+        : providerCompletion();
+    }) as typeof fetch;
+    const headers = codexHeaders();
+    headers.set("session_id", `encrypted-replay-${reprobe}`);
+    const seeded = await post(config, "xai/grok-4.5", [{ role: "user", content: "seed identity" }], headers);
+    expect(seeded.status).toBe(200);
+    await seeded.text();
+    urls.length = 0;
+    const response = await post(config, "combo/routed", [
+      { type: "reasoning", id: "rs_foreign", summary: [], encrypted_content: "foreign-blob", content: [] },
+      { type: "function_call", call_id: "call_1", name: "get_weather", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_1", output: "rain" },
+      ...encryptedInput(),
+    ], headers, undefined, { tools: [{ type: "function", name: "get_weather", parameters: { type: "object", properties: {} } }] });
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain("chatgpt.com");
+    expect(urls[1]).not.toContain("strict.example.test");
+    if (reprobe) expect(isComboTargetInCooldown("routed", strict)).toBe(true);
+  });
+
+  test.each(["non-spawn", "disabled-recovery"] as const)("refused %s recovery preserves cooldowns and the reprobe reservation", async (reason) => {
+    const target = { provider: "xai", model: "grok-4.5" };
+    const config = comboConfig([target]);
+    config.combos!.routed!.cooldownReprobe = { enabled: true, intervalMs: 86400000 };
+    coolComboTarget("routed", target, { cooldownMs: 60_000 });
+    const headers = codexHeaders();
+    if (reason === "non-spawn") headers.delete("x-openai-subagent");
+    else config.agentTaskRecovery = { enabled: false };
+    const urls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      urls.push(url);
+      return url.includes("chatgpt.com")
+        ? new Response(recoverySse("admitted assignment"), { headers: { "content-type": "text/event-stream" } })
+        : providerCompletion();
+    }) as typeof fetch;
+    const refused = await post(config, "combo/routed", encryptedInput(), headers);
+    await refused.text();
+    expect(refused.status).toBe(503);
+    expect(urls).toEqual([]);
+    expect(isComboTargetInCooldown("routed", target)).toBe(true);
+    expect(agentTaskRecoveryCacheSnapshotForTests()).toEqual({ entries: 0, bytes: 0 });
+
+    // An admitted request immediately afterwards must still own the first recovery pass.
+    config.agentTaskRecovery = { enabled: true };
+    const admitted = await post(config, "combo/routed", encryptedInput(), codexHeaders());
+    await admitted.text();
+    expect(admitted.status).toBe(200);
+    expect(urls).toHaveLength(2);
+    expect(isComboTargetInCooldown("routed", target)).toBe(false);
   });
 
   test("rejects an all-disabled combo before recovery creates or caches plaintext", async () => {

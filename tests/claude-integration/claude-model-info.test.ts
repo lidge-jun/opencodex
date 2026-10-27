@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { buildAnthropicModelInfos, nativeEffectiveLadder } from "../../src/claude/model-info";
 import { gatherRoutedModels, nativeEffortClamp } from "../../src/codex/catalog";
+import { MIMO_THINKING_CAPABILITIES } from "../../src/providers/mimo-thinking";
 
 describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => {
   test.each(["anthropic", "anthropic-apikey"])("%s registry image inputs reach Claude discovery aliases", async (provider) => {
@@ -56,6 +57,78 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     expect(info!.capabilities.effort.xhigh).toBeNull();
     expect(info!.capabilities.thinking.supported).toBe(false);
     expect(info!.max_input_tokens).toBeNull();
+  });
+
+  test("generic toggle-only models publish enabled thinking without claiming adaptive", () => {
+    const [info] = buildAnthropicModelInfos([], [{
+      provider: "p",
+      id: "toggle-only",
+      supportsReasoning: true,
+      supportsThinkingToggle: true,
+      supportsReasoningEffort: false,
+    }]);
+    expect(info!.capabilities.thinking).toEqual({
+      supported: true,
+      types: { adaptive: { supported: false }, enabled: { supported: true } },
+    });
+  });
+
+  test.each([
+    {
+      name: "fixed reasoning",
+      capabilities: { supportsReasoning: true, supportsThinkingToggle: false, supportsReasoningEffort: false },
+      ladder: ["high"],
+      effort: false,
+      thinking: { supported: true, adaptive: false, enabled: false },
+    },
+    {
+      name: "effort-only reasoning",
+      capabilities: { supportsReasoning: true, supportsThinkingToggle: false, supportsReasoningEffort: true },
+      ladder: ["high"],
+      effort: true,
+      thinking: { supported: true, adaptive: true, enabled: false },
+    },
+    {
+      name: "combined controls",
+      capabilities: { supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: true },
+      ladder: ["high"],
+      effort: true,
+      thinking: { supported: true, adaptive: true, enabled: true },
+    },
+    {
+      name: "explicitly unsupported reasoning",
+      capabilities: { supportsReasoning: false, supportsThinkingToggle: true, supportsReasoningEffort: true },
+      ladder: ["high"],
+      effort: false,
+      thinking: { supported: false, adaptive: false, enabled: false },
+    },
+    {
+      name: "effort declaration without a usable Claude rung",
+      capabilities: { supportsReasoning: true, supportsThinkingToggle: false, supportsReasoningEffort: true },
+      ladder: [],
+      effort: false,
+      thinking: { supported: true, adaptive: false, enabled: false },
+    },
+  ])("$name preserves independent reasoning axes", ({ capabilities, ladder, effort, thinking }) => {
+    const [info] = buildAnthropicModelInfos([], [{ provider: "p", id: "model", reasoningEfforts: ladder, ...capabilities }]);
+    expect(info!.capabilities.effort.supported).toBe(effort);
+    expect(info!.capabilities.thinking).toEqual({
+      supported: thinking.supported,
+      types: { adaptive: { supported: thinking.adaptive }, enabled: { supported: thinking.enabled } },
+    });
+  });
+
+  test("MiMo V2.6 publishes its documented enabled-only thinking switch", () => {
+    const [info] = buildAnthropicModelInfos([], [{
+      provider: "xiaomi",
+      id: "mimo-v2.6-pro",
+      ...MIMO_THINKING_CAPABILITIES["mimo-v2.6-pro"],
+    }]);
+    expect(info!.capabilities.effort.supported).toBe(false);
+    expect(info!.capabilities.thinking).toEqual({
+      supported: true,
+      types: { adaptive: { supported: false }, enabled: { supported: true } },
+    });
   });
 
   test("non-anthropic rungs (ultra) are filtered out of the capability set", () => {

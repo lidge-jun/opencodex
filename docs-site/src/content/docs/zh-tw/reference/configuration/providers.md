@@ -11,6 +11,16 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 此推斷預設關閉，需按供應商設定 `inferContextWindow: true` 開啟。未開啟時，缺少視窗的模型使用已啟用的 Context cap，否則回退至 128k。
 
+## GPT-6.1 Terra
+
+[GPT-6.1 Terra](https://openai.com/index/introducing-gpt-6-1-terra/) 於 2026年10月26日發布，是 GPT-5.6 Terra 的後繼型號。`gpt-6.1-terra` 與 `gpt-5.6-terra` 並列提供，不修改預設模型或子代理清單。GitHub Copilot 使用 Responses；OpenRouter ID 為 `openai/gpt-6.1-terra`，上下文為 1,050,000，每百萬 token 輸入 $1.00、輸出 $5.00。
+
+原生 Codex：預設上下文 500,000，長上下文上限 872,000，預設 effort 為 `low`，級別為 `low`、`medium`、`high`、`xhigh`、`max`、`ultra`。原生 `ultra` 在傳輸時對應至 `max`。原生項目僅提供 Fast 高速模式。
+
+[OpenAI API](https://developers.openai.com/api/docs/models/gpt-6.1-terra)：上下文 1,050,000，最大輸出 128,000；支援文字與影像輸入、文字輸出；知識截止日期為 2026-06-01。effort 為 `none`、`low`、`medium`（預設）、`high`、`xhigh`、`max`。端點為 `v1/responses` 和 `v1/chat/completions`；工具呼叫必須使用 Responses。
+
+每百萬 token：輸入 $1.00、快取輸入 $0.05、快取寫入 $1.25（30分鐘）、輸出 $5.00。輸入超過 272,000 token 時，整個請求按輸入與快取 2×、輸出 1.5×計費，依序為 $2.00 / $0.10 / $2.50 / $7.50。Fast 模式價格為 2×。
+
 ## 首次註冊時的模型選擇
 
 新的非 OAuth 連線會先等待可靠的模型清單，再公開模型。如果 Models 分頁中去重後的模型列達到20個，所有模型開關初始為 OFF，但供應商本身保持 ACTIVE。實際驗證方式為 OAuth 或 ChatGPT 登入的連線保留預設值。
@@ -103,7 +113,7 @@ ocx models provider openrouter on
 | `modelReasoningEfforts?` | `Record<string, string[]>` | Per-model 標籤。空清單隱藏 effort 控制。 |
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | 將模型設為 `false` 以停止廣告摘要並剝離 summary-delivery 欄位。 |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Per-model Responses delivery 列舉；重寫既有的 delivery 欄位。 |
-| `modelAdapters?` | `Record<string, string>` | 混合 wire 閘道的 Per-model `openai-chat` 或 `openai-responses` wire 覆寫。明確項目勝過 registry 預設；DeepSeek 的預設可為 `deepseek-v4-flash` 選擇原生 Responses。單一 wire 上游 pin 與規範 ChatGPT forward 拒絕覆寫。 |
+| `modelAdapters?` | `Record<string, string>` | 混合 wire 閘道的 Per-model `openai-chat` 或 `openai-responses` wire 覆寫。明確項目勝過 registry 預設；DeepSeek 的預設可為 `deepseek-v4-flash` 選擇原生 Responses。單一 wire 上游 pin 與規範 ChatGPT forward 拒絕覆寫。  GitHub Copilot 為 `gpt-6.1-sol` 與 `gpt-6.1-terra` 使用 Responses。 |
 | xAI Responses 選用（儀表板） | 開關 | 僅用於 `xai`，以原子方式設定或清除 `grok-4.5` 與 `grok-4.6` 的 `modelAdapters` 項目。若只有一個項目，會顯示混合狀態，直到下次開關寫入統一兩者。其他覆寫與層級行為不變。 Grok 4.7 在 OAuth 上透過登錄檔 wire 預設使用 Responses，也可透過明確的 `modelAdapters["grok-4.7"] = "openai-chat"` 項目切換至 Chat。 |
 | `annotateEmptyToolOutputs?` | `boolean` | 在工具結果送達模型前，將已存在但為空的結果替換成簡短標記，使空白結果不會被解讀為遺漏的結果。適用於空白字串及僅含文字部分的陣列；影像、檔案及加密部分絕不會被更動。DeepSeek 透過內建登錄檔預設為 `true`，其他情況則不設定。設為 `false` 可讓供應商停用此功能；後續編輯即使省略此欄位，也會保留明確設定的 `false`。`PATCH /api/providers?name=<provider>` 接受 `true`、`false` 或 `null`；`null` 會清除覆寫並恢復使用登錄檔的預設行為。 |
 | `xaiResponsesXSearch?` | `boolean` | 預設停用。在 xAI Responses 目的地上，僅當即時 `web_search` 工具通過最終請求正規化後仍保留時，才附加由供應商託管的 `x_search` 宣告。既有宣告不會重複，呼叫端的 `tool_choice`／`allowed_tools` 選擇器絕不會擴大，且此設定與網頁搜尋輔助服務的 `search.xSearch` 選項分開。 |

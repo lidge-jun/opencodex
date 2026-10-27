@@ -284,6 +284,22 @@
       ]
     },
     {
+      "path": "transports/response-turn-membership.md",
+      "tier": 3,
+      "title": "Structural Response Turn Membership",
+      "scope": "Embedding-owned signing material, dedicated authenticated caller/own-thread scope and pre-parser structural normalization.",
+      "documents": [
+        "src/responses/turn-membership.ts",
+        "src/server/responses/turn-membership.ts",
+        "src/bridge/sse.ts",
+        "src/server/responses/adapter-delivery.ts",
+        "src/server/responses/adapter-dispatch.ts",
+        "src/server/responses/request-transport.ts",
+        "src/server/auth-cors.ts",
+        "src/server/responses/request-prepare.ts"
+      ]
+    },
+    {
       "path": "transports/responses.md",
       "tier": 3,
       "title": "Responses Transport",
@@ -673,11 +689,25 @@
       ]
     },
     {
+      "path": "providers/completed-tool-blocks.md",
+      "tier": 4,
+      "title": "Negotiated Completed Tool Blocks",
+      "scope": "Explicit response-only block completion, ordered safe-call delivery and terminal ownership.",
+      "documents": ["src/adapters/base.ts", "src/adapters/unique-tool-call-ids.ts", "src/adapters/openai-chat.ts", "src/adapters/openai-chat/completed-tool-blocks.ts", "src/adapters/openai-chat/serialized-tool-call-content.ts"]
+    },
+    {
       "path": "providers/mimo-bare-calls.md",
       "tier": 4,
       "title": "MiMo Bare Tool Calls",
       "scope": "Standalone MiMo bare-block recovery into declared freeform calls, separate from identified-wrapper reconciliation.",
       "documents": ["src/adapters/openai-chat/", "src/adapters/openai-chat.ts"]
+    },
+    {
+      "path": "providers/chat-required-tool-results.md",
+      "tier": 4,
+      "title": "Mandatory Translated Chat Tool Results",
+      "scope": "Translated Chat terminal guard that fails a clean completion missing a mandatory client tool call.",
+      "documents": ["src/adapters/openai-chat/required-tool-result.ts"]
     },
     {
       "path": "adapters/registry.md",
@@ -928,6 +958,33 @@
       ]
     },
     {
+      "path": "ops/desktop-supervision.md",
+      "tier": 6,
+      "title": "Desktop Supervision",
+      "scope": "Durable Desktop ownership read, takeover-consent handling, live-supervision evidence, the Windows probe's trusted system-directory acquisition, and the supervision latch blocking contract consumed by service and update guards.",
+      "documents": [
+        "bin/ocx.mjs",
+        "desktop/src-tauri/src/claim.rs",
+        "desktop/src-tauri/src/first_run.rs",
+        "desktop/src-tauri/src/identity.rs",
+        "desktop/src-tauri/src/ownership.rs",
+        "desktop/src-tauri/src/resolve.rs",
+        "desktop/src-tauri/src/runtime_stop.rs",
+        "desktop/src-tauri/src/startup.rs",
+        "src/cli/desktop-runtime-guidance.ts",
+        "src/cli/update-restart.ts",
+        "src/service/cli.ts",
+        "src/service/desktop-command-guard.ts",
+        "src/service/desktop-startup.ts",
+        "src/service/desktop-supervision.d.mts",
+        "src/service/desktop-supervision.mjs",
+        "src/service/orchestration.ts",
+        "src/service/repair.ts",
+        "src/update/index.ts",
+        "src/update/restart-ownership.ts"
+      ]
+    },
+    {
       "path": "ops/service-logging.md",
       "tier": 6,
       "title": "Managed Service Logging",
@@ -1060,8 +1117,10 @@
       "path": "ops/test-sandbox-cleanup.md",
       "tier": 6,
       "title": "Test Sandbox Cleanup",
-      "scope": "Test-runner home and case-scoped lifecycle teardown ordering.",
+      "scope": "Test-runner home, case-scoped lifecycle teardown, and Bun test lock generation ownership.",
       "documents": [
+        "scripts/test-run-lock.ts",
+        "scripts/test-run-lock-gate.ts",
         "tests/"
       ]
     },

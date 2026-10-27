@@ -384,12 +384,11 @@ export function bootRestoreProbe(packageDir, deps = {}) {
  * Run the transactional update. `runNpm(args, opts)` is injected so the caller keeps
  * its hardened npm resolution (npm-invocation.mjs) and logging.
  */
-export function transactionalNpmUpdate({
+function* npmUpdateTransaction({
   packageDir,
   pkgName,
   targetVersion,
   tag,
-  runNpm,
   cachePath,
   log = () => {},
   deps = {},
@@ -437,13 +436,18 @@ export function transactionalNpmUpdate({
   // operator's global npmrc would be dropped and npm would fall back to its default root. Pin
   // the cache the pre-flight resolved and checked, so staging uses that exact root (#6288).
   const cacheArgs = typeof cachePath === "string" && cachePath.length > 0 ? ["--cache", cachePath] : [];
-  const install = runNpm([
+  const install = yield [
     "install", "-g", "--prefix", stageRoot, ...cacheArgs,
     "--allow-scripts=bun", "--no-audit", "--no-fund", spec,
-  ]);
-  if (install.status !== 0) {
-    discardStage();
-    return { ok: false, phase: "stage", error: "npm staging install failed (" + (install.status ?? "?") + ")" };
+  ];
+  if (install.status !== 0 || install.error || install.processTreeExited === false) {
+    if (install.processTreeExited === false) {
+      log("Left this update's staging directory in place: process-tree exit was not confirmed; stop the installer before removing " + basename(stageRoot));
+    } else discardStage();
+    const detail = install.error
+      ? [install.error.code, install.error.message].filter(Boolean).join(": ")
+      : install.signal ?? install.status ?? "?";
+    return { ok: false, phase: "stage", error: "npm staging install failed (" + detail + ")" };
   }
   const stagedPackage = stagedCandidatesIn(stageRoot).find(dir => existsSync(join(dir, "package.json")));
   if (!stagedPackage) {
@@ -523,4 +527,26 @@ export function transactionalNpmUpdate({
   // still hold the old cwd.
   discardStage();
   return { ok: true, phase: "done", backup: backupPackage };
+}
+
+/** Keep synchronous callers while the Node launcher awaits the install/exit barrier. */
+export function transactionalNpmUpdate(options) {
+  const transaction = npmUpdateTransaction(options);
+  const step = transaction.next();
+  if (step.done) return step.value;
+  // Preserve the legacy status-only transaction on POSIX and for existing callers.
+  const install = options.runNpm(step.value);
+  return transaction.next({ status: install.status }).value;
+}
+
+export async function transactionalNpmUpdateAsync(options) {
+  const transaction = npmUpdateTransaction(options);
+  const step = transaction.next();
+  if (step.done) return step.value;
+  let install;
+  try { install = await options.runNpm(step.value); }
+  catch (error) { install = { status: null, error, processTreeExited: false }; }
+  if (install.processTreeExited !== true) install = { ...install, status: null, processTreeExited: false,
+    error: install.error ?? { code: "EINSTALLJOIN", message: "npm process-tree exit was not confirmed" } };
+  return transaction.next(install).value;
 }
