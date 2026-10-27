@@ -108,6 +108,9 @@ export const STALE_MODEL_ROSTERS: readonly StaleModelRoster[] = [
     contextWindows: { [MINIMAX_M31_FLASH]: MINIMAX_MODEL_CONTEXT_WINDOWS[MINIMAX_M31_FLASH]! },
     maxOutputTokens: { [MINIMAX_M31_FLASH]: MINIMAX_M31_FLASH_MAX_OUTPUT_TOKENS },
     defaultReasoningEfforts: { [MINIMAX_M31_FLASH]: MINIMAX_M31_DEFAULT_REASONING_EFFORT },
+    // #7807: Custom destinations keep their roster and partial metadata maps.
+    destinationBaseUrls: ["https://api.minimax.io/v1", "https://api.minimaxi.com/v1", "https://api.minimax.cn/v1"]
+      .flatMap(url => [url, `${url}/chat/completions`]),
   })),
   ...[
     { provider: "alibaba-token-plan", from: ALIBABA_TOKEN_PLAN_MODELS_BEFORE_1017, to: ALIBABA_TOKEN_PLAN_MODELS },

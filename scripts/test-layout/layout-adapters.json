@@ -1,4 +1,7 @@
 {
+  "qoder-image-input.test.ts": "providers",
+  "qoder-cn-image-validation.test.ts": "providers",
+  "coding-agent-history-projection.test.ts": "adapters",
   "cursor-native-grep-globs.test.ts": "providers/cursor",
   "tool-identity-hash.test.ts": "adapters",
   "eventstream-fragmentation.test.ts": "responses",

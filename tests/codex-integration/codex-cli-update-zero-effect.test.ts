@@ -203,7 +203,7 @@ describe("Codex CLI updater zero-effect boundary", () => {
     });
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(2);
-    expect(result.stderr).toContain("codex-cli-update action must be check, attest or plan");
+    expect(result.stderr).toContain("codex-cli-update action must be check, attest, plan, apply or status");
     expect(readFileSync(statePath)).toEqual(before);
     expect(existsSync(marker)).toBe(false);
   });

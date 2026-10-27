@@ -81,14 +81,17 @@ describe("Codex CLI selection inspection boundary", () => {
     for (const key of Object.keys(env)) {
       if (["home", "node_path"].includes(key.toLowerCase())) delete env[key];
     }
+    const startedAt = performance.now();
     const result = spawnSync("node", [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", "check", "--json"], {
       cwd: repoRoot(), encoding: "utf8", timeout: 15_000, windowsHide: true,
       env: { ...env, Home: "C:\\" + "h".repeat(8 * 1024), Node_Path: "C:\\" + "n".repeat(8 * 1024),
         OPENCODEX_HOME: root, OPENCODEX_BUN_PATH: process.execPath,
         CODEX_CLI_PATH: "C:\\fixture\\codex.exe", OCX_NO_DESKTOP_HANDOFF: "1" },
     });
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
+    const diagnostic = JSON.stringify({ elapsedMs: performance.now() - startedAt, status: result.status,
+      signal: result.signal, error: result.error?.message, stdout: result.stdout?.slice(-2_048), stderr: result.stderr?.slice(-2_048) });
+    expect(result.error, diagnostic).toBeUndefined();
+    expect(result.status, diagnostic).toBe(0);
     const report = JSON.parse(result.stdout);
     expect(report.candidateSource).toBe("environment");
     expect(report.reason).toBe("windows_inspection_deferred");
@@ -248,8 +251,18 @@ describe("Codex CLI selection inspection boundary", () => {
     // and node directories. Everything the spawned npm view needs is answered
     // by the script; nothing else on the PATH can shadow it.
     const integrity = "sha512-" + Buffer.alloc(64, 7).toString("base64");
+    const backingVersion = "9.9.9-" + selected.pkg.slice("@openai/codex-".length);
+    const mainMetadata = JSON.stringify({ name: "@openai/codex", version: "9.9.9",
+      optionalDependencies: { [selected.pkg]: "npm:@openai/codex@" + backingVersion },
+      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-9.9.9.tgz" } });
+    const backingMetadata = JSON.stringify({ name: "@openai/codex", version: backingVersion,
+      dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-" + backingVersion + ".tgz" } });
     writeFileSync(join(fakeBin, "npm"), [
       "#!/bin/sh",
+      'case "$*" in',
+      `  *codex@${backingVersion}*--json*) printf '%s\\n' '${backingMetadata}'; exit 0 ;;`,
+      `  *--json*) printf '%s\\n' '${mainMetadata}'; exit 0 ;;`,
+      "esac",
       'case "$*" in',
       '  *dist.integrity*) printf "%s\n" ' + JSON.stringify(integrity) + " ;;",
       '  *dist.tarball*) printf "%s\n" "https://registry.npmjs.org/@openai/codex/-/codex-9.9.9.tgz" ;;',
@@ -470,9 +483,15 @@ const result = await handleCodexCliUpdateCommand(process.argv.slice(4), {
       requireEvidence(equal(captureCodexCliTransportEnv(options.env)), "npm transport mismatch");
       requireEvidence(options.env.PATH === ${JSON.stringify(tools)}, "npm PATH mismatch");
       queries++;
-      return { status: 0, stdout: args.includes("version") ? "1.1.0"
-        : args.includes("dist.integrity") ? "sha512-" + Buffer.alloc(64, 7).toString("base64")
-        : "https://registry.npmjs.org/@openai/codex/-/codex-1.1.0.tgz", stderr: "" };
+      requireEvidence(args[0] === "view" && args.includes("--json"), "exact artifact metadata query missing");
+      const requested = args[1].slice(args[1].lastIndexOf("@") + 1);
+      const version = requested === "latest" ? "1.1.0" : requested;
+      return { status: 0, stdout: JSON.stringify({ name: "@openai/codex", version,
+        optionalDependencies: version === "1.1.0" ? Object.fromEntries(
+          ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-x64", "win32-arm64"]
+            .map(suffix => ["@openai/codex-" + suffix, "npm:@openai/codex@1.1.0-" + suffix])) : undefined,
+        dist: { integrity: "sha512-" + Buffer.alloc(64, 7).toString("base64"),
+          tarball: "https://registry.npmjs.org/@openai/codex/-/codex-" + version + ".tgz" } }), stderr: "" };
     },
   }),
 });

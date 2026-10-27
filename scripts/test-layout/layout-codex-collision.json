@@ -1,4 +1,10 @@
 {
+  "codex-cli-update-artifacts.test.ts": "codex-integration",
+  "codex-cli-update-apply.test.ts": "codex-integration",
+  "codex-cli-update-paths.test.ts": "codex-integration",
+  "codex-cli-update-admission.test.ts": "codex-integration",
+  "codex-cli-update-recovery.test.ts": "codex-integration",
+  "codex-cli-update-worker.test.ts": "codex-integration",
   "codex-catalog-heal-reanchor.test.ts": "codex-integration",
   "codex-quota-persistence.test.ts": "codex-integration",
   "codex-sync-user-edits.test.ts": "codex-integration",
