@@ -1576,11 +1576,7 @@ async function resolveCodexAuthContextUnannotated(
       );
     }
     if (fixedAccountId !== undefined) {
-      // Discovery ran for an exact `__main__` selector too, so its saved failure must not be
-      // downgraded into a blanket unavailability refusal here: propagate it the same way the
-      // no-selection path above does. After an entitlement-await recovery, stale failure wins
-      // while the credential is still unusable; a healthy account falls through to the normal
-      // checks and gets served.
+      // Preserve exact-main discovery errors only while the current credential remains unusable, as above.
       if (accountId === MAIN_CODEX_ACCOUNT_ID && mainDiscoveryFailure !== undefined
         && !getMainAccountCredentialStatus().usable) {
         throw new CodexAuthContextError(MAIN_CODEX_ACCOUNT_ID, mainDiscoveryFailure);
