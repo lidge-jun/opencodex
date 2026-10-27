@@ -16,7 +16,6 @@ import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../account-runt
 import { decodeJwtPayload, extractAccountId } from "../../oauth/chatgpt";
 import { getMainAccountPlan, getValidMainAccountToken, isMainAccountTokenVerifiablyLive, mainAccountTokenIsCurrent, mainAccountTokenQuotaWriter, MainAccountTokenRefreshError, MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan, type MainAccountToken } from "../main-account";
 import { resolveCodexHomeDir } from "../home";
-import { nativeMainAuthenticationIsCurrent, nativeMainRefusals } from "../native-main-refusals";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { captureMainAccountIdentityGeneration, clearMainAccountInfoCache, getMainAccountInfoCache, getMainQuotaCredentialGeneration, isMainAccountIdentityGenerationLive, isMainQuotaWriterLive, matchesMainQuotaCredential, observeMainQuotaCredential, setMainAccountCredentialPresence, setMainAccountInfoCache } from "../main-account-cache";
 import type { MainQuotaWriter, MainAccountInfo } from "../main-account-cache";
@@ -284,8 +283,6 @@ export async function fetchMainAccountInfoWhileOwned(
     const preserved = getMainAccountInfoCache();
     return { info: preserved ?? EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: false };
   }
-  const authentication = nativeMainRefusals.capture(resolveCodexHomeDir(), tokens.access_token);
-  if (!authentication) return { info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: false };
   const requestAccountId = extractAccountId(tokens.id_token, tokens.access_token) ?? (tokens.account_id || null);
   const cached = getMainAccountInfoCache();
   if (!forceRefresh && cached && Date.now() - cached.ts < MAIN_CACHE_TTL) {
@@ -299,7 +296,6 @@ export async function fetchMainAccountInfoWhileOwned(
   const mainQuotaCredentialGeneration = getMainQuotaCredentialGeneration();
   /** A disk replacement may have no second probe to advance the credential generation. */
   const credentialIsCurrent = (): boolean => {
-    if (!nativeMainAuthenticationIsCurrent(authentication)) return false;
     const current = readCodexTokensResult(undefined, { bounded: true });
     if (owned) return current.status === "missing" && mainAccountTokenIsCurrent(owned)
       && mainQuotaCredentialGeneration === getMainQuotaCredentialGeneration();
@@ -322,7 +318,6 @@ export async function fetchMainAccountInfoWhileOwned(
   const read = async (): Promise<MainAccountInfoFetchResult> => {
     try {
       let dispatchSequence = 0;
-      if (!nativeMainAuthenticationIsCurrent(authentication)) return { info: EMPTY_MAIN_ACCOUNT_INFO, credentialChecked: true, hasCredential: false };
       const baseKey = `main:${writerGeneration}:${mainQuotaCredentialGeneration}`;
       const resetEpoch = postReset ? `:post-reset:${currentQuotaDispatchSequence()}` : "";
       const admission = await fetchCodexUsage<MainAccountInfoFetchResult>(

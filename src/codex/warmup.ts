@@ -22,8 +22,6 @@ export interface CodexWarmupOptions {
   chatgptAccountId: string;
   model?: string;
   timeoutMs?: number;
-  /** Recheck an owned credential before every physical send, including model fallback. */
-  beforeDispatch?: () => void;
   /** Publish quota headers only after a completed inference, never on a failed stream. */
   onCompleted?: (headers: Headers) => void;
 }
@@ -249,7 +247,6 @@ async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<vo
   try {
     let res: Response;
     try {
-      options.beforeDispatch?.();
       res = await fetch(CODEX_RESPONSES_URL, {
         method: "POST",
         headers: {

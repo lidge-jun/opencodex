@@ -29,9 +29,6 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
-import { nativeMainRefusals } from "../../src/codex/native-main-refusals";
-import { providerRequestPacingStatus, resetProviderRequestPacingForTest, waitForProviderRequestSlot } from "../../src/providers/request-pacing";
-import * as routedConfig from "../../src/providers/routed-config";
 
 /** Smallest complete Anthropic stream: the combo's second target has to actually answer. */
 const ANTHROPIC_SSE = [
@@ -111,7 +108,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  nativeMainRefusals.verifiedLogin(home);
   setNativeMainRefreshResolutionForTests(null);
   clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);
   resetMainCodexAccountIdentityTrackingForTests();
@@ -164,108 +160,6 @@ function install401ThenRefreshHarness(): { sends: string[]; refreshes: string[] 
 }
 
 describe("native main 401 refresh and replay", () => {
-  for (const gateway of [false, true]) test.each(["/v1/responses", "/v1/responses/compact"] as const)(
-    `%s success retains refusal history (gateway=${gateway})`, async path => {
-      clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);
-      resetMainCodexAccountIdentityTrackingForTests();
-      fs.rmSync(join(home, "auth.json"));
-      setNativeMainRefreshResolutionForTests({ mode: "codex", configured: "auto", reason: "codex-compatible", command: "/fixture/codex", version: "0.162.1" });
-      const rejected = fakeChatGptJwt("account-main", { jti: "refused" });
-      await getValidMainAccountToken({ codexAuthStatus: async () => ({ authMethod: "chatgpt", authToken: rejected, requiresOpenaiAuth: true }) });
-      await expect(getValidMainAccountToken({ codexAuthStatus: async () => ({ authMethod: "chatgpt", authToken: null, requiresOpenaiAuth: true }) })).rejects.toMatchObject({ reason: "reauth" });
-      const successor = fakeChatGptJwt("account-main", { jti: "successor" });
-      writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: { access_token: successor, account_id: "account-main" } }));
-      expect((await getValidMainAccountToken())?.accessToken).toBe(successor);
-      expect(nativeMainRefusals.has(home)).toBe(true);
-      let sends = 0;
-      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = new URL(input instanceof Request ? input.url : String(input));
-        if (!url.pathname.endsWith("/responses") && !url.pathname.endsWith("/responses/compact")) return Response.json({}, { status: 503 });
-        sends++;
-        expect(url.hostname).toBe(gateway ? "gateway.example.test" : "chatgpt.com");
-        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${gateway ? "gateway-fixture-key" : successor}`);
-        expect(nativeMainRefusals.has(home)).toBe(true);
-        return Response.json({ id: "resp_authenticated", object: "response", status: "completed", output: [] });
-      }) as typeof fetch;
-      const cfg = config();
-      if (gateway) Object.assign(cfg.providers.openai!, { baseUrl: "https://gateway.example.test/v1",
-        headers: { Authorization: "Bearer gateway-fixture-key" }, supportsNativeCompactEndpoint: true });
-      // Inject an already-resolved gateway row: the preset normally pins openai's URL.
-      // Selection, transport credentials and both generic success hooks remain real.
-      const resolved = gateway ? spyOn(routedConfig, "routedProviderConfig").mockImplementation((_name, provider) => provider) : undefined;
-      try {
-      const req = request(path);
-      const log = { model: "", provider: "" } as RequestLogContext;
-      const response = path === "/v1/responses" ? await handleResponses(req, cfg, log)
-        : await handleResponsesCompact(req, cfg, log);
-      const body = await response.text();
-      expect({ status: response.status, error: response.status === 200 ? undefined : body }).toEqual({ status: 200, error: undefined });
-      expect(sends).toBe(1);
-      expect(nativeMainRefusals.has(home)).toBe(true);
-      expect(nativeMainRefusals.refuses(home, rejected)).toBe(true);
-      nativeMainRefusals.verifiedLogin(home);
-      expect(nativeMainRefusals.has(home)).toBe(false);
-      } finally { resolved?.mockRestore(); }
-    },
-  );
-  for (const mode of ["pool", "direct"] as const) test.each(["/v1/responses", "/v1/responses/compact"] as const)(
-    `%s rechecks refusal after pacing (mode=${mode})`, async path => {
-      const cfg = config(); cfg.providers.openai!.codexAccountMode = mode;
-      cfg.hostname = "0.0.0.0";
-      cfg.apiKeys = [{ id: "queued", name: "queued", key: "ocx_data_queued_fixture", createdAt: "2026-10-27T00:00:00.000Z" }];
-      cfg.providers.openai!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
-      const blocker = await waitForProviderRequestSlot("openai", cfg.providers.openai!, "gpt-5.5");
-      let sends = 0;
-      globalThis.fetch = (async (input: RequestInfo | URL) => {
-        const url = new URL(input instanceof Request ? input.url : String(input));
-        if (url.pathname.endsWith("/responses") || url.pathname.endsWith("/responses/compact")) sends++;
-        return Response.json({ id: "resp_queued", object: "response", status: "completed", output: [] });
-      }) as typeof fetch;
-      const req = request(path), log = { model: "", provider: "" } as RequestLogContext;
-      req.headers.set("authorization", "Bearer ocx_data_queued_fixture");
-      const admission = resolveResponsesApiAuth(req, cfg)!, turn = tryAdmitTurn()!;
-      expect(admission.source).toBe("bearer"); expect(turn).not.toBeNull();
-      const pending = path.endsWith("compact") ? handleResponsesCompact(req, cfg, log, turn, admission)
-        : handleResponses(req, cfg, log, { admission, turnAdmissionLease: turn });
-      try {
-        for (let i = 0; i < 1000 && providerRequestPacingStatus("openai", cfg.providers.openai!).queued === 0; i++) await Bun.sleep(1);
-        expect(providerRequestPacingStatus("openai", cfg.providers.openai!).queued).toBe(1);
-        nativeMainRefusals.refuse(home, "rejected-access");
-        blocker?.release();
-        const response = await pending;
-        expect(sends).toBe(0);
-        expect(response.status).toBe(401);
-        expect(await response.text()).toContain(CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE);
-      } finally { blocker?.release(); resetProviderRequestPacingForTest(); await pending; turn.release(); }
-    },
-  );
-  test.each(["/v1/responses", "/v1/responses/compact"] as const)(
-    "%s rechecks refusal while a refreshed replay waits for pacing", async path => {
-      const cfg = config(); cfg.providers.openai!.requestPacing = { enabled: true, maxConcurrentRequests: 1 };
-      const harness = install401ThenRefreshHarness(), upstream = globalThis.fetch;
-      let blocker: Awaited<ReturnType<typeof waitForProviderRequestSlot>>;
-      let entered!: () => void; const refreshing = new Promise<void>(resolve => { entered = resolve; });
-      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        if (new URL(input instanceof Request ? input.url : String(input)).hostname === "auth.openai.com") {
-          blocker = await waitForProviderRequestSlot("openai", cfg.providers.openai!, "gpt-5.5"); entered();
-        }
-        return upstream(input, init);
-      }) as typeof fetch;
-      const req = request(path), log = { model: "", provider: "" } as RequestLogContext;
-      const pending = path.endsWith("compact") ? handleResponsesCompact(req, cfg, log) : handleResponses(req, cfg, log);
-      try {
-        await refreshing;
-        for (let i = 0; i < 1000 && providerRequestPacingStatus("openai", cfg.providers.openai!).queued === 0; i++) await Bun.sleep(1);
-        expect(providerRequestPacingStatus("openai", cfg.providers.openai!).queued).toBe(1);
-        nativeMainRefusals.refuse(home, "refreshed-access"); blocker?.release();
-        const response = await pending;
-        expect(harness.sends).toEqual(["Bearer rejected-access"]);
-        expect(harness.refreshes).toEqual(["refresh-grant"]);
-        expect(response.status).toBe(401);
-        expect(await response.text()).toContain(CODEX_MAIN_SIGN_IN_REQUIRED_MESSAGE);
-      } finally { blocker?.release(); resetProviderRequestPacingForTest(); await pending; }
-    },
-  );
   test.each(["/v1/responses", "/v1/responses/compact"] as const)(
     "%s publishes retry quota for a keyring account replacement after 401", async path => {
       clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);

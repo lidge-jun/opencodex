@@ -1,7 +1,5 @@
 import { readFileSync, statSync, type BigIntStats } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { dirname } from 'node:path';
-import { nativeMainBearerAllowed, nativeMainRefusals } from '../native-main-refusals';
 import type { UsageIdentity } from './usage-controller';
 
 type Credential = { identity: UsageIdentity; accessToken: string };
@@ -23,8 +21,7 @@ export function createNativeIdentityReader(authPath: string, upstreamFetch: type
     const auth = JSON.parse(text);
     if (auth.auth_mode !== 'chatgpt' || typeof auth.tokens?.id_token !== 'string'
       || typeof auth.tokens?.access_token !== 'string' || !auth.tokens.access_token
-      || typeof auth.tokens?.account_id !== 'string'
-      || !nativeMainBearerAllowed(auth.tokens.access_token, dirname(authPath))) throw new Error('Native login required');
+      || typeof auth.tokens?.account_id !== 'string') throw new Error('Native login required');
     // These local claims are only a binding hint. Activation additionally verifies upstream.
     const claims = JSON.parse(Buffer.from(auth.tokens.id_token.split('.')[1], 'base64url').toString('utf8'))['https://api.openai.com/auth'];
     if (!claims || claims.chatgpt_account_id !== auth.tokens.account_id
@@ -39,8 +36,6 @@ export function createNativeIdentityReader(authPath: string, upstreamFetch: type
   const verifyFreshIdentity = async (): Promise<UsageIdentity | null> => {
     try {
       const before = readCredential();
-      const proof = nativeMainRefusals.capture(dirname(authPath), before.accessToken);
-      if (!proof) return null;
       const response = await upstreamFetch('https://chatgpt.com/backend-api/wham/usage', {
         headers: { authorization: 'Bearer ' + before.accessToken, 'ChatGPT-Account-ID': before.identity.id },
         redirect: 'manual', signal: AbortSignal.timeout(10000),
@@ -57,7 +52,7 @@ export function createNativeIdentityReader(authPath: string, upstreamFetch: type
       } finally { reader.releaseLock(); }
       const usage = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       const after = readCredential();
-      if (!nativeMainRefusals.current(proof) || !equal(before.identity, after.identity) || before.accessToken !== after.accessToken
+      if (!equal(before.identity, after.identity) || before.accessToken !== after.accessToken
         || usage.account_id !== before.identity.id || usage.user_id !== before.identity.userId
         || usage.plan_type !== before.identity.plan) return null;
       return before.identity;

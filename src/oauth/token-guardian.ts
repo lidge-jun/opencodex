@@ -27,7 +27,6 @@ import {
 } from "../codex/account-store";
 import { codexWarmupFailureReason, warmCodexAccount } from "../codex/warmup";
 import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
-import { resolveCodexHomeDir } from "../codex/home";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
@@ -191,14 +190,10 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
           try {
             const mainToken = getMainAccountToken();
             if (!mainToken) return;
-            const mainHome = resolveCodexHomeDir();
             await warmCodexAccount({
               accessToken: mainToken.accessToken,
               chatgptAccountId: mainToken.chatgptAccountId,
               model: opts.codexWarmupModel,
-              beforeDispatch: () => {
-                if (mainHome !== resolveCodexHomeDir() || getMainAccountToken()?.accessToken !== mainToken.accessToken) throw new Error("main account unavailable");
-              },
             });
             backoff.delete(key);
             result.warmed.push(key);

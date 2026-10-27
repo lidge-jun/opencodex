@@ -15,12 +15,8 @@ import {
 } from "../../src/codex/native-main-refresh-mode";
 import {
   forceRefreshMainAccountToken,
-  beginNativeMainReauth,
   getMainAccountCredentialStatus,
-  getMainAccountToken,
   getValidMainAccountToken,
-  isMainAccountTokenLive,
-  isMainAccountTokenVerifiablyLive,
   isMainAccountRefreshGrantRejected,
   MAIN_CODEX_ACCOUNT_ID,
   MainAuthJsonChangedDuringRefreshError,
@@ -42,7 +38,6 @@ import type { OcxConfig } from "../../src/types";
 import type { ResolveCodexRuntimeResult } from "../../src/codex/runtime";
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { NativeMainRefusals, nativeMainRefusals } from "../../src/codex/native-main-refusals";
 
 const CODEX_MODE: NativeMainRefreshResolution = {
   mode: "codex", configured: "auto", reason: "codex-compatible", command: "/fake/codex", version: "0.162.1",
@@ -136,8 +131,6 @@ process.stdin.on("data", chunk => {
 let root: string;
 let home: string;
 let previousCodexHome: string | undefined;
-let refusalHomes: Map<string, unknown>;
-let refusalEvicted: boolean;
 const touchedEnv = ["OCX_FAKE_CODEX_SCENARIO", "OCX_FAKE_CODEX_LOG", "OCX_FAKE_CODEX_TOKEN"] as const;
 
 function fakeCodex(): { command: string; logPath: string } {
@@ -161,8 +154,6 @@ function seedAuth(accessToken: string, refreshToken = "codex-owned-grant"): stri
 const expired = () => fakeChatGptJwt("acct-main", { exp: Math.floor(Date.now() / 1000) - 60 });
 
 beforeEach(() => {
-  refusalHomes = new Map(Reflect.get(nativeMainRefusals, "homes"));
-  refusalEvicted = Reflect.get(nativeMainRefusals, "evictedRefusal");
   root = mkdtempSync(join(tmpdir(), "ocx-native-refresh-mode-"));
   home = join(root, "codex-home");
   mkdirSync(home);
@@ -171,8 +162,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  Reflect.set(nativeMainRefusals, "homes", refusalHomes);
-  Reflect.set(nativeMainRefusals, "evictedRefusal", refusalEvicted);
   setNativeMainRefreshResolutionForTests(null);
   for (const name of touchedEnv) delete process.env[name];
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -282,6 +271,29 @@ describe("main account in codex refresh mode (#2999)", () => {
 
     expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: fresh, chatgptAccountId: "acct-main" });
     expect(calls).toEqual([{ refresh: false }]);
+  });
+
+  test.each([false, true])("a withheld lookup only refuses its own materialization (forced=%s)", async forced => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const bearer = fakeChatGptJwt("acct-per-lookup");
+    let withheld = true;
+    const { calls, codexAuthStatus } = seam(() => ({
+      authMethod: "chatgpt", authToken: withheld ? null : bearer, requiresOpenaiAuth: true,
+    }));
+    const inbound = new Headers({ authorization: "Bearer ocx_data_fixture" });
+    const context = { kind: "main" as const, accountId: null };
+    const options = { substituteMainCredential: true, nativeMainRefreshDependencies: { codexAuthStatus } };
+    if (forced) {
+      await expect(forceRefreshMainAccountToken(bearer, { codexAuthStatus })).rejects.toMatchObject({ reason: "reauth" });
+    } else {
+      await expect(materializeCodexUpstreamAuthAsync(inbound, context, options)).rejects.toMatchObject({ reason: "reauth" });
+    }
+    expect(getMainAccountCredentialStatus()).toMatchObject({ refreshGrantRejected: false, usable: false });
+    withheld = false;
+    const selected = await materializeCodexUpstreamAuthAsync(inbound, context, options);
+    expect(selected.get("authorization")).toBe(`Bearer ${bearer}`);
+    expect(selected.get("chatgpt-account-id")).toBe("acct-per-lookup");
+    expect(calls).toEqual([{ refresh: forced }, { refresh: false }]);
   });
 
   test("Pool discovers a keyring-only main login before synchronous candidacy", async () => {
@@ -735,7 +747,7 @@ describe("main account in codex refresh mode (#2999)", () => {
     expect(getMainAccountCredentialStatus().usable).toBe(false);
   });
 
-  test.each(["rejected-bearer", "opaque", "conflicting-identity", "home-roundtrip"])("a keyring refresh refusal stays quarantined until a verified successor (%s)", async scenario => {
+  test("a later authoritative keyring lookup can return the same bearer after withholding it", async () => {
     setNativeMainRefreshResolutionForTests(CODEX_MODE);
     seedAuth(expired());
     const rejected = fakeChatGptJwt("acct-main");
@@ -749,215 +761,14 @@ describe("main account in codex refresh mode (#2999)", () => {
 
     await expect(forceRefreshMainAccountToken(rejected, { codexAuthStatus })).rejects.toMatchObject({ reason: "reauth" });
     expect(getMainAccountCredentialStatus().usable).toBe(false);
-    expect(isMainAccountRefreshGrantRejected()).toBe(true);
-    await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toMatchObject({ reason: "reauth" });
-    if (scenario === "home-roundtrip") {
-      const otherHome = join(root, "other-home");
-      mkdirSync(otherHome);
-      process.env.CODEX_HOME = otherHome;
-      try {
-        expect(isMainAccountRefreshGrantRejected()).toBe(false);
-        expect(await getValidMainAccountToken({ codexAuthStatus: async () => ({
-          authMethod: "chatgpt", authToken: rejected, requiresOpenaiAuth: true,
-        }) })).toEqual({ accessToken: rejected, chatgptAccountId: "acct-main" });
-      } finally {
-        process.env.CODEX_HOME = home;
-      }
-    }
-    const uncertain = scenario === "rejected-bearer" || scenario === "home-roundtrip" ? rejected : scenario === "opaque" ? "opaque-fixture-token"
-      : fakeChatGptJwt("acct-main", { chatgpt_account_id: "acct-conflicting" });
-    status = { authMethod: "chatgpt", authToken: uncertain, requiresOpenaiAuth: true };
-    await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toMatchObject({ reason: "reauth" });
-    expect(getMainAccountCredentialStatus()).toMatchObject({ refreshGrantRejected: true, usable: false });
-    // A different bearer is a candidate; reading it must retain the refused fingerprints.
-    const successor = fakeChatGptJwt("acct-main", { jti: "verified-successor" });
-    status = { authMethod: "chatgpt", authToken: successor, requiresOpenaiAuth: true };
-    expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: successor, chatgptAccountId: "acct-main" });
-    expect(nativeMainRefusals.has(home)).toBe(true);
-    expect(nativeMainRefusals.refuses(home, rejected)).toBe(true);
     expect(isMainAccountRefreshGrantRejected()).toBe(false);
-    expect(getMainAccountCredentialStatus().usable).toBe(true);
-  });
-
-  test("ordinary lookup refusal remembers the last observed bearer across uncertain reads", async () => {
-    setNativeMainRefreshResolutionForTests(CODEX_MODE);
-    const bearer = fakeChatGptJwt("acct-ordinary-refusal");
-    const answer = (authToken: string | null) => async (): Promise<CodexAuthStatus> => ({
-      authMethod: "chatgpt", authToken, requiresOpenaiAuth: true,
-    });
-    await getValidMainAccountToken({ codexAuthStatus: answer(bearer) });
-    await expect(getValidMainAccountToken({ codexAuthStatus: async () => { throw new Error("offline"); } }))
-      .rejects.toMatchObject({ reason: "transient" });
-    await expect(getValidMainAccountToken({ codexAuthStatus: answer(null) })).rejects.toMatchObject({ reason: "reauth" });
-    await expect(getValidMainAccountToken({ codexAuthStatus: answer(bearer) })).rejects.toMatchObject({ reason: "reauth" });
-    expect(getMainAccountCredentialStatus().usable).toBe(false);
-    const successor = fakeChatGptJwt("acct-ordinary-refusal", { jti: "new-login" });
-    expect(await getValidMainAccountToken({ codexAuthStatus: answer(successor) }))
-      .toMatchObject({ accessToken: successor });
-  });
-
-  for (const refusal of ["known", "unknown", "fingerprint-saturated", "home-evicted"] as const) {
-    test.each(["status", "valid", "forced", "raw", "live", "verifiably-live"] as const)(
-      `restored auth.json cannot bypass ${refusal} keyring refusal (%s)`, async admission => {
-        // Saturation is process-wide; restore metadata so this matrix cannot poison later homes.
-        const homes = new Map(Reflect.get(nativeMainRefusals, "homes"));
-        const evicted = Reflect.get(nativeMainRefusals, "evictedRefusal");
-        try {
-          setNativeMainRefreshResolutionForTests(CODEX_MODE);
-          const bearer = fakeChatGptJwt("acct-main", { jti: "restored-refused" });
-          const answer = (authToken: string | null) => async (): Promise<CodexAuthStatus> => ({
-            authMethod: "chatgpt", authToken, requiresOpenaiAuth: true,
-          });
-          if (refusal !== "unknown") await getValidMainAccountToken({ codexAuthStatus: answer(bearer) });
-          await expect(getValidMainAccountToken({ codexAuthStatus: answer(null) }))
-            .rejects.toMatchObject({ reason: "reauth" });
-          if (refusal === "fingerprint-saturated") {
-            for (let i = 0; i < 5; i++) {
-              await expect(forceRefreshMainAccountToken(fakeChatGptJwt("acct-main", { jti: i }), { codexAuthStatus: answer(null) }))
-                .rejects.toMatchObject({ reason: "reauth" });
-            }
-          } else if (refusal === "home-evicted") {
-            for (let i = 0; i < 12; i++) nativeMainRefusals.refuse(join(root, `evicted-${i}`), `fixture-${i}`);
-          }
-          seedAuth(bearer);
-          if (admission === "status") {
-            expect(getMainAccountCredentialStatus()).toEqual({ refreshGrantRejected: true, hasRefreshGrant: false, usable: false });
-          } else if (admission === "valid" || admission === "forced") {
-            const dependencies = { codexAuthStatus: answer(bearer) };
-            await expect(admission === "valid" ? getValidMainAccountToken(dependencies)
-              : forceRefreshMainAccountToken("different-upstream-bearer", dependencies)).rejects.toMatchObject({ reason: "reauth" });
-          } else if (admission === "raw") {
-            expect(getMainAccountToken()).toBeNull();
-          } else {
-            expect(admission === "live" ? isMainAccountTokenLive() : isMainAccountTokenVerifiablyLive()).toBe(false);
-          }
-          if (refusal !== "known") {
-            // A fresh verified successor alone cannot recover lost refusal history.
-            const successor = fakeChatGptJwt("acct-main", { jti: "unproven-file-successor" });
-            seedAuth(successor);
-            await expect(getValidMainAccountToken()).rejects.toMatchObject({ reason: "reauth" });
-            expect(getMainAccountCredentialStatus().usable).toBe(false);
-            await beginNativeMainReauth().commit({ accessToken: successor, refreshToken: "committed-new-grant",
-              idToken: successor, chatgptAccountId: "acct-main" });
-            expect(await getValidMainAccountToken()).toEqual({ accessToken: successor, chatgptAccountId: "acct-main" });
-          }
-        } finally {
-          Reflect.set(nativeMainRefusals, "homes", homes);
-          Reflect.set(nativeMainRefusals, "evictedRefusal", evicted);
-        }
-      },
-    );
-  }
-
-  test.each(["status", "valid", "raw"] as const)("restored auth.json requires a different verified bearer for recovery (%s)", async admission => {
-    setNativeMainRefreshResolutionForTests(CODEX_MODE);
-    const bearer = fakeChatGptJwt("acct-main", { jti: "file-recovery-old" });
-    const answer = (authToken: string | null) => async (): Promise<CodexAuthStatus> => ({
-      authMethod: "chatgpt", authToken, requiresOpenaiAuth: true,
-    });
-    await getValidMainAccountToken({ codexAuthStatus: answer(bearer) });
-    await expect(getValidMainAccountToken({ codexAuthStatus: answer(null) })).rejects.toMatchObject({ reason: "reauth" });
-    seedAuth(bearer);
-    await expect(getValidMainAccountToken()).rejects.toMatchObject({ reason: "reauth" });
-    for (const uncertain of ["opaque-fixture-token", fakeChatGptJwt("acct-main", { chatgpt_account_id: "acct-conflict" }),
-      fakeChatGptJwt("acct-other"), expired()]) {
-      seedAuth(uncertain);
-      await expect(getValidMainAccountToken()).rejects.toMatchObject({ reason: "reauth" });
-    }
-    const successor = fakeChatGptJwt("acct-main", { jti: "file-recovery-new" });
-    seedAuth(successor);
-    if (admission === "status") {
-      expect(getMainAccountCredentialStatus()).toEqual({ refreshGrantRejected: false, hasRefreshGrant: true, usable: true });
-    } else {
-      const result = admission === "valid" ? await getValidMainAccountToken() : getMainAccountToken();
-      expect(result).toEqual({ accessToken: successor, chatgptAccountId: "acct-main" });
-    }
+    await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toMatchObject({ reason: "reauth" });
+    status = { authMethod: "chatgpt", authToken: rejected, requiresOpenaiAuth: true };
+    expect((await getValidMainAccountToken({ codexAuthStatus }))?.accessToken).toBe(rejected);
     expect(isMainAccountRefreshGrantRejected()).toBe(false);
   });
 
-  test.each(["status", "valid", "raw", "live", "verifiably-live"] as const)(
-    "signature-mutated successor cannot clear a refusal through %s reads", async admission => {
-      setNativeMainRefreshResolutionForTests(CODEX_MODE);
-      const bearer = fakeChatGptJwt("acct-main", { jti: "signature-only-mutation" });
-      const answer = (authToken: string | null) => async (): Promise<CodexAuthStatus> => ({
-        authMethod: "chatgpt", authToken, requiresOpenaiAuth: true,
-      });
-      await getValidMainAccountToken({ codexAuthStatus: answer(bearer) });
-      await expect(getValidMainAccountToken({ codexAuthStatus: answer(null) })).rejects.toMatchObject({ reason: "reauth" });
-      const forged = bearer.slice(0, bearer.lastIndexOf(".") + 1) + "forged-signature";
-      seedAuth(forged);
-      if (admission === "status") expect(getMainAccountCredentialStatus().usable).toBe(true);
-      else if (admission === "valid") expect((await getValidMainAccountToken())?.accessToken).toBe(forged);
-      else if (admission === "raw") expect(getMainAccountToken()?.accessToken).toBe(forged);
-      else expect(admission === "live" ? isMainAccountTokenLive() : isMainAccountTokenVerifiablyLive()).toBe(true);
-      expect(nativeMainRefusals.has(home)).toBe(true);
-      seedAuth(bearer);
-      expect(getMainAccountToken()).toBeNull();
-      expect(getMainAccountCredentialStatus().usable).toBe(false);
-      await expect(getValidMainAccountToken()).rejects.toMatchObject({ reason: "reauth" });
-    },
-  );
-
-  test("unknown ordinary lookup refusal cannot be cleared by a newly observed verified bearer", async () => {
-    setNativeMainRefreshResolutionForTests(CODEX_MODE);
-    await expect(getValidMainAccountToken({ codexAuthStatus: async () => ({
-      authMethod: "chatgpt", authToken: null, requiresOpenaiAuth: true,
-    }) })).rejects.toMatchObject({ reason: "reauth" });
-    await expect(getValidMainAccountToken({ codexAuthStatus: async () => ({
-      authMethod: "chatgpt", authToken: fakeChatGptJwt("acct-unknown-refusal"), requiresOpenaiAuth: true,
-    }) })).rejects.toMatchObject({ reason: "reauth" });
-    expect(getMainAccountCredentialStatus().usable).toBe(false);
-    // Only the committed same-identity device login is an explicit recovery event.
-    const recovered = fakeChatGptJwt("acct-main", { jti: "committed-login" });
-    seedAuth(recovered);
-    await beginNativeMainReauth().commit({ accessToken: recovered, refreshToken: "new-grant",
-      idToken: recovered, chatgptAccountId: "acct-main" });
-    rmSync(join(home, "auth.json"));
-    expect(await getValidMainAccountToken({ codexAuthStatus: async () => ({
-      authMethod: "chatgpt", authToken: recovered, requiresOpenaiAuth: true,
-    }) })).toMatchObject({ accessToken: recovered });
-  });
-
-  test("home saturation bounds metadata and keeps evicted refusals unknown", () => {
-    const refusals = new NativeMainRefusals();
-    for (let i = 0; i < 12; i++) refusals.refuse(`fixture-home-${i}`, `fixture-bearer-${i}`);
-    expect(Reflect.get(refusals, "homes").size).toBe(8);
-    expect(refusals.has("fixture-home-0")).toBe(true);
-    expect(refusals.refuses("fixture-home-0", "fixture-bearer-0")).toBe(true);
-    expect(refusals.refuses("fixture-home-0", "different-verified-bearer")).toBe(true);
-    expect(refusals.refuses("untracked-home", "different-verified-bearer")).toBe(true);
-    refusals.verifiedLogin("fixture-home-0");
-    expect(refusals.has("fixture-home-0")).toBe(false);
-    expect(refusals.refuses("fixture-home-0", "committed-login-bearer")).toBe(false);
-    expect(refusals.has("fixture-home-1")).toBe(true);
-    expect(Reflect.get(refusals, "homes").size).toBe(8);
-  });
-
-  test("fingerprint metadata has a small cap and stores only domain-separated hashes", () => {
-    const refusals = new NativeMainRefusals();
-    for (let i = 0; i < 4; i++) refusals.refuse("fixture-home", `fixture-bearer-${i}`);
-    const state = Reflect.get(refusals, "homes").get("fixture-home");
-    expect(state.fingerprints.size).toBe(4);
-    for (const hash of state.fingerprints) expect(hash).toMatch(/^[a-f0-9]{64}$/);
-    refusals.refuse("fixture-home", "fixture-bearer-overflow");
-    expect(state.fingerprints.size).toBe(0);
-    expect(state.unknown).toBe(true);
-    expect(refusals.refuses("fixture-home", "different-verified-bearer")).toBe(true);
-  });
-
-  test("fingerprint saturation requires verified login instead of forgetting refused bearers", async () => {
-    setNativeMainRefreshResolutionForTests(CODEX_MODE);
-    const refused = async (): Promise<CodexAuthStatus> => ({ authMethod: "chatgpt", authToken: null, requiresOpenaiAuth: true });
-    for (let i = 0; i < 12; i++) {
-      await expect(forceRefreshMainAccountToken(fakeChatGptJwt("acct-saturated", { jti: i }), { codexAuthStatus: refused }))
-        .rejects.toMatchObject({ reason: "reauth" });
-    }
-    await expect(getValidMainAccountToken({ codexAuthStatus: async () => ({
-      authMethod: "chatgpt", authToken: fakeChatGptJwt("acct-saturated", { jti: "unproven-successor" }), requiresOpenaiAuth: true,
-    }) })).rejects.toMatchObject({ reason: "reauth" });
-  });
-
-  test("a chatgpt login with a withheld token means reauthentication", async () => {
+  test("a chatgpt login with a withheld token keeps the file-backed grant rejection", async () => {
     setNativeMainRefreshResolutionForTests(CODEX_MODE);
     const original = seedAuth(expired());
     const { codexAuthStatus } = seam(() => ({ authMethod: "chatgpt", authToken: null, requiresOpenaiAuth: true }));

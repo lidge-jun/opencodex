@@ -1,6 +1,5 @@
 import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt, poolCreditRecoveryNeeded, poolContextCreditRecoveryNeeded, poolCreditRecoveryRetryAt } from "./pool-credit-policy";
 import { hasSpendableCodexCredits } from "./quota-types";
-import { guardNativeMainDispatch, nativeMainBearerAllowed } from "./native-main-refusals";
 import { nextQuotaQueryDelay } from "./quota-query-backoff";
 import { noteMainAccountActivity } from "./main-account-external-usage";
 import { codexAccountPriorityFailbackEnabled } from "./account-priority";
@@ -779,7 +778,7 @@ export function createCodexAuthDispatchGuard(
   admission?: Pick<DataPlaneAdmission, "source">,
   terminalHelper = false,
 ): ((headers: Headers) => void) | undefined {
-  const reserveGuard = guardNativeMainDispatch(ctx, createCodexReserveDispatchGuard(ctx, config, modelId, admission, terminalHelper), () => new CodexAuthContextError(MAIN_CODEX_ACCOUNT_ID, new MainAccountTokenRefreshError("reauth")));
+  const reserveGuard = createCodexReserveDispatchGuard(ctx, config, modelId, admission, terminalHelper);
   if (ctx.kind !== "pool" && ctx.kind !== "main-pool") return reserveGuard;
   return headers => {
     if (config.pausedCodexAccountIds?.includes(ctx.accountId)) throw new CodexPoolAuthenticationError("Selected Codex account is paused; resume it in account settings");
@@ -904,15 +903,16 @@ function observeSelectedMainCredential(
   token: { accessToken: string; chatgptAccountId: string },
   writer: MainQuotaWriter | undefined,
 ): MainQuotaWriter | undefined {
-  if (!nativeMainBearerAllowed(token.accessToken)) throw new MainAccountTokenRefreshError("reauth");
-  // Only the exact RPC result carries its replacement identity writer.
+  // A claimed RPC can observe a replacement identity while the caller awaits it. Only that
+  // exact result carries the replacement writer; stale results keep their stale fence.
   const ownedWriter = mainAccountTokenQuotaWriter(token);
   if (ownedWriter) return ownedWriter;
   if (!writer) return undefined;
-  // Keep stale writers tagged so they cannot invalidate the replacement's trusted observation.
+  // Carry an explicitly stale writer through to quota's rejection fence; turning it into an
+  // untagged write would instead invalidate the replacement account's trusted observation.
   if (!isMainQuotaWriterLive(writer)) return writer;
   const observed = observeMainQuotaCredential(token.accessToken, token.chatgptAccountId);
-  return observed?.identityKey === writer.identityKey ? observed : undefined;
+  return observed?.identityKey === writer.identityKey ? writer : undefined;
 }
 
 /**

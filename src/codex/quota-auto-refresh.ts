@@ -261,9 +261,7 @@ async function warmAccount(config: OcxConfig, accountId: string): Promise<void |
           && getMainQuotaCredentialGeneration() === credentialGeneration;
       };
       try {
-        await warmCodexAccount({ ...token, beforeDispatch: () => {
-          if (!credentialStillLive()) throw new Error("main account unavailable");
-        }, onCompleted: headers => {
+        await warmCodexAccount({ ...token, onCompleted: headers => {
           if (writer && credentialStillLive()) {
             applyAccountQuotaFromUpstreamHeaders(accountId, headers, writerGeneration, writer);
           }
