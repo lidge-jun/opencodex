@@ -38,7 +38,7 @@ interface CursorJwtPayload {
   exp?: unknown;
 }
 
-function decodeCursorJwtPayload(token: string): CursorJwtPayload | undefined {
+export function decodeCursorJwtPayload(token: string): CursorJwtPayload | undefined {
   const parts = token.split(".");
   const payload = parts[1];
   if (parts.length !== 3 || !payload) return undefined;
