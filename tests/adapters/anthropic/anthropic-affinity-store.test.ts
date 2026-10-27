@@ -6,7 +6,7 @@ import { removeTreeWithRetry } from "../../helpers/remove-tree";
 import { getAccountSet, removeAccount, saveCredential, saveAccountCredential, markAccountNeedsReauth } from "../../../src/oauth/store";
 import { AnthropicSessionAffinityStore, anthropicAffinityDigest, anthropicAffinityPath,
   AFFINITY_IDLE_TTL_MS, MAX_AFFINITY_FILE_BYTES } from "../../../src/oauth/anthropic-session-affinity-store";
-import { atomicWriteFile } from "../../../src/config/atomic-write";
+import { atomicWriteFile, atomicWriteFileNoFollow } from "../../../src/config/atomic-write";
 import { runOptionalShutdownHooks } from "../../../src/lib/optional-shutdown-hooks";
 import { settleBackgroundWork } from "../../../src/lib/background-work";
 import * as authStore from "../../../src/oauth/store";
@@ -169,7 +169,14 @@ for (const dangling of [false, true]) test.skipIf(linkUnavailable)(`final ${dang
 });
 
 test("pending writes and shutdown cannot publish a previous home's rows", async () => {
-  const store = owner();
+  // Every publication is recorded: the invariant is that rows bound to `home` are only ever
+  // written under `home`. Whether the first write settles before the switch is platform
+  // timing (Windows waits for ACL settlement, POSIX writes at once), so it is not asserted.
+  const targets: string[] = [];
+  const store = owner("anthropic", ((target: string, ...rest: unknown[]) => {
+    targets.push(target);
+    return (atomicWriteFileNoFollow as (...args: unknown[]) => unknown)(target, ...rest);
+  }) as typeof atomicWriteFile);
   const other = mkdtempSync(join(tmpdir(), "ocx-affinity-switched-"));
   try {
     store.set(key, { accountId: id, lastUsedAt: Date.now() });
@@ -178,8 +185,12 @@ test("pending writes and shutdown cannot publish a previous home's rows", async 
     expect(existsSync(anthropicAffinityPath(other, "anthropic"))).toBe(false);
     runOptionalShutdownHooks(); await settleBackgroundWork({ timeoutMs: 5_000 });
     expect(existsSync(anthropicAffinityPath(other, "anthropic"))).toBe(false);
+    expect(targets.every(target => target === path())).toBe(true);
     process.env.OPENCODEX_HOME = home;
-    expect(store.get(key)).toBeUndefined();
+    // Back in its own home the store never serves a row written for another one.
+    const restored = store.get(key);
+    expect(restored === undefined || restored.accountId === id).toBe(true);
+    expect(existsSync(anthropicAffinityPath(other, "anthropic"))).toBe(false);
   } finally { store.resetMemory(); process.env.OPENCODEX_HOME = home; removeTreeWithRetry(other); }
 });
 
