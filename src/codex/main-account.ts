@@ -11,6 +11,7 @@ import {
   credsFromToken,
   decodeJwtPayload,
   extractAccountId,
+  extractAccountIdClaims,
 } from "../oauth/chatgpt";
 import type { OAuthCredentials } from "../oauth/types";
 import { extractChatgptPlanType } from "./plan";
@@ -262,6 +263,27 @@ function credentialRefreshGrantRejected(current: MainAuthJsonCredential | null):
   return !!key && isMainRefreshGrantRejected(key);
 }
 
+/** Restored file bytes are subject to the same home refusal as an owned RPC. */
+function credentialRefused(current: MainAuthJsonCredential | null, now = Date.now()): boolean {
+  if (credentialRefreshGrantRejected(current)) return true;
+  const home = resolveCodexHomeDir();
+  if (!codexOwnedMainRefusals.has(home)) return false;
+  const bearer = current?.accessToken;
+  if (!current || !bearer || codexOwnedMainRefusals.refuses(home, bearer)
+    || !mainAccessTokenFresh(bearer, now, 0)) return true;
+  const accessIdentity = extractAccountIdClaims(bearer);
+  const idIdentity = extractAccountIdClaims(nonEmptyString(current.tokens.id_token));
+  if (!accessIdentity.accountId || accessIdentity.conflict || idIdentity.conflict
+    || accessIdentity.accountId !== current.chatgptAccountId
+    || (idIdentity.accountId !== undefined && idIdentity.accountId !== accessIdentity.accountId)
+    || (nonEmptyString(current.tokens.account_id) !== undefined
+      && current.tokens.account_id !== accessIdentity.accountId)) return true;
+  // Only a different, identity-verified bearer can recover a known refusal.
+  // Unknown/saturated history was rejected above and needs committed login.
+  codexOwnedMainRefusals.observe(home, bearer);
+  return false;
+}
+
 export interface MainAccountCredentialStatus {
   refreshGrantRejected: boolean;
   hasRefreshGrant: boolean;
@@ -272,8 +294,7 @@ export interface MainAccountCredentialStatus {
 export function getMainAccountCredentialStatus(now = Date.now()): MainAccountCredentialStatus {
   const current = readMainAuthJsonCredential();
   const owned = !current && codexOwnedMainCredential?.home === resolveCodexHomeDir() ? codexOwnedMainCredential : null;
-  const refreshGrantRejected = credentialRefreshGrantRejected(current)
-    || (!current && codexOwnedMainRefusals.has(resolveCodexHomeDir()));
+  const refreshGrantRejected = credentialRefused(current, now);
   const hasRefreshGrant = !!current?.refreshToken && !refreshGrantRejected;
   const ownedUsable = !!owned && owned.expiresAt > now;
   const usable = !refreshGrantRejected
@@ -559,7 +580,7 @@ async function resolveMainAccountToken(
     if (rejectedAccessToken !== undefined) noteNativeMainRefresh("skipped-no-credential");
     return null;
   }
-  if (credentialRefreshGrantRejected(initial)) throw new MainAccountTokenRefreshError("reauth");
+  if (credentialRefused(initial)) throw new MainAccountTokenRefreshError("reauth");
   const now = Date.now();
   if (initial.accessToken !== rejectedAccessToken
     && mainAccessTokenFresh(initial.accessToken, now, MAIN_TOKEN_REFRESH_SKEW_MS)) {
@@ -607,7 +628,7 @@ async function resolveMainAccountToken(
         if (resolveCodexHomeDir() !== codexHome) throw new MainAuthJsonChangedDuringRefreshError();
         const locked = readMainAuthJsonCredential();
         if (!locked) throw new MainAuthJsonChangedDuringRefreshError();
-        if (credentialRefreshGrantRejected(locked)) throw new MainAccountTokenRefreshError("reauth");
+        if (credentialRefused(locked)) throw new MainAccountTokenRefreshError("reauth");
         if (!locked.refreshToken
           || refreshGrantFingerprintForToken(locked.refreshToken) !== lockKey) {
           if (locked.accessToken !== rejectedAccessToken
@@ -824,9 +845,9 @@ export function getMainAccountPlan(): string | undefined {
 
 /** Read-only main account token from ~/.codex/auth.json, or null when not logged in. */
 export function getMainAccountToken(): { accessToken: string; chatgptAccountId: string } | null {
-  const tokens = readCodexTokens();
-  if (!tokens?.access_token) return null;
-  return { accessToken: tokens.access_token, chatgptAccountId: tokens.account_id };
+  const current = readMainAuthJsonCredential();
+  if (!current?.accessToken || credentialRefused(current)) return null;
+  return { accessToken: current.accessToken, chatgptAccountId: nonEmptyString(current.tokens.account_id) ?? "" };
 }
 
 /**
@@ -835,9 +856,9 @@ export function getMainAccountToken(): { accessToken: string; chatgptAccountId: 
  * actually-invalid token then surfaces via the upstream 401 → cooldown path.
  */
 export function isMainAccountTokenLive(now = Date.now()): boolean {
-  const tokens = readCodexTokens();
-  if (!tokens?.access_token) return false;
-  const payload = decodeJwtPayload(tokens.access_token);
+  const current = readMainAuthJsonCredential();
+  if (!current?.accessToken || credentialRefused(current, now)) return false;
+  const payload = decodeJwtPayload(current.accessToken);
   const exp = typeof payload?.exp === "number" ? payload.exp * 1000 : undefined;
   return exp === undefined || exp > now;
 }
@@ -852,9 +873,9 @@ export function isMainAccountTokenLive(now = Date.now()): boolean {
  * 401 "transient" and needsReauth could never flip.
  */
 export function isMainAccountTokenVerifiablyLive(now = Date.now()): boolean {
-  const tokens = readCodexTokens();
-  if (!tokens?.access_token) return false;
-  const payload = decodeJwtPayload(tokens.access_token);
+  const current = readMainAuthJsonCredential();
+  if (!current?.accessToken || credentialRefused(current, now)) return false;
+  const payload = decodeJwtPayload(current.accessToken);
   const exp = typeof payload?.exp === "number" ? payload.exp * 1000 : undefined;
   return exp !== undefined && exp > now;
 }

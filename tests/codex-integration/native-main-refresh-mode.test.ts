@@ -17,7 +17,10 @@ import {
   forceRefreshMainAccountToken,
   beginNativeMainReauth,
   getMainAccountCredentialStatus,
+  getMainAccountToken,
   getValidMainAccountToken,
+  isMainAccountTokenLive,
+  isMainAccountTokenVerifiablyLive,
   isMainAccountRefreshGrantRejected,
   MAIN_CODEX_ACCOUNT_ID,
   MainAuthJsonChangedDuringRefreshError,
@@ -39,7 +42,7 @@ import type { OcxConfig } from "../../src/types";
 import type { ResolveCodexRuntimeResult } from "../../src/codex/runtime";
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { NativeMainRefusals } from "../../src/codex/native-main-refusals";
+import { NativeMainRefusals, nativeMainRefusals } from "../../src/codex/native-main-refusals";
 
 const CODEX_MODE: NativeMainRefreshResolution = {
   mode: "codex", configured: "auto", reason: "codex-compatible", command: "/fake/codex", version: "0.162.1",
@@ -783,6 +786,85 @@ describe("main account in codex refresh mode (#2999)", () => {
     const successor = fakeChatGptJwt("acct-ordinary-refusal", { jti: "new-login" });
     expect(await getValidMainAccountToken({ codexAuthStatus: answer(successor) }))
       .toMatchObject({ accessToken: successor });
+  });
+
+  for (const refusal of ["known", "unknown", "fingerprint-saturated", "home-evicted"] as const) {
+    test.each(["status", "valid", "forced", "raw", "live", "verifiably-live"] as const)(
+      `restored auth.json cannot bypass ${refusal} keyring refusal (%s)`, async admission => {
+        // Saturation is process-wide; restore metadata so this matrix cannot poison later homes.
+        const homes = new Map(Reflect.get(nativeMainRefusals, "homes"));
+        const evicted = Reflect.get(nativeMainRefusals, "evictedRefusal");
+        try {
+          setNativeMainRefreshResolutionForTests(CODEX_MODE);
+          const bearer = fakeChatGptJwt("acct-main", { jti: "restored-refused" });
+          const answer = (authToken: string | null) => async (): Promise<CodexAuthStatus> => ({
+            authMethod: "chatgpt", authToken, requiresOpenaiAuth: true,
+          });
+          if (refusal !== "unknown") await getValidMainAccountToken({ codexAuthStatus: answer(bearer) });
+          await expect(getValidMainAccountToken({ codexAuthStatus: answer(null) }))
+            .rejects.toMatchObject({ reason: "reauth" });
+          if (refusal === "fingerprint-saturated") {
+            for (let i = 0; i < 5; i++) {
+              await expect(forceRefreshMainAccountToken(fakeChatGptJwt("acct-main", { jti: i }), { codexAuthStatus: answer(null) }))
+                .rejects.toMatchObject({ reason: "reauth" });
+            }
+          } else if (refusal === "home-evicted") {
+            for (let i = 0; i < 12; i++) nativeMainRefusals.refuse(join(root, `evicted-${i}`), `fixture-${i}`);
+          }
+          seedAuth(bearer);
+          if (admission === "status") {
+            expect(getMainAccountCredentialStatus()).toEqual({ refreshGrantRejected: true, hasRefreshGrant: false, usable: false });
+          } else if (admission === "valid" || admission === "forced") {
+            const dependencies = { codexAuthStatus: answer(bearer) };
+            await expect(admission === "valid" ? getValidMainAccountToken(dependencies)
+              : forceRefreshMainAccountToken("different-upstream-bearer", dependencies)).rejects.toMatchObject({ reason: "reauth" });
+          } else if (admission === "raw") {
+            expect(getMainAccountToken()).toBeNull();
+          } else {
+            expect(admission === "live" ? isMainAccountTokenLive() : isMainAccountTokenVerifiablyLive()).toBe(false);
+          }
+          if (refusal !== "known") {
+            // A fresh verified successor alone cannot recover lost refusal history.
+            const successor = fakeChatGptJwt("acct-main", { jti: "unproven-file-successor" });
+            seedAuth(successor);
+            await expect(getValidMainAccountToken()).rejects.toMatchObject({ reason: "reauth" });
+            expect(getMainAccountCredentialStatus().usable).toBe(false);
+            await beginNativeMainReauth().commit({ accessToken: successor, refreshToken: "committed-new-grant",
+              idToken: successor, chatgptAccountId: "acct-main" });
+            expect(await getValidMainAccountToken()).toEqual({ accessToken: successor, chatgptAccountId: "acct-main" });
+          }
+        } finally {
+          Reflect.set(nativeMainRefusals, "homes", homes);
+          Reflect.set(nativeMainRefusals, "evictedRefusal", evicted);
+        }
+      },
+    );
+  }
+
+  test.each(["status", "valid", "raw"] as const)("restored auth.json requires a different verified bearer for recovery (%s)", async admission => {
+    setNativeMainRefreshResolutionForTests(CODEX_MODE);
+    const bearer = fakeChatGptJwt("acct-main", { jti: "file-recovery-old" });
+    const answer = (authToken: string | null) => async (): Promise<CodexAuthStatus> => ({
+      authMethod: "chatgpt", authToken, requiresOpenaiAuth: true,
+    });
+    await getValidMainAccountToken({ codexAuthStatus: answer(bearer) });
+    await expect(getValidMainAccountToken({ codexAuthStatus: answer(null) })).rejects.toMatchObject({ reason: "reauth" });
+    seedAuth(bearer);
+    await expect(getValidMainAccountToken()).rejects.toMatchObject({ reason: "reauth" });
+    for (const uncertain of ["opaque-fixture-token", fakeChatGptJwt("acct-main", { chatgpt_account_id: "acct-conflict" }),
+      fakeChatGptJwt("acct-other"), expired()]) {
+      seedAuth(uncertain);
+      await expect(getValidMainAccountToken()).rejects.toMatchObject({ reason: "reauth" });
+    }
+    const successor = fakeChatGptJwt("acct-main", { jti: "file-recovery-new" });
+    seedAuth(successor);
+    if (admission === "status") {
+      expect(getMainAccountCredentialStatus()).toEqual({ refreshGrantRejected: false, hasRefreshGrant: true, usable: true });
+    } else {
+      const result = admission === "valid" ? await getValidMainAccountToken() : getMainAccountToken();
+      expect(result).toEqual({ accessToken: successor, chatgptAccountId: "acct-main" });
+    }
+    expect(isMainAccountRefreshGrantRejected()).toBe(false);
   });
 
   test("unknown ordinary lookup refusal cannot be cleared by a newly observed verified bearer", async () => {
