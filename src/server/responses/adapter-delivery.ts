@@ -42,6 +42,8 @@ export async function deliverAdapterResponse(
     | "clientToolCatalogRestriction"
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
+    | "turnMembership"
+    | "completedToolBlocks"
   >,
   transportState: Pick<ResponsesTransport, "activeAdapter" | "bindKeyUsageFromBridge" | "sentOAuthSnapshot">,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
@@ -125,6 +127,15 @@ export async function deliverAdapterResponse(
 
 
   if (parsed.stream) {
+    const clientEncoder = clientToolCatalog?.bareCustomToolNames.has("exec") ? undefined
+      : clientEncoderForDelivery(options, logCtx, !!routedCompaction, transportState.activeAdapter.name);
+    // Sign only the negotiated canonical Chat delivery. Native/sidecar/opaque item identities
+    // retain their existing owners; structural membership grants no supplier-state authority.
+    const outputItemIds = requestState.completedToolBlocks && transportState.activeAdapter.name === "openai-chat"
+      && options.inboundWire !== "chat" && options.inboundWire !== "anthropic"
+      && !routedCompaction && !parsed._advisorGuard && !clientEncoder && upstreamResponse.headers.get("x-opencodex-tool-completion") === "block-stop-v1"
+      ? requestState.turnMembership?.begin() : undefined;
+
     // The continuation legs classify a stalled body themselves; the initial stream needs the
     // same mapping or the bridge catch reports this upstream timeout as a 500 proxy_error.
     const initialEventStream = (async function* (): AsyncGenerator<AdapterEvent> {
@@ -133,7 +144,7 @@ export async function deliverAdapterResponse(
           upstreamResponse,
           upstream.signal,
           bodyInactivityMs,
-          response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata),
+          response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata, { completedToolBlocks: outputItemIds !== undefined }),
         )) {
           options.onCompactionRecoveryAdapterEvent?.(event);
           yield event;
@@ -211,8 +222,7 @@ export async function deliverAdapterResponse(
       notifyResponseComplete(response);
     };
     // The Responses bridge owns code-mode helper compilation; the direct encoder only renames.
-    const clientEncoder = clientToolCatalog?.bareCustomToolNames.has("exec") ? undefined
-      : clientEncoderForDelivery(options, logCtx, !!routedCompaction, transportState.activeAdapter.name);
+
     if (clientEncoder) {
       return deliverClientEncodedResponse({
         encoder: clientEncoder,
@@ -243,6 +253,7 @@ export async function deliverAdapterResponse(
       {
         translatorBudget,
         replayCacheScope: parsed._reasoningReplayScope,
+        ...(outputItemIds ? { outputItemIds } : {}),
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
         localUpstream,

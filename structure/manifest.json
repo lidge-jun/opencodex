@@ -284,6 +284,22 @@
       ]
     },
     {
+      "path": "transports/response-turn-membership.md",
+      "tier": 3,
+      "title": "Structural Response Turn Membership",
+      "scope": "Embedding-owned signing material, dedicated authenticated caller/own-thread scope and pre-parser structural normalization.",
+      "documents": [
+        "src/responses/turn-membership.ts",
+        "src/server/responses/turn-membership.ts",
+        "src/bridge/sse.ts",
+        "src/server/responses/adapter-delivery.ts",
+        "src/server/responses/adapter-dispatch.ts",
+        "src/server/responses/request-transport.ts",
+        "src/server/auth-cors.ts",
+        "src/server/responses/request-prepare.ts"
+      ]
+    },
+    {
       "path": "transports/responses.md",
       "tier": 3,
       "title": "Responses Transport",
@@ -671,6 +687,13 @@
         "src/chat/",
         "src/responses/"
       ]
+    },
+    {
+      "path": "providers/completed-tool-blocks.md",
+      "tier": 4,
+      "title": "Negotiated Completed Tool Blocks",
+      "scope": "Explicit response-only block completion, ordered safe-call delivery and terminal ownership.",
+      "documents": ["src/adapters/base.ts", "src/adapters/unique-tool-call-ids.ts", "src/adapters/openai-chat.ts", "src/adapters/openai-chat/completed-tool-blocks.ts", "src/adapters/openai-chat/serialized-tool-call-content.ts"]
     },
     {
       "path": "providers/mimo-bare-calls.md",
