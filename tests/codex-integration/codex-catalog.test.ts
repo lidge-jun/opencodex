@@ -4232,8 +4232,8 @@ describe("Codex catalog routed normalization", () => {
         { effort: "low", description: "l" }, { effort: "max", description: "m" }, { effort: "ultra", description: "u" },
       ],
     };
-    // Genuine: real display name — must be preserved untouched (installed codex is SoT once
-    // it catches up), marker field proves no replacement happened.
+    // Genuine metadata is preserved; priority is resolved separately from source provenance.
+    // The marker proves no metadata replacement happened.
     const genuineSol = {
       ...nativeTemplate(),
       slug: "gpt-5.6-sol",
@@ -4251,7 +4251,7 @@ describe("Codex catalog routed normalization", () => {
       .toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(luna?.priority).toBe(8); // upstream priority restored for the upgraded entry
     expect(sol?.genuine_marker).toBe("from-installed-catalog");
-    expect(sol?.priority).toBe(1);
+    expect(sol?.priority).toBe(4); // no baseline/source field: use snapshot, never published rank
   });
 
   test("fallback-quality upgrades restore snapshot metadata without losing pristine priority", () => {

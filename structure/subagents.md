@@ -255,6 +255,28 @@ through `ocx agent subagents set` or the opencodex configuration. Retired native
 excluded by the [shared catalog](catalog.md#shared-catalog); saved user choices are not rewritten
 by that retirement. Quota fallback retains independent shared/Reserve evidence.
 
+### Native source priority
+
+`src/codex/catalog/native-priority.ts` owns native priority provenance for the builder and merge.
+It accepts only safe integers in `0..1000`, trying the current discovered descriptor, pristine
+catalog-backup baseline, the exact slug's retained `opencodex_native_source_priority`, then the
+upstream snapshot, finally `9`. Invalid candidates are skipped. Published `priority` and
+`opencodex_spawn_priority` never supply source provenance. Every ordinary emitted native row
+carries its unbanded source value; `src/codex/catalog/derive-entry.ts` strips it from template clones.
+Featured bare rows retain their rank. With a nonempty featured list, unfeatured bare natives use
+`featured.length + 100 + sourcePriority`; otherwise they use `sourcePriority`. Account-selector
+stride priorities and routed priority `5` (or their existing selector band) keep their own rules;
+the source bound does not promise disjointness from account-selector priorities. Complete picker
+ordering remains the final display override, independently of private guidance priority.
+
+`src/server/codex-model-list.ts` resolves the active catalog path once per live Codex-shaped list,
+reads its pristine baseline and exact-slug retained fields directly from that file, and supplies
+both to the same builder. Missing, null or corrupt catalogs contribute empty inputs. This path
+never creates a backup or publishes a catalog. For equal inputs, live `/v1/models?client_version`,
+the published catalog and its `models_cache.json` copy carry equal priorities. Concurrent reads may
+observe the complete previous or next publication. Coverage: `tests/codex-integration/native-source-priority.test.ts`
+and `tests/server/server-native-catalog-priority.test.ts`.
+
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
 widening Codex's five-row advertisement window. Fresh defaults are Astra, GPT-6.1 Sol and Luna
@@ -465,7 +487,7 @@ The Models page saves routed snapshots in `modelPickerOrder` and records their o
 `modelPickerOrderMode` (`alphabetical`, `provider`, `most-used`). Mode is UI provenance, not a
 catalog sorting policy: catalog writers consume the saved array. Routed-only featured/native
 bands and complete-picker natural-rank preservation remain as described above. Public
-`buildCatalogEntries` accepts the order as its final argument and applies the complete-order
+`buildCatalogEntries` accepts the order before optional native-source inputs and applies the complete-order
 pass after building. On-disk convergence retains its existing post-merge final pass.
 
 Claude ModelInfo ordering receives optional `{ modelPickerOrder, featured }` after `fastRows`.
