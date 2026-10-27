@@ -933,6 +933,7 @@ OpenCodex keeps it in the catalog from the preset. An install whose saved MiniMa
 still the previous default receives it on the next start; a list you edited is left as it is;
 register it by hand with
 `ocx models add minimax MiniMax-M3.1-Flash --context-window 1000000`.
+The seed refresh applies only to official MiniMax endpoints; Custom URLs keep their model list.
 
 **OpenCode Go** routes `gemini-4-argon-contributor` through its Gemini API, including
 streaming and tool-result continuations. The existing `opencode-go` preset keeps its
