@@ -29,7 +29,6 @@ import { codexAccountSelectionForTurn } from "./lifecycle";
 import type { RequestLogContext } from "./request-log";
 import { authorizationCredential } from "../lib/authorization-scheme";
 import { nativeMainRefreshFailureResponse } from "./responses/codex-auth-error";
-import { confirmMainQuotaAuthentication } from "../codex/main-account-cache";
 
 export const TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
 export const LIVE_AUDIO_MODEL = "gpt-live-1-codex";
@@ -152,11 +151,7 @@ export async function resolveAudioUpstream(
         headers: Object.fromEntries(selected),
         keyed: false,
         authContext: context,
-        recordOutcome: status => {
-          const writer = context?.kind === "main-pool" ? context.mainQuotaWriter : context?.kind === "main" ? context.mainQuotaDispatch?.writer : undefined;
-          if (typeof status === "number" && status >= 200 && status < 300 && writer) confirmMainQuotaAuthentication(writer);
-          recordOutcome?.(status);
-        },
+        recordOutcome,
         release: () => releaseCodexAuthContextProbeLease(context),
       };
     }

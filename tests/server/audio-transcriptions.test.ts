@@ -334,7 +334,7 @@ describe("standalone transcription API", () => {
     }
   });
 
-  test.each([false, true])("stored Direct audio honors refusal until authenticated successor (successor=%s)", async successor => {
+  test.each([false, true])("stored Direct audio retains refusal history with a successor (successor=%s)", async successor => {
     nativeMainRefresh.setNativeMainRefreshResolutionForTests({ mode: "codex", configured: "auto", reason: "codex-compatible", command: "/fake/codex", version: "0.162.1" });
     const bearer = fakeChatGptJwt({ chatgpt_account_id: "fixture-refused-audio" });
     try {
@@ -355,7 +355,7 @@ describe("standalone transcription API", () => {
       await response.text();
       expect(response.status).toBe(successor ? 200 : 401);
       expect(captured).toHaveLength(successor ? 1 : 0);
-      expect(nativeMainRefusals.has(codex.path)).toBe(!successor);
+      expect(nativeMainRefusals.has(codex.path)).toBe(true);
     } finally {
       nativeMainRefresh.setNativeMainRefreshResolutionForTests(null);
     }

@@ -5,7 +5,7 @@ import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
 import { claimManualResetCooldowns, settleManualResetCooldown } from "../routing";
 import type { ManualResetCooldownClaim } from "../routing";
 import { readCodexTokens } from "../auth-collision";
-import { confirmNativeMainAuthentication, nativeMainAuthenticationIsCurrent, nativeMainBearerAllowed, nativeMainRefusals, type NativeMainAuthentication } from "../native-main-refusals";
+import { nativeMainAuthenticationIsCurrent, nativeMainBearerAllowed, nativeMainRefusals, type NativeMainAuthentication } from "../native-main-refusals";
 import { resolveCodexHomeDir } from "../home";
 import { extractAccountId } from "../../oauth/chatgpt";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
@@ -310,7 +310,6 @@ export async function inspectResetCredits(config: OcxConfig, accountId: string, 
         return jsonResponse({ error: "Invalid upstream reset-credit response" }, 502);
       }
       if (auth.isMain && !manualResetAuthStillLive(accountId, auth)) return jsonResponse({ error: "Main Codex credential changed" }, 409);
-      if (auth.authentication) confirmNativeMainAuthentication(auth.authentication);
       return jsonResponse(safeResetCreditsDto(parsed.value));
     } finally {
       detachBodyAbort();
@@ -397,7 +396,6 @@ export async function consumeResetCredits(config: OcxConfig, accountId: string, 
         return jsonResponse({ error: `Upstream error ${resp.status}` }, resp.status);
       }
       const consumed = await readResetCreditJson(resp, AbortSignal.timeout(10_000));
-      if (auth.authentication && manualResetAuthStillLive(accountId, auth)) confirmNativeMainAuthentication(auth.authentication);
       if (!consumed.ok) {
         // The spend may already have landed upstream and its outcome code is unreadable,
         // so this id must never come back as a new operation.

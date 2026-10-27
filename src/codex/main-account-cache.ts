@@ -5,7 +5,7 @@ import { codexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import type { StoredAccountQuota } from "./quota-types";
 import { truncateRetainedUtf8 } from "../lib/admission";
 import { resolveCodexHomeDir } from "./home";
-import { confirmNativeMainAuthentication, nativeMainAuthenticationIsCurrent, nativeMainBearerAllowed, nativeMainRefusals, type NativeMainAuthentication } from "./native-main-refusals";
+import { nativeMainAuthenticationIsCurrent, nativeMainBearerAllowed, nativeMainRefusals, type NativeMainAuthentication } from "./native-main-refusals";
 
 const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 
@@ -49,14 +49,6 @@ export function getMainQuotaCredentialGeneration(): number { return mainQuotaCre
 export type MainQuotaWriter = Readonly<{ identityKey: string; identityGeneration: number }>;
 const decisionWriterGenerations = new WeakMap<MainQuotaWriter, number>();
 const writerAuthentications = new WeakMap<MainQuotaWriter, NativeMainAuthentication>();
-const writerCredentialGenerations = new WeakMap<MainQuotaWriter, number>();
-
-/** Called only for an upstream HTTP 2xx, never a local read or projected WS response. */
-export function confirmMainQuotaAuthentication(writer: MainQuotaWriter): boolean {
-  const proof = writerAuthentications.get(writer);
-  return !!proof && writerCredentialGenerations.get(writer) === mainQuotaCredentialGeneration
-    && isMainQuotaWriterLive(writer) && confirmNativeMainAuthentication(proof);
-}
 /** Return the credential generation a main quota writer was captured under, or undefined once that writer is stale or its credential generation has moved. */
 export function mainDecisionQuotaWriterGeneration(writer: MainQuotaWriter): number | undefined {
   const generation = decisionWriterGenerations.get(writer);
@@ -88,7 +80,6 @@ export function captureMainQuotaWriter(accountId: string): MainQuotaWriter | und
   if (identityKey !== observedMainQuotaIdentityKey) return undefined;
   const writer = { identityKey, identityGeneration: mainAccountIdentityGeneration };
   if (mainQuotaCredential) writerAuthentications.set(writer, mainQuotaCredential.authentication);
-  if (mainQuotaCredential) writerCredentialGenerations.set(writer, mainQuotaCredentialGeneration);
   if (mainQuotaCredential) decisionWriterGenerations.set(writer, mainDecisionGeneration);
   return writer;
 }
@@ -104,12 +95,10 @@ export function observeMainQuotaCredential(accessToken: string, accountId: strin
   if (!mainQuotaCredential || !isMainQuotaWriterLive(mainQuotaCredential.writer)
     || !timingSafeEqual(bearerHmac, mainQuotaCredential.bearerHmac)) { mainQuotaCredentialGeneration += 1; mainDecisionGeneration += 1; }
   mainQuotaCredential = { bearerHmac, writer, authentication };
-  writerCredentialGenerations.set(writer, mainQuotaCredentialGeneration);
   mainDecisionCredentialFresh = true;
   publishMainDecisionRoster(true);
   const result = { ...writer };
   writerAuthentications.set(result, authentication);
-  writerCredentialGenerations.set(result, mainQuotaCredentialGeneration);
   decisionWriterGenerations.set(result, mainDecisionGeneration);
   return result;
 }

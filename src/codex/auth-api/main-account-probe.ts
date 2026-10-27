@@ -16,7 +16,7 @@ import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../account-runt
 import { decodeJwtPayload, extractAccountId } from "../../oauth/chatgpt";
 import { getMainAccountPlan, getValidMainAccountToken, isMainAccountTokenVerifiablyLive, mainAccountTokenIsCurrent, mainAccountTokenQuotaWriter, MainAccountTokenRefreshError, MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan, type MainAccountToken } from "../main-account";
 import { resolveCodexHomeDir } from "../home";
-import { confirmNativeMainAuthentication, nativeMainAuthenticationIsCurrent, nativeMainRefusals } from "../native-main-refusals";
+import { nativeMainAuthenticationIsCurrent, nativeMainRefusals } from "../native-main-refusals";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import { captureMainAccountIdentityGeneration, clearMainAccountInfoCache, getMainAccountInfoCache, getMainQuotaCredentialGeneration, isMainAccountIdentityGenerationLive, isMainQuotaWriterLive, matchesMainQuotaCredential, observeMainQuotaCredential, setMainAccountCredentialPresence, setMainAccountInfoCache } from "../main-account-cache";
 import type { MainQuotaWriter, MainAccountInfo } from "../main-account-cache";
@@ -424,7 +424,6 @@ export async function fetchMainAccountInfoWhileOwned(
           credentialChecked: true, hasCredential: true };
       }
       const freshResetCredits = quota?.resetCredits;
-      confirmNativeMainAuthentication(authentication);
       // Tag the count with the identity it was read from, so a later response that omits the
       // summary can restore the badge without ever crossing an account boundary.
       rememberMainResetCredits(requestAccountId, freshResetCredits);

@@ -1,12 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmdirSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { nativeMainRefusals } from "../../src/codex/native-main-refusals";
 import { createNativeIdentityReader } from "../../src/codex/desktop-compatibility/native-identity";
 import { UsageRelayController } from "../../src/codex/desktop-compatibility/usage-controller";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) { unlinkSync(join(root, "auth.json")); rmdirSync(root); } });
+afterEach(() => { for (const root of roots.splice(0)) { nativeMainRefusals.verifiedLogin(root); unlinkSync(join(root, "auth.json")); rmdirSync(root); } });
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "desktop-identity-")); roots.push(root);
   const path = join(root, "auth.json"); let revision = 0;
@@ -42,6 +43,29 @@ function upstreamFixture(beforeResponse?: () => Promise<void>) {
 }
 const exchange = { method: "GET", pathname: "/backend-api/wham/usage", status: 200 };
 const consent = { scope: "account-ui-compatibility" as const, accountWideConsent: true };
+
+for (const refusal of ["known", "unknown", "saturated"] as const) test(`native identity refuses ${refusal} main bearer before dispatch`, async () => {
+  const io = fixture(), upstream = upstreamFixture(), reader = createNativeIdentityReader(io.path, upstream.fetch);
+  const home = dirname(io.path);
+  if (refusal === "known") nativeMainRefusals.refuse(home, "synthetic-access-A");
+  else if (refusal === "unknown") nativeMainRefusals.refuse(home);
+  else for (let i = 0; i < 5; i++) nativeMainRefusals.refuse(home, `synthetic-refused-${i}`);
+  expect(await reader.readCurrentIdentity()).toBeNull();
+  expect(await reader.verifyFreshIdentity()).toBeNull();
+  upstream.verify([]);
+});
+
+test("native identity cannot publish after refusal during its in-flight check", async () => {
+  const io = fixture(); let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const upstream = upstreamFixture(async () => { entered(); await blocked; });
+  const reader = createNativeIdentityReader(io.path, upstream.fetch), pending = reader.verifyFreshIdentity();
+  await started; nativeMainRefusals.refuse(dirname(io.path), "synthetic-access-A"); release();
+  expect(await pending).toBeNull();
+  expect(await reader.readCurrentIdentity()).toBeNull();
+  upstream.verify(["synthetic-access-A"]);
+});
 
 test("unchanged native credentials keep one opaque generation and verify without exposing tokens", async () => {
   const io = fixture(), upstream = upstreamFixture(), reader = createNativeIdentityReader(io.path, upstream.fetch);

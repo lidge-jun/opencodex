@@ -8,6 +8,7 @@ import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth }
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { setMainAccountPlan } from "../../src/codex/main-account";
+import { nativeMainRefusals } from "../../src/codex/native-main-refusals";
 import * as mainAccount from "../../src/codex/main-account";
 import * as nativeClaim from "../../src/codex/native-main-claim";
 import { clearAccountQuota, flushQuotaObservationsForTests, getAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
@@ -117,6 +118,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  nativeMainRefusals.verifiedLogin(home);
   globalThis.fetch = previousFetch;
   clearAccountQuota();
   await flushQuotaObservationsForTests();
@@ -275,6 +277,18 @@ describe("quota auto-refresh native-main admission", () => {
     await runCodexQuotaAutoRefresh(cfg, now + 1, { persistCompleted: recordMarkers });
     expect(calls).toEqual([responsesUrl]);
     expect(cfg.codexQuotaAutoRefresh?.[MAIN]).toMatchObject({ lastFiveHourResetAt: RESET_MILLISECONDS, lastWeeklyResetAt: RESET_MILLISECONDS });
+    expect(getNativeMainProfileRequestCount()).toBe(0);
+  });
+
+  test("main warmup rechecks refusal before a model fallback send", async () => {
+    const cfg = config(); cfg.codexMainAccountHardLock = false;
+    const calls = installFetch(async () => {
+      nativeMainRefusals.refuse(home, bearer());
+      return new Response(null, { status: 400 });
+    });
+    await runCodexQuotaAutoRefresh(cfg, now, { persistCompleted: recordMarkers });
+    expect(calls).toEqual([responsesUrl]);
+    expect(cfg.codexQuotaAutoRefresh?.[MAIN]?.lastWeeklyResetAt).toBeUndefined();
     expect(getNativeMainProfileRequestCount()).toBe(0);
   });
 

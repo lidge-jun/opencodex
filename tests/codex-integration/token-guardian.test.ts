@@ -7,6 +7,7 @@ import { getConfigPath } from "../../src/config";
 import { flushConfigDirHardening } from "../../src/config/paths";
 import { markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { __resetGuardianState, guardianSweep } from "../../src/oauth/token-guardian";
+import { nativeMainRefusals } from "../../src/codex/native-main-refusals";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import {
   acquireNativeMainProfileDrain,
@@ -48,6 +49,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  nativeMainRefusals.verifiedLogin(join(tmp, "codex"));
   // Optional Windows ACL work can outlive credential writes and keep this home open.
   await flushConfigDirHardening(join(tmp, "ocx"));
   resetLifecycleDrainStateForTests();
@@ -401,6 +403,22 @@ describe("token guardian", () => {
     expect(readCodexAccountRecord("acct-dead")?.lastCodexValidationTerminal).toBeUndefined();
     expect((await guardianSweep(Date.now())).refreshed).toContain("codex:acct-dead");
     expect(tokenCalls).toBe(3);
+  });
+
+  test("guardian native-main warmup rechecks refusal before model fallback", async () => {
+    writeFileSync(join(tmp, "codex", "auth.json"), JSON.stringify({ tokens: { access_token: "main-guardian", account_id: "main-chatgpt-id" } }));
+    writeConfig({ tokenGuardian: { enabled: true, tickSeconds: 60, leadSeconds: 60, codexWarmupEnabled: true }, providers: { openai: {
+      adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct", refreshPolicy: "proactive",
+    } } });
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends++; nativeMainRefusals.refuse(join(tmp, "codex"), "main-guardian");
+      return new Response(null, { status: 400 });
+    }) as typeof fetch;
+    const result = await guardianSweep(Date.now());
+    expect(sends).toBe(1);
+    expect(result.warmed).toEqual([]);
+    expect(result.failed).toEqual(["codex:__main__"]);
   });
 
   test("direct mode warms main only and never enumerates the added-account store", async () => {

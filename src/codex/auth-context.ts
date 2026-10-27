@@ -1,6 +1,6 @@
 import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt, poolCreditRecoveryNeeded, poolContextCreditRecoveryNeeded, poolCreditRecoveryRetryAt } from "./pool-credit-policy";
 import { hasSpendableCodexCredits } from "./quota-types";
-import { nativeMainBearerAllowed } from "./native-main-refusals";
+import { guardNativeMainDispatch, nativeMainBearerAllowed } from "./native-main-refusals";
 import { nextQuotaQueryDelay } from "./quota-query-backoff";
 import { noteMainAccountActivity } from "./main-account-external-usage";
 import { codexAccountPriorityFailbackEnabled } from "./account-priority";
@@ -779,7 +779,7 @@ export function createCodexAuthDispatchGuard(
   admission?: Pick<DataPlaneAdmission, "source">,
   terminalHelper = false,
 ): ((headers: Headers) => void) | undefined {
-  const reserveGuard = createCodexReserveDispatchGuard(ctx, config, modelId, admission, terminalHelper);
+  const reserveGuard = guardNativeMainDispatch(ctx, createCodexReserveDispatchGuard(ctx, config, modelId, admission, terminalHelper), () => new CodexAuthContextError(MAIN_CODEX_ACCOUNT_ID, new MainAccountTokenRefreshError("reauth")));
   if (ctx.kind !== "pool" && ctx.kind !== "main-pool") return reserveGuard;
   return headers => {
     if (config.pausedCodexAccountIds?.includes(ctx.accountId)) throw new CodexPoolAuthenticationError("Selected Codex account is paused; resume it in account settings");

@@ -33,7 +33,7 @@ import {
   isFixedCodexAccount,
   shouldDeferCodexResetDerivedCooldown,
 } from "./core-codex-account";
-import { confirmMainQuotaAuthentication, isMainQuotaDispatchLive, isMainQuotaDispatchWsClaimed } from "../../codex/main-account-cache";
+import { isMainQuotaDispatchLive, isMainQuotaDispatchWsClaimed } from "../../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse, isCodexWsPreludeProjection } from "./ws-upstream";
@@ -510,9 +510,6 @@ export async function deliverPassthroughResponse(
       }
       : undefined;
     const terminalBodyWillRecord = !!terminalRecorder && upstreamResponse.ok && isEventStream;
-    const mainWriter = admissionState.authCtx.kind === "main-pool" ? admissionState.authCtx.mainQuotaWriter : arrivalMainDispatch?.writer;
-    if (upstreamResponse.ok && mainWriter && !isCodexWsUpstreamResponse(upstreamResponse)
-      && !isCodexWsPreludeProjection(upstreamResponse)) confirmMainQuotaAuthentication(mainWriter);
     // Capture quota from upstream response for multi-account tracking
    if (usesCodexForwardPoolAuth(admissionState.authCtx, route.provider)) {
       // primary was the 5h window; it now carries weekly data for GPT plans.

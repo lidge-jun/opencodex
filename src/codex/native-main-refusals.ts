@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolveCodexHomeDir } from "./home";
+import type { CodexAuthContext } from "./auth-context";
 
 const MAX_HOMES = 8;
 const MAX_FINGERPRINTS = 4;
@@ -71,17 +72,6 @@ export class NativeMainRefusals {
       && !state.fingerprints.has(proof.fingerprint);
   }
 
-  /** Only a successful upstream exchange with this exact pre-dispatch candidate may recover. */
-  authenticated(proof: NativeMainAuthentication): boolean {
-    if (!this.current(proof)) return false;
-    const state = this.homes.get(proof.home)!;
-    state.observed = proof.fingerprint;
-    state.refused = false;
-    state.unknown = false;
-    state.fingerprints.clear();
-    return true;
-  }
-
   /** Recovery authority: a committed, identity-checked native-main device login. */
   verifiedLogin(home: string): void {
     const state = this.state(home);
@@ -108,6 +98,19 @@ export function nativeMainAuthenticationIsCurrent(proof: NativeMainAuthenticatio
   return proof.home === resolveCodexHomeDir() && nativeMainRefusals.current(proof);
 }
 
-export function confirmNativeMainAuthentication(proof: NativeMainAuthentication): boolean {
-  return nativeMainAuthenticationIsCurrent(proof) && nativeMainRefusals.authenticated(proof);
+/** Keep the captured home and inspect the actual bearer after pacing, on every attempt. */
+export function guardNativeMainDispatch(
+  ctx: CodexAuthContext,
+  guard: ((headers: Headers) => void) | undefined,
+  refused: () => Error,
+): ((headers: Headers) => void) | undefined {
+  if (ctx.kind === "pool") return guard;
+  const home = resolveCodexHomeDir();
+  return headers => {
+    if (ctx.kind === "main-pool" || ctx.mainQuotaDispatch) {
+      const bearer = headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+      if (home !== resolveCodexHomeDir() || !bearer || !nativeMainBearerAllowed(bearer, home)) throw refused();
+    }
+    guard?.(headers);
+  };
 }

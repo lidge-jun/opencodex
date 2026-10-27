@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { nativeMainBearerAllowed } from "./native-main-refusals";
+import { resolveCodexHomeDir } from "./home";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { CodexAccountCredentialRecord, OcxConfig } from "../types";
 import { isSelectableCodexPoolAccount } from "./account-id";
@@ -377,6 +379,13 @@ export interface CodexModelEntitlementCredentialSnapshot {
   readonly chatgptAccountId: string;
   /** Stable local identity for rejecting a catalog commit after credential replacement. */
   readonly credentialIdentity: string;
+  readonly nativeMainHome?: string;
+}
+
+function nativeMainCredentialAllowed(credential: CodexModelEntitlementCredentialSnapshot): boolean {
+  const home = credential.nativeMainHome ?? resolveCodexHomeDir();
+  return credential.accountId !== MAIN_CODEX_ACCOUNT_ID
+    || (home === resolveCodexHomeDir() && nativeMainBearerAllowed(credential.accessToken, home));
 }
 
 export type CodexModelEntitlementProvenance =
@@ -608,6 +617,7 @@ async function accountCredentialSnapshot(
 ): Promise<CodexModelEntitlementCredentialSnapshot | null> {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
     try {
+      const nativeMainHome = resolveCodexHomeDir();
       const token = await getValidMainAccountToken({
         signal: options.signal,
         ...(options.nativeMainRefreshDependencies ?? {}),
@@ -615,6 +625,7 @@ async function accountCredentialSnapshot(
       return token
         ? {
           accountId,
+          nativeMainHome,
           accessToken: token.accessToken,
           chatgptAccountId: token.chatgptAccountId,
           credentialIdentity: `main:${token.chatgptAccountId}`,
@@ -725,6 +736,7 @@ async function fetchAccountModels(
       Accept: "application/json",
     });
     if (credential.chatgptAccountId) headers.set("ChatGPT-Account-Id", credential.chatgptAccountId);
+    if (!nativeMainCredentialAllowed(credential)) throw new Error("Main Codex account unavailable");
     const response = await fetcher(codexModelsUrl(clientVersion), {
       headers,
       redirect: "error",
@@ -760,6 +772,7 @@ async function fetchAccountModels(
     if (!usable) {
       return unconfirmedAccountModels(credential, clientVersion, now, { kind: "parsed-empty" });
     }
+    if (!nativeMainCredentialAllowed(credential)) throw new Error("Main Codex account unavailable");
     recordDiscoveredNativeModels(parsed.discoveredRows, clientVersion, now);
     const hasUnknownGatedAbsence = [...ACCOUNT_GATED_NATIVE_MODEL_MINIMUM_CLIENT_VERSIONS]
       // Reachable only through tier 1, an inbound client_version below the floor. Every other
@@ -878,6 +891,7 @@ async function fetchDiscoveryRoster(
     const now = options.now ?? Date.now();
     const cached = discoveryEtags.get(credential.credentialIdentity);
     if (cached && now - cached.fetchedAt < DISCOVERY_ETAG_MAX_AGE_MS) headers.set("If-None-Match", cached.etag);
+    if (!nativeMainCredentialAllowed(credential)) return "unavailable";
     const response = await fetcher(codexModelsUrl(CODEX_ROSTER_DISCOVERY_CLIENT_VERSION), {
       headers,
       redirect: "error",
@@ -893,7 +907,7 @@ async function fetchDiscoveryRoster(
     if (!body.displaySafe || body.truncated) return "unavailable";
     const parsed = parseAccountModels(body.text);
     if (parsed === null || parsed.models.size === 0) return "unavailable";
-    if (controller.signal.aborted || options.isCurrent?.() === false) return "unavailable";
+    if (controller.signal.aborted || options.isCurrent?.() === false || !nativeMainCredentialAllowed(credential)) return "unavailable";
     recordDiscoveredNativeModels(parsed.discoveredRows, CODEX_ROSTER_DISCOVERY_CLIENT_VERSION, now);
     const nextEtag = response.headers.get("etag");
     if (nextEtag && nextEtag.length <= 256) discoveryEtags.set(credential.credentialIdentity, { etag: nextEtag, fetchedAt: now });
