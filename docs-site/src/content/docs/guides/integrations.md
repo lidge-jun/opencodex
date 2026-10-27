@@ -385,8 +385,10 @@ Catalog changes and `ocx sync` automatically refresh only the default profile re
 running proxy's environment (including `HERMES_HOME`). Named profiles keep their previous catalog.
 After changing the model selection, open **Connect → Hermes**, select each named profile showing
 **Update needed**, and review and confirm **Apply**. The CLI has no named-profile selector.
-Automatic refresh refuses any Hermes file changed since the last Apply, including comments or
-settings outside `providers.opencodex`. When the catalog shows **Update needed**, review and Apply
+With an unchanged catalog, refresh stays **Current** after edits to comments or settings outside
+`providers.opencodex`; it changes neither the file nor the recorded baseline. When a catalog update
+is pending, automatic refresh refuses any Hermes file changed since the last Apply, including those
+unrelated edits. When the catalog shows **Update needed**, review and Apply
 the pending catalog change to resume automatic updates. Apply with an unchanged catalog is a no-op
 and does not accept a new file baseline.
 
@@ -586,7 +588,7 @@ ocx mcode
 Once connected, `ocx sync` and `POST /api/sync` refresh owned MCode, Pi, Aside,
 Raycast, omo, OpenCode, Kilo, and Hermes catalogs with the current model selection, context windows, and
 reasoning-effort ladders. Background catalog changes also refresh the connected Hermes default profile unattended;
-an edited Hermes file is refused and reported; a never-connected or disabled integration stays untouched.
+an edited Hermes file with a pending catalog update is refused and reported; a never-connected or disabled integration stays untouched.
 Named profiles require [explicit Apply](#hermes-profiles). Proxy startup refreshes an owned Raycast catalog. Changes to
 model visibility, provider selection, or presets also refresh connected Pi, Aside,
 Raycast, omo, OpenCode, Kilo, and Hermes catalogs.

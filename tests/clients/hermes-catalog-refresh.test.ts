@@ -7,9 +7,10 @@ import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-
 import { defaultIntegrationIO } from "../../src/integrations/config-io";
 import { hermesProfileEnv, hermesProfilePaths, hermesProfileStore, resolveHermesProfile } from "../../src/integrations/hermes-profiles";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
+import { fingerprint } from "../../src/integrations/ownership";
 import { readIntegrationState } from "../../src/integrations/state";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../src/integrations/store";
-import { applyIntegration, disableIntegration } from "../../src/integrations/writer";
+import { applyIntegration, disableIntegration, refreshIntegration } from "../../src/integrations/writer";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -100,6 +101,31 @@ describe("Hermes default-profile catalog refresh", () => {
     } }, ["hermes"])).toEqual([]);
     expect(loads).toBe(0);
     expect(readFileSync(path, "utf8")).toBe(never);
+  });
+
+  test.each(["comment", "unrelated key"])("an external %s with an unchanged catalog keeps refresh current", async kind => {
+    expect(applyIntegration(input())).toMatchObject({ ok: true, changed: true });
+    const record = store.readRecords().hermes!;
+    const recordsPath = join(store.root, "records.json");
+    const journalPath = join(store.root, "journal.jsonl");
+    const records = readFileSync(recordsPath);
+    const journal = readFileSync(journalPath);
+    const snapshots = store.countSnapshots("hermes");
+    const edited = readFileSync(path, "utf8") + (kind === "comment" ? "# My note\n" : "terminal:\n  shell: zsh\n");
+    writeFileSync(path, edited, "utf8");
+    const bytes = readFileSync(path);
+    expect(fingerprint(edited)).not.toBe(record.fileFingerprint);
+    expect(readIntegrationState(input()).state).toBe("current");
+
+    expect(refreshIntegration(input())).toMatchObject({ ok: true, changed: false, state: "current" });
+    expect(await refreshOwnedCatalogIntegrations(input(), ["hermes"]))
+      .toEqual([{ client: "hermes", ok: true, changed: false }]);
+    expect(readIntegrationState(input()).state).toBe("current");
+    expect(readFileSync(path)).toEqual(bytes);
+    expect(readFileSync(journalPath)).toEqual(journal);
+    expect(readFileSync(recordsPath)).toEqual(records);
+    expect(store.readRecords().hermes).toEqual(record);
+    expect(store.countSnapshots("hermes")).toBe(snapshots);
   });
 
   test.each(["setting", "comment"])("an external %s edit refuses refresh without touching file or journal", async kind => {

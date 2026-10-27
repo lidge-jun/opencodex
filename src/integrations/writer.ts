@@ -366,11 +366,11 @@ function applyOrRefreshIntegration(
       message: "managed block is absent; refresh did not reconnect it",
     };
   }
-  const hermesRefusal = hermesRefreshRefusal(pre, allowAbsent);
-  if (hermesRefusal) return hermesRefusal;
   if (classified.state === "current") {
     return { ok: true, changed: false, state: "current", clientId, message: "already applied" };
   }
+  const hermesRefusal = hermesRefreshRefusal(pre, allowAbsent);
+  if (hermesRefusal) return hermesRefusal;
 
   // A stale refresh drops what the PREVIOUS record owned before merging: a
   // model that left the catalog would otherwise stay behind as an orphan the
