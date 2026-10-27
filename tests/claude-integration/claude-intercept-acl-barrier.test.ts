@@ -20,7 +20,7 @@ import { startConnectProxy } from "../../src/claude/intercept/connect-proxy";
 import { flushConfigDirHardeningAndReaps, hardenConfigDir, withConfigDirHardeningSettled } from "../../src/config/paths";
 import { setLocalCaWindowsAclRunnerForTests } from "../../src/claude/intercept/local-ca-windows";
 import { readClaudeInterceptProxyToken } from "../../src/claude/intercept/proxy-auth";
-import { hardenSecretDirAsync, resetHardenedStateForTests, setAsyncIcaclsBeltSchedulerForTests, setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests, setNowForTests, setPlatformForTests, windowsSecretAclReapPendingForPath, type IcaclsResult } from "../../src/lib/windows-secret-acl";
+import { WindowsSecretAclSettleTimeoutError, hardenSecretDirAsync, resetHardenedStateForTests, setAsyncIcaclsBeltSchedulerForTests, setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests, setNowForTests, setPlatformForTests, windowsSecretAclReapPendingForPath, type IcaclsResult } from "../../src/lib/windows-secret-acl";
 import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { previewClaudeModelDefaults } from "../../src/claude/model-default-settings";
@@ -537,15 +537,34 @@ test("model-defaults POST waits for a parent flight over a nested Claude home", 
   setAsyncIcaclsRunnerForTests(async () => { entered.resolve(); await release.promise; return success; });
   hardenConfigDir();
   await entered.promise;
+  // Prove the request reached the barrier for the Claude home before checking it is held there.
+  const atBarrier = deferred(), barrier = configPaths.withConfigDirHardeningSettled;
+  entrySpy = spyOn(configPaths, "withConfigDirHardeningSettled").mockImplementation(<T>(dir: string, mutate: () => T) => {
+    const work = barrier(dir, mutate); if (dir === home) atBarrier.resolve(); return work;
+  });
   const url = new URL("http://127.0.0.1:10100/api/claude-code/model-defaults");
   const work = handleManagementAPI(new Request(url, { method: "POST", headers: { Host: url.host, "Content-Type": "application/json" },
     body: JSON.stringify({ fingerprint }) }), url, { port: 10100, providers: {}, claudeCode: { tierModels: models } } as OcxConfig,
     {}, "admin-token", undefined, { trustedLoopback: true });
   try {
-    await macrotask();
+    await atBarrier.promise; await macrotask();
     expect(overlapping).toEqual([]);
     expect(JSON.parse(readFileSync(path, "utf8")).env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBeUndefined();
   } finally { held = false; release.resolve(); }
   expect((await work)?.status).toBe(200);
   expect(JSON.parse(readFileSync(path, "utf8")).env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe(models.sonnet);
+});
+
+// A rollback that cannot be admitted before the deadline reports incomplete instead of throwing.
+test("settled first-party rollback reports a settle timeout as incomplete without running", async () => {
+  let ran = false;
+  const rollback = () => { ran = true; return true; };
+  entrySpy = spyOn(configPaths, "withConfigDirHardeningSettled").mockImplementation(async () => { throw new WindowsSecretAclSettleTimeoutError(); });
+  expect(await firstParty.rollbackDesktopFirstPartySettled(root, rollback)).toBe(false);
+  expect(ran).toBe(false);
+  entrySpy.mockImplementation(async () => { throw new Error("unexpected"); });
+  await expect(firstParty.rollbackDesktopFirstPartySettled(root, rollback)).rejects.toThrow("unexpected");
+  entrySpy.mockRestore(); entrySpy = undefined;
+  expect(await firstParty.rollbackDesktopFirstPartySettled(root, rollback)).toBe(true);
+  expect(ran).toBe(true);
 });

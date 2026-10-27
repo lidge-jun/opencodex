@@ -10,6 +10,8 @@ export interface IncomingMeta {
   headers: Headers;
   /** Canonical routed provider identity for provider-specific wire fields. */
   providerName?: string;
+  /** Trusted caller has durable structural replay ownership for earlier completed tools. */
+  completedToolBlocks?: boolean;
   translatorBudget: TranslatorBudget;
   abortSignal?: AbortSignal;
   /** Lease acquired before the response is committed; the physical send transfers it to its body. */
@@ -53,6 +55,11 @@ export interface IncomingMeta {
    * channel explains why recovery stopped without inflating physical-send telemetry.
    */
   onRecoveryWithheld?: (withheld: { reason: AttemptRecoveryWithheld }) => void;
+}
+
+export interface AdapterStreamContext {
+  /** Per-exchange authority: this parser feeds a bridge with signed structural output IDs. */
+  completedToolBlocks?: boolean;
 }
 
 export interface ProviderAdapter {
@@ -108,6 +115,7 @@ export interface ProviderAdapter {
     response: Response,
     budget: TranslatorBudget,
     tierMetadata?: AdapterTierMetadata,
+    streamContext?: AdapterStreamContext,
   ): AsyncGenerator<AdapterEvent>;
   parseResponse?(
     response: Response,

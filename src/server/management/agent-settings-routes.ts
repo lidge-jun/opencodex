@@ -1062,7 +1062,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         rethrowManagementBodyTooLarge(error);
         return jsonResponse({ error: "invalid JSON body" }, 400);
       }
-      const { resolveClaudeDesktopApplyMode, observeClaudeDesktopMode, applyDesktopFirstParty, withFirstPartySecretsSettled, captureDesktopFirstPartyRollback, removeDesktopFirstPartySettled } = await import("../../claude/desktop-first-party");
+      const { resolveClaudeDesktopApplyMode, observeClaudeDesktopMode, applyDesktopFirstParty, withFirstPartySecretsSettled, captureDesktopFirstPartyRollback, rollbackDesktopFirstPartySettled, removeDesktopFirstPartySettled } = await import("../../claude/desktop-first-party");
       const requested = (parsed as { mode?: unknown } | null)?.mode;
       let desktopMode: "first-party" | "gateway" = resolveClaudeDesktopApplyMode(config, observeClaudeDesktopMode(config));
       if (requested !== undefined) {
@@ -1105,7 +1105,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         return await runPickerTransition(config, async ops => {
           const { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } = await import("../../claude/desktop-3p");
           const rollback = captureDesktopFirstPartyRollback(config);
-          const { getConfigDir, withConfigDirHardeningSettled } = await import("../../config/paths");
+          const { getConfigDir } = await import("../../config/paths");
           const applied = await withFirstPartySecretsSettled(getConfigDir(), () => applyDesktopFirstParty(config));
           if (!applied.ok) {
             const { firstPartyRefusalMessage } = await import("./native-integration-routes");
@@ -1124,7 +1124,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
             const removed = (deps.removeDesktop3pStandardPivot ?? removeDesktop3pStandardPivot)({ appliedFingerprint, replaceWhileEnabled: true });
             if (!removed.ok) {
-              const restored = removed.changed || !applied.changed || await withConfigDirHardeningSettled(getConfigDir(), rollback);
+              const restored = removed.changed || !applied.changed || await rollbackDesktopFirstPartySettled(getConfigDir(), rollback);
               const modeSaved = !removed.changed || (await persistDesktopModeField(config, "first-party")).ok;
               const warning = [restored ? "" : "first-party settings rollback did not complete",
                 modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");

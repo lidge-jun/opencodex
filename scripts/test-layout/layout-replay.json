@@ -1,4 +1,6 @@
 {
+  "turn-membership.test.ts": "responses",
+  "turn-membership-ingress.test.ts": "responses",
   "responses-anthropic-compaction-prefix.test.ts": "responses",
   "responses-replay-metadata-principal.test.ts": "responses",
   "responses-combo-replay-principal.test.ts": "responses",
