@@ -112,7 +112,7 @@ async function send() {
     body: JSON.stringify({ model: "subAlias/gpt-5.5", input: "fixture", stream: false, store: false }),
   });
   const response = await handleResponses(request, config, { model: "", provider: "" });
-  return { status: response.status, body: await response.json() };
+  return { status: response.status, retryAfter: response.headers.get("retry-after"), body: await response.json() };
 }
 
 test("same Direct namespace recovers after five-minute credit expiry without fallback or external refresh", async () => {
@@ -123,6 +123,7 @@ test("same Direct namespace recovers after five-minute credit expiry without fal
   now += 360_001;
   const stale = await send();
   expect(stale.status).toBe(429);
+  expect(stale.retryAfter).toBe("300");
   expect(responseAccounts).toHaveLength(1);
   expect(metadataAccounts).toEqual([]);
   const noMain = () => { throw new Error("stored-account renewal must never access main"); };

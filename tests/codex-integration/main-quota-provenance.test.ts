@@ -5,6 +5,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
+import { isCodexAccountHeldForCredits } from "../../src/codex/account-credit-use";
+import { hasSpendableCodexCredits } from "../../src/codex/quota-types";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import {
   applyConfirmedMainCodexAccountTransition,
@@ -340,6 +342,77 @@ describe("main policy quota durability and lifecycle", () => {
       cwd: repoRoot(),
     });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+  for (const unavailable of [true, false]) {
+    test(`persisted ${unavailable ? "unavailable" : "legacy"} null remains identity-bound and cannot authorize spending`, () => {
+      const writer = writerFor();
+      const resetAt = Date.now() + 86_400_000;
+      setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: resetAt,
+        credits: { hasCredits: true, balance: 5, observedAt: Date.now() } }, undefined, writer);
+      setAccountQuotaFromParsed(MAIN, unavailable ? parseUsageQuota({ credits: {} }) : { credits: null },
+        undefined, writer);
+      // Partial headers carry the pair without supplying new spending evidence.
+      applyAccountQuotaFromUpstreamHeaders(MAIN, new Headers({ "x-codex-primary-used-percent": "100",
+        "x-codex-primary-reset-at": String(resetAt) }),
+        undefined, writer);
+      const quota = getMainPolicyQuota();
+      expect(quota?.credits).toBeNull();
+      expect(quota?.creditObservationUnavailable).toBe(unavailable ? true : undefined);
+      expect(hasSpendableCodexCredits(quota)).toBe(false);
+      expect(isCodexAccountHeldForCredits({ creditCodexAccountIds: [MAIN] }, MAIN, quota, "plus", Date.now())).toBe(true);
+      const persisted = JSON.parse(flushPersistence());
+      expect(persisted.mainPolicyQuota).toEqual({ identityKey: writer.identityKey, quota });
+      // Read the actual serializer output in a fresh process, without clearing or rewriting it.
+      const script = `
+        ${QUOTA_PROVENANCE_IMPORT_PROLOGUE}
+        import { hasSpendableCodexCredits } from ${JSON.stringify(repoPath("src/codex/quota-types.ts"))};
+        import { isCodexAccountHeldForCredits } from ${JSON.stringify(repoPath("src/codex/account-credit-use.ts"))};
+        globalThis.fetch = () => { throw new Error("Unexpected network request"); };
+        const before = getMainPolicyQuota();
+        observeMainQuotaIdentity("fixture-main-b");
+        const other = getMainPolicyQuota();
+        observeMainQuotaIdentity("fixture-main-a");
+        const policy = getMainPolicyQuota();
+        console.log(JSON.stringify({ before, other, policy,
+          spendable: hasSpendableCodexCredits(policy),
+          held: isCodexAccountHeldForCredits({ creditCodexAccountIds: ["__main__"] }, "__main__", policy, "plus", Date.now()) }));
+      `;
+      const child = Bun.spawnSync({
+        cmd: [process.execPath, "--eval", script], cwd: repoRoot(), env: process.env,
+        timeout: process.platform === "win32" ? SPAWN_BUDGET_MS - INTERNAL_DEADLINE_MS : 10_000,
+      });
+      expect(child.exitCode).toBe(0);
+      expect(JSON.parse(child.stdout.toString())).toEqual({ before: null, other: null, policy: quota,
+        spendable: false, held: true });
+    }, SPAWN_BUDGET_MS);
+  }
+
+  test("stale main writers cannot replace unavailable evidence or attach it to a new identity", () => {
+    const oldA = writerFor();
+    const unavailable = parseUsageQuota({ credits: {} });
+    const positive = { hasCredits: true, balance: 5, observedAt: Date.now() };
+    setAccountQuotaFromParsed(MAIN, unavailable, undefined, oldA);
+    const writerB = writerFor("fixture-main-b");
+    expect(getMainPolicyQuota()).toBeNull();
+    setAccountQuotaFromParsed(MAIN, { credits: positive }, undefined, writerB);
+    setAccountQuotaFromParsed(MAIN, unavailable, undefined, oldA);
+    expect(getMainPolicyQuota()?.credits).toEqual(positive);
+    expect(getMainPolicyQuota()?.creditObservationUnavailable).toBeUndefined();
+
+    const newA = writerFor();
+    setAccountQuotaFromParsed(MAIN, { weeklyPercent: 100, weeklyResetAt: Date.now() + 86_400_000 }, undefined, newA);
+    setAccountQuotaFromParsed(MAIN, unavailable, undefined, newA);
+    const before = getMainPolicyQuota();
+    expect(before).toMatchObject({ credits: null, creditObservationUnavailable: true });
+    // Returning to A does not revive a writer captured before the A → B → A transition.
+    setAccountQuotaFromParsed(MAIN, { credits: positive }, undefined, oldA);
+    expect(isMainQuotaWriterLive(oldA)).toBe(false);
+    expect(getMainPolicyQuota()).toEqual(before);
+    expect(getAccountQuota(MAIN)?.credits).toBeNull();
+    expect(hasSpendableCodexCredits(getMainPolicyQuota())).toBe(false);
+    expect(isCodexAccountHeldForCredits({ creditCodexAccountIds: [MAIN] }, MAIN, getMainPolicyQuota(), "plus", Date.now())).toBe(true);
+    expect(JSON.parse(flushPersistence()).mainPolicyQuota).toEqual({ identityKey: newA.identityKey, quota: before });
+  });
 
   for (const resetAt of [undefined, 4_000_000_000]) {
     test(`restart beyond six hours retains ${resetAt ? "future-reset" : "missing-reset"} policy evidence only for observed A`, () => {

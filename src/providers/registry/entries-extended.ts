@@ -111,6 +111,10 @@ import {
   OPPER_MODEL_CONTEXT_WINDOWS,
   OPPER_MODEL_MAX_OUTPUT_TOKENS,
   OPPER_MODEL_INPUT_MODALITIES,
+  AISTUPIDLEVEL_ROUTING_MODES,
+  AISTUPIDLEVEL_MODEL_CONTEXT_WINDOWS,
+  AISTUPIDLEVEL_MODEL_MAX_OUTPUT_TOKENS,
+  AISTUPIDLEVEL_MODEL_INPUT_MODALITIES,
   STEPFUN_MODELS,
   STEPFUN_MODEL_CONTEXT_WINDOWS,
   STEPFUN_MODEL_INPUT_MODALITIES,
@@ -1287,6 +1291,33 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     defaultModel: "glm-5.3-flash",
     models: ["glm-5.3-flash", "claude-sonnet-5-5", "gpt-6.1-sol", "deepseek-v4-flash"],
     note: "OpenAI-compatible relay for Claude, GPT, GLM and DeepSeek chat models. The seeded models were verified with chat, streaming and tool calls; deepseek-v4.1-flash is listed upstream but currently answers 503 and is left out. An ordinary key only reaches its own routing group's models; a Smart key reaches all seeded models. Image and video models are not served through this Chat preset. Upstream latency varies widely (a few seconds to about 30 s) with occasional transient 503s.",
+  },
+  {
+    // AI Stupid Level Smart Router, operated by S.C. Studio Platforms S.R.L. Contract checked
+    // 2026-10-26: https://aistupidlevel.info/router/docs and https://aistupidlevel.info/terms#router.
+    // The router calls the model it picks with the provider keys saved on the user's own ASL
+    // account, so each provider bills the user directly; ASL resells no model access. GET /v1/models
+    // answers 401 without a valid key, so the default discovery URL doubles as key validation. The
+    // router's /v1/messages is a plain Anthropic passthrough with no routing, so every inbound,
+    // Claude Code included, stays on Chat. The env reference derived from the id is
+    // ${AISTUPIDLEVEL_API_KEY}.
+    id: "aistupidlevel",
+    label: "AI Stupid Level",
+    adapter: "openai-chat",
+    baseUrl: "https://aistupidlevel.info/v1",
+    authKind: "key",
+    dashboardUrl: "https://aistupidlevel.info/router/keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "auto-coding",
+    models: AISTUPIDLEVEL_ROUTING_MODES,
+    modelContextWindows: AISTUPIDLEVEL_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: AISTUPIDLEVEL_MODEL_MAX_OUTPUT_TOKENS,
+    modelInputModalities: AISTUPIDLEVEL_MODEL_INPUT_MODALITIES,
+    // Text only for every id, including the pinned models live discovery adds: the router
+    // answers an image, audio or file part with 400 `unsupported_content`.
+    inputModalities: ["text"],
+    note: "Smart Router that sends each request to a model chosen from AI Stupid Level's benchmarks, using the provider keys saved on your AI Stupid Level account (OpenAI, Anthropic, Google, DeepSeek, Kimi, GLM), so each provider bills you directly with no markup. Routing modes: auto-coding (the default), auto-tooling, auto-reasoning, auto-best, plus value and speed modes. A real model id from the live list, such as claude-opus-5-5, pins one model. The X-AISM-Model response header names the model that answered. Text only.",
   },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.

@@ -10,6 +10,7 @@
  */
 import { loadConfig } from "../config";
 import { cliFirstPartyDesired, firstPartyDesired, reconcileClaudeFirstPartySettings } from "../claude/first-party-settings";
+import { getConfigDir } from "../config/paths";
 import { claudeInterceptEnabled } from "../claude/intercept/runtime";
 import { removeDesktopPickerArtifacts } from "../claude/desktop-picker";
 import { findLiveProxy } from "../server/proxy-liveness";
@@ -17,10 +18,10 @@ import { runtimeRequest } from "./runtime-api";
 import { stripGrokConfig, type GrokInjectResult } from "../grok/inject";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } from "../claude/desktop-3p";
 import {
-  applyDesktopFirstParty,
+  applyDesktopFirstParty, withFirstPartySecretsSettled,
   inspectDesktopFirstParty,
   observeClaudeDesktopMode,
-  removeDesktopFirstParty,
+  removeDesktopFirstParty, removeDesktopFirstPartySettled,
   resolveClaudeDesktopMode,
 } from "../claude/desktop-first-party";
 import {
@@ -154,8 +155,9 @@ export async function ensureClaudeDesktopMatchesDesired(
   if (cliFirstPartyDesired(config)) {
     const seen = (deps.inspectDesktopFirstParty ?? inspectDesktopFirstParty)(config);
     if (seen.settings.kind === "absent" || seen.stale || !claudeInterceptEnabled(config)) {
-      const result = (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
-        firstPartyDesired(config, (deps.observeClaudeDesktopMode ?? observeClaudeDesktopMode)(config)));
+      const result = await withFirstPartySecretsSettled(getConfigDir(), () =>
+        (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
+          firstPartyDesired(config, (deps.observeClaudeDesktopMode ?? observeClaudeDesktopMode)(config))));
       if (result.ok && result.changed) log(`   + Claude CLI first-party env refreshed (${result.path})`);
       else if (!result.ok) error(`⚠️  Claude CLI first-party env refresh skipped: ${result.reason}.`);
     }
@@ -173,7 +175,7 @@ export async function ensureClaudeDesktopMatchesDesired(
     }
     const seen = (deps.inspectDesktopFirstParty ?? inspectDesktopFirstParty)(config);
     if (!seen.stale) return;
-    const applied = (deps.applyDesktopFirstParty ?? applyDesktopFirstParty)(config);
+    const applied = await withFirstPartySecretsSettled(getConfigDir(), () => (deps.applyDesktopFirstParty ?? applyDesktopFirstParty)(config));
     if (applied.ok && applied.changed) log(`   + Claude Desktop first-party env refreshed (${applied.path})`);
     else if (!applied.ok) error(`⚠️  Claude Desktop first-party env refresh skipped: ${applied.reason}.`);
     return;
@@ -196,7 +198,7 @@ export async function ensureClaudeDesktopMatchesDesired(
     error(`⚠️  Claude Desktop picker cleanup skipped: ${detail}.`);
   }
   try {
-    const env = (deps.removeDesktopFirstParty ?? removeDesktopFirstParty)(deps.loadConfig());
+    const env = await removeDesktopFirstPartySettled(deps.loadConfig, {}, deps.removeDesktopFirstParty ?? removeDesktopFirstParty);
     if (env.ok && env.changed) log("   ↩️  Claude Desktop first-party env removed.");
     else if (env.ok && env.retainedFor === "cli") log("   = Shared first-party env retained for Claude Code CLI.");
     else if (!env.ok) error(`⚠️  Claude Desktop first-party env cleanup skipped: ${env.reason} (${env.path}).`);

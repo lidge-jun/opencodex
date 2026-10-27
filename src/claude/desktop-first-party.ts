@@ -19,7 +19,8 @@
  * into Claude Code's settings keeps `first-party` (observeClaudeDesktopMode), so moving the default
  * to gateway never flips a working Desktop under the operator.
  */
-import { getConfigDir } from "../config/paths";
+import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
+import { WindowsSecretAclSettleTimeoutError } from "../lib/windows-secret-acl";
 import { join } from "node:path";
 import type { OcxConfig } from "../types";
 import { claudeConfigDir } from "./auth-detect";
@@ -211,9 +212,35 @@ export function observeClaudeDesktopMode(
   return observed;
 }
 
+const SECRET_FAILURE_CAUSES = ["EACCES", "EPERM", "ENOENT", "EEXIST", "EIO", "EBUSY", "ETIMEDOUT",
+  "EICACLS", "EACLIDENTITY", "local_ca_path_unsafe", "client_lifecycle_busy", "client_lifecycle_lock_failed",
+  "claude_intercept_proxy_token_invalid", "Error", "TypeError", "RangeError", "unknown"] as const;
+export interface InterceptSecretDiagnostic {
+  stage: "ca" | "token";
+  cause: typeof SECRET_FAILURE_CAUSES[number];
+}
+function secretFailureCause(error: unknown): InterceptSecretDiagnostic["cause"] {
+  const code = error instanceof Error && "code" in error ? error.code : undefined;
+  // Allowlist labels, never arbitrary messages, paths, ACL stdout, or error-supplied names.
+  for (const allowed of SECRET_FAILURE_CAUSES) if (code === allowed) return allowed;
+  for (const allowed of ["TypeError", "RangeError", "Error"] as const)
+    if (error instanceof Error && error.name === allowed) return allowed;
+  return "unknown";
+}
 export type DesktopFirstPartyApplyResult =
   | { ok: true; changed: boolean; path: string; env: ClaudeInterceptEnv; proxyPort: number }
-  | { ok: false; reason: "intercept_disabled" | "ca_unavailable" | "unreadable" | "foreign_env"; path: string };
+  | { ok: false; reason: "intercept_disabled" | "ca_unavailable" | "unreadable" | "foreign_env"; path: string; diagnostic?: InterceptSecretDiagnostic };
+
+/** Async apply/reconcile boundaries translate admission timeout into the existing refusal. */
+export async function withFirstPartySecretsSettled<T>(configDir: string, prepare: () => T):
+  Promise<T | Extract<DesktopFirstPartyApplyResult, { ok: false }>> {
+  try { return await withConfigDirHardeningSettled(configDir, prepare); }
+  catch (error) {
+    if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+    return { ok: false, reason: "ca_unavailable", path: claudeInterceptCaCertPath(configDir),
+      diagnostic: { stage: "ca", cause: "ETIMEDOUT" } };
+  }
+}
 
 /**
  * Write the first-party env into Claude Code's settings. Creates the local CA first so the
@@ -226,11 +253,15 @@ export function applyDesktopFirstParty(
   const opencodexConfigDir = options.opencodexConfigDir ?? getConfigDir();
   if (!claudeInterceptEnabled(config)) return { ok: false, reason: "intercept_disabled", path: "" };
   let target: DesktopFirstPartyTarget;
+  let stage: InterceptSecretDiagnostic["stage"] = "ca";
   try {
     ensureLocalInterceptCa(opencodexConfigDir);
+    stage = "token";
     target = desktopFirstPartyTarget(config, opencodexConfigDir);
-  } catch {
-    return { ok: false, reason: "ca_unavailable", path: claudeInterceptCaCertPath(opencodexConfigDir) };
+  } catch (error) {
+    const diagnostic = { stage, cause: secretFailureCause(error) };
+    console.warn(`[claude-intercept] secret preparation failed: stage=${diagnostic.stage} cause=${diagnostic.cause}`);
+    return { ok: false, reason: "ca_unavailable", path: claudeInterceptCaCertPath(opencodexConfigDir), diagnostic };
   }
   const written = applyClaudeInterceptSettings(target.env, options.claudeConfigDir);
   if (!written.ok) return { ok: false, reason: written.reason, path: written.path };
@@ -247,4 +278,23 @@ export function removeDesktopFirstParty(
   }
   const caCertPath = claudeInterceptCaCertPath(options.opencodexConfigDir ?? getConfigDir());
   return removeClaudeInterceptSettings(caCertPath, options.claudeConfigDir);
+}
+
+/**
+ * Remove Desktop's first-party env once ACL work overlapping the Claude settings home settles.
+ * A `CLAUDE_CONFIG_DIR` nested in the opencodex home shares the config-root hardening flight, so
+ * the credential-bearing settings rewrite gets the same admission as other intercept secrets.
+ * The config is read inside the same synchronous turn. A settle timeout refuses without writing.
+ */
+export async function removeDesktopFirstPartySettled(
+  readConfig: () => Pick<OcxConfig, "claudeCode" | "runtimeRole">,
+  options: DesktopFirstPartyOptions = {},
+  remove: typeof removeDesktopFirstParty = removeDesktopFirstParty,
+): Promise<ReturnType<typeof removeDesktopFirstParty>> {
+  const dir = options.claudeConfigDir ?? claudeConfigDir();
+  try { return await withConfigDirHardeningSettled(dir, () => remove(readConfig(), options)); }
+  catch (error) {
+    if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+    return { ok: false, reason: "unreadable", path: join(dir, "settings.json") };
+  }
 }
