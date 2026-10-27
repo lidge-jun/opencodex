@@ -291,6 +291,10 @@ function atomicWriteFileToTarget(
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
   let hardened = false;
   let ownsTemp = false;
+  // The residual-cleanup harden below must not spend the destination's single
+  // recovery attempt: a stalled icacls there would block for a whole hardening
+  // deadline and leave the destination refusing writes until the memo re-arms.
+  let cleanupHarden = false;
   const effective: AtomicWriteIO = io ?? {
     write: (tempPath, value) => writePrivateTempFile(tempPath, value, path, () => { ownsTemp = true; }),
     harden: tempPath => {
@@ -299,7 +303,11 @@ function atomicWriteFileToTarget(
       // its ChangeTime bump is what used to invalidate the harden memo one line
       // later. On POSIX the mode IS the boundary, so it stays.
       if (windowsHardeningApplies()) {
-        hardenSecretPath(tempPath, { required: true, timeoutMemoKey: path, retryTimedOutOnce: true });
+        hardenSecretPath(tempPath, {
+          required: true,
+          timeoutMemoKey: path,
+          retryTimedOutOnce: !cleanupHarden,
+        });
         return;
       }
       try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
@@ -357,7 +365,8 @@ function atomicWriteFileToTarget(
     }
     if (!removed && !scrubbed) throw new AtomicWriteSecretResidualError(tmp, { cause });
     if (!removed && !hardened) {
-      try { effective.harden(tmp); hardened = true; } catch { /* reported below */ }
+      cleanupHarden = true;
+      try { effective.harden(tmp); hardened = true; } catch { /* reported below */ } finally { cleanupHarden = false; }
     }
     if (removed) forgetEphemeralSecretPath(tmp);
     if (!removed) throw new AtomicWriteResidualTempError(tmp, hardened, { cause });
