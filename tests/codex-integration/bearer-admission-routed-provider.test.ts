@@ -423,7 +423,7 @@ async function withTraceLines(
   }
 }
 
-type BearerAdmissionPost = (url: string, model: string, headers: HeadersInit) => Promise<Response>;
+type BearerAdmissionPost = (url: string | URL, model: string, headers: HeadersInit) => Promise<Response>;
 
 /**
  * The request stage used by the matrix below — and exercised directly by the
@@ -436,7 +436,7 @@ type BearerAdmissionPost = (url: string, model: string, headers: HeadersInit) =>
 async function runBearerRequestStage(
   iteration: BearerIterationTrace | undefined,
   surface: "Responses" | "Chat",
-  url: string,
+  url: string | URL,
   headers: HeadersInit,
   post: BearerAdmissionPost,
 ): Promise<{ body: unknown }> {
