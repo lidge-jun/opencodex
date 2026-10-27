@@ -222,16 +222,17 @@ describe("enforceAnthropicImageLimits — byte limits", () => {
   }
 
   test("B1: over-budget total evicts oldest base64 images until under budget, newest survive", () => {
-    // 8 × 4MiB base64 = 32MiB > 20MiB budget → 3 oldest evicted (28 → 24 → 20MiB).
+    // Legacy mutating helper: 8 × 4MiB base64 exceeds the current image share.
     const messages = [userMsg(Array.from({ length: 8 }, () => midPng()))];
     enforceAnthropicImageLimits(messages);
     const content = (messages[0] as { content: Array<{ type: string }> }).content;
-    for (let i = 0; i < 3; i++) {
+    const evictions = 8 - Math.floor(TOTAL_IMAGE_BASE64_BUDGET / (4 * 1024 * 1024));
+    for (let i = 0; i < evictions; i++) {
       expect(content[i].type).toBe("text");
       expect(textOf(content[i])).toContain("older screenshots were dropped");
       expect(textOf(content[i])).toContain("request limit");
     }
-    for (let i = 3; i < 8; i++) expect(content[i].type).toBe("image");
+    for (let i = evictions; i < 8; i++) expect(content[i].type).toBe("image");
     expect(base64SumOf(messages)).toBeLessThanOrEqual(TOTAL_IMAGE_BASE64_BUDGET);
   });
 
@@ -266,7 +267,7 @@ describe("enforceAnthropicImageLimits — byte limits", () => {
 
   test("B5: >8000px image textified by the dimension rule does not count toward the byte budget", () => {
     // 18MiB decoded (24MiB base64) at 9000px wide → dimension rule kills it first; the
-    // remaining 2 × 4MiB base64 = 8MiB ≤ 20MiB, so no byte-budget eviction fires.
+    // remaining 2 × 4MiB base64 fit, so no byte-budget eviction fires.
     const messages = [userMsg([imageBlock(bigPngBase64(9000, 500, 18 * 1024 * 1024)), midPng(), midPng()])];
     enforceAnthropicImageLimits(messages);
     const content = (messages[0] as { content: Array<{ type: string }> }).content;
@@ -277,17 +278,17 @@ describe("enforceAnthropicImageLimits — byte limits", () => {
   });
 
   test("B6: URL images are never evicted by the byte budget; oldest base64 goes instead", () => {
-    // Oldest ref is a URL image, then 6 × 4MiB base64 = 24MiB > 20MiB → exactly one
-    // base64 eviction (the oldest base64, index 1), never the URL.
+    // Exactly one base64 image exceeds the available share; never evict the URL.
     const urlImg = { type: "image", source: { type: "url", url: "https://example.com/a.png" } };
-    const messages = [userMsg([{ ...urlImg }, midPng(), midPng(), midPng(), midPng(), midPng(), midPng()])];
+    const count = Math.floor(TOTAL_IMAGE_BASE64_BUDGET / (4 * 1024 * 1024)) + 1;
+    const messages = [userMsg([{ ...urlImg }, ...Array.from({ length: count }, midPng)])];
     enforceAnthropicImageLimits(messages);
     const content = (messages[0] as { content: Array<{ type: string; source?: { type?: string } }> }).content;
     expect(content[0].type).toBe("image");
     expect(content[0].source?.type).toBe("url");
     expect(content[1].type).toBe("text");
     expect(textOf(content[1])).toContain("older screenshots were dropped");
-    for (let i = 2; i < 7; i++) expect(content[i].type).toBe("image");
+    for (let i = 2; i <= count; i++) expect(content[i].type).toBe("image");
     expect(base64SumOf(messages)).toBeLessThanOrEqual(TOTAL_IMAGE_BASE64_BUDGET);
   });
 });

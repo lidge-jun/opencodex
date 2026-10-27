@@ -4,6 +4,7 @@ import { anthropicReplayContent, createAnthropicReplayCapture } from "./anthropi
 import { withAnthropicProgressUpdates } from "./anthropic-progress";
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { createAdapterTierMetadata, type AdapterTierMetadata } from "../providers/fastwire";
+import { observeAnthropicCacheUsage } from "../lib/anthropic-cache-observation";
 import { ANTHROPIC_FAST_MODE_BETA, mergeAnthropicBetaHeader } from "../providers/anthropic-fast";
 import { createToolCallIdAllocator, type ToolCallIdAllocator } from "./tool-call-id";
 import { debugDroppedFrame } from "../lib/debug";
@@ -23,7 +24,8 @@ import type {
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName } from "../types";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPrefix, stripClaudeToolPrefix } from "../oauth/anthropic";
 import { parseDataUrl } from "./image";
-import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
+import { assertAnthropicImageBudget } from "./anthropic-image-guard";
+import { sameProviderContinuationOwner } from "../responses/provider-continuation";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
 import { normalizeAnthropicOutputSchema } from "./anthropic-output-schema";
 import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
@@ -1020,6 +1022,10 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
     formatErrorBody: formatAnthropicErrorBody,
 
     async buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
+      if (parsed._anthropicImageOwner && (!parsed._providerContinuationOwner
+        || !sameProviderContinuationOwner(parsed._anthropicImageOwner, parsed._providerContinuationOwner))) {
+        throw new Error("Anthropic compaction serving account changed; retry with the current account.");
+      }
       if (typeof provider.apiKey !== "string" || provider.apiKey.trim() === "") {
         if (isOAuth) {
           throw new Error("anthropic oauth token missing — run ocx login anthropic");
@@ -1032,16 +1038,9 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         usesNativeAnthropicEndpoint(provider) ? parsed._anthropicServerReplay : undefined);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
-      // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
-      // (anthropic-image-normalize.ts); the guard below remains the deterministic backstop.
-      // imageTierBias > 0 = upstream-413 tightened retry (030): start every image one tier lower.
       await normalizeAnthropicImages(messages, {
-        tierBias: incoming?.imageTierBias ?? 0,
         abortSignal: incoming?.abortSignal,
       });
-      // Anthropic rejects many-image requests (>20 images) carrying any image over
-      // 2000px per side; see anthropic-image-guard.ts for the full limit policy.
-      enforceAnthropicImageLimits(messages);
       const converted = toolsToAnthropicFormat(parsed, toolNames);
       // A third-party Anthropic-compatible endpoint may not implement Anthropic's server tools.
       const tools = usesNativeAnthropicEndpoint(provider) ? withAnthropicServerTools(converted, parsed) : converted;
@@ -1261,11 +1260,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);
 
+      const serialized = JSON.stringify(body);
+      assertAnthropicImageBudget(messages, Buffer.byteLength(serialized, "utf8"));
+
       const request = {
         url,
         method: "POST",
         headers,
-        body: JSON.stringify(body),
+        body: serialized,
         // Adapter-owned: the registry wrapper would otherwise report the exact absence of a
         // tier field and mislabel every fast turn as downgraded.
         tierLog: createAdapterTierMetadata(
@@ -1369,6 +1371,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
               case "message_start": {
                 const message = data.message as { usage?: unknown } | undefined;
                 pendingUsage = mergeAnthropicUsage(pendingUsage, message?.usage);
+                observeAnthropicCacheUsage(response, message?.usage);
                 // Fast mode reports the speed actually served here (`usage.speed`).
                 observeAnthropicSpeed(message?.usage, tierMetadata);
                 break;

@@ -75,6 +75,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 
 | Doc | Scope |
 | --- | --- |
+| [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) | Opt-in running-turn cache renewal, stable historical images and bounded overflow compaction. |
 | [`quota-snapshots.md`](quota-snapshots.md) | Bounded write deferral and cancellation for Codex and provider account quota snapshots. |
 | [`providers/generic-account-pool.md`](providers/generic-account-pool.md) | Opt-in conversation ownership, request-local selection receipts and bounded release for generic OAuth pools. |
 | [`providers/anthropic-progress.md`](providers/anthropic-progress.md) | Opus 5.5 progress display, visible commentary, and exact signed-block replay. |
@@ -204,6 +205,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/adapters/workbuddy-schema.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/adapters/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/advisor/` | [`advisor.md`](advisor.md) |
+| `src/anthropic/` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/bridge.ts` | [`transports/responses.md`](transports/responses.md) |
 | `src/bridge/` | [`transports/responses.md`](transports/responses.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
 | `src/bridge/sse.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
@@ -231,6 +233,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/app-server-processes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/auth-api/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
 | `src/codex/auth-api/pool-mode-gate.ts` | [`providers/pool-credit-renewal.md`](providers/pool-credit-renewal.md) |
+| `src/codex/cache-runtime-state.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/codex/catalog/effort.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/catalog/model-hints.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/ownership.ts` | [`catalog-routed-ownership.md`](catalog-routed-ownership.md) |
@@ -240,8 +243,11 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/cli-update-plan.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/quota.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
+| `src/codex/request-provenance.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
+| `src/codex/rollout-cache-runtime.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
 | `src/codex/signed-in-identity.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
+| `src/codex/thread-writer-lock.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/combos/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/companion/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`companion.md`](companion.md) |
 | `src/compatibility/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) |
@@ -262,6 +268,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/lib/` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-spend.md`](transports/responses-spend.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/lib/account-auto-pause-response.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/lib/advisor-activation.ts` | [`advisor.md`](advisor.md) |
+| `src/lib/anthropic-cache-observation.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/lib/decision-quota-sink.ts` | [`providers/jev-decision.md`](providers/jev-decision.md) |
 | `src/lib/gui-pair-intent.ts` | [`remote-link.md`](remote-link.md) |
 | `src/lib/windows-owner-acl.ts` | [`remote-link.md`](remote-link.md) |
@@ -304,6 +311,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/remote-control/` | [`remote-workspace.md`](remote-workspace.md) |
 | `src/remote/` | [`runtime.md`](runtime.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/responses/` | [`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses.md`](transports/responses.md)<br>[`transports/native-reasoning-retention.md`](transports/native-reasoning-retention.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/kiro.md`](providers/kiro.md)<br>[`providers/xai-grok.md`](providers/xai-grok.md)<br>[`providers/chat-compat.md`](providers/chat-compat.md) |
+| `src/responses/compaction-summary.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/responses/reasoning-replay-cache.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/responses/turn-membership.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/router.ts` | [`runtime.md`](runtime.md) |
@@ -321,13 +329,16 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/management/link-routes.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/management/model-routes.ts` | [`pricing.md`](pricing.md) |
 | `src/server/management/quota-pool-routes.ts` | [`quota-pool.md`](quota-pool.md) |
+| `src/server/request-origin.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/responses/adapter-dispatch.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md) |
 | `src/server/responses/advisor-plan-slot.ts` | [`advisor.md`](advisor.md) |
 | `src/server/responses/advisor-slot.ts` | [`advisor.md`](advisor.md) |
+| `src/server/responses/anthropic-image-context.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/server/responses/anthropic-thinking-recovery.ts` | [`transports/anthropic-thinking-recovery.md`](transports/anthropic-thinking-recovery.md) |
 | `src/server/responses/compact.ts` | [`transports/responses-citations.md`](transports/responses-citations.md) |
+| `src/server/responses/image-context-recovery.ts` | [`providers/anthropic-cache-lifecycle.md`](providers/anthropic-cache-lifecycle.md) |
 | `src/server/responses/opengateway-completion-guard.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/passthrough-completion.ts` | [`providers/opengateway.md`](providers/opengateway.md) |
 | `src/server/responses/passthrough-dispatch.ts` | [`providers/opengateway.md`](providers/opengateway.md) |

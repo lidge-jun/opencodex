@@ -82,7 +82,8 @@ export async function deliverAdapterResponse(
   } = responseEffects;
   const { routedCompaction } = sidecarState;
   const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
-  const upstreamRequestsStream = parsed.stream || isCanonicalOpenAiForwardProvider(route.provider);
+  const upstreamRequestsStream = parsed.stream || isCanonicalOpenAiForwardProvider(route.provider)
+    || transportState.activeAdapter.name === "anthropic" && upstreamResponse.headers.get("content-type")?.includes("text/event-stream") === true;
   const recoverThinkingSignature = (events: AsyncIterable<AdapterEvent>): AsyncIterable<AdapterEvent> =>
     thinkingSignatureRecovery.wrap(events, async function* () {
       const result = await refetchThinkingSignature();

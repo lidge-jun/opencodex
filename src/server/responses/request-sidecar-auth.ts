@@ -53,6 +53,7 @@ export async function prepareResponsesSidecarAuth(
   const routedCompaction = parsed._compactionRequest === true
     && (!supportsNativeResponsesCompactionTrigger(route.provider) || parsed._portableCompaction === true);
   const preserveCompactionPrefix = routedCompaction && transportState.adapter.name === "anthropic";
+  if (options.imageSummaryContext) return { openAiSidecar, routedCompaction, preserveCompactionPrefix };
   if (routedCompaction) parsed.context.messages = omitEarlierCompactionImages(parsed.context.messages);
   const needsOpenAiVision = !visionDescribeTerminal
     && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);

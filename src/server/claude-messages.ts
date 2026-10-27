@@ -345,7 +345,7 @@ async function anthropicNativePassthrough(
   // count_tokens too — counts must match what the real send will contain, and the 32MB
   // body cap applies to it equally. Non-message bodies pass through untouched.
   if (Array.isArray(body.messages)) {
-    await normalizeAnthropicImages(body.messages, { abortSignal: req.signal });
+    await normalizeAnthropicImages(body.messages, { abortSignal: req.signal, stablePerImage: false });
     enforceAnthropicImageLimits(body.messages);
     sanitizePassthroughToolCallIds(body.messages);
   }

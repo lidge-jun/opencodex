@@ -9,7 +9,7 @@ import { resetNormalizeStateForTests } from "../../../src/adapters/anthropic-ima
 import { sniffImageDimensions } from "../../../src/adapters/anthropic-image-guard";
 import type { OcxConfig } from "../../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../../helpers/isolated-codex-home";
-import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -25,15 +25,18 @@ beforeEach(() => {
   resetNormalizeStateForTests();
 });
 
-afterEach(() => {
+afterEach(async () => {
   upstream?.stop(true);
   upstream = null;
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  if (testDir) removeTreeWithRetry(testDir);
-  clearKeyCooldowns();
+  try {
+    if (testDir) await removeTreeAfterBackgroundWork(testDir);
+  } finally {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    isolatedCodexHome?.restore();
+    isolatedCodexHome = null;
+    clearKeyCooldowns();
+  }
 });
 
 const ONE_PX_PNG =
@@ -121,30 +124,26 @@ async function postImageRequest(serverUrl: string, dataUrl: string): Promise<Res
   });
 }
 
-describe("anthropic 413 tightened-retry (end-to-end)", () => {
-  test("R1: upstream 413 then 200 — exactly one biased rebuild, images re-encoded a tier lower", async () => {
+describe("anthropic image encoding and upstream rejection (end-to-end)", () => {
+  test("R1: upstream 413 surfaces once without rewriting images", async () => {
     const seen: SeenRequest[] = [];
     upstream = scriptedUpstream([413, 200], seen);
     saveConfig(anthropicConfig(upstream.url.toString().replace(/\/$/, "")));
     const server = startServer(0);
     try {
       const res = await postImageRequest(String(server.url), await realPngDataUrl(1500, 1000));
-      expect(res.status).toBe(200);
-      expect(seen).toHaveLength(2);
+      expect(res.status).toBe(413);
+      expect(seen).toHaveLength(1);
       // First attempt: 1500px PNG rides tier-0 pass-through.
       const first = firstImageSource(seen[0].body);
       expect(first?.media_type).toBe("image/png");
-      // Biased retry: tier 1 — re-encoded JPEG within 1024px.
-      const second = firstImageSource(seen[1].body);
-      expect(second?.media_type).toBe("image/jpeg");
-      const dims = sniffImageDimensions(second?.data ?? "");
-      expect(Math.max(dims!.width, dims!.height)).toBeLessThanOrEqual(1024);
+      expect(sniffImageDimensions(first?.data ?? "")).toEqual({ width: 1500, height: 1000 });
     } finally {
       await server.stop(true);
     }
   });
 
-  test("R2: upstream 413 twice — exactly two calls, honest 413 surfaces, no spiral", async () => {
+  test("R2: repeated upstream 413 cannot start a lossy retry spiral", async () => {
     const seen: SeenRequest[] = [];
     upstream = scriptedUpstream([413, 413], seen);
     saveConfig(anthropicConfig(upstream.url.toString().replace(/\/$/, "")));
@@ -152,7 +151,7 @@ describe("anthropic 413 tightened-retry (end-to-end)", () => {
     try {
       const res = await postImageRequest(String(server.url), await realPngDataUrl(1500, 1000));
       expect(res.status).toBe(413);
-      expect(seen).toHaveLength(2);
+      expect(seen).toHaveLength(1);
       expect(res.headers.get("content-type")).toContain("application/json");
       const errorBody = await res.json();
       expect(errorBody.error).toEqual({
@@ -165,22 +164,19 @@ describe("anthropic 413 tightened-retry (end-to-end)", () => {
     }
   });
 
-  test("R4: 413 → biased retry → 429 → key rotation keeps the tightened tiers", async () => {
+  test("R4: 429 key rotation preserves the exact image encoding", async () => {
     const seen: SeenRequest[] = [];
-    upstream = scriptedUpstream([413, 429, 200], seen);
+    upstream = scriptedUpstream([429, 200], seen);
     saveConfig(anthropicConfig(upstream.url.toString().replace(/\/$/, ""), true));
     const server = startServer(0);
     try {
       const res = await postImageRequest(String(server.url), await realPngDataUrl(1500, 1000));
       expect(res.status).toBe(200);
-      expect(seen).toHaveLength(3);
-      // Rotation happened after the biased 413 retry hit 429.
-      expect(seen[2].apiKey).not.toBe(seen[1].apiKey);
-      // And the rotated rebuild STILL carries the tightened tier (jpeg <= 1024px).
-      const third = firstImageSource(seen[2].body);
-      expect(third?.media_type).toBe("image/jpeg");
-      const dims = sniffImageDimensions(third?.data ?? "");
-      expect(Math.max(dims!.width, dims!.height)).toBeLessThanOrEqual(1024);
+      expect(seen).toHaveLength(2);
+      expect(seen[1].apiKey).not.toBe(seen[0].apiKey);
+      expect(firstImageSource(seen[1].body)).toEqual(firstImageSource(seen[0].body));
+      const dims = sniffImageDimensions(firstImageSource(seen[1].body)?.data ?? "");
+      expect(Math.max(dims!.width, dims!.height)).toBe(1500);
     } finally {
       await server.stop(true);
     }

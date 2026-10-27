@@ -1,0 +1,6 @@
+{
+  "anthropic-cache-renewal.test.ts": "adapters/anthropic",
+  "responses-anthropic-cache-prefix.test.ts": "responses",
+  "responses-anthropic-cache-lifecycle-entry.test.ts": "responses",
+  "codex-cache-runtime-record.test.ts": "codex-integration"
+}

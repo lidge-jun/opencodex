@@ -55,6 +55,8 @@ export const RESPONSES_CORE_MODULES = [
   // Reached from request-transport.ts: opt-in DeepSeek upload-backed image replay.
   "deepseek-image-files.ts",
   "request-sidecar-auth.ts",
+  "anthropic-image-context.ts",
+  "image-context-recovery.ts",
   "response-effects.ts",
   "response-tool-ownership.ts",
   "request-send-budget.ts",
@@ -78,6 +80,7 @@ export const RESPONSES_CORE_MODULES = [
   "terminal-error-redaction.ts",
   "non-replayable-error.ts",
   "sidecar-execution.ts",
+  "sidecar-tool-surface.ts",
   "sidecar-send-budget.ts",
   "completion-policy.ts",
   "run-turn-execution.ts",

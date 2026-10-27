@@ -8,12 +8,9 @@
  *
  * Codex threads accumulate screenshots in history, so long sessions cross 20 images
  * easily and any single retina capture (>2000px wide) kills every later turn. The
- * PRIMARY layer is now anthropic-image-normalize.ts (Bun.Image resize/re-encode with an
- * age-tier pyramid — devlog/260714_image_normalization_pipeline/020), which runs before
- * this guard; these rules remain the deterministic BACKSTOP for whatever normalization
- * could not shrink (undecodable passthroughs, all-terminal overflow). When this guard
- * must drop, it textifies the OLDEST image blocks — newest screenshots are the ones the
- * model needs.
+ * current pipeline fixes each image's encoding, then checks the final wire budget.
+ * Aggregate pressure enters context compaction. The older mutating guard remains
+ * available for compatibility but is not used by the Anthropic adapter.
  */
 
 export const MANY_IMAGE_THRESHOLD = 20;
@@ -36,13 +33,29 @@ export const MAX_IMAGE_FILE_BYTES = MAX_IMAGE_BASE64_LENGTH;
 /**
  * Anthropic rejects raw HTTP bodies over ~32MB with 413 request_too_large, and base64
  * image data dominates image-heavy histories (base64 is single-byte ASCII, so base64
- * chars ≈ serialized body bytes for the image share). The guard runs inside buildRequest
- * BEFORE system/tools attach, so it cannot measure the final body; instead we bound the
- * image share to 20MiB, leaving ≥11MB headroom even against a decimal 32,000,000-byte
- * cap — realistic non-image share (context-capped text history + tool schemas) stays
- * well under that. Residual: a request dominated by non-image content can still 413.
+ * chars ≈ serialized body bytes for the image share). Bound the image share to 26MiB,
+ * then check the actual serialized request, including history, system and tools,
+ * against the decimal 32,000,000-byte cap before sending. Either limit requests
+ * context compaction; neither limit changes an older image's encoding.
  */
-export const TOTAL_IMAGE_BASE64_BUDGET = 20 * 1024 * 1024;
+export const TOTAL_IMAGE_BASE64_BUDGET = 26 * 1024 * 1024;
+
+export const ANTHROPIC_REQUEST_BYTES = 32_000_000;
+
+export class AnthropicImageOverflow extends Error {
+  constructor() { super("Anthropic request requires context compaction before it can fit the image or body limit."); }
+}
+
+export function assertAnthropicImageBudget(messages: unknown[], bodyBytes: number): void {
+  const refs = collectImageRefs(messages);
+  const riskyMany = refs.length > MANY_IMAGE_THRESHOLD && refs.some(ref => {
+    const size = ref.base64 ? sniffImageDimensions(ref.base64) : null;
+    return !size || size.width > MANY_IMAGE_MAX_DIMENSION || size.height > MANY_IMAGE_MAX_DIMENSION;
+  });
+  if (refs.length > MAX_IMAGES_PER_REQUEST || riskyMany
+    || refs.reduce((sum, ref) => sum + (ref.base64?.length ?? 0), 0) > TOTAL_IMAGE_BASE64_BUDGET
+    || bodyBytes > ANTHROPIC_REQUEST_BYTES) throw new AnthropicImageOverflow();
+}
 
 const OMITTED_TEXT = "[image omitted: Anthropic request exceeded the 20-image limit for large images; older screenshots were dropped]";
 const OVERSIZED_TEXT = "[image omitted: exceeds Anthropic's 8000px per-side limit]";

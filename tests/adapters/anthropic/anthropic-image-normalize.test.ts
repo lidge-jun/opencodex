@@ -14,6 +14,7 @@ import {
 } from "../../../src/adapters/anthropic-image-normalize";
 import {
   enforceAnthropicImageLimits,
+  assertAnthropicImageBudget,
   sniffImageDimensions,
   TOTAL_IMAGE_BASE64_BUDGET,
 } from "../../../src/adapters/anthropic-image-guard";
@@ -238,26 +239,22 @@ describe("normalizeAnthropicImages — real Bun.Image path", () => {
     expect((block.source?.data ?? "").length).toBeLessThanOrEqual(TIER_SPECS[0].hardCap);
   });
 
-  test("N2: 30 images land on age tiers — newest pass through, older shrink to their tier edges", async () => {
+  test("N2: appending images preserves the encoding of every historical image", async () => {
     const src = await realPngBase64(1500, 1000);
     const messages = [userMsg(Array.from({ length: 30 }, () => imageBlock(src)))];
     await normalizeAnthropicImages(messages);
     const content = contentOf(messages);
     expect(content.every(b => b.type === "image")).toBe(true);
-    // Wire order is oldest first: indices 0-9 are tier 2 (<=700px), 10-23 tier 1 (<=1024px), 24-29 tier 0 (pass-through PNG).
-    for (let i = 0; i < 10; i++) {
-      const d = sniffImageDimensions(content[i].source?.data ?? "");
-      expect(Math.max(d!.width, d!.height)).toBeLessThanOrEqual(700);
-      expect(content[i].source?.media_type).toBe("image/jpeg");
-    }
-    for (let i = 10; i < 24; i++) {
-      const d = sniffImageDimensions(content[i].source?.data ?? "");
-      expect(Math.max(d!.width, d!.height)).toBeLessThanOrEqual(1024);
-    }
-    for (let i = 24; i < 30; i++) {
+    for (let i = 0; i < 30; i++) {
       expect(content[i].source?.media_type).toBe("image/png");
       expect(content[i].source?.data).toBe(src);
     }
+    const appended = [userMsg(Array.from({ length: 31 }, () => imageBlock(src)))];
+    await normalizeAnthropicImages(appended);
+    expect(contentOf(appended).slice(0, 30)).toEqual(content);
+    resetNormalizeStateForTests();
+    await normalizeAnthropicImages(appended);
+    expect(contentOf(appended).slice(0, 30)).toEqual(content);
   });
 
   test("N3: cache hit — same input re-normalized with ZERO additional encoder invocations and identical bytes", async () => {
@@ -366,22 +363,24 @@ describe("normalizeAnthropicImages — guards and seams", () => {
     expect(sum).toBeLessThanOrEqual(TOTAL_IMAGE_BASE64_BUDGET);
   });
 
-  test("representative 100-image session: demotion keeps every image, zero textify, sum within budget", async () => {
+  test("representative 100-image session retains images and signals aggregate pressure without mutation", async () => {
     const capFitting = sizedEncoder(edge => {
       const spec = TIER_SPECS.find(s => s.maxEdge === edge)!;
       return Number.isFinite(spec.hardCap) ? spec.hardCap : 100 * 1024;
     });
     const messages = [userMsg(Array.from({ length: 100 }, () => imageBlock(fakePngBase64(3000, 2000))))];
     await normalizeAnthropicImages(messages, { encode: capFitting });
-    enforceAnthropicImageLimits(messages);
     const content = contentOf(messages);
     expect(content.every(b => b.type === "image")).toBe(true);
     let sum = 0;
     for (const b of content) sum += b.source?.data?.length ?? 0;
-    expect(sum).toBeLessThanOrEqual(TOTAL_IMAGE_BASE64_BUDGET);
+    expect(sum).toBeGreaterThan(TOTAL_IMAGE_BASE64_BUDGET);
+    const before = JSON.stringify(messages);
+    expect(() => assertAnthropicImageBudget(messages, Buffer.byteLength(JSON.stringify(messages), "utf8"))).toThrow();
+    expect(JSON.stringify(messages)).toBe(before);
   });
 
-  test("aggregate demotion: over-budget totals demote OLDEST images further down the ladder until the sum fits", async () => {
+  test("aggregate pressure never demotes historical images", async () => {
     // Encoder returns exactly the hard cap at each position (terminal: 100KiB).
     const capFitting = sizedEncoder(edge => {
       const spec = TIER_SPECS.find(s => s.maxEdge === edge)!;
@@ -394,9 +393,10 @@ describe("normalizeAnthropicImages — guards and seams", () => {
     expect(content.every(b => b.type === "image")).toBe(true);
     let sum = 0;
     for (const b of content) sum += b.source?.data?.length ?? 0;
-    expect(sum).toBeLessThanOrEqual(TOTAL_IMAGE_BASE64_BUDGET);
-    // Oldest images were demoted below tier 2 (192KiB) to the 100KiB floor.
-    expect(content[0].source?.data?.length).toBe(100 * 1024);
+    expect(sum).toBeGreaterThan(TOTAL_IMAGE_BASE64_BUDGET);
+    expect(content[0].source?.data?.length).toBe(TIER_SPECS[0].hardCap);
+    expect(content.every(block => block.source?.data === content[0].source?.data)).toBe(true);
+    expect(() => assertAnthropicImageBudget(messages, Buffer.byteLength(JSON.stringify(messages), "utf8"))).toThrow();
   });
 
   test("activation both directions: with normalization the guard keeps every image; without it Rule 4 drops", async () => {

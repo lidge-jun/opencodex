@@ -24,6 +24,7 @@ import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { formatErrorResponse } from "../../bridge";
 import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./compaction-retention";
+import { createImageContextPreparation } from "./image-context-recovery";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
 export async function handleResponsesInner(
@@ -55,6 +56,8 @@ export async function handleResponsesInner(
     const execute = async (): Promise<Response> => {
       const sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState);
       if (sidecarState instanceof Response) return sidecarState;
+      const prepareImageContext = createImageContextPreparation(requestContext, requestState, transportState, requestDispatchers);
+      if (prepareImageContext instanceof Response) return prepareImageContext;
       const responseEffects = createResponsesEffects(
         requestContext,
         admissionState,
@@ -84,6 +87,7 @@ export async function handleResponsesInner(
         sidecarState,
         responseEffects,
         sendBudgetState,
+        prepareImageContext,
       );
       if (sidecarPlans instanceof Response) return sidecarPlans;
       const completionPolicy = createResponsesCompletionPolicy(requestContext, sidecarState);
@@ -104,6 +108,7 @@ export async function handleResponsesInner(
         transportState,
         responseEffects,
         sendBudgetState,
+        prepareImageContext,
       );
       if (adapterExchange instanceof Response) return adapterExchange;
       const continuationState = createAdapterContinuations(

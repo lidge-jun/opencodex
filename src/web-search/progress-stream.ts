@@ -1,5 +1,6 @@
 import type { ProviderAdapter } from "../adapters/base";
 import type { AdapterEvent, OcxUsage } from "../types";
+import { inheritCacheObservation } from "../lib/anthropic-cache-observation";
 import {
   isTranslatorBudgetExceededError,
   TRANSLATOR_MAX_TURN_BYTES,
@@ -249,11 +250,11 @@ export async function* parseStreamWithProgress(
     },
   }, { highWaterMark: 0 });
 
-  const tappedResponse = new Response(tappedBody, {
+  const tappedResponse = inheritCacheObservation(response, new Response(tappedBody, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
-  });
+  }));
 
   resetInactivity();
 

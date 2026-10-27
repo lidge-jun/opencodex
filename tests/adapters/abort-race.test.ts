@@ -79,7 +79,7 @@ describe("Responses abort guards", () => {
   });
 
   for (const budgetError of [true, false]) {
-    test(`an image-retry build ${budgetError ? "budget refusal returns 413" : "ordinary error retains 400"} without a retry send`, async () => {
+    test(`an image preflight build ${budgetError ? "budget refusal returns 413" : "ordinary error retains 400"} without any send`, async () => {
       let builds = 0;
       let sends = 0;
       let adapterSignal: AbortSignal | undefined;
@@ -112,7 +112,7 @@ describe("Responses abort guards", () => {
         message: "request translation buffer exceeded the safe limit",
       } : { type: "invalid_request_error", code: "invalid_request_error", message: "fixture rebuild failure" });
       expect(builds).toBe(2);
-      expect(sends).toBe(1);
+      expect(sends).toBe(0);
       expect(adapterSignal?.aborted).toBe(true);
     });
   }
