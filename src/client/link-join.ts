@@ -1,4 +1,3 @@
-import { requireRemotePlatform } from "../link/remote-platform";
 import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { isPortAvailable } from "../server/ports";
@@ -178,7 +177,7 @@ async function revokeIssuedLink(deps: ClientLinkJoinDeps, linkId: string, alias 
     const result = await deps.runner.run(
       buildExecArgv({
         alias,
-        argv: remoteOcxArgv(["link", "revoke", "--link-id", linkId], await requireRemotePlatform(deps.runner, alias, deps.knownHostsFile)),
+        argv: remoteOcxArgv(["link", "revoke", "--link-id", linkId]),
         knownHostsFile: deps.knownHostsFile,
       }),
       { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },
@@ -320,7 +319,7 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
     result = await deps.runner.run(
       buildExecArgv({
         alias: input.alias,
-        argv: remoteOcxArgv(["link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), "--json"], await requireRemotePlatform(deps.runner, input.alias, deps.knownHostsFile)),
+        argv: remoteOcxArgv(["link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), "--json"]),
         knownHostsFile: deps.knownHostsFile,
       }),
       { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },

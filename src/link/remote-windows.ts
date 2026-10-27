@@ -48,7 +48,7 @@ export const OCX_JOB_SOURCE = [
   "public static bool Ok(string x){try{",
   "var q=Process.Start(new ProcessStartInfo(x,\"--version\"){UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true});",
   "q.StandardInput.Close();q.StandardOutput.ReadToEndAsync();q.StandardError.ReadToEndAsync();",
-  "if(q.WaitForExit(10000))return q.ExitCode==0;q.Kill();}catch{}return false;}",
+  "if(q.WaitForExit(10000))return q.ExitCode==0;q.Kill();}catch{return false;}return false;}",
   "public static int Run(string x,string c){",
   "IntPtr z=IntPtr.Zero,j=z,l=z,v=z,h=z,t=z;bool listed=false,done=false;",
   "try{",

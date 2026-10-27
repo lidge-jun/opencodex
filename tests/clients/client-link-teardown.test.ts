@@ -30,8 +30,6 @@ test("teardown revokes the matching link once and returns tunnel state", async (
     reapOrphanTunnel: async () => ({ tunnel: "owned" }),
     runner: {
       run: async (argv, options) => {
-        if (argv.at(-1) === "cmd /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
-        if (argv.at(-1)?.includes("ocx-platform")) return { code: 0, stdout: "Linux\n", stderr: "" };
         calls.push({ argv, timeoutMs: options?.timeoutMs });
         return { code: 0, stdout: "", stderr: "" };
       },

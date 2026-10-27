@@ -163,7 +163,8 @@ for (const scenario of ["success", "redirect", "oversize", "invalid UTF-8", "sta
       if (scenario === "invalid UTF-8") return new Response(new Uint8Array([0xff]));
       if (scenario === "stalled body") return new Response(new ReadableStream({ start(controller) {
         controller.enqueue(new TextEncoder().encode("{"));
-        release = () => { try { controller.close(); } catch {} };
+        // A cancelled stream rejects close with TypeError; any other failure is a real fixture bug.
+        release = () => { try { controller.close(); } catch (error) { if (!(error instanceof TypeError)) throw error; } };
       } }));
       return Response.json({ models: [] });
     } });

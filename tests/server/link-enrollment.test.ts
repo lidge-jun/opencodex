@@ -297,7 +297,7 @@ describe("Home enrollment of a standalone Child", () => {
   test("measured 3400ms SSH latency allows 28600ms commands and separate restart/relay budgets", async () => {
     const h = harness();
     h.overrides.probe = call => {
-      h.advance(3400); writeFileSync(candidateFile(call.argv), "child ssh-ed25519 AAAA\n"); return result();
+      h.advance(3400); writeFileSync(candidateFile(call.argv), "child ssh-ed25519 AAAA\n"); return result("ocx-link-probe\n");
     };
     expect((await h.call("probe", { alias: "child" })).status).toBe(200);
     expect((await h.call("confirm-host", { alias: "child", fingerprint })).status).toBe(200);

@@ -379,7 +379,7 @@ function fakeSsh(pair: ReturnType<typeof remoteMessagingPair>, loseFirst = false
   const runner: RemoteControlRunner = async (argv, _budget, _capacity, stdin) => {
     if (argv[0] === "ssh-keygen") return "256 SHA256:fixture fake (ED25519)\n";
     const known = argv.find(arg => arg.startsWith("UserKnownHostsFile="))?.slice("UserKnownHostsFile=".length);
-    if (argv.at(-1) === "true") { writeRemoteFile(known!, "fixture ssh-ed25519 Zml4dHVyZQ==\n"); return ""; }
+    if (argv.at(-1) === "echo ocx-link-probe") { writeRemoteFile(known!, "fixture ssh-ed25519 Zml4dHVyZQ==\n"); return ""; }
     if (!stdin) throw new Error("fixture missing private stdin");
     const request = JSON.parse(stdin); requests.push(request); controls++;
     const reply = handleEnrollmentControl(pair.bStore, request);

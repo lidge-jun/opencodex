@@ -1,4 +1,3 @@
-import { requireRemotePlatform } from "../link/remote-platform";
 import { buildExecArgv, remoteOcxArgv } from "../link/ssh-argv";
 import type { SshRunner } from "../link/ssh-runner";
 import type { ClientLinkState } from "./link-state";
@@ -48,7 +47,7 @@ export async function teardownClientLink(
     const result = await deps.runner.run(
       buildExecArgv({
         alias: sidecar.alias,
-        argv: remoteOcxArgv(["link", "revoke", "--link-id", sidecar.linkId], await requireRemotePlatform(deps.runner, sidecar.alias, deps.knownHostsFile)),
+        argv: remoteOcxArgv(["link", "revoke", "--link-id", sidecar.linkId]),
         knownHostsFile: deps.knownHostsFile,
       }),
       { timeoutMs: deps.timeoutMs ?? HOME_REVOKE_TIMEOUT_MS },
