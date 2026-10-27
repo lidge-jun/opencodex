@@ -33,14 +33,19 @@ export interface GoogleRetryOptions {
 
 async function normalizeFinalGoogleError(label: string, res: Response, request: AdapterRequest, signal?: AbortSignal): Promise<Response> {
   if (label === "Antigravity" && (res.status === 403 || res.status === 404)) {
-    const body = await readBoundedResponseBody(res, {
-      maxBytes: 4096, totalTimeoutMs: 2000, firstByteTimeoutMs: 2000,
-      inactivityTimeoutMs: 2000, signal,
-    });
+    let payloadText = "";
+    try {
+      const body = await readBoundedResponseBody(res, {
+        maxBytes: 4096, totalTimeoutMs: 2000, firstByteTimeoutMs: 2000,
+        inactivityTimeoutMs: 2000, signal,
+      });
+      if (body.displaySafe && !body.truncated && !body.timedOut && !body.oversized) payloadText = body.text;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+    }
     const headers = new Headers(res.headers);
     headers.delete("content-encoding");
     headers.delete("content-length");
-    const payloadText = body.displaySafe && !body.truncated && !body.timedOut && !body.oversized ? body.text : "";
     const normalized = inheritAccountAutoPauseResponse(res, new Response(safeGoogleHttpErrorMessage(label, res.status,
       payloadText), {
       status: res.status, statusText: res.statusText, headers,

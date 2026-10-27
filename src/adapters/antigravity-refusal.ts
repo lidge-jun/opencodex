@@ -19,22 +19,15 @@ export function markAntigravityModelNotFound(response: Response, requestBody: st
   const error = payload?.error;
   if (typeof model !== "string" || !model || !error || error.status !== "NOT_FOUND"
     || (error.code !== undefined && error.code !== 404)) return;
-  const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const modelResource = new RegExp(`(?:^|/)models/${escaped}$`);
-  const namedMessage = new RegExp(`\\bmodel\\s+["']?${escaped}["']?\\s+(?:was\\s+)?not found\\b`, "i");
-  const resourceMessage = new RegExp(`\\bmodels/${escaped}(?=$|[\\s"':,;])`);
-  const message = typeof error.message === "string" ? error.message : "";
   const details = Array.isArray(error.details) ? error.details : [];
   const resourceInfo = details.filter((detail): detail is Record<string, unknown> =>
     detail !== null && typeof detail === "object" && !Array.isArray(detail)
     && detail["@type"] === "type.googleapis.com/google.rpc.ResourceInfo");
-  // A concrete project/resource refusal must not be recast as a model denial by incidental prose.
-  if (resourceInfo.some(detail => typeof detail.resourceName !== "string" || !modelResource.test(detail.resourceName)
+  // No observed model-specific message form is known: prose alone cannot identify the missing resource.
+  if (!resourceInfo.length || resourceInfo.some(detail => detail.resourceName !== `models/${model}`
     || (detail.resourceType !== undefined && (typeof detail.resourceType !== "string"
       || !/(?:^|[./])models?$/i.test(detail.resourceType))))) return;
-  if (!/\bnot found\b/i.test(message)) return;
-  if (namedMessage.test(message) || resourceMessage.test(message) || resourceInfo.length > 0)
-    modelNotFoundResponses.set(response, true);
+  modelNotFoundResponses.set(response, true);
 }
 
 export type AntigravityRefusalKind = "verify_account" | "other";

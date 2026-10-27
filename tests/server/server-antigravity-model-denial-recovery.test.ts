@@ -18,9 +18,6 @@ test("CCA model 404 classification requires original model-specific evidence", a
   const accepted = await normalized(envelope());
   expect(await isAntigravityModelNotFoundRefusal(accepted)).toBe(true);
   expect(await accepted.text()).toContain(text);
-  expect(await isAntigravityModelNotFoundRefusal(await normalized(JSON.stringify({ error: {
-    status: "NOT_FOUND", message: `Model '${model}' was not found.`,
-  } })))).toBe(true);
   for (const status of [400, 401, 403, 404, 429, 500])
     expect(await isAntigravityModelNotFoundRefusal(new Response(text, { status }))).toBe(false);
   for (const body of ["not found", "Requested entity is missing", "x".repeat(4097) + text, text + "x".repeat(4097)])
@@ -32,8 +29,22 @@ test("ambiguous and mismatched original resource errors cannot authorize model d
   for (const body of [JSON.stringify({ error: { status: "NOT_FOUND", message: "Requested entity was not found." } }),
     envelope("Requested entity was not found.", "projects/synthetic-project"),
     envelope("Requested entity was not found.", "models/other-model"),
+    envelope("Requested entity was not found.", `projects/synthetic-project/models/${model}`),
     envelope(`Model '${model}' was not found.`, "projects/synthetic-project")])
     expect(await isAntigravityModelNotFoundRefusal(await normalized(body))).toBe(false);
+});
+
+test("incidental model mentions without ResourceInfo cannot authorize model denial", async () => {
+  for (const message of [
+    `Project projects/p was not found while resolving models/${model}`,
+    `Model 'other-model' was not found while resolving models/${model}`,
+    `models/other-model not found; requested models/${model}`,
+    `Model '${model}' was not found.`,
+  ]) {
+    const response = await normalized(JSON.stringify({ error: { code: 404, status: "NOT_FOUND", message } }));
+    expect(response.status).toBe(404);
+    expect(await isAntigravityModelNotFoundRefusal(response)).toBe(false);
+  }
 });
 
 test("a 5 KiB original JSON model 404 cannot become trusted after Google normalization", async () => {
@@ -61,4 +72,31 @@ test("an incomplete original model 404 stream cannot authorize rotation", async 
   }));
   expect(await isAntigravityModelNotFoundRefusal(response)).toBe(false);
   expect(await response.text()).toBe("Antigravity invalid request: HTTP 404");
+});
+
+test("an erroring original 404 body preserves status without denial provenance", async () => {
+  const response = await normalized(new ReadableStream<Uint8Array>({
+    start(controller) { controller.enqueue(new TextEncoder().encode(envelope())); },
+    pull(controller) { controller.error(new TypeError("synthetic body reset")); },
+  }));
+  expect(response.status).toBe(404);
+  expect(await isAntigravityModelNotFoundRefusal(response)).toBe(false);
+  expect(await response.text()).toBe("Antigravity invalid request: HTTP 404");
+});
+
+test("cancellation while reading an original 404 body propagates by identity", async () => {
+  const controller = new AbortController();
+  const reason = new Error("synthetic cancellation");
+  let reading!: () => void;
+  const atRead = new Promise<void>(resolve => { reading = resolve; });
+  const pending = fetchAntigravityWithRetry({ url: "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
+    method: "POST", headers: {}, body: JSON.stringify({ model }) }, {
+    abortSignal: controller.signal,
+    executor: (async () => new Response(new ReadableStream<Uint8Array>({
+      pull() { reading(); },
+    }, { highWaterMark: 0 }), { status: 404 })) as typeof fetch,
+  });
+  await atRead;
+  controller.abort(reason);
+  await expect(pending).rejects.toBe(reason);
 });

@@ -185,6 +185,31 @@ test("an unrelated 404 never rotates or records a model denial", async () => {
   expect(antigravityAccountSupportsModel(provider, ids[0]!, model)).toBeUndefined();
 });
 
+for (const subject of ["Project projects/p", "Model 'other-model'"]) {
+  test(`incidental model mention in a missing ${subject} never denies or rotates`, async () => {
+    onSend = async (_auth, wireModel) => Response.json({ error: { code: 404, status: "NOT_FOUND",
+      message: `${subject} was not found while resolving models/${wireModel}`,
+    } }, { status: 404 });
+    expect((await turn(config(true))).status).toBe(404);
+    expect(sends).toEqual([bearer(0)]);
+    for (const id of ids) expect(antigravityAccountSupportsModel(provider, id, model)).toBeUndefined();
+    onSend = undefined;
+    expect((await turn(config(true))).status).toBe(200);
+    expect(sends).toEqual([bearer(0), bearer(0)]);
+  });
+}
+
+test("an erroring 404 body stays 404 without denial, rotation or retry", async () => {
+  onSend = async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) { controller.error(new TypeError("synthetic body reset")); },
+  }), { status: 404 });
+  const result = await turn(config(true));
+  expect(result.status).toBe(404);
+  expect(result.body.error?.message).toContain("HTTP 404");
+  expect(sends).toEqual([bearer(0)]);
+  for (const id of ids) expect(antigravityAccountSupportsModel(provider, id, model)).toBeUndefined();
+});
+
 test("a generic resource 404 with the CCA sentence never poisons model eligibility or rotates", async () => {
   onSend = async () => Response.json({ error: { code: 404, status: "NOT_FOUND", message: "Requested entity was not found.",
     details: [{ "@type": "type.googleapis.com/google.rpc.ResourceInfo", resourceType: "cloudresourcemanager.googleapis.com/Project",

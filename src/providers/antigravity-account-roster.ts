@@ -87,20 +87,24 @@ export function recordAntigravityAccountRoster(
   observation = captureAntigravityModelObservation(),
 ): void {
   if (!providerName || !accountId || observation.configDir !== getConfigDir()) return;
+  const key = rosterKey(providerName, accountId);
+  const generation = accountGeneration(providerName, accountId);
+  const previous = rosters.get(key);
+  if (previous && previous.generation === generation && previous.order > observation.order) return;
   const ids = new Set<string>();
   for (const model of models) {
     ids.add(model.id);
     ids.add(model.wireModelId);
     for (const wire of Object.values(model.effortWireModelIds ?? {})) if (wire) ids.add(wire);
   }
-  rosters.set(rosterKey(providerName, accountId), {
+  rosters.set(key, {
     ids,
     modelIds: models.map(model => model.id),
     observedAt: now,
-    generation: accountGeneration(providerName, accountId),
+    generation,
     order: observation.order,
   });
-  const denials = modelDenials.get(rosterKey(providerName, accountId));
+  const denials = modelDenials.get(key);
   for (const id of ids) {
     const key = denialModelId(id);
     const denial = denials?.get(key);

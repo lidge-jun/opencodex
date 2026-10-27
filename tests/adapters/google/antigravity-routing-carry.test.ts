@@ -119,6 +119,33 @@ test("active discovery held by a sibling cannot publish into replacement credent
   expect(antigravityAccountRosterModelIds(provider, "a")).toBeUndefined();
 });
 
+test("late D1 publication cannot roll back D2 before a delayed inference denial", async () => {
+  const { cfg } = setup();
+  let releaseSibling!: () => void;
+  let siblingSent!: () => void;
+  const atSibling = new Promise<void>(resolve => { siblingSent = resolve; });
+  const held = new Promise<void>(resolve => { releaseSibling = resolve; });
+  globalThis.fetch = (async (_input, init) => {
+    if (new Headers(init?.headers).get("authorization")!.endsWith("-b")) {
+      siblingSent(); await held;
+    }
+    return Response.json(payload(model));
+  }) as typeof fetch;
+  const d1 = gatherRoutedModels(cfg);
+  await atSibling;
+  const sent = { ...captureAntigravityModelObservation(),
+    generation: credentialGeneration(getAccountCredentialWithStatus(provider, "a")!.credential) };
+  try {
+    recordAntigravityAccountRoster(provider, "a", modelRows(model)); // D2 completes first.
+  } finally { releaseSibling(); }
+  await d1;
+  expect(recordAntigravityModelDenial(provider, "a", model, sent)).toBe(false);
+  expect(antigravityAccountRosterModelIds(provider, "a")).toEqual([model]);
+  expect(antigravityAccountSupportsModel(provider, "a", model)).toBe(true);
+  expect(routeAntigravityModel(cfg, provider, "a", model)).toEqual({ kind: "keep" });
+  expect(preferredInitialAccount(cfg, provider, Date.now(), model)).toBeNull(); // No switch from the eligible active account.
+});
+
 for (const timing of ["before-send", "before-publication"] as const) {
   for (const mutation of ["paused", "removed", "reauth", "replaced", "root"] as const) {
     test(`sibling ${mutation} ${timing} contributes no stale discovery`, async () => {
