@@ -1,4 +1,5 @@
 {
+  "claude-native-fast-1m-ingress.test.ts": "claude-integration",
   "claude-intercept-acl-barrier.test.ts": "claude-integration",
   "agent-clients.test.ts": "clients",
   "workbuddy-selector-recovery.test.ts": "clients",
