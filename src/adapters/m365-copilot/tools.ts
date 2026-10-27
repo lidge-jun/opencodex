@@ -54,6 +54,7 @@ function cleanLooseText(text: string): string | null {
                 out = out.replace(m, value);
         }
         catch {
+            continue;
         }
     }
     out = out.replace(CONFIDENCE_REGEX, "").trim();
@@ -137,6 +138,7 @@ export function formatMessages(messages: Message[], tools?: ToolDef[], toolChoic
                     argsObj = typeof rawArgs === "string" ? JSON.parse(rawArgs || "{}") : (rawArgs ?? {});
                 }
                 catch {
+                    argsObj = {};
                 }
                 const spec = specMap?.get(tc.function.name) ?? deriveFencedSpec({
                     type: "function",
@@ -236,6 +238,7 @@ export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
             }
         }
         catch {
+            continue;
         }
     }
     if (toolCalls.length === 0) {
@@ -258,6 +261,7 @@ export function parseToolCalls(text: string, tools?: ToolDef[]): ParseResult {
                 }
             }
             catch {
+                continue;
             }
         }
     }

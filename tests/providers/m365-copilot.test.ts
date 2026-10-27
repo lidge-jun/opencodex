@@ -7,6 +7,7 @@ import { m365CopilotAuthorizationUrl, M365_COPILOT_CLIENT_ID, m365CopilotClaims,
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { isPublicOAuthProvider } from "../../src/oauth";
 import { providerSupportsLiveModelDiscovery } from "../../src/providers/static-model-discovery";
+import { parseToolCalls } from "../../src/adapters/m365-copilot/tools";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 
@@ -73,6 +74,28 @@ describe("Microsoft 365 Copilot registration and authentication", () => {
 });
 
 describe("Microsoft 365 Copilot native transport", () => {
+  test("invalid tool JSON remains text instead of becoming a client execution", () => {
+    const malformed = '{"tool":"read_file","arguments":invalid}';
+    const result = parseToolCalls(malformed);
+    expect(result.hasToolCalls).toBe(false);
+    expect(result.textContent).toContain(malformed);
+  });
+  test("reports socket cleanup failure without leaking the underlying error", async () => {
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req, server) { if (server.upgrade(req)) return; return new Response(null, { status: 400 }); }, websocket: {
+      message(ws, data) {
+        const frame = JSON.parse(String(data).split("\x1e")[0]);
+        if (frame.protocol) ws.send('{}\x1e');
+        else if (frame.target === "chat") { ws.send('{"type":1,"target":"update","arguments":[{"messages":[{"author":"bot","messageId":"fixture","text":"ok"}]}]}\x1e'); ws.send('{"type":2,"item":{"result":{"value":"Success"}}}\x1e'); }
+      },
+    } });
+    try {
+      await expect(runM365CopilotTurn({ token: token(), model: "Claude_Sonnet", text: "fixture", conversation: createM365Conversation(), onText() {}, createSocket() {
+        const socket = new WebSocket("ws://127.0.0.1:" + server.port), close = socket.close.bind(socket);
+        socket.close = () => { close(); throw new Error("fixture-private-transport-detail"); };
+        return socket;
+      } })).rejects.toThrow("connection cleanup failed");
+    } finally { server.stop(true); }
+  });
   test("reassembles distinct streamed messages without dropping their heads", () => {
     const text = new M365TextComposer();
     text.cursor("first"); text.snapshot("first", "Hello"); text.delta(" world");

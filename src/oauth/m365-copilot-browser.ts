@@ -14,7 +14,7 @@ export function m365BrowserExecutable(): string {
       : process.platform === "linux"
         ? execFileSync("xdg-settings", ["get", "default-web-browser"], { encoding: "utf8", timeout: 2_000 })
         : execFileSync("defaults", ["read", "com.apple.LaunchServices/com.apple.launchservices.secure", "LSHandlers"], { encoding: "utf8", timeout: 2_000 });
-  } catch {}
+  } catch { preferred = ""; }
   const candidates = process.platform === "win32" ? [
     join(process.env.PROGRAMFILES ?? "C:/Program Files", "Google/Chrome/Application/chrome.exe"),
     join(process.env["PROGRAMFILES(X86)"] ?? "C:/Program Files (x86)", "Microsoft/Edge/Application/msedge.exe"),

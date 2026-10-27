@@ -87,11 +87,12 @@ export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
       if (settled) return;
       settled = true; cleanup();
       if (retainedBytes) { options.budget?.releaseRetained(retainedBytes, { kind: "retained_collectors" }); retainedBytes = 0; }
-      try { socket.close(); } catch {}
+      try { socket.close(); } catch { error ??= new M365CopilotTurnError("Microsoft 365 Copilot connection cleanup failed"); }
       if (error) reject(error); else resolveTurn(composer.text);
     };
     const cancel = () => {
-      try { if (handshake && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ arguments: [{}], invocationId: "1", target: "stop", type: 1 }) + RS); } catch {}
+      try { if (handshake && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ arguments: [{}], invocationId: "1", target: "stop", type: 1 }) + RS); }
+      catch { finish(new M365CopilotTurnError("Microsoft 365 Copilot turn cancelled before Stop could be delivered", 499)); return; }
       finish(new M365CopilotTurnError("Microsoft 365 Copilot turn cancelled", 499));
     };
     options.signal?.addEventListener("abort", cancel, { once: true });

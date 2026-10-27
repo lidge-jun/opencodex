@@ -417,6 +417,7 @@ function coerceHeaderValue(value: string, declaredType: string | undefined): unk
                     return parsed;
             }
             catch {
+                return [value];
             }
             return [value];
         }
@@ -559,6 +560,7 @@ function parseYamlScalar(raw: string): unknown {
             return JSON.parse(s);
         }
         catch {
+            return s;
         }
     }
     return s;
@@ -592,6 +594,7 @@ function headerTextValue(inline: string, more: string[]): string {
             return parseYamlBlockScalar(rows, 0, block[1] === ">", block[2]);
         }
         catch {
+            return headerTextValue("", rows);
         }
     }
     if (inline === "" || block) {
