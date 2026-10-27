@@ -1,4 +1,4 @@
-import { chmodSync, existsSync } from "node:fs";
+import { chmodSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { flushWindowsSecretAclReapsBeforeRemoval, hardenSecretDirAsync, windowsSecretAclApplies, withWindowsSecretAclSettled } from "../lib/windows-secret-acl";
@@ -37,7 +37,8 @@ export function hardenConfigDir(): void {
   // The guard runs before any mutation: refusing after chmod/ACL would already
   // have changed the protected directory used by the test-home boundary.
   assertNotRealHomeUnderTest(dir);
-  if (!existsSync(dir)) return;
+  // Follow directory links as before, but never apply directory permissions to a file.
+  try { if (!statSync(dir).isDirectory()) return; } catch { return; }
   // Windows privacy is enforced by NTFS ACLs. chmod only changes DOS attributes there;
   // doing it before the ACL lookup can invalidate its ctime-based successful observation.
   if (!windowsSecretAclApplies()) {

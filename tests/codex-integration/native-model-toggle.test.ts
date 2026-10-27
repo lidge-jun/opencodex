@@ -124,7 +124,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     // shard that has not caught up all produce the same silent disappearance, which reads as
     // "opencodex lost my model" rather than "upstream did not confirm it".
     resetCodexModelEntitlementCacheForTests();
-    const flagship = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"];
+    const flagship = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-terra"];
     const slugs = nativeModelRows({ disabledModels: [] }).map(row => row.slug);
     for (const slug of flagship) {
       expect(ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug)).toBe(false);

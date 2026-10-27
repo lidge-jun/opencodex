@@ -221,11 +221,12 @@ metadata instead of an older-template approximation.
 
 | Route | Picker ids and catalog metadata |
 | --- | --- |
-| Codex login (account-qualified rows disabled) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 922,000-token catalog window. |
+| Codex login (account-qualified rows disabled) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 922,000-token catalog window. `gpt-6.1-terra`: 500,000 default / 872,000 long context. |
 | Codex login (account-qualified rows enabled with eligible selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
 | Codex login (explicit Daybreak forward row) | `openai/gpt-daybreak-blue-latest` only when the exact `customModels` row is configured on the canonical `openai` provider. It keeps the Daybreak wire id and uses the pinned Sol capability snapshot (922,000 context; 829,800 automatic compaction). |
-| OpenAI (API key) | Exactly ten namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, the three `*-pro` virtual ids, and the two Daybreak aliases (1,050,000 context; 922,000 max input for all ten) |
+| OpenAI (API key) | Namespaced models include `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, the `*-pro` virtual ids and the Daybreak aliases (1,050,000 context; 922,000 max input). `openai-apikey/gpt-6.1-terra` adds 1,050,000 context and 128,000 max output. |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (922,000) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` (1,050,000) |
 | Cursor | Static fallback includes `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, and `cursor/gpt-5.6-luna` (1,000,000), plus regular/Fast rows for Grok 4.5, 4.6, and 4.7 (500,000); 4.6 and 4.7 add `xhigh`, and live account discovery decides which rows remain visible. |
 | xAI | Live discovery is authoritative. The fallback catalog includes `xai/grok-4.6` and `xai/grok-4.7` and defaults to `xai/grok-4.5`; all three have 500,000-token windows. Grok 4.6 and 4.7 expose `low` / `medium` / `high` / `xhigh` (upstream default: `high`), while Grok 4.5 stops at `high`. |
 
@@ -279,7 +280,7 @@ On the wire, routed adapters map or clamp unsupported tiers. For older native mo
 ladder stops at `xhigh`, `nativeEffortClamp` maps a direct `max` or an `ultra` selection to `xhigh`
 (for example, GPT-5.5). Sol, Terra, and Luna have a real `max` rung.
 The ChatGPT backend itself accepts `none` through `max`, so a native ChatGPT request never forwards `ultra` as-is:
-native models with a real `max` rung receive `max`, including Astra and GPT-6.1 Sol whose ladders
+native models with a real `max` rung receive `max`, including Astra, GPT-6.1 Sol and GPT-6.1 Terra whose ladders
 list `ultra`, while older models such as GPT-5.5 receive `xhigh` as above. This applies to
 `/v1/responses` and `/v1/chat/completions` alike. The native clamp does not apply to routed model IDs: a routed
 OpenAI Chat passthrough can copy a declared `reasoning_effort: "ultra"` to its provider unchanged,

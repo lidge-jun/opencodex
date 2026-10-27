@@ -330,6 +330,7 @@ rows. A supplied key scopes the catalog to its model permissions and delivery po
 anonymous catalog does not establish authentication. Newly promoted preset collision protection
 preserves an older same-named custom destination. `tests/providers/tokenlab-provider.test.ts`
 covers derived entry points, scoped discovery, destination preservation and model routing.
+GPT-6.1 Terra's preemptive seed uses OpenAI API limits and GPT-6.1 Sol's wire; GPT-5.6 Terra stays selectable and default. `tests/providers/gpt61-terra-provider-rows.test.ts` covers its limits and wires.
 Per-model wires follow TokenLab's declared `accepted_request_formats`: registry
 `modelWireDefaults` send the Responses-capable GPT-6, Grok, DeepSeek, Kimi and GLM ids over
 Responses for Responses inbound only, and an endpoint-bound `claude-` prefix pin in
