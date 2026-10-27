@@ -8,7 +8,7 @@ export function activateAdvisor(config: OcxConfig): void {
     return;
   }
   setAdvisorPlanFactory(config, async input => {
-    // A later settings write may disable the same live config before this request starts.
+    // A later settings write (probe) may disable the same live config before this request starts.
     if (config.advisor?.enabled !== true || !config.advisor.model?.trim()) return null;
     const { createAdvisorRuntimePlan } = await import("../advisor/runtime");
     return createAdvisorRuntimePlan(input);
