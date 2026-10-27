@@ -34,18 +34,26 @@ export function mirrorDesiredEnabledOntoSnapshot(config: OcxConfig, client: "cla
 export async function persistDesktopProfileField(
   config: OcxConfig,
   desktopProfile: NonNullable<OcxConfig["claudeCode"]>["desktopProfile"],
+  expectedProfile: NonNullable<OcxConfig["claudeCode"]>["desktopProfile"],
 ): Promise<{ ok: true } | { ok: false; reason: "missing" | "invalid" | "conflict" | "unavailable" }> {
-  const outcome = await settleConfigRoot(configRoot(), () => mutatePersistedConfig(persisted => {
-    persisted.claudeCode = { ...(persisted.claudeCode ?? {}), desktopProfile };
-    return { changed: true, value: structuredClone(persisted.claudeCode) };
-  })).catch(error => {
+  const outcome = await settleConfigRoot(configRoot(), () => {
+    const outcome = mutatePersistedConfig(persisted => {
+      if (JSON.stringify(persisted.claudeCode?.desktopProfile) !== JSON.stringify(expectedProfile)) {
+        return { changed: false, value: null };
+      }
+      persisted.claudeCode = { ...(persisted.claudeCode ?? {}), desktopProfile };
+      return { changed: true, value: structuredClone(persisted.claudeCode) };
+    });
+    if (outcome.status !== "unavailable" && outcome.value !== null) adoptPersistedClaudeCode(config, outcome.value);
+    return outcome;
+  }).catch(error => {
     if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
     return { status: "unavailable", reason: "unavailable" } as const;
   });
   // Only mirror into memory once the durable write actually landed; an
   // `unavailable` outcome must not leave the snapshot claiming a saved profile.
   if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };
-  adoptPersistedClaudeCode(config, outcome.value);
+  if (outcome.value === null) return { ok: false, reason: "conflict" };
   return { ok: true };
 }
 
@@ -54,10 +62,14 @@ export async function persistDesktopModeField(
   desktopMode: "first-party" | "gateway",
 ): Promise<{ ok: true } | { ok: false; reason: "missing" | "invalid" | "conflict" | "unavailable" }> {
   const { recordClaudeDesktopMode } = await import("../../claude/desktop-first-party");
-  const outcome = await settleConfigRoot(configRoot(), () => mutatePersistedConfig(persisted => {
-    const mutation = recordClaudeDesktopMode(persisted, desktopMode);
-    return { changed: mutation.changed, value: structuredClone(persisted.claudeCode) };
-  })).catch(error => {
+  const outcome = await settleConfigRoot(configRoot(), () => {
+    const outcome = mutatePersistedConfig(persisted => {
+      const mutation = recordClaudeDesktopMode(persisted, desktopMode);
+      return { changed: mutation.changed, value: structuredClone(persisted.claudeCode) };
+    });
+    if (outcome.status !== "unavailable") adoptPersistedClaudeCode(config, outcome.value);
+    return outcome;
+  }).catch(error => {
     if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
     return { status: "unavailable", reason: "unavailable" } as const;
   });
@@ -65,6 +77,5 @@ export async function persistDesktopModeField(
   // First-party apply ends here — no profile-marker write follows — so without
   // adopting, live diverges from the armed baseline and a later whole-config
   // save reads that divergence as a pending mutation and stomps hand edits.
-  adoptPersistedClaudeCode(config, outcome.value);
   return { ok: true };
 }

@@ -1,3 +1,4 @@
+import { readConfigForAdmittedMutation } from "../config/persisted-mutation";
 import { getConfigDir as configRoot, withConfigDirHardeningSettled as settleConfigRoot } from "../config/paths";
 import { WindowsSecretAclSettleTimeoutError } from "../lib/windows-secret-acl";
 import { recordCommittedDesktopGateway } from "../claude/desktop-gateway-state";
@@ -435,14 +436,16 @@ async function applyFirstPartyDesktop(
   if (!desired.ok) return "path" in desired ? desired : { ok: false, path: "", reason: desired.message };
   // Establish the replacement before deleting the working gateway. A refused
   // cleanup restores only our managed env keys, preserving unrelated settings.
-  const rollback = captureDesktopFirstPartyRollback(config);
-  const applied = await withFirstPartySecretsSettled(getConfigDir(), () => applyDesktopFirstParty(config));
+  let rollback!: ReturnType<typeof captureDesktopFirstPartyRollback>;
+  const applied = await withFirstPartySecretsSettled(getConfigDir(), () => {
+    const fresh = readConfigForAdmittedMutation(); rollback = captureDesktopFirstPartyRollback(fresh); return applyDesktopFirstParty(fresh);
+  });
   if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason, ...(applied.diagnostic ? { diagnostic: applied.diagnostic } : {}) };
   const appliedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
   const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });
   if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
     let removed: ReturnType<typeof removeDesktop3pStandardPivot>;
-    try { removed = await settleConfigRoot(configRoot(), () => removeDesktop3pStandardPivot({ appliedFingerprint, replaceWhileEnabled: true })); }
+    try { removed = await settleConfigRoot(configRoot(), () => removeDesktop3pStandardPivot({ appliedFingerprint: readConfigForAdmittedMutation().claudeCode?.desktopProfile?.appliedFingerprint ?? null, replaceWhileEnabled: true })); }
     catch (error) {
       if (!(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
       removed = { ok: false, changed: false, kind: "write_failed", libraryPath: library.libraryPath, reason: "acl_settlement_timeout" };
@@ -548,21 +551,15 @@ export async function applyProfile(
     if (!claudeDesktopIntegrationEnabledNow()) {
       return { ok: false, path: "", reason: "desired_state_changed" };
     }
-    const routed = filterCatalogVisibleModels(allModels, config).map(model => ({
-      provider: model.provider,
-      id: model.id,
-      contextWindow: model.contextWindow,
-    }));
-    const result = await settleConfigRoot(configRoot(), () => writeDesktop3pConfig(
-      config.port ?? 10100,
-      [...desktopVisibleNativeSlugs(config)],
-      routed,
-      config.apiKeys?.[0]?.key,
-      mode,
-      state.profile,
-      nativeContextLimits(config),
-      deps.lifecycleLockDeps,
-    ));
+    const result = await settleConfigRoot(configRoot(), () => {
+      const fresh = readConfigForAdmittedMutation();
+      if (fresh.clientIntegrations?.["claude-desktop"] === false) return null;
+      if (JSON.stringify(fresh.claudeCode?.desktopProfile) !== JSON.stringify(state.profile)) return null;
+      const routed = filterCatalogVisibleModels(allModels, fresh).map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow }));
+      return writeDesktop3pConfig(fresh.port ?? 10100, [...desktopVisibleNativeSlugs(fresh)], routed,
+        fresh.apiKeys?.[0]?.key, mode, fresh.claudeCode?.desktopProfile, nativeContextLimits(fresh), deps.lifecycleLockDeps);
+    });
+    if (result === null) return { ok: false, path: "", reason: "desktop_config_changed" };
     let stateWarning: string | undefined;
     if (result.written) {
       try { await settleConfigRoot(configRoot(), () => saveLocalDesktopProfile(state.profile, state.profile, connection, deps, { fingerprint: result.fingerprint })); }
