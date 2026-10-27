@@ -1040,8 +1040,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         && (configuredEfforts !== undefined
           ? configuredEfforts.length > 0
           : (provider.googleMode !== "vertex"
-            && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")));
-      returnsThoughtSummaries = (provider.googleMode === "cloud-code-assist" || (thinkingEligible && provider.showThinkingSummary === true))
+            && /^gemini-/.test(parsed.modelId)));
+      returnsThoughtSummaries = (provider.googleMode === "cloud-code-assist" || (thinkingEligible && provider.showThinkingSummary !== false))
         && /^gemini-/.test(routedModelId) && !isImageCapableModel(parsed.modelId);
       // AI Studio's `-tiered` spelling is wire-only; CCA aliases may migrate to another generation.
       const identityModelId = provider.googleMode === "cloud-code-assist" ? routedModelId : parsed.modelId;
@@ -1085,7 +1085,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
       const includeThoughts = thinkingEligible
-        && provider.showThinkingSummary === true
+        && provider.showThinkingSummary !== false
         && parsed.options.hideThinkingSummary !== true
         && /^gemini-/.test(routedModelId);
       if (thinkingLevel || includeThoughts) {
@@ -1139,7 +1139,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         antigravitySession = sessionId;
         // CCA Gemini exposes provider-authored thought summaries with includeThoughts.
         // Other CCA model families do not share this request contract.
-        const includeThoughts = provider.showThinkingSummary === true
+        const includeThoughts = provider.showThinkingSummary !== false
           && parsed.options.hideThinkingSummary !== true
           && /^gemini-/.test(wireModelId)
           && !isImageCapableModel(parsed.modelId);

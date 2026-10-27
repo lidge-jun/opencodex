@@ -59,8 +59,26 @@ describe("F7 explicit reasoning disable survives the Chat boundary", () => {
     expect(reasoningOf(body)?.effort).toBeUndefined();
   });
 
-  test("omitting an effort entirely still produces no effort", () => {
+  test("omitting an effort entirely still produces no effort but defaults summary to auto", () => {
     const body = chatCompletionsToResponsesBody(chat({}));
+    expect(reasoningOf(body)?.effort).toBeUndefined();
+    expect(reasoningOf(body)?.summary).toBe("auto");
+  });
+
+  test("honors explicit include_reasoning: false by omitting reasoning entirely", () => {
+    const body = chatCompletionsToResponsesBody(chat({ include_reasoning: false }));
+    expect(reasoningOf(body)).toBeUndefined();
+  });
+
+  test("preserves explicit summary none", () => {
+    const body = chatCompletionsToResponsesBody(chat({ reasoning: { summary: "none" } }));
+    expect(reasoningOf(body)?.summary).toBe("none");
+  });
+
+  test("plain chat requests validate against schema with summary auto without injecting unwanted effort", () => {
+    const body = chatCompletionsToResponsesBody(chat({ model: "gpt-4o" }));
+    expect(responsesRequestSchema.safeParse(body).success).toBe(true);
+    expect(reasoningOf(body)?.summary).toBe("auto");
     expect(reasoningOf(body)?.effort).toBeUndefined();
   });
 });

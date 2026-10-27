@@ -856,9 +856,11 @@ describe("google adapter — Antigravity thought-text opt-in", () => {
     expect(await thinkingConfig(optedIn, "claude-sonnet-4-6", "high")).toEqual({ thinkingLevel: "high" });
   });
 
-  test("a provider without the opt-in keeps the CCA wire unchanged", async () => {
-    expect(await thinkingConfig(ccaProvider, "gemini-3.8-flash", "high")).toBeUndefined();
-    expect(await thinkingConfig(ccaProvider, "gemini-3.7-flash", "high")).toEqual({ thinkingLevel: "high" });
+  test("a provider without the opt-in enables CCA thinkingConfig by default for eligible Gemini models", async () => {
+    expect(await thinkingConfig(ccaProvider, "gemini-3.8-flash", "high")).toEqual({ includeThoughts: true });
+    expect(await thinkingConfig(ccaProvider, "gemini-3.7-flash", "high")).toEqual({ thinkingLevel: "high", includeThoughts: true });
+    expect(await thinkingConfig({ ...ccaProvider, showThinkingSummary: false }, "gemini-3.8-flash", "high")).toBeUndefined();
+    expect(await thinkingConfig({ ...ccaProvider, showThinkingSummary: false }, "gemini-3.7-flash", "high")).toEqual({ thinkingLevel: "high" });
   });
 
   test("an explicit client opt-out stops the thought text at the source", async () => {
@@ -925,10 +927,10 @@ describe("google adapter — Vertex and direct Gemini thought-text opt-in", () =
       .toEqual({ includeThoughts: true });
   });
 
-  test("omits includeThoughts when showThinkingSummary is absent, false, or client-suppressed", async () => {
+  test("omits includeThoughts when showThinkingSummary is false or client-suppressed", async () => {
     const vertexOptIn = { ...vertexBase, showThinkingSummary: true };
     expect(await wireThinkingConfig(vertexBase, "gemini-4-argon", "high"))
-      .toEqual({ thinkingLevel: "high" });
+      .toEqual({ thinkingLevel: "high", includeThoughts: true });
     expect(await wireThinkingConfig({ ...vertexBase, showThinkingSummary: false }, "gemini-4-argon", "high"))
       .toEqual({ thinkingLevel: "high" });
     expect(await wireThinkingConfig(vertexOptIn, "gemini-4-argon", "high", true))
@@ -996,8 +998,8 @@ describe("google adapter — Vertex and direct Gemini thought-text opt-in", () =
       const defaultAdapter = withTestTranslatorBudget(createGoogleAdapter(vertexBase as never));
       await defaultAdapter.buildRequest(makeParsed("gemini-4-argon", "high"));
       expect(await extractFirstEvent(defaultAdapter, stream)).toEqual({
-        type: "reasoning_raw_delta",
-        text: "vertex summary",
+        type: "thinking_delta",
+        thinking: "vertex summary",
       });
 
       const unladderedAdapter = withTestTranslatorBudget(

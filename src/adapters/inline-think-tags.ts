@@ -2,10 +2,10 @@ import type { AdapterEvent } from "../types";
 import { modelInList } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
-type ThinkingTag = "<thinking>" | "<think>" | "<reasoning>";
+type ThinkingTag = "<thinking>" | "<think>" | "<reasoning>" | "<thought>" | "<internal_thought>";
 type ParserState = "pre" | "thinking" | "scanning" | "streaming";
 
-const OPEN_TAGS: ThinkingTag[] = ["<thinking>", "<think>", "<reasoning>"];
+const OPEN_TAGS: ThinkingTag[] = ["<thinking>", "<think>", "<reasoning>", "<thought>", "<internal_thought>"];
 const MAX_OPEN_TAG = Math.max(...OPEN_TAGS.map(t => t.length));
 const MAX_CLOSE_TAG = Math.max(...OPEN_TAGS.map(t => `</${t.slice(1)}`.length));
 
@@ -225,7 +225,7 @@ export function createInlineThinkContentSplitter(
   modelId: string | undefined,
   budget?: TranslatorBudget,
 ): InlineThinkContentSplitter {
-  if (!modelInList(models, modelId ?? "")) return PASSTHROUGH;
+  if (!models?.includes("*") && !modelInList(models, modelId ?? "")) return PASSTHROUGH;
   const parser = new InlineThinkTagParser(budget, { interleaved: true });
   return {
     // An empty content delta stays an empty delta: it is a wire signal, not thinking.
