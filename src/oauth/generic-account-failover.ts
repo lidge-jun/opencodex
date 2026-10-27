@@ -425,6 +425,7 @@ export function rotateAntigravityAccountOnAuthRefusal(
       cooldownSource: "auth",
       identity: sentGeneration,
     });
+    presence.delete("google-antigravity");
     sweepExpiredOnWrite(now);
   }
   const eligible = new Set(preferKiroModelSupport("google-antigravity",

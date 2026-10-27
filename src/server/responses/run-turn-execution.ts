@@ -494,7 +494,8 @@ export async function executeResponsesRunTurn(
       error: Extract<AdapterEvent, { type: "error" }>,
     ): Promise<boolean> => {
       const sent = transportState.sentOAuthSnapshot;
-      if (error.status !== 401 || !transportState.isOAuth401ReplayProvider || !sent || oauth401ReplayAttempted) return false;
+      const status = error.status ?? adapterFailureFromMessage(error.message).httpStatus;
+      if (status !== 401 || !transportState.isOAuth401ReplayProvider || !sent || oauth401ReplayAttempted) return false;
       oauth401ReplayAttempted = true;
       const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|runturn-oauth-401`);
       if (!hop.allowed) return false;

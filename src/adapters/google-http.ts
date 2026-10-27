@@ -4,7 +4,7 @@ import { createAdapterPhysicalSend } from "./physical-send";
 import type { SendClass } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { debugProviderDiagnosticLazy } from "../lib/debug";
-import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
+import { extractGoogleRetryAfterSeconds, isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
 import { repairGoogleInvalidRequestBodyWithReport } from "./google-wire-compiler";
 import type { GoogleToolSchemaPolicy, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
@@ -130,10 +130,16 @@ export async function fetchGoogleWithRetry(
         const peekTarget = res.clone();
         const peek = await readDisplaySafeErrorPayloadText(peekTarget, ctx.abortSignal);
         if (isQuotaExhaustedBody(peek)) {
-          return ctx.returnRawErrors ? res : normalizeUpstreamHttpErrorResponse(res, {
+          if (ctx.returnRawErrors) return res;
+          const normalized = await normalizeUpstreamHttpErrorResponse(res, {
             signal: ctx.abortSignal,
             formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText || peek),
           });
+          if (!normalized.headers.has("retry-after")) {
+            const retryAfter = extractGoogleRetryAfterSeconds(peek);
+            if (retryAfter) normalized.headers.set("retry-after", retryAfter);
+          }
+          return normalized;
         }
       }
       // Retry-After names the earliest send Google will serve (#7802). The local maximum bounds

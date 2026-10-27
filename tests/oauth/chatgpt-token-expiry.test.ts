@@ -97,7 +97,7 @@ async function browserFlow(signal?: AbortSignal): Promise<ChatGPTOAuthFlow> {
 
 describe("ChatGPT OAuth refresh failure classification", () => {
   const deadCodes = ["invalid_grant", "refresh_token_reused", "refresh_token_invalidated",
-    "token_invalidated", "refresh_token_expired"];
+    "token_invalidated", "refresh_token_expired", "account_deactivated", "deactivated_workspace"];
 
   for (const status of [400, 401, 403]) {
     for (const code of deadCodes) {
