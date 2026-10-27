@@ -78,6 +78,47 @@ test("a root change during active discovery cannot start sibling probes in the n
   expect(antigravityAccountRosterModelIds(provider, "b")).toBeUndefined();
 });
 
+test("active discovery held by a sibling cannot erase a newer inference denial", async () => {
+  const { cfg } = setup();
+  let releaseSibling!: () => void;
+  let siblingSent!: () => void;
+  const atSibling = new Promise<void>(resolve => { siblingSent = resolve; });
+  const held = new Promise<void>(resolve => { releaseSibling = resolve; });
+  globalThis.fetch = (async (_input, init) => {
+    if (new Headers(init?.headers).get("authorization")!.endsWith("-b")) {
+      siblingSent(); await held;
+    }
+    return Response.json(payload(model));
+  }) as typeof fetch;
+  const pending = gatherRoutedModels(cfg);
+  await atSibling;
+  try {
+    const sent = { ...captureAntigravityModelObservation(),
+      generation: credentialGeneration(getAccountCredentialWithStatus(provider, "a")!.credential) };
+    expect(recordAntigravityModelDenial(provider, "a", model, sent)).toBe(true);
+  } finally { releaseSibling(); }
+  await pending;
+  expect(antigravityAccountRosterModelIds(provider, "a")).toEqual([model]);
+  expect(antigravityAccountSupportsModel(provider, "a", model)).toBe(false);
+  expect(routeAntigravityModel(cfg, provider, "a", model)).toEqual({ kind: "reroute", accountId: "b" });
+  expect(preferredInitialAccount(cfg, provider, Date.now(), model)).toBe("b");
+});
+
+test("active discovery held by a sibling cannot publish into replacement credentials", async () => {
+  const { cfg, store, home } = setup();
+  globalThis.fetch = (async (_input, init) => {
+    const active = new Headers(init?.headers).get("authorization")!.endsWith("-a");
+    if (!active) {
+      store[provider].accounts[0]!.credential.access = "synthetic-replacement";
+      writeFileSync(join(home, "auth.json"), JSON.stringify(store));
+    }
+    return Response.json(payload(active ? "model-active" : "model-sibling"));
+  }) as typeof fetch;
+  const rows = await gatherRoutedModels(cfg);
+  expect(rows.some(row => row.id === "model-active")).toBe(false);
+  expect(antigravityAccountRosterModelIds(provider, "a")).toBeUndefined();
+});
+
 for (const timing of ["before-send", "before-publication"] as const) {
   for (const mutation of ["paused", "removed", "reauth", "replaced", "root"] as const) {
     test(`sibling ${mutation} ${timing} contributes no stale discovery`, async () => {

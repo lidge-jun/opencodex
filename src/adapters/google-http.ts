@@ -9,6 +9,7 @@ import { repairGoogleInvalidRequestBodyWithReport } from "./google-wire-compiler
 import type { GoogleToolSchemaPolicy, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { markAntigravityModelNotFound } from "./antigravity-refusal";
 import {
   abortError,
   cancelResponseBodyBestEffort,
@@ -30,8 +31,8 @@ export interface GoogleRetryOptions {
   toolSchemaPolicy?: GoogleToolSchemaPolicy;
 }
 
-async function normalizeFinalGoogleError(label: string, res: Response, signal?: AbortSignal): Promise<Response> {
-  if (label === "Antigravity" && res.status === 403) {
+async function normalizeFinalGoogleError(label: string, res: Response, request: AdapterRequest, signal?: AbortSignal): Promise<Response> {
+  if (label === "Antigravity" && (res.status === 403 || res.status === 404)) {
     const body = await readBoundedResponseBody(res, {
       maxBytes: 4096, totalTimeoutMs: 2000, firstByteTimeoutMs: 2000,
       inactivityTimeoutMs: 2000, signal,
@@ -39,10 +40,13 @@ async function normalizeFinalGoogleError(label: string, res: Response, signal?: 
     const headers = new Headers(res.headers);
     headers.delete("content-encoding");
     headers.delete("content-length");
-    return inheritAccountAutoPauseResponse(res, new Response(safeGoogleHttpErrorMessage(label, res.status,
-      body.displaySafe && !body.truncated ? body.text : ""), {
+    const payloadText = body.displaySafe && !body.truncated && !body.timedOut && !body.oversized ? body.text : "";
+    const normalized = inheritAccountAutoPauseResponse(res, new Response(safeGoogleHttpErrorMessage(label, res.status,
+      payloadText), {
       status: res.status, statusText: res.statusText, headers,
     }));
+    if (!signal?.aborted) markAntigravityModelNotFound(normalized, request.body, payloadText);
+    return normalized;
   }
   return normalizeUpstreamHttpErrorResponse(res, {
     signal,
@@ -109,7 +113,7 @@ export async function fetchGoogleWithRetry(
               changedSendAllowed,
             }));
             if (!changedSendAllowed) {
-              return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
+              return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
             }
           }
           compatibilityReplayUsed = true;
@@ -121,7 +125,7 @@ export async function fetchGoogleWithRetry(
         }
       }
       if (!retryableGoogleStatus(res.status) || attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) {
-        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
+        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
       }
       // A 429 may be a transient rate limit (retry) or hard quota exhaustion (do NOT retry —
       // it won't recover for hours and burns retries). Peek the body to tell them apart.
@@ -151,7 +155,7 @@ export async function fetchGoogleWithRetry(
           // upstream answer — but it used to leave the log indistinguishable from a request
           // where no retry was ever eligible (#5044).
           ctx.onRecoveryWithheld?.({ reason: "retry-send-budget" });
-          return ctx.returnRawErrors ? pendingResponse : normalizeFinalGoogleError(label, pendingResponse, ctx.abortSignal);
+          return ctx.returnRawErrors ? pendingResponse : normalizeFinalGoogleError(label, pendingResponse, activeRequest, ctx.abortSignal);
         }
         throw err;
       }

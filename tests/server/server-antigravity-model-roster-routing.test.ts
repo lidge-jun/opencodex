@@ -32,7 +32,7 @@ let originalFetch: typeof fetch;
 let sleep: ReturnType<typeof spyOn>;
 let ids: string[];
 let sends: string[];
-let onSend: ((auth: string) => Promise<Response | undefined>) | undefined;
+let onSend: ((auth: string, wireModel: string) => Promise<Response | undefined>) | undefined;
 
 beforeEach(async () => {
   previousHome = process.env.OPENCODEX_HOME;
@@ -60,7 +60,7 @@ beforeEach(async () => {
       throw new Error("Unexpected external request in Antigravity model routing regression");
     const auth = new Headers(init?.headers).get("authorization")!;
     sends.push(auth);
-    return await onSend?.(auth) ?? Response.json({ response: {
+    return await onSend?.(auth, JSON.parse(String(init?.body)).model) ?? Response.json({ response: {
       candidates: [{ content: { role: "model", parts: [{ text: "synthetic result" }] }, finishReason: "STOP" }],
       usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, totalTokenCount: 8 },
     } });
@@ -158,10 +158,12 @@ test("a recovery rebind onto a newly selected omitting account is abandoned, not
   expect(sends).not.toContain(bearer(1));
 });
 
-const notFound = () => Response.json({ error: { code: 404, status: "NOT_FOUND", message: "Requested entity was not found." } }, { status: 404 });
+const notFound = (wireModel: string) => Response.json({ error: { code: 404, status: "NOT_FOUND", message: "Requested entity was not found.",
+  details: [{ "@type": "type.googleapis.com/google.rpc.ResourceInfo", resourceType: "aiplatform.googleapis.com/Model", resourceName: `models/${wireModel}` }],
+} }, { status: 404 });
 
 test("a bounded CCA model 404 rotates within the request and caches only that account's denial", async () => {
-  onSend = async auth => auth === bearer(0) ? notFound() : undefined;
+  onSend = async (auth, wireModel) => auth === bearer(0) ? notFound(wireModel) : undefined;
   expect((await turn(config(true))).status).toBe(200);
   expect(sends).toEqual([bearer(0), bearer(1)]);
   expect(antigravityAccountSupportsModel(provider, ids[0]!, model)).toBe(false);
@@ -169,7 +171,7 @@ test("a bounded CCA model 404 rotates within the request and caches only that ac
 });
 
 test("all accounts denying a model gives a model-specific exhaustion without cycling", async () => {
-  onSend = async () => notFound();
+  onSend = async (_auth, wireModel) => notFound(wireModel);
   const result = await turn(config(true));
   expect(result.status).toBe(404);
   expect(sends).toEqual([bearer(0), bearer(1), bearer(2)]);
@@ -183,11 +185,27 @@ test("an unrelated 404 never rotates or records a model denial", async () => {
   expect(antigravityAccountSupportsModel(provider, ids[0]!, model)).toBeUndefined();
 });
 
+test("a generic resource 404 with the CCA sentence never poisons model eligibility or rotates", async () => {
+  onSend = async () => Response.json({ error: { code: 404, status: "NOT_FOUND", message: "Requested entity was not found.",
+    details: [{ "@type": "type.googleapis.com/google.rpc.ResourceInfo", resourceType: "cloudresourcemanager.googleapis.com/Project",
+      resourceName: "projects/synthetic-project-one" }],
+  } }, { status: 404 });
+  const result = await turn(config(true));
+  expect(result.status).toBe(404);
+  expect(result.body.error?.message).toContain("Requested entity was not found.");
+  expect(result.body.error?.message).not.toContain("No eligible stored");
+  expect(sends).toEqual([bearer(0)]);
+  for (const id of ids) expect(antigravityAccountSupportsModel(provider, id, model)).toBeUndefined();
+  onSend = undefined;
+  expect((await turn(config(true))).status).toBe(200);
+  expect(sends).toEqual([bearer(0), bearer(0)]);
+});
+
 test("a spent send budget preserves the 404 and reports recovery failure rather than no eligible account", async () => {
   const cfg = config(true);
   const sendBudget = createRequestExecutionBudget({ maxTotalModelSends: 1, baseSendAllowance: 1,
     finalRecoveryAllowance: 0, maxAlternateTargetSends: 0, maxTargetTransitions: 0 });
-  onSend = async () => notFound();
+  onSend = async (_auth, wireModel) => notFound(wireModel);
   const result = await turn(cfg, { sendBudget });
   expect(result.status).toBe(404);
   expect(sends).toEqual([bearer(0)]);
@@ -201,9 +219,9 @@ for (const replacement of [false, true]) {
     let sent!: () => void;
     const atSend = new Promise<void>(resolve => { sent = resolve; });
     const delayed = new Promise<void>(resolve => { release404 = resolve; });
-    onSend = async auth => {
+    onSend = async (auth, wireModel) => {
       if (auth !== bearer(0)) return undefined;
-      sent(); await delayed; return notFound();
+      sent(); await delayed; return notFound(wireModel);
     };
     const pending = turn(config(true));
     await atSend;
@@ -222,10 +240,10 @@ for (const replacement of [false, true]) {
 
 test("replacement admission failure is reported separately from no eligible account", async () => {
   let failure: ReturnType<typeof spyOn> | undefined;
-  onSend = async auth => {
+  onSend = async (auth, wireModel) => {
     if (auth !== bearer(0)) return undefined;
     failure = spyOn(failover, "failoverAccountSnapshot").mockRejectedValue(new Error("synthetic resolution failure"));
-    return notFound();
+    return notFound(wireModel);
   };
   try {
     const result = await turn(config(true));
