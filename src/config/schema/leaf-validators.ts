@@ -13,6 +13,7 @@ import {
   normalizeNonBlankStringArray,
   normalizeAutoReviewModelOverrides,
   modelCapabilitiesConfigError,
+  providerInputModalitiesConfigError,
   contextTierRecordConfigError,
   mergeModelCapabilities,
 } from "../provider-validation";
@@ -310,6 +311,10 @@ export const providerConfigSchema = z.object({
   // Raw diagnostics/writes reject malformed provenance; tolerant loads preserve the custom row.
   anthropicOAuthInstance: z.literal("anthropic2").optional().catch(undefined),
   modelCapabilities: modelCapabilitiesSchema.optional(),
+  inputModalities: z.unknown().superRefine((value, ctx) => {
+    const error = providerInputModalitiesConfigError(value);
+    if (error) ctx.addIssue({ code: "custom", message: error });
+  }).optional().transform(value => value as OcxProviderConfig["inputModalities"]),
   modelContextTiers: z.unknown().superRefine((value, ctx) => {
     const error = contextTierRecordConfigError(value);
     if (error) ctx.addIssue({ code: "custom", message: error });
@@ -427,6 +432,7 @@ export const providerConfigSchema = z.object({
     repairInvalidIds: z.boolean().optional(),
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
+  messagePhaseInference: z.boolean().optional(),
   hideRawReasoning: z.boolean().optional(),
   // Invalid blocks degrade to "absent" rather than failing the whole config load: an unusable
   // bridge block must never send an operator through invalid-config recovery for an opt-in

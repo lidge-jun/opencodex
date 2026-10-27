@@ -108,6 +108,9 @@ export type StoredAccountQuota = {
   resetCredits?: number;
   /** Spendable usage credits; resetCredits are separate, manually redeemed reset tickets. */
   credits?: CodexSpendableCredits | null;
+  /** Only with null: provider evidence was unavailable, not a proven spending veto.
+   * Affects retry advice only; legacy null remains conservative. */
+  creditObservationUnavailable?: true;
   /** Monthly usage came from an explicitly monthly PRIMARY, not supplementary tertiary, window. */
   monthlyIsPrimaryWindow?: boolean;
   updatedAt: number;

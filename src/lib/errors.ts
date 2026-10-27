@@ -25,6 +25,68 @@ export const SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE = "spend_ledger_storage_unava
  * envelope formatter decides whether the identity survives serialization.
  */
 export const UNDECLARED_TOOL_CALL_ERROR_CODE = "undeclared_tool_call";
+/** A buffered combo child completed without the call explicitly required by tool_choice. */
+export const REQUIRED_TOOL_CONTRACT_CODE = "required_tool_contract_unsatisfied";
+
+/**
+ * Wire code for a provider's model-scoped plan refusal (#7684): the account's plan does not
+ * include the requested model. It travels as a 400 so Codex ends the turn instead of
+ * reconnecting through its retry budget on the upstream 403, and the shared formatter keeps it so
+ * combo and policy fallback can hop past the one refused target. Neither the body code nor the
+ * marker header is trusted: an upstream can send both. Only object identity is provenance.
+ */
+export const MODEL_NOT_IN_PLAN_CODE = "model_not_in_plan";
+/** Diagnostic `x-opencodex-refusal` value on the adapter's refusal; never read as provenance. */
+export const MODEL_NOT_IN_PLAN_REFUSAL_MARKER = "model-not-in-plan";
+/**
+ * The code a verified plan refusal carries once the response is already a 200 stream. The 400
+ * status can no longer stop Codex there, and it reconnects on any `response.failed` code outside
+ * {@link TERMINAL_REFUSAL_CODES}; `invalid_prompt` is the member that says "this request, as sent,
+ * cannot succeed" without naming a policy family. The message keeps `MODEL_NOT_IN_PLAN`.
+ */
+export const MODEL_NOT_IN_PLAN_STREAM_CODE = "invalid_prompt";
+
+/**
+ * Responses this process built as a verified plan refusal: the Command Code adapter's normalized
+ * refusal, and the client envelope `formatErrorResponse` built from one. Owned wrappers carry
+ * membership the way they carry non-replayability; a wrapper that drops it fails closed (no hop).
+ */
+const verifiedPlanRefusalResponses = new WeakSet<Response>();
+
+export function markVerifiedModelNotInPlanResponse(response: Response): void {
+  verifiedPlanRefusalResponses.add(response);
+}
+
+export function isVerifiedModelNotInPlanResponse(response: Response): boolean {
+  return verifiedPlanRefusalResponses.has(response);
+}
+
+/** True for a verified plan refusal that still carries the canonical code in its 400 body. */
+export function isModelNotInPlanRefusal(response: Response, bodyCode: string | null | undefined): boolean {
+  return response.status === 400 && bodyCode === MODEL_NOT_IN_PLAN_CODE && verifiedPlanRefusalResponses.has(response);
+}
+
+/**
+ * The proxy's own fixed message from a verified plan refusal's body, or `undefined` for any other
+ * response. Sidecar loops rebuild a failed iteration as their own error envelope and use this to
+ * keep the actionable copy; the text is trusted only because the marked object is ours.
+ */
+export function verifiedPlanRefusalMessage(response: Response, bodyText: string): string | undefined {
+  if (response.status !== 400 || !verifiedPlanRefusalResponses.has(response)) return undefined;
+  try {
+    const error = (JSON.parse(bodyText) as { error?: { code?: unknown; message?: unknown } }).error;
+    return error?.code === MODEL_NOT_IN_PLAN_CODE && typeof error.message === "string" ? error.message : undefined;
+  } catch { return undefined; }
+}
+
+/**
+ * Whether a code names the plan refusal in any spelling combo failover folds into it (case,
+ * surrounding space, hyphens). The trust gate has to match the same set, or an unmarked
+ * `MODEL_NOT_IN_PLAN` would pass the gate and still be read as the hop code downstream.
+ */
+export function namesModelNotInPlanCode(code: string | null | undefined): boolean {
+  return typeof code === "string" && code.trim().toLowerCase().replaceAll("-", "_") === MODEL_NOT_IN_PLAN_CODE;
+}
 
 /** First nonblank string across the canonical upstream error paths, in priority order. */
 export function upstreamErrorMessageFromPayload(payload: unknown): string | undefined {

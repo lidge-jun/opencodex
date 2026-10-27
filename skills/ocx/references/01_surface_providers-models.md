@@ -92,6 +92,7 @@ Drives no management route.
 | `--jsonl` | boolean | Emit one configured provider per JSON line. |
 
 - Local config and registry read, not GET /api/providers. --json and --jsonl are mutually exclusive.
+- Each configured row carries active: false while this device is linked to a Home (a Remote Link Child or a Hub-mode client), whose providers serve instead; true when the row serves. Credential values are never printed.
 
 ### `ocx provider resets`
 

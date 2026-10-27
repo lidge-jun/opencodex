@@ -88,6 +88,10 @@ export const LIVE_SIDEBAND_API_ROOT = "https://api.openai.com/v1";
  * upstream the caller was addressing, so there is nothing to scope it away from. That is not
  * true of the images sidecar, which strips it deliberately and keeps doing so.
  *
+ * `voice-session-id` is the client-generated voice session id Codex 0.164 forwards on WebSocket,
+ * WebRTC and existing-call transports (openai/codex#53784). It is a separate identity from the
+ * realtime session id carried in `x-session-id`, so neither may stand in for the other.
+ *
  * Every name here is relayed only when the caller sent it. Nothing on this list is invented,
  * which is what keeps a caller that omits one byte-identical upstream. Auth headers
  * (`authorization`, `chatgpt-account-id`) stay proxy-owned and are never taken from this list.
@@ -100,6 +104,7 @@ export const LIVE_CLIENT_PROTOCOL_HEADERS = [
   "originator",
   "x-oai-attestation",
   "x-codex-turn-metadata",
+  "voice-session-id",
 ] as const;
 
 /**

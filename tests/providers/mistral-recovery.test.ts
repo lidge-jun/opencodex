@@ -366,12 +366,38 @@ describe("Mistral observed budget pacing", () => {
     const waiting = Array.from({ length: 128 }, () => pacing.acquire("pressure", abort.signal));
     const settled = Promise.allSettled(waiting);
     await expect(pacing.acquire("pressure")).rejects.toMatchObject({ reason: "queue_full" });
+    // A full queue belongs to its identity: a healthy identity sends at once, and another
+    // held identity still queues behind its own deadline instead of being refused.
+    (await pacing.acquire("unrelated"))(true);
+    pacing.observe("held", budget("0", "1", "10", "30"));
+    const held = pacing.acquire("held", abort.signal);
     abort.abort();
+    await expect(held).rejects.toMatchObject({ name: "AbortError" });
     expect((await settled).every(result => result.status === "rejected")).toBe(true);
     const cancelled = new AbortController();
     const next = pacing.acquire("pressure", cancelled.signal);
     cancelled.abort();
     await expect(next).rejects.toThrow();
+  });
+
+  test("an aggregate waiter bound refuses only new parked waiters, never a request that can send", async () => {
+    const pacing = new MistralBudgetPacer();
+    const abort = new AbortController();
+    // Distinct identities (client-chosen model strings) cannot grow the waiters without bound.
+    const waiting = ["a", "b", "c", "d"].flatMap(identity => {
+      pacing.observe(identity, budget("0", "1", "10", "30"));
+      return Array.from({ length: 128 }, () => pacing.acquire(identity, abort.signal));
+    });
+    const settled = Promise.allSettled(waiting);
+    pacing.observe("e", budget("0", "1", "10", "30"));
+    await expect(pacing.acquire("e", abort.signal)).rejects.toMatchObject({ reason: "queue_full" });
+    (await pacing.acquire("healthy"))(true);
+    abort.abort();
+    expect((await settled).every(result => result.status === "rejected")).toBe(true);
+    const after = new AbortController();
+    const parked = pacing.acquire("e", after.signal);
+    after.abort();
+    await expect(parked).rejects.toMatchObject({ name: "AbortError" });
   });
 });
 

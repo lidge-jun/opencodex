@@ -313,7 +313,8 @@ export function sweepExpiredComboTargetCooldowns(now = Date.now()): number {
   return removed;
 }
 
-export function clearComboTargetCooldowns(comboId?: string): void {
+/** Clear all cooldowns, one combo, or only the supplied target keys within that combo. */
+export function clearComboTargetCooldowns(comboId?: string, targetKeys?: Iterable<string>): void {
   if (comboId === undefined) {
     targetCooldowns.clear();
     liveComboTargets.clear();
@@ -321,6 +322,10 @@ export function clearComboTargetCooldowns(comboId?: string): void {
     return;
   }
   const prefix = `${comboId}\0`;
+  if (targetKeys !== undefined) {
+    for (const key of targetKeys) targetCooldowns.delete(`${prefix}${key}`);
+    return;
+  }
   for (const key of targetCooldowns.keys()) {
     if (key.startsWith(prefix)) targetCooldowns.delete(key);
   }
@@ -773,7 +778,13 @@ export function codexAccountModelRefusal(
 export function comboFailureDecision(
   status: number,
   message: string,
-  options?: { code?: string | null; codexModelRefusal?: CodexAccountModelRefusal; failedAdapter?: string },
+  options?: {
+    code?: string | null;
+    codexModelRefusal?: CodexAccountModelRefusal;
+    failedAdapter?: string;
+    /** The caller proved the failure is an adapter-normalized plan refusal (`isModelNotInPlanRefusal`). */
+    verifiedPlanRefusal?: boolean;
+  },
 ): ComboFailureDecision {
   if (status === 499) return "stop";
   if (message.toLowerCase().includes("origin_rejected")) return "stop";
@@ -846,6 +857,10 @@ export function comboFailureDecision(
   if (["model_not_found", "model_unavailable", "unsupported_model", "unsupported_input_modality"].includes(failureCode)) {
     return "hop";
   }
+  // So is a plan refusal (#7684): this account's plan excludes THIS model, and it cools only the
+  // refused target because `comboFailureCooldownScope` reads a 400 as target-scoped. Unlike the
+  // codes above it is honoured only with caller-supplied provenance, never from the code alone.
+  if (failureCode === "model_not_in_plan" && options?.verifiedPlanRefusal === true) return "hop";
   if (modelRefusal === "refusal") return "hop";
   // `free_rate_limited` no longer routes through `isProviderScopedQuotaCap` (it is a
   // per-request cap, not provider-wide evidence), so keep its hop verdict explicit here.

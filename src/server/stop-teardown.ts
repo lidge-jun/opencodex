@@ -15,9 +15,18 @@ import type { ManagementPrincipal } from "./management-auth";
 
 export type GrokStripResult = { ok: boolean; changed: boolean; message: string };
 
+/** Read-only promise covering API teardown and the CLI runtime's signal/manager exit cleanup. */
+export function stopCapabilities() {
+  return { schema: "ocx-stop-capabilities/1", connectedClientOwnership: true, pid: process.pid };
+}
+
 export type StopTeardownIo = {
   /** Does the nonce this request carries name a readable obligation on disk? */
   ownsReceipt?: (nonce: string | null) => boolean;
+  /** Does that obligation hand the teardown to the proxy an update restarts (#7423)? */
+  isHandoverReceipt?: (nonce: string | null) => boolean;
+  /** Keep Codex, Grok and env fences in place when this process exits. */
+  keepClientConfigOnExit?: () => void;
   restoreNativeCodex?: () => Promise<CodexNativeRestoreResult>;
   stripGrok?: () => GrokStripResult;
 };
@@ -25,7 +34,7 @@ export type StopTeardownIo = {
 export type StopTeardownBody = {
   success: boolean;
   message: string;
-  /** `not-owned`: a sibling instance, whose shared client routing belongs to the live owner. */
+  /** `not-owned`: shared routing belongs to a live sibling owner or a client connection. */
   sharedTeardown: "deferred" | "performed" | "not-owned";
 };
 
@@ -79,8 +88,34 @@ export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Pr
   if (siblingOfLivePort() !== null) {
     return { success: true, message: `Proxy stopping. ${siblingSkipMessage()}`, sharedTeardown: "not-owned" };
   }
+  // A connection owns its integrations across stop/start, even for a successful API stop.
+  // This is persisted authority, not a caller's request to skip an obligation it owns.
+  const connection = (await import("../client/state")).readClientConnectionState();
+  if (connection.kind === "connected") {
+    return {
+      success: true,
+      message: "Proxy stopping; connection-owned Codex routing, catalog and Grok config preserved. Run `ocx disconnect` to release them.",
+      sharedTeardown: "not-owned",
+    };
+  }
   const ownsReceipt = io.ownsReceipt ?? deferralMatchesReceipt;
   if (deferralHonored(url, ownsReceipt)) {
+    // A handover outlives this process: the exit cleanup would otherwise restore native
+    // Codex and put the pristine catalog back right after the stop kept them (#7423).
+    // Exiting as a recycle leaves them for the replacement, as a dashboard restart does.
+    const nonce = url.searchParams.get("teardownNonce");
+    const handover = io.isHandoverReceipt
+      ? io.isHandoverReceipt(nonce)
+      : (await import("../config/pending-teardown")).isUpdateHandoverReceipt(nonce);
+    if (handover) {
+      if (io.keepClientConfigOnExit) io.keepClientConfigOnExit();
+      else (await import("./lifecycle")).markRecyclingForExit();
+      return {
+        success: true,
+        message: "Proxy stopping; Codex routing and catalog kept for the updated proxy.",
+        sharedTeardown: "deferred",
+      };
+    }
     // Not "native Codex restored": nothing was restored here, and claiming otherwise
     // would be a success message the operator cannot verify.
     return {

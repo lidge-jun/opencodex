@@ -8,7 +8,11 @@ import { readClientConnectionState, sameClientConnectionOwner } from "../client/
 import { fetchHubUsage } from "../client/hub-client";
 import { readServiceApiTokenState, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
+import { readRuntimePort, type RuntimePortState } from "../config/process-state";
+import { isLocalAttestationSecret } from "../lib/local-management-attestation";
 import { redactSecretString } from "../lib/redact";
+import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
+import { fetchBoundLocalManagementRead, type LocalManagementReadDeps } from "../server/local-management-read-client";
 import { rangeWindow, USAGE_SURFACES } from "../usage/summary";
 import type { UsageTimeWindow } from "../usage/time-range";
 import {
@@ -16,8 +20,7 @@ import {
   printData,
   rejectArgs,
   RuntimeApiError,
-  runtimeRequest,
-  runtimeBaseUrl,
+  PROXY_NOT_RUNNING_MESSAGE,
   takeFlag,
   takeOption,
   takeOptionWithSyntax,
@@ -29,7 +32,10 @@ export const USAGE_COMPARE_USAGE = `Usage:
       [--provider <name>] [--model <id>] [--api-key-id <id>] [--json]`;
 
 export type CompareRange = "today" | "7d" | "30d";
-export type UsageCompareDeps = RuntimeApiDeps & { now?: () => number };
+export type UsageCompareDeps = RuntimeApiDeps & Pick<LocalManagementReadDeps, "directFetch"> & {
+  now?: () => number;
+  readRuntime?: typeof readRuntimePort;
+};
 
 const METRICS = ["requests", "totalTokens", "inputTokens", "outputTokens", "cachedInputTokens", "estimatedCostUsd"] as const;
 type Metric = typeof METRICS[number];
@@ -189,9 +195,59 @@ function captureUsageOwner() {
   const headers = runningProxyUpdateHeaders();
   const fingerprint = connection.kind === "connected" ? connection.value.tokenFingerprint
     : serviceApiTokenFingerprint(headers.get("X-OpenCodex-API-Key") ?? "");
-  return { connection, token, headers, fingerprint };
+  return { connection, token, fingerprint };
 }
 type UsageOwner = ReturnType<typeof captureUsageOwner>;
+
+function pinUsageRuntime(deps: UsageCompareDeps, owner: UsageOwner): (suffix: string) => Promise<ScopedUsage> {
+  const readRuntime = deps.readRuntime ?? readRuntimePort;
+  const initial = readRuntimePortForComparison();
+  const pinned = { ...initial };
+  let liveIdentity: string | undefined;
+  function readRuntimePortForComparison(): RuntimePortState {
+    const runtime = readRuntime();
+    if (!runtime || !isLocalAttestationSecret(runtime.attestationSecret)) {
+      throw new Error("Usage runtime unavailable: restart the proxy with an attested runtime record.");
+    }
+    return runtime;
+  }
+  function assertRuntime(): RuntimePortState {
+    const current = readRuntimePortForComparison();
+    if (current.pid !== pinned.pid || current.port !== pinned.port || current.hostname !== pinned.hostname
+      || current.attestationSecret !== pinned.attestationSecret) {
+      throw new Error("Usage runtime changed during comparison; no comparison was produced. Retry for the current runtime.");
+    }
+    return current;
+  }
+  return async suffix => {
+    assertRuntime();
+    const live = await (deps.findLiveProxy ?? findLiveProxy)();
+    assertRuntime();
+    assertUsageOwner(owner);
+    if (!live) throw new RuntimeApiError(PROXY_NOT_RUNNING_MESSAGE, 503, null, "proxy_not_running");
+    const identity = JSON.stringify([live.pid, live.port, live.hostname, live.source, live.role]);
+    if (live.source !== "runtime" || live.pid !== pinned.pid || live.port !== pinned.port
+      || probeHostname(live.hostname) !== probeHostname(pinned.hostname) || live.role === "client"
+      || (liveIdentity !== undefined && liveIdentity !== identity)) {
+      throw new Error("Usage runtime changed during comparison; no comparison was produced. Retry for the current runtime.");
+    }
+    liveIdentity = identity;
+    const read = await fetchBoundLocalManagementRead(live, `/api/usage?${suffix.replace(/^\?/, "")}`, {
+      fetchImpl: deps.fetchImpl, directFetch: deps.directFetch, readRuntime: assertRuntime,
+      timeoutMs: 60_000, requireResponseProof: true,
+    });
+    assertRuntime();
+    if (read.kind === "unavailable") {
+      throw new RuntimeApiError(`Local usage read unavailable (${read.reason}). No comparison was produced.`, 503, null);
+    }
+    if (!read.response.ok) {
+      throw new RuntimeApiError(`Usage request failed (HTTP ${read.response.status}). No comparison was produced.`, read.response.status, null);
+    }
+    const result = await read.response.json() as ScopedUsage;
+    assertRuntime();
+    return result;
+  };
+}
 
 function assertUsageOwner(owner: UsageOwner): void {
   const current = readClientConnectionState();
@@ -216,6 +272,7 @@ async function readUsage(
   apiKeyId: string | undefined,
   deps: RuntimeApiDeps,
   owner: UsageOwner,
+  localRead?: (suffix: string) => Promise<ScopedUsage>,
 ): Promise<ScopedUsage> {
   assertUsageOwner(owner);
   const { connection, token } = owner;
@@ -233,16 +290,15 @@ async function readUsage(
     result = await fetchHubUsage(connection.value.serverUrl, token.token, new URLSearchParams(suffix.replace(/^\?/, "")), {
       fetchImpl: peerFetch, timeoutMs: 60_000, ...(link ? { peer: "Home" as const } : {}),
     });
-  } else if (apiKeyId === undefined) {
-    result = await runtimeRequest(`/api/usage${suffix}`, { headers: owner.headers }, deps);
   } else {
     try {
-      result = await runtimeRequest(`/api/usage${suffix}`, { redirect: "error", credentials: "omit", headers: owner.headers }, deps);
+      result = await localRead!(suffix);
     } catch (error) {
-      if (error instanceof RuntimeApiError && error.code === "proxy_not_running") throw error;
+      if (apiKeyId === undefined) throw error;
+      if (error instanceof RuntimeApiError) throw error;
       throw new Error("Key-scoped usage could not be read. Check runtime access and retry.");
     }
-    if (result.filter?.apiKeyId !== apiKeyId) {
+    if (apiKeyId !== undefined && result.filter?.apiKeyId !== apiKeyId) {
       throw new Error("The server did not confirm the requested API key scope. Upgrade and restart the proxy, then retry.");
     }
   }
@@ -276,9 +332,9 @@ export async function handleUsageCompareCommand(argv: string[], deps: UsageCompa
   const windows = compareUsageWindows(range, now);
   const filters = { range, surface, provider, model, apiKeyId };
   const owner = captureUsageOwner();
-  const readDeps = owner.connection.kind === "disconnected" ? { ...deps, baseUrl: await runtimeBaseUrl(deps) } : deps;
-  const currentReport = await readUsage(query({ ...filters, since: windows.current.since, until: windows.current.until }), windows.current, apiKeyId, readDeps, owner);
-  const previousReport = await readUsage(query({ ...filters, since: windows.previous.since, until: windows.previous.until }), windows.previous, apiKeyId, readDeps, owner);
+  const localRead = owner.connection.kind === "disconnected" ? pinUsageRuntime(deps, owner) : undefined;
+  const currentReport = await readUsage(query({ ...filters, since: windows.current.since, until: windows.current.until }), windows.current, apiKeyId, deps, owner, localRead);
+  const previousReport = await readUsage(query({ ...filters, since: windows.previous.since, until: windows.previous.until }), windows.previous, apiKeyId, deps, owner, localRead);
   const current = totalsOf(currentReport);
   const previous = totalsOf(previousReport);
   const deltaTotals: Totals = {};

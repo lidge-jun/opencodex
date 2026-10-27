@@ -6,10 +6,12 @@ import {
   buildExecArgv,
   buildProbeArgv,
   buildTunnelArgv,
+  buildWindowsProbeArgv,
   LinkSshArgumentError,
   quoteRemote,
   REMOTE_OCX_SCRIPT,
   remoteOcxArgv,
+  WINDOWS_OS_PROBE,
 } from "../../src/link/ssh-argv";
 import {
   boundHint,
@@ -79,6 +81,17 @@ test("exec argv emits only sh bare, quotes arguments, and clears forwarding", ()
   expect(argv).toContain("ClearAllForwardings=yes");
   expect(argv.slice(-3, -1)).toEqual(["--", "beta.example.test"]);
   expect(argv[argv.length - 1]).toBe(`sh 'it'"'"'s ready'`);
+});
+
+test("Windows %OS% probe is a fixed literal that trusts only an already recorded host key", () => {
+  const knownHostsFile = tempPath("windows-probe");
+  const argv = buildWindowsProbeArgv({ alias: "gamma.example.test", knownHostsFile });
+  expect(argv.slice(0, 2)).toEqual(["ssh", "-T"]);
+  expectCommonTrustOptions(argv, "yes", knownHostsFile);
+  expect(argv).toContain("ClearAllForwardings=yes");
+  expect(argv.slice(-3)).toEqual(["--", "gamma.example.test", "cmd /c echo %OS%"]);
+  expect(WINDOWS_OS_PROBE).toBe("cmd /c echo %OS%");
+  expect(() => buildWindowsProbeArgv({ alias: "-oProxyCommand=x", knownHostsFile })).toThrow(LinkSshArgumentError);
 });
 
 test("probe argv uses accept-new only with its temporary known_hosts file", () => {

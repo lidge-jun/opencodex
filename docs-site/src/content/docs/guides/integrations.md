@@ -4,7 +4,7 @@ description: Connect opencodex to OpenCode, Pi, Gentle Shell, OMP, Hermes, OpenC
 ---
 
 The **Connect** page writes opencodex's provider block into a client's own config
-file, and removes it again. Twenty clients work this way, each with a switch:
+file, and removes it again. Each client below has its own switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
@@ -24,6 +24,9 @@ file, and removes it again. Twenty clients work this way, each with a switch:
 | Raycast | `~/.config/raycast/ai/providers.yaml` | YAML | immediately on save — Raycast watches the file | none — loopback only |
 | omo (Pi / senpi) | `~/.omo/agent/models.json` | JSON | new sessions | loopback placeholder |
 | Qoder | `settings.json` in `$QODER_CONFIG_DIR`, default `~/.qoder` | JSON | new sessions | loopback placeholder |
+| Qoder CN | `settings.json` in `$QODERCN_CONFIG_DIR`, default `~/.qoder-cn` | JSON | new sessions | loopback placeholder |
+| WorkBuddy (CN) | `~/.workbuddy/models.json` | JSON | auto reload / new sessions | loopback placeholder |
+| WorkBuddy AI | `~/.workbuddy-ai/models.json` | JSON | auto reload / new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
 | Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
@@ -65,6 +68,40 @@ This integration retains Pi’s loopback-only export policy and stores no real A
 [omo (Codex / LazyCodex) role models](#omo-codex--lazycodex-role-models). OpenCode-based omo
 (oh-my-opencode) keeps its own config under OpenCode; opencodex does not read or write it.
 
+### Qoder CN and WorkBuddy editions
+
+In **Connect**, enable **Qoder CN**, **WorkBuddy (CN)** or **WorkBuddy AI**, then choose
+an OpenCodex model in the client's custom-model picker. The proxy must stay running.
+The first enable saves a snapshot; disable removes only the generated contribution,
+and Undo restores the snapshot. Existing models and unrelated settings remain intact.
+These are separate connections from Global Qoder and from each other.
+
+The same operations are available through the CLI (replace `workbuddy` with
+`workbuddy-ai` or `qoder-cn` for the other editions):
+
+```bash
+ocx integration client enable --client workbuddy
+ocx export --client workbuddy --json
+ocx integration client disable --client workbuddy
+```
+
+Qoder CN honors `QODERCN_CONFIG_DIR`. Both WorkBuddy editions honor their native
+`WORKBUDDY_CONFIG_DIR`, then `CODEBUDDY_CONFIG_DIR`; unset overrides keep the regional
+roots in the table. Overrides must be absolute, `~`, or start with `~/` or `~\`. WorkBuddy's legacy
+array configuration and its object-form `models` list are both supported. If an existing
+`availableModels` restriction excludes OpenCodex models, remove that restriction in
+WorkBuddy before enabling. Project-level settings can override user-level models.
+
+Connections require an unauthenticated loopback listener; no upstream credentials are
+copied into these clients. WorkBuddy receives the full Chat Completions URL and the
+capabilities declared by the OpenCodex catalog. Restart the client or start a new session
+if its model picker has not reloaded yet. Configuration/lifecycle tests do not establish
+end-to-end compatibility with every upstream model or every client release.
+
+Doubao Desktop and Devin currently have no verified arbitrary-provider configuration
+contract in this integration. They have no enable switch; adding a local JSON file alone
+would not make their model pickers consume it.
+
 Qoder IDE / qodercli supports export and managed configuration through the Dashboard and CLI:
 
 ```bash
@@ -74,15 +111,22 @@ ocx integration client disable --client qoder
 ```
 
 Qoder uses `settings.json` in `QODER_CONFIG_DIR` when that variable is set, and
-`~/.qoder/settings.json` otherwise; a relative `QODER_CONFIG_DIR` is refused. Enable merges `providers.opencodex` and
-OpenCodex entries in `modelConfigs.customModels`, preserving other providers, custom models,
-and settings. Disable removes the recorded OpenCodex entries; restore uses the existing
+`~/.qoder/settings.json` otherwise; a relative `QODER_CONFIG_DIR` is refused. Enable merges only `providers.opencodex`, preserving other providers, custom models,
+and settings. Models appear once in the provider catalog; duplicating them in
+`modelConfigs.customModels` causes Qoder to reject the provider. Refreshing an older managed
+integration removes its recorded duplicate rows; user-edited rows remain conflicts. Disable removes the recorded OpenCodex entries; restore uses the existing
 snapshot workflow. The provider's default model is the first model in the sorted export.
-Custom models use their catalog context window, falling back to 128000 input tokens.
+If `modelConfigs.customModels` already holds an `opencodex` row for an exported model that
+OpenCodex did not write, enable, refresh, overwrite and disable report a conflict and leave the
+file unchanged; remove or rename that row in Qoder's settings, then try again. Rows for other
+providers or for models outside the export are left alone.
+Provider models use their catalog `contextWindow`, falling back to 128000 input tokens.
+Restart Qoder after refreshing an existing integration to reload the provider registry.
 The generated API key is a non-secret placeholder: Qoder integration requires loopback
 access and refuses an authenticated non-loopback bind. When the dedicated unauthenticated
 loopback listener is enabled, exports point Qoder at that listener. `ocx sync` and catalog
 changes refresh an already enabled Qoder integration like the other managed clients.
+Model IDs containing `,` or `]` (for example `kimi/k3[1m]`) are exported like any other model.
 
 Generated catalogs include only enabled models from each provider selection. This applies to both
 downloads and managed integrations, including Pi and Aside. The management model list still shows
@@ -299,7 +343,12 @@ parse, or one whose structure we cannot reason about, still refuses.
 ## Hermes session affinity
 
 The generated `providers.opencodex` block includes `session_affinity_header: session-id` for all
-models. This names a header; Hermes supplies its dynamic conversation identifier. OpenCodex does
+models. Retain this generated default unless you deliberately choose log-only correlation:
+changing `session_affinity_header` from `session-id` to `x-hermes-conversation-id` replaces the
+header sent by Hermes. Because OpenCodex treats `x-hermes-conversation-id` strictly as a request-log
+correlation fallback and not as a native routing or turn-termination identity, switching to
+`x-hermes-conversation-id` removes native session affinity and lane assignment while correlating
+agent loops in request logs. This names a header; Hermes supplies its dynamic conversation identifier. OpenCodex does
 not write a shared static identifier or change `api_mode` to enable affinity.
 
 Use a Hermes version supporting [per-provider request options](https://hermes-agent.nousresearch.com/docs/user-guide/configuring-models#per-provider-request-options).
@@ -317,6 +366,28 @@ can adopt it when all other managed settings still match the ownership record. T
 exception to the conflict rule above: other edits, a different header name, or a block without a
 matching ownership record still require conflict resolution. Unrelated YAML settings and comments
 remain untouched, and the existing snapshot and Restore workflow applies to the upgrade.
+
+## Hermes profiles
+
+Hermes keeps a separate home for each bot profile. The default profile uses
+`~/.hermes/config.yaml` (`%LOCALAPPDATA%\hermes\config.yaml` on Windows, or `$HERMES_HOME/config.yaml`),
+and each named profile created with `hermes profile create <name>` uses
+`<Hermes home>/profiles/<name>/config.yaml`. See Hermes'
+[profiles guide](https://hermes-agent.nousresearch.com/docs/user-guide/profiles).
+
+When named profiles exist, **Connect → Hermes** lists every profile with its own status. Select a
+profile to apply, disable, replace, or restore OpenCodex for that profile alone; each profile keeps its
+own backups and rollback history, and the other profiles stay unchanged. Every profile keeps its own
+`model.default` and other providers: OpenCodex adds only `providers.opencodex`. With no named profiles,
+the page works as before and changes the default profile.
+
+The management API selects a profile with `profile=<name>` on `/api/client-integrations/hermes` and with
+`client=hermes&profile=<name>` on the preview, journal, and restore endpoints;
+`GET /api/client-integrations/hermes/profiles` lists the profiles. A directory under `profiles/` counts
+only when Hermes would list it: a valid name, a Hermes identity file such as `config.yaml` or `SOUL.md`,
+and no deletion marker. A profile reached through a symbolic link or junction is not offered. If
+`HERMES_HOME` later points at a different Hermes home, a profile with the same name there is refused
+until you disconnect the original one, so OpenCodex never loses track of a file it changed.
 
 ## Preview and confirm changes
 
@@ -337,6 +408,8 @@ Aside uses the same preview and confirmation flow for one selected profile at a 
 profiles** remains a separate bulk action and is not bound to one combined preview.
 
 ## What to expect, honestly
+
+If a generated managed path cannot be represented safely, that client reports an unsafe status and its preview refuses the operation. Attempts to apply, overwrite or disable return HTTP 409 without changing the configuration. Other clients remain available.
 
 **Managed configuration files are limited to 4 MiB (4,194,304 UTF-8 bytes).**
 The shared integration reader refuses larger files as unsafe to read, and the writer
@@ -746,7 +819,7 @@ every Codex agent role found in `$CODEX_HOME/agents/*.toml`, with the model each
 to. Codex runs a role on that pin no matter which model the parent asks for, so this is where a
 role's model is actually decided. LazyCodex counts as installed when the `omo@sisyphuslabs`
 Codex plugin is enabled in `$CODEX_HOME/config.toml` and an installed copy under
-`$CODEX_HOME/plugins/cache/sisyphuslabs/omo/` carries its `lazycodex-install.json`. A `~/.omo`
+`$CODEX_HOME/plugins/cache/sisyphuslabs/omo/` carries its plugin manifest or `lazycodex-install.json`. A `~/.omo`
 folder on its own does not count, because Pi-based omo creates it too. Without LazyCodex the
 section is hidden and the command line reports it as not installed. Pick a model and a reasoning
 effort on a row and press Save. A row whose role has no model pin can save an effort on its own;

@@ -1,0 +1,5 @@
+{
+  "chat-incomplete-length-reason.test.ts": "responses",
+  "openai-chat-required-tool.test.ts": "adapters/openai",
+  "responses-required-chat-tool.test.ts": "responses"
+}

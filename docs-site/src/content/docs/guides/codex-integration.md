@@ -142,6 +142,17 @@ to restore the default upstream WebSocket selection. This setting does not chang
 client-facing `websockets` switch or the ChatGPT account used for the request. Native
 mid-turn steering and injection need upstream WebSocket and are unavailable while it is off.
 
+**Reasoning usage metadata (2.90.0 and later).** For HTTP/SSE clients on the canonical
+ChatGPT route, the upstream WebSocket relay preserves an actual `x-reasoning-included`
+connection-response header when the Bun runtime exposes it, including on a reused connection.
+This tells Codex that the server's reported usage already includes earlier reasoning. Metadata
+sent before the first Responses event takes precedence; later metadata remains in the stream
+but cannot change headers already committed. The relay does not invent this signal or alter
+usage numbers. A missing upstream signal and Codex's own accounting lifecycle remain separate
+issues, so this change alone does not establish that early compaction is fixed. Client-facing
+WebSocket connections have already completed their upgrade before the upstream response and
+cannot receive the signal retroactively as an upgrade header.
+
 Local provider pacing can also hold a request before it is dispatched at all. So a slow first
 output has several possible contributors, and upstream queueing is only one of them. `ocx doctor`
 classifies configuration and measures none of these: compare actual transport, pacing, network,
@@ -396,6 +407,10 @@ Root keys such as `openai_base_url`, `model_provider`, and `model_catalog_json` 
 first `[table]` header. The injector guarantees that placement, removes its own stale/duplicate
 copies, and never overwrites a user-owned root `openai_base_url`; if one exists, sync updates the
 catalog but reports that routing was not injected.
+
+Sync and restore also leave a root `model_context_window` in place, since OpenCodex never writes
+that key. Codex uses it instead of each model's catalog window, capped at that model's maximum
+window, so delete it yourself if you want each model to report its own window.
 :::
 
 ## Shared model catalog
@@ -1001,6 +1016,22 @@ has reached Codex the turn is never sent again. If every attempt is declined, Co
 the same error it would have received without the retries. Native compact requests move to
 another Pool account on a server error in the same way.
 
+### Runtime agent instances (Codex 0.164+)
+
+Codex 0.164 can sign each request with a runtime agent assertion when
+`features.runtime_agent_instances` is enabled (it is off by default). opencodex supports one of
+its two modes:
+
+- `mode = "dual_header"` keeps the normal `Authorization: Bearer` credential and adds an
+  `x-openai-agent-assertion` header. opencodex treats the request exactly as before. The assertion
+  is forwarded only when the turn goes to ChatGPT Direct with your own credential. It is removed
+  when a Pool account, a stored main credential, a routed provider, or a sidecar serves the request,
+  because it belongs to the credential Codex sent.
+- `mode = "assertion_only"` replaces the bearer with `Authorization: AgentAssertion <jwt>`.
+  opencodex refuses these requests with HTTP 400 and error code `agent_assertion_unsupported`.
+  It never substitutes a Pool or provider credential for the assertion, and it never forwards or
+  logs the assertion. Use `dual_header`, or turn the feature off, when Codex runs through opencodex.
+
 ### Codex autostart shim
 
 Run `ocx codex-shim install` to install the optional launcher wrapper. It runs
@@ -1246,6 +1277,8 @@ opencodex removes the old five-hour reading from both request admission and acco
 An allowed response with primary and secondary windows can omit the optional tertiary window.
 This recovery uses your included plan allowance and does not require enabling **Use credits**.
 Partial or invalid usage data retains the previous block until recovery is confirmed.
+
+Stored accounts with **Use credits after limit** enabled renew their credit evidence on the existing background cycle once an included usage window is exhausted and the credit observation is at least three minutes old. In **Direct** mode this also covers stored accounts explicitly bound in `codexAccountNamespaces`, such as a sub-account selector. You can keep Direct mode and separate main/sub identities; this does not enable Pool routing or refresh unbound accounts. Paused and reauthentication-required accounts are skipped. Metadata reads do not validate pending accounts or send model requests. Failed reads retain backoff and requests still need fresh spendable credits; ordinary response usage headers do not renew the credit balance timestamp.
 
 ### Cancelling main-account device reauthentication
 

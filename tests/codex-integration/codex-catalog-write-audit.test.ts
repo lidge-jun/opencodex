@@ -29,6 +29,7 @@ import { initializeConfigOwnership, CONFIG_UNINSTALL_MANIFEST } from "../../src/
 import type { CatalogWriteAuditEvent } from "../../src/codex/catalog/write-audit-contract";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { redactUserPath } from "../../src/lib/redact";
+import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
 
 let root = "";
 let codexHome = "";
@@ -38,6 +39,7 @@ let previousOpencodexHome: string | undefined;
 const native = { slug: "gpt-5.5", description: "native" };
 const routed = { slug: "ark/glm-5.3", description: "Routed via opencodex → ark/glm-5.3 (ark)." };
 const catalogBytes = (...models: object[]) => `${JSON.stringify({ models }, null, 2)}\n`;
+const aclSuccess = () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" });
 
 function auditPath(): string { return join(codexHome, CODEX_CATALOG_AUDIT_FILE); }
 const auditEvent = (): CatalogWriteAuditEvent => ({
@@ -78,6 +80,13 @@ function replaceAs(intent: CatalogWriteIntent, content: string) {
 }
 
 beforeEach(() => {
+  // A fresh audit file is hardened inside a 1s product deadline. On Windows that window held a
+  // cold PowerShell SID lookup plus real icacls, so a slow runner reported "skipped" where the
+  // audit contract says "created". These cases test the audit's publication rules; the ACL
+  // sequence has its own suite (tests/windows/windows-secret-acl.test.ts).
+  setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
+  secretAcl.setIcaclsRunnerForTests(aclSuccess);
+  secretAcl.setAsyncIcaclsRunnerForTests(async () => aclSuccess());
   previousOpencodexHome = process.env.OPENCODEX_HOME;
   root = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-catalog-audit-")));
   codexHome = join(root, "codex");
@@ -88,6 +97,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  secretAcl.setIcaclsRunnerForTests(null);
+  secretAcl.setAsyncIcaclsRunnerForTests(null);
+  setSyntheticWindowsPrincipalForTests(null);
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   const path = resolveCodexCatalogSerializationDatabasePath(resolveEffectiveUserIdentity(), codexHome);
@@ -240,6 +252,43 @@ describe("bounded audit descriptors and privacy", () => {
     if (process.platform !== "win32") expect(auditLines()[1]).toEqual({ kept: true });
   });
 
+  test("compaction preserves complete UTF-8 byte views and drops an unterminated JSON row", () => {
+    const complete = Buffer.from(' \t{"note":"한😀�","bom":"\uFEFF"}\r\n{"escaped":"\\ud800"}\n');
+    const original = Buffer.concat([complete, Buffer.from('{"unterminated":true}')]);
+    writeFileSync(auditPath(), original, { mode: 0o600 });
+    if (process.platform === "win32") {
+      expect(appendUnderK()).toBe("skipped");
+      expect(readFileSync(auditPath()).equals(original)).toBe(true);
+      return;
+    }
+    expect(appendUnderK()).toBe("appended");
+    const output = readFileSync(auditPath());
+    expect(output.subarray(0, complete.length).equals(complete)).toBe(true);
+    expect(auditLines()).toHaveLength(3);
+    expect(auditLines().at(-1)).toMatchObject({ writer: "convergence" });
+  });
+
+  test("compaction rejects malformed UTF-8 and BOM-prefixed rows, then reads the next byte view", () => {
+    const malformed = [
+      [0xff], [0x80], [0xc2], [0xc0, 0xaf], [0xe2, 0x82],
+      [0xed, 0xa0, 0x80], [0xf4, 0x90, 0x80, 0x80],
+    ].map(bytes => Buffer.concat([Buffer.from('{"bad":"'), Buffer.from(bytes), Buffer.from('"}\n')]));
+    malformed.push(Buffer.from('\uFEFF{"bad":"bom"}\n'), Buffer.from('\uFEFF\uFEFF{"bad":"two boms"}\n'));
+    const kept = malformed.map((_bytes, index) => Buffer.from(`${JSON.stringify({ kept: index, text: "한😀�" })}\n`));
+    const original = Buffer.concat(malformed.flatMap((bytes, index) => [bytes, kept[index]!]));
+    writeFileSync(auditPath(), original, { mode: 0o600 });
+    if (process.platform === "win32") {
+      expect(appendUnderK()).toBe("skipped");
+      expect(readFileSync(auditPath()).equals(original)).toBe(true);
+      return;
+    }
+    expect(appendUnderK()).toBe("appended");
+    const prefix = Buffer.concat(kept);
+    expect(readFileSync(auditPath()).subarray(0, prefix.length).equals(prefix)).toBe(true);
+    expect(auditLines()).toHaveLength(kept.length + 1);
+    expect(auditLines().at(-1)).toMatchObject({ writer: "convergence" });
+  });
+
   test("fixed named projection excludes arbitrary properties and unknown writer/argv secrets", () => {
     const originalArgv = process.argv;
     const secret = "token-private-test-value";
@@ -341,6 +390,20 @@ describe("foreign refusal is K-held append only", () => {
       const before = statSync(auditPath());
       expect(refuseForeign()).toEqual({ kind: "unavailable", reason: "foreign-owner" });
       expect(readFileSync(auditPath(), "utf8")).toBe(bytes);
+      expect(statSync(auditPath()).mtimeMs).toBe(before.mtimeMs);
+    }
+  });
+
+  test("foreign appends refuse malformed UTF-8 and BOM-prefixed rows without rewriting bytes", () => {
+    foreignBinding();
+    for (const bytes of [
+      Buffer.from('{}\n\uFEFF{"bad":"bom"}\n'),
+      Buffer.concat([Buffer.from('{}\n{"bad":"'), Buffer.from([0xed, 0xa0, 0x80]), Buffer.from('"}\n')]),
+    ]) {
+      writeFileSync(auditPath(), bytes, { mode: 0o600 });
+      const before = statSync(auditPath());
+      expect(refuseForeign()).toEqual({ kind: "unavailable", reason: "foreign-owner" });
+      expect(readFileSync(auditPath()).equals(bytes)).toBe(true);
       expect(statSync(auditPath()).mtimeMs).toBe(before.mtimeMs);
     }
   });

@@ -3,8 +3,10 @@
  * thread only swaps the finished file in, routing-time reads never wait, and a
  * close or a replaced ledger never leaves a partial index or a stray build file.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -30,8 +32,8 @@ import {
   setRequestHistoryWorkerRebuildMinBytesForTests,
 } from "../../src/routing/history/indexer";
 import { buildFilePath, buildIndexFile } from "../../src/routing/history/build-file";
-import { RequestHistoryIndexStaleError } from "../../src/routing/history/ingest";
-import { HISTORY_DB_FILENAME } from "../../src/routing/history/schema";
+import { ingestSourceTail, metaValue, resetAndCreateSchema, RequestHistoryIndexStaleError } from "../../src/routing/history/ingest";
+import { HISTORY_DB_FILENAME, HISTORY_META_KEYS } from "../../src/routing/history/schema";
 import { getConfigDir } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
@@ -296,5 +298,142 @@ describe("request-history worker rebuild (#6990)", () => {
     expect(() => buildIndexFile(buildPath, "test", { ...revision, ino: (BigInt(revision.ino) + 1n).toString() }))
       .toThrow(RequestHistoryIndexStaleError);
     expect(readdirSync(testDir).filter(name => name.startsWith("unit.sqlite"))).toEqual([]);
+  });
+});
+
+describe("request-history unchanged partial tail", () => {
+  function withIndex(run: (handle: Database, path: string) => void): void {
+    const handle = new Database(":memory:");
+    try {
+      resetAndCreateSchema(handle);
+      run(handle, join(testDir, "partial.jsonl"));
+    } finally {
+      handle.close();
+    }
+  }
+
+  test("unchanged tails do not reread bytes or rewrite SQLite metadata", () => {
+    withIndex((handle, path) => {
+      const complete = JSON.stringify(entry("complete", 1)) + "\n";
+      const partial = JSON.stringify(entry("partial", 2));
+      fs.writeFileSync(path, complete + partial);
+      expect(ingestSourceTail(handle, path, 0)).toBe(1);
+      const offset = Buffer.byteLength(complete);
+      const changes = () => (handle.query("SELECT total_changes() AS n").get() as { n: number }).n;
+      const before = changes();
+      const read = spyOn(fs, "readSync");
+      try {
+        for (let index = 0; index < 3; index++) expect(ingestSourceTail(handle, path, offset)).toBe(0);
+        expect(read).not.toHaveBeenCalled();
+        expect(changes()).toBe(before);
+        expect(Number(metaValue(handle, HISTORY_META_KEYS.indexedOffset))).toBe(offset);
+        fs.appendFileSync(path, "\n");
+        expect(ingestSourceTail(handle, path, offset)).toBe(1);
+        expect(Number(metaValue(handle, HISTORY_META_KEYS.indexedRows))).toBe(2);
+      } finally {
+        read.mockRestore();
+      }
+    });
+  });
+
+  test("same-size edits, replacements and paths invalidate an observation", () => {
+    withIndex((handle, path) => {
+      fs.writeFileSync(path, "partial");
+      ingestSourceTail(handle, path, 0);
+      const read = spyOn(fs, "readSync");
+      try {
+        fs.writeFileSync(path, "changed");
+        const clock = new Date(Date.now() - 10_000);
+        fs.utimesSync(path, clock, clock);
+        ingestSourceTail(handle, path, 0);
+        expect(read).toHaveBeenCalledTimes(1);
+        fs.writeFileSync(`${path}.next`, "replace");
+        fs.renameSync(`${path}.next`, path);
+        ingestSourceTail(handle, path, 0);
+        expect(read).toHaveBeenCalledTimes(2);
+        const other = `${path}.other`;
+        fs.writeFileSync(other, "another");
+        ingestSourceTail(handle, other, 0);
+        expect(read).toHaveBeenCalledTimes(3);
+      } finally {
+        read.mockRestore();
+      }
+    });
+  });
+
+  test("schema reset and a new database handle do not reuse old tail state", () => {
+    withIndex((handle, path) => {
+      fs.writeFileSync(path, "partial");
+      ingestSourceTail(handle, path, 0);
+      const read = spyOn(fs, "readSync");
+      const other = new Database(":memory:");
+      try {
+        resetAndCreateSchema(handle);
+        ingestSourceTail(handle, path, 0);
+        resetAndCreateSchema(other);
+        ingestSourceTail(other, path, 0);
+        expect(read).toHaveBeenCalledTimes(2);
+      } finally {
+        read.mockRestore();
+        other.close();
+      }
+    });
+  });
+
+  test("worker snapshot bounds and expected identity are checked before reuse", () => {
+    withIndex((handle, path) => {
+      const text = JSON.stringify(entry("bounded", 1)) + "\n";
+      fs.writeFileSync(path, text);
+      expect(ingestSourceTail(handle, path, 0, { endOffset: 5 })).toBe(0);
+      expect(ingestSourceTail(handle, path, 0)).toBe(1);
+      resetAndCreateSchema(handle);
+      fs.writeFileSync(path, "partial");
+      ingestSourceTail(handle, path, 0);
+      const exact = fs.statSync(path, { bigint: true });
+      expect(() => ingestSourceTail(handle, path, 0, {
+        expected: { dev: exact.dev.toString(), ino: (exact.ino + 1n).toString() },
+      })).toThrow(RequestHistoryIndexStaleError);
+    });
+  });
+
+  test("a failed read is retried rather than cached", () => {
+    withIndex((handle, path) => {
+      fs.writeFileSync(path, "partial");
+      const original = fs.readSync;
+      let reads = 0;
+      const read = spyOn(fs, "readSync").mockImplementation((...args: Parameters<typeof fs.readSync>) => {
+        if (++reads === 1) throw new Error("synthetic ledger read failure");
+        return original(...args);
+      });
+      try {
+        expect(() => ingestSourceTail(handle, path, 0)).toThrow("synthetic ledger read failure");
+        expect(ingestSourceTail(handle, path, 0)).toBe(0);
+        expect(ingestSourceTail(handle, path, 0)).toBe(0);
+        expect(reads).toBe(2);
+      } finally {
+        read.mockRestore();
+      }
+    });
+  });
+
+  test("a source changed during its read is not cached as fully observed", () => {
+    withIndex((handle, path) => {
+      fs.writeFileSync(path, "partial");
+      const original = fs.readSync;
+      let reads = 0;
+      const read = spyOn(fs, "readSync").mockImplementation((...args: Parameters<typeof fs.readSync>) => {
+        const count = original(...args);
+        if (++reads === 1) fs.appendFileSync(path, "-later");
+        return count;
+      });
+      try {
+        ingestSourceTail(handle, path, 0);
+        ingestSourceTail(handle, path, 0);
+        ingestSourceTail(handle, path, 0);
+        expect(reads).toBe(2);
+      } finally {
+        read.mockRestore();
+      }
+    });
   });
 });

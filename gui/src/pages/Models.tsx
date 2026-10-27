@@ -1237,11 +1237,10 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     : null;
 
   const putV2Threads = async (value: number) => {
-    // Same guards as the flag toggle: single-flight + server-side idempotence
-    // (setMaxConcurrentThreads no-ops on equal value), so a re-selected current
-    // value or a double click can never double-write config.toml.
+    // Validate both child and backend units before the single-flight write.
     if (!v2 || v2BusyRef.current) return;
-    if (!Number.isInteger(value) || value < 1) { publishFeedback(false, t("models.v2ThreadsInvalid")); return; }
+    const threadLimit = childCountToThreadLimit(value, v2.enabled);
+    if (!Number.isSafeInteger(value) || value < 1 || !Number.isSafeInteger(threadLimit)) { publishFeedback(false, t("models.v2ThreadsInvalid")); return; }
     if (v2ThreadsChildren === value) return;
     setV2Busy(true);
     v2BusyRef.current = true;
@@ -1252,7 +1251,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       const r = await fetch(`${apiBase}/api/v2`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ maxConcurrentThreadsPerSession: childCountToThreadLimit(value, v2.enabled) }),
+        body: JSON.stringify({ maxConcurrentThreadsPerSession: threadLimit }),
       });
       try {
         const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));

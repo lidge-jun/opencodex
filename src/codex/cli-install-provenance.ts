@@ -9,6 +9,7 @@ import {
   readSync,
   realpathSync,
   statSync,
+  type Stats,
 } from "node:fs";
 import { posix, win32 } from "node:path";
 import { getConfigDir } from "../config";
@@ -33,6 +34,18 @@ const CODEX_PACKAGE = "@openai/codex";
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_RUNTIME_STATE_BYTES = 256 * 1024;
 const MAX_MANIFEST_ANCESTORS = 12;
+/** The published package entrypoint is a few KB; 1 MiB leaves wide headroom. */
+const MAX_PACKAGE_ENTRYPOINT_BYTES = 1024 * 1024;
+/**
+ * The native companion binary is streamed in HELD_READ_CHUNK_BYTES chunks and
+ * never buffered whole, so this bound limits read time, not memory. Published
+ * backings outgrew the former 256 MiB: `@openai/codex@0.163.0-linux-x64` ships a
+ * 296,865,480-byte binary, in platform packages of 341-430 MB unpacked. 1 GiB
+ * leaves more than 3x headroom over that binary while staying finite; larger
+ * files are refused by fstat before any read.
+ */
+export const MAX_NATIVE_BACKING_BYTES = 1024 * 1024 * 1024;
+const HELD_READ_CHUNK_BYTES = 1024 * 1024;
 
 export type CodexCliInstallKind =
   | "npm-global"
@@ -64,6 +77,7 @@ export type CodexCliInstallEvidence =
   | "version_manager_path"
   | "package_manifest"
   | "package_manifest_digest"
+  | "install_content_digest"
   | "shim_backing"
   | "global_npm_layout";
 
@@ -92,6 +106,20 @@ export interface CodexCliInstallReport {
    * identity binds this value so two different install roots cannot share a plan.
    */
   readonly installDigest: string | null;
+  /**
+   * sha256 digest over the bounded content observation of the versioned file
+   * set the supported npm-global layout defines: the package manifest, its
+   * declared bin/codex.js entrypoint, and the platform backing package manifest
+   * plus vendored binary at the locations the layout's modeled Node lookup
+   * produces. This binds the bytes that were actually read under a
+   * held-identity window; it is not an execution guarantee. It does not prove
+   * which bytes a launcher run would execute, that the files are authentic
+   * upstream artifacts, or that the rest of the install tree is unchanged — a
+   * later apply phase must re-observe under its own held handles rather than
+   * treating this plan-time digest as durable proof. Null when the caller did
+   * not request the observation or when the required set could not be bound.
+   */
+  readonly installContentDigest: string | null;
   readonly packageVersion: string | null;
   readonly shim: Readonly<{
     status: "not-tracked" | "matched" | "unknown";
@@ -110,6 +138,21 @@ export interface CodexCliInstallProvenanceDeps {
   readonly readFile?: (path: string) => Buffer;
   readonly boundedFileReadMode?: "native-hardened" | "injected-test";
   readonly realpath?: (path: string) => string;
+  /**
+   * The architecture the launcher would report for its own interpreter. The
+   * published entrypoint picks its native backing by (platform, arch); the
+   * value is recorded inside the content digest so a different launcher
+   * architecture can never silently share a plan.
+   */
+  readonly arch?: NodeJS.Architecture;
+  /**
+   * Opt-in switch for the bounded install-content observation. Reading the
+   * required file set can stream a vendored binary of up to
+   * MAX_NATIVE_BACKING_BYTES, so a caller that only needs the ownership
+   * classification leaves this unset and receives a null installContentDigest;
+   * the update-plan path sets it because its planId binds the digest.
+   */
+  readonly observeInstallContent?: boolean;
   readonly inspectShim?: (
     command: string,
     platform: NodeJS.Platform,
@@ -183,6 +226,7 @@ function unknownReport(
     reason,
     location: extra.location ?? null,
     installDigest: null,
+    installContentDigest: null,
     packageVersion: null,
     shim: Object.freeze({ status: "not-tracked", backingKind: null }),
     evidence: Object.freeze([]),
@@ -636,6 +680,359 @@ function shimReport(shim: CodexShimBackingForCommand): CodexCliInstallReport["sh
   return Object.freeze({ status: "not-tracked" as const, backingKind: null });
 }
 
+/**
+ * The published @openai/codex bin/codex.js selection table, mirrored as layout
+ * knowledge: the supported npm-global layout places the platform backing
+ * package where Node's module lookup from the package's bin directory finds
+ * "<package>/package.json", then "<package-dir>/vendor/<triple>/bin/codex"
+ * (codex.exe on Windows), with an in-package "vendor/<triple>" fallback when
+ * that resolve would throw. This table locates files for observation; it does
+ * not prove which file a launcher run would select. A launcher following a
+ * different rule simply produces different observed entrypoint bytes.
+ */
+const CODEX_PLATFORM_BACKING: Readonly<Record<string, Readonly<{ triple: string; package: string }>>> = {
+  "linux:x64": { triple: "x86_64-unknown-linux-musl", package: "@openai/codex-linux-x64" },
+  "linux:arm64": { triple: "aarch64-unknown-linux-musl", package: "@openai/codex-linux-arm64" },
+  "android:x64": { triple: "x86_64-unknown-linux-musl", package: "@openai/codex-linux-x64" },
+  "android:arm64": { triple: "aarch64-unknown-linux-musl", package: "@openai/codex-linux-arm64" },
+  "darwin:x64": { triple: "x86_64-apple-darwin", package: "@openai/codex-darwin-x64" },
+  "darwin:arm64": { triple: "aarch64-apple-darwin", package: "@openai/codex-darwin-arm64" },
+  "win32:x64": { triple: "x86_64-pc-windows-msvc", package: "@openai/codex-win32-x64" },
+  "win32:arm64": { triple: "aarch64-pc-windows-msvc", package: "@openai/codex-win32-arm64" },
+};
+
+/** Node's Module._nodeModulePaths: every ancestor's node_modules child, closest first. */
+function nodeModuleDirs(fromDir: string, platform: NodeJS.Platform): string[] {
+  const tools = pathTools(platform);
+  const dirs: string[] = [];
+  let cursor = fromDir;
+  for (;;) {
+    // A directory literally named "node_modules" contributes no nested
+    // node_modules entry of its own in Node's lookup.
+    if (tools.basename(cursor) !== "node_modules") dirs.push(tools.join(cursor, "node_modules"));
+    const parent = tools.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  return dirs;
+}
+
+/**
+ * Node's global lookup list for the launcher process: NODE_PATH entries first,
+ * then $HOME/.node_modules and $HOME/.node_libraries, then the lib/node directory
+ * beside the install prefix of the node binary the captured PATH resolves.
+ * 'complete' is false when any input cannot be modeled from the bound
+ * environment — in that case 'require.resolve threw' cannot be proven and the
+ * in-package vendor fallback lane stays unverifiable.
+ */
+function globalModuleDirs(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  deps: CodexCliInstallProvenanceDeps,
+): { dirs: string[]; complete: boolean } {
+  const tools = pathTools(platform);
+  const dirs: string[] = [];
+  let complete = true;
+  const nodePath = platform === "win32" ? caseInsensitiveEnv(env, "NODE_PATH") : env.NODE_PATH;
+  if (nodePath) {
+    for (const entry of nodePath.split(tools.delimiter)) {
+      if (!entry) continue;
+      // Node resolves a relative NODE_PATH entry against the launcher process's
+      // cwd, which this read-only inspection cannot know.
+      if (isSafeLocalInspectionPath(entry, deps)) dirs.push(tools.resolve(entry));
+      else complete = false;
+    }
+  }
+  const home = platform === "win32"
+    ? caseInsensitiveEnv(env, "USERPROFILE") ?? caseInsensitiveEnv(env, "HOME")
+    : env.HOME;
+  if (home && isSafeLocalInspectionPath(home, deps)) {
+    dirs.push(tools.join(home, ".node_modules"), tools.join(home, ".node_libraries"));
+  } else {
+    complete = false;
+  }
+  const nodeCommand = resolveCandidateCommandPath("node", deps);
+  const canonicalNode = nodeCommand ? canonicalize(nodeCommand, deps) : null;
+  if (canonicalNode) {
+    // POSIX node lives at <prefix>/bin/node, so the lookup prefix is two levels
+    // up; a Windows prefix sits beside the executable. The win32 arm is
+    // unreachable today — inspection returns before any candidate I/O there.
+    const prefix = platform === "win32"
+      ? tools.dirname(canonicalNode)
+      : tools.dirname(tools.dirname(canonicalNode));
+    dirs.push(tools.join(prefix, "lib", "node"));
+  } else {
+    complete = false;
+  }
+  return { dirs, complete };
+}
+
+interface InstallContentFile {
+  readonly role: "manifest" | "entrypoint" | "backing-manifest" | "backing-binary";
+  readonly path: string;
+  readonly maxBytes: number;
+}
+
+interface ObservedContentFile {
+  readonly digest: string;
+  /** Retained only for small role files; the streamed binary keeps none. */
+  readonly bytes: Buffer | null;
+}
+
+function fileContentDomain(role: InstallContentFile["role"]): string {
+  return role === "manifest" ? "codex-cli-package-manifest-v1" : "codex-cli-observed-file-v1";
+}
+
+/**
+ * Hash every requested file under one observation window. Native POSIX mode
+ * opens all files first (O_NOFOLLOW | O_NONBLOCK), streams each digest, then
+ * re-verifies every descriptor's identity and each canonical path's linkage
+ * before returning. Injected-test mode performs the equivalent stat -> read ->
+ * stat sequence per file plus a final identity pass over the whole set. The
+ * optional finalize hook runs its own checks while the held set is still open,
+ * so linkage and selector re-verification completes inside the window rather
+ * than after the descriptors close. Any read, size, identity or finalize
+ * failure inside the window fails the set closed.
+ */
+function observeHeldFileSet(
+  requests: readonly InstallContentFile[],
+  deps: CodexCliInstallProvenanceDeps,
+  finalize?: () => boolean,
+): Map<string, ObservedContentFile> | null {
+  const keepBytes = (role: InstallContentFile["role"]): boolean => role !== "backing-binary";
+  if (deps.boundedFileReadMode === "injected-test") {
+    const stat = deps.stat;
+    const read = deps.readFile;
+    if (!stat || !read) return null;
+    const results = new Map<string, ObservedContentFile>();
+    const identities: { before: Stats; req: InstallContentFile }[] = [];
+    try {
+      for (const req of requests) {
+        const before = stat(req.path);
+        if (!before.isFile() || before.size > req.maxBytes) return null;
+        const bytes = read(req.path);
+        const after = stat(req.path);
+        if (bytes.byteLength !== before.size
+          || before.dev !== after.dev || before.ino !== after.ino
+          || before.size !== after.size || before.mtimeMs !== after.mtimeMs) return null;
+        identities.push({ before, req });
+        results.set(req.role, {
+          digest: sha256(fileContentDomain(req.role), bytes),
+          bytes: keepBytes(req.role) ? bytes : null,
+        });
+      }
+      // A replacement that slipped in after a file's own read still failed.
+      for (const { before, req } of identities) {
+        const now = stat(req.path);
+        if (before.dev !== now.dev || before.ino !== now.ino
+          || before.size !== now.size || before.mtimeMs !== now.mtimeMs) return null;
+      }
+      if (finalize && !finalize()) return null;
+      return results;
+    } catch {
+      return null;
+    }
+  }
+  const held: { fd: number; req: InstallContentFile; before: Stats }[] = [];
+  const openedFds: number[] = [];
+  try {
+    const flags = process.platform === "win32"
+      ? fsConstants.O_RDONLY
+      : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
+    for (const req of requests) {
+      if (!isSafeLocalInspectionPath(req.path, deps)) return null;
+      const fd = openSync(req.path, flags);
+      // The descriptor joins the close set before any check that can bail, so
+      // an fstat failure or a refused type/size cannot leak it.
+      openedFds.push(fd);
+      const before = fstatSync(fd);
+      // O_NONBLOCK keeps a FIFO open nonblocking, so the type check must come
+      // first: anything that is not a regular file is refused before a read.
+      if (!before.isFile() || before.size > req.maxBytes) return null;
+      held.push({ fd, req, before });
+    }
+    const results = new Map<string, ObservedContentFile>();
+    for (const { fd, req, before } of held) {
+      const hasher = createHash("sha256")
+        .update(fileContentDomain(req.role), "utf8")
+        .update("\0", "utf8");
+      const bytes = keepBytes(req.role) ? Buffer.allocUnsafe(before.size) : null;
+      const chunk = Buffer.allocUnsafe(Math.max(1, Math.min(HELD_READ_CHUNK_BYTES, before.size)));
+      let offset = 0;
+      while (offset < before.size) {
+        const count = readSync(fd, chunk, 0, Math.min(chunk.length, before.size - offset), offset);
+        if (count <= 0) return null;
+        hasher.update(chunk.subarray(0, count));
+        if (bytes) chunk.copy(bytes, offset, 0, count);
+        offset += count;
+      }
+      // A file that grew inside the window is a different file than was hashed.
+      if (readSync(fd, chunk, 0, 1, offset) !== 0) return null;
+      results.set(req.role, { digest: hasher.digest("hex"), bytes });
+    }
+    for (const { fd, req, before } of held) {
+      const after = fstatSync(fd);
+      const lexical = lstatSync(req.path);
+      const followed = statSync(req.path);
+      if (before.dev !== after.dev || before.ino !== after.ino
+        || before.size !== after.size || before.mtimeMs !== after.mtimeMs
+        || before.ctimeMs !== after.ctimeMs
+        || lexical.isSymbolicLink() || !lexical.isFile()
+        || lexical.dev !== before.dev || lexical.ino !== before.ino
+        || followed.dev !== before.dev || followed.ino !== before.ino) return null;
+    }
+    if (finalize && !finalize()) return null;
+    return results;
+  } catch {
+    return null;
+  } finally {
+    for (const fd of openedFds) {
+      try { closeSync(fd); } catch { /* the observation already failed */ }
+    }
+  }
+}
+
+/**
+ * Bind the versioned file set the supported npm-global layout defines: the
+ * manifest, its declared bin/codex.js entrypoint, and the platform backing
+ * (manifest plus vendored binary) at the locations the layout's modeled Node
+ * lookup produces. The bound set is deliberately small and versioned; this is
+ * not an execution proof, an artifact-authenticity claim, or a
+ * whole-tree-integrity claim.
+ */
+function observeInstallContent(
+  manifest: PackageManifestEvidence,
+  npmPrefix: string,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+  deps: CodexCliInstallProvenanceDeps,
+  selection: { readonly lexical: string; readonly canonical: string },
+): string | null {
+  const arch = deps.arch ?? process.arch;
+  const backing = CODEX_PLATFORM_BACKING[platform + ":" + arch];
+  if (!backing) return null;
+  const tools = pathTools(platform);
+  const normalizedPrefix = normalizePath(npmPrefix, platform);
+  // A filesystem-root prefix cannot bound anything; treat it as unsupported.
+  if (!normalizedPrefix || normalizedPrefix === "/") return null;
+  const withinPrefix = (path: string): boolean => {
+    const normalized = normalizePath(path, platform);
+    return normalized === normalizedPrefix || normalized.startsWith(normalizedPrefix + "/");
+  };
+  // Every lexical path that produced a bound canonical target — the selected
+  // launcher included — is re-resolved at the window's final observed boundary.
+  // Held descriptors do not prevent link mutation; this check observes whether
+  // the selection still reaches the bound files at that instant.
+  const links: { readonly lexical: string; readonly canonical: string }[] = [
+    { lexical: selection.lexical, canonical: selection.canonical },
+  ];
+  const canonicalBound = (path: string): string | null => {
+    const canonical = canonicalize(path, deps);
+    if (!canonical || !withinPrefix(canonical)) return null;
+    links.push({ lexical: path, canonical });
+    return canonical;
+  };
+  const entrypoint = canonicalBound(tools.join(manifest.root, ...manifest.binPath.split("/")));
+  if (!entrypoint) return null;
+
+  const globals = globalModuleDirs(env, platform, deps);
+  const lstat = deps.lstat ?? lstatSync;
+  // Probe one modeled lookup lane in order; the first hit wins.
+  const probeDirs = (
+    dirs: readonly string[],
+  ): { kind: "none" } | { kind: "hit"; path: string; dir: string } | { kind: "refuse" } => {
+    for (const dir of dirs) {
+      const probe = tools.join(dir, ...backing.package.split("/"), "package.json");
+      let entry;
+      try {
+        entry = lstat(probe);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        if (code === "ENOENT" || code === "ENOTDIR") continue;
+        return { kind: "refuse" };
+      }
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      // First hit wins, matching the lookup order the layout models.
+      const canonical = canonicalize(probe, deps);
+      if (!canonical || !withinPrefix(canonical)) return { kind: "refuse" };
+      links.push({ lexical: probe, canonical });
+      return { kind: "hit", path: canonical, dir: tools.dirname(canonical) };
+    }
+    return { kind: "none" };
+  };
+  const probeBacking = (): ReturnType<typeof probeDirs> => {
+    const local = probeDirs(nodeModuleDirs(tools.dirname(entrypoint), platform));
+    if (local.kind !== "none") return local;
+    // Missing lookup seeds leave unknown earlier global lanes. Even an
+    // observed in-prefix global hit cannot prove which package wins there.
+    if (!globals.complete) return { kind: "refuse" };
+    return probeDirs(globals.dirs);
+  };
+  const selectedBacking = probeBacking();
+  if (selectedBacking.kind === "refuse") return null;
+  const backingManifestPath = selectedBacking.kind === "hit" ? selectedBacking.path : null;
+  const backingPackageDir = selectedBacking.kind === "hit" ? selectedBacking.dir : null;
+
+  const binName = platform === "win32" ? "codex.exe" : "codex";
+  const backingBinary = canonicalBound(backingPackageDir
+    ? tools.join(backingPackageDir, "vendor", backing.triple, "bin", binName)
+    : tools.join(manifest.root, "vendor", backing.triple, "bin", binName));
+  // The launcher cannot run without the vendored binary; a missing one makes
+  // the required set incomplete, not merely shorter.
+  if (!backingBinary) return null;
+
+  const requests: InstallContentFile[] = [
+    { role: "manifest", path: manifest.path, maxBytes: MAX_MANIFEST_BYTES },
+    { role: "entrypoint", path: entrypoint, maxBytes: MAX_PACKAGE_ENTRYPOINT_BYTES },
+    ...(backingManifestPath
+      ? [{ role: "backing-manifest" as const, path: backingManifestPath, maxBytes: MAX_MANIFEST_BYTES }]
+      : []),
+    { role: "backing-binary", path: backingBinary, maxBytes: MAX_NATIVE_BACKING_BYTES },
+  ];
+  const observed = observeHeldFileSet(requests, deps, () => {
+    // Re-run the selector after the final file identity pass, while native
+    // descriptors remain open. An earlier lane gaining a package or the
+    // selected one disappearing makes the bound set ambiguous.
+    const selectedAgain = probeBacking();
+    if (selectedAgain.kind !== selectedBacking.kind
+      || (selectedAgain.kind === "hit" && selectedBacking.kind === "hit"
+        && selectedAgain.path !== selectedBacking.path)) return false;
+    // A canonical-path lstat cannot see a retargeted lexical selection link.
+    for (const link of links) {
+      const resolved = canonicalize(link.lexical, deps);
+      if (!resolved || !samePath(resolved, link.canonical, platform)) return false;
+    }
+    return true;
+  });
+  if (!observed) return null;
+  // The manifest was already hashed once while provenance was being decided.
+  // If the bytes read now differ, ownership answered a different file than the
+  // content claim would describe.
+  if (observed.get("manifest")?.digest !== manifest.digest) return null;
+  const backingManifest = observed.get("backing-manifest");
+  if (backingManifest?.bytes) {
+    // A backing manifest carrying an exports map can make the real
+    // require.resolve throw instead of returning this file; without modeling
+    // export conditions the resolution lane would be ambiguous, so it is refused.
+    try {
+      const value: unknown = JSON.parse(backingManifest.bytes.toString("utf8"));
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      if ("exports" in value) return null;
+    } catch {
+      return null;
+    }
+  }
+  const record = {
+    layout: "npm-global" as const,
+    platform,
+    arch,
+    triple: backing.triple,
+    backingKind: backingManifestPath ? "optional-package" as const : "package-vendor" as const,
+    files: requests.map(req => ({ role: req.role, digest: observed.get(req.role)?.digest })),
+  };
+  return sha256("codex-cli-install-content-v1", JSON.stringify(record));
+}
+
 /** Inspect ownership of one configured Codex CLI candidate, without mutation. */
 export async function inspectCodexCliInstall(
   deps: CodexCliInstallProvenanceDeps = {},
@@ -687,6 +1084,7 @@ export async function inspectCodexCliInstall(
         reason: appBundle ? "app_bundle" : "version_manager_owned",
         location: publicExecutableLocation(lexicalCandidatePath, platform),
         installDigest: null,
+        installContentDigest: null,
         packageVersion: null,
         shim: Object.freeze({ status: "unknown", backingKind: null }),
         evidence: Object.freeze([appBundle ? "app_bundle_path" : "version_manager_path"]),
@@ -770,6 +1168,7 @@ export async function inspectCodexCliInstall(
       reason: "app_bundle",
       location,
       installDigest: null,
+      installContentDigest: null,
       packageVersion: null,
       shim: shimReport(shim),
       evidence: Object.freeze(["canonical_path", "app_bundle_path"]),
@@ -792,6 +1191,7 @@ export async function inspectCodexCliInstall(
       reason: "version_manager_owned",
       location,
       installDigest: null,
+      installContentDigest: null,
       packageVersion: null,
       shim: shimReport(shim),
       evidence: Object.freeze(["canonical_path", "version_manager_path"]),
@@ -821,6 +1221,21 @@ export async function inspectCodexCliInstall(
       deps,
     );
     const manifestOwned = global && linked;
+    // The npm-global prefix bounds every content path this observation may
+    // follow: it is the manifest root minus the fixed package suffix. An
+    // install that cannot prove the layout keeps a null digest.
+    const npmPrefix = manifestOwned
+      ? manifest.root.slice(0, manifest.root.length - "/lib/node_modules/@openai/codex".length)
+      : "";
+    const installContentDigest = manifestOwned && deps.observeInstallContent === true
+      // The selection's own lexical->canonical link is part of the claim:
+      // verified again at the end of the observation so a retargeted launcher
+      // cannot leave the digest bound to bytes it no longer selects.
+      ? observeInstallContent(manifest, npmPrefix, platform, env, deps, {
+        lexical: ownershipPath,
+        canonical: canonicalOwnershipPath,
+      })
+      : null;
     const versionMatches = candidate.version === null || candidate.version === manifest.version;
     const reason: CodexCliInstallReason = !global || !linked
       ? "npm_global_unverified"
@@ -848,11 +1263,13 @@ export async function inspectCodexCliInstall(
       // package roots that resolve to the same "<path>/codex" string must still
       // produce different plans.
       installDigest: sha256("codex-cli-install-root-v1", normalizePath(manifest.root, platform)),
+      installContentDigest,
       packageVersion: manifest.version,
       shim: shimReport(shim),
       evidence: Object.freeze<CodexCliInstallEvidence[]>([
         "canonical_path", "package_manifest", "package_manifest_digest",
         ...(manifestOwned ? ["global_npm_layout" as const] : []),
+        ...(installContentDigest ? ["install_content_digest" as const] : []),
       ]),
     });
   }
@@ -882,6 +1299,7 @@ export async function inspectCodexCliInstall(
     reason: "unverified_standalone",
     location,
     installDigest: null,
+    installContentDigest: null,
     packageVersion: null,
     shim: shimReport(shim),
     evidence: Object.freeze(["canonical_path"]),

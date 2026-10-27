@@ -331,8 +331,8 @@ export async function syncEnabledClientIntegrations(
     config,
     port,
   }, unattended
-    ? ["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder"]
-    : ["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder"],
+    ? ["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai"]
+    : ["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai"],
   ...unattended ? [{ refreshOnly: true, admit }] as const : []));
 
   return out;

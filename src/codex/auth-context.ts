@@ -1,4 +1,4 @@
-import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt } from "./pool-credit-policy";
+import { bindPoolCreditPolicy, poolCreditHoldResetAt, poolContextCreditHoldResetAt, poolCreditRecoveryNeeded, poolContextCreditRecoveryNeeded, poolCreditRecoveryRetryAt } from "./pool-credit-policy";
 import { hasSpendableCodexCredits } from "./quota-types";
 import { nextQuotaQueryDelay } from "./quota-query-backoff";
 import { noteMainAccountActivity } from "./main-account-external-usage";
@@ -98,6 +98,7 @@ import { getMainReserveAuthorization, isMainReserveAuthorizationLive, nativeUser
 import { UpstreamRetryEvidenceError } from "../lib/upstream-retry";
 import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 import { CODEX_MAIN_DUPLICATE_ACTION, configuredCodexMainDuplicate } from "./collision-identity";
+import { AgentAssertionUnsupportedError, authorizationCredential, hasAgentAssertionAuthorization } from "../lib/authorization-scheme";
 
 /**
  * A request-owned bearer cannot inspect the physical main credential for its plan, but cached
@@ -547,17 +548,20 @@ export class CodexMainAccountHardLockError extends CodexAccountCooldownError {
 export class CodexPoolAccountCreditsOffError extends CodexAccountCooldownError {
   readonly resetAt: number;
 
-  constructor(accountId: string, resetAt: number) {
-    super(accountId, resetAt);
+  constructor(accountId: string, resetAt: number, creditRecovery = false, quotaScope?: CodexQuotaScope) {
+    // Keep the included reset; a metadata hint neither admits nor clears an upstream hold.
+    super(accountId, creditRecovery ? poolCreditRecoveryRetryAt(accountId, resetAt, quotaScope) : resetAt);
     this.name = "CodexPoolAccountCreditsOffError";
     this.resetAt = resetAt;
-    this.message = "The selected Codex account reached its usage limit, and spending credits is off or no fresh spendable balance is available."
+    this.message = creditRecovery
+      ? "The selected Codex account reached its usage limit and needs a fresh credit observation. Retry later; spending remains blocked until fresh spendable credits are observed."
+      : "The selected Codex account reached its usage limit, and spending credits is off or no fresh spendable balance is available."
       + " Wait for the limit to reset, choose another account, or explicitly allow credits for this account in Codex Auth.";
   }
 }
 
-function assertPoolAccountCredits(accountId: string, resetAt: number | undefined): void {
-  if (resetAt !== undefined) throw new CodexPoolAccountCreditsOffError(accountId, resetAt);
+function assertPoolAccountCredits(accountId: string, resetAt: number | undefined, creditRecovery: boolean, quotaScope?: CodexQuotaScope): void {
+  if (resetAt !== undefined) throw new CodexPoolAccountCreditsOffError(accountId, resetAt, creditRecovery, quotaScope);
 }
 
 /** The main login may not spend credits and one of its usage windows is full (#6334). */
@@ -701,7 +705,7 @@ async function authorizeReserveCredential(
 
 function selectedCodexToken(headers: Headers): { accessToken: string; chatgptAccountId: string } {
   return {
-    accessToken: headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ?? "",
+    accessToken: authorizationCredential(headers) ?? "",
     chatgptAccountId: headers.get("chatgpt-account-id") ?? "",
   };
 }
@@ -716,7 +720,7 @@ function selectedCodexToken(headers: Headers): { accessToken: string; chatgptAcc
 export function callerCodexWorkspaceAccountId(headers: Headers): string | undefined {
   const explicit = headers.get("chatgpt-account-id");
   if (explicit) return explicit;
-  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(headers);
   return bearer ? extractAccountId(undefined, bearer) : undefined;
 }
 
@@ -779,7 +783,7 @@ export function createCodexAuthDispatchGuard(
   return headers => {
     if (config.pausedCodexAccountIds?.includes(ctx.accountId)) throw new CodexPoolAuthenticationError("Selected Codex account is paused; resume it in account settings");
     if (ctx.kind === "main-pool") { reserveGuard?.(headers); return; }
-    assertPoolAccountCredits(ctx.accountId, poolContextCreditHoldResetAt(ctx, config));
+    assertPoolAccountCredits(ctx.accountId, poolContextCreditHoldResetAt(ctx, config), poolContextCreditRecoveryNeeded(ctx, config), ctx.quotaScope);
     reserveGuard?.(headers);
   };
 }
@@ -807,7 +811,7 @@ function assertMainAccountPolicy(
 
 /** No auth-file I/O: an unsigned claim alone never identifies a caller as stored main. */
 function callerMatchesObservedMain(headers: Headers): boolean {
-  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(headers);
   if (!bearer) return false;
   const effectiveAccountId = headers.get("chatgpt-account-id")
     ?? extractAccountId(undefined, bearer);
@@ -831,7 +835,7 @@ function sameCredentialMaterial(a: string, b: string): boolean {
  * cooldown — the safe direction.
  */
 function callerIsCooledPoolAccount(headers: Headers, config: OcxConfig, accountId: string): boolean {
-  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(headers);
   if (!bearer) return true;
   const callerAccountId = headers.get("chatgpt-account-id") ?? extractAccountId(undefined, bearer);
   if (callerAccountId === undefined) return true;
@@ -1568,7 +1572,7 @@ async function resolveCodexAuthContextUnannotated(
   try {
     assertCodexAccountValidationReady(accountId);
     if (configuredCodexMainDuplicate(config, accountId)) throw new CodexPoolAuthenticationError(CODEX_MAIN_DUPLICATE_ACTION);
-    assertPoolAccountCredits(accountId, poolCreditHoldResetAt(policy, accountId, config));
+    assertPoolAccountCredits(accountId, poolCreditHoldResetAt(policy, accountId, config), poolCreditRecoveryNeeded(policy, accountId), quotaScope);
   } catch (cause) {
     // Nothing will reach upstream, so give the trial back instead of leaving the held account
     // unprobeable until the lease deadline lapses (#4701).
@@ -1699,7 +1703,7 @@ async function resolveCodexAuthContextUnannotated(
     const token = await getValidCodexToken(accountId, { signal: options.signal });
     assertCodexAccountValidationReady(accountId);
     if (configuredCodexMainDuplicate(config, accountId)) throw new CodexPoolAuthenticationError(CODEX_MAIN_DUPLICATE_ACTION);
-    assertPoolAccountCredits(accountId, poolCreditHoldResetAt(policy, accountId, config));
+    assertPoolAccountCredits(accountId, poolCreditHoldResetAt(policy, accountId, config), poolCreditRecoveryNeeded(policy, accountId), quotaScope);
     return bindPoolCreditPolicy({
       kind: "pool",
       accountId,
@@ -1731,7 +1735,7 @@ async function resolveCodexAuthContextUnannotated(
 
 export function assertCodexAuthContextNotCooled(ctx: CodexAuthContext | undefined): void {
   if (ctx?.kind !== "pool" && ctx?.kind !== "main-pool") return;
-  if (ctx.kind === "pool") assertPoolAccountCredits(ctx.accountId, poolContextCreditHoldResetAt(ctx));
+  if (ctx.kind === "pool") assertPoolAccountCredits(ctx.accountId, poolContextCreditHoldResetAt(ctx), poolContextCreditRecoveryNeeded(ctx), ctx.quotaScope);
   // A context holding the probe lease was deliberately admitted through the cooldown.
   if (ctx.probeLeaseId) return;
   const cooldown = getCodexQuotaHealthSnapshot(ctx.accountId, ctx.quotaScope);
@@ -1747,7 +1751,7 @@ export function applyCodexAuthContextToProvider(
 ): OcxRuntimeProviderConfig {
   if (mode !== "pool" || (ctx.kind !== "pool" && ctx.kind !== "main-pool") || provider.authMode !== "forward") return provider;
   assertCodexAccountValidationReady(ctx.accountId);
-  if (ctx.kind === "pool") assertPoolAccountCredits(ctx.accountId, poolContextCreditHoldResetAt(ctx));
+  if (ctx.kind === "pool") assertPoolAccountCredits(ctx.accountId, poolContextCreditHoldResetAt(ctx), poolContextCreditRecoveryNeeded(ctx), ctx.quotaScope);
   return {
     ...provider,
     _codexAccountOverride: {
@@ -1767,7 +1771,7 @@ export class CodexMainSubstitutionUnavailableError extends Error {
 
 /** Dispatch identity comes only from an owned observation of the selected credential. */
 function selectedMainQuotaDispatch(selected: Headers): MainQuotaDispatch | undefined {
-  const bearer = selected.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const bearer = authorizationCredential(selected);
   if (!bearer) return undefined;
   const accountId = selected.get("chatgpt-account-id") ?? extractAccountId(undefined, bearer);
   return captureMainQuotaDispatch(bearer, accountId, captureConfigGeneration());
@@ -1792,6 +1796,8 @@ export function materializeCodexUpstreamAuth(
   ctx: CodexAuthContext,
   options: CodexAuthMaterializationOptions = {},
 ): Headers {
+  // assertion_only must never be answered with a pool, stored-main, or other substituted Bearer.
+  if (hasAgentAssertionAuthorization(headers)) throw new AgentAssertionUnsupportedError();
   if (ctx.kind === "main") ctx.mainQuotaDispatch = undefined;
   const selected = new Headers();
   for (const name of FORWARD_HEADERS) {
@@ -1800,7 +1806,7 @@ export function materializeCodexUpstreamAuth(
   }
   if (ctx.kind === "pool" || ctx.kind === "main-pool") {
     assertCodexAccountValidationReady(ctx.accountId);
-    if (ctx.kind === "pool") assertPoolAccountCredits(ctx.accountId, poolContextCreditHoldResetAt(ctx, options.config));
+    if (ctx.kind === "pool") assertPoolAccountCredits(ctx.accountId, poolContextCreditHoldResetAt(ctx, options.config), poolContextCreditRecoveryNeeded(ctx, options.config), ctx.quotaScope);
     selected.set("authorization", `Bearer ${ctx.accessToken}`);
     selected.set("chatgpt-account-id", ctx.chatgptAccountId);
     if (ctx.kind === "main-pool") {
@@ -1814,7 +1820,7 @@ export function materializeCodexUpstreamAuth(
   }
   if (ctx.kind === "main" && options.substituteMainCredential !== true
     && !selected.has("chatgpt-account-id")) {
-    const bearer = selected.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+    const bearer = authorizationCredential(selected);
     const accountId = bearer ? extractAccountId(undefined, bearer) : undefined;
     if (accountId) selected.set("chatgpt-account-id", accountId);
   }
@@ -1892,6 +1898,7 @@ export async function materializeCodexUpstreamAuthAsync(
   ctx: CodexAuthContext,
   options: CodexAuthMaterializationOptions = {},
 ): Promise<Headers> {
+  if (hasAgentAssertionAuthorization(headers)) throw new AgentAssertionUnsupportedError();
   if (ctx.kind === "main") ctx.mainQuotaDispatch = undefined;
   if (requiresReserveAuthorization(options.config, options.modelId, options.admission)) {
     return materializeReserveUpstreamAuth(headers, ctx, options);

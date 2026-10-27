@@ -182,7 +182,7 @@ describe("dispatchCommand exit codes", () => {
       expect(code).toBe(0);
       expect(order).toEqual(["catalog", "refresh"]);
       expect(refresh).toHaveBeenCalledTimes(1);
-      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder"]);
+      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai"]);
     } finally {
       sync.mockRestore(); refresh.mockRestore(); aside.mockRestore(); log.mockRestore();
     }
@@ -622,15 +622,18 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     // Read before the first stop can remove the record.
     expect(readAt).toBeLessThan(stop.indexOf("stopServiceIfInstalledDetailed()"));
     expect(stop).toContain("if (teardownNonce || stoppingSibling) return;");
-    expect(stop).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling;");
-    expect(stop).toContain('if (nativeRestoreHandledByProxy && !stoppingSibling) record.sharedTeardown = "performed-by-proxy";');
+    // #7563 adds a connected client to the same gate; the sibling term is unchanged.
+    expect(stop).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
+    expect(stop).toContain('if (nativeRestoreHandledByProxy && !stoppingSibling && !connectedClientSkip) record.sharedTeardown = "performed-by-proxy";');
+    expect(stop).toContain("fetchFn: connectedClientSkip ? directLocalHttpFetch as typeof fetch : undefined,");
     // The system env was never the sibling's to set, so its stop does not roll it back either.
     expect(stop).toContain("if (!stoppingSibling) { try { revertSystemEnv(); } catch { /* best-effort */ } }");
     expect(stop).not.toMatch(/\n {2}try \{ revertSystemEnv\(\); \}/);
     // A sibling never runs under a service manager, so an installed one is the live owner's. Asking
     // it failed the ownership check from the sibling's home: exit 1, and after a hard kill the
     // stale sibling records were never purged.
-    expect(stop).toContain(': stoppingSibling ? "absent" : stopServiceIfInstalledDetailed();');
+    // #7423: the non-sibling branch claims an update-handover receipt first; the sibling term is unchanged.
+    expect(stop).toContain(': stoppingSibling || connectedClientAlreadyStopped ? "absent" : (claimHandoverBeforeManager(), stopServiceIfInstalledDetailed());');
     // The only other caller is the guarded desktop step, which reaches the manager only when it
     // provably owns the approved pid; a sibling's pid never is.
     expect(stop.split("stopServiceIfInstalledDetailed()").length - 1).toBe(2);

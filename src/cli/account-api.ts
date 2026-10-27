@@ -23,6 +23,9 @@ export interface AccountRow {
   provider: string;
   type: AccountType;
   id: string;
+  slotId?: string;
+  slotKind?: "native-main" | "pool";
+  upstreamAccountKey?: string;
   label?: string;
   email?: string;
   /**
@@ -329,6 +332,9 @@ export interface ProviderQuotaReportDto {
 
 interface CodexAccountDto {
   id: string;
+  slotId?: string;
+  slotKind?: "native-main" | "pool";
+  upstreamAccountKey?: string;
   alias?: string;
   email?: string;
   plan?: string;
@@ -401,6 +407,11 @@ export async function fetchCodexRows(
     provider: "openai",
     type: "codex" as const,
     id: a.id,
+    slotId: a.id,
+    slotKind: a.id === "__main__" ? "native-main" as const : "pool" as const,
+    ...(a.slotId === a.id && typeof a.upstreamAccountKey === "string"
+      && /^uai1_[0-9a-f]{64}$/.test(a.upstreamAccountKey)
+      ? { upstreamAccountKey: a.upstreamAccountKey } : {}),
     label: a.alias ?? a.plan ?? a.email,
     email: a.email,
     plan: a.plan,

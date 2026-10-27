@@ -143,7 +143,11 @@ describe("ocx.mjs package launcher (source invariants)", () => {
     // Windows spells the variable `Path` in practice, so an upper-case-only delete would
     // leave the duplicate behind. The match must be on the lowercase form of every key.
     expect(source).toContain("if (snapshotted.has(name.toLowerCase())) delete inheritedEnv[name];");
-    expect(source).toContain('["PATH", "PATHEXT", ...CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS].map(name => name.toLowerCase())');
+    expect(source).toContain('...CODEX_CLI_TRANSPORT_ENV_KEYS].map(name => name.toLowerCase())');
+    expect(source).toContain("const preBunTransportEnv = captureCodexCliTransportEnv(process.env);");
+    expect(source).toContain("transportEnv: preBunTransportEnv,");
+    // The backing arch is the Node launcher's, bound before Bun (possibly another arch) starts.
+    expect(source).toContain("arch: process.arch,");
 
     // The de-duplication is scoped to the one-shot inspection launch; every other launch
     // must still inherit PATH, or the long-running proxy child loses its tooling lookup.
@@ -208,7 +212,7 @@ test("Desktop supervision is freshly checked before Node stop and both package-m
   const initial = source.indexOf("supervision: observeSupervision()", source.indexOf("const initialOwnership"));
   const gate = source.indexOf("const preStopPlan = planUpdateRuntimeHandling({");
   const stop = source.indexOf('const stopRes = spawnSync(process.execPath, [launcher, "stop"]');
-  const npm = source.indexOf("const tx = transactionalNpmUpdate({");
+  const npm = source.indexOf("const tx = await transactionalNpmUpdate({");
   const pnpm = source.indexOf("const update = runPnpmGlobalUpdate({");
   expect(initial).toBeGreaterThan(0); expect(gate).toBeGreaterThan(initial);
   expect(stop).toBeGreaterThan(gate); expect(npm).toBeGreaterThan(stop); expect(pnpm).toBeGreaterThan(stop);

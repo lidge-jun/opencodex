@@ -22,6 +22,7 @@ import {
   MAX_WS_FRAME_BYTES,
   openLiveSidebandUpstream,
   startServer,
+  type StartServerDeps,
 } from "../../src/server";
 import {
   activeRegistryMetrics,
@@ -32,6 +33,7 @@ import {
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { phaseTimer } from "../helpers/phase-timing";
 import { expectSidebandUpgrade, openSidebandClient, redirectSidebandWebSocket, sidebandRelayUpstream } from "../helpers/sideband-relay-probe";
@@ -149,6 +151,15 @@ function forwardConfig(): OcxConfig {
   } as OcxConfig;
 }
 
+// Isolate relay/readiness fixtures from host service-manager probes.
+// Explicit per-case dependencies override this default.
+function startTestServer(port?: number, deps: StartServerDeps = {}): ReturnType<typeof startServer> {
+  return startServer(port, {
+    inspectNativeCodexOwnership: ownedServiceHomeInspection("server-live fixture"),
+    ...deps,
+  });
+}
+
 function expectReadyProtocolMetadata(body: Record<string, unknown>, managementUrl: string): void {
   expect(body).toMatchObject({
     protocol: 1,
@@ -192,7 +203,7 @@ test("POST /v1/live rewrites ChatGPT multipart into backend realtime/calls JSON"
   config.providers.openai!.baseUrl = "https://chatgpt.com/backend-api/codex///";
   saveConfig(config);
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const { body, contentType } = multipartLiveBody("v=0-offer", { model: "gpt-live", instructions: "hi" });
     const response = await fetch(new URL("/v1/live", server.url), {
@@ -241,7 +252,7 @@ test.each(["/v1/live", "/backend-api/codex/live"])("POST %s relays to an OpenAI 
     },
   } as OcxConfig);
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const { body, contentType } = multipartLiveBody();
     const response = await fetch(new URL(path, server.url), {
@@ -272,7 +283,7 @@ test("call-create forwards Frameless protocol headers and keeps auth pool-owned"
   const upstream = fakeLiveUpstream(captured);
   saveConfig(forwardConfig());
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const { body, contentType } = multipartLiveBody("v=0-offer", { model: "gpt-live", instructions: "hi" });
     const response = await fetch(new URL("/v1/live", server.url), {
@@ -287,6 +298,8 @@ test("call-create forwards Frameless protocol headers and keeps auth pool-owned"
         "thread-id": "thread_def",
         originator: "codex_app",
         "x-oai-attestation": "attest-blob",
+        // openai/codex#53784: client voice session id, distinct from the realtime x-session-id.
+        "voice-session-id": "voice_456",
         // Must NOT be forwarded: account-derived compliance header.
         "x-openai-fedramp": "true",
       },
@@ -302,6 +315,7 @@ test("call-create forwards Frameless protocol headers and keeps auth pool-owned"
     expect(headers.get("thread-id")).toBe("thread_def");
     expect(headers.get("originator")).toBe("codex_app");
     expect(headers.get("x-oai-attestation")).toBe("attest-blob");
+    expect(headers.get("voice-session-id")).toBe("voice_456");
     expect(headers.get("x-openai-fedramp")).toBeNull();
     // Auth stays proxy-resolved, not blindly copied from the whitelist path.
     expect(headers.get("authorization")).toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
@@ -317,7 +331,7 @@ test("call-create without protocol headers does not invent them upstream", async
   const upstream = fakeLiveUpstream(captured);
   saveConfig(forwardConfig());
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const { body, contentType } = multipartLiveBody("v=0-offer", { model: "gpt-live", instructions: "hi" });
     const response = await fetch(new URL("/v1/live", server.url), {
@@ -338,6 +352,7 @@ test("call-create without protocol headers does not invent them upstream", async
     expect(headers.get("thread-id")).toBeNull();
     expect(headers.get("originator")).toBeNull();
     expect(headers.get("x-oai-attestation")).toBeNull();
+    expect(headers.get("voice-session-id")).toBeNull();
   } finally {
     await server.stop(true);
     await upstream.stop(true);
@@ -349,7 +364,7 @@ test("POST /v1/realtime/calls is accepted and relays like /v1/live", async () =>
   const upstream = fakeLiveUpstream(captured, 201, "/v1/realtime/calls/rtc_codex");
   saveConfig(forwardConfig());
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const { body, contentType } = multipartLiveBody("v=0-codex");
     const response = await fetch(new URL("/v1/realtime/calls", server.url), {
@@ -380,7 +395,7 @@ test("ChatGPT multipart rewrite allows SDP-only offers without session", async (
   const upstream = fakeLiveUpstream(captured);
   saveConfig(forwardConfig());
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const { body, contentType } = multipartLiveBody("v=0-sdp-only", null);
     const response = await fetch(new URL("/v1/live", server.url), {
@@ -403,7 +418,7 @@ test("ChatGPT multipart rewrite allows SDP-only offers without session", async (
 
 test("OPTIONS preflight allows ChatGPT-Account-Id for voice clients", async () => {
   saveConfig(forwardConfig());
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const response = await fetch(new URL("/v1/live", server.url), {
       method: "OPTIONS",
@@ -436,7 +451,7 @@ test("POST /v1/live without an OpenAI upstream returns 400", async () => {
     },
   } as OcxConfig);
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const response = await fetch(new URL("/v1/live", server.url), {
       method: "POST",
@@ -453,7 +468,7 @@ test("POST /v1/live without an OpenAI upstream returns 400", async () => {
 
 test("GET /v1/live still hits the unknown-endpoint JSON 404 guard", async () => {
   saveConfig(forwardConfig());
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const response = await fetch(new URL("/v1/live", server.url), {
       method: "GET",
@@ -496,7 +511,7 @@ test("a routed pool account's token overrides the caller bearer on the live rela
     chatgptAccountId: "acct-pool-a",
   });
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const { body, contentType } = multipartLiveBody();
     const response = await fetch(new URL("/v1/live", server.url), {
@@ -575,7 +590,7 @@ test("call-create and its sideband join bind to the same pool account (openai/co
     }
   } as typeof WebSocket;
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const voiceHeaders = {
       authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
@@ -667,7 +682,7 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
   // helper because this case is at its size cap and the repo answer is not to compress.
   const { OriginalWebSocket, restore } = redirectSidebandWebSocket(upstream.port);
   restoreWebSocket = restore;
-  const server = live = startServer(0);
+  const server = live = startTestServer(0);
   const ws = openSidebandClient(OriginalWebSocket, server.url, "/v1/live/rtc_sideband", DIRECT_CHATGPT_TOKEN);
   client = ws;
   // Each leg is its own segment and the timer's ticks read the peer's event count, so a
@@ -760,7 +775,7 @@ test("standalone GET /v1/realtime?intent=quicksilver&model= upgrades and relays 
     }
   } as typeof WebSocket;
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const wsUrl = new URL(`/v1/realtime?intent=quicksilver&model=gpt-realtime-1.5&access_token=dropme`, server.url);
     wsUrl.protocol = "ws:";
@@ -840,7 +855,7 @@ test("standalone GET /v1/live?model= upgrades and relays bidirectionally", async
     }
   } as typeof WebSocket;
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const wsUrl = new URL(`/v1/live?model=gpt-realtime-1.5`, server.url);
     wsUrl.protocol = "ws:";
@@ -884,7 +899,7 @@ test("standalone realtime upgrade keeps the auth and origin guards", async () =>
   saveConfig(forwardConfig());
   process.env.OPENCODEX_API_AUTH_TOKEN = "required-secret";
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const upgradeHeaders = {
       connection: "upgrade",
@@ -1207,7 +1222,7 @@ test("sideband relay preserves multibyte UTF-8 frames byte-identically in both d
     }
   } as typeof WebSocket;
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const wsUrl = new URL(`/v1/live/rtc_korean`, server.url);
     wsUrl.protocol = "ws:";
@@ -1311,7 +1326,7 @@ test("sideband frame log preserves delivery without recording damaged or clean t
     }
   } as typeof WebSocket;
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   try {
     const wsUrl = new URL(`/v1/live/rtc_framelog`, server.url);
     wsUrl.protocol = "ws:";
@@ -1392,7 +1407,7 @@ describe("GET /readyz", () => {
 
     for (const { outcome, expectedStatus, expectedHttp } of cases) {
       const gate = createReadinessGate();
-      const server = startServer(0, { readinessGate: gate });
+      const server = startTestServer(0, { readinessGate: gate });
       try {
         const pending = await fetch(new URL("/readyz", server.url));
         expect(pending.status).toBe(503);
@@ -1416,7 +1431,7 @@ describe("GET /readyz", () => {
   test("fresh gate is pending; /healthz 200 while /readyz 503 with Retry-After", async () => {
     saveConfig(forwardConfig());
     const gate = createReadinessGate();
-    const server = startServer(0, { readinessGate: gate });
+    const server = startTestServer(0, { readinessGate: gate });
     try {
       const base = server.url;
       // Liveness is immediate and unchanged.
@@ -1440,7 +1455,7 @@ describe("GET /readyz", () => {
       expectReadyProtocolMetadata(readyzBody, new URL(base).origin);
       // Sanitization: the body must never carry sync diagnostics, paths, or warnings.
       expect(Object.keys(readyzBody).sort()).toEqual([
-        "managementUrl", "minimumClientProtocol", "pid", "port", "protocol", "service", "status", "uptime", "version",
+        "features", "managementUrl", "minimumClientProtocol", "pid", "port", "protocol", "service", "status", "uptime", "version",
       ]);
       expect(JSON.stringify(readyzBody)).not.toContain("warning");
       expect(JSON.stringify(readyzBody)).not.toContain("path");
@@ -1455,7 +1470,7 @@ describe("GET /readyz", () => {
       runtimeRole: "hub",
       hub: { managementPublicOrigin: "https://hub.example.test" },
     });
-    const server = startServer(0);
+    const server = startTestServer(0);
     try {
       const ready = await fetch(new URL("/readyz", server.url), {
         headers: {
@@ -1480,7 +1495,7 @@ describe("GET /readyz", () => {
   test("/readyz is 200 with status ready only after gate.markReady()", async () => {
     saveConfig(forwardConfig());
     const gate = createReadinessGate();
-    const server = startServer(0, { readinessGate: gate });
+    const server = startTestServer(0, { readinessGate: gate });
     try {
       const base = server.url;
       expect(((await (await fetch(new URL("/readyz", base))).json()) as { status: string }).status).toBe("pending");
@@ -1500,7 +1515,7 @@ describe("GET /readyz", () => {
     saveConfig(forwardConfig());
     const gate = createReadinessGate();
     gate.markFailed();
-    const server = startServer(0, { readinessGate: gate });
+    const server = startTestServer(0, { readinessGate: gate });
     try {
       const res = await fetch(new URL("/readyz", server.url));
       expect(res.status).toBe(503);
@@ -1514,7 +1529,7 @@ describe("GET /readyz", () => {
   test("exact method/path: POST /readyz and GET /readyz/ are NOT matched", async () => {
     saveConfig(forwardConfig());
     const gate = createReadinessGate();
-    const server = startServer(0, { readinessGate: gate });
+    const server = startTestServer(0, { readinessGate: gate });
     try {
       const base = server.url;
       // POST must not be accepted as readiness (falls through to the JSON 404 guard).
@@ -1556,7 +1571,7 @@ describe("GET /readyz", () => {
   test("/readyz answers without an admission token (unauthenticated, like /healthz)", async () => {
     saveConfig(forwardConfig());
     const gate = createReadinessGate();
-    const server = startServer(0, { readinessGate: gate });
+    const server = startTestServer(0, { readinessGate: gate });
     try {
       // No Authorization header, no API auth token in env (beforeEach deletes it).
       const res = await fetch(new URL("/readyz", server.url), { headers: { Authorization: "" } });
@@ -1572,7 +1587,7 @@ describe("GET /readyz", () => {
   test("ephemeral startServer(0): /readyz reports the actual bound port (not the requested 0)", async () => {
     saveConfig(forwardConfig());
     const gate = createReadinessGate();
-    const server = startServer(0, { readinessGate: gate });
+    const server = startTestServer(0, { readinessGate: gate });
     try {
       const boundPort = new URL(server.url).port;
       // The bound port is a real ephemeral port, not the requested 0.
@@ -1597,8 +1612,8 @@ describe("per-server readiness gate isolation", () => {
     saveConfig(forwardConfig());
     const gateA: ReadinessGate = createReadinessGate();
     const gateB: ReadinessGate = createReadinessGate();
-    const serverA = startServer(0, { readinessGate: gateA });
-    const serverB = startServer(0, { readinessGate: gateB });
+    const serverA = startTestServer(0, { readinessGate: gateA });
+    const serverB = startTestServer(0, { readinessGate: gateB });
     try {
       gateA.markReady();
       // gateB stays pending.
@@ -1620,8 +1635,8 @@ describe("per-server readiness gate isolation", () => {
     saveConfig(forwardConfig());
     const gateA: ReadinessGate = createReadinessGate();
     const gateB: ReadinessGate = createReadinessGate();
-    const serverA = startServer(0, { readinessGate: gateA });
-    const serverB = startServer(0, { readinessGate: gateB });
+    const serverA = startTestServer(0, { readinessGate: gateA });
+    const serverB = startTestServer(0, { readinessGate: gateB });
     try {
       gateA.markReady();
       gateB.markFailed();
@@ -1642,7 +1657,7 @@ describe("per-server readiness gate isolation", () => {
   test("a server with no gate passed in still serves pending /readyz (fresh private gate)", async () => {
     saveConfig(forwardConfig());
     // No gate supplied → startServer creates a fresh pending private gate.
-    const server = startServer(0);
+    const server = startTestServer(0);
     try {
       const res = await fetch(new URL("/readyz", server.url));
       expect(res.status).toBe(503);
@@ -1657,7 +1672,7 @@ describe("per-server readiness gate isolation", () => {
     const gateA: ReadinessGate = createReadinessGate();
     const gateB: ReadinessGate = createReadinessGate();
     // Ephemeral start: A binds a real kernel-assigned port (NOT a fixed user port).
-    const serverA = startServer(0, { readinessGate: gateA });
+    const serverA = startTestServer(0, { readinessGate: gateA });
     try {
       gateA.markReady();
       const occupiedPort = Number(new URL(serverA.url).port);
@@ -1668,7 +1683,7 @@ describe("per-server readiness gate isolation", () => {
 
       // Binding the occupied port with a separate gate must throw (EADDRINUSE).
       // It must never silently share A's listener or reset A's gate.
-      expect(() => startServer(occupiedPort, { readinessGate: gateB })).toThrow();
+      expect(() => startTestServer(occupiedPort, { readinessGate: gateB })).toThrow();
 
       // A is unaffected by the failed bind: still HTTP 200 / ready.
       const resA = await fetch(new URL("/readyz", serverA.url));
@@ -1698,7 +1713,7 @@ describe("GET /readyz while draining", () => {
   test("a ready gate reports pending (503) once the listener starts draining", async () => {
     saveConfig(forwardConfig());
     const gate = createReadinessGate();
-    const server = startServer(0, { readinessGate: gate });
+    const server = startTestServer(0, { readinessGate: gate });
     try {
       gate.markReady();
       const base = server.url;
@@ -2020,7 +2035,7 @@ test("a failed pre-upgrade handshake retains admission until its CLOSING upstrea
   saveConfig(forwardConfig());
   const upstream = new FakeUpstreamSocket();
   upstream.closeMode = "closing";
-  const server = startServer(0, {
+  const server = startTestServer(0, {
     liveSidebandWebSocketFactory: () => {
       queueMicrotask(() => upstream.emit("error", {}));
       return upstream as unknown as WebSocket;
@@ -2064,7 +2079,7 @@ test("a failed pre-upgrade handoff retains admission until its CLOSING upstream 
   saveConfig(forwardConfig());
   const upstream = new FakeUpstreamSocket();
   upstream.closeMode = "closing";
-  const server = startServer(0, {
+  const server = startTestServer(0, {
     liveSidebandWebSocketFactory: () => {
       queueMicrotask(() => {
         upstream.emit("open", {});
@@ -2137,7 +2152,7 @@ test("a sideband join whose upstream handshake fails never opens the client sock
     }
   } as typeof WebSocket;
 
-  const server = startServer(0);
+  const server = startTestServer(0);
   const activeTurnsBefore = activeRegistryMetrics().activeTurns.active;
   try {
     const wsUrl = new URL(`/v1/realtime?call_id=rtc_dead_call`, server.url);
@@ -2186,7 +2201,7 @@ test("a sideband join whose upstream handshake fails never opens the client sock
 test("an upstream that opens then closes before relay attachment refuses the client and releases admission", async () => {
   saveConfig(forwardConfig());
   const upstream = new FakeUpstreamSocket();
-  const server = startServer(0, {
+  const server = startTestServer(0, {
     liveSidebandWebSocketFactory: () => {
       queueMicrotask(() => {
         upstream.emit("open", {});

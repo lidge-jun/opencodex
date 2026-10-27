@@ -18,12 +18,18 @@ identities/aliases/transactions and oversized state refuse rather than repair.
 ancestors, bounded no-follow single-link files and fatal UTF-8. Root-controlled
 OS directory aliases are allowed only with trusted resolved ancestors. An existing trusted
 configuration parent may be 0755; only the owned messaging subtree must be 0700, and enable
-does not chmod the existing parent.
+does not chmod the existing parent. On macOS, the private subtree and every state file must also
+have no extended access ACL; creation, reads, and atomic replacement all fail closed otherwise.
+Temporary-file ACL refusal or probe failure reports `unsafe_remote_storage`, closes the file descriptor
+and removes the unpublished file without replacing existing state.
 Mutations acquire an exclusive directory lock and atomically publish private
 files, syncing the file before rename and its parent directory before dependent work.
 Creation persists new directory entries; journal removal also syncs the parent before reporting success.
 A failed publication/removal directory sync reports `remote_storage_unknown`; the operation is not
-automatically retried and the visible state is retained for explicit recovery. Crash locks are not automatically reaped by age. Filesystem calls are not
+automatically retried and the visible state is retained for explicit recovery. A post-rename ACL
+refusal or probe failure also reports `remote_storage_unknown`, because replacement has already
+occurred; ACL privacy and crash durability require inspection before explicit recovery.
+Crash locks are not automatically reaped by age. Filesystem calls are not
 claimed to resist unrestricted same-uid access or privileged path replacement.
 
 `src/messaging/remote-enrollment.ts` uses a private temporary offered known-hosts

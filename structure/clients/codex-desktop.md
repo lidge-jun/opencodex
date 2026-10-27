@@ -3,17 +3,17 @@
 ## Explicit restart
 
 `ocx system codex-restart` requests a Codex app-server restart through the management
-endpoint. `src/codex/app-server-restart-service.ts` also quits and relaunches the desktop
-app only when `src/codex/desktop-app/picker-freshness.ts` reports that a root shell started
-at or before the mtime of the catalog `config.toml` binds through `model_catalog_json`,
-because the picker is built at shell launch and an app-server restart cannot refresh it.
-A shell that started strictly later is left running (`desktopApp.reason: "picker_current"`),
-so its unsaved drafts, picker selections and pending approvals survive while it respawns its
-own app-server. An unbound config, an unreadable shell list, start time or catalog mtime, or a
-binding the request's own sync changed all take the full restart; `desktopApp.pickerState`
-reports which reading decided. `config.toml`'s own mtime is not evidence, because injection
-rewrites identical bytes. A binding changed by an earlier sync over a byte-identical catalog
-is not observable.
+endpoint. `src/codex/app-server-restart-service.ts` also requests a full quit and relaunch of the
+desktop app whenever a root shell is running, because the picker is built at shell launch and an
+app-server restart cannot refresh it. A shell at or before the mtime of the catalog
+`config.toml` binds through `model_catalog_json` is provably stale. A newer shell is still
+`unknown`: its start time cannot prove which binding it loaded, because an earlier sync may
+have rebound an already-existing, byte-identical catalog. An unbound config or an unreadable
+shell list or catalog mtime is unknown; an unreadable shell start time is unknown unless another
+readable shell is already known stale. A binding this request's own
+sync changed is stale. Both states request the full restart; `desktopApp.pickerState` reports
+which reading decided. A closed desktop is left closed. `config.toml`'s own mtime is not
+evidence, because injection rewrites identical bytes.
 `src/cli/capabilities.ts` and `src/cli/system-command.ts` warn that unsaved client state
 may be lost and report which outcome happened.
 The unconfirmed path sends no restart request; JSON output preserves refused outcomes.
@@ -69,12 +69,14 @@ registration refuse it, while exact trust removal and deliberate renewal remain 
 `CryptProtectData`/`CryptUnprotectData` in-process on Windows x64, loading `crypt32.dll`
 from the `GetSystemDirectoryW` path and clearing unprotected output before `LocalFree`.
 Windows ARM64, where Bun FFI is unavailable, keeps the trusted PowerShell helper with
-bounded stdin/stdout. Both write the same blob format; neither puts secrets on a command
+bounded stdin/stdout. The helper uses only .NET calls and never a cmdlet, because the first
+cmdlet in a session pays module discovery, which a cold profile turns into the whole budget.
+Both write the same blob format; neither puts secrets on a command
 line or falls back to plaintext. CurrentUser protects against other OS identities, not
 another process using the same credentials.
 `tests/clients/desktop-compatibility-authority.test.ts` covers persistence, refusal,
-a real Windows DPAPI round trip with synthetic data, and a PowerShell-written key opening
-in-process.
+a real Windows DPAPI round trip with synthetic data, a PowerShell-written key opening
+in-process, and the helper's cmdlet-free script on every platform.
 
 ## Certificate setup API
 
@@ -148,6 +150,11 @@ when the ordinary rate limit is exhausted. Their original snapshots disarm Apply
 Reserve schemas pass unchanged. Neither observation nor correction changes entitlement state.
 Later exhaustion does not resume that trial; it requires another explicit activation.
 Pending response checks from the previous generation cannot emit a correction after recovery.
+An explicit non-empty foreign account, user or plan in a usage record invalidates the trial,
+clears its observation and outputs, and excludes that stream from refresh. A failed fresh
+activation identity check also invalidates the current trial. A verification result from an
+older binding or generation cannot invalidate a newer trial. Resuming correction requires
+another matched exhaustion observation and explicit activation; native cache refresh remains unconfirmed.
 Native identity verification also binds an opaque reader-local credential generation from a stable file-stat/content snapshot. Replacement, token rotation and A-to-B-to-A restoration invalidate pending identity checks and response correction; they require a fresh observation runtime. Neither credential hashes nor tokens appear in public status. `tests/clients/desktop-compatibility-native-identity.test.ts` exercises delayed verification and build-check races with synthetic auth files.
 Fresh identity checks, generation changes, unknown schemas and elapsed deadlines refuse
 correction. `usage-sse-controller.ts` preserves event metadata and original sequence IDs;
@@ -176,13 +183,27 @@ table do not invalidate the routing snapshot. Desktop refreshes that tool-transp
 after launch; all other native fields, including unknown ones and selected profiles, remain bound.
 It does not claim knowledge of project-local overrides or a conversation's selected model.
 Each record that would be corrected checks routing and the assessed installed build asynchronously,
-then rechecks account identity and trial generation before emitting it. `installed-build.ts` shares
-the Windows adapter's discovery parser, coalesces concurrent probes without caching a positive
+then rechecks account identity and trial generation before emitting it. `installed-build.ts` uses a
+compatibility-only current-user package query that reads the registered manifest's actual App and
+fixed ChatGPT.exe entry in the installed package's app directory, binds its publisher/name/version to the exact official family,
+and refuses missing/reparse executable facts. It coalesces concurrent probes without caching a positive
 result across requests, and aborts/reaps its bounded child before shutdown completes. Observe and
 unchanged responses do not query Windows. Background refresh runs once a minute in Observe,
 every ten seconds during Apply, and stops probing after the safety deadline. Failed checks
 disarm Apply. Native update/routing failures are
 public diagnostic codes; originals continue to relay and no app/config repair is automatic.
+The package proof's manifest digest and canonical executable metadata stay private. An observed
+identity change or failed proof invalidates trial generation, prior exhaustion and outputs before
+another correction; a supported-version A-to-B-to-A transition cannot revive old consent. Later
+success requires a new original exhaustion and explicit account-wide consent with the unchanged
+maximum three-minute trial. Stop/start replaces the observation context, and old probe completions
+cannot affect its replacement. Identical observed registration/file metadata cannot detect every
+same-version reinstall; this is not continuous file/process or signature attestation.
+Every volume-root-to-file ancestor is checked for reparse points before manifest/file consumption
+and rechecked before proof publication. FullName is lexical and is not a held-handle canonical-path
+proof; the bounded before/after metadata walk does not exclude a transient replace-and-restore
+between observations. Such unobserved replacement remains outside this observation contract. The launcher,
+exact version allowlist, GET/SSE surface and default-off behavior remain unchanged.
 Each completed check also publishes a `buildAssessment` record on runtime status holding only
 `assessedVersion`, `observedVersion`, `verified` and `completedAt`. A status read never starts
 a probe, a runtime without a real probe omits the field, and an aborted or in-flight check never

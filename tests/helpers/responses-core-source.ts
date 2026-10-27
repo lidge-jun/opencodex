@@ -35,8 +35,12 @@ export const RESPONSES_CORE_MODULES = [
   "core-combo-native.ts",
   // Reached from core-combo.ts: tool-loop continuations stay on the lane's previous target (#7298).
   "combo-tool-loop-pin.ts",
+  // Reached from core-combo.ts: opt-in JEV session pin keeps a session on its decided target (#7525).
+  "jev-session-pin.ts",
   // Reached from core-combo.ts: the JEV model backend's internal decision turn.
   "jev-model-invoke.ts",
+  // Reached from core-combo.ts: JEV effort choices and resolved native quota identity.
+  "jev-combo-choice.ts",
   "request-prepare.ts",
   "policy-request-scope.ts",
   "skills-snapshot.ts",
@@ -67,6 +71,8 @@ export const RESPONSES_CORE_MODULES = [
   "pacing-overload.ts",
   "reset-replay.ts",
   "passthrough-delivery.ts",
+  // Reached from passthrough-delivery.ts: buffered combo children must honor a required tool_choice (#7456).
+  "combo-required-tool-contract.ts",
   "buffered-sse-json.ts",
   "terminal-error-redaction.ts",
   "non-replayable-error.ts",

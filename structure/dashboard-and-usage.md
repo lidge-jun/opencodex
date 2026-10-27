@@ -497,7 +497,7 @@ The existing dashboard file-client maps include Cline CLI and reuse its committe
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates. The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples. Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 Dashboard overview polling observes authorization failures independently of stalled or rejected peer requests, cancels remaining child requests after a decisive result, and exposes resource-level deadline failures without rewriting them as authentication failures.
@@ -578,7 +578,7 @@ projection version changes and encodes older raw-selector rows from canonical JS
 still find them. CLI access-key usage is unavailable without an ISO-8601 UTC attribution timestamp,
 rather than a measured zero or never-used key.
 
-Kimi Coding K3 price rows use API-reference estimates with the default five-minute cache-write rate,
+Kimi Coding K3/K3.1 Pro (and `moonshot` `kimi-k3.1-pro*`) price rows are API-reference estimates at the 5-minute cache-write rate,
 not Code Plan billing or quota. The three Coding presets have explicit price namespaces. The
 retargeted `kimi-for-coding` alias stays unpriced until a verified K2.8 price or a user `modelCosts`
 override exists; the retired K2.7 mapping is not reused. Request, attempt and combo estimates remain

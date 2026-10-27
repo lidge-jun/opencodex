@@ -278,12 +278,16 @@ export type TierDecision =
   | { readonly kind: "drop" }
   | { readonly kind: "set"; readonly value: string };
 
-/**
- * One configured provider entry. `authMode` (default `"key"`) decides whether same-target 429
- * retries are allowed; OAuth/forward credentials and local runtimes are never replayed.
- */
+/** Independent reasoning axes. Absence means unknown, not an explicit denial. */
+export interface ReasoningCapabilities {
+  supportsReasoning?: boolean;
+  supportsThinkingToggle?: boolean;
+  supportsReasoningEffort?: boolean;
+  defaultThinkingEnabled?: boolean;
+}
+
 /** Explicit per-model operator declarations; absent axes keep legacy behavior. */
-export interface ModelCapabilities {
+export interface ModelCapabilities extends ReasoningCapabilities {
   inputModalities?: Array<"text" | "image" | "audio" | "video">;
   /** Requested tier only; does not imply an upstream window or activate an unverified wire. */
   contextTier?: "default" | "long_context";
@@ -292,6 +296,10 @@ export interface ModelCapabilities {
   deepseekImageFiles?: boolean;
 }
 
+/**
+ * One configured provider entry. `authMode` (default `"key"`) decides whether same-target 429
+ * retries are allowed; OAuth/forward credentials and local runtimes are never replayed.
+ */
 export interface OcxProviderConfig {
   /** Explicit builtin Pool 2 provenance; endpoints never imply ownership. */
   anthropicOAuthInstance?: "anthropic2";
@@ -661,6 +669,12 @@ export interface OcxProviderConfig {
   modelContextTiers?: Record<string, "default" | "long_context">;
   /** Model-specific Codex catalog input modalities, e.g. ["text"] or ["text", "image"]. */
   modelInputModalities?: Record<string, string[]>;
+  /**
+   * Provider-wide input modalities, applied to models `modelInputModalities` does not enumerate
+   * (a live-discovered id, for example). The registry's value is applied at runtime only, for the
+   * preset's own destination, and never persisted; a per-model declaration still wins.
+   */
+  inputModalities?: string[];
   modelCapabilities?: Record<string, ModelCapabilities>;
   /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
   modelMaxInputTokens?: Record<string, number>;
@@ -872,6 +886,14 @@ export interface OcxProviderConfig {
    */
   responsesSnapshotRepair?: boolean;
   /**
+   * Infer the commentary/final_answer phase on assistant messages for Responses passthrough
+   * providers whose upstream omits it (e.g. third-party gateways). Codex desktop collapses
+   * commentary into progress rows; without this every narration renders fully expanded.
+   * Disabled by default. Applies in the client-facing SSE rewrite chain, including
+   * buffered JSON reconstructed from upstream SSE; ordinary upstream JSON is unchanged.
+   */
+  messagePhaseInference?: boolean;
+  /**
    * Opt-in hosted-web-search bridge for this KEY-auth Responses passthrough provider (#3761).
    * Absent or disabled leaves the passthrough byte-identical to today.
    */
@@ -892,7 +914,7 @@ export interface OcxProviderConfig {
    * `reasoningEffortMap`, resolved per model first.
    */
   modelReasoningEffortMap?: Record<string, Record<string, string>>;
-  /** OpenAI-compatible gateway reasoning wire shape. Default sends `reasoning_effort`. */
+  /** Chat gateway reasoning object; also opts custom Responses wires into `reasoning.enabled`. */
   reasoningWireFormat?: "gateway-object";
   /**
    * Model ids that do NOT support a reasoning/thinking parameter. The openai-chat adapter drops
@@ -1116,7 +1138,7 @@ export interface OcxProviderConfig {
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   /** Google tool-schema compatibility policy. Omitted preserves compatible report-only behavior. */
   googleToolSchemaPolicy?: "compatible" | "reject-lossy";
-  /** Vertex AI GCP project id. API keys use it to select the project endpoint; ADC falls back to GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env. */
+  /** Vertex AI GCP project id. API keys use it to select the project endpoint; "auto" resolves each API key's own project. ADC falls back to GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env. */
   project?: string;
   /** Vertex AI location, e.g. "us-central1" or "global". API-key project endpoints default to "global"; ADC falls back to GOOGLE_CLOUD_LOCATION env. */
   location?: string;

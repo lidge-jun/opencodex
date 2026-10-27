@@ -12,6 +12,10 @@ import {
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
+  isModelNotInPlanRefusal,
+  markVerifiedModelNotInPlanResponse,
+  MODEL_NOT_IN_PLAN_CODE,
+  REQUIRED_TOOL_CONTRACT_CODE,
   SPEND_LEDGER_STORAGE_UNAVAILABLE_CODE,
   UNDECLARED_TOOL_CALL_ERROR_CODE,
   type OcxErrorPayload,
@@ -54,6 +58,11 @@ export function formatErrorResponse(
   // survives so the Anthropic translator can classify it instead of folding it into a
   // retryable overload (and so clients see the SSE path's rejection identity).
   if (options?.code === UNDECLARED_TOOL_CALL_ERROR_CODE) error.code = options.code;
+  if (options?.code === REQUIRED_TOOL_CONTRACT_CODE && error.code !== CYBER_POLICY_ERROR_CODE) error.code = options.code;
+  // A plan refusal keeps its wire code so clients can branch on it. The code is not provenance:
+  // run-turn combo children pass an adapter event's own code here, so only the boundary that
+  // verified the refusal marks the envelope (`markVerifiedModelNotInPlanResponse`).
+  if (options?.code === MODEL_NOT_IN_PLAN_CODE) error.code = options.code;
   // Only the allowlisted transport verdicts survive this formatter. Do not forward
   // arbitrary provider codes, and preserve the existing cyber-policy precedence.
   const replayBlocked = error.code !== CYBER_POLICY_ERROR_CODE
@@ -80,6 +89,7 @@ export function formatErrorResponse(
   // and no wait of its own does not stop a client that retries every 429 by default.
   const refusal = isReplayRefusalCode(error.code) && replayBlocked;
   if (refusal) applyReplayRefusalClientHeaders(headers);
+  if (error.code === REQUIRED_TOOL_CONTRACT_CODE && finalStatus === 400) applyReplayRefusalClientHeaders(headers);
   const response = new Response(JSON.stringify({ error }), {
     status: finalStatus,
     headers,
@@ -90,6 +100,23 @@ export function formatErrorResponse(
   // recorder that no upstream produced this status. Carry the narrower marker across too.
   if (refusal) retainReplayRefusal(response);
   return response;
+}
+
+/**
+ * `formatErrorResponse` for an upstream failure that may be the adapter-normalized plan refusal
+ * (#7684). Only a verified refusal (`isModelNotInPlanRefusal` on the response the adapter marked)
+ * keeps `model_not_in_plan` and carries the in-memory mark policy fallback reads; the wire code
+ * alone is never provenance. Every other failure formats exactly as `formatErrorResponse` does.
+ */
+export function formatUpstreamFailureResponse(
+  source: Response,
+  sourceCode: string | undefined,
+  ...[status, type, message, options]: Parameters<typeof formatErrorResponse>
+): Response {
+  if (!isModelNotInPlanRefusal(source, sourceCode)) return formatErrorResponse(status, type, message, options);
+  const failure = formatErrorResponse(status, type, message, { ...options, code: MODEL_NOT_IN_PLAN_CODE });
+  markVerifiedModelNotInPlanResponse(failure);
+  return failure;
 }
 
 /**

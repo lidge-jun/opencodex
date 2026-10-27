@@ -405,22 +405,37 @@ async function runOwnerLookup(file: string, args: string[], timeoutMs: number): 
   return stdout;
 }
 
+export type LoopbackOwnerLookupResult = {
+  kind: "match" | "mismatch" | "lookup_error" | "deadline";
+  elapsedMs: number;
+};
+
 export interface LoopbackOwnerLookupIo {
   platform?: NodeJS.Platform;
+  nowMs?: () => number;
+  scheduleDeadline?: (callback: () => void, timeoutMs: number) => () => void;
   readProc?: (path: string) => Promise<string>;
   listFds?: (path: string) => Promise<string[]>;
   readFdLink?: (path: string) => Promise<string>;
   run?: (file: string, args: string[], timeoutMs: number) => Promise<string>;
 }
 
-/** Async, bounded proof that this PID owns the IPv4 loopback LISTEN socket used by the relay. */
-export async function ownsIpv4LoopbackListener(
+/**
+ * Classify fresh IPv4 loopback LISTEN ownership within the bounded lookup deadline.
+ * Only match proves the expected PID; mismatch, inspection failure and timeout remain distinct.
+ * elapsedMs uses a monotonic clock by default, and no raw OS output is returned.
+ */
+export async function inspectIpv4LoopbackListener(
   port: number,
   expectedPid: number,
   io: LoopbackOwnerLookupIo = {},
-): Promise<boolean> {
+): Promise<LoopbackOwnerLookupResult> {
+  const now = io.nowMs ?? (() => performance.now());
+  const startedAt = now();
+  const result = (kind: LoopbackOwnerLookupResult["kind"]): LoopbackOwnerLookupResult =>
+    ({ kind, elapsedMs: Math.max(0, now() - startedAt) });
   if (!Number.isInteger(port) || port < 1 || port > 65535
-    || !Number.isSafeInteger(expectedPid) || expectedPid < 1) return false;
+    || !Number.isSafeInteger(expectedPid) || expectedPid < 1) return result("mismatch");
   const platform = io.platform ?? process.platform;
   const lookup = async (): Promise<boolean> => {
     if (platform === "linux") {
@@ -458,13 +473,40 @@ export async function ownsIpv4LoopbackListener(
     }
     return false;
   };
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<false>(resolve => {
-    timer = setTimeout(() => resolve(false), OWNER_LOOKUP_TIMEOUT_MS);
+  const scheduleDeadline = io.scheduleDeadline ?? ((callback, timeoutMs) => {
+    const timer = setTimeout(callback, timeoutMs);
     timer.unref?.();
+    return () => clearTimeout(timer);
   });
-  try { return await Promise.race([lookup().catch(() => false), deadline]); }
-  finally { if (timer) clearTimeout(timer); }
+  let cancelDeadline: (() => void) | undefined;
+  const deadline = new Promise<LoopbackOwnerLookupResult["kind"]>(resolve => {
+    cancelDeadline = scheduleDeadline(() => resolve("deadline"), OWNER_LOOKUP_TIMEOUT_MS);
+  });
+  const inspected = lookup().then(
+    matches => matches ? "match" as const : "mismatch" as const,
+    error => {
+      const failure = error as {
+        killed?: boolean; signal?: string | null; code?: unknown; stdout?: unknown; stderr?: unknown;
+      } | null;
+      // lsof exits 1 with no output when no socket matches its selectors.
+      if (platform === "darwin" && failure?.code === 1 && !failure.killed
+        && failure.signal == null && failure.stdout === "" && failure.stderr === "") return "mismatch" as const;
+      // execFile's timeout kills with SIGTERM; other spawn/exit/buffer errors are lookup failures.
+      return failure?.killed === true && failure.signal === "SIGTERM" && failure.code === null
+        ? "deadline" as const : "lookup_error" as const;
+    },
+  );
+  try { return result(await Promise.race([inspected, deadline])); }
+  finally { cancelDeadline?.(); }
+}
+
+/** Boolean compatibility API: only a proven match admits the listener. */
+export async function ownsIpv4LoopbackListener(
+  port: number,
+  expectedPid: number,
+  io: LoopbackOwnerLookupIo = {},
+): Promise<boolean> {
+  return (await inspectIpv4LoopbackListener(port, expectedPid, io)).kind === "match";
 }
 
 /**

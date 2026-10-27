@@ -13,7 +13,7 @@ import { captureProviderApiKeySelection } from "./api-key-selection-capture";
 import { assertProviderDestinationAllowed } from "../lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "../lib/redact";
 import { PROVIDER_REGISTRY, registryEntryForProviderDestination } from "./registry";
-import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts } from "./derive";
+import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts, registryInputModalitiesForDestination } from "./derive";
 import { cloneFastWire } from "./fastwire";
 import { fastSwitchOff } from "./fast-opt-in";
 import {
@@ -21,6 +21,7 @@ import {
   providerSupportsLiveModelDiscovery,
 } from "./static-model-discovery";
 import { resolveModelPolicy } from "./resolved-model-policy";
+import { mapFill, nestedMapFill, stableUnion } from "./resolved-model-policy-merge";
 
 /** Same endpoint modulo surrounding space and trailing slashes — matches `matchBaseUrlChoice`. */
 function isSameEndpoint(a: string, b: string): boolean {
@@ -121,9 +122,21 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     // the reasoning item the upstream answers 400 to. Destination matching refuses templated and
     // overridable base URLs, so this cannot follow a retargeted row, and an explicit value wins.
     const destination = registryEntryForProviderDestination(provider);
+    const inputModalities = provider.inputModalities === undefined
+      ? registryInputModalitiesForDestination(providerName, provider) : undefined;
     return {
       ...provider,
+      ...(inputModalities ? { inputModalities } : {}),
       apiKey: usableResolvedApiKey(provider.apiKey),
+      ...(destination?.modelDefaultReasoningEfforts ? {
+        modelDefaultReasoningEfforts: mapFill(destination.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts)[0],
+      } : {}),
+      ...(destination?.modelReasoningEffortMap ? {
+        modelReasoningEffortMap: nestedMapFill(destination.modelReasoningEffortMap, provider.modelReasoningEffortMap)[0],
+      } : {}),
+      ...(destination?.noStructuredOutputModels?.length ? {
+        noStructuredOutputModels: stableUnion(destination.noStructuredOutputModels, provider.noStructuredOutputModels)[0],
+      } : {}),
       ...(provider.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined
         ? { dropResponsesReasoningItems: destination.dropResponsesReasoningItems }
         : {}),
@@ -172,6 +185,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const noStopModels = staticPolicy.noStopModels;
   const noPenaltyModels = staticPolicy.noPenaltyModels;
   const noJsonSchemaModels = staticPolicy.noJsonSchemaModels;
+  const noStructuredOutputModels = staticPolicy.noStructuredOutputModels;
   const autoToolChoiceOnlyModels = staticPolicy.autoToolChoiceOnlyModels;
   const preserveReasoningContentModels = staticPolicy.preserveReasoningContentModels;
   const requiresReasoningPlaceholderModels = staticPolicy.requiresReasoningPlaceholderModels;
@@ -287,6 +301,11 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.project === undefined && registryEntry.project !== undefined ? { project: registryEntry.project } : {}),
     ...(provider.location === undefined && registryEntry.location !== undefined ? { location: registryEntry.location } : {}),
     ...(provider.contextWindow === undefined && registryEntry.contextWindow !== undefined ? { contextWindow: registryEntry.contextWindow } : {}),
+    // The request path never calls enrichProviderFromRegistry(), so a row saved before the
+    // registry declared a provider-wide modality must inherit it here to reach the vision gate.
+    ...(provider.inputModalities === undefined && registryEntry.inputModalities !== undefined
+      ? { inputModalities: [...registryEntry.inputModalities] }
+      : {}),
     ...((provider.reasoningEfforts === undefined || hasLegacyClinePassReasoningEfforts(providerName, provider))
       && registryEntry.reasoningEfforts !== undefined
       ? { reasoningEfforts: [...registryEntry.reasoningEfforts] }
@@ -301,6 +320,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.chatServiceTier === undefined && registryEntry.chatServiceTier !== undefined ? { chatServiceTier: registryEntry.chatServiceTier } : {}),
     ...(provider.openaiChatEofTolerance === undefined && registryEntry.openaiChatEofTolerance !== undefined
       ? { openaiChatEofTolerance: registryEntry.openaiChatEofTolerance }
+      : {}),
+    ...(provider.foldDeveloperRoleToSystem === undefined && registryEntry.foldDeveloperRoleToSystem !== undefined
+      ? { foldDeveloperRoleToSystem: registryEntry.foldDeveloperRoleToSystem }
       : {}),
     ...(provider.reasoningWireFormat === undefined && registryEntry.reasoningWireFormat !== undefined
       ? { reasoningWireFormat: registryEntry.reasoningWireFormat }
@@ -325,6 +347,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(noStopModels ? { noStopModels } : {}),
     ...(noPenaltyModels ? { noPenaltyModels } : {}),
     ...(noJsonSchemaModels ? { noJsonSchemaModels } : {}),
+    ...(noStructuredOutputModels ? { noStructuredOutputModels } : {}),
     ...(autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels } : {}),
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
     ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),

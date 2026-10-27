@@ -50,7 +50,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   {
     name: "stop",
     usage: "ocx stop [--json]",
-    summary: "Stop the proxy and restore native Codex config.",
+    summary: "Stop the proxy; preserve connected-client integrations, restore native Codex config for standalone owners.",
     details: [
       "--json keeps the stop path unchanged and prints one structured summary document on stdout; human output moves to stderr.",
       "Exit codes are identical with and without --json: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).",
@@ -150,7 +150,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke|reconnect>",
+    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
@@ -158,6 +158,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Status: ocx link status [--json]",
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
       "Reconnect: ocx link reconnect --link-id <id> [--json]",
+      "Cleanup: ocx link cleanup [--link-id <id>] [--json]",
       "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
     ],
   },
@@ -180,13 +181,15 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "sync",
-    usage: "ocx sync [--restart-codex] [--restart-app-server-only]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--restart-codex] [--restart-app-server-only]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
       "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, after catalog/cache writes or a committed configuration change. It ends live conversations.",
       "--restart-app-server-only keeps the narrow behaviour: SIGTERM to matching app-server / code-mode-host processes, desktop app left running. It wins over --restart-codex when both are given.",
       "--restart-desktop-app is a deprecated alias of --restart-codex and prints a notice.",
+      "--expect-link <linkId> syncs only when this machine is a connected Remote Link Child of that link (ocx connect status --json reports link.linkId); --expect-hub-key <apiKeyId> does the same for a hub client's key. The check runs under the lock that chooses the sync path.",
+      "Any other state (disconnected, another link or key, the other client kind, a pending key rotation, connect or disconnect) changes nothing, never syncs local providers, exits 5, and prints {\"phase\":\"child_link_mismatch\"|\"hub_client_mismatch\",\"reason\":...} as the last stderr line. A malformed or repeated flag exits 2.",
     ],
   },
   {
@@ -435,6 +438,17 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "fallback",
+    usage: "ocx fallback <status|off|on|clear|local> [--kind model|provider|all] [--provider <name> | --route <selector> | --device <id|alias>] [--json]",
+    summary: "Turn model and provider fallback off or on per scope, and record per-device local fallback.",
+    details: [
+      "A refused fallback answers fallback_refused with the status of the failure that triggered it, and names the command that allows it.",
+      "Precedence: a device set to off always refuses; otherwise route, then provider, then global; unset allows.",
+      "Rotation among the accounts or keys of one provider pool is not a fallback and is not governed here.",
+      "Live proxy only. On a Remote Link Child, status reads the Home; writes are refused. Run write commands on the Home.",
+    ],
+  },
+  {
     name: "agent",
     usage: "ocx agent <status|injection|effort|subagents|fallback|sidecar> ...",
     summary: "Manage headless multi-agent, roster, effort, injection, and sidecar settings.",
@@ -504,8 +518,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "export",
-    usage: "ocx export --client <qoder|opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|commandcode|prime|aside|raycast|omo|cline|kilo|droid|gentle-shell> [--json] [--out <path>] [--force]",
-    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Command Code, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid, Qoder, Gentle Shell) wired to the running proxy.",
+    usage: "ocx export --client <qoder|qoder-cn|workbuddy|workbuddy-ai|opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|commandcode|prime|aside|raycast|omo|cline|kilo|droid|gentle-shell> [--json] [--out <path>] [--force]",
+    summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Command Code, Prime Agent, Aside, Raycast, omo, Cline, Kilo, Factory Droid, Qoder, Qoder CN, WorkBuddy, WorkBuddy AI, Gentle Shell) wired to the running proxy.",
     details: [
       "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
       "--out <path> writes the native config there and refuses to replace an existing file without --force.",

@@ -219,6 +219,17 @@ Windows에서 Orca shell은 `CODEX_HOME`과 `ORCA_CODEX_HOME`을 Orca의 번들 
 
 전용 provider 모드의 `requires_openai_auth = true`는 Codex App/TUI의 계정 게이트 화면을 네이티브 Codex와 같은 조건으로 맞춥니다. opencodex는 `/v1/responses`도 WebSocket으로 제공합니다. 전용 provider는 `"websockets": true`일 때만 `supports_websockets = true`를 광고합니다. loopback에서는 Codex의 빌트인 provider가 먼저 WebSocket을 시도할 수 있으며, 비활성화된 proxy는 `426`을 반환해서 Codex가 HTTP/SSE로 fallback합니다.
 
+**추론 사용량 표시 보존(2.90.0 이상).** 정식 ChatGPT 경로를 HTTP/SSE로 받는
+클라이언트에는, Bun 런타임이 제공하는 상류 WebSocket 연결 응답의 실제
+`x-reasoning-included` 헤더를 전달합니다. 같은 연결을 재사용하는 요청에서도 유지합니다.
+이 표시는 서버가 보고한 사용량에 이전 추론량이 이미 포함됐음을 Codex에 알립니다.
+첫 Responses 이벤트 전에 받은 메타데이터가 우선하며, 이후 메타데이터는 본문에 남지만
+이미 확정한 응답 헤더를 바꾸지는 못합니다. 없는 표시를 만들어 붙이거나 사용량 숫자를
+수정하지 않습니다. 상류가 표시를 보내지 않는 경우와 Codex 자체의 사용량 상태 관리는
+별도 문제이므로, 이 변경만으로 조기 압축 해결을 보장하지 않습니다. 클라이언트도
+WebSocket으로 연결하면 상류 응답 전에 연결 승인이 끝나므로, 그 승인 헤더에 표시를
+나중에 추가할 수는 없습니다.
+
 네이티브 ChatGPT forward 요청의 로컬 재생 상태가 만료되었거나 없으면 opencodex는
 upstream 요청 전에 `previous_response_not_found`를 반환합니다. Codex WebSocket 클라이언트는
 일반 스트림 재시도 한도 안에서 다시 연결하고, 완료된 도구 호출과 결과를 포함한 현재 보유
@@ -378,6 +389,8 @@ ChatGPT 계정을 추가하거나 재인증할 때 OpenCodex는 일반적으로 
 `ocx account refresh openai`와 `ocx account list openai --quota --refresh`는 사용량만 조회합니다. 모델 검증은 할당량을 사용하므로 사람의 대시보드 세션이 필요합니다. 할당량이 복구되면 `ocx gui`를 열고 **Refresh quotas**를 클릭하세요. 헤드리스 호스트도 브라우저에서 해당 대시보드에 접속해야 하며, 관리자 토큰만으로는 검증할 수 없습니다. 일시 정지된 계정도 검증할 수 있지만 일시 정지를 해제하거나 계정을 선택하지는 않습니다. 모델 인증 실패 표시는 검증 또는 재인증에 성공할 때까지 유지됩니다.
 
 **Codex Set → Multi-auth**에서 **Codex Auth** 제목 줄의 **Codex 크레딧** 스위치를 켜면 메인 계정과 풀 계정의 최근 크레딧 잔액이 Week 바로 아래에 표시됩니다. 기본값은 꺼짐이며 `showCodexCredits`로 저장됩니다. 잔액은 로케일에 맞는 숫자로 표시하고, 응답에 따라 무제한 또는 초과 사용 한도 도달 안내를 표시합니다. 전체 크레딧 한도가 제공되지 않으므로 막대는 백분율이 아닌 사용 가능 상태를 나타냅니다. 스위치는 표시만 제어하며 새 로그인에는 해당 계정의 조회 결과가 필요합니다.
+
+**Use credits after limit**을 허용한 저장 계정은 포함 사용량 한도가 소진되고 크레딧 관측이 3분 이상 지나면 기존 백그라운드 주기에서 잔액을 다시 조회합니다. **Direct** 모드에서도 `codexAccountNamespaces`로 명시적으로 연결한 서브 계정 등이 대상입니다. Direct와 메인/서브 계정 분리를 유지하며, Pool 라우팅을 켜거나 연결되지 않은 계정을 조회하지 않습니다. 일시 정지·재인증 필요 계정은 제외합니다. 메타데이터 조회는 검증 대기 계정을 검증하거나 모델 요청을 보내지 않습니다. 조회 실패 시 재시도 대기를 유지하며 요청에는 여전히 최신의 사용 가능한 크레딧 증거가 필요합니다. 일반 응답의 사용량 헤더는 크레딧 잔액 관측 시각을 갱신하지 않습니다.
 
 별도의 백그라운드 재검증은 기본적으로 꺼져 있습니다. Token Guardian, `openai`의 `proactive` 갱신 정책, `tokenGuardian.codexWarmupEnabled`가 필요하며 등록 검증 대기 계정은 제외합니다.
 

@@ -204,11 +204,13 @@ import type { ReadinessGate } from "../readiness";
 import type { WorkflowRefusalLog } from "../workflow-refusal";
 
 import { readyProtocolMetadata } from "../../remote/protocol";
+import { homeInstanceId, stampServedBy } from "../../remote/served-by";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
 import { withGrokSessionIdentity } from "../../grok/session-identity";
 import { withCallerSessionIdentity } from "../caller-session-identity";
+import { agentAssertionUnsupportedResponse, hasAgentAssertionAuthorization } from "../../lib/authorization-scheme";
 
 export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
 
@@ -370,6 +372,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         : ingress === "unauthenticated-loopback" || ingress === "claude-intercept"
           ? loopbackPolicy()
           : config;
+      // Codex runtime agent assertion_only (Authorization: AgentAssertion) is refused before
+      // admission or routing: it is never a bearer, never an admission secret, and no pool or
+      // routed credential may stand in for it.
+      if (hasAgentAssertionAuthorization(req.headers)) return withCors(agentAssertionUnsupportedResponse(), req, policy);
       if (ingress === "hub-link") {
         const admission = resolveApiAuth(req, policy);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
@@ -380,7 +386,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // the shared table in src/link/management-routes.ts; never reachable on another ingress.
         if (isLinkManagementPath(requestUrl.pathname)) {
           const { handleLinkManagementRequest } = await import("./link-management");
-          return withCors(await handleLinkManagementRequest(req, requestUrl, config, requestManagementApiDeps, managementSessionControl), req, policy);
+          return withCors(await handleLinkManagementRequest(
+            req, requestUrl, config, requestManagementApiDeps, managementSessionControl,
+            admission.kind === "configured" ? admission.keyId : undefined,
+          ), req, policy);
         }
       }
       const url = requestUrl;
@@ -408,11 +417,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
         const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
         const fencedHealth = url.pathname === "/healthz";
+        const fencedInstanceId = fencedHealth ? homeInstanceId() : undefined;
         const response = fencedHealth || readyzPath !== undefined
           ? jsonResponse({
               status: "restart_required",
               service: "opencodex",
               version: VERSION,
+              ...(fencedInstanceId ? { instanceId: fencedInstanceId } : {}),
               uptime: process.uptime(),
               pid: process.pid,
               port: fencedPort,
@@ -623,10 +634,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       if (url.pathname === "/healthz" && req.method === "GET") {
         // service/pid/port let CLI liveness reject foreign 200s and verify pid identity.
         const healthPort = ctx.server.port ?? listenPort;
+        // Opaque Home instance id (src/remote/served-by.ts); omitted until the identity exists.
+        const instanceId = homeInstanceId();
         const response = jsonResponse({
           status: "ok",
           service: "opencodex",
           version: VERSION,
+          ...(instanceId ? { instanceId } : {}),
           uptime: process.uptime(),
           pid: process.pid,
           port: healthPort,
@@ -1290,9 +1304,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             ...(effectiveId !== publicId ? { native_id: publicId } : {}),
             ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
             ...modelCapabilityFields({
+              supportsReasoning: m.supportsReasoning, supportsReasoningEffort: m.supportsReasoningEffort,
+              supportsThinkingToggle: m.supportsThinkingToggle, defaultThinkingEnabled: m.defaultThinkingEnabled,
               reasoningEfforts: m.reasoningEfforts,
-              // contextWindow is already the post-cap effective value; contextCap is the raw
-              // operator knob and over-reports models whose real window sits below it.
+              // Use the post-cap window; the raw contextCap can exceed a model's real window.
               contextWindow: m.contextWindow,
               maxOutputTokens: m.maxOutputTokens,
               inputModalities: m.inputModalities,
@@ -1752,7 +1767,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (audioController) registerTurn(audioController, turnAdmissionLease);
         const acquisition = audioController
           ? clearableDeadline(120_000, AbortSignal.any([req.signal, audioController.signal])) : undefined;
-        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal);
+        const detachClientAbort = turnAdmissionLease.bindAbortSignal(req.signal); // detached at the dial; then close/CLOSED owns release
         const releaseAcquisition = () => {
           detachClientAbort();
           acquisition?.clear();
@@ -1805,6 +1820,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           finally { finalizeLiveRequest(499, { closeReason: "client_cancel" }); }
           return withCors(formatErrorResponse(499, "client_closed_request", "Audio connection canceled"), req, policy);
         }
+        detachClientAbort();
         const upstreamHandshake = await openLiveSidebandUpstream(
           resolved.upstreamWsUrl,
           resolved.headers,
@@ -1873,7 +1889,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(formatErrorResponse(502, "upstream_error", "Audio WebSocket upgrade failed"), req, policy);
         }
         if (upgraded) {
-          detachClientAbort();
           acquisition?.clear();
           finalizeLiveRequest(101);
           return undefined as unknown as Response;
@@ -1977,5 +1992,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
     },
     websocket: createWebsocketHandler(ctx, requestMetrics),
   } as const;
-  return serveOptions;
+  const routeFetch = serveOptions.fetch;
+  // x-opencodex-served-by on GET /v1/models, whichever branch answered (src/remote/served-by.ts).
+  return { ...serveOptions, fetch: async (req: Request, requestServer: Server<WsData>): Promise<Response> =>
+    stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer)) } as const;
 }

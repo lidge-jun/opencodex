@@ -85,10 +85,12 @@ The final native ChatGPT Responses HTTP send in `src/server/responses/fetch-help
 strings of at least 1 MiB as a UTF-8 buffer for Bun upload compatibility. This is a transport copy,
 not a counting allocation or retained continuation. Existing body admission limits still apply;
 the serialization observation keeps its existing lifetime, and nested dispatch reuses the buffer.
-With the opt-in `upstreamRequestCompression`, an eligible body (1 KiB–16 MiB) is instead encoded and
-compressed there by `src/server/responses/request-compression.ts`; the UTF-8 input and coded output
-overlap briefly for that one send and neither is retained. Admission limits and every byte observation
-still measure the uncompressed body.
+With the opt-in `upstreamRequestCompression`, an eligible body (1 KiB–16 MiB) is compressed there by
+`src/server/responses/request-compression.ts`. Gzip passes the original string to `Bun.gzipSync` and
+returns a Buffer view of the coded output, without an explicit full-input UTF-8 Buffer allocation.
+Zstd still encodes a UTF-8 input buffer that briefly overlaps its coded output for that send.
+Neither codec retains these bytes beyond the send. Admission limits and every byte observation
+still measure the uncompressed body; native codec workspace is not a counted JavaScript copy.
 
 ## Raised HTTP body admission
 
@@ -121,7 +123,38 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
-HTTP owners in `src/server/responses/core.ts`, `src/server/chat-completions.ts` and `src/server/claude-messages.ts` pass the request abort signal to `src/lib/translator-budget.ts`. An aborted request releases its owned translator budget even when its response body is never consumed. Abort finalization changes accounting only; the transport keeps ownership of producer cancellation and response terminal precedence. Explicit body cancellation also releases the budget before awaiting upstream reader cancellation. EOF and read errors share the same idempotent finalizer, which removes its abort listener. Responses lifetime wrapping in `src/server/responses/core-lifetime.ts` preserves native, eager-relay, preinspected-response, run-turn and nonreplayable markers, including through an outer serving-account lease. `tests/adapters/translator-budget-lifetime.test.ts` holds cancellation pending and covers abort before wrapping, abort after wrapping, explicit cancellation, marker preservation and successful EOF.
+`src/lib/pinned-http.ts` pauses its socket response when the receiving Web Stream queue fills
+and resumes when the reader asks for more. For gzip and deflate, the final decoded queue also
+gates subsequent socket input even when the decoder would accept more coded bytes.
+The body inactivity timer pauses with local backpressure and re-arms when socket input resumes.
+Cancellation and abort still release a paused connection. Native socket and decoder buffers are
+separate from Web Stream queue accounting: one highly compressed input chunk can expand inside
+the decoder before backpressure stops further socket delivery. Existing coded/decoded `maxBytes`
+checks still apply, but this flow control is not a decoder-allocation or total process-memory ceiling.
+`tests/lib/pinned-http.test.ts` observes actual receiver delivery, repeated pauses, exact resumed
+bytes, pending-read timeouts and cancellation/error teardown.
+
+`src/lib/eventstream-decoder.ts` retains only an incomplete EventStream frame in a geometrically
+grown byte buffer. Fragmentation therefore requires linear aggregate copying; a complete frame in
+one source chunk keeps its source view. Storage grows with received bytes rather than an advertised
+length, and completed carry allocations remain owned by their yielded payloads. The four-byte
+length and twelve-byte prelude are validated before copying subsequent payload bytes, including
+the header-to-frame boundary. The 16 MiB frame and 128 KiB header limits, both CRC checks, truncated
+EOF errors and reader cancellation remain in force. Coalesced chunks may contain multiple valid
+frames whose aggregate exceeds the per-frame cap. `tests/responses/eventstream-fragmentation.test.ts`
+covers copy work, ownership, validation checkpoints and cleanup across split/coalesced input.
+
+The Chat adapter's decoded carry contains only an unfinished line after each drain.
+A network fragment with no newline retains the carry's already-counted UTF-8 size
+instead of splitting and re-encoding the entire growing line. The append and
+residual overlap reservations remain in their original order, including the
+otherwise redundant reservation, so existing cap failures and high-water accounting
+are unchanged. A fragment containing a newline drains through the existing parser.
+Unicode decoder boundaries, CRLF handling, EOF, terminal repairs and call ordering
+retain their contracts. `tests/adapters/openai/openai-chat-parallel-stream.test.ts`
+covers fragmented work scaling and the Unicode/EOF boundary cases.
+
+HTTP owners in `src/server/responses/core.ts`, `src/server/chat-completions.ts` and `src/server/claude-messages.ts` pass the request abort signal to `src/lib/translator-budget.ts`. An aborted request releases its owned translator budget even when its response body is never consumed. Abort finalization changes accounting only; the transport keeps ownership of producer cancellation and response terminal precedence. Explicit body cancellation also releases the budget before awaiting upstream reader cancellation. EOF and read errors share the same idempotent finalizer, which removes its abort listener. Responses lifetime wrapping in `src/server/responses/core-lifetime.ts` preserves native, eager-relay, preinspected-response, run-turn and nonreplayable markers, including through an outer serving-account lease. Both budget and account-lease finalization also carry replay-refusal provenance with `carryReplayRefusal`: deferred logging distinguishes synthetic transport-ambiguous refusals from genuine upstream 429 rate limits without changing the client response or replay policy. `tests/responses/responses-translated-reset.test.ts` covers attribution through each wrapper and their composition. `tests/adapters/translator-budget-lifetime.test.ts` holds cancellation pending and covers abort before wrapping, abort after wrapping, explicit cancellation, marker preservation and successful EOF.
 
 Disposed budgets ignore late call, reservation, charge and observation work; reservations created before disposal cannot resurrect per-turn or aggregate counters. The same Bun contract checks both accounting scopes before any producer cancellation and while an explicit cancellation is pending. Every producer must honor its transport abort link; disposed accounting does not provide a byte cap to work that outlives its request.
 
@@ -138,6 +171,11 @@ cancellation or consumer closure; a buffer-limit failure terminates without anot
 `src/server/sse-payload-rewrite.ts` shares an incremental block buffer with native Chat. It scans
 only new input plus a three-character delimiter prefix and counts consumed blocks rather than
 remaining suffixes. CR, LF and CRLF share partial-event, injection/drop and EOF behavior.
+After an unsuccessful delimiter search, fragments without CR or LF cannot create a delimiter;
+the buffer advances its scan cursor without passing the growing carry to the regex again.
+Queued appends retain scan eligibility until drained. This adds no payload buffer or budget operation.
+Surrogate-boundary accounting caches the final code unit from each fragment rather than indexing
+the growing carry. A failed scan retains that boundary; emptying or clearing the buffer resets it.
 Output admission precedes its single UTF-8 encoding;
 failed enqueue and cancellation release the reservation without re-entering a disposed rewrite.
 Old/new buffer overlap remains charged against the same translator cap.
@@ -324,17 +362,7 @@ The [compaction routing override](responses-failover.md#compaction-routing-overr
 
 `src/lib/sse-decoder.ts` recognizes CR, LF and CRLF line endings, including CRLF split between fetch chunks. Delimiters are consumed before field retention; event/comment ordering, EOF dispatch and translator-budget release remain shared across all three forms. The delimiter search keeps native `indexOf` cursors for the next CR and LF in each decoded chunk, so scanning stays linear for every framing.
 
-Native Chat's optional reasoning capture (`src/server/chat-native-reasoning.ts`) charges retained
-reasoning and tool ids before concatenation and reserves the previous string during replacement.
-Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay.
-Terminal, error and cancellation paths release collector retention; the shared replay cache owns
-its own bounded text after insertion. For a changed replay, native Chat measures the exact
-escaped-JSON net change and checks the final request size (`baseBytes + serializedBytes`)
-against the fixed `maxSerializedBytes` cap before expansion. It then reserves that full size as
-transient `request_copies` against the remaining translator budget before applying replay and
-serializing the request, releasing the reservation in `finally`. Exceeding either limit returns
-413 without truncating history. The post-build request charge remains owned and released by
-the existing retry/key-rotation lifecycle. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior.
+Native Chat's optional reasoning capture (`src/server/chat-native-reasoning.ts`) captures thinking from both `reasoning_content` and `reasoning` properties across SSE stream deltas and non-streaming choices. It charges retained reasoning and tool ids before concatenation and reserves the previous string during replacement. Its separate 256 KiB/64-call bound drops the fallback capture without interrupting the wire relay. Terminal, error and cancellation paths release collector retention; the shared replay cache owns its own bounded text after insertion. In `src/adapters/openai-chat/passthrough.ts`, passthrough body sizing measures `baseBytes` unconditionally against `maxSerializedBytes - replayPlan.serializedBytes` via `jsonUtf8Bytes(transformedBody(), maxSerializedBytes - replayPlan.serializedBytes)` for both unchanged bodies and changed replays. Exceeding the remaining serialized byte budget immediately throws `TranslatorBudgetExceededError("request_copies", maxSerializedBytes)` (HTTP 413), enforcing `maxSerializedBytes` even on non-replay requests without eager string serialization. For a changed replay, native Chat measures the exact escaped-JSON net change, checks final request size (`baseBytes + serializedBytes`) against `maxSerializedBytes`, and reserves that full size as transient `request_copies` against the remaining translator budget before applying replay and serializing the request, releasing the reservation in `finally`. Exceeding either limit returns 413 without truncating history. The post-build request charge remains owned and released by the existing retry/key-rotation lifecycle. The [native continuation contract](../data-planes/inbound-compat.md#native-chat-thinking-continuation) defines replay scope and cache-miss behavior. Model-contract evidence and compatibility policy: Verification date: 2026-10-25. The Reflection/Stealth family default is a defensive compatibility fallback policy based on observed vendor behavior: live testing against Vercel AI Gateway (`reflection-beam`, 2026-10-23) observed rejection of tool-free multi-turn requests with HTTP 400. Because this destination-specific observation is not a vendor guarantee across all possible stealth or reflection hosts, OpenCodex applies this heuristic as a fallback policy while providing explicit operator overrides via `preserveReasoningContentModels` and `requiresReasoningPlaceholderModels`. Continuous CI verification exercises hermetic local fixtures in `tests/responses/chat-native-reasoning-scope.test.ts` (pinning multi-turn non-tool replay, `reasoning` delta capture, and passthrough size checks) without live network requests.
 
 The Opus 5.5 progress normalizer in `src/adapters/anthropic-progress.ts` reserves its one-block
 thinking/signature buffer before concatenation, replaces signatures rather than appending, and

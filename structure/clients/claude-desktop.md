@@ -541,7 +541,7 @@ The account history response can include a [low-confidence effective capacity es
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
@@ -575,7 +575,7 @@ Translated tool results in `src/claude/inbound.ts` retain nonempty string `tool_
 
 ## Claude Code picker descriptions
 
-`src/claude/model-info.ts` gives every readable (`idStyle: "readable"`, Claude Code CLI) `/v1/models` row a `description` that Claude Code 2.1.257 and later shows under the picker entry instead of the generic "From gateway": `Routed by OpenCodex to native <slug>` for native rows and `Routed by OpenCodex to <provider>/<model>` for routed rows. The 1M copy keeps the base description and a Fast sibling appends ` · Fast`. Desktop 3P rows keep the ModelInfo shape without a description. `src/claude/gateway-cache.ts` preserves a string `description` when it refreshes and rewrites the gateway-model cache and drops any other type. `tests/claude-integration/claude-model-info.test.ts` and `tests/claude-integration/claude-gateway-cache.test.ts` cover both.
+Routed discovery projects reasoning support independently of effort rungs: fixed reasoners retain thinking support without controls, toggle-only models expose enabled thinking without adaptive effort, and explicit false capability declarations constrain the projection. Unknown legacy axes retain their ladder-based defaults. `src/claude/model-info.ts` gives every readable (`idStyle: "readable"`, Claude Code CLI) `/v1/models` row a `description` that Claude Code 2.1.257 and later shows under the picker entry instead of the generic "From gateway": `Routed by OpenCodex to native <slug>` for native rows and `Routed by OpenCodex to <provider>/<model>` for routed rows. The 1M copy keeps the base description and a Fast sibling appends ` · Fast`. Desktop 3P rows keep the ModelInfo shape without a description. `src/claude/gateway-cache.ts` preserves a string `description` when it refreshes and rewrites the gateway-model cache and drops any other type. `tests/claude-integration/claude-model-info.test.ts` and `tests/claude-integration/claude-gateway-cache.test.ts` cover both.
 
 ## Claude Code routed aliases and the context window
 

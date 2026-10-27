@@ -278,6 +278,12 @@ preserved, so Luna has `max` but no `ultra`.
 On the wire, routed adapters map or clamp unsupported tiers. For older native models whose real
 ladder stops at `xhigh`, `nativeEffortClamp` maps a direct `max` or an `ultra` selection to `xhigh`
 (for example, GPT-5.5). Sol, Terra, and Luna have a real `max` rung.
+The ChatGPT backend itself accepts `none` through `max`, so a native ChatGPT request never forwards `ultra` as-is:
+native models with a real `max` rung receive `max`, including Astra and GPT-6.1 Sol whose ladders
+list `ultra`, while older models such as GPT-5.5 receive `xhigh` as above. This applies to
+`/v1/responses` and `/v1/chat/completions` alike. The native clamp does not apply to routed model IDs: a routed
+OpenAI Chat passthrough can copy a declared `reasoning_effort: "ultra"` to its provider unchanged,
+while the ordinary translated adapter maps `ultra` to `max`.
 
 Catalog advertisement of the two top tiers is unconditional: `ocx sync` no longer removes `max` or
 `ultra` when the installed Codex binary is too old to offer them — Codex versions without those
@@ -313,6 +319,45 @@ decision controls both catalog metadata and runtime injection, so the fast optio
 advertised where it cannot be honored. An `openai-chat` destination can authorize every otherwise
 eligible model with `chatServiceTier: true`, or authorize only exact models with
 `modelSupportsServiceTier`; Responses routes do not need that extra Chat wire authorization.
+
+### Selecting Flex in Codex
+
+For a routed provider and model verified to accept `service_tier: "flex"`, explicitly
+declare Flex support alongside the existing Fast wire. Merge these fields into the
+**existing** `providers.nanogpt` entry (do not replace its URL or credentials):
+
+```json
+{
+  "modelSupportsServiceTier": { "openai/gpt-6-luna": true },
+  "fastWire": {
+    "kind": "service-tier",
+    "canonicalToWire": { "priority": "priority", "flex": "flex" },
+    "foreignCallerTiers": "verbatim"
+  }
+}
+```
+
+With an eligible `openai-responses` route, the Luna row advertises Standard,
+Fast and Flex in Codex's speed selector. For an `openai-chat` route, also set
+`chatServiceTier: true` **only if** the upstream Chat Completions endpoint supports
+caller-provided service tiers. The `fastWire` mapping is **provider-wide**:
+other service-tier-eligible routed models in the same `providers.nanogpt`
+entry can also advertise Flex when the catalog publishes them as ordinary routed
+rows, even when they are not listed in `modelSupportsServiceTier`. That map is not
+an allowlist excluding other eligible models. Combo-namespace and native-alias
+rows are **not** published with Flex. Verify Flex support for **every** eligible
+ordinary routed model;
+if only Luna supports Flex, configure it in a separate provider entry with
+no other Fast-eligible models. Do not infer Flex support from Fast alone.
+
+Keep OpenCodex's global Fast mode on **Auto** (`fastMode` unset), as forcing
+Fast or Default overrides the caller's Flex choice. After `ocx sync`, refresh the
+Codex model list. Select **Flex** from the speed selector, or use
+`/model <routed-id> --speed=flex` in Codex CLI. This is a **selectable tier**,
+not a per-model forced default: switching models does not force Flex automatically.
+The tier is forwarded as `service_tier: "flex"` and can still be declined by
+the upstream; availability, cost and latency depend on the provider. Neither
+the menu nor a request alone proves which tier was billed.
 
 ### Selecting Ultra Fast in Codex Desktop
 

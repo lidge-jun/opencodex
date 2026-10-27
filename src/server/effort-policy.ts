@@ -232,6 +232,7 @@ interface EffortSnapshot {
   modelId: string;
   reasoningPresent: boolean;
   reasoning: OcxParsedRequest["options"]["reasoning"];
+  thinkingEnabled: boolean | undefined;
   rawEffortPresent: boolean;
   rawEffort: unknown;
 }
@@ -239,7 +240,7 @@ interface EffortSnapshot {
 const effortSnapshots = new WeakMap<OcxParsedRequest, EffortSnapshot>();
 
 /** Capture effective synthetic/combo defaults before final model namespace rewriting.
- * A different destination restores effort alone; intervening summary/options edits survive.
+ * A different destination restores effort and thinking choice; intervening summary edits survive.
  * Credential retries do not change the destination and retain their existing decision.
  */
 export function prepareEffortNormalization(
@@ -255,6 +256,7 @@ export function prepareEffortNormalization(
       modelId: route.modelId,
       reasoningPresent: Object.hasOwn(parsed.options, "reasoning"),
       reasoning: parsed.options.reasoning,
+      thinkingEnabled: parsed.options.thinkingEnabled,
       rawEffortPresent: !!raw?.reasoning && Object.hasOwn(raw.reasoning, "effort"),
       rawEffort: raw?.reasoning?.effort,
     });
@@ -265,6 +267,8 @@ export function prepareEffortNormalization(
   }
   if (previous.reasoningPresent) parsed.options.reasoning = previous.reasoning;
   else delete parsed.options.reasoning;
+  if (previous.thinkingEnabled !== undefined) parsed.options.thinkingEnabled = previous.thinkingEnabled;
+  else delete parsed.options.thinkingEnabled;
   if (raw && previous.rawEffortPresent) {
     if (!raw.reasoning || typeof raw.reasoning !== "object") raw.reasoning = {};
     raw.reasoning.effort = previous.rawEffort;

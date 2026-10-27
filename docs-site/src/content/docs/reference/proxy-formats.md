@@ -20,6 +20,33 @@ response safety still happen at the proxy boundary. Configure the listener and a
 [Configuration](/reference/configuration/); use [Combos](/guides/combos/) when one public model id
 should select among several targets.
 
+## Required tools on buffered native combo routes
+
+A combo checks buffered native `openai-responses` JSON results when `tool_choice` is `required`
+or selects a named function/custom tool. A completed result without the required call becomes
+HTTP 502 with `error.code: "required_tool_contract_unsatisfied"`. The combo may try another eligible
+target before delivering the response, subject to its existing fallback policy and send budget.
+If no eligible target succeeds, the client receives the typed error instead of a false completion.
+A hosted call for a declared capability can satisfy `required`; a mismatched hosted call returns
+HTTP 400 with the same error code and `x-should-retry: false`, since the hosted action may already
+have executed. No fallback occurs in that case. Usage remains recorded.
+Auto/none choices, incomplete results and unknown tool contracts keep their existing behavior.
+This guard covers buffered native combo children. Streaming required-tool enforcement and direct
+native routes are separate scopes; visible output is never replayed. Translated Chat routes have
+their own guard, described next.
+
+## Required tools on translated Chat routes
+
+A translated OpenAI Chat response must contain a complete selected client tool call when
+`tool_choice` is required, names a tool, or uses a required allowed-tool selection. If the upstream
+finishes normally without one, the turn fails with `required_tool_not_called` and preserves usage.
+Already streamed text stays visible; the proxy does not replay the request or switch targets after
+that output. A streamed Responses reply ends with `response.failed`; an admitted buffered Responses
+envelope has `status: "failed"` even when its HTTP status is 200. Check the envelope status.
+Auto/none choices and truncated outcomes keep their existing behavior. This guard covers translated
+Chat client-tool catalogs; catalogs containing proxy-executed sidecars, native passthrough and other
+adapters retain their existing completion rules.
+
 ## MiMo bare tool-call recovery
 
 On translated OpenAI Chat routes, `mimo-v2` and dotted `mimo-v2.*` model IDs can recover a
@@ -89,6 +116,10 @@ WebSocket. An upstream rejection fails the upgrade with 502; a ten-second handsh
 returns 504, and client cancellation returns 499. Bun does not expose the exact upstream handshake status, so an upstream 404/410
 cannot currently be forwarded precisely. A successful connection preserves the initial session
 frames in order. This handshake policy is separate from the Responses WebSocket transport.
+
+When a sideband connection ends, the proxy allows one second for a graceful upstream
+close before terminating an unresponsive transport. It releases the account's active-call
+capacity only after that transport has closed, including when the client upgrade fails.
 
 ## Undeclared tool calls
 
@@ -546,6 +577,18 @@ effort default to `reasoning.summary: "auto"` so thinking streams back as
 `reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
 `detailed`, or `none` wins over `include_reasoning`.
 
+When the model is Claude, the response also carries `reasoning_details` in the same shape
+OpenRouter uses: `{"type": "reasoning.text", "text", "signature", "format": "anthropic-claude-v1"}`
+for each signed thinking block and `{"type": "reasoning.encrypted", "data", ...}` for each redacted
+one, on `message` or as `delta.reasoning_details` (each entry arrives complete in one chunk). Send
+the array back unchanged on the assistant message, next to its `tool_calls`, and Claude keeps its
+reasoning across tool steps. The signature is opaque and is the same value `/v1/messages`
+clients receive. OpenCodex replays it only when the model routes to Anthropic's own API
+(`api.anthropic.com`) as a single route; on any other destination, or when an entry is
+malformed (an unknown type or format, or a missing signature), the turn falls back to the plain
+`reasoning_content` text. An entry whose text or signature was edited is forwarded as is, and
+Anthropic rejects it, so return the array exactly as received.
+
 Structured output is part of that translation: `response_format` with `json_object` or
 `json_schema` is forwarded to routed `openai-chat` models. On `POST /v1/responses` the
 equivalent request field is `text.format`: native Responses routes preserve it in the raw
@@ -741,7 +784,8 @@ upstream (`404`). Both legs carry Codex's `session-id` and `thread-id` headers; 
 account choice is bound to that pair (process-local), so a join that reaches the proxy reuses the
 account that created the call, while Direct mode forwards the caller's current bearer on both legs.
 The relayed client headers are exactly `openai-alpha`, `x-session-id`, `session-id`, `thread-id`,
-`originator`, `x-oai-attestation`, and `x-codex-turn-metadata`
+`originator`, `x-oai-attestation`, `x-codex-turn-metadata`, and `voice-session-id` (the client voice
+session id, separate from the realtime `x-session-id`)
 (`LIVE_CLIENT_PROTOCOL_HEADERS` in `src/server/live.ts`); each is relayed only when the caller
 sent it, and none is invented.
 `Authorization` and the ChatGPT account id are proxy-owned on ChatGPT-backed routes (Pool replaces

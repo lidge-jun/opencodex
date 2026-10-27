@@ -111,9 +111,10 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("isServiceOwnershipError(err)");
     expect(stopFn).toContain("ownershipBlocked = true");
     // Ownership is one reason to skip the restore; others are an inherited obligation whose
-    // proxy could not be confirmed down (#3008) and a sibling runtime, whose shared client
-    // routing belongs to the live proxy it ran beside.
-    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling;");
+    // proxy could not be confirmed down (#3008), a sibling runtime, whose shared client
+    // routing belongs to the live proxy it ran beside, and a connected client, whose routing,
+    // catalog and Grok config belong to its connection and are never written back on start (#7563).
+    expect(stopFn).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
     expect(stopFn).toContain("if (!restoreBlocked) {");
     expect(stopFn).toContain("await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable)");
     expect(restoreFn).toContain("restoreNativeCodexAsync()");
@@ -332,10 +333,11 @@ describe("Grok fence lifecycle wiring", () => {
     const updateSource2 = readFileSync(repoPath("src", "update", "index.ts"), "utf8");
     expect(updateSource2).toContain("teardownOutstanding: pendingTeardownOutstanding()");
     const decisionSource = readFileSync(repoPath("src", "update", "stop-decision.mjs"), "utf8");
-    // The gate has exactly one exemption, and it is the child saying it kept those
-    // receipts on purpose after the Codex history preflight refused (#4718). Anything
-    // else — including a stop that merely exited 0 — still aborts the install.
-    expect(decisionSource).toContain('if (teardownOutstanding && !historyDeferred) return { proceed: false, reason: "teardown-outstanding" };');
+    // The gate has exactly two exemptions, both the child saying it kept its own receipt on
+    // purpose: after the Codex history preflight refused (#4718), and when an update hands
+    // its teardown to the proxy it restarts (#7423). Anything else — including a stop that
+    // merely exited 0 — still aborts the install.
+    expect(decisionSource).toContain('if (teardownOutstanding && !historyDeferred && !handedOver) return { proceed: false, reason: "teardown-outstanding" };');
     expect(decisionSource).toContain("const historyDeferred = status === STOP_HISTORY_DEFERRED_EXIT_CODE;");
     const receiptSource = readFileSync(repoPath("src", "config", "pending-teardown.ts"), "utf8");
     expect(receiptSource).toContain('from "./pending-teardown-names.mjs"');

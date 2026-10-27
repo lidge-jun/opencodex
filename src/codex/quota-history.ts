@@ -92,6 +92,13 @@ export class CodexQuotaHistory {
     return { samples: structuredClone(bucket.samples.slice(-capped)), truncated: bucket.samples.length > capped };
   }
 
+  /** The newest sample's origin, without pruning or clearing: a passive read changes nothing. */
+  peekLatestSource(accountId: string, identity: string | undefined): QuotaHistorySample["source"] | undefined {
+    const bucket = this.accounts.get(accountId);
+    if (!identity || !bucket || bucket.identity !== identity) return undefined;
+    return bucket.samples.at(-1)?.source;
+  }
+
   clear(accountId?: string): number {
     if (accountId === undefined) {
       const count = this.accounts.size;

@@ -3,6 +3,7 @@ import type { OcxProviderConfig } from "../../types";
 import { CODEX_RESPONSES_LITE_HEADER } from "../../codex/forward-transport-headers";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers-destination";
 import { normalizeForwardedClientHeaderName } from "../../lib/provider-client-headers";
+import { AGENT_ASSERTION_HEADER } from "../../lib/authorization-scheme";
 import { openaiResponsesUrl } from "../openai-responses-url";
 
 // Caller credentials are forwarded only to the canonical Codex destination, never by capability.
@@ -69,6 +70,11 @@ export function buildResponsesTransport(provider: OcxProviderConfig, incoming: P
     if (override && mayForwardCallerCredentials) {
       headers.authorization = `Bearer ${override.accessToken}`;
       headers["chatgpt-account-id"] = override.chatgptAccountId;
+    } else if (mayForwardCallerCredentials) {
+      // dual_header runtime assertion: first-party Direct only, beside the caller's own Bearer.
+      // A pool override above never carries it, and non-canonical transports never see it.
+      const assertion = incoming.headers.get(AGENT_ASSERTION_HEADER);
+      if (assertion) headers[AGENT_ASSERTION_HEADER] = assertion;
     }
   } else {
     url = provider.responsesPath === undefined

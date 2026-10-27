@@ -246,7 +246,7 @@ returns the same downstream SSE contract. The canonical `openai` provider uses
 upstream WebSocket by default; `providers.openai.upstreamWebsocket: false` sends
 its streaming turns over HTTP/SSE instead. This explicit choice also makes
 native mid-turn steering and injection unavailable on that provider. It does
-not change the endpoint, credential, or downstream event format.
+not change the endpoint, credential, or downstream event format. The [upstream connection-signal contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314) preserves an actual reasoning-inclusion header for HTTP/SSE clients; it cannot modify a client-facing WebSocket upgrade that already completed.
 Its WSS route checks NO_PROXY first, then selects the
 first non-empty HTTPS_PROXY, https_proxy, ALL_PROXY, or all_proxy value. HTTP_PROXY alone does not
 route WSS. Unsupported or malformed selected proxy values skip the WebSocket attempt and use the
@@ -358,7 +358,7 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Account quota surfaces use [safe probe diagnostics](inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](responses.md) documents this boundary, and native Chat capability stripping applies only for an explicit empty declaration or no-reasoning model; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

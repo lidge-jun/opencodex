@@ -11,6 +11,7 @@ import {
   JEV_DECISION_TIMEOUT_MIN_MS,
 } from "../jev-decision-service";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
+import { JEV_SESSION_PIN_TTL_MIN_MS, JEV_SESSION_PIN_TTL_MAX_MS } from "../../../src/combos/jev-session-pin-config";
 
 /** Localized validation message, with the bounds or the decision-service reason filled in. */
 export function comboDraftErrorText(
@@ -19,6 +20,9 @@ export function comboDraftErrorText(
   draft: ComboItem,
   providers: Readonly<Record<string, JevDecisionRow>>,
 ): string {
+  if (code === "invalidSessionPin") {
+    return t("cws.err.invalidSessionPin", { min: JEV_SESSION_PIN_TTL_MIN_MS, max: JEV_SESSION_PIN_TTL_MAX_MS });
+  }
   if (code === "invalidDecisionTimeout") {
     return t("cws.err.invalidDecisionTimeout", { min: JEV_DECISION_TIMEOUT_MIN_MS, max: JEV_DECISION_TIMEOUT_MAX_MS });
   }

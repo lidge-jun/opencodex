@@ -863,3 +863,80 @@ describe("resolved static model policy parity", () => {
     expect(entry.modelContextWindows?.[MODEL]).toBe(100_000);
   });
 });
+
+describe("independent reasoning policy", () => {
+  const id = "synthetic-reasoner";
+  const entry: ProviderRegistryEntry = {
+    id: "synthetic-reasoner", label: "Synthetic reasoner", adapter: "openai-chat",
+    baseUrl: "https://synthetic.example.test/v1", authKind: "key",
+    reasoningEfforts: ["low", "medium", "high"],
+    modelCapabilities: { [id]: {
+      supportsReasoning: true, supportsThinkingToggle: true, supportsReasoningEffort: false, defaultThinkingEnabled: true,
+    } },
+    thinkingToggleModels: [id],
+  };
+  test("registry axes fill beneath exact operator axes without synthetic strength defaults", () => {
+    const provider: OcxProviderConfig = { adapter: entry.adapter, baseUrl: entry.baseUrl,
+      modelCapabilities: { [id]: { supportsThinkingToggle: false, defaultThinkingEnabled: false } },
+      modelReasoningEfforts: { [id]: ["low", "high"] }, modelDefaultReasoningEfforts: { [id]: "high" } };
+    const policy = resolveModelPolicy({ providerName: "synthetic", modelId: id, provider, registryEntry: entry, transportMatchedRegistry: true });
+    expect(policy.model).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: false,
+      supportsReasoningEffort: false, defaultThinkingEnabled: false, reasoningEfforts: [] });
+    expect(policy.model.defaultReasoningEffort).toBeUndefined();
+    expect(policy.provider.modelReasoningEfforts?.[id]).toEqual(["low", "high"]);
+    expect(policy.provenance.model.supportsThinkingToggle).toBe("operator-capability");
+    expect(policy.provenance.model.supportsReasoningEffort).toBe("registry");
+    expect(entry.modelCapabilities?.[id]?.supportsThinkingToggle).toBe(true);
+  });
+  test.each(["synthetic-reasoner", "SYNTHETIC-REASONER"])("case-varied capability overrides remain authoritative for %s", modelId => {
+    const provider: OcxProviderConfig = { adapter: entry.adapter, baseUrl: entry.baseUrl,
+      modelCapabilities: { [id.toUpperCase()]: { supportsThinkingToggle: false, defaultThinkingEnabled: false } } };
+    const policy = resolveModelPolicy({ providerName: "synthetic", modelId, provider, registryEntry: entry, transportMatchedRegistry: true });
+    expect(policy.model).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: false,
+      supportsReasoningEffort: false, defaultThinkingEnabled: false });
+    expect(policy.provenance.model.supportsThinkingToggle).toBe("operator-capability");
+    expect(policy.provenance.model.supportsReasoningEffort).toBe("registry");
+    expect(Object.keys(policy.provider.modelCapabilities ?? {})).toHaveLength(1);
+    const overlay = resolveModelPolicy({ providerName: "synthetic", modelId, provider, registryEntry: entry,
+      transportMatchedRegistry: true, modelCapabilities: { defaultThinkingEnabled: true } });
+    expect(overlay.model).toMatchObject({ supportsReasoning: true, supportsThinkingToggle: false,
+      supportsReasoningEffort: false, defaultThinkingEnabled: true });
+    expect(entry.modelCapabilities?.[id]?.supportsThinkingToggle).toBe(true);
+    expect(provider.modelCapabilities?.[id.toUpperCase()]).toEqual({ supportsThinkingToggle: false, defaultThinkingEnabled: false });
+  });
+  test("case-folded capability declarations govern discovered rows without changing unknown legacy evidence", () => {
+    const provider: OcxProviderConfig = {
+      adapter: entry.adapter,
+      baseUrl: entry.baseUrl,
+      modelCapabilities: { M: { supportsReasoning: false } },
+    };
+    const discovered = {
+      provider: "synthetic",
+      id: "m",
+      supportsReasoning: true,
+      supportsThinkingToggle: true,
+      supportsReasoningEffort: true,
+      reasoningEfforts: ["low", "high"],
+    };
+    const policy = resolveModelPolicy({ providerName: "synthetic", modelId: "m", provider, registryEntry: entry, transportMatchedRegistry: true });
+    expect(policy.model).toMatchObject({ supportsReasoning: false, supportsThinkingToggle: false, supportsReasoningEffort: false });
+    expect(applyProviderConfigHints("synthetic", provider, discovered)).toMatchObject({
+      supportsReasoning: false,
+      supportsThinkingToggle: false,
+      supportsReasoningEffort: false,
+      reasoningEfforts: [],
+    });
+    expect(applyProviderConfigHints("synthetic", { adapter: entry.adapter, baseUrl: entry.baseUrl }, discovered)).toMatchObject(discovered);
+  });
+  test.each(["operator", "registry"])("%s noReasoningModels remains authoritative over every independent declaration", source => {
+    const provider: OcxProviderConfig = { adapter: entry.adapter, baseUrl: entry.baseUrl,
+      modelCapabilities: { [id]: { supportsThinkingToggle: true } },
+      ...(source === "operator" ? { noReasoningModels: [id] } : {}) };
+    const registryEntry = source === "registry" ? { ...entry, noReasoningModels: [id] } : entry;
+    const policy = resolveModelPolicy({ providerName: "synthetic", modelId: id, provider, registryEntry, transportMatchedRegistry: true });
+    expect(policy.model).toMatchObject({ supportsReasoning: false, supportsThinkingToggle: false,
+      supportsReasoningEffort: false, defaultThinkingEnabled: false, reasoningEfforts: [] });
+    expect(policy.provenance.model).toMatchObject({ supportsReasoning: source, supportsThinkingToggle: source,
+      supportsReasoningEffort: source, defaultThinkingEnabled: source });
+  });
+});

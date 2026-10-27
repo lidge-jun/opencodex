@@ -11,6 +11,7 @@ import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-r
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
+import { fallbackPolicyError } from "./schema/fallback-policy";
 import type { OcxConfig } from "../types";
 import { anthropicAccountPoolConfigError, anthropicOAuthInstanceConfigError, anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
 import { configReasoningPinsConfigError } from "./provider-validation";
@@ -145,6 +146,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (blockedModelRedirectsError(rawParsed)) warnings.push("blockedModelRedirects ignored: expected a map of nonempty model keys to nonempty string targets");
   if (nativeReasoningRetentionConfigError(rawParsed)) warnings.push("nativeReasoningRetention ignored: expected only optional boolean modelSwitch and accountSwitch fields; both remain off");
   if (mainAccountHardLockFallbackError(rawParsed)) warnings.push("codexMainAccountHardLockFallback ignored: expected a nonblank model selector and an optional declared reasoningEffort");
+  if (fallbackPolicyError(rawParsed)) warnings.push("fallback partly ignored: expected boolean model/provider switches, providers/routes/devices maps of them, and devices.<id>.localFallback; ignored leaves keep today's fallback behavior");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
   if (quotaAutoRefreshWarning) warnings.push(quotaAutoRefreshWarning);
   if (rawEffort !== undefined && !isClaudeSubagentEffort(rawEffort)) {
@@ -729,6 +731,9 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   const anthropicError = anthropicOAuthInstanceConfigError(value) ?? anthropicAccountPoolConfigError(value) ?? anthropicSidecarConfigError(value);
   if (anthropicError) return { ok: false, error: anthropicError };
   const boundaryError = blockedModelRedirectsError(value)
+    // OCX-11: the read schema degrades a malformed fallback leaf to absent, which would silently
+    // drop a refusal on the next whole-config save; the write boundary rejects it instead.
+    ?? fallbackPolicyError(value)
     ?? nativeReasoningRetentionConfigError(value)
     ?? mainAccountHardLockFallbackError(value)
     ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)

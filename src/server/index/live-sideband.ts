@@ -184,6 +184,19 @@ function finalizeLiveSideband(ws: ServerWebSocket<WsData>, upstream?: WebSocket)
   finally { releaseLiveSidebandAdmission(ws); }
 }
 
+function forceCloseLiveSidebandUpstream(upstream: WebSocket): void {
+  // Bun 1.4.4 waits for the peer's closing handshake; another close() while
+  // CLOSING does not finish it. Stop the transport after the graceful window,
+  // but leave admission release to the close event or an observed CLOSED state.
+  try {
+    const socket = upstream as WebSocket & { terminate?: () => void };
+    if (typeof socket.terminate === "function") socket.terminate();
+    else upstream.close(1000, "upstream close timeout");
+  } catch {
+    /* retain ownership until transport closure is confirmed */
+  }
+}
+
 function armLiveSidebandCloseFallback(ws: ServerWebSocket<WsData>, upstream: WebSocket): void {
   if (ws.data.liveCloseFallback !== undefined) return;
   ws.data.liveCloseFallback = setTimeout(() => {
@@ -193,13 +206,7 @@ function armLiveSidebandCloseFallback(ws: ServerWebSocket<WsData>, upstream: Web
       finalizeLiveSideband(ws, upstream);
       return;
     }
-    // A close frame was already sent below. Retry once, but never surrender
-    // native-main ownership while the authenticated transport remains live.
-    try {
-      upstream.close(1000, "upstream close timeout");
-    } catch {
-      /* upstream is already unusable */
-    }
+    forceCloseLiveSidebandUpstream(upstream);
     // Some implementations transition synchronously without delivering the
     // close event. That is still an observed CLOSED transport and is safe to
     // finalize. CONNECTING/CLOSING peers keep the lease so profile switching
@@ -238,17 +245,13 @@ export function closeLiveSidebandBeforeUpgrade(
       releaseOnce();
       return;
     }
-    try {
-      upstream.close(1000, "upstream close timeout");
-    } catch {
-      /* retain ownership until CLOSED is observed */
-    }
+    forceCloseLiveSidebandUpstream(upstream);
     if ((upstream.readyState as number) === 3) releaseOnce();
   }, LIVE_SIDEBAND_CLOSE_FALLBACK_MS);
   try {
     upstream.close(code, reason);
   } catch {
-    /* the bounded fallback retries without releasing ownership */
+    /* the bounded fallback stops the transport before releasing ownership */
   }
   if ((upstream.readyState as number) === 3) releaseOnce();
 }
@@ -272,12 +275,12 @@ export function closeLiveSideband(ws: ServerWebSocket<WsData>, code = 1000, reas
     // The sideband holds a native-main admission lease. Do not release it just
     // because the downstream left: its authenticated upstream remains live
     // until the close event arrives or the transport is observed CLOSED. The
-    // bounded fallback only retries close; it does not release ownership.
+    // bounded fallback terminates the transport; it cannot release a live lease.
     armLiveSidebandCloseFallback(ws, upstream);
     try {
       upstream.close(code, reason);
     } catch {
-      /* the fallback retries close without releasing ownership */
+      /* the fallback stops the transport without releasing a live lease */
     }
   }
   try {
