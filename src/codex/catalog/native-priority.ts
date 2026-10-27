@@ -1,6 +1,7 @@
 import { discoveredNativeOpenAiModels } from "./native-models";
 import { UPSTREAM_NATIVE_ENTRIES } from "./metadata";
 import type { RawEntry } from "./parsing";
+import { isPlainObject } from "../../lib/plain-data";
 
 // Private provenance, like opencodex_spawn_priority: Codex ignores unknown fields.
 // This is always the unbanded source rank, independent of picker/guidance history.
@@ -17,8 +18,9 @@ function validSourcePriority(value: unknown): value is number {
     && value >= 0 && value <= NATIVE_SOURCE_PRIORITY_MAX;
 }
 
-export function retainedNativeSourcePriorities(rows: readonly RawEntry[]): Map<string, unknown> {
-  return new Map(rows.flatMap(row => typeof row.slug === "string" && !row.slug.includes("/")
+export function retainedNativeSourcePriorities(rows: readonly unknown[]): Map<string, unknown> {
+  return new Map(rows.flatMap(row => isPlainObject(row) && typeof row.slug === "string" && !row.slug.includes("/")
+    && validSourcePriority(row[OCX_NATIVE_SOURCE_PRIORITY_FIELD])
     ? [[row.slug, row[OCX_NATIVE_SOURCE_PRIORITY_FIELD]] as const] : []));
 }
 

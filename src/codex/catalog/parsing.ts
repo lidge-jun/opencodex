@@ -1,4 +1,5 @@
 import type { VendorContextInference } from "./vendor-context";
+import { isPlainObject } from "../../lib/plain-data";
 import { isCodexControlPlaneModel } from "../control-plane-models";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -288,7 +289,10 @@ export function readConfiguredDefaultModel(): string | null {
 export function parseCatalogJson(raw: string): RawCatalog | null {
   try {
     const cat = JSON.parse(raw);
-    return (cat && Array.isArray(cat.models)) ? cat : null;
+    if (!cat || !Array.isArray(cat.models)) return null;
+    // Optional disk catalogs may contain malformed rows; validate before any consumer dereferences them.
+    cat.models = cat.models.filter((row: unknown) => isPlainObject(row) && typeof row.slug === "string");
+    return cat;
   } catch { return null; }
 }
 
@@ -969,7 +973,7 @@ export function readNativeBaseline(catalogPath: string): Map<string, number> {
   const backup = readCatalogBackup(catalogPath);
   const out = new Map<string, number>();
   for (const e of backup?.models ?? []) {
-    if (typeof e.slug === "string" && !e.slug.includes("/") && typeof e.priority === "number") {
+    if (typeof e.slug === "string" && !e.slug.includes("/") && typeof e.priority === "number" && Number.isFinite(e.priority)) {
       out.set(e.slug, e.priority);
     }
   }

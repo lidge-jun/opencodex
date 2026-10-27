@@ -86,3 +86,62 @@ test("without descriptor or baseline exact-slug source beats snapshot across liv
   await checkSurfaces(config(slug), slug, 104, 3);
   expect(readFileSync(catalogBackupPathFor(catalogPath), "utf8")).toBe("{corrupt");
 });
+
+for (const models of [[null, 3, { slug: 5 }], { slug: "gpt-5.6-sol", priority: 1 }]) {
+  test(`live HTTP ignores structurally malformed optional backup ${JSON.stringify(models)}`, async () => {
+    const slug = "gpt-5.6-sol";
+    const next = config(slug);
+    saveConfig(next);
+    writeFileSync(catalogPath, JSON.stringify({ models: [upstreamNativeEntry(slug)] }), "utf8");
+    const server = startServer(0);
+    try {
+      const url = new URL("/v1/models?client_version=0.160.0", server.url);
+      const withoutBackup = await fetch(url);
+      expect(withoutBackup.status).toBe(200);
+      const expected = await withoutBackup.json();
+      const activeBefore = readFileSync(catalogPath, "utf8");
+      const backup = JSON.stringify({ models });
+      writeFileSync(catalogBackupPathFor(catalogPath), backup, "utf8");
+      const response = await fetch(url);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(expected);
+      expect(readFileSync(catalogPath, "utf8")).toBe(activeBefore);
+      expect(readFileSync(catalogBackupPathFor(catalogPath), "utf8")).toBe(backup);
+    } finally { await server.stop(true); }
+  });
+}
+
+test("live HTTP skips malformed active native rows while retaining valid exact-slug provenance", async () => {
+  const slug = "gpt-5.6-sol";
+  saveConfig(config(slug));
+  const native = { ...upstreamNativeEntry(slug)!, priority: 104, [SOURCE]: 3 };
+  writeFileSync(catalogPath, JSON.stringify({ models: [native] }), "utf8");
+  const server = startServer(0);
+  try {
+    const url = new URL("/v1/models?client_version=0.160.0", server.url);
+    const clean = await fetch(url);
+    expect(clean.status).toBe(200);
+    const expected = await clean.json() as { models: RawEntry[] };
+    expect(expected.models.find(row => row.slug === slug)?.[SOURCE]).toBe(3);
+    const malformed = JSON.stringify({ models: [null, 3, [], { slug: 5 }, native] });
+    writeFileSync(catalogPath, malformed, "utf8");
+    const response = await fetch(url);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(expected);
+    expect(readFileSync(catalogPath, "utf8")).toBe(malformed);
+  } finally { await server.stop(true); }
+});
+
+test("retained sync ignores malformed backup rows and preserves the backup bytes", async () => {
+  const slug = "gpt-5.6-sol";
+  const native = upstreamNativeEntry(slug)!;
+  const next = config(slug);
+  saveConfig(next);
+  writeFileSync(catalogPath, JSON.stringify({ models: [native] }), "utf8");
+  const backup = JSON.stringify({ models: [null, 3, [], { slug: 5 }, { ...native, priority: 9 }] });
+  writeFileSync(catalogBackupPathFor(catalogPath), backup, "utf8");
+  const result = await syncCatalogModels(next, { allowWhenDesiredDisabled: true });
+  expect(result.refreshOutcome).toBe("committed");
+  expect(readRows(catalogPath).find(row => row.slug === slug)?.priority).toBe(110);
+  expect(readFileSync(catalogBackupPathFor(catalogPath), "utf8")).toBe(backup);
+});

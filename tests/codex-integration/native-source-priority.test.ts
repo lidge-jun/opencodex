@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCatalogEntriesFromObservedState, mergeCatalogEntriesFromObservedState } from "../../src/codex/catalog/build-entries";
 import { deriveEntry } from "../../src/codex/catalog/derive-entry";
 import { setConfiguredNativeOpenAiModels, setDiscoveredNativeOpenAiModels, resetConfiguredNativeOpenAiModelsForTests } from "../../src/codex/catalog/native-models";
-import type { RawEntry } from "../../src/codex/catalog/parsing";
+import { catalogBackupPathFor, parseCatalogJson, readNativeBaseline, type RawEntry } from "../../src/codex/catalog/parsing";
+import { retainedNativeSourcePriorities } from "../../src/codex/catalog/native-priority";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // Literal wire key lets these behavioral regressions run against the pre-fix tree too.
@@ -132,4 +133,37 @@ test("unfeatured baseline nine is assigned after upstream derivation and overrid
     multiAgentV2Enabled: false, nativeSource: { baseline: new Map([["gpt-5.6-sol", 9]]), retainedBySlug: new Map([["gpt-5.6-sol", 3]]) } });
   expect(get(rows, "gpt-5.6-sol").priority).toBe(9);
   expect(get(rows, "gpt-5.6-sol")[SOURCE]).toBe(9);
+});
+
+test("baseline skips malformed backup rows and nonnumeric priorities without writing", () => {
+  const catalogPath = join(home, "catalog.json");
+  const backupPath = catalogBackupPathFor(catalogPath);
+  const backup = JSON.stringify({ models: [null, 3, [], { slug: 5, priority: 1 },
+    { slug: ids[0], priority: "3" }, { slug: ids[1], priority: 8 }, { slug: "fixture/routed", priority: 2 }] });
+  writeFileSync(backupPath, backup, "utf8");
+  expect([...readNativeBaseline(catalogPath)]).toEqual([[ids[1], 8]]);
+  expect(readFileSync(backupPath, "utf8")).toBe(backup);
+});
+
+for (const models of [[null, 3, [], { slug: 5 }], {}, null, "unavailable"]) {
+  test(`wholly unusable backup yields empty baseline ${JSON.stringify(models)}`, () => {
+    const catalogPath = join(home, "catalog.json");
+    const backup = JSON.stringify({ models });
+    writeFileSync(catalogBackupPathFor(catalogPath), backup, "utf8");
+    expect([...readNativeBaseline(catalogPath)]).toEqual([]);
+    expect(readFileSync(catalogBackupPathFor(catalogPath), "utf8")).toBe(backup);
+  });
+}
+
+test("catalog parsing keeps valid rows and wrapper fields while discarding malformed identities", () => {
+  const native = row(ids[0]!, 3);
+  expect(parseCatalogJson(JSON.stringify({ version: 7, models: [null, 3, [], { slug: 5 }, native] })))
+    .toEqual({ version: 7, models: [native] });
+});
+
+test("retained provenance skips malformed rows and invalid source priorities", () => {
+  const rows = [null, 3, [], { slug: 5 }, { slug: ids[0], [SOURCE]: 3 },
+    ...["8", -1, 1.5, 1001, null].map(value => ({ slug: ids[1], [SOURCE]: value })),
+    { slug: "fixture/routed", [SOURCE]: 2 }];
+  expect([...retainedNativeSourcePriorities(rows)]).toEqual([[ids[0], 3]]);
 });
