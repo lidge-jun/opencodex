@@ -4,6 +4,7 @@ import { createPhysicalSendReporter, rebindPhysicalSend } from "../../lib/reques
 import { createInferenceSendBudget } from "../inference/context";
 import { unboundPoolSpendRefusalResponse } from "../workflow-refusal";
 import { capturePoolQuotaWriter } from "../../codex/account-store";
+import { confirmMainQuotaAuthentication } from "../../codex/main-account-cache";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
 import { previewXaiOauthWireModel } from "./core-normalize";
@@ -1601,6 +1602,8 @@ export async function handleResponsesCompact(
       }
     }
     // Capture the final serving account as well as an earlier rejected account, once per response.
+    const mainWriter = outcomeCtx.kind === "main-pool" ? outcomeCtx.mainQuotaWriter : outcomeCtx.kind === "main" ? outcomeCtx.mainQuotaDispatch?.writer : undefined;
+    if (upstream.ok && mainWriter) confirmMainQuotaAuthentication(mainWriter);
     if (outcomeCtx.kind === "pool") {
       const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/quota");
       applyAccountQuotaFromUpstreamHeaders(outcomeCtx.accountId, upstream.headers, outcomeCtx.writerGeneration,

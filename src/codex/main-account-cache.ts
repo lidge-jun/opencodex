@@ -4,6 +4,8 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { codexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import type { StoredAccountQuota } from "./quota-types";
 import { truncateRetainedUtf8 } from "../lib/admission";
+import { resolveCodexHomeDir } from "./home";
+import { confirmNativeMainAuthentication, nativeMainAuthenticationIsCurrent, nativeMainBearerAllowed, nativeMainRefusals, type NativeMainAuthentication } from "./native-main-refusals";
 
 const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 
@@ -22,7 +24,7 @@ let cachedMainCredentialPresence: boolean | null = null;
 let mainAccountIdentityGeneration = 0;
 let observedMainQuotaIdentityKey: string | undefined;
 const mainQuotaCredentialKey = randomBytes(32);
-let mainQuotaCredential: { bearerHmac: Buffer; writer: MainQuotaWriter } | undefined;
+let mainQuotaCredential: { bearerHmac: Buffer; writer: MainQuotaWriter; authentication: NativeMainAuthentication } | undefined;
 let mainQuotaCredentialGeneration = 0;
 let mainDecisionCredentialUsable = true;
 // Advisory-only generation for the decision row and its writers. It follows every core credential
@@ -46,6 +48,15 @@ export function getMainQuotaCredentialGeneration(): number { return mainQuotaCre
 
 export type MainQuotaWriter = Readonly<{ identityKey: string; identityGeneration: number }>;
 const decisionWriterGenerations = new WeakMap<MainQuotaWriter, number>();
+const writerAuthentications = new WeakMap<MainQuotaWriter, NativeMainAuthentication>();
+const writerCredentialGenerations = new WeakMap<MainQuotaWriter, number>();
+
+/** Called only for an upstream HTTP 2xx, never a local read or projected WS response. */
+export function confirmMainQuotaAuthentication(writer: MainQuotaWriter): boolean {
+  const proof = writerAuthentications.get(writer);
+  return !!proof && writerCredentialGenerations.get(writer) === mainQuotaCredentialGeneration
+    && isMainQuotaWriterLive(writer) && confirmNativeMainAuthentication(proof);
+}
 /** Return the credential generation a main quota writer was captured under, or undefined once that writer is stale or its credential generation has moved. */
 export function mainDecisionQuotaWriterGeneration(writer: MainQuotaWriter): number | undefined {
   const generation = decisionWriterGenerations.get(writer);
@@ -76,21 +87,29 @@ export function captureMainQuotaWriter(accountId: string): MainQuotaWriter | und
   const identityKey = mainQuotaIdentityKey(accountId);
   if (identityKey !== observedMainQuotaIdentityKey) return undefined;
   const writer = { identityKey, identityGeneration: mainAccountIdentityGeneration };
+  if (mainQuotaCredential) writerAuthentications.set(writer, mainQuotaCredential.authentication);
+  if (mainQuotaCredential) writerCredentialGenerations.set(writer, mainQuotaCredentialGeneration);
   if (mainQuotaCredential) decisionWriterGenerations.set(writer, mainDecisionGeneration);
   return writer;
 }
 
 /** Credential material must come from an already-owned read, never an incoming request. */
 export function observeMainQuotaCredential(accessToken: string, accountId: string): MainQuotaWriter | undefined {
+  if (!nativeMainBearerAllowed(accessToken)) return undefined;
+  const authentication = nativeMainRefusals.capture(resolveCodexHomeDir(), accessToken);
   const writer = captureMainQuotaWriter(accountId);
-  if (!accessToken || !writer) return undefined;
+  if (!accessToken || !writer || !authentication) return undefined;
+  writerAuthentications.set(writer, authentication);
   const bearerHmac = createHmac("sha256", mainQuotaCredentialKey).update(accessToken).digest();
   if (!mainQuotaCredential || !isMainQuotaWriterLive(mainQuotaCredential.writer)
     || !timingSafeEqual(bearerHmac, mainQuotaCredential.bearerHmac)) { mainQuotaCredentialGeneration += 1; mainDecisionGeneration += 1; }
-  mainQuotaCredential = { bearerHmac, writer };
+  mainQuotaCredential = { bearerHmac, writer, authentication };
+  writerCredentialGenerations.set(writer, mainQuotaCredentialGeneration);
   mainDecisionCredentialFresh = true;
   publishMainDecisionRoster(true);
   const result = { ...writer };
+  writerAuthentications.set(result, authentication);
+  writerCredentialGenerations.set(result, mainQuotaCredentialGeneration);
   decisionWriterGenerations.set(result, mainDecisionGeneration);
   return result;
 }
@@ -104,8 +123,10 @@ export function matchesMainQuotaCredential(accessToken: string, effectiveAccount
 }
 
 export function isMainQuotaWriterLive(writer: MainQuotaWriter): boolean {
+  const proof = writerAuthentications.get(writer);
   return writer.identityKey === observedMainQuotaIdentityKey
-    && writer.identityGeneration === mainAccountIdentityGeneration;
+    && writer.identityGeneration === mainAccountIdentityGeneration
+    && (!proof || nativeMainAuthenticationIsCurrent(proof));
 }
 
 /** Proof that a dispatch used the observed main credential; process-local, never persisted. */

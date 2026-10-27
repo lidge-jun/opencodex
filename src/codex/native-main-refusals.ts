@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto";
+import { resolveCodexHomeDir } from "./home";
 
 const MAX_HOMES = 8;
 const MAX_FINGERPRINTS = 4;
-type HomeState = { observed?: string; refused: boolean; unknown: boolean; fingerprints: Set<string> };
+type HomeState = { observed?: string; refused: boolean; unknown: boolean; fingerprints: Set<string>; generation: number };
+export type NativeMainAuthentication = Readonly<{ home: string; fingerprint: string; generation: number }>;
 
 /** Bounded process-local metadata only. Losing refusal history always strengthens admission. */
 export class NativeMainRefusals {
   private readonly homes = new Map<string, HomeState>();
   private evictedRefusal = false;
+  private generation = 0;
 
   private state(home: string): HomeState {
     const existing = this.homes.get(home);
@@ -19,7 +22,7 @@ export class NativeMainRefusals {
       if (oldest[1].refused) this.evictedRefusal = true;
       this.homes.delete(oldest[0]);
     }
-    const state: HomeState = { refused: this.evictedRefusal, unknown: this.evictedRefusal, fingerprints: new Set() };
+    const state: HomeState = { refused: this.evictedRefusal, unknown: this.evictedRefusal, fingerprints: new Set(), generation: ++this.generation };
     this.homes.set(home, state);
     return state;
   }
@@ -35,6 +38,7 @@ export class NativeMainRefusals {
 
   refuse(home: string, bearer?: string): void {
     const state = this.state(home);
+    state.generation = ++this.generation;
     state.refused = true;
     const candidates = [state.observed, bearer ? fingerprint(bearer) : undefined];
     for (const candidate of candidates) {
@@ -49,18 +53,39 @@ export class NativeMainRefusals {
     if (state.fingerprints.size === 0) state.unknown = true;
   }
 
-  /** Remember an accepted owned RPC; the caller verifies identity for refusal recovery. */
+  /** Read observations remember candidates; they never recover a refused home. */
   observe(home: string, bearer: string): void {
     const state = this.state(home);
     state.observed = fingerprint(bearer);
+  }
+
+  capture(home: string, bearer: string): NativeMainAuthentication | undefined {
+    const state = this.state(home);
+    if (this.refuses(home, bearer)) return undefined;
+    return { home, fingerprint: fingerprint(bearer), generation: state.generation };
+  }
+
+  current(proof: NativeMainAuthentication): boolean {
+    const state = this.homes.get(proof.home);
+    return !!state && state.generation === proof.generation && !state.unknown
+      && !state.fingerprints.has(proof.fingerprint);
+  }
+
+  /** Only a successful upstream exchange with this exact pre-dispatch candidate may recover. */
+  authenticated(proof: NativeMainAuthentication): boolean {
+    if (!this.current(proof)) return false;
+    const state = this.homes.get(proof.home)!;
+    state.observed = proof.fingerprint;
     state.refused = false;
     state.unknown = false;
     state.fingerprints.clear();
+    return true;
   }
 
   /** Recovery authority: a committed, identity-checked native-main device login. */
   verifiedLogin(home: string): void {
     const state = this.state(home);
+    state.generation = ++this.generation;
     state.observed = undefined;
     state.refused = false;
     state.unknown = false;
@@ -73,3 +98,16 @@ function fingerprint(bearer: string): string {
 }
 
 export const nativeMainRefusals = new NativeMainRefusals();
+
+/** Common admission boundary for every owned main file/keyring bearer reader. */
+export function nativeMainBearerAllowed(bearer: string, home = resolveCodexHomeDir()): boolean {
+  return !nativeMainRefusals.refuses(home, bearer);
+}
+
+export function nativeMainAuthenticationIsCurrent(proof: NativeMainAuthentication): boolean {
+  return proof.home === resolveCodexHomeDir() && nativeMainRefusals.current(proof);
+}
+
+export function confirmNativeMainAuthentication(proof: NativeMainAuthentication): boolean {
+  return nativeMainAuthenticationIsCurrent(proof) && nativeMainRefusals.authenticated(proof);
+}

@@ -21,6 +21,8 @@ import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
+import { getValidMainAccountToken } from "../../src/codex/main-account";
+import { nativeMainRefusals } from "../../src/codex/native-main-refusals";
 
 const KEY = "ocx_data_audio_test_client";
 const originalFetch = globalThis.fetch;
@@ -102,6 +104,7 @@ afterEach(async () => {
   clearMainAccountInfoCache();
   resetMainCodexAccountIdentityTrackingForTests();
   resetLifecycleDrainStateForTests();
+  nativeMainRefusals.verifiedLogin(codex.path);
   codex.restore();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -328,6 +331,33 @@ describe("standalone transcription API", () => {
     } finally {
       nativeMainRefresh.setNativeMainRefreshResolutionForTests(null);
       authStatus.mockRestore();
+    }
+  });
+
+  test.each([false, true])("stored Direct audio honors refusal until authenticated successor (successor=%s)", async successor => {
+    nativeMainRefresh.setNativeMainRefreshResolutionForTests({ mode: "codex", configured: "auto", reason: "codex-compatible", command: "/fake/codex", version: "0.162.1" });
+    const bearer = fakeChatGptJwt({ chatgpt_account_id: "fixture-refused-audio" });
+    try {
+      await getValidMainAccountToken({ codexAuthStatus: async () => ({ authMethod: "chatgpt", authToken: bearer, requiresOpenaiAuth: true }) });
+      await expect(getValidMainAccountToken({ codexAuthStatus: async () => ({ authMethod: "chatgpt", authToken: null, requiresOpenaiAuth: true }) })).rejects.toMatchObject({ reason: "reauth" });
+      const selected = successor ? fakeChatGptJwt({ chatgpt_account_id: "fixture-refused-audio", jti: "successor" }) : bearer;
+      writeFileSync(join(codex.path, "auth.json"), JSON.stringify({ tokens: { access_token: selected, account_id: "fixture-refused-audio" } }));
+      const cfg = config();
+      cfg.defaultProvider = "openai";
+      cfg.providers = { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" } };
+      saveConfig(cfg);
+      respond = req => {
+        expect(nativeMainRefusals.has(codex.path)).toBe(true);
+        expect(req.headers.get("authorization")).toBe(`Bearer ${selected}`);
+        return Response.json({ text: "synthetic successor transcript" });
+      };
+      const response = await request();
+      await response.text();
+      expect(response.status).toBe(successor ? 200 : 401);
+      expect(captured).toHaveLength(successor ? 1 : 0);
+      expect(nativeMainRefusals.has(codex.path)).toBe(!successor);
+    } finally {
+      nativeMainRefresh.setNativeMainRefreshResolutionForTests(null);
     }
   });
 

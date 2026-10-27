@@ -136,6 +136,8 @@ process.stdin.on("data", chunk => {
 let root: string;
 let home: string;
 let previousCodexHome: string | undefined;
+let refusalHomes: Map<string, unknown>;
+let refusalEvicted: boolean;
 const touchedEnv = ["OCX_FAKE_CODEX_SCENARIO", "OCX_FAKE_CODEX_LOG", "OCX_FAKE_CODEX_TOKEN"] as const;
 
 function fakeCodex(): { command: string; logPath: string } {
@@ -159,6 +161,8 @@ function seedAuth(accessToken: string, refreshToken = "codex-owned-grant"): stri
 const expired = () => fakeChatGptJwt("acct-main", { exp: Math.floor(Date.now() / 1000) - 60 });
 
 beforeEach(() => {
+  refusalHomes = new Map(Reflect.get(nativeMainRefusals, "homes"));
+  refusalEvicted = Reflect.get(nativeMainRefusals, "evictedRefusal");
   root = mkdtempSync(join(tmpdir(), "ocx-native-refresh-mode-"));
   home = join(root, "codex-home");
   mkdirSync(home);
@@ -167,6 +171,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  Reflect.set(nativeMainRefusals, "homes", refusalHomes);
+  Reflect.set(nativeMainRefusals, "evictedRefusal", refusalEvicted);
   setNativeMainRefreshResolutionForTests(null);
   for (const name of touchedEnv) delete process.env[name];
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -763,10 +769,12 @@ describe("main account in codex refresh mode (#2999)", () => {
     status = { authMethod: "chatgpt", authToken: uncertain, requiresOpenaiAuth: true };
     await expect(getValidMainAccountToken({ codexAuthStatus })).rejects.toMatchObject({ reason: "reauth" });
     expect(getMainAccountCredentialStatus()).toMatchObject({ refreshGrantRejected: true, usable: false });
-    // A different bearer for the same verified identity is sufficient successor evidence.
+    // A different bearer is a candidate; reading it must retain the refused fingerprints.
     const successor = fakeChatGptJwt("acct-main", { jti: "verified-successor" });
     status = { authMethod: "chatgpt", authToken: successor, requiresOpenaiAuth: true };
     expect(await getValidMainAccountToken({ codexAuthStatus })).toEqual({ accessToken: successor, chatgptAccountId: "acct-main" });
+    expect(nativeMainRefusals.has(home)).toBe(true);
+    expect(nativeMainRefusals.refuses(home, rejected)).toBe(true);
     expect(isMainAccountRefreshGrantRejected()).toBe(false);
     expect(getMainAccountCredentialStatus().usable).toBe(true);
   });
@@ -866,6 +874,29 @@ describe("main account in codex refresh mode (#2999)", () => {
     }
     expect(isMainAccountRefreshGrantRejected()).toBe(false);
   });
+
+  test.each(["status", "valid", "raw", "live", "verifiably-live"] as const)(
+    "signature-mutated successor cannot clear a refusal through %s reads", async admission => {
+      setNativeMainRefreshResolutionForTests(CODEX_MODE);
+      const bearer = fakeChatGptJwt("acct-main", { jti: "signature-only-mutation" });
+      const answer = (authToken: string | null) => async (): Promise<CodexAuthStatus> => ({
+        authMethod: "chatgpt", authToken, requiresOpenaiAuth: true,
+      });
+      await getValidMainAccountToken({ codexAuthStatus: answer(bearer) });
+      await expect(getValidMainAccountToken({ codexAuthStatus: answer(null) })).rejects.toMatchObject({ reason: "reauth" });
+      const forged = bearer.slice(0, bearer.lastIndexOf(".") + 1) + "forged-signature";
+      seedAuth(forged);
+      if (admission === "status") expect(getMainAccountCredentialStatus().usable).toBe(true);
+      else if (admission === "valid") expect((await getValidMainAccountToken())?.accessToken).toBe(forged);
+      else if (admission === "raw") expect(getMainAccountToken()?.accessToken).toBe(forged);
+      else expect(admission === "live" ? isMainAccountTokenLive() : isMainAccountTokenVerifiablyLive()).toBe(true);
+      expect(nativeMainRefusals.has(home)).toBe(true);
+      seedAuth(bearer);
+      expect(getMainAccountToken()).toBeNull();
+      expect(getMainAccountCredentialStatus().usable).toBe(false);
+      await expect(getValidMainAccountToken()).rejects.toMatchObject({ reason: "reauth" });
+    },
+  );
 
   test("unknown ordinary lookup refusal cannot be cleared by a newly observed verified bearer", async () => {
     setNativeMainRefreshResolutionForTests(CODEX_MODE);

@@ -29,6 +29,7 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
+import { nativeMainRefusals } from "../../src/codex/native-main-refusals";
 
 /** Smallest complete Anthropic stream: the combo's second target has to actually answer. */
 const ANTHROPIC_SSE = [
@@ -108,6 +109,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  nativeMainRefusals.verifiedLogin(home);
   setNativeMainRefreshResolutionForTests(null);
   clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);
   resetMainCodexAccountIdentityTrackingForTests();
@@ -160,6 +162,39 @@ function install401ThenRefreshHarness(): { sends: string[]; refreshes: string[] 
 }
 
 describe("native main 401 refresh and replay", () => {
+  test.each(["/v1/responses", "/v1/responses/compact"] as const)(
+    "%s authenticates a successor only on its upstream 2xx", async path => {
+      clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);
+      resetMainCodexAccountIdentityTrackingForTests();
+      fs.rmSync(join(home, "auth.json"));
+      setNativeMainRefreshResolutionForTests({ mode: "codex", configured: "auto", reason: "codex-compatible", command: "/fixture/codex", version: "0.162.1" });
+      const rejected = fakeChatGptJwt("account-main", { jti: "refused" });
+      await getValidMainAccountToken({ codexAuthStatus: async () => ({ authMethod: "chatgpt", authToken: rejected, requiresOpenaiAuth: true }) });
+      await expect(getValidMainAccountToken({ codexAuthStatus: async () => ({ authMethod: "chatgpt", authToken: null, requiresOpenaiAuth: true }) })).rejects.toMatchObject({ reason: "reauth" });
+      const successor = fakeChatGptJwt("account-main", { jti: "successor" });
+      writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: { access_token: successor, account_id: "account-main" } }));
+      expect((await getValidMainAccountToken())?.accessToken).toBe(successor);
+      expect(nativeMainRefusals.has(home)).toBe(true);
+      let sends = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (!url.pathname.endsWith("/responses") && !url.pathname.endsWith("/responses/compact")) return Response.json({}, { status: 503 });
+        sends++;
+        expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${successor}`);
+        expect(nativeMainRefusals.has(home)).toBe(true);
+        return Response.json({ id: "resp_authenticated", object: "response", status: "completed", output: [] });
+      }) as typeof fetch;
+      const cfg = config();
+      const req = request(path);
+      const log = { model: "", provider: "" } as RequestLogContext;
+      const response = path === "/v1/responses" ? await handleResponses(req, cfg, log)
+        : await handleResponsesCompact(req, cfg, log);
+      const body = await response.text();
+      expect({ status: response.status, error: response.status === 200 ? undefined : body }).toEqual({ status: 200, error: undefined });
+      expect(sends).toBe(1);
+      expect(nativeMainRefusals.has(home)).toBe(false);
+    },
+  );
   test.each(["/v1/responses", "/v1/responses/compact"] as const)(
     "%s publishes retry quota for a keyring account replacement after 401", async path => {
       clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);

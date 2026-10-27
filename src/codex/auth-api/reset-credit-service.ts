@@ -5,6 +5,8 @@ import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
 import { claimManualResetCooldowns, settleManualResetCooldown } from "../routing";
 import type { ManualResetCooldownClaim } from "../routing";
 import { readCodexTokens } from "../auth-collision";
+import { confirmNativeMainAuthentication, nativeMainAuthenticationIsCurrent, nativeMainBearerAllowed, nativeMainRefusals, type NativeMainAuthentication } from "../native-main-refusals";
+import { resolveCodexHomeDir } from "../home";
 import { extractAccountId } from "../../oauth/chatgpt";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
 import { getMainQuotaCredentialGeneration, isMainQuotaWriterLive, matchesMainQuotaCredential, observeMainQuotaCredential } from "../main-account-cache";
@@ -29,6 +31,7 @@ interface ResetCreditAuth {
   nativeMainSharedClaimHeld?: true;
   poolGeneration?: number;
   mainProof?: MainResetQuotaProof;
+  authentication?: NativeMainAuthentication;
 }
 
 async function withResetCreditAuth<T>(
@@ -57,6 +60,7 @@ async function withResetCreditAuth<T>(
             ok: true,
             value: await operation({
               isMain: true,
+              authentication: nativeMainRefusals.capture(resolveCodexHomeDir(), tokens.access_token),
               ...(writer ? { mainProof: { writer, credentialGeneration: getMainQuotaCredentialGeneration() } } : {}),
               accessToken: tokens.access_token,
               chatgptAccountId: tokens.account_id,
@@ -206,7 +210,8 @@ function manualResetAuthStillLive(accountId: string, auth: ResetCreditAuth): boo
       && record?.credential?.chatgptAccountId === auth.chatgptAccountId;
   }
   const tokens = readCodexTokens();
-  return !!auth.mainProof && !!tokens
+  return !!auth.authentication && nativeMainAuthenticationIsCurrent(auth.authentication)
+    && nativeMainBearerAllowed(auth.accessToken) && !!auth.mainProof && !!tokens
     && tokens.access_token === auth.accessToken && tokens.account_id === auth.chatgptAccountId
     && isMainQuotaWriterLive(auth.mainProof.writer)
     && auth.mainProof.credentialGeneration === getMainQuotaCredentialGeneration()
@@ -270,6 +275,7 @@ async function refreshAfterManualReset(
 
 export async function inspectResetCredits(config: OcxConfig, accountId: string, signal: AbortSignal): Promise<Response> {
   const result = await withResetCreditAuth(getRuntimeConfig(config), accountId, async auth => {
+    if (auth.isMain && !manualResetAuthStillLive(accountId, auth)) return jsonResponse({ error: "Main Codex account not logged in" }, 401);
     const linkedSignal = signalWithTimeout(8000, signal);
     let detachBodyAbort = () => {};
     try {
@@ -303,6 +309,8 @@ export async function inspectResetCredits(config: OcxConfig, accountId: string, 
       if (!parsed.ok) {
         return jsonResponse({ error: "Invalid upstream reset-credit response" }, 502);
       }
+      if (auth.isMain && !manualResetAuthStillLive(accountId, auth)) return jsonResponse({ error: "Main Codex credential changed" }, 409);
+      if (auth.authentication) confirmNativeMainAuthentication(auth.authentication);
       return jsonResponse(safeResetCreditsDto(parsed.value));
     } finally {
       detachBodyAbort();
@@ -314,6 +322,7 @@ export async function inspectResetCredits(config: OcxConfig, accountId: string, 
 
 export async function consumeResetCredits(config: OcxConfig, accountId: string, requestedOperationId: string | undefined): Promise<Response> {
   const operation = await withResetCreditAuth(getRuntimeConfig(config), accountId, async auth => {
+    if (auth.isMain && !manualResetAuthStillLive(accountId, auth)) return jsonResponse({ error: "Main Codex account not logged in" }, 401);
     // The ledger keys manual operations by the *physical* ChatGPT account, which is
     // only known after the auth wrapper resolves credentials. Open here, not earlier.
     let identity = requestedOperationId === undefined
@@ -362,6 +371,7 @@ export async function consumeResetCredits(config: OcxConfig, accountId: string, 
     try {
       let resp: Response;
       try {
+        if (auth.isMain && !manualResetAuthStillLive(accountId, auth)) return jsonResponse({ error: "Main Codex credential changed" }, 409);
         resp = await fetch(
           "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
           {
@@ -387,6 +397,7 @@ export async function consumeResetCredits(config: OcxConfig, accountId: string, 
         return jsonResponse({ error: `Upstream error ${resp.status}` }, resp.status);
       }
       const consumed = await readResetCreditJson(resp, AbortSignal.timeout(10_000));
+      if (auth.authentication && manualResetAuthStillLive(accountId, auth)) confirmNativeMainAuthentication(auth.authentication);
       if (!consumed.ok) {
         // The spend may already have landed upstream and its outcome code is unreadable,
         // so this id must never come back as a new operation.

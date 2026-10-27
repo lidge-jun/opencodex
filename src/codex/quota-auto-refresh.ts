@@ -15,7 +15,7 @@ import { isMainAccountHardLocked } from "./main-account-hard-lock";
 import { tryAcquireNativeMainProfileClaim } from "./native-main-admission";
 import { withNativeMainSharedClaim } from "./native-main-claim";
 import { resolveNativeProfileContext } from "./native-profile-store";
-import { getMainQuotaCredentialGeneration, observeMainQuotaCredential } from "./main-account-cache";
+import { confirmMainQuotaAuthentication, getMainQuotaCredentialGeneration, observeMainQuotaCredential } from "./main-account-cache";
 import { applyAccountQuotaFromUpstreamHeaders, getAccountQuota, type StoredAccountQuota } from "./quota";
 import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./warmup";
 import {
@@ -263,6 +263,7 @@ async function warmAccount(config: OcxConfig, accountId: string): Promise<void |
       try {
         await warmCodexAccount({ ...token, onCompleted: headers => {
           if (writer && credentialStillLive()) {
+            confirmMainQuotaAuthentication(writer);
             applyAccountQuotaFromUpstreamHeaders(accountId, headers, writerGeneration, writer);
           }
         } });

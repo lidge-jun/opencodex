@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { nativeMainBearerAllowed } from "./native-main-refusals";
 import { getCodexAccountCredential } from "./account-store";
 import { loadConfig } from "../config";
 import { resolveCodexHomeDir } from "./home";
@@ -56,6 +57,7 @@ export function readCodexTokensResult(
       tokens?: { access_token?: string; account_id?: string; id_token?: string };
     };
     if (!j?.tokens?.access_token) return { status: "invalid" };
+    if (!nativeMainBearerAllowed(j.tokens.access_token, dirname(authPath))) return { status: "invalid" };
     return {
       status: "ok",
       tokens: {
