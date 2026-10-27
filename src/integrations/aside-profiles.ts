@@ -1,4 +1,5 @@
 import type { AsideProfile } from "../clients/aside-profiles";
+import { WindowsSecretAclSettleTimeoutError } from "../lib/windows-secret-acl";
 import { asideHomeDir } from "../clients/config-export";
 import { join } from "node:path";
 import type { OwnedIntegrationRefreshOutcome } from "./owned-refresh";
@@ -262,7 +263,7 @@ export function mutateAsideProfiles(
 
 export function refreshAsideProfiles(
   input: AsideProfilesInput,
-  options?: { refreshOnly?: boolean; guard?: CoordinatedIntegrationOptions["guard"] },
+  options?: Pick<CoordinatedIntegrationOptions, "guard" | "settleConfigRoot"> & { refreshOnly?: boolean },
 ): Promise<Array<OwnedIntegrationRefreshOutcome & { profileId: number }>> {
   const policy = input.config.asideProfileSync;
   const selected = Object.values(policy?.profiles ?? {}).some(enabled => enabled === true);
@@ -282,6 +283,7 @@ export function refreshAsideProfiles(
         const operation = owned ? refreshIntegrationCoordinated : applyIntegrationCoordinated;
         const result = await operation(bound, {
           lockSeams: input.lockSeams,
+          settleConfigRoot: options?.settleConfigRoot,
           ...(options?.guard ? { guard: options.guard } : {}),
         });
         outcomes.push({
@@ -295,6 +297,11 @@ export function refreshAsideProfiles(
           } : {}),
         });
       } catch (error) {
+        if (error instanceof WindowsSecretAclSettleTimeoutError) {
+          outcomes.push({ client: "aside", profileId: profile.id, ok: false, reason: "ca_unavailable",
+            diagnostic: { stage: "ca", cause: "ETIMEDOUT" } });
+          continue;
+        }
         const failure = asideProfileFailure(profile.id, error);
         outcomes.push({ client: "aside", profileId: profile.id, ok: false, reason: failure.message,
           ...(!failure.ok ? { refusalReason: failure.reason, state: failure.state,

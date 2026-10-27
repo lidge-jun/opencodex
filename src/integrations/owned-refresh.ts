@@ -41,6 +41,7 @@ export interface OwnedIntegrationRefreshOutcome {
   readonly state?: string;
   readonly snapshotPath?: string;
   readonly residual?: boolean;
+  readonly diagnostic?: { stage: "ca"; cause: "ETIMEDOUT" };
 }
 
 /**

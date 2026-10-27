@@ -1,5 +1,6 @@
 import { siblingOfLivePort } from "../codex/sibling-start";
 import { redactSecretString } from "../lib/redact";
+import { WindowsSecretAclSettleTimeoutError } from "../lib/windows-secret-acl";
 import type { ExportModel } from "../clients/config-export";
 import type { IntegrationClientId } from "./registry";
 import type { CoordinatedIntegrationOptions, WriteOutcome } from "./writer";
@@ -23,12 +24,13 @@ export async function refreshOwnedCatalogIntegrations(
     typeof input.models === "function" ? input.models() : input.models);
   const outcomes: OwnedIntegrationRefreshOutcome[] = [];
   const admit = options.admit;
-  const writeOptions: CoordinatedIntegrationOptions | undefined = admit ? {
-    guard: (frozen): WriteOutcome | null => admit() ? null : {
+  const writeOptions: CoordinatedIntegrationOptions = {
+    settleConfigRoot: true,
+    ...admit ? { guard: (frozen): WriteOutcome | null => admit() ? null : {
       ok: false, reason: "superseded_store", state: "current", clientId: frozen.clientId,
       message: "Background refresh superseded",
-    },
-  } : undefined;
+    } } : {},
+  };
   for (const clientId of clientIds) {
     if (admit?.() === false) break;
     try {
@@ -46,6 +48,11 @@ export async function refreshOwnedCatalogIntegrations(
         ? refreshOwnedIntegration(bound) : refreshOwnedIntegration(bound, writeOptions));
       if (result) outcomes.push(result);
     } catch (error) {
+      if (error instanceof WindowsSecretAclSettleTimeoutError) {
+        outcomes.push({ client: clientId, ok: false, reason: "ca_unavailable",
+          diagnostic: { stage: "ca", cause: "ETIMEDOUT" } });
+        continue;
+      }
       const busy = error !== null && typeof error === "object"
         && "code" in error && error.code === "integration_mutation_busy";
       outcomes.push({

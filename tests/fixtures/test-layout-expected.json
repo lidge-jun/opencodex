@@ -479,6 +479,7 @@
   "client-config-export-new-clients.test.ts": "config", "client-config-export.test.ts": "config",
   "opencode-kilo-refresh.test.ts": "clients", "client-export-reasoning-metadata.test.ts": "clients",
   "hermes-catalog-refresh.test.ts": "clients",
+  "hermes-catalog-acl-admission.test.ts": "clients",
   "client-export-reasoning-controls.test.ts": "clients", "client-export-live-wire.test.ts": "clients",
   "client-export-effective-metadata.test.ts": "clients", "client-config-new-clients.test.ts": "config",
   "client-connect.test.ts": "clients", "client-export-modality-enum.test.ts": "clients",

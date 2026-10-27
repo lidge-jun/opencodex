@@ -187,6 +187,7 @@ interface ClientIntegrationSyncOutcome {
   readonly changed?: boolean;
   readonly reason?: string;
   readonly profileId?: number;
+  readonly diagnostic?: { stage: "ca"; cause: "ETIMEDOUT" };
 }
 
 /** Only the Desktop write's own applied markers may change during a background projection. */
@@ -851,10 +852,11 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
     const catalogRefresh = pickerWasEnabled !== pickerIsEnabled || desktopSwitchesChanged || fastRowsChanged
       ? await convergeCodexCatalog()
       : undefined;
+    let integrations: ClientIntegrationSyncOutcome[] = [];
     if (fastRowsChanged) {
       const { readRuntimePort } = await import("../../config/process-state");
       const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
-      await syncEnabledClientIntegrations(runtime?.port, config, deps);
+      integrations = await syncEnabledClientIntegrations(runtime?.port, config, deps);
     }
     // Injection second, matching `syncModelsToCodex`: the injected `model_catalog_json` should
     // point at a catalog that has already settled. And it runs here rather than inside the save
@@ -872,6 +874,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
     return jsonResponse({
       ok: true,
       codexAutoStart: codexAutoStartEnabled(config),
+      ...(integrations.some(result => !result.ok) ? { partial: true, integrations } : {}),
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: pickerIsEnabled,
@@ -926,6 +929,7 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
     return jsonResponse({
       ...attachStaleAppServerHint(result),
       ...(integrations.length > 0 ? { integrations } : {}),
+      ...(integrations.some(integration => !integration.ok) ? { partial: true } : {}),
       ...(result.ok ? {} : { error: result.message }),
     }, status);
   }

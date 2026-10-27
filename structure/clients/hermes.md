@@ -61,7 +61,7 @@ full-file fingerprint, so edits outside managed fragments also refuse. A current
 unchanged without writing or adopting a new fingerprint. Explicit Apply of a pending
 catalog change preserves those edits and records the new baseline; Apply with an unchanged contribution
 is a no-op and does not adopt file drift. Disabled or unowned profiles are not
-reconnected, and a failure is reported per client without stopping catalog fan-out.
+reconnected, and a failure is reported per client without stopping catalog fan-out. The shared coordinated transaction admits ACL settlement after discovery and any writer awaits; deadline refusal leaves snapshots, client bytes, ownership and journal unchanged.
 The unscoped journal lists the root store only, so named-profile history
 is read and undone from that profile's page.
 `tests/clients/hermes-profile-routes.test.ts` and `tests/clients/hermes-profiles.test.ts` cover

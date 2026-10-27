@@ -230,7 +230,7 @@ Model rows keep stored custom overrides separate from their effective `exportMet
 the [client export contract](clients/integrations.md#owned-catalog-convergence) prevents picker-only
 default preferences from becoming provider defaults and preserves explicitly empty effort ladders.
 
-API-key PATCH validates the entire rename/scope patch on a detached entry before replacing live configuration. A rejected field changes neither the existing name nor either scope, including a later unrelated save.
+API-key PATCH validates the entire rename/scope patch on a detached entry before replacing live configuration. A rejected field changes neither the existing name nor either scope, including a later unrelated save. After settings or Codex sync commit, a failed client catalog refresh returns `partial: true` and per-client `integrations` alongside the committed settings or Codex result; an ACL admission timeout reports sanitized `ca_unavailable` without undoing that commit.
 
 
 The provider editor admits `googleToolSchemaPolicy` as an editor-safe, non-secret field. Its value
