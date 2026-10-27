@@ -124,8 +124,11 @@ failure to restore shared client configuration keeps the stop failed and its rec
 carries the outcome class (`stopped`, `not-running`, `history-incomplete`, `history-deferred`,
 or `failed`), the service and proxy classifications, whether the runtime is down, and a stable
 one-line message. Exit codes are identical with and without `--json`: 0 on success, 1 on failure,
-79 when only Codex history cleanup did not complete, and 80 when the shared teardown was deferred
-and is still owed.
+79 when only Codex history cleanup did not complete, 80 when the shared teardown was deferred
+and is still owed, and 81 when a dashboard update that will restart the proxy handed Codex routing
+and its catalog to the restarted proxy instead of restoring native Codex. With 81 the proxy is
+down, and the restarted proxy releases the kept teardown after its first sync; if it never starts,
+the next `ocx stop` restores native Codex.
 
 For a desktop-approved takeover, `ocx stop --json` also accepts the complete set of
 `--expect-*` values supplied by `ocx resolve --json`. On Windows, this guarded stop can

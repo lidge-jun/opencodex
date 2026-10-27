@@ -392,6 +392,11 @@ export interface OcxRequestOptions {
   toolChoice?: OcxToolChoice;
   parallelToolCalls?: boolean;
   reasoning?: string;
+  /**
+   * Independent reasoning toggle resolved at client-compatibility ingress. This is distinct from
+   * the strength-like `reasoning` effort: toggle-only models consume this value as `thinking.type`.
+   */
+  thinkingEnabled?: boolean;
   hideThinkingSummary?: boolean;
   /** Provider policy: suppress raw content-channel reasoning while summaries stay visible. */
   hideRawReasoning?: boolean;

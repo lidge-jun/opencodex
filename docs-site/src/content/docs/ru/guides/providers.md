@@ -220,7 +220,7 @@ Inline JSON и лишние позиционные аргументы откло
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 105 встроенными пресетами: 84 на основе ключей, 17 OAuth, три локальных и
+opencodex поставляется с 106 встроенными пресетами: 85 на основе ключей, 17 OAuth, три локальных и
 один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера.
 Наиболее заметные записи:
@@ -490,6 +490,9 @@ GPT-5.6 Sol/Terra/Luna заранее внесены в резервные сп�
 | Вход Codex (Pool или Direct) | `gpt-5.6-*` | 922,000 |
 | OpenAI (API key) | `openai-apikey/gpt-5.6-*` плюс `*-pro` | 922,000 (макс. вход 922,000) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 922,000 |
+| Codex | `gpt-6.1-terra` | 500,000 / 872,000 |
+| OpenAI API | `openai-apikey/gpt-6.1-terra` | 1,050,000 (128,000 max output) |
+| OpenRouter | `openrouter/openai/gpt-6.1-terra` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1,000,000 |
 
 Нативные записи GPT-5.6 сохраняют закреплённые вышестоящие шкалы уровней рассуждений (например, у
@@ -510,7 +513,7 @@ Assist), `azure` / `azure-openai`, `kiro` и `cursor`. Проприетарны�
 точке. **Cloudflare AI Gateway** требует подставить в URL id аккаунта и шлюза.
 
 Copilot предоставляет каталог со смешанными проводами: модели (`gpt-5.3-codex`,
-`gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)
+`gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)
 отклоняют `/chat/completions` для агентного трафика, поэтому opencodex по умолчанию
 маршрутизирует эти модели через Responses API, а все остальные модели Copilot остаются на
 chat completions. Приоритет: жёсткий wire-пин → явная запись

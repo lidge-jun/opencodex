@@ -11,6 +11,16 @@ description: 공급자 항목, 인증, 엔드포인트, 모델 카탈로그, 할
 
 이 추정은 기본적으로 꺼져 있습니다. 공급자별로 `inferContextWindow: true`를 설정해야 켜집니다. 설정하지 않으면 창이 없는 모델은 활성 Context cap, 그다음 128k를 사용합니다.
 
+## GPT-6.1 Terra
+
+[GPT-6.1 Terra](https://openai.com/index/introducing-gpt-6-1-terra/)는 GPT-5.6 Terra의 후속 모델로 2026년 10월 26일 출시되었습니다. `gpt-6.1-terra`는 `gpt-5.6-terra`와 함께 제공하며 기본 모델이나 하위 에이전트 모델 목록은 바꾸지 않습니다. GitHub Copilot에서는 Responses를 사용합니다. OpenRouter ID는 `openai/gpt-6.1-terra`이며 컨텍스트는 1,050,000, 100만 토큰당 입력 $1.00 / 출력 $5.00입니다.
+
+네이티브 Codex: 기본 컨텍스트 500,000, 장문 상한 872,000, 기본 effort `low`, 단계는 `low`, `medium`, `high`, `xhigh`, `max`, `ultra`입니다. 네이티브 `ultra`는 전송 시 `max`로 변환합니다. 네이티브 행의 고속 모드는 Fast만 제공합니다.
+
+[OpenAI API](https://developers.openai.com/api/docs/models/gpt-6.1-terra): 컨텍스트 1,050,000, 최대 출력 128,000, 텍스트·이미지 입력과 텍스트 출력, 지식 기준일 2026-06-01입니다. effort는 `none`, `low`, `medium`(기본), `high`, `xhigh`, `max`입니다. 엔드포인트는 `v1/responses`와 `v1/chat/completions`이며 도구 호출에는 Responses가 필요합니다.
+
+100만 토큰당 입력 $1.00, 캐시 입력 $0.05, 캐시 쓰기 $1.25(30분), 출력 $5.00입니다. 입력이 272,000 토큰을 초과하면 요청 전체에 입력·캐시 2×, 출력 1.5×를 적용하여 각각 $2.00 / $0.10 / $2.50 / $7.50입니다. Fast 모드는 2×입니다.
+
 ## 처음 등록할 때의 모델 선택
 
 신규 비-OAuth 연결은 신뢰할 수 있는 모델 목록을 확보할 때까지 모델 노출을 보류합니다. Models 탭의 중복 없는 모델 행이 20개 이상이면 모델 스위치를 모두 OFF로 설정합니다. 프로바이더는 활성 상태를 유지합니다. 실제 인증 방식이 OAuth나 ChatGPT 로그인인 연결은 기존 기본값을 유지합니다.
@@ -126,7 +136,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `modelReasoningEfforts?` | `Record<string, string[]>` | 모델별 레이블입니다. 빈 목록이면 effort 제어를 숨깁니다. |
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | 모델을 `false`로 두면 summary 광고를 멈추고 summary 전달 필드를 제거합니다. |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | 모델별 Responses 전달 enum입니다. 기존 delivery 필드를 다시 씁니다. |
-| `modelAdapters?` | `Record<string, string>` | 혼합 와이어 게이트웨이를 위한 모델별 `openai-chat` 또는 `openai-responses` 와이어 재정의입니다. 명시적 항목이 레지스트리 기본값보다 우선합니다. DeepSeek 프리셋은 `deepseek-v4-flash`에 네이티브 Responses를 선택할 수 있고, GitHub Copilot은 모델(`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)을 Responses 전용 기본값으로 선언합니다. 이 모델들은 에이전트 트래픽에서 `/chat/completions`를 거부하기 때문입니다. `gpt-5.4-nano`처럼 기본값이 없는 모델은 여기서 직접 옵트인할 수 있습니다. 단일 와이어 상위 항목과 정식 ChatGPT forward는 재정의를 거부합니다. |
+| `modelAdapters?` | `Record<string, string>` | 혼합 와이어 게이트웨이를 위한 모델별 `openai-chat` 또는 `openai-responses` 와이어 재정의입니다. 명시적 항목이 레지스트리 기본값보다 우선합니다. DeepSeek 프리셋은 `deepseek-v4-flash`에 네이티브 Responses를 선택할 수 있고, GitHub Copilot은 모델(`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)을 Responses 전용 기본값으로 선언합니다. 이 모델들은 에이전트 트래픽에서 `/chat/completions`를 거부하기 때문입니다. `gpt-5.4-nano`처럼 기본값이 없는 모델은 여기서 직접 옵트인할 수 있습니다. 단일 와이어 상위 항목과 정식 ChatGPT forward는 재정의를 거부합니다. |
 | xAI Responses 옵트인(대시보드) | 스위치 | `xai`에서만 `grok-4.5`와 `grok-4.6`의 `modelAdapters` 항목을 원자적으로 설정하거나 지웁니다. 한 항목만 있으면 다음 스위치 쓰기가 둘을 정규화할 때까지 혼합 상태로 표시됩니다. 다른 재정의와 티어 동작은 바뀌지 않습니다. Grok 4.7은 OAuth에서 레지스트리 와이어 기본값으로 Responses를 사용하며, 명시적 `modelAdapters["grok-4.7"] = "openai-chat"` 항목으로 Chat으로 전환할 수 있습니다. |
 | `xaiResponsesXSearch?` | `boolean` | 기본적으로 비활성화됩니다. xAI Responses 대상에서는 최종 요청 정규화 후에도 실제 `web_search` 도구가 남아 있을 때만 공급자가 호스팅하는 `x_search` 선언을 추가합니다. 기존 선언은 중복하지 않고, 호출자의 `tool_choice`/`allowed_tools` 선택기 범위를 확장하지 않으며, 웹 검색 사이드카의 `search.xSearch` 옵션과는 별개입니다. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | hosted tool namespace를 예약하는 non-forward Responses gateway용 정확한 모델 ID opt-in입니다. 현재 `["image_generation"]`만 허용하며, 일치하는 모델은 `openai-responses` wire를 사용하고 해당 hosted tool을 지원해야 합니다. 충돌하는 클라이언트 `image_gen` 선언을 제거하고 호출자의 tool choice를 유지하도록 selector도 다시 씁니다. OpenAI API 가상 `-pro` 모델은 선택한 공개 ID를 먼저 일치시키고, 해석된 기본 wire-model ID를 대체값으로 사용합니다. `modelAdapters`는 공개 ID를 먼저, 그 다음 기본 ID를 해석하며, 두 번째 결과가 최종 wire를 결정합니다. 설정하지 않은 모델은 일반 alias 동작을 유지합니다. |

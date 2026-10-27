@@ -42,7 +42,8 @@ import {
   type RetainedCodexProviderTable,
 } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
-import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../update/stop-contract.mjs";
+import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE, STOP_TEARDOWN_HANDED_OVER_EXIT_CODE } from "../update/stop-contract.mjs";
+import { announceStopHandover, completeUpdateTeardownHandover, forgetUpdateTeardownHandover, stopHandsTeardownOver, updateTeardownHandoverRequested } from "../update/teardown-handover";
 import {
   describeHistoryJobFailure,
   resolveCodexHistoryJobTarget,
@@ -143,7 +144,7 @@ import {
   StartOwnershipRollbackUncertainError,
 } from "./start-ownership-publication";
 import { syncModelsToCodex } from "../codex/sync";
-import { localClientSkipReason, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
+import { localClientSkipReason, shouldSyncCodexOnStart, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
 import { honorSiblingMarker, markSiblingStart, siblingOfLivePort, siblingRuntimeField, siblingStopFoundOwner, withoutSiblingMarker } from "../codex/sibling-start";
 import { consumeSiblingHandoff } from "../codex/sibling-handoff";
 import {
@@ -384,6 +385,7 @@ async function findProxyOwnerBeforeJournalRecovery(
 }
 
 async function handleStart(options: { block?: boolean } = {}) {
+  forgetUpdateTeardownHandover(); // #7423: a recovery start must not pass the marker to its update workers
   updateRestartChild?.check();
   // A supervised service child defers to a foreign recorded owner before doing
   // anything else. 'ocx service start' refuses this activation path already, but
@@ -752,6 +754,8 @@ async function handleStart(options: { block?: boolean } = {}) {
     },
   );
   if (!startupSync.ran) console.log(startupLeftCodexNativeLine(localClientSkipReason(config), server.port ?? port));
+  // #7423: routing an update kept in place for this proxy is ours once the startup sync published.
+  if (!siblingStart && startupSync.published) completeUpdateTeardownHandover(pid => isProcessAlive(pid) && isLikelyOcxProcess(pid));
   await refreshOwnedRaycastCatalog(config, port);
   if (!cleaned && !shuttingDown) healthSentinel = startServiceHealthSentinel(config); // after startup reconciliation; never mid-boot or mid-drain
   // #1046: one warning per startup, after BOTH writes. The server's cache
@@ -1130,11 +1134,14 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   const inheritedTeardowns = listPendingTeardowns()
     .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let teardownNonce: string | undefined;
+  // #7423: an update that restarts the proxy asks this stop to leave Codex routing for the replacement.
+  const handoverRequested = updateTeardownHandoverRequested(process.env, () => shouldSyncCodexOnStart(loadConfig())) && !stoppingSibling && !connectedClientSkip;
+  let deferralHonoredByProxy = false;
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce || stoppingSibling) return;
     if (connectedClientSkip) return;
     try {
-      teardownNonce = claimPendingTeardown(endpoint, endpointSource).nonce;
+      teardownNonce = claimPendingTeardown(endpoint, endpointSource, process.pid, handoverRequested ? "update-restart" : undefined).nonce;
     } catch (err) {
       // Without a receipt the proxy performs its own teardown, which is the pre-#3008
       // behaviour: correct for every backend that cannot respawn, and merely early for
@@ -1161,12 +1168,15 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     // A valid receipt means the proxy deferred shared teardown to this process. If the
     // receipt could not be written, the proxy restores it itself and the caller must not
     // attempt a second restore after a graceful stop. A hard-kill always leaves restore
-    // to this process.
+    // to this process. #7423: only a confirmed deferral kept the proxy's own exit cleanup off.
+    if (graceful && teardownNonce) deferralHonoredByProxy = true;
     return graceful && !teardownNonce;
   };
   const approvedEndpoint = snapshot
     ? { hostname: probeHostname(snapshot.approval.hostname || undefined), port: snapshot.approval.port }
     : null;
+  // Only an exact runtime endpoint may back a handover; without one the ordinary restore runs.
+  const claimHandoverBeforeManager = () => { const exact = handoverRequested ? endpointOf(readRuntimePort()) : null; if (exact) claimTeardown(exact, "exact"); };
   let guardedStep: Awaited<ReturnType<typeof runGuardedManagerStep>> | null = null;
   try {
     const serviceStop = snapshot
@@ -1182,7 +1192,8 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
         })).service
       // A sibling never runs under a service manager: an installed one belongs to the live owner,
       // and its ownership check would fail this stop and skip the stale-record purge below.
-      : stoppingSibling || connectedClientAlreadyStopped ? "absent" : stopServiceIfInstalledDetailed();
+      // #7423: a manager stop takes the proxy down itself, so a handover claims its receipt first.
+      : stoppingSibling || connectedClientAlreadyStopped ? "absent" : (claimHandoverBeforeManager(), stopServiceIfInstalledDetailed());
     record.service = serviceStop;
     stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
     schedulerCanRespawn = serviceStop === "stopped-respawnable";
@@ -1425,7 +1436,10 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   if (stoppingSibling) console.log(`↩️  Client routing stays on the proxy at port ${siblingOfPort}; this sibling had no shared teardown to run.`);
   if (connectedClientSkip) console.log(connectedClientSkip);
   const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;
-  if (!restoreBlocked) {
+  const handedOver = stopHandsTeardownOver({ requested: handoverRequested, restoreBlocked, nonce: teardownNonce,
+    stopFailed, recoveredCount: recoveredNonces.length, proxy: record.proxy, service: record.service, deferralHonored: deferralHonoredByProxy });
+  if (handedOver) announceStopHandover();
+  else if (!restoreBlocked) {
     if (recoveredNonces.length > 0) {
       // A previous deferred stop died before restoring, and the probe says its endpoint is
       // not answering. That is the whole point of leaving the receipt behind.
@@ -1503,6 +1517,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       ? STOP_HISTORY_DEFERRED_EXIT_CODE
       : 1;
   }
+  else if (handedOver) process.exitCode = STOP_TEARDOWN_HANDED_OVER_EXIT_CODE;
   const signals = {
     failed: stopFailed,
     historyOnly: historyOnlyFailure,

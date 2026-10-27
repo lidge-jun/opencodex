@@ -1,7 +1,8 @@
 import type { Server } from "bun";
 import { supportsDesktopPicker } from "../desktop-picker-platform";
 import type { OcxConfig } from "../../types";
-import { getConfigDir } from "../../config/paths";
+import { getConfigDir, withConfigDirHardeningSettled } from "../../config/paths";
+import { claudeConfigDir } from "../auth-detect";
 import type { DesktopPickerController } from "../desktop-picker";
 import type { ClaudeFirstPartyDesired } from "../first-party-settings";
 import { classifyInterceptClient, interceptRouteFor } from "./client-class";
@@ -149,7 +150,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   const configDir = options.configDir ?? getConfigDir();
   const ca = await ensureLocalInterceptCaForStartup(configDir);
   const startProxy = options.startProxy ?? startConnectProxy;
-  const authToken = ensureClaudeInterceptProxyToken(configDir);
+  const authToken = await withConfigDirHardeningSettled(configDir, () => ensureClaudeInterceptProxyToken(configDir));
   const leaf = issueLocalInterceptLeaf(ca, CLAUDE_INTERCEPT_HOSTS);
   const listener = startClaudeInterceptListener<T>({
     leaf,
@@ -179,7 +180,9 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   // fixed-port bind leaves settings untouched; an ephemeral test binder never publishes :0
   // or a probed port another process can steal. Only stale, owned env blocks are rewritten.
   try {
-    migrateClaudeInterceptSettings(buildClaudeInterceptEnv(proxy.port, claudeInterceptCaCertPath(configDir), authToken));
+    // Fresh admission after the bind await: a nested CLAUDE_CONFIG_DIR shares the config-root flight.
+    await withConfigDirHardeningSettled(claudeConfigDir(), () =>
+      migrateClaudeInterceptSettings(buildClaudeInterceptEnv(proxy.port, claudeInterceptCaCertPath(configDir), authToken)));
   } catch (error) {
     // Ensure/apply retries a skipped migration; upgraded clients otherwise keep hitting 407.
     console.warn(`[claude-intercept] settings migration skipped: ${error instanceof Error ? error.message : String(error)}`);

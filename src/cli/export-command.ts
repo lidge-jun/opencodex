@@ -94,6 +94,9 @@ export function exportModelsFromProxyRows(
     if (entry.maxTokens !== undefined) model.maxTokens = entry.maxTokens;
     if (entry.maxInputTokens !== undefined) model.maxInputTokens = entry.maxInputTokens;
     if (entry.reasoningEfforts !== undefined) model.reasoningEfforts = [...entry.reasoningEfforts];
+    if (entry.supportsThinkingToggle !== undefined) model.supportsThinkingToggle = entry.supportsThinkingToggle;
+    if (entry.supportsReasoningEffort !== undefined) model.supportsReasoningEffort = entry.supportsReasoningEffort;
+    if (entry.defaultThinkingEnabled !== undefined) model.defaultThinkingEnabled = entry.defaultThinkingEnabled;
     if (entry.defaultReasoningEffort) model.defaultReasoningEffort = entry.defaultReasoningEffort;
     if (entry.inputModalities && entry.inputModalities.length > 0) {
       model.inputModalities = [...entry.inputModalities];

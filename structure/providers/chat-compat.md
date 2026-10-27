@@ -111,11 +111,7 @@ Passthrough and routed-compaction raw-body repairs emit it as a user turn (`exte
 Stateful developer-guidance injection reuses that validator for its raw insertion
 boundary, so parsed messages and stored raw history retain the same task/guidance order.
 
-Native OpenAI passthrough consults the existing configured capability ladder before forwarding
-`reasoning_effort`; an explicitly empty ladder removes that unsupported control while an unknown
-ladder remains unclassified. Both Chat builders then apply the same explicit provider declarations:
-gateway-object projection and tool-bearing model effort omission. An unset declaration preserves the
-native caller field exactly. Native passthrough also sanitizes routed reasoning history so `reasoning` input items do not send
+Native Chat passthrough and translated Chat share `src/adapters/openai-chat/reasoning-wire.ts` after provider resolution. Explicit reasoning/effort false declarations and empty strength ladders remove unsupported effort; toggle false removes the switch without declaring an unknown strength axis unsupported. A declared toggle wire serializes the independent thinking choice without treating enabled/disabled/adaptive discriminators as strengths. Dual-control requests still pass through gateway-object projection and tool-bearing effort omission; a legacy toggle configuration gains a second serialized control only with explicit effort support; unknown declarations preserve legacy raw forwarding. Native passthrough also sanitizes routed reasoning history so `reasoning` input items do not send
 non-empty `content` arrays to upstream models that reject them. Chat Completions bridging repairs
 orphan `toolResult` messages by inserting a synthetic assistant `tool_call` before tool messages.
 It also repairs the opposite direction (260718): an assistant `tool_calls` round left dangling —
@@ -464,8 +460,7 @@ measurement rather than allocating a serialized copy just to measure it.
 
 > Decision record: [ADR-0067](../decisions/ADR-0067-reasoning-display-parity-hidethinkingsummary.md)
 
-`hideThinkingSummary` is set for explicit summary "none", or omitted summary without a validated
-active effort. Accepted minimal/low/medium/high/xhigh/max (including ultra normalized to max)
+`hideThinkingSummary` is set for explicit summary "none", or omitted summary without active thinking. An explicit `thinkingEnabled` boolean determines activity before effort is considered; otherwise accepted minimal/low/medium/high/xhigh/max (including ultra normalized to max)
 allow raw visibility when summary is omitted; none and invalid efforts do not. Explicit "auto"
 still permits raw visibility independently of effort. This flag is
 honored by BOTH reasoning paths: anthropic `thinking_delta` AND raw `reasoning_raw_delta`
@@ -578,4 +573,4 @@ Canonical Responses identity sanitation and narrowly scoped pre-output combo rec
 Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
-DeepSeek Artifact compatibility: `src/adapters/openai-chat/tool-schema.ts` omits schema `pattern` and `anyOf` constraints and strict mode for unnamespaced `Artifact` tools on `api.deepseek.com`. Surrounding properties and required fields remain; union-only nodes become unconstrained, so tool execution must validate inputs. Property names, literal defaults/examples, and caller schemas are preserved; other tools and hosts retain existing normalization. `tests/providers/deepseek-artifact-tool-schema.test.ts` checks the serialized request.
+DeepSeek Artifact compatibility: `src/adapters/openai-chat/tool-schema.ts` omits schema `pattern` and `anyOf` constraints and strict mode for unnamespaced `Artifact` tools on `api.deepseek.com`. Surrounding properties and required fields remain; union-only nodes become unconstrained, so tool execution must validate inputs. Property names, literal defaults/examples, and caller schemas are preserved; other tools and hosts retain existing normalization. `tests/providers/deepseek-artifact-tool-schema.test.ts` checks the serialized request. Negotiated early tool delivery follows [completed tool blocks](completed-tool-blocks.md).
