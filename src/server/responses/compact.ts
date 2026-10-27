@@ -80,6 +80,7 @@ import {
 } from "../../codex/auth-context";
 import {
   forceRefreshMainAccountToken,
+  mainAccountTokenQuotaWriter,
   type NativeMainRefreshDependencies,
 } from "../../codex/main-account";
 import {
@@ -371,6 +372,7 @@ async function refreshNativeMainCompactContext(args: {
       ...authCtx,
       accessToken: refreshed.accessToken,
       chatgptAccountId: refreshed.chatgptAccountId,
+      mainQuotaWriter: mainAccountTokenQuotaWriter(refreshed) ?? authCtx.mainQuotaWriter,
     };
     const refreshedProvider = applyCodexAuthContextToProvider(
       stripCodexRuntimeProviderFields(provider),

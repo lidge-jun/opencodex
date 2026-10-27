@@ -34,6 +34,7 @@ import { resolveNativeProfileContext } from "./native-profile-store";
 import { NativeProfileError } from "./native-profile-types";
 import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 import { loadConfig } from "../config";
+import { nativeMainRefusals as codexOwnedMainRefusals } from "./native-main-refusals";
 import {
   requestCodexAuthStatus,
   resolveNativeMainRefreshMode,
@@ -52,8 +53,6 @@ let jwtPlanAttempted = false;
 const MAIN_TOKEN_REFRESH_SKEW_MS = 60_000;
 let beforeMainAuthJsonRenameForTests: (() => void) | null = null;
 let codexOwnedMainCredential: { home: string; expiresAt: number } | null = null;
-// Refusal survives uncertain reads and home switches; never retain the rejected bearer.
-const codexOwnedMainRefusals = new Map<string, Set<string>>();
 export type MainAccountToken = Readonly<{ accessToken: string; chatgptAccountId: string }>;
 const codexOwnedQuotaWriters = new WeakMap<MainAccountToken, { writer: MainQuotaWriter; home: string; credentialGeneration: number }>();
 
@@ -472,7 +471,7 @@ export function beginNativeMainReauth(): {
         if (options.signal?.aborted) throw options.signal.reason;
         assertMainAuthJsonSnapshotUnchanged(expected);
         persistNativeMainReauthTokens(expected, tokens);
-        codexOwnedMainRefusals.delete(resolveCodexHomeDir());
+        codexOwnedMainRefusals.verifiedLogin(resolveCodexHomeDir());
         clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
         return { chatgptAccountId: tokens.chatgptAccountId };
       }, { waitMs: 30_000, signal: options.signal });
@@ -753,9 +752,7 @@ async function refreshThroughCodex(
     noteNativeMainRefresh("codex-reauth");
     const grantKey = locked && mainRefreshGrantKey(locked);
     if (grantKey) markMainRefreshGrantRejected(grantKey);
-    const refusedBearers = codexOwnedMainRefusals.get(codexHome) ?? new Set<string>();
-    if (refreshBearer) refusedBearers.add(sha256(`opencodex:native-main:refused-bearer:v1\0${refreshBearer}`));
-    codexOwnedMainRefusals.set(codexHome, refusedBearers);
+    codexOwnedMainRefusals.refuse(codexHome, refreshBearer);
     throw new MainAccountTokenRefreshError("reauth", { credentialObservedAbsent: true });
   }
   const token = status.authToken;
@@ -768,7 +765,7 @@ async function refreshThroughCodex(
     if (locked === null && rejectedAccessToken === undefined && !didRefresh) return null;
     throw new MainAccountTokenRefreshError("transient", { credentialObservedAbsent: true });
   }
-  if (codexOwnedMainRefusals.get(codexHome)?.has(sha256(`opencodex:native-main:refused-bearer:v1\0${token}`))) {
+  if (codexOwnedMainRefusals.refuses(codexHome, token)) {
     throw new MainAccountTokenRefreshError("reauth");
   }
   // A transient Codex refresh failure still answers with its cached bearer.
@@ -783,7 +780,8 @@ async function refreshThroughCodex(
   });
   const writer = observeCodexOwnedMainAccountCredential(token);
   if (codexOwnedMainRefusals.has(codexHome) && !writer) throw new MainAccountTokenRefreshError("reauth");
-  if (writer) codexOwnedMainRefusals.delete(codexHome);
+  // Keep only a fingerprint of the last owned bearer, even across uncertain reads.
+  codexOwnedMainRefusals.observe(codexHome, token);
   noteNativeMainRefresh("codex-ok");
   if (writer) codexOwnedQuotaWriters.set(result, { writer, home: codexHome, credentialGeneration: getMainQuotaCredentialGeneration() });
   if (writer && dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
