@@ -16,7 +16,6 @@ import { dirname } from "node:path";
 import type { ExportModel, ManagedContribution } from "../clients/config-export";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
-import { withConfigDirHardeningSettled } from "../config/paths";
 import { copyPlainData } from "../lib/plain-data";
 import type { OcxConfig } from "../types";
 import { IntegrationWriteSizeError, PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
@@ -810,8 +809,6 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
 
 export interface CoordinatedIntegrationOptions {
   lockSeams?: IntegrationWriterLockSeams;
-  /** Catalog fan-out admits its complete synchronous transaction after discovery and locks. */
-  settleConfigRoot?: boolean;
   /**
    * Checked after the input is frozen and the writer lock is held, before any side effect.
    *
@@ -947,18 +944,14 @@ function withClientLocks(
   const run = async (heldStoreLock: string | null): Promise<WriteOutcome> => {
     const refused = await options?.revalidate?.(frozen);
     if (refused) return refused;
-    const transact = (): WriteOutcome | { requiredLock: string } => {
-      // Re-probe after both revalidation and ACL admission: either await can expose a new store.
-      const required = storeLockFile(frozen);
-      return required !== null && required !== heldStoreLock
-        ? { requiredLock: required } : operation();
-    };
-    const result = options?.settleConfigRoot
-      ? await withConfigDirHardeningSettled(frozen.store.root, transact) : transact();
-    // Lock acquisition suspends, so the recursive entry repeats revalidation and admission.
-    return "requiredLock" in result
-      ? withIntegrationWriterLock(result.requiredLock, () => run(result.requiredLock), options?.lockSeams, ".lock")
-      : result;
+    // A profile can appear while revalidation awaits. Acquire its lock and
+    // repeat the validation before observing or mutating its document.
+    const required = storeLockFile(frozen);
+    if (required !== null && required !== heldStoreLock) {
+      return withIntegrationWriterLock(required, () => run(required), options?.lockSeams, ".lock");
+    }
+    // No await between the last store probe and the synchronous transaction.
+    return operation();
   };
   return withIntegrationWriterLock(frozen.resolvedPaths.configPath, () => {
     // Decide only after the outer lock has actually been acquired.
@@ -978,21 +971,16 @@ async function coordinatedWrite(
   const frozen = prepared.value;
   const spec = INTEGRATION_CLIENTS[frozen.clientId];
   const guarded = (bound: IntegrationWriteInput) => options?.guard?.(bound) ?? operation(bound);
-  const transact = () => guarded(frozen);
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
-    return refused ?? (options?.settleConfigRoot
-      ? withConfigDirHardeningSettled(frozen.store.root, transact) : transact());
+    return refused ?? guarded(frozen);
   }
 
   // An absent client home is not created merely to acquire a sibling lock.
   if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") {
     const refused = await options?.revalidate?.(frozen);
     if (refused) return refused;
-    const absent = () => frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir" ? transact() : null;
-    const result = options?.settleConfigRoot
-      ? await withConfigDirHardeningSettled(frozen.store.root, absent) : absent();
-    if (result) return result;
+    if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") return guarded(frozen);
   }
   return withClientLocks(
     frozen,

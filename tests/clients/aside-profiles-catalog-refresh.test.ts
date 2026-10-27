@@ -132,9 +132,9 @@ test("attended catalog refresh passes no guard and still first-applies enabled A
   try {
     const outcomes = await refreshOwnedCatalogIntegrations(input(), ["pi", "aside"]);
     expect(refreshOwned.mock.calls).toHaveLength(1);
-    expect(refreshOwned.mock.calls[0]?.[1]).toEqual({ settleConfigRoot: true });
+    expect(refreshOwned.mock.calls[0]).toHaveLength(1);
     expect(refreshAside.mock.calls).toHaveLength(1);
-    expect(refreshAside.mock.calls[0]?.[1]).toEqual({ settleConfigRoot: true });
+    expect(refreshAside.mock.calls[0]).toHaveLength(1);
     expect(outcomes.map(row => [row.client, row.profileId, row.ok])).toEqual([
       ["pi", undefined, true], ["aside", 0, true], ["aside", 1, true],
     ]);
