@@ -66,7 +66,7 @@ provider-wide fallback. Exact model output limits precede the provider default o
   compatibility is `null`: Codex's hash-change trigger requires two non-null, unequal hashes, so
   native/routed switches do not compact merely because of a synthetic marker. Native rows and
   Codex-forward aliases keep upstream hashes; foreign rows keep valid hashes. Token limits are unchanged;
-- forces strict Codex catalog fields required by the current parser. `src/codex/catalog/parsing.ts` skips disk rows without plain-object/string-slug structure and treats non-array model collections as unavailable; baseline priorities must be finite numbers and retained source ranks must be valid. Live discovery and retained sync tolerate malformed optional provenance; reads never repair its files;
+- forces strict Codex catalog fields required by the current parser. `src/codex/catalog/parsing.ts` preserves every object row, including id-only rows used for prompt text and reasoning-summary support, drops non-object elements and treats non-array model collections as unavailable. Native baseline, retained-provenance and template consumers validate string slugs locally; baseline priorities must be finite numbers and retained source ranks must be valid. Live discovery and retained sync tolerate malformed optional provenance; reads never repair its files;
 - hides `disabledModels` without blocking direct routing (routed provider ids are excluded;
   account-qualified native ids hide only that selector row; BARE native slugs hide the bare row
   and all account-selector clones and drop that model family from raw `/v1/models`);

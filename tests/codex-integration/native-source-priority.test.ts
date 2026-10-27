@@ -7,6 +7,7 @@ import { deriveEntry } from "../../src/codex/catalog/derive-entry";
 import { setConfiguredNativeOpenAiModels, setDiscoveredNativeOpenAiModels, resetConfiguredNativeOpenAiModelsForTests } from "../../src/codex/catalog/native-models";
 import { catalogBackupPathFor, parseCatalogJson, readNativeBaseline, type RawEntry } from "../../src/codex/catalog/parsing";
 import { retainedNativeSourcePriorities } from "../../src/codex/catalog/native-priority";
+import { stripUnsupportedReasoningSummaryDelivery } from "../../src/adapters/openai-responses/reasoning";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // Literal wire key lets these behavioral regressions run against the pre-fix tree too.
@@ -155,10 +156,28 @@ for (const models of [[null, 3, [], { slug: 5 }], {}, null, "unavailable"]) {
   });
 }
 
-test("catalog parsing keeps valid rows and wrapper fields while discarding malformed identities", () => {
+test("catalog parsing preserves every object row including id-only rows beside malformed elements", () => {
   const native = row(ids[0]!, 3);
-  expect(parseCatalogJson(JSON.stringify({ version: 7, models: [null, 3, [], { slug: 5 }, native] })))
-    .toEqual({ version: 7, models: [native] });
+  const idOnly = { id: "gpt-id-only", base_instructions: "Configured instructions.", supports_reasoning_summaries: false };
+  const objects = [{}, { slug: 5 }, idOnly, native];
+  expect(parseCatalogJson(JSON.stringify({ version: 7, models: [null, 3, "bad", [], ...objects] })))
+    .toEqual({ version: 7, models: objects });
+});
+
+test("an id-only catalog opt-out strips unsupported reasoning summary delivery", () => {
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  try {
+    writeFileSync(join(home, "opencodex-catalog.json"), JSON.stringify({ models: [null, 3, [],
+      { id: "gpt-id-only", supports_reasoning_summaries: false }] }), "utf8");
+    const body = { stream_options: { include_usage: true, reasoning_summary_delivery: "sequential_cutoff" } };
+    expect(stripUnsupportedReasoningSummaryDelivery(body, "gpt-id-only"))
+      .toEqual({ stream_options: { include_usage: true } });
+    expect(body.stream_options.reasoning_summary_delivery).toBe("sequential_cutoff");
+  } finally {
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+  }
 });
 
 test("retained provenance skips malformed rows and invalid source priorities", () => {

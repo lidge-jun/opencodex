@@ -290,8 +290,8 @@ export function parseCatalogJson(raw: string): RawCatalog | null {
   try {
     const cat = JSON.parse(raw);
     if (!cat || !Array.isArray(cat.models)) return null;
-    // Optional disk catalogs may contain malformed rows; validate before any consumer dereferences them.
-    cat.models = cat.models.filter((row: unknown) => isPlainObject(row) && typeof row.slug === "string");
+    // Preserve id-only and other object rows; consumers validate the fields they need.
+    cat.models = cat.models.filter(isPlainObject);
     return cat;
   } catch { return null; }
 }
