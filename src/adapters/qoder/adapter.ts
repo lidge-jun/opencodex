@@ -8,6 +8,7 @@ import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type CodingAge
 import { QODER_PROFILES, resolveQoderProfile, type QoderProfile } from "./profiles";
 import { QoderScaffoldFilter, QODER_SCAFFOLD_ERROR_CODE, qoderScaffoldErrorMessage } from "./scaffold-guard";
 import { ToolEnvelopeEchoFilter } from "../../lib/tool-envelope-echo-filter";
+import { buildQoderConversationInput, qoderCnImageInputSupported } from "./image-input";
 
 export type QoderAdapterDeps = CodingAgentDeps;
 
@@ -275,21 +276,13 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
       yield { type: "error", message: "Qoder adapter uses runTurn; the fetch/parseStream path is disabled." };
     },
     async runTurn(parsed, incoming, emit): Promise<void> {
-      if (resolveQoderProfile(provider.baseUrl)?.region === "cn") {
-        const hasImage = parsed.context.messages.some(message =>
-          Array.isArray(message.content) && message.content.some(part => part.type === "image"),
-        );
-        if (hasImage) {
-          emit({
-            type: "error",
-            message: "Qoder image input is not enabled because the CLI provider route has no verified multimodal contract.",
-            status: 400,
-            errorType: "invalid_request_error",
-            code: "unsupported_input_modality",
-            retryable: false,
-          });
-          return;
-        }
+      if (resolveQoderProfile(provider.baseUrl)?.region === "cn" && !qoderCnImageInputSupported(parsed)) {
+        emit({
+          type: "error", status: 400, errorType: "invalid_request_error",
+          code: "unsupported_input_modality", retryable: false,
+          message: "Qoder CN raw-image routing is verified only with qoderclicn 1.1.70, DeepSeek-Flash or Qwen3.8-Flash, and one base64 PNG in a single user turn on stream-json stdin. URL, multiple-image, tool-result and history replay surfaces remain unverified; use the vision sidecar for those inputs.",
+        });
+        return;
       }
       let catalog: ReturnType<typeof buildCodingAgentToolCatalog>;
       try {
@@ -325,6 +318,7 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
       const system = buildSystemPrompt(parsed);
       await runCodingAgentTurn({
           profiles: QODER_PROFILES,
+          conversationInput: buildQoderConversationInput,
           classifyFailure: classifyQoderFailure,
           provider,
           parsed,

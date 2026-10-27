@@ -1558,4 +1558,76 @@ describe("Cursor incomplete-tool conversation remint", () => {
       clearCursorCheckpointsForTests();
     }
   });
+
+  test("derives stable _cursorIdentityScope from JWT sub across token refresh while isolating distinct Cursor subjects", async () => {
+    const makeJwt = (sub: string, exp: number) => {
+      const h = Buffer.from(JSON.stringify({ alg: "HS256" })).toString("base64url");
+      const b = Buffer.from(JSON.stringify({ sub, exp })).toString("base64url");
+      return `${h}.${b}.sig`;
+    };
+    const tokenTurn1 = makeJwt("github|user-alpha", 1_900_000_000);
+    const tokenTurn2 = makeJwt("github|user-alpha", 1_900_003_600);
+    const tokenOther = makeJwt("github|user-beta", 1_900_000_000);
+
+    const makeTurn = (token: string): OcxParsedRequest => ({
+      modelId: "cursor/grok-4.6",
+      context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+      stream: false,
+      options: {},
+    } as OcxParsedRequest);
+
+    const noopTransport = {
+      async *run() {
+        yield { type: "interaction_update", text: "ok" } satisfies CursorServerMessage;
+      },
+      writeClient() {},
+    };
+
+    const req1 = makeTurn(tokenTurn1);
+    await createCursorAdapter({ ...provider, apiKey: tokenTurn1 }, { createTransport: () => noopTransport })
+      .runTurn?.(req1, { headers: new Headers() }, () => {});
+
+    const req2 = makeTurn(tokenTurn2);
+    await createCursorAdapter({ ...provider, apiKey: tokenTurn2 }, { createTransport: () => noopTransport })
+      .runTurn?.(req2, { headers: new Headers() }, () => {});
+
+    const reqOther = makeTurn(tokenOther);
+    await createCursorAdapter({ ...provider, apiKey: tokenOther }, { createTransport: () => noopTransport })
+      .runTurn?.(reqOther, { headers: new Headers() }, () => {});
+
+    expect(req1._cursorIdentityScope).toBeDefined();
+    expect(req1._cursorIdentityScope).toBe(req2._cursorIdentityScope);
+    expect(req1._cursorIdentityScope).not.toBe(reqOther._cursorIdentityScope);
+  });
+
+  test("CursorHttp1BidiConnection sends x-cursor-streaming: true on HTTP/1.1 RunSSE requests", async () => {
+    const { CursorHttp1BidiConnection } = await import("../../../src/adapters/cursor/http1-bidi");
+    const { createTranslatorBudget } = await import("../../../src/lib/translator-budget");
+    let capturedHeaders: Headers | undefined;
+    const budget = createTranslatorBudget();
+    const conn = new CursorHttp1BidiConnection({
+      baseUrl: "https://api2.cursor.sh",
+      token: "test-token",
+      clientVersion: "cli-2026.07.08-0c04a8a",
+      requestId: "req-1",
+      sessionId: "sess-1",
+      translatorBudget: budget,
+      fetch: (async (_url: unknown, init?: RequestInit) => {
+        capturedHeaders = new Headers(init?.headers);
+        return new Response("", { status: 200 });
+      }) as typeof fetch,
+      callbacks: {
+        onData() {},
+        onEnd() {},
+        onError() {},
+        onCommitted() {},
+      },
+    });
+    conn.start();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    conn.close();
+    budget.dispose();
+    expect(capturedHeaders?.get("x-cursor-streaming")).toBe("true");
+    expect(capturedHeaders?.get("x-ghost-mode")).toBe("true");
+  });
 });

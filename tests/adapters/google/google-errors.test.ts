@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  extractGoogleRetryAfterSeconds,
   isGoogleQuotaExhaustedText,
   isQuotaExhaustedBody,
   safeAntigravityHttpErrorMessage,
@@ -227,5 +228,21 @@ describe("google location denial classification (#3467)", () => {
       const body = JSON.stringify({ error: { code: 400, status, message } });
       expect(safeAntigravityHttpErrorMessage(400, body)).toBe(`Antigravity ${prefix}: ${message}`);
     }
+  });
+
+  test("extractGoogleRetryAfterSeconds parses RetryInfo.retryDelay and ErrorInfo.metadata.quotaResetDelay", () => {
+    expect(extractGoogleRetryAfterSeconds(JSON.stringify({
+      error: {
+        code: 429,
+        details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "42.5s" }],
+      },
+    }))).toBe("43");
+    expect(extractGoogleRetryAfterSeconds(JSON.stringify({
+      error: {
+        code: 429,
+        details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", metadata: { quotaResetDelay: "180s" } }],
+      },
+    }))).toBe("180");
+    expect(extractGoogleRetryAfterSeconds("{}")).toBeUndefined();
   });
 });

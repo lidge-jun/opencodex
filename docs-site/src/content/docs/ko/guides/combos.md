@@ -289,3 +289,7 @@ opencodex 인스턴스에 기록했는지 확인하세요.
 일반적인 400 오류는 종료되지만, `user`를 명시적으로 거부하거나 `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값, 모델별 이미지 입력 거부(`param: input`) 또는 경로가 읽을 수 없는 입력 미디어 거부(`unsupported_input_modality`)를 나타내는 구조화된 오류는 출력 시작 전에 다음 적격 대상으로 넘어갈 수 있습니다. 이 경우 쿨다운을 기록하지 않습니다. 보안 정책 거부, 취소 및 이미 시작된 출력은 재실행하지 않습니다.
 
 [Canonical compatibility details](/guides/combos/#request-local-target-compatibility).
+
+## 쿨다운 복구 예약
+
+`cooldownReprobe: { enabled: true }`로 활성화한 복구 시도는 이를 예약한 요청에만 속하며, 다른 요청에는 저장된 쿨다운이 계속 적용됩니다. 예약은 쿨다운 대기와 JEV 선택을 거쳐 유지됩니다. 대기 중 다시 사용 가능해진 대상은 기존 쿨다운이 바뀌지 않았다면 재시도할 수 있지만, 새 쿨다운 기록은 그 대상의 예약을 무효화합니다. 성공하면 응답한 대상의 변경되지 않은 쿨다운만 해제하며, 시도하지 않은 대상과 새로운 실패의 쿨다운은 유지합니다. 공급자 비활성화, 할당량, 요청 적격성 및 취소 검사는 계속 적용됩니다. [설정과 제한](/guides/combos/#retry-all-cooled-targets-opt-in)을 참고하세요.

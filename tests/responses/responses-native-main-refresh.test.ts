@@ -132,7 +132,7 @@ function install401ThenRefreshHarness(): { sends: string[]; refreshes: string[] 
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.hostname === "auth.openai.com") {
-      const refresh = new URLSearchParams(String(init?.body)).get("refresh_token") ?? "";
+      const refresh = (JSON.parse(String(init?.body)) as { refresh_token?: string }).refresh_token ?? "";
       refreshes.push(refresh);
       return Response.json({
         access_token: "refreshed-access",
@@ -371,7 +371,7 @@ describe("native main 401 refresh and replay", () => {
       globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         if (url.hostname === "auth.openai.com") {
-          refreshes.push(new URLSearchParams(String(init?.body)).get("refresh_token") ?? "");
+          refreshes.push((JSON.parse(String(init?.body)) as { refresh_token?: string }).refresh_token ?? "");
           return Response.json({
             access_token: "refreshed-access",
             refresh_token: "rotated-refresh",
@@ -428,7 +428,7 @@ describe("native main 401 refresh and replay", () => {
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.hostname === "auth.openai.com") {
-        refreshes.push(new URLSearchParams(String(init?.body)).get("refresh_token") ?? "");
+        refreshes.push((JSON.parse(String(init?.body)) as { refresh_token?: string }).refresh_token ?? "");
         return Response.json(refusal.body, { status: refusal.status });
       }
       if (!url.pathname.endsWith("/responses")) {
@@ -610,7 +610,7 @@ describe("native main 401 refresh and replay", () => {
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       if (url.hostname === "auth.openai.com") {
-        refreshes.push(new URLSearchParams(String(init?.body)).get("refresh_token") ?? "");
+        refreshes.push((JSON.parse(String(init?.body)) as { refresh_token?: string }).refresh_token ?? "");
         return Response.json({ error: "token_invalidated" }, { status: 401 });
       }
       if (url.hostname === "fallback.test") {

@@ -1,7 +1,7 @@
 /** Closed diagnostic vocabulary; provider descriptions and unknown codes never escape. */
 const REFRESH_DIAGNOSTIC_CODES = [
   "invalid_grant", "refresh_token_invalidated", "token_invalidated", "refresh_token_reused",
-  "refresh_token_expired", "invalid_client", "invalid_request", "server_error",
+  "refresh_token_expired", "account_deactivated", "deactivated_workspace", "invalid_client", "invalid_request", "server_error",
   "temporarily_unavailable", "rate_limit_exceeded", "unsupported_grant_type", "invalid_scope",
 ] as const;
 export type ChatgptRefreshDiagnosticCode = typeof REFRESH_DIAGNOSTIC_CODES[number];
@@ -32,7 +32,7 @@ export function classifyChatgptRefreshFailure(status: number, body: string): Cha
     ? exactCode as ChatgptRefreshDiagnosticCode : undefined;
   let reason: ChatgptRefreshFailure["reason"] = "unknown";
   if (status === 400 || status === 401 || status === 403) {
-    if (["invalid_grant", "refresh_token_invalidated", "token_invalidated", "refresh_token_reused"].includes(exactCode ?? "")) {
+    if (["invalid_grant", "refresh_token_invalidated", "token_invalidated", "refresh_token_reused", "account_deactivated", "deactivated_workspace"].includes(exactCode ?? "")) {
       reason = "revoked";
     } else if (exactCode === "refresh_token_expired") {
       reason = "expired";

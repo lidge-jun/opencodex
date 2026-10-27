@@ -8,6 +8,7 @@
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import {
   assertChatCompletionsRoutingBody,
+  chatRawReasoningVisible,
   ChatCompletionsRequestError,
 } from "../chat/inbound";
 import { chatSettingsBody, chatToResponsesBody } from "../protocols/codecs/chat";
@@ -196,6 +197,8 @@ async function handleChatCompletionsWithBudget(
   const droidDefaultEffort = effortRow
     ? undefined
     : droidReasoningDefault(req.headers.get(DROID_DEFAULT_EFFORT_HEADER), chatBody);
+  // Read the caller's delivery choice before any generation default (Droid effort) is written.
+  const rawReasoningVisible = chatRawReasoningVisible(chatBody);
   if (effortRow) chatBody.model = effortRow.baseId;
   if (fastRow) {
     chatBody.model = fastRow.baseId;
@@ -536,6 +539,7 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    chatRawReasoningVisible: rawReasoningVisible,
     // A Chat caller may send an explicit empty `tools` array — a deny-all declaration the
     // translation drops along with the whole catalog. Carried separately so the
     // undeclared-tool guard can still enforce it; absent/partial catalogs stay deferred.

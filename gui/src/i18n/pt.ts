@@ -1026,7 +1026,7 @@ export const pt: Record<TKey, string> = {
   "sub.featured": "Em destaque",
   "sub.advanced": "Avançado",
   "sub.orderHintAria": "Como esta ordem é usada",
-  "sub.orderHint": "A ordem exibida aqui define as posições 1 a 5 no topo do seletor de modelos do Codex e os modelos padrão candidatos para {cmd}.",
+  "sub.orderHint": "A ordem exibida aqui define as posições 1 a 5 no topo do seletor de modelos do Codex e os modelos padrão candidatos para {cmd}. Quando menos de 5 modelos destacados estão visíveis no seletor, os slots restantes são oferecidos por prioridade do catálogo; 5 modelos destacados visíveis preenchem a lista, a menos que uma ordem personalizada do seletor de modelos altere a prioridade do catálogo.",
   "sub.noneSelected": "Nenhum selecionado — escolha na lista abaixo.",
   "sub.models": "Modelos",
   "sub.search": "Buscar modelos (gpt nativo + roteados)…",

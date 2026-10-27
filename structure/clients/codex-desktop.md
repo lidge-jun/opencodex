@@ -24,6 +24,10 @@ Under the test preload's `OCX_TEST_HOME_GUARD=1`,
 `src/codex/desktop-app-restart.ts` skips real restart without an injected executor.
 `src/cli/restart-scope.ts` reports that skip. `NODE_ENV=test` alone does not control
 this boundary. `tests/clients/desktop-app-restart.test.ts` covers the contract.
+The same function refuses with the `selection_mutation_busy` skipped reason while a cli-update
+worker holds admission through installer termination and readback: refusal precedes the restart lock, discovery, any app
+quit and the handoff, and a lock-acquisition throw still releases the shared gate. See the
+[update commit window](../codex-cli-update.md#worker-realm-and-the-selection-commit-window).
 
 ## Windows launch context
 

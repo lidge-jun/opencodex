@@ -45,7 +45,7 @@ multi-call pairing, overlap and lifecycle release.
 - Translated (non-passthrough, non-run-turn) fetch path: full support — synthetic tool injection,
   guard interception of `advisor` tool calls, advice reinjection as a paired
   assistant-toolCall/toolResult message pair, and worker re-dispatch through the same
-  continuation machinery the terminal guard uses (`adapter-continuation.ts`). Consultations are
+  continuation machinery the terminal guard uses (`adapter-continuation.ts`). Explicitly unfinished tool ends cannot trigger consultation or continuation. Consultations are
   bounded at three per request including automatic calls, with at most four Advisor-owned worker continuations. The tool
   is removed when consultations are exhausted. A repeated call gets one final paired limit result;
   a further call ends with typed 502 `advisor_continuation_limit`, without another worker send.

@@ -24,8 +24,10 @@ afterEach(() => {
 });
 
 const cases = [true, false, undefined].flatMap(terminalRefusalAsFailed =>
-  ["direct", "hidden", "rotated"].map(path => ({ terminalRefusalAsFailed, path })));
-test.each(cases)("a refused image_gen iteration stops and meters usage: %j", async ({ terminalRefusalAsFailed, path }) => {
+  ["direct", "hidden", "rotated"].map(path => ({ terminalRefusalAsFailed, path, reason: "content_filter", unfinished: false })))
+  .concat([{ terminalRefusalAsFailed: false, path: "direct", reason: "max_output_tokens", unfinished: true },
+    { terminalRefusalAsFailed: false, path: "direct", reason: "max_output_tokens", unfinished: false }]);
+test.each(cases)("a refused image_gen iteration stops and meters usage: %j", async ({ terminalRefusalAsFailed, path, reason, unfinished }) => {
   const hasPrior = path !== "direct";
   const reported: (OcxUsage | undefined)[] = [];
   const rotated: OcxUsage[] = [];
@@ -47,13 +49,13 @@ test.each(cases)("a refused image_gen iteration stops and meters usage: %j", asy
       yield { type: "tool_call_start", id: "call_1", name: "image_gen" } satisfies AdapterEvent;
       // Missing prompt gives the prior round a local tool error without sending a media request.
       yield { type: "tool_call_delta", arguments: hasPrior && routedRequests === 1 ? "{}" : '{"prompt":"a cat"}' } satisfies AdapterEvent;
-      yield { type: "tool_call_end" } satisfies AdapterEvent;
+      yield { type: "tool_call_end", ...(unfinished && !(hasPrior && routedRequests === 1) ? { incomplete: true as const } : {}) } satisfies AdapterEvent;
       if (hasPrior && routedRequests === 1) {
         yield { type: "done", usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } } satisfies AdapterEvent;
         return;
       }
       yield {
-        type: "incomplete", reason: "content_filter", retryable: false,
+        type: "incomplete", reason, ...(reason === "content_filter" ? { retryable: false } : {}),
         message: 'upstream ended the turn with stop_reason "refusal"',
         usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 },
       } satisfies AdapterEvent;
@@ -92,6 +94,6 @@ test.each(cases)("a refused image_gen iteration stops and meters usage: %j", asy
   });
   expect(text).toContain(`event: response.${terminalRefusalAsFailed ? "failed" : "incomplete"}`);
   if (terminalRefusalAsFailed) expect(text).toContain('"code":"invalid_prompt"');
-  else expect(text).toContain('"reason":"content_filter"');
+  else expect(text).toContain(`"reason":"${reason}"`);
   expect(text).not.toContain("event: response.completed");
 });

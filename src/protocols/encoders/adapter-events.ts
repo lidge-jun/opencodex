@@ -143,6 +143,8 @@ export interface ClientEncodeHooks {
 export interface AdapterEventEncodeOptions {
   translatorBudget: TranslatorBudget;
   hideThinkingSummary?: boolean;
+  /** Chat client delivery only, independent of upstream thinking/summary configuration. */
+  chatRawReasoningVisible?: boolean;
   /** Provider policy: suppress raw content-channel reasoning, keep provider-authored summaries. */
   hideRawReasoning?: boolean;
   toolNsMap?: ReadonlyMap<string, { namespace: string; name: string; freeform?: true }>;
@@ -640,7 +642,7 @@ export function encodeAdapterEventStream(
             break;
           }
           case "reasoning_raw_delta": {
-            if (options.hideThinkingSummary || options.hideRawReasoning) {
+            if (!(options.chatRawReasoningVisible ?? !options.hideThinkingSummary) || options.hideRawReasoning) {
               hiddenRawBytes += Buffer.byteLength(event.text);
               break;
             }
@@ -682,6 +684,7 @@ export function encodeAdapterEventStream(
             break;
           }
           case "tool_call_end": {
+            if (event.incomplete) { failCurrentToolCall(); break; }
             // Streamed fragments cannot be repaired: unusable arguments fail the turn.
             if (currentToolCall && currentToolCall.kind === "function" && !toolCallArgumentsUsable(currentToolCall.args)) {
               failCurrentToolCall();

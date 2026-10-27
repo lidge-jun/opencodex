@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { FORWARD_HEADERS, createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
 import { headersForCodexAuthContext } from "../../src/codex/auth-context";
+import {
+  deriveCodexAccountInstallationId,
+  isolateCodexPoolAccountHeaders,
+  isolateCodexPoolClientMetadata,
+} from "../../src/codex/forward-transport-headers";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -161,6 +166,66 @@ describe("Codex metadata integrity", () => {
     expect(sync.headers["thread-id"]).toBe("thread-real-2");
   });
 
+  test("pooled accounts isolate x-codex-installation-id, x-codex-turn-metadata.installation_id, and body.client_metadata idempotently while stripping x-oai-attestation", async () => {
+    const callerInstallId = "11111111-1111-4111-8111-111111111111";
+    const turnMeta = JSON.stringify({ installation_id: callerInstallId, thread_id: "thread-keep" });
+    const inbound = new Headers({
+      authorization: "Bearer caller-token",
+      "x-codex-installation-id": callerInstallId,
+      "x-codex-turn-metadata": turnMeta,
+      "x-oai-attestation": "caller-device-attestation",
+      version: "0.154.0",
+    });
+    const headersA = headersForCodexAuthContext(inbound, poolAuthContext);
+    const headersB = headersForCodexAuthContext(inbound, {
+      ...poolAuthContext,
+      accountId: "pool-b",
+      chatgptAccountId: "acct_pool_b",
+    });
+    const idA = headersA.get("x-codex-installation-id")!;
+    const idB = headersB.get("x-codex-installation-id")!;
+    expect(idA).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(idB).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(idA).not.toBe(callerInstallId);
+    expect(idA).not.toBe(idB);
+    expect(deriveCodexAccountInstallationId(accountA.chatgptAccountId, idA)).toBe(idA);
+    expect(JSON.parse(headersA.get("x-codex-turn-metadata")!)).toEqual({
+      installation_id: idA,
+      thread_id: "thread-keep",
+    });
+    expect(headersA.has("x-oai-attestation")).toBe(false);
+    expect(headersA.get("version")).toBe("0.154.0");
+
+    // Passing already-materialized headers and client_metadata through passthrough adapter with _codexAccountOverride stays idempotent.
+    const parsed = minimalParsed();
+    parsed._rawBody = {
+      model: "gpt-5.6-luna",
+      input: [],
+      client_metadata: {
+        "x-codex-installation-id": callerInstallId,
+        "x-codex-turn-metadata": turnMeta,
+      },
+    };
+    const providerWithOverride = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      authMode: "forward",
+      _codexAccountOverride: {
+        accessToken: accountA.accessToken,
+        chatgptAccountId: accountA.chatgptAccountId,
+      },
+    } as unknown as OcxProviderConfig;
+    const built = await createResponsesPassthroughAdapter(providerWithOverride).buildRequest(parsed, { headers: headersA });
+    expect(built.headers["x-codex-installation-id"]).toBe(idA);
+    expect(built.headers["x-oai-attestation"]).toBeUndefined();
+    const sentBody = JSON.parse(built.body);
+    expect(sentBody.client_metadata["x-codex-installation-id"]).toBe(idA);
+    expect(JSON.parse(sentBody.client_metadata["x-codex-turn-metadata"]).installation_id).toBe(idA);
+    expect(isolateCodexPoolClientMetadata(sentBody, accountA.chatgptAccountId)).toBe(sentBody);
+    const copyHeaders = new Headers(built.headers);
+    isolateCodexPoolAccountHeaders(copyHeaders, accountA.chatgptAccountId);
+    expect(copyHeaders.get("x-codex-installation-id")).toBe(idA);
+  });
   test("Responses preserves caller User-Agent as a fallback in key and forward modes", async () => {
     for (const provider of [
       {

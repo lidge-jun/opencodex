@@ -214,13 +214,15 @@ export function buildAnthropicModelInfos(
     // A real model always wins its own id, whatever the iteration order.
     if (realDiscoveryIds.has(id) || seen.has(id)) return;
     seen.add(id);
-    out.push({
+    const fast = {
       ...base,
       id,
       display_name: `${base.display_name} · Fast`,
       // Fast picks a different tier/variant, so the picker line says so like the name does.
       ...(base.description === undefined ? {} : { description: `${base.description} · Fast` }),
-    });
+    };
+    out.push(fast);
+    return fast;
   };
   for (const slug of nativeSlugs) {
     const id = idStyle === "readable" ? claudeCodeNativeAlias(slug) : aliasForRoute("native", slug);
@@ -236,7 +238,10 @@ export function buildAnthropicModelInfos(
     push1mVariant(info, nativeWindow, nativeMaxInput);
     // Natives too, not only routed rows: gpt-5.6-sol is the flagship Fast model, and
     // omitting it would leave this surface without the model the feature exists for.
-    if (fastRows?.({ provider: "native", id: slug }) === true) pushFastVariant(info);
+    if (fastRows?.({ provider: "native", id: slug }) === true) {
+      const fast = pushFastVariant(info);
+      if (fast) push1mVariant(fast, nativeWindow, nativeMaxInput);
+    }
   }
   const nativeEnd = out.length;
   const routedGroups = new Map<CatalogModel, AnthropicModelInfo[]>();

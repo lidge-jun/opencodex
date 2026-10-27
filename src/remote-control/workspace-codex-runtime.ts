@@ -2,6 +2,10 @@ import { chmodSync, linkSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync 
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { resolveCodexRuntimeAsync } from "../codex/runtime";
+import {
+  beginCodexCliSelectionParentWrite,
+  CodexCliSelectionMutationBusyError,
+} from "../codex/cli-update-selection-gate";
 import { remoteWorkspaceThreadStartParams } from "./workspace-coordinator";
 import { startRemoteWorkspaceToolBridge } from "./workspace-tool-bridge";
 import { truncateRemoteWorkspaceUtf8 } from "./workspace-utf8";
@@ -366,6 +370,23 @@ export class CodexRemoteWorkspaceRuntimeFactory implements RemoteWorkspaceRuntim
       "app-server", "--listen", "stdio://",
     ], { env: childEnv });
     let child: Bun.Subprocess<"pipe", "pipe", "pipe">;
+    // A cli-update worker holds this gate from its final process scan through
+    // installer termination/readback; a new session must not appear inside that
+    // window. Busy is the same explicit pre-spawn failure path as a spawn
+    // throw, so the bridge and isolation are reclaimed identically.
+    const selectionWrite = beginCodexCliSelectionParentWrite();
+    if (!selectionWrite.entered) {
+      // Both teardown steps are attempted before the refusal leaves: the
+      // ordered runner keeps a rejected bridge stop from skipping isolation
+      // removal or replacing the explicit busy signal the caller maps to a
+      // retryable refusal. The raw cleanup error stays internal; the caller
+      // gets the same fixed busy evidence as every other pre-spawn refusal.
+      await runRemoteWorkspaceCleanupSteps([
+        () => bridge.stop(),
+        () => removeRemoteWorkspaceIsolation(isolation),
+      ]).catch(() => {});
+      throw new CodexCliSelectionMutationBusyError();
+    }
     try {
       child = Bun.spawn([invocation.file, ...invocation.args], {
         cwd: isolation,
@@ -376,10 +397,12 @@ export class CodexRemoteWorkspaceRuntimeFactory implements RemoteWorkspaceRuntim
         ...invocation.options,
       });
     } catch (error) {
+      selectionWrite.exit();
       await bridge.stop();
       removeRemoteWorkspaceIsolation(isolation);
       throw error;
     }
+    selectionWrite.exit();
     const peer = new JsonLineRpcProcess(child);
     let activeTurn: ActiveTurn | null = null;
     let stopped = false;

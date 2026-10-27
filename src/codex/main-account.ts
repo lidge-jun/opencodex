@@ -113,12 +113,15 @@ async function refreshNativeMainGrant(
 ): Promise<OAuthCredentials> {
   const resp = await fetch(CHATGPT_TOKEN_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
       client_id: CHATGPT_CLIENT_ID,
+      grant_type: "refresh_token",
       refresh_token: refreshToken,
-    }).toString(),
+    }),
     signal: options.signal,
   });
   if (!resp.ok) {

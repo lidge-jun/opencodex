@@ -83,6 +83,7 @@ export const RESPONSES_CORE_MODULES = [
   "run-turn-execution.ts",
   "adapter-dispatch.ts",
   "antigravity-validation-refusal.ts",
+  "antigravity-model-denial-recovery.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
   "anthropic-thinking-recovery.ts",
