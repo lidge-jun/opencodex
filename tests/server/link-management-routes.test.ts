@@ -153,6 +153,8 @@ function versionRunner(remote: { probeCode: number; probeStderr: string; code: n
       const text = argv.join(" ");
       if (text.includes("ssh-keygen")) return { code: 0, stdout: "256 SHA256:abcdefghijklmnop host (ED25519)", stderr: "" };
       if (isBareOcx(argv)) return BARE_OCX;
+      if (argv.at(-1) === "cmd /c echo %OS%") return { code: 127, stdout: "", stderr: "cmd absent" };
+      if (argv.at(-1)?.includes("ocx-platform")) return { code: 0, stdout: "Linux\n", stderr: "" };
       if (argv.at(-1) === remoteOcx(["--version"])) return { code: remote.code, stdout: remote.stdout, stderr: remote.stderr };
       const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
       if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
@@ -817,6 +819,7 @@ describe("link management routes", () => {
         const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
         if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
         if (isBareOcx(argv)) return BARE_OCX;
+        const child = childProbe(argv.at(-1) ?? "", h); if (child) return child;
         if (argv.at(-1) === remoteOcx(["--version"])) return { code: 0, stdout: "opencodex 2.66.0\n", stderr: "" };
         if (argv.at(-1) === remoteOcx(["link", "port"])) return { code: 0, stdout: JSON.stringify({ port: 2200 }), stderr: "" };
         return { code: 0, stdout: "", stderr: "" };
