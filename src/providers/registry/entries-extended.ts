@@ -1322,6 +1322,36 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     inputModalities: ["text"],
     note: "Smart Router that sends each request to a model chosen from AI Stupid Level's benchmarks, using the provider keys saved on your AI Stupid Level account (OpenAI, Anthropic, Google, DeepSeek, Kimi, GLM), so each provider bills you directly with no markup. Routing modes: auto-coding (the default), auto-tooling, auto-reasoning, auto-best, plus value and speed modes. A real model id from the live list, such as claude-opus-5-5, pins one model. The X-AISM-Model response header names the model that answered. Text only.",
   },
+  {
+    // cheapaimodel, operated by LINKOVA PTE. LTD. (Singapore). Contract checked 2026-10-28:
+    // https://cheapaimodel.ai/docs/api/create-chat-completion and
+    // https://cheapaimodel.ai/docs/api/list-models. GET /v1/models answers 401 without a valid key,
+    // so the default discovery URL doubles as key validation. The gateway serves Chat Completions
+    // only (no Responses or Anthropic Messages), so every inbound stays on Chat. Context windows and
+    // input modalities are from the live catalog at https://cheapaimodel.ai/models. kimi-k3 rejects
+    // any temperature other than 0.6 or 1 and rejects top_p 0.9 and 1.0, so both are dropped for it.
+    // The env reference derived from the id is ${CHEAPAIMODEL_API_KEY}.
+    id: "cheapaimodel",
+    label: "cheapaimodel",
+    adapter: "openai-chat",
+    baseUrl: "https://api.cheapaimodel.ai/v1",
+    authKind: "key",
+    dashboardUrl: "https://console.cheapaimodel.ai/keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    defaultModel: "deepseek-v4-1-flash",
+    models: ["deepseek-v4-1-flash", "glm-5.3", "glm-5.3-flash", "kimi-k3", "grok-4.7"],
+    modelContextWindows: {
+      "deepseek-v4-1-flash": 1_000_000, "glm-5.3": 1_000_000, "glm-5.3-flash": 1_000_000, "kimi-k3": 1_000_000, "grok-4.7": 500_000,
+    },
+    modelInputModalities: {
+      "deepseek-v4-1-flash": ["text", "image"], "glm-5.3": ["text"], "glm-5.3-flash": ["text", "image"],
+      "kimi-k3": ["text", "image"], "grok-4.7": ["text", "image"],
+    },
+    noTemperatureModels: ["kimi-k3"],
+    noTopPModels: ["kimi-k3"],
+    note: "Pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and Grok, billed from a prepaid USD balance. Create an API key at console.cheapaimodel.ai. Live discovery lists the models your key can call; deepseek-v4-1-flash is the default. Chat Completions only.",
+  },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
   // Saved defaults are not rewritten; V2.5 stays listed until it stops answering.
