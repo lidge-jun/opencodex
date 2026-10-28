@@ -31,7 +31,7 @@ every caller, and reads only caches other paths filled:
 - Per-account OAuth quota (Anthropic instances, Kiro, Antigravity, xAI, Cursor, Kimi, Command Code,
   Devin, DSH, Meta): the last-good per-account cache. A current `QuotaFailureCode` becomes
   `failure`.
-- Claude CLI: `peekClaudeUsageObservation` in `src/adapters/claude-cli/usage-admission.ts`, which
+- Claude CLI: `peekClaudeUsageObservation` in `src/providers/claude-cli-usage-state.ts`, which
   reads the admission snapshot from memory or its file without resolving the sign-in. A parsed CLI
   limit refusal is a `custom` window `refusal` with `exhausted: true` and source `estimated`.
 - Provider reports: `heldProviderQuotaReports`, the reports the Home last published. They are the

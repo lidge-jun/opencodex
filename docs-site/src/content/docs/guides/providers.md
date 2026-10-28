@@ -1443,6 +1443,10 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;
   giving several people their own Claude usage needs one proxy user per sign-in.
+- **Subscription usage:** the Providers workspace shows the plan's 5-hour, weekly and model-scoped
+  windows from the last usage check OpenCodex recorded before a turn. Opening the page never probes
+  or launches the CLI, and **Refresh quota** re-reads that recorded observation rather than
+  Anthropic's endpoint; before the first Claude turn there is nothing to show.
 - **Input media:** the row publishes its models as text-only for v1. The CLI accepts an image frame
   on its stream-json input, but no headless turn has been shown to hand those bytes to the model, so
   an image sent straight to this provider is refused (`unsupported_input_modality`) instead of

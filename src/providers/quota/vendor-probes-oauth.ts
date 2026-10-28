@@ -9,6 +9,7 @@ import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-accoun
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
 import { probeAnthropicUsageQuota, type AnthropicUsageProbe } from "../claude-cli-usage";
+import { peekClaudeUsageObservation } from "../claude-cli-usage-state";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
   commitKiroAccountUsageState,
@@ -422,6 +423,23 @@ export async function fetchPassiveProviderQuota(provider: string): Promise<Provi
   const entry = accountQuotaCache.get(accountCacheKey(provider, activeId));
   if (!entry?.quota) return null;
   const built = report(provider, `${provider}:subscription-observation`, entry.quota);
+  // Tagged here rather than inside report(), which every probed path shares.
+  return built ? { ...built, observed: true } : null;
+}
+
+/**
+ * Provider-level row for the Claude Code CLI subscription: the last usage the admission
+ * recorded, in the same shape `fetchPassiveProviderQuota` returns.
+ *
+ * Cache-only. OpenCodex stores no Claude credential and this path must never spawn the CLI or
+ * probe an endpoint on a dashboard load; the admission already reads Anthropic's usage endpoint
+ * before a launch. A forced quota refresh re-reads this snapshot, not the upstream. `updatedAt`
+ * stays the observation time, which is the age the quota card renders.
+ */
+export function fetchClaudeCliObservedQuota(provider: string): ProviderQuotaReport | null {
+  const observation = peekClaudeUsageObservation();
+  if (!observation?.quota) return null;
+  const built = report(provider, `${provider}:subscription-observation`, observation.quota);
   // Tagged here rather than inside report(), which every probed path shares.
   return built ? { ...built, observed: true } : null;
 }

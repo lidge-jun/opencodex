@@ -62,6 +62,7 @@ import {
 import {
   fetchAnthropicQuota,
   fetchChatGptForwardQuota,
+  fetchClaudeCliObservedQuota,
   fetchCursorQuota,
   fetchKiroQuota,
   fetchMuseKeyQuota,
@@ -120,6 +121,9 @@ async function maybeFetchProviderQuota(
 ): Promise<ProviderQuotaProbeResult> {
   if (provider.disabled === true) return null;
   try {
+    // The Claude Code CLI owns its sign-in and reports the subscription windows itself; there is
+    // no key or token for this facade to probe, so publish the admission's last observation.
+    if (provider.adapter === "claude-cli") return fetchClaudeCliObservedQuota(name);
     if (isBuiltInChatGptForwardProvider(name, provider)) {
       return fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);
     }

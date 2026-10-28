@@ -42,7 +42,7 @@ import {
 } from "../providers/quota/account-cache";
 import { parseQuotaFailureCode } from "../providers/quota-types";
 import { getAccountSet } from "../oauth/store";
-import { peekClaudeUsageObservation } from "../adapters/claude-cli/usage-admission";
+import { peekClaudeUsageObservation } from "../providers/claude-cli-usage-state";
 import {
   QUOTA_POOL_SCHEMA,
   type QuotaPool,
