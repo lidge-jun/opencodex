@@ -586,6 +586,8 @@ function refusedPlan(
 }
 
 const NOT_EVALUATED: CodexCliUpdateSession = Object.freeze({ state: "not-evaluated" as const, matches: null });
+const WINDOWS_TOOLCHAIN_CLOSURE_UNVERIFIED: CodexCliUpdateTarget = Object.freeze({
+  kind: "unresolved", reason: "Windows toolchain closure unverified" });
 
 /**
  * Build the dry-run plan. Installs nothing and mutates no application state;
@@ -637,8 +639,12 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   const resolveTarget = deps.resolveTarget
     ?? (ch => resolveCodexCliUpdateArtifactTarget(ch, deps.spawnProcess ?? spawnCodexCliUpdateMetadata, deps.inspectionDeps?.env,
       platform, windowsEvidence?.arch ?? deps.inspectionDeps?.arch ?? process.arch, windowsEvidence ?? undefined));
+  // Holding node.exe and npm-cli.js does not cover npm's module closure or Node's
+  // executable dependencies. Until that closure is verified write-private and held,
+  // a Windows plan spawns no npm metadata child and stays unresolved.
   const target = windowsEvidence
-    ? await withWindowsCodexCliPlanToolchain(report, () => resolveTarget(channel))
+    ? await withWindowsCodexCliPlanToolchain(report,
+      () => deps.resolveTarget ? resolveTarget(channel) : WINDOWS_TOOLCHAIN_CLOSURE_UNVERIFIED)
       ?? Object.freeze({ kind: "unresolved" as const, reason: "Windows toolchain identity changed" })
     : await resolveTarget(channel);
   if (target.kind !== "resolved") {

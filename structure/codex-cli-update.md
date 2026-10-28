@@ -96,8 +96,9 @@ This observes linkage and content, not publisher authenticity or a whole-tree gu
 The fresh-source Worker case in `tests/codex-integration/codex-cli-windows-plan.test.ts`
 rebuilds private evidence through the native inspector inside that realm before resolving
 owned fixture metadata. It does not establish compiled-worker or Windows ARM64 support.
-Metadata queries use the observed Node/npm paths under freshly matching held handles,
-the existing isolated npm configuration/cache, and the pinned registry. No installer runs.
+Holding `node.exe` and `npm-cli.js` does not verify npm's module closure or Node's executable
+dependencies, so the default Windows plan spawns no npm metadata child and reports
+`target_unresolved` until that closure is verified write-private and held. No installer runs.
 A completed Windows read-only plan has a deterministic ID and `applicable: false`,
 `refusal: windows_apply_disabled`; active/unknown sessions still refuse earlier.
 The independent Windows apply entrypoint remains refused before inspection or lease creation.

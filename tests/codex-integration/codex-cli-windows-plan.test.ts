@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { inspectCodexCliInstall, MAX_NATIVE_BACKING_BYTES } from "../../src/codex/cli-install-provenance";
@@ -383,7 +383,7 @@ native("actual CLI handler reaches production inspector and plan from the proof-
   expect(reached).toBe(true);
 });
 
-native("a fresh production Worker rebuilds private Windows plan evidence before reading fixture metadata", async () => {
+native("a fresh production Worker rebuilds private Windows plan evidence and spawns no unverified npm closure", async () => {
   const f = fixture(); const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
   copyFileSync(hostNode!, join(f.toolchainPrefix, "node.exe"));
   const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
@@ -391,9 +391,13 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
     dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
   const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
     tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
-  // Only this owned npm protocol fixture runs; Codex and real npm never execute.
-  writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
-    `const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+  // Owned npm protocol fixture with a separate required module; it must not run
+  // while npm's module closure is unverified. Codex and real npm never execute.
+  const marker = join(f.root, "npm-module-executed");
+  mkdirSync(join(f.npmRoot, "lib"), { recursive: true });
+  writeFileSync(join(f.npmRoot, "lib", "cli.js"), `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran');
+const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+  writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"), "require('../lib/cli.js');");
   let starts = 0, worker: Worker | undefined, closed = false;
   try {
     const plan = await runCodexCliUpdatePlanInWorker({
@@ -410,12 +414,10 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
     });
     expect(starts).toBe(1);
     expect(closed).toBe(true);
-    expect(plan).toMatchObject({ managed: true, installedVersion: "1.2.3", targetVersion: "1.2.4",
-      targetIntegrity: integrity, applicable: false });
+    expect(plan).toMatchObject({ managed: true, installedVersion: "1.2.3", targetVersion: null,
+      targetIntegrity: null, applicable: false, planId: null, refusal: "target_unresolved" });
     expect(plan.installContentDigest).toMatch(/^[a-f0-9]{64}$/);
-    // Real process observation may find active/unreadable sessions. Either refusal
-    // is after private-evidence admission and successful fixture metadata resolution.
-    expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+    expect(existsSync(marker)).toBe(false);
     expect(JSON.stringify(plan)).not.toContain(f.root);
   } finally {
     // afterEach retains this fixture even if the test times out before this
@@ -424,7 +426,7 @@ native("a fresh production Worker rebuilds private Windows plan evidence before 
   }
 }, 60_000);
 
-native("published Node CLI uses the production inspector and observed toolchain for read-only metadata", () => {
+native("published Node CLI plan spawns no npm module while the toolchain closure is unverified", () => {
   const f = fixture(); const hostNode = Bun.which("node"); expect(hostNode).not.toBeNull();
   const node = join(f.toolchainPrefix, "node.exe"); copyFileSync(hostNode!, node);
   const integrity = "sha512-" + Buffer.alloc(64, 1).toString("base64");
@@ -432,9 +434,14 @@ native("published Node CLI uses the production inspector and observed toolchain 
     dist: { integrity, tarball: "https://registry.npmjs.org/@openai/codex/-/codex-1.2.4.tgz" } };
   const backing = { name: "@openai/codex-win32-x64", version: "1.2.4", dist: { integrity,
     tarball: "https://registry.npmjs.org/@openai/codex-win32-x64/-/codex-win32-x64-1.2.4.tgz" } };
-  // Controlled registry protocol fixture; no real npm installation or network request.
-  writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"),
-    `const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+  // Controlled registry protocol fixture split across npm's entrypoint and a separate
+  // required module, as in npm itself. Neither may run: holding node.exe and
+  // npm-cli.js does not verify the module closure. No real npm or network request.
+  const marker = join(f.root, "npm-module-executed");
+  mkdirSync(join(f.npmRoot, "lib"), { recursive: true });
+  writeFileSync(join(f.npmRoot, "lib", "cli.js"), `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran');
+const spec = process.argv[3]; console.log(JSON.stringify(spec.startsWith('@openai/codex-win32-x64@') ? ${JSON.stringify(backing)} : ${JSON.stringify(main)}));`);
+  writeFileSync(join(f.npmRoot, "bin", "npm-cli.js"), "require('../lib/cli.js');");
   // This independent npm fixture has no manager roots. Inheriting the host's
   // NVM_SYMLINK junction would correctly refuse the plan before metadata.
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
@@ -446,9 +453,9 @@ native("published Node CLI uses the production inspector and observed toolchain 
   });
   expect(run.error).toBeUndefined(); expect(run.status).toBe(0);
   const plan = JSON.parse(run.stdout);
-  expect(plan.managed).toBe(true); expect(plan.targetVersion).toBe("1.2.4");
-  expect(plan.targetIntegrity).toBe(integrity);
-  expect(plan.applicable).toBe(false);
-  expect(["blocked_active_session", "blocked_process_state_unknown", "windows_apply_disabled"]).toContain(plan.refusal);
+  expect(plan.managed).toBe(true);
+  expect(plan).toMatchObject({ applicable: false, planId: null, refusal: "target_unresolved",
+    targetVersion: null, targetIntegrity: null });
+  expect(existsSync(marker)).toBe(false);
   expect(JSON.stringify(plan)).not.toContain(f.root);
 }, 60_000);
