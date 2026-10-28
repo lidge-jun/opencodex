@@ -34,6 +34,16 @@ beforeEach(() => {
   requests = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     requests.push({ url: String(input), init });
+    const url = String(input);
+    if (url === "/api/provider-presets") {
+      return Response.json({ providers: [{ id: item.name, baseUrlChoices: [
+        { id: "region-a", label: "Region A", baseUrl: item.baseUrl },
+        { id: "region-b", label: "Region B", baseUrl: "http://127.0.0.2:9/v1" },
+      ] }] });
+    }
+    if (url.startsWith("/api/provider-request-pacing")) {
+      return Response.json({ enabled: true, queued: 3, nextSlotInMs: 250, lastModelId: "configured" });
+    }
     return Response.json({ applicable: true, ok: true, latencyMs: 3 });
   }) as typeof fetch;
 });
@@ -82,10 +92,22 @@ test("overview without any api base renders no probes and sends nothing", async 
   expect(requests).toHaveLength(0);
 });
 
-test("same-origin settings loads endpoint choices and request pacing status", async () => {
+test("same-origin settings loads and renders endpoint choices and request pacing status", async () => {
   await mount(<ProviderSettings item={item} apiBase="" availableModels={["configured"]}
     onUpdateProvider={async () => ({ ok: true })} />);
+  await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 0)); });
   const urls = requests.map(r => r.url);
   expect(urls).toContain("/api/provider-presets");
   expect(urls).toContain("/api/provider-request-pacing?name=local%20vendor");
+  // The endpoint picker is built from the preset response and preselects the saved base URL.
+  const endpoint = Array.from(host.querySelectorAll<HTMLSelectElement>("select"))
+    .find(select => Array.from(select.options).some(option => option.value === "region-b"));
+  expect(endpoint).toBeTruthy();
+  expect(Array.from(endpoint!.options).map(option => option.value)).toEqual(["region-a", "region-b"]);
+  expect(endpoint!.value).toBe("region-a");
+  // The live pacing status comes from the pacing response.
+  const pacing = host.querySelector(".pwi-pacing-status")!.textContent ?? "";
+  expect(pacing).toContain("3");
+  expect(pacing).toContain("250 ms");
+  expect(pacing).toContain("configured");
 });
