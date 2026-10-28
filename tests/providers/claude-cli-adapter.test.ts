@@ -1049,27 +1049,27 @@ describe("Issue #6469 — offline fixtures", () => {
   const systemInit = enc.encode('{"type":"system","subtype":"init","mcp_servers":[{"name":"opencodex","status":"connected"}]}\n');
 
   test("1. tool-use round trip: tool request, matching result, schema-valid final JSON", async () => {
-    const stdout = [
+    const events = await run(adapterWith([
       systemInit,
       enc.encode(claudeCliToolFrame(0, "tu_1", CLAUDE_CLI_MCP_TOOL, '{"path":"a"}')),
+      enc.encode(textDelta('{"answer":"42"}')),
       enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":4,"output_tokens":2}}\n'),
-    ];
-    const events = await run(adapterWith(stdout), claudeCliToolRequest());
+    ]), claudeCliToolRequest());
     const starts = events.filter(e => e.type === "tool_call_start");
     expect(starts).toHaveLength(1);
     expect(starts[0]).toMatchObject({ type: "tool_call_start", id: "tu_1", name: "read_file" });
     expect(events.filter(e => e.type === "tool_call_delta").map(e => (e as { arguments: string }).arguments))
       .toEqual(['{"path":"a"}']);
     expect(events.filter(e => e.type === "tool_call_end")).toHaveLength(1);
+    expect(events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe('{"answer":"42"}');
   });
 
   test("2. tool-free control: normal final output without tool continuation", async () => {
-    const stdout = [
+    const events = await run(adapterWith([
       enc.encode('{"type":"system","subtype":"init"}\n'),
       enc.encode(textDelta("hello world")),
       enc.encode('{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":3,"output_tokens":2}}\n'),
-    ];
-    const events = await run(adapterWith(stdout), parsed());
+    ]), parsed());
     expect(events.filter(e => e.type === "tool_call_start")).toEqual([]);
     expect(events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe("hello world");
     expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "stop" });
@@ -1115,10 +1115,30 @@ describe("Issue #6469 — offline fixtures", () => {
     expect(events.some(e => e.type === "done")).toBe(true);
   });
 
-  test("6a. call-ID negative: tool result id that never started is ignored", async () => {
-    const events = await run(adapterWith([
+  test("5b. invalid model JSON remains plain text for unsupported schema", async () => {
+    const schemaRequest = parsed({ options: { textFormat: { type: "json_schema", name: "probe", schema: { type: "object" } } } });
+    const invalidModelText = "not-json";
+    const stdout = [
+      systemInit,
+      enc.encode(textDelta(invalidModelText)),
       enc.encode('{"type":"result","subtype":"success","is_error":false}\n'),
-    ]), claudeCliToolRequest({
+    ];
+    const events = await run(adapterWith(stdout), schemaRequest);
+    expect(events.filter(e => e.type === "text_delta").map(e => (e as { text: string }).text).join("")).toBe(invalidModelText);
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+  });
+
+  test("6a. call-ID negative: tool result id that never started is ignored", async () => {
+    const written: Uint8Array[] = [];
+    const child = fakeChild([enc.encode('{"type":"result","subtype":"success","is_error":false}\n')], { exitCode: 0 });
+    const adapter = createClaudeCliAdapter(provider(), {
+      spawn: () => child as unknown as ChildProcess,
+      which: () => "/opt/homebrew/bin/claude",
+      killGraceMs: 20,
+    });
+    const writeSpy = child.write;
+    child.write = (chunk: any) => { written.push(chunk as Uint8Array); return writeSpy.call(child, chunk); };
+    const events = await run(adapter, claudeCliToolRequest({
       context: {
         messages: [
           { role: "user", content: "Read the fixture", timestamp: 0 },
@@ -1128,7 +1148,8 @@ describe("Issue #6469 — offline fixtures", () => {
       },
     }));
     expect(events.filter(e => e.type === "tool_call_start")).toEqual([]);
-    expect(events.filter(e => e.type === "tool_result")).toEqual([]);
+    const writtenText = written.map(w => w.toString()).join("");
+    expect(writtenText).not.toContain("nonexistent-id");
   });
 
   test("6b. call-ID negative: mismatched tool-result identifier stays intact", async () => {
@@ -1152,7 +1173,7 @@ describe("Issue #6469 — offline fixtures", () => {
     expect(starts[0]).toMatchObject({ type: "tool_call_start", id: "tu_1", name: "read_file" });
   });
 
-  test("7. cancellation: abort terminates CLI, releases buffer", async () => {
+  test("7. cancellation: abort terminates CLI and releases buffer", async () => {
     const child = fakeChild([enc.encode(textDelta("partial text"))], { emitClose: false });
     const adapter = createClaudeCliAdapter(provider(), {
       spawn: () => child as unknown as ChildProcess,
