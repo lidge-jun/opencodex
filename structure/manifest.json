@@ -497,6 +497,13 @@
       "documents": ["src/claude/", "src/server/responses/"]
     },
     {
+      "path": "data-planes/claude-tier-routing.md",
+      "tier": 3,
+      "title": "Claude Ingress Tier Routing",
+      "scope": "Opt-in claudeCode.tierRoutes resolution on Claude ingress, precedence against modelMap and classifier routes, preview and count_tokens.",
+      "documents": ["src/claude/", "src/protocols/", "src/server/"]
+    },
+    {
       "path": "data-planes/chat-reasoning-details.md",
       "tier": 3,
       "title": "Anthropic Thinking Signatures on the Chat Wire",
