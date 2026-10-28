@@ -355,7 +355,7 @@
   "bridge-raw-reasoning-hidden.test.ts": "adapters", "bridge-reasoning-replay-batch.test.ts": "adapters",
   "bridge-stall.test.ts": "adapters", "bridge-terminal-singleness.test.ts": "adapters",
   "bridge.test.ts": "adapters", "buffered-response-shape-guards.test.ts": "adapters",
-  "build-desktop-icon-set.test.ts": "ci-workflows", "build-release-changelog.test.ts": "ci-workflows", "ci-gui-typecheck-gate.test.ts": "ci-workflows",
+  "build-desktop-icon-set.test.ts": "ci-workflows", "build-release-changelog.test.ts": "ci-workflows", "ci-gui-typecheck-gate.test.ts": "ci-workflows", "ci-bun-install-frozen.test.ts": "ci-workflows",
   "bump-dev-version.test.ts": "ci-workflows", "bun-runtime.test.ts": "ci-workflows",
   "bun-transpiler-cache-scope.test.ts": "cli",
   "bun-stream-caps.test.ts": "lib", "cache-diagnostic.test.ts": "usage",
