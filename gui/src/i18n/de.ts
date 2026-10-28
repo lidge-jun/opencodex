@@ -34,7 +34,7 @@ export const de: Record<TKey, string> = {
   "pws.completion.request_pacing": "Die Anfragedrosselung ist aktiviert.",
   "pws.completion.custom_executor_egress": "Ein eigener Fetch-Executor mit Anbieter-Proxy kann nicht beibehalten werden.",
   "pws.completion.runAll": "Alle Modelle testen",
-  "pws.completion.allConfirm": "Alle {count} Modelle bei {provider} testen? Dabei werden {count} echte Anfragen nacheinander gesendet, jeweils mit einer Ausgabegrenze von 32 Tokens. Das verbraucht Kontingent und kann Kosten verursachen.",
+  "pws.completion.allConfirm": "Alle {count} Modelle bei {provider} testen? Dabei werden bis zu {count} echte Anfragen nacheinander gesendet, jeweils mit einer Ausgabegrenze von 32 Tokens. Manche Modelle werden vor dem Senden übersprungen. Das verbraucht Kontingent und kann Kosten verursachen.",
   "pws.completion.stop": "Stopp",
   "pws.completion.progress": "Teste {done} von {total}…",
   "pws.completion.stopped": "Nach {done} von {total} Modellen gestoppt",

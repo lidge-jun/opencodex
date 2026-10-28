@@ -31,7 +31,7 @@ export const zhTW: Record<TKey, string> = {
   "pws.completion.request_pacing": "已啟用請求速率控制。",
   "pws.completion.custom_executor_egress": "無法保留同時使用供應商代理的自訂 fetch 執行器。",
   "pws.completion.runAll": "測試所有模型",
-  "pws.completion.allConfirm": "測試 {provider} 上全部 {count} 個模型？這會逐一送出 {count} 個真實請求，每個請求的輸出上限為 32 個 token。這會消耗配額並可能產生費用。",
+  "pws.completion.allConfirm": "測試 {provider} 上全部 {count} 個模型？這會逐一送出最多 {count} 個真實請求，每個請求的輸出上限為 32 個 token。部分模型可能在送出請求前被略過。這會消耗配額並可能產生費用。",
   "pws.completion.stop": "停止",
   "pws.completion.progress": "正在測試 {done}/{total}…",
   "pws.completion.stopped": "已在 {done}/{total} 個模型後停止",

@@ -34,7 +34,7 @@ export const tr: Record<TKey, string> = {
   "pws.completion.request_pacing": "İstek aralığı sınırlaması etkin.",
   "pws.completion.custom_executor_egress": "Sağlayıcı vekiliyle kullanılan özel fetch yürütücüsü korunamaz.",
   "pws.completion.runAll": "Tüm modelleri test et",
-  "pws.completion.allConfirm": "{provider} üzerindeki {count} modelin tümü test edilsin mi? Her biri 32 token çıktı sınırına sahip {count} gerçek istek tek tek gönderilir. Kota tüketir ve maliyet oluşturabilir.",
+  "pws.completion.allConfirm": "{provider} üzerindeki {count} modelin tümü test edilsin mi? Her biri 32 token çıktı sınırına sahip en fazla {count} gerçek istek tek tek gönderilir. Bazı modeller gönderimden önce atlanabilir. Kota tüketir ve maliyet oluşturabilir.",
   "pws.completion.stop": "Durdur",
   "pws.completion.progress": "{total} içinden {done} test ediliyor…",
   "pws.completion.stopped": "{total} modelden {done} tanesinden sonra durduruldu",

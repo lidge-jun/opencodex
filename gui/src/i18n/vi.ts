@@ -35,7 +35,7 @@ export const vi: Record<TKey, string> = {
   "pws.completion.request_pacing": "Đã bật điều tiết yêu cầu.",
   "pws.completion.custom_executor_egress": "Không thể giữ bộ thực thi fetch tùy chỉnh kết hợp proxy của nhà cung cấp.",
   "pws.completion.runAll": "Kiểm tra tất cả mô hình",
-  "pws.completion.allConfirm": "Kiểm tra cả {count} mô hình trên {provider}? Thao tác này gửi lần lượt {count} yêu cầu thật, mỗi yêu cầu giới hạn đầu ra 32 token. Việc này tiêu tốn hạn mức và có thể phát sinh chi phí.",
+  "pws.completion.allConfirm": "Kiểm tra cả {count} mô hình trên {provider}? Thao tác này gửi lần lượt tối đa {count} yêu cầu thật, mỗi yêu cầu giới hạn đầu ra 32 token. Một số mô hình có thể được bỏ qua trước khi gửi. Việc này tiêu tốn hạn mức và có thể phát sinh chi phí.",
   "pws.completion.stop": "Dừng",
   "pws.completion.progress": "Đang kiểm tra {done}/{total}…",
   "pws.completion.stopped": "Đã dừng sau {done}/{total} mô hình",

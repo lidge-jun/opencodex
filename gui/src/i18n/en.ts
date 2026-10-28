@@ -35,7 +35,7 @@ export const en = {
   "pws.completion.request_pacing": "Request pacing is enabled.",
   "pws.completion.custom_executor_egress": "A custom fetch executor with a provider proxy cannot be preserved.",
   "pws.completion.runAll": "Test all models",
-  "pws.completion.allConfirm": "Test all {count} models on {provider}? This sends {count} real completion requests, one at a time, each with an output cap of 32 tokens. It consumes quota and may incur costs.",
+  "pws.completion.allConfirm": "Test all {count} models on {provider}? This sends up to {count} real completion requests, one at a time, each with an output cap of 32 tokens. Some models may be skipped before sending. It consumes quota and may incur costs.",
   "pws.completion.stop": "Stop",
   "pws.completion.progress": "Testing {done} of {total}…",
   "pws.completion.stopped": "Stopped after {done} of {total} models",

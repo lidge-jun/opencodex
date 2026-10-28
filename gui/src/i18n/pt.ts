@@ -35,7 +35,7 @@ export const pt: Record<TKey, string> = {
   "pws.completion.request_pacing": "O controle de ritmo das solicitações está ativado.",
   "pws.completion.custom_executor_egress": "Não é possível manter um executor fetch personalizado com proxy do provedor.",
   "pws.completion.runAll": "Testar todos os modelos",
-  "pws.completion.allConfirm": "Testar os {count} modelos de {provider}? Isso envia {count} requisições reais, uma de cada vez, cada uma com limite de saída de 32 tokens. Consome cota e pode gerar custos.",
+  "pws.completion.allConfirm": "Testar os {count} modelos de {provider}? Isso envia até {count} requisições reais, uma de cada vez, cada uma com limite de saída de 32 tokens. Alguns modelos podem ser ignorados antes do envio. Consome cota e pode gerar custos.",
   "pws.completion.stop": "Parar",
   "pws.completion.progress": "Testando {done} de {total}…",
   "pws.completion.stopped": "Interrompido após {done} de {total} modelos",

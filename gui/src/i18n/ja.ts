@@ -33,7 +33,7 @@ export const ja: Record<TKey, string> = {
   "pws.completion.request_pacing": "リクエストのペーシングが有効です。",
   "pws.completion.custom_executor_egress": "プロバイダーのプロキシを併用するカスタムfetch実行器を維持できません。",
   "pws.completion.runAll": "すべてのモデルをテスト",
-  "pws.completion.allConfirm": "{provider} の {count} 個のモデルをすべてテストしますか？出力上限 32 トークンの実際のリクエストを 1 件ずつ {count} 件送信します。クォータを消費し、費用が発生する場合があります。",
+  "pws.completion.allConfirm": "{provider} の {count} 個のモデルをすべてテストしますか？出力上限 32 トークンの実際のリクエストを 1 件ずつ最大 {count} 件送信します。一部のモデルは送信前にスキップされる場合があります。クォータを消費し、費用が発生する場合があります。",
   "pws.completion.stop": "停止",
   "pws.completion.progress": "{total} 件中 {done} 件をテスト中…",
   "pws.completion.stopped": "{total} 件中 {done} 件で停止しました",

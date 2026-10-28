@@ -33,7 +33,7 @@ export const ko: Record<TKey, string> = {
   "pws.completion.request_pacing": "요청 속도 조절이 활성화되어 있습니다.",
   "pws.completion.custom_executor_egress": "공급자 프록시와 함께 사용하는 사용자 지정 fetch 실행기를 유지할 수 없습니다.",
   "pws.completion.runAll": "모든 모델 테스트",
-  "pws.completion.allConfirm": "{provider}의 모델 {count}개를 모두 테스트할까요? 출력 상한 32토큰의 실제 요청 {count}건을 하나씩 보냅니다. 할당량을 소비하며 비용이 발생할 수 있습니다.",
+  "pws.completion.allConfirm": "{provider}의 모델 {count}개를 모두 테스트할까요? 출력 상한 32토큰의 실제 요청을 최대 {count}건 하나씩 보냅니다. 일부 모델은 요청을 보내기 전에 건너뛸 수 있습니다. 할당량을 소비하며 비용이 발생할 수 있습니다.",
   "pws.completion.stop": "중지",
   "pws.completion.progress": "{total}개 중 {done}개 테스트 중…",
   "pws.completion.stopped": "{total}개 중 {done}개에서 중지됨",

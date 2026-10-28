@@ -56,6 +56,9 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
       const detail = value.error
         ? `${value.error.code}${value.error.status !== undefined ? ` (${value.error.status})` : ""}`
         : value.termination;
+      if (value.error?.code === "http_status" && [401, 403, 429].includes(value.error.status ?? 0)) {
+        return { model, outcome: "skipped", detail };
+      }
       return { model, outcome: "failed", latencyMs: value.totalLatencyMs, detail };
     } catch (cause) {
       return { model, outcome: "skipped", detail: cause instanceof Error ? cause.message : t("pws.completion.failed") };

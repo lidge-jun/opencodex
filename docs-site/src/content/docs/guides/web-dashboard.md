@@ -522,10 +522,11 @@ For the CLI workflow, see [Providers and accounts](/reference/cli/providers-acco
 
 **Test all models** runs the same completion test for every configured, listed and
 default model of the provider, one request at a time, after a single confirmation that
-states how many requests it sends. **Stop** cancels the in-flight request and sends no
+states the maximum number of requests; some models can be skipped before sending. **Stop** cancels the in-flight request and sends no
 more. Each model is reported as passed, failed (the upstream answered with an error or
 timed out) or not tested (the management API refused the request, for example a
-concurrent test, missing or changed credentials, or a refused destination). An unsupported
+concurrent test, missing or changed credentials, a refused destination, or upstream HTTP
+401/403/429 authentication, access or quota refusals). These HTTP refusals do not become disable targets. An unsupported
 effective adapter marks only that model as not tested and continues, because one provider
 can use different wires for different models. Provider-wide applicability refusals, such as
 OAuth authentication or unsupported transport settings, stop the run. When any model failed, **Disable failed models** asks a second

@@ -76,6 +76,8 @@ const outcomes = () => Array.from(host.querySelectorAll("[data-model-test-outcom
 test("one confirmation names the count and cost; canceling sends nothing", async () => {
   await render(); await runAll(false);
   expect(actionDialogText(document)).toContain("3 models");
+  expect(actionDialogText(document)).toContain("up to 3 real completion requests");
+  expect(actionDialogText(document)).toContain("skipped before sending");
   expect(actionDialogText(document)).toContain("quota");
   expect(actionDialogText(document)).toContain("32");
   await act(async () => { dismissActionDialog(document); });
@@ -241,4 +243,15 @@ test("a credential change aborts a pending disable write and ignores its late re
   await act(async () => { release(Response.json({ ok: true })); });
   expect(button("Disable 1 failed models")!.disabled).toBe(false);
   expect(host.textContent).not.toContain("Disabled 1 models");
+});
+
+test.each([401, 403, 429])("upstream HTTP %s is not a disable target", async status => {
+  answers.good = () => Response.json({ ...success, ok: false, termination: "failed",
+    error: { code: "http_status", status, message: "provider refused the request" } });
+  answers.bad = answers.good!;
+  await render(); await runAll();
+  expect(outcomes()).toEqual([["good", "skipped"], ["bad", "skipped"], ["busy", "skipped"]]);
+  expect(host.textContent).toContain(`http_status (${status})`);
+  expect(host.textContent).toContain("0 passed, 0 failed, 3 not tested");
+  expect(button(/^Disable/)).toBeUndefined();
 });

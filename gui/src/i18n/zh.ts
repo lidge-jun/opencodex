@@ -33,7 +33,7 @@ export const zh: Record<TKey, string> = {
   "pws.completion.request_pacing": "已启用请求速率控制。",
   "pws.completion.custom_executor_egress": "无法保留同时使用提供商代理的自定义 fetch 执行器。",
   "pws.completion.runAll": "测试所有模型",
-  "pws.completion.allConfirm": "测试 {provider} 上全部 {count} 个模型？这会逐个发送 {count} 个真实请求，每个请求的输出上限为 32 个 token。这会消耗配额并可能产生费用。",
+  "pws.completion.allConfirm": "测试 {provider} 上全部 {count} 个模型？这会逐个发送最多 {count} 个真实请求，每个请求的输出上限为 32 个 token。部分模型可能在发送请求前被跳过。这会消耗配额并可能产生费用。",
   "pws.completion.stop": "停止",
   "pws.completion.progress": "正在测试 {done}/{total}…",
   "pws.completion.stopped": "已在 {done}/{total} 个模型后停止",
