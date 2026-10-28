@@ -95,6 +95,9 @@ await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))
       OCX_OWNER_REGISTRY_DIR: owned.path("registry"), XDG_RUNTIME_DIR: owned.root },
     stdout: "pipe", stderr: "pipe",
   });
+  const output = Promise.all([
+    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  ]);
   let cleanup: Promise<void> | undefined;
   settleProcesses = () => cleanup ??= (async () => {
     // Stop the live parent tree first, including descendants still loading their entry.
@@ -106,15 +109,15 @@ await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))
       if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) throw new Error("invalid fixture PID");
       if (isProcessAlive(pid)) killProxy(pid);
     }
-    await child.exited;
+    await output;
   })();
   const watchdog = setTimeout(() => {
     void settleProcesses!().catch(error => console.error("restart fixture cleanup failed", error));
   }, 18_000);
+  let captured: unknown;
   try {
-    const [code, stdout, stderr] = await Promise.all([
-      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
-    ]);
+    const [code, stdout, stderr] = await output;
+    captured = { code, stdout, stderr };
     const logPath = owned.path("restart-handoff.log");
     const handoffLog = existsSync(logPath) ? readFileSync(logPath, "utf8") : "(not created)";
     const phasesPath = owned.path("fixture-phases.log");
@@ -132,6 +135,11 @@ await import(${JSON.stringify(fixturePath("restart-parent-ownership-runner.ts"))
       beforeHandoff: { refused: true, pidUnchanged: true },
       successorPid: result.pid, successorRuntime: { pid: result.pid, port: result.port } });
     expect(readFileSync(owned.path("restart-handoff.log"), "utf8")).toContain("is serving port");
+  } catch (error) {
+    const logs = Object.fromEntries(["fixture-phases.log", "probe.stdout.log", "probe.stderr.log", "restart-handoff.log"]
+      .map(name => [name, existsSync(owned.path(name)) ? readFileSync(owned.path(name), "utf8") : "(not created)"]));
+    console.error("restart fixture failed", { captured, logs });
+    throw error;
   } finally {
     clearTimeout(watchdog);
     await settleProcesses();
