@@ -91,8 +91,9 @@ export function classifyRoleModelCandidates(
   }
   const unmapped = candidates.filter(candidate => !mapped.has(candidate.model));
   const scored = unmapped.filter(candidate => measured.has(candidate.model));
+  const scoreTiers = tierByRank([...new Set(scored.map(candidate => measured.get(candidate.model)!))].sort((a, b) => a - b));
   const byScore = scored.length >= 2
-    ? tierByRank(scored.map(candidate => candidate.model).sort((a, b) => measured.get(a)! - measured.get(b)!))
+    ? new Map(scored.map(candidate => [candidate.model, scoreTiers.get(measured.get(candidate.model)!)!] as const))
     : new Map<string, SizingTier>();
   const byPrice = byScore.size > 0
     ? new Map<string, SizingTier>()

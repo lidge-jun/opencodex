@@ -356,8 +356,8 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   is not sent. The call goes through the proxy's own `/v1/chat/completions` via
   `postLocalChatCompletion` (`src/lib/local-chat-completion.ts`, shared with the routed vision describer), on
   the root `model` of Codex `config.toml` unless the caller names one. An answer that is not the strict JSON
-  shape, a missing role, or a field outside the vocabulary leaves that role **unsized** with the reason;
-  nothing is guessed. Keys beyond the five answer fields are ignored, and all five stay required. The
+  shape, a missing role, or a tier or effort outside the vocabulary leaves that role **unsized** with the reason;
+  a missing or unknown domain defaults to general. Keys beyond the six answer fields are ignored; the other five stay required. The
   sizing model never names a model.
 - **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from
   `subagentSelectableModels` (the same list the role picker renders) and tiers them: `codexRoleTiers` in the
@@ -368,14 +368,15 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   resolves. Otherwise or on failure, it reads the LMArena leaderboard dataset (CC BY 4.0) once per clock
   hour only with `codexRoleCapability.huggingFace.enabled: true` (default off). With it off, both paths
   make no Hugging Face request, keep configured tiers and price signals, and report benchmark data
-  unavailability through `capability.error`.
+  unavailability through `capability.error`. Both sources refuse redirects, retain a 30-second timeout
+  and a 16 MiB body bound, and never download a redirected body; redirected datasets are unavailable.
   The response's `capability` block attributes the source; Artificial Analysis terms forbid
-  redistribution, so its scores are dropped from that block. With two or more measured candidates the measured ones are tiered by score
+  redistribution, so its scores are dropped from that block. With two or more measured candidates the measured ones are tiered by distinct score values (equal scores share a tier), without requiring prices,
   and unmeasured ones are not proposed; otherwise, or when the source cannot be read, price rank decides
   and `capability.error` says why. Each proposal names its `tierSource`. Three or more priced models
   split evenly across the three tiers. Fewer are anchored at the top, the dearest frontier and each cheaper
   one a tier lower, so one is frontier and two are standard and frontier; fast is the tier left empty,
-  which keeps a standard role on the cheaper model. Unpriced, unmapped models are never proposed. A role
+  which keeps a standard role on the cheaper model. Price tiering excludes unpriced, unmapped models. A role
   gets the lowest sufficient tier, then the lowest price, then the model it already uses when that model is
   in the tie, then picker order. Effort binds to ladder positions of the chosen
   model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed

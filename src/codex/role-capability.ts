@@ -165,7 +165,7 @@ export async function readBoundedBytes(response: Response, maxBytes: number): Pr
 
 async function readLatest(config: string, fetchImpl: typeof fetch): Promise<LeaderboardRow[]> {
   const url = `${ARENA_SOURCE.url}/resolve/main/${config}/latest-00000-of-00001.parquet`;
-  const response = await fetchImpl(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  const response = await fetchImpl(url, { redirect: "error", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return await parquetReadObjects({ file: await readBoundedBytes(response, MAX_TABLE_BYTES) }) as LeaderboardRow[];
 }
@@ -178,6 +178,7 @@ export async function fetchCapabilityTable(fetchImpl: typeof fetch = fetch): Pro
 
 export async function fetchArtificialAnalysisTable(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<CapabilityTable> {
   const response = await fetchImpl(ARTIFICIAL_ANALYSIS_URL, {
+    redirect: "error",
     headers: { "x-api-key": apiKey },
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });

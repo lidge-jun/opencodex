@@ -1349,6 +1349,8 @@
   "codex-agent-role-models.test.ts": "routing", "codex-role-sizing.test.ts": "routing",
   "codex-role-auto-assign.test.ts": "routing", "omo-role-models.test.ts": "clients",
   "codex-role-capability-consent.test.ts": "routing",
+  "codex-role-capability-redirects.test.ts": "routing",
+  "codex-role-measured-ties.test.ts": "routing",
   "lazycodex-detection.test.ts": "clients", "codex-agent-role-routes.test.ts": "server",
   "codex-role-history-recovery.test.ts": "server",
   "codex-role-auto-assign-routes.test.ts": "server", "local-chat-completion.test.ts": "lib",

@@ -977,13 +977,13 @@ then picks the cheapest model from your picker list that reaches the tier:
 - Models listed under `codexRoleTiers` in the opencodex config (`{ "fast": [...], "standard": [...], "frontier": [...] }`)
   have that tier.
 - When two or more of the other models have a published score in the role's domain, those models are
-  tiered by that score, and unscored models are left out. Scores come from the
+  tiered by distinct score values, without requiring a price; equal scores share a tier, and unscored models are left out. Scores come from the
   [LMArena leaderboard dataset](https://huggingface.co/datasets/lmarena-ai/leaderboard-dataset)
   (CC BY 4.0) when explicitly enabled, or from [Artificial Analysis](https://artificialanalysis.ai) when you add your own API key
   (below). The response's `capability` block names the source it used.
 - Other models with a known price are ranked by price and split evenly across the three tiers. With only
   one or two priced models, the dearest is frontier and the other, if any, is standard.
-- Models with no price and no listed tier are never proposed. List them to include them.
+- When tiering falls back to price, models with no price and no listed tier are not proposed. List them to include them.
 
 To use Artificial Analysis, create a free API key at [artificialanalysis.ai](https://artificialanalysis.ai/api-reference)
 and set it as a literal, an `${ENV}` reference or a keychain reference:
@@ -1008,6 +1008,11 @@ to `true` to allow reading the LMArena dataset once per clock hour, either as th
 an Artificial Analysis key or as its fallback. When off, neither path makes a Hugging Face request:
 auto-assign continues with configured tiers and price signals, and `capability.error` reports that
 benchmark data was unavailable. Artificial Analysis can still supply measured scores with its key.
+
+Both benchmark sources refuse HTTP redirects and limit each response body to 16 MiB with a 30-second
+request timeout. Artificial Analysis credentials are sent only to its fixed API endpoint. A redirected
+Hugging Face download is refused too, even with consent enabled; auto-assign then uses configured tiers
+and prices and reports benchmark unavailability rather than following the redirect.
 
 Each proposal shows the model, the tier, the reasoning effort, a one-line reason, and what would move
 it up or down. A role the model could not size clearly is shown as not sized, with the reason, and

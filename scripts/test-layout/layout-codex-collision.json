@@ -1,5 +1,7 @@
 {
   "codex-role-capability-consent.test.ts": "routing",
+  "codex-role-capability-redirects.test.ts": "routing",
+  "codex-role-measured-ties.test.ts": "routing",
   "codex-cli-windows-child.test.ts": "codex-integration",
   "codex-cli-update-windows-apply-install.test.ts": "codex-integration",
   "codex-cli-update-windows-apply-outcomes.test.ts": "codex-integration",
