@@ -326,7 +326,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `preserveResponsesMessageMetadata?` | `boolean` | Default off. Preserve private `internal_chat_message_metadata_passthrough` on input items for explicitly trusted launcher relays, including custom native v1 compact requests. This forwards private turn/session metadata to that destination; do not enable for ordinary gateways. |
 | `dropResponsesReasoningItems?` | `boolean` | Remove replayed Responses `reasoning` items from continuation input entirely, including custom native v1 compact requests, instead of forwarding them with blanked content. This is lossy: summaries, item ids, and `encrypted_content` go with them, so no reasoning item from the previous turn remains in the forwarded input. It does not remove `previous_response_id`, so an upstream holding its own turn state may still reach it. Enable only for an upstream that rejects reasoning replay outright — the built-in Volcengine Ark Coding Plan preset sets it because validated tool continuations answered `400 InvalidParameter` otherwise. Set it to `false` on that provider to forward reasoning items again. |
 | `disabled?` | `boolean` | Keep the provider on disk but exclude it from routing and model/catalog listings. |
-| `apiKey?` | `string` | API key, an `${ENV_VAR}` / `$ENV_VAR` reference, or a `keychain:<provider>` reference written by `ocx provider keychain <name> store`. References resolve at request time. See [Storing keys in the OS keychain](#storing-keys-in-the-os-keychain). |
+| `apiKey?` | `string` | API key, an `${ENV_VAR}` / `$ENV_VAR` reference, or a `keychain:<provider>` reference written by `ocx provider keychain <name> store`. References resolve at request time. See [Storing keys in the OS keychain](/reference/configuration/keychain/). |
 | `apiKeyTransport?` | `"x-api-key" \| "bearer"` | Anthropic key header style. Defaults to native `x-api-key`; valid only for key-auth `anthropic` providers. |
 | `apiKeyPool?` | `ApiKeyPoolEntry[]` | Multi-key pool. `apiKey` mirrors the active entry; each item has `id`, `key`, optional `label`, and optional numeric `addedAt`. |
 | `apiKeyPoolStrategy?` | `"round-robin" \| "fill-first" \| "quota"` | How a warm key is chosen **before** the first attempt when the committed key is already cooling. Omitted keeps rotation reactive-only: the pool moves after a 429 or 401 and not before. `round-robin` takes the next key in the pool, `fill-first` keeps the first eligible one, and `quota` prefers the key with the most remaining headroom, falling back to `fill-first` order for a provider whose per-key quota is unknown. A healthy committed key is never overridden, so a manual key selection stands. |
@@ -1590,60 +1590,11 @@ same mapping applies to a native `vercel/<model-id>` selector: use the encoded
 `vercel-ai-gateway/vercel-<model-id>` selector in OpenCodex and keep `vercel/<model-id>` as the
 model key.
 
-## Static model allowlists
-
 ## Storing keys in the OS keychain
 
-For Vertex, the dedicated API-key pool input (`POST /api/providers/keys`) accepts complete GCP
-`service_account` or `authorized_user` credential JSON after the provider has been created.
-The provider create/edit form and `ocx provider add --api-key` refuse credential JSON before
-saving: create the provider without a key, then add the JSON through its key pool. Paste the
-JSON contents, not a Windows, Unix, or relative file path. Multiple
-JSON objects separated by commas or whitespace are stored together as separate pool entries;
-the first becomes active. Configuration contains only `gcp-sa:<account>` references, never the
-credential JSON. Mixed JSON/literal-key bulk pastes are rejected as a whole; add literal keys
-separately. Storage failures leave the configuration unchanged and report a fixed error without
-echoing credential material. Empty marker accounts are invalid and do not fall back to host credentials.
-Paste one credential object or a sequence of objects, without an enclosing array or quoted string.
-Malformed credential text is rejected. If a selected stored credential is removed or becomes unreadable,
-Vertex refuses the request even when it previously cached an access token for that credential.
-Removing a key or provider, or replacing a provider with `ocx provider add --force`, deletes its unreferenced GCP credentials after the configuration is
-saved; a credential referenced by another provider is retained. If OS-store cleanup fails, a
-warning requests manual inspection without undoing the committed configuration removal.
-Ordinary keychain store/restore actions leave GCP markers and JSON in the OS store. Restoring
-credential JSON through a `keychain:` alias is refused, and cleanup preserves accounts still
-referenced through either marker spelling.
-Using a `keychain:` alias containing GCP JSON as an API key also refuses the request; select its
-`gcp-sa:` reference for Vertex authentication instead.
-Literal API keys must be plain token text: JSON objects, arrays and quoted JSON strings are refused
-in literal-key resolution and restore, including wrappers containing escaped credential text.
-Credential writes and marker persistence share the cleanup transaction lock, so concurrent
-removal cannot delete the stored JSON between read-back and the marker commit.
+API keys and credential references can be stored in the OS credential store (macOS Keychain, Windows Credential Manager, Linux Secret Service) instead of `config.json`. See [Storing keys in the OS keychain](/reference/configuration/keychain/) for details on migration commands, storage rules, and headless-service caveats.
 
-By default a provider's `apiKey` and `apiKeyPool` sit in `config.json` (mode 0600, atomic writes).
-If you would rather keep the key material out of the file, move it into the OS credential store:
-
-```bash
-ocx provider keychain deepseek status    # store: file | env | keychain, and whether the keychain answers
-ocx provider keychain deepseek store     # move active key + pool into the OS keychain
-ocx provider keychain deepseek restore   # bring the plaintext back and delete the keychain items
-```
-
-The same operations are `GET`/`POST /api/providers/keychain`. After `store`, `config.json` holds
-`"apiKey": "keychain:deepseek"` (pool entries `keychain:deepseek/<id>`) and the secret lives under the
-`opencodex.provider-api-key.v1` service in macOS Keychain, Windows Credential Manager, or the Linux
-Secret Service. Backups of `config.json` therefore carry references only. Key rotation and failover
-keep working: pool entries compare by reference, so a rotation never writes plaintext back.
-
-Before touching the config, `store` writes and reads back every entry; if the keychain is unavailable
-or the read-back does not match, it refuses with 503 and leaves the file as it was. At request time
-a reference that cannot be read yields no credential and one warning per key — there is no plaintext
-fallback, by design.
-
-When not to opt in: a proxy running as a headless service (systemd, launchd, Task Scheduler) or in a
-container usually has no unlocked keychain session, so requests would fail closed. Use an
-`${ENV_VAR}` reference in the service environment there instead. Env references are left untouched
-by `store`.
+## Static model allowlists
 
 The `zhipu-bigmodel-responses` preset seeds `glm-5.3`, `glm-5.3-flash` and `glm-5-turbo` with
 `liveModels: false` for `https://open.bigmodel.cn/api/v1`. Its static roster and
