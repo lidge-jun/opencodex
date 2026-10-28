@@ -151,11 +151,15 @@ the first-party mode keeps it; run `ocx claude desktop apply --gateway` to switc
 first-party mode, which keeps Desktop on claude.ai and routes only its Code tab, is described under
 [Claude Desktop modes](/guides/claude-code/#claude-desktop-modes-gateway-default-and-first-party).
 
+Fully quit and reopen Claude Desktop after switching modes.
+
 ### Grok Build
 
 On a local listener, `ocx start` registers the visible models in `~/.grok/config.toml` when
 `~/.grok` exists. Pick an `ocx-*` model in Grok Build. Remote setups and the managed block are
 covered in [Grok Build](/guides/grok-build/).
+
+After you add providers or models, run `ocx ensure` or restart the proxy so Grok Build sees them.
 
 ### Other tools
 

@@ -104,9 +104,13 @@ ocx claude desktop
 
 Yeni kurulumda tüm uygulama için ağ geçidi profilini ayarlar. Zaten first-party modunu kullanan bir kurulum bu modu korur; açıkça geçiş yapmak için `ocx claude desktop apply --gateway` çalıştırın. Desktop’ı claude.ai üzerinde tutup yalnızca Code sekmesini yönlendiren first-party modu, [Claude Code](/tr/guides/claude-code/) sayfasındaki Claude Desktop modları bölümünde açıklanır.
 
+Mod değiştirdikten sonra Claude Desktop’tan tamamen çıkıp yeniden açın.
+
 ### Grok Build
 
 Yerel dinleyicide `~/.grok` varsa `ocx start` görünür modelleri `~/.grok/config.toml` dosyasına kaydeder. Grok Build içinde bir `ocx-*` modeli seçin. Uzak kurulumlar ve yönetilen blok [Grok Build](/tr/guides/grok-build/) sayfasında anlatılır.
+
+Sağlayıcı veya model ekledikten sonra Grok Build’in görmesi için `ocx ensure` çalıştırın veya proxy’yi yeniden başlatın.
 
 ### Diğer araçlar
 

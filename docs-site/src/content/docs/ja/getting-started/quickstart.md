@@ -92,9 +92,13 @@ ocx claude desktop
 
 新規インストールではアプリ全体にゲートウェイプロファイルを設定します。すでに first-party モードを使用している場合はそのまま維持され、`ocx claude desktop apply --gateway` を実行すると明示的に切り替えられます。Desktop を claude.ai のままにして Code タブのみをルーティングする first-party モードは、[Claude Code](/ja/guides/claude-code/)の Claude Desktop モードの節を参照してください。
 
+モードを切り替えた後は、Claude Desktop を完全に終了してから開き直してください。
+
 ### Grok Build
 
 ローカルリスナーでは、`~/.grok` が存在すると `ocx start` が表示対象のモデルを `~/.grok/config.toml` に登録します。Grok Build で `ocx-*` モデルを選択します。リモート設定と管理対象ブロックは [Grok Build](/ja/guides/grok-build/)を参照してください。
+
+プロバイダーやモデルを追加した後は、`ocx ensure` を実行するかプロキシを再起動すると Grok Build に反映されます。
 
 ### その他のツール
 

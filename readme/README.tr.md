@@ -99,14 +99,14 @@ yönetin. `ocx gui` paneli istediğiniz zaman yeniden açar.
 
 ### Aracınızı bağlayın
 
-Önce bir sağlayıcı ekleyin, ardından kullandığınız aracı bağlayın:
+Zaten kullandığınız aracı bağlayın:
 
 | Araç | Bağlantı yöntemi |
 |---|---|
 | Codex | Panelin **Connect** sayfasındaki Codex anahtarını açın, ardından `codex` komutunu her zamanki gibi çalıştırın. Yerel dinleyicide bu, Codex’in yerleşik sağlayıcısını proxy’ye yönlendirir. Terminalden, panelde sağlayıcı eklemeden önce `ocx init` çalıştırın ve Codex istemini kabul edin. |
 | Claude Code | `claude` CLI kuruluysa `ocx claude` çalıştırın. Gerekirse proxy’yi başlatır ve Claude Code’u onun üzerinden açar. |
-| Claude Desktop | `ocx claude desktop` çalıştırın. Yeni kurulumda tüm uygulama için ağ geçidi profilini ayarlar; mevcut first-party yapılandırması korunur ve `ocx claude desktop apply --gateway` açıkça geçiş yapar. [Claude Code kılavuzuna](https://opencodex.me/tr/guides/claude-code/) bakın. |
-| Grok Build | Yerel dinleyicide `~/.grok` varsa `ocx start` modelleri kaydeder; Grok Build içinde bir `ocx-*` modeli seçin. Uzak kurulumlar için [Grok Build kılavuzuna](https://opencodex.me/tr/guides/grok-build/) bakın. |
+| Claude Desktop | `ocx claude desktop` çalıştırın. Yeni kurulumda tüm uygulama için ağ geçidi profilini ayarlar; mevcut first-party yapılandırması korunur ve `ocx claude desktop apply --gateway` açıkça geçiş yapar. [Claude Code kılavuzuna](https://opencodex.me/tr/guides/claude-code/) bakın. Geçişten sonra Claude Desktop’tan tamamen çıkıp yeniden açın. |
+| Grok Build | Yerel dinleyicide `~/.grok` varsa `ocx start` modelleri kaydeder; Grok Build içinde bir `ocx-*` modeli seçin. Uzak kurulumlar için [Grok Build kılavuzuna](https://opencodex.me/tr/guides/grok-build/) bakın. Sağlayıcı ekledikten sonra listeyi yenilemek için `ocx ensure` çalıştırın veya proxy’yi yeniden başlatın. |
 | Yönetilen entegrasyonu olan araçlar | Panelin **Connect** sayfasını veya `ocx integration client enable --client <id>` komutunu kullanın. |
 | Diğer tüm araçlar | Özel OpenAI uyumlu temel URL’yi `http://localhost:10100/v1` veya Anthropic temel URL’sini `http://localhost:10100` olarak ayarlayın. |
 

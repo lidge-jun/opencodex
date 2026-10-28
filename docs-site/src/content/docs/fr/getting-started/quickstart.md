@@ -95,9 +95,13 @@ ocx claude desktop
 
 Lors d’une nouvelle installation, cette commande configure le profil de passerelle pour toute l’application. Une installation utilisant déjà le mode first-party le conserve ; exécutez `ocx claude desktop apply --gateway` pour changer explicitement. Le mode first-party conserve claude.ai pour Desktop et ne route que son onglet Code ; consultez la section sur les modes Claude Desktop dans [Claude Code](/fr/guides/claude-code/).
 
+Quittez complètement puis rouvrez Claude Desktop après un changement de mode.
+
 ### Grok Build
 
 Sur une écoute locale, si `~/.grok` existe, `ocx start` enregistre les modèles visibles dans `~/.grok/config.toml`. Choisissez un modèle `ocx-*` dans Grok Build. Les configurations distantes et le bloc géré sont décrits dans [Grok Build](/fr/guides/grok-build/).
+
+Après avoir ajouté des fournisseurs ou des modèles, lancez `ocx ensure` ou redémarrez le proxy pour que Grok Build les voie.
 
 ### Autres outils
 

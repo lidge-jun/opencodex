@@ -90,9 +90,13 @@ ocx claude desktop
 
 새로 설치할 때는 앱 전체에 게이트웨이 프로필을 설정합니다. 이미 first-party 모드를 사용하는 설치는 해당 모드를 유지하며, `ocx claude desktop apply --gateway`를 실행해 명시적으로 전환할 수 있습니다. Desktop은 claude.ai를 유지하고 Code 탭만 라우팅하는 first-party 모드는 [Claude Code](/ko/guides/claude-code/)의 Claude Desktop 모드 항목을 참조하세요.
 
+모드를 전환한 뒤에는 Claude Desktop을 완전히 종료했다가 다시 여세요.
+
 ### Grok Build
 
 로컬 리스너에서 `~/.grok`이 존재하면 `ocx start`가 표시되는 모델을 `~/.grok/config.toml`에 등록합니다. Grok Build에서 `ocx-*` 모델을 선택하세요. 원격 설정과 관리 블록은 [Grok Build](/ko/guides/grok-build/)를 참조하세요.
+
+프로바이더나 모델을 추가한 뒤에는 `ocx ensure`를 실행하거나 프록시를 재시작해야 Grok Build에 반영됩니다.
 
 ### 다른 도구
 

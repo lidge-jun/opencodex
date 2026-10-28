@@ -93,9 +93,13 @@ ocx claude desktop
 
 全新安裝時會為整個應用程式設定閘道設定檔；已經使用 first-party 模式的安裝會保持原模式，可執行 `ocx claude desktop apply --gateway` 明確切換。first-party 模式讓 Desktop 繼續使用 claude.ai，只路由其 Code 分頁；詳見 [Claude Code](/zh-tw/guides/claude-code/) 的 Claude Desktop 模式一節。
 
+切換模式後，請完全結束並重新開啟 Claude Desktop。
+
 ### Grok Build
 
 在本機監聽時，若 `~/.grok` 存在，`ocx start` 會將可見模型註冊至 `~/.grok/config.toml`。在 Grok Build 選擇 `ocx-*` 模型。遠端設定和受管理區塊請參閱 [Grok Build](/zh-tw/guides/grok-build/)。
+
+新增供應商或模型後，執行 `ocx ensure` 或重新啟動代理，Grok Build 才能看到它們。
 
 ### 其他工具
 
