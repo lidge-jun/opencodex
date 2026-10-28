@@ -12,6 +12,7 @@ import {
   type MatrixInputs,
 } from "../../scripts/generate-client-support-matrix";
 import { EXPORT_CLIENT_METADATA, NATIVE_CLIENT_METADATA } from "../../scripts/client-support-matrix/metadata";
+import { LOCALES } from "../../scripts/client-support-matrix/locales";
 import { repoPath } from "../helpers/repo-root";
 
 const BASE = defaultInputs();
@@ -45,6 +46,21 @@ describe("client support matrix", () => {
   test("every committed locale page matches the generator", () => {
     for (const [path, expected] of Object.entries(renderAll())) {
       expect(readFileSync(repoPath(path), "utf8"), `${path} is stale; run bun run docs:clients`).toBe(expected);
+    }
+  });
+
+  test("every locale defines exactly the root locale's strings", () => {
+    const keys = (value: unknown, prefix = ""): string[] =>
+      value !== null && typeof value === "object"
+        ? Object.entries(value).flatMap(([key, child]) => keys(child, prefix ? `${prefix}.${key}` : key))
+        : [prefix];
+    const root = keys(LOCALES.root).sort();
+    for (const [locale, strings] of Object.entries(LOCALES)) {
+      expect(keys(strings).sort(), locale).toEqual(root);
+      for (const key of keys(strings)) {
+        const value = key.split(".").reduce<unknown>((node, part) => (node as Record<string, unknown>)[part], strings);
+        expect(typeof value === "string" && value.trim().length > 0, `${locale}.${key}`).toBe(true);
+      }
     }
   });
 

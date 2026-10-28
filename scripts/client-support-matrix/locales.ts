@@ -1,6 +1,7 @@
 /**
  * Page chrome and note phrases for the generated client support page, one block per docs locale.
- * English is canonical; every locale must define every key (enforced by the Strings type).
+ * English is canonical; every locale must define every key. The repository typecheck does not cover
+ * scripts/, so tests/ci-workflows/client-support-matrix.test.ts compares each locale's key set with root.
  * Product names, protocol names and the level keywords stay in English on every page.
  */
 
