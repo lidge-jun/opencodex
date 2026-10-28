@@ -4,7 +4,7 @@ import { listen, TunnelFixtureScope } from "../helpers/opaque-proxy-tunnel";
 import { credentialPinnedProviderConfigError, modelAdapterRecordConfigError } from "../../src/config/provider-validation";
 import { pinnedWireAdapter } from "../../src/types/wire";
 import { M365_COPILOT_BASE_URL } from "../../src/providers/m365-copilot-models";
-import { createM365Conversation, runM365CopilotTurn } from "../../src/adapters/m365-copilot/transport";
+import { createM365Conversation, m365SocketDialOptions, runM365CopilotTurn } from "../../src/adapters/m365-copilot/transport";
 
 describe("M365 stored credential boundary", () => {
   test.each([
@@ -24,6 +24,32 @@ describe("M365 stored credential boundary", () => {
 });
 
 describe("M365 native socket egress", () => {
+  test("an inherited SOCKS route is also refused", () => {
+    const previousProxy = process.env.HTTPS_PROXY, previousBypass = process.env.NO_PROXY;
+    process.env.HTTPS_PROXY = "socks5://127.0.0.1:9";
+    process.env.NO_PROXY = "";
+    try {
+      expect(() => m365SocketDialOptions({}, "wss://substrate.office.com/m365Copilot", {}))
+        .toThrow("supports only HTTP(S) proxies");
+    } finally {
+      if (previousProxy === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = previousProxy;
+      if (previousBypass === undefined) delete process.env.NO_PROXY; else process.env.NO_PROXY = previousBypass;
+    }
+  });
+
+  test.each(["socks5", "socks5h"])("%s is refused with a config error before any socket dial", async scheme => {
+    let dials = 0;
+    const token = "header." + Buffer.from(JSON.stringify({
+      oid: "11111111-1111-1111-1111-111111111111", tid: "22222222-2222-2222-2222-222222222222", exp: 4102444800,
+    })).toString("base64url") + ".signature";
+    await expect(Promise.resolve().then(() => runM365CopilotTurn({
+      token, model: "claude-sonnet", text: "fixture", conversation: createM365Conversation(), onText() {},
+      route: { proxy: `${scheme}://127.0.0.1:9` },
+      createSocket() { dials++; throw new Error("unexpected socket dial"); },
+    }))).rejects.toThrow("supports only HTTP(S) proxies");
+    expect(dials).toBe(0);
+  });
+
   test.each(["ws", "wss"])("%s: a refusing HTTP proxy receives the socket attempt and the destination receives no direct connection", async scheme => {
     let proxyRequests = 0, directRequests = 0;
     let proxyRequestLine = "";

@@ -210,7 +210,7 @@ describe("Microsoft 365 Copilot socket egress", () => {
   const headers = { Origin: "https://m365.cloud.microsoft" };
   test("applies the provider route to the ChatHub socket", () => {
     expect(m365SocketDialOptions({ proxy: "http://127.0.0.1:9" }, socketUrl, headers).proxy).toBe("http://127.0.0.1:9/");
-    expect(m365SocketDialOptions({ proxy: "socks5://127.0.0.1:9" }, socketUrl, headers).proxy).toBe("socks5://127.0.0.1:9");
+    expect(() => m365SocketDialOptions({ proxy: "socks5://127.0.0.1:9" }, socketUrl, headers)).toThrow("supports only HTTP(S) proxies");
     expect(m365SocketDialOptions({ proxy: "direct" }, socketUrl, headers).proxy).toBeUndefined();
     expect(m365SocketDialOptions({ proxy: "http://127.0.0.1:9", noProxy: ["substrate.office.com"] }, socketUrl, headers).proxy).toBeUndefined();
     expect(m365SocketDialOptions(undefined, socketUrl, headers).proxy).toBeUndefined();

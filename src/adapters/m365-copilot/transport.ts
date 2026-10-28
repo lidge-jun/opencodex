@@ -70,6 +70,13 @@ export interface M365TurnOptions {
 
 export interface M365SocketDialOptions { headers: Record<string, string>; proxy?: string }
 
+function proxyDialOptions(proxy: string, headers: Record<string, string>): M365SocketDialOptions {
+  if (!/^https?:\/\//i.test(proxy)) {
+    throw new M365CopilotTurnError("Microsoft 365 Copilot ChatHub supports only HTTP(S) proxies; configure an HTTP(S) proxy or an explicit direct/bypass route", 400);
+  }
+  return { headers, proxy };
+}
+
 /**
  * Bun's WebSocket ignores proxy environment variables, so the provider route is applied to the
  * socket explicitly: an explicit provider proxy is pinned, noProxy/direct stays direct, and inherit
@@ -80,13 +87,13 @@ export function m365SocketDialOptions(route: M365TurnOptions["route"], url: stri
   if (!route) return { headers };
   if (typeof route.fetch === "function") throw new M365CopilotTurnError("Microsoft 365 Copilot ChatHub cannot use a custom fetch executor; remove providers.m365-copilot.fetch", 400);
   const egress = resolveProviderEgress({ providerName: "m365-copilot", provider: route, url });
-  if (egress.kind === "proxy") return { headers, proxy: egress.proxyUrl };
+  if (egress.kind === "proxy") return proxyDialOptions(egress.proxyUrl, headers);
   if (egress.kind === "direct") return { headers };
   const https = new URL(url);
   https.protocol = "https:";
   if (noProxyMatches(https)) return { headers };
   const inherited = effectiveProxyFor(https);
-  return inherited ? { headers, proxy: inherited } : { headers };
+  return inherited ? proxyDialOptions(inherited, headers) : { headers };
 }
 
 export function runM365CopilotTurn(options: M365TurnOptions): Promise<string> {
