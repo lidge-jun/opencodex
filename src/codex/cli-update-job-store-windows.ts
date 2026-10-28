@@ -842,9 +842,18 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
       async release(): Promise<boolean> {
         if (closed) return false;
         closed = true;
-        try { await verifyHeld(); if (held) releaseLock(ctx, held); }
+        let aclVerified = true;
+        try {
+          verifyIdentitySync();
+          // An ACL lookup failure must not strand a lock whose original pins
+          // still prove ownership. It remains a failed release verdict, even
+          // when the independently token/identity-fenced deletion succeeds.
+          try { await verifyAcl(entries); } catch { aclVerified = false; }
+          verifyIdentitySync();
+          if (held) releaseLock(ctx, held);
+        }
         finally { ctx.pins.closeAll(kernel); }
-        return pins.remaining === 0 && (!acquire || !existsSync(lock));
+        return aclVerified && pins.remaining === 0 && (!acquire || !existsSync(lock));
       },
     };
   } finally { if (!transferred) ctx.pins.closeAll(kernel); }
