@@ -1,4 +1,4 @@
-import type { ProviderQuotaReportView } from "./provider-workspace/report";
+import { accountQuotaFromReport, type ProviderQuotaReportView } from "./provider-workspace/report";
 
 const PROVIDER = "meta-muse";
 const OBSERVATION_SOURCE = "meta-muse:rate-limit-observation";
@@ -32,7 +32,7 @@ export function museLimitReport(value: unknown, accountLabel: string, now = Date
 export function museObservationResetAt(reports: Record<string, ProviderQuotaReportView>): number | undefined {
   const report = reports[PROVIDER];
   if (report?.source !== OBSERVATION_SOURCE) return undefined;
-  const resetAt = report.quota?.customWindows?.[0]?.resetAt;
+  const resetAt = accountQuotaFromReport(report)?.customWindows?.[0]?.resetAt;
   return typeof resetAt === "number" && Number.isFinite(resetAt) ? resetAt : undefined;
 }
 
