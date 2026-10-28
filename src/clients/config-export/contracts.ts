@@ -4,6 +4,7 @@ export type { ExportClientId } from "../client-ids";
 import { canonicalizeReasoningEfforts } from "../../reasoning-effort";
 import type { OcxConfig } from "../../types";
 import type { ConfigFormat } from "../../integrations/serialize";
+import type { ExportModelNames } from "./model-names";
 
 export const DROID_DEFAULT_EFFORT_HEADER = "x-opencodex-droid-default-effort";
 
@@ -81,6 +82,8 @@ export interface OpencodeCatalogModel {
 export interface ExportModel {
   /** Canonical proxy selector: `provider/id`, or bare slug for native. */
   namespaced: string;
+  /** Provider-qualified alias proven equivalent by the shared management row loader. */
+  aliasNamespaced?: string;
   /** Hub-resolved Fast availability; exporters never infer it from local config. */
   fastRowAvailable?: boolean;
   provider: string;
@@ -191,6 +194,7 @@ export function knownReasoningSupport(evidence: ExportCapabilityEvidence): boole
 }
 
 export interface ExportContext {
+  modelNames?: ExportModelNames;
   /** `http://host:port/v1` — the OpenAI-compatible surface the client dials. */
   baseUrl: string;
   models: readonly ExportModel[];

@@ -278,3 +278,19 @@ GitHub Copilot デスクトップアプリでは、opencodex を OpenAI 互換�
 ## Factory Droid
 
 Factory Droid は `~/.factory/settings.json`（Windows では `%USERPROFILE%\.factory\settings.json`）を使用します。`ocx integration client enable --client droid` で明示的に有効化し、`/model` でカスタムモデルを選択します。管理対象の行はキーを使わず、ループバックでのみ動作します。無効化すると管理対象の行が削除され、Undo で保存済みのバイト列が復元されます。従来の `config.json` に OpenCodex の行がある場合や、`settings.local.json` が `customModels` を上書きする場合は、有効化する前に競合を解消してください。[Factory BYOK のドキュメント](https://docs.factory.ai/model-independence/byok)も参照してください。
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

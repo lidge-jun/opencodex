@@ -30,6 +30,7 @@ import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../inte
 import { fileIO } from "../integrations/config-io";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
 import { expandFastExportModels } from "./config-export/fast-models";
+import { namedExportContext } from "./config-export/alias-selectors";
 import { probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 
@@ -1742,7 +1743,7 @@ export function isExportClientId(value: string): value is ExportClientId {
 
 /** Single entry point every export surface calls. */
 export function buildClientConfig(client: ExportClientId, ctx: ExportContext): unknown {
-  return EXPORT_CLIENTS[client].build(ctx);
+  return EXPORT_CLIENTS[client].build(namedExportContext(client, ctx));
 }
 
 /**
@@ -1756,7 +1757,7 @@ export function buildClientConfigText(
   ctx: ExportContext,
 ): { document: unknown; text: string; format: ConfigFormat; mediaType: string } {
   const spec = EXPORT_CLIENTS[client];
-  const document = spec.build(ctx);
+  const document = spec.build(namedExportContext(client, ctx));
   return {
     document,
     text: serializeDocument(document, spec.format),
@@ -1767,5 +1768,5 @@ export function buildClientConfigText(
 
 /** The fragments opencodex owns in a client's config (writer-side). */
 export function buildClientContribution(client: ExportClientId, ctx: ExportContext): ManagedContribution {
-  return EXPORT_CLIENTS[client].buildContribution(ctx);
+  return EXPORT_CLIENTS[client].buildContribution(namedExportContext(client, ctx));
 }

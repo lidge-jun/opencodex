@@ -289,3 +289,19 @@ This takes effect on the **next routed `ocx claude` launch**, injecting `CLAUDE_
 Claude Code **2.1.257 or newer** is required for FORCE. Plugin and built-in agents (including Explore/Plan) and per-call model arguments are overridden. Forks and subagent skills with `model: inherit` keep the main conversation model. The main loop and Haiku/small-fast sidecars are unaffected. Existing roster files remain available.
 
 The dashboard warns about old or unknown CLI versions, unavailable targets, and either variable already present in `settings.json` → `env` (which overrides launch env). Detection is read-only and server-local: it cannot inspect another launch shell, another machine, or project-local settings. An unknown result is not proof of force support.
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

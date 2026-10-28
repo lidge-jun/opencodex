@@ -122,6 +122,7 @@ The dashboard, the management API, and third-party client config ownership.
 | [`dashboard-and-usage.md`](dashboard-and-usage.md) | Dashboard page contracts, usage accounting and request metrics, and per-surface management settings. |
 | [`quota-pool.md`](quota-pool.md) | The passive GET /api/quota-pool read GOAT consumes (ocx.quota-pool/1): sources, window mapping, absent-not-zero, and the install identity behind homeId and accountRef. |
 | [`pricing.md`](pricing.md) | User price policies, prompt-length rate selection, persistence and estimate cache invalidation. |
+| [`clients/export-model-names.md`](clients/export-model-names.md) | Per-connection naming policy, router-proven aliases and passive export previews. |
 | [`clients/integrations.md`](clients/integrations.md) | Third-party client config ownership, snapshots, refresh, disable, and restore. |
 | [`clients/codex-desktop.md`](clients/codex-desktop.md) | Windows package activation, restart context, and protected compatibility authority persistence. |
 | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) | Experimental macOS app-server stdout shim, opt-in launch, restore and failure boundaries. |
@@ -222,7 +223,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/chatgpt/` | [`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md) |
 | `src/claude/` | [`runtime.md`](runtime.md)<br>[`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/claude-desktop-config-reads.md`](clients/claude-desktop-config-reads.md) |
 | `src/cli.ts` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
-| `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`remote-messaging.md`](remote-messaging.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `src/cli/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`remote-messaging.md`](remote-messaging.md)<br>[`local-messaging.md`](local-messaging.md)<br>[`cli-management.md`](cli-management.md)<br>[`provider-completion-diagnostic.md`](provider-completion-diagnostic.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`clients/claude-desktop.md`](clients/claude-desktop.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/cli/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
 | `src/cli/codex-cli-update.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/cli/codex-provider.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
@@ -239,7 +240,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/client/link-parity-reporter.ts` | [`remote-link.md`](remote-link.md) |
 | `src/client/runtime-restart.ts` | [`remote-link.md`](remote-link.md) |
 | `src/clients/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/t3code.md`](clients/t3code.md) |
-| `src/clients/config-export.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
+| `src/clients/config-export.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md) |
+| `src/clients/config-export/` | [`clients/export-model-names.md`](clients/export-model-names.md) |
 | `src/codex/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`codex-home.md`](codex-home.md)<br>[`codex-prompts.md`](codex-prompts.md)<br>[`catalog.md`](catalog.md)<br>[`subagents.md`](subagents.md)<br>[`subagent-capacity.md`](subagent-capacity.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md)<br>[`providers/openai-accounts.md`](providers/openai-accounts.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`fallback-policy.md`](fallback-policy.md)<br>[`clients/codex-desktop.md`](clients/codex-desktop.md)<br>[`clients/chatgpt-desktop.md`](clients/chatgpt-desktop.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/codex/account-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/codex/account-preservation.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
@@ -285,7 +287,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/grok/` | [`runtime.md`](runtime.md) |
 | `src/images/` | [`runtime.md`](runtime.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`providers/anthropic-progress.md`](providers/anthropic-progress.md) |
 | `src/index.ts` | [`runtime.md`](runtime.md) |
-| `src/integrations/` | [`clients/integrations.md`](clients/integrations.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/t3code.md`](clients/t3code.md) |
+| `src/integrations/` | [`clients/export-model-names.md`](clients/export-model-names.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`clients/hermes.md`](clients/hermes.md)<br>[`clients/qoder.md`](clients/qoder.md)<br>[`clients/t3code.md`](clients/t3code.md) |
 | `src/lab/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/lib/` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`transports/byte-accounting.md`](transports/byte-accounting.md)<br>[`transports/responses-wire-shapes.md`](transports/responses-wire-shapes.md)<br>[`transports/responses-failover.md`](transports/responses-failover.md)<br>[`transports/responses-spend.md`](transports/responses-spend.md)<br>[`transports/inventory.md`](transports/inventory.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`clients/integrations.md`](clients/integrations.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `src/lib/abort.ts` | [`transports/timeouts.md`](transports/timeouts.md) |
@@ -349,7 +351,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/index.ts` | [`adapters/compatibility-lab.md`](adapters/compatibility-lab.md) |
 | `src/server/index/link-management.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/inference/advisor-diagnostics.ts` | [`advisor.md`](advisor.md) |
-| `src/server/management/` | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md) |
+| `src/server/management/` | [`providers/oauth-code-display-login.md`](providers/oauth-code-display-login.md)<br>[`clients/export-model-names.md`](clients/export-model-names.md) |
 | `src/server/management/anthropic-pool-settings.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/server/management/codex-cli-update-routes.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/server/management/companion-routes.ts` | [`desktop-shell.md`](desktop-shell.md) |

@@ -276,3 +276,19 @@ GitHub Copilot 桌面应用可以将 opencodex 用作兼容 OpenAI 的模型提�
 ## Factory Droid
 
 Factory Droid 使用 `~/.factory/settings.json`（Windows 上为 `%USERPROFILE%\.factory\settings.json`）。使用 `ocx integration client enable --client droid` 明确启用，然后在 `/model` 中选择自定义模型。托管条目不含密钥，且仅支持回环连接。禁用会移除托管条目；Undo 会恢复保存的原始字节。如果旧版 `config.json` 含有 OpenCodex 条目，或 `settings.local.json` 覆盖了 `customModels`，请先解决冲突再启用。参见 [Factory BYOK 文档](https://docs.factory.ai/model-independence/byok)。
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { shouldInjectApiAuthHeader } from "../../codex/loopback-target";
+import { isExportModelNames, supportsAliasModelNames } from "../../clients/config-export/model-names";
 
 /**
  * Codex parses a catalog entry's `input_modalities` as a closed enum, and one out-of-enum
@@ -169,7 +170,7 @@ import type {
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import { managementInferencePort, type ManagementContext } from "./context";
-import { effectiveModelReasoningEfforts, inheritedModelReasoningEfforts, listManagementModelRows, loadExportModels } from "./model-rows";
+import { effectiveModelReasoningEfforts, inheritedModelReasoningEfforts, listManagementModelRows, loadExportModels, previewExportSnapshot } from "./model-rows";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import {
@@ -539,6 +540,16 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
         config,
       );
     }
+    const namingOptions = url.searchParams.getAll("modelNames");
+    const modelNames = namingOptions[0];
+    if (namingOptions.length > 1 || (modelNames !== undefined
+      && (!isExportModelNames(modelNames) || !supportsAliasModelNames(requested)))) {
+      return jsonResponse({ error: "modelNames must be alias or routed and requires Hermes or Command Code", code: "invalid_model_names" }, 400, req, config);
+    }
+    const passive = url.searchParams.get("preview") === "1";
+    if (passive && !supportsAliasModelNames(requested)) {
+      return jsonResponse({ error: "passive export preview requires Hermes or Command Code", code: "invalid_export_preview" }, 400, req, config);
+    }
     const spec = EXPORT_CLIENTS[requested];
     // Resolved before the catalog load on purpose. A refused override is a
     // property of the request, not of the catalog: validating it afterwards
@@ -568,12 +579,16 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       }, 400, req, config);
     }
     const baseUrl = opencodeProxyBaseUrl(managementInferencePort(ctx), config.hostname, config);
-    let models: ExportModel[];
+    let models: readonly ExportModel[];
     try {
       // The ONE loader every export surface uses. It carries the visibility
       // filter with it, so this route and the integration routes cannot end up
       // telling a client about different models.
-      models = await loadExportModels(config);
+      if (passive) {
+        const snapshot = previewExportSnapshot(config);
+        if (snapshot === null) return jsonResponse({ error: "no current model roster is cached", code: "integration_preview_unavailable" }, 409, req, config);
+        models = snapshot.models;
+      } else models = await loadExportModels(config);
     } catch (error) {
       // A partial or empty `models` block reads as a valid config while offering nothing,
       // so a catalog failure is surfaced as unavailable rather than serialized. The
@@ -590,6 +605,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       baseUrl,
       models,
       config,
+      ...(modelNames === undefined ? {} : { modelNames }),
     });
     const document = built.document;
     return jsonResponse({

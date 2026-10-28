@@ -19,6 +19,7 @@ import { canonicalContribution, fingerprint, type OwnershipRecord } from "./owne
 import { ClientPathError } from "../clients/client-path";
 import { EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import { OPENCODE_PROVIDER_ID } from "../clients/config-export/constants";
+import { resolveModelNames, type ExportModelNames } from "../clients/config-export/model-names";
 import {
   ZCODE_STORE_MODEL_RULES_PATH,
   ZCODE_STORE_PROVIDER_RULES_PATH,
@@ -236,6 +237,8 @@ export function orderPlanChanges(changes: readonly IntegrationPlanChange[]): rea
  * names the row and the bytes are what lands in the user's file.
  */
 export interface PlanFingerprintInput {
+  readonly requestedModelNames?: ExportModelNames;
+  readonly modelNames?: ExportModelNames;
   readonly operation: IntegrationPlanOperation;
   readonly clientId: IntegrationClientId;
   readonly profileId?: number;
@@ -294,7 +297,7 @@ export interface PlanFingerprintInput {
   };
 }
 
-const PLAN_FINGERPRINT_VERSION = "p2";
+const PLAN_FINGERPRINT_VERSION = "p3";
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
@@ -314,6 +317,8 @@ export function planFingerprint(input: PlanFingerprintInput): string {
     PLAN_FINGERPRINT_VERSION,
     input.operation,
     input.clientId,
+    input.requestedModelNames ?? null,
+    input.modelNames ?? null,
     input.profileId === undefined ? null : input.profileId,
     input.configPath,
     input.detectDir,
@@ -387,7 +392,8 @@ function applyOutcome(input: PlanInput): PlanOutcome {
   if (input.classified.state === "conflict" && (input.operation !== "overwrite"
     || qoderLegacyCatalogConflict(input.parsed, input.record, input.contribution))) return deny("conflict");
   if (input.classified.state === "unsafe") return deny("unsafe");
-  if (input.classified.state === "current") return NOOP;
+  if (input.classified.state === "current"
+    && (input.modelNames ?? "routed") === (input.record?.modelNames ?? "routed")) return NOOP;
   return CHANGE;
 }
 
@@ -742,6 +748,8 @@ export function previewIntegration(input: IntegrationWriteInput, request: Previe
     before: observed.before,
     contribution: observed.contribution,
     record: observed.record,
+    requestedModelNames: input.modelNames,
+    modelNames: observed.modelNames,
     models: input.models,
     classified: observed.classified,
     parsed: observed.parsed,
@@ -848,6 +856,7 @@ function previewRestore(input: IntegrationWriteInput, request: PreviewRequest): 
  * planner must not depend on the writer; the writer re-exports it, so callers are unaffected.
  */
 export interface IntegrationWriteInput {
+  modelNames?: ExportModelNames;
   clientId: IntegrationClientId;
   models: readonly ExportModel[];
   config: OcxConfig;
@@ -1014,7 +1023,9 @@ export function observeIntegration(
     if (refusal) return { failed: observationFailure("unsafe", "unsafe", refusal) } as const;
   }
   let contribution: ManagedContribution;
+  let modelNames: ExportModelNames;
   try {
+    modelNames = resolveModelNames(clientId, input.modelNames, record?.modelNames);
     contribution = buildIntegrationContribution(input, effective, parsed, record);
   } catch (error) {
     if (!(error instanceof UnrepresentableSelectorError)) throw error;
@@ -1048,6 +1059,6 @@ export function observeIntegration(
     ineffectiveWrite: effective.ineffective === null
       ? null
       : `${effective.ineffective.why}\u0000${effective.ineffective.store}`,
-    before, parsed, contribution, record, classified,
+    before, parsed, contribution, record, classified, modelNames,
   } as const;
 }

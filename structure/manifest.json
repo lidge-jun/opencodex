@@ -886,6 +886,13 @@
       ]
     },
     {
+      "path": "clients/export-model-names.md",
+      "tier": 5,
+      "title": "Client Export Model Names",
+      "scope": "Per-connection naming policy, router-proven aliases and passive export previews.",
+      "documents": ["src/clients/config-export.ts", "src/clients/config-export/", "src/integrations/", "src/cli/", "src/server/management/"]
+    },
+    {
       "path": "clients/integrations.md",
       "tier": 5,
       "title": "Client Integrations",

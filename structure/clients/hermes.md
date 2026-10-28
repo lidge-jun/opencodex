@@ -33,6 +33,8 @@ or with `profile=default`, the default profile, the root ownership store and the
 exactly as before.
 
 Each named profile owns `<integrations>/hermes-profiles/<name>/`: its own records, journal and snapshots.
+Its record also stores the optional [export naming policy](export-model-names.md):
+omitted Apply retains that profile's mode, independent of every other profile.
 The generic writer runs unchanged with that store, an explicit target (`resolvedPaths`) and
 `HERMES_HOME` set to the profile home. Only `providers.opencodex` is written; the profile's
 `model.default` and other providers stay as they are. Mutation-flight keys carry the profile name, so a
@@ -59,7 +61,7 @@ against the current roster on the profile page. The CLI has no named-profile sel
 automatic Hermes refresh that would write a catalog update, the writer checks its actual preflight bytes against the ownership record's
 full-file fingerprint, so edits outside managed fragments also refuse. A current contribution returns
 unchanged without writing or adopting a new fingerprint. Explicit Apply of a pending
-catalog change preserves those edits and records the new baseline; Apply with an unchanged contribution
+catalog change preserves those edits and records the new baseline; Apply with unchanged contribution and naming policy
 is a no-op and does not adopt file drift. Disabled or unowned profiles are not
 reconnected, and a failure is reported per client without stopping catalog fan-out.
 The unscoped journal lists the root store only, so named-profile history

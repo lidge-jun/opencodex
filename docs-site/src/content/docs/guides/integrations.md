@@ -539,6 +539,36 @@ ocx integration client history --client hermes
 ocx integration client restore --op <opId> [--confirm-drift]
 ```
 
+### Opt-in alias model names
+
+Hermes and Command Code accept `--model-names alias|routed`. The default is
+`routed`, independent of `preferModelAliasIds`. For example:
+
+```bash
+ocx export --client hermes --model-names alias --json
+ocx integration client preview --client hermes --operation apply --model-names alias --json
+ocx integration client enable --client hermes --model-names alias
+ocx integration client enable --client commandcode --model-names alias
+```
+
+Export is a preview: it uses an already loaded, current catalog and writes no
+client configuration or integration state. If that catalog is unavailable, load
+the model catalog separately and retry. `--out` explicitly writes an export
+artifact; it does not connect the client.
+
+The connection stores the mode. Omitting the flag on later Apply (including the
+dashboard) preserves it; explicit `--model-names routed` resets it. A qualified
+alias such as `AC/AC-model-x` replaces `acme/vendor-model-x` only when the router
+proves the same provider and model. Missing or unsafe aliases and collisions
+fall back to the routed key. Combos retain their existing keys.
+
+After an alias rename or removal, run `ocx sync` or explicitly Apply the connection:
+the next successful managed refresh replaces the old key with the newly validated
+alias or routed fallback. Alias edits do not atomically update client files.
+Refresh remains idempotent and refuses foreign edits. Each named Hermes profile
+stores its own mode; automatic catalog refresh covers only the default profile,
+so named profiles need explicit Apply. Other exporters retain routed names.
+
 ### Preview and bind a terminal write
 
 The existing direct commands remain supported. To bind a write to a reviewed

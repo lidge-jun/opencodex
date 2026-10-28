@@ -368,3 +368,19 @@ ocx integration client enable --client kilo
 ## Factory Droid
 
 Factory Droid, `~/.factory/settings.json` dosyasını (Windows'ta `%USERPROFILE%\.factory\settings.json`) kullanır. `ocx integration client enable --client droid` komutuyla açıkça etkinleştirin, ardından `/model` içinde özel bir model seçin. Yönetilen satırlar anahtarsızdır ve yalnızca geri döngü bağlantısında çalışır. Devre dışı bırakma yönetilen satırları kaldırır; Undo kaydedilen baytları geri yükler. Eski `config.json` dosyasında OpenCodex satırları varsa veya `settings.local.json`, `customModels` değerini geçersiz kılıyorsa etkinleştirmeden önce çakışmayı giderin. [Factory BYOK belgelerine](https://docs.factory.ai/model-independence/byok) bakın.
+
+## Hermes / Command Code: model names
+
+Hermes and Command Code support `--model-names alias|routed` (API: `modelNames`).
+The default is `routed`, independent of `preferModelAliasIds`. A connection
+stores its mode; later Apply without the option preserves it. Alias mode uses
+only provider-qualified aliases that the router proves equivalent; missing,
+unsafe or colliding aliases fall back to routed keys. Combos keep their keys.
+Removed/renamed aliases migrate on the next successful managed refresh, with
+foreign-edit refusal. Named Hermes profiles need explicit Apply.
+
+`ocx export --client hermes --model-names alias --json` previews a current
+already loaded catalog without writing client files or managed state; a cold or
+stale catalog returns unavailable. Explicit `--out` writes an export artifact.
+See the [English integration guide](/guides/integrations/#opt-in-alias-model-names)
+for the canonical workflow.

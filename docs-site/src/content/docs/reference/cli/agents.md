@@ -1012,13 +1012,31 @@ Manage and apply the Grok Build model fence.
 
 ## Client config export
 
+Hermes and Command Code export and integration apply/overwrite accept
+`--model-names alias|routed` (JSON API field: `modelNames`). Omission on export
+means `routed`; omission on a later integration Apply preserves its stored mode.
+This is independent of `preferModelAliasIds`. Only a provider-qualified alias
+that routes to the same provider/model is emitted; unsafe, missing or colliding
+aliases fall back to routed names, and combos keep their existing keys.
+
+`ocx export --client hermes --model-names alias --json` previews an existing
+current catalog without writing client files or managed state. A cold/stale
+catalog returns unavailable; load the catalog separately and retry. Explicit
+`--out` writes only the requested export artifact and retains its existing
+exclusive-create/`--force` behavior. For managed writes, pass the same mode to
+both `integration client preview --operation apply|overwrite` and `enable` when
+confirming a plan. The field is unsupported on disable/restore and other clients.
+Removed/renamed aliases migrate at the next successful refresh, with foreign-edit
+refusal. See [the integration guide](/guides/integrations/#opt-in-alias-model-names).
+
 ### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|kilo|commandcode|droid>`
 
 Print a client config wired to the running proxy. The command serializes the
 `opencodex` provider block — base URL, model list, and the client's credential
 reference or loopback placeholder — in the selected client's native format.
 
-The proxy must be running; the command resolves its live port, reads `/api/models`, and emits only
+The proxy must be running; the command resolves its live port, uses the current
+catalog (`/api/models` or the server-side client export), and emits only
 models Codex can currently see.
 
 OpenCode and Kilo exports preserve effective model limits, known capabilities, declared reasoning
