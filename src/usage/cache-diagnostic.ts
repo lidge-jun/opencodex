@@ -74,9 +74,33 @@ interface PreviousObservation {
 // Finalization order, process-local only. Keys include the diagnostic destination so changing
 // OPENCODEX_HOME cannot join histories. Neither keys nor values retain raw session/account data.
 const previousObservations = new Map<string, PreviousObservation>();
+// Retention epoch: every on/off transition starts a new one. Nothing observed in an earlier epoch
+// may be compared, merged or written after it, so turning diagnostics off forgets the history.
+let diagnosticGeneration = 0;
+let lastEnabled = false;
+const draftGenerations = new WeakMap<object, number>();
 
 export function isCacheDiagnosticEnabled(): boolean {
-  return process.env.OPENCODEX_CACHE_DEBUG === "1";
+  const enabled = process.env.OPENCODEX_CACHE_DEBUG === "1";
+  if (enabled !== lastEnabled) {
+    lastEnabled = enabled;
+    diagnosticGeneration++;
+    drafts.clear();
+    previousObservations.clear();
+  }
+  return enabled;
+}
+
+function stamp<T extends object>(draft: T): T {
+  draftGenerations.set(draft, diagnosticGeneration);
+  return draft;
+}
+
+/** A draft stamped in an earlier epoch; unstamped partial observations are not drafts. */
+function staleDraft(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const generation = draftGenerations.get(value);
+  return generation !== undefined && generation !== diagnosticGeneration;
 }
 
 export function cacheDiagnosticPath(): string {
@@ -242,8 +266,8 @@ function continuation(facts: CacheDiagnosticFinalFacts, draft: CacheDiagnosticDr
 }
 
 export function observe(requestId: string, observation: Partial<CacheDiagnosticDraft>): CacheDiagnosticDraft {
-  if (!isCacheDiagnosticEnabled()) return {};
-  const draft = drafts.get(requestId) ?? {};
+  if (!isCacheDiagnosticEnabled() || staleDraft(observation)) return {};
+  const draft = drafts.get(requestId) ?? stamp({});
   Object.assign(draft, observation);
   const callerScope = callerScopes.get(observation);
   if (callerScope) callerScopes.set(draft, callerScope);
@@ -264,12 +288,12 @@ export function observeInbound(
     const record = body && typeof body === "object" && !Array.isArray(body)
       ? body as Record<string, unknown> : {};
     const inboundHeaders = sessionHeaders(headers);
-    const draft: CacheDiagnosticDraft = {
+    const draft: CacheDiagnosticDraft = stamp({
       promptCacheKey: { inbound: taggedPresence(record.prompt_cache_key, "cache-debug:prompt-cache-key", source) },
       session: { inboundHeader: sessionPresence(inboundHeaders), inboundHeaders },
       prefix: { inbound: prefixFingerprint(body) },
       accountAffinity: { inbound: accountAffinityKey(headers) },
-    };
+    });
     // Admission owns caller identity; bridges may remove or replace Authorization.
     // No trusted principal (including unauthenticated loopback) means no history join.
     if (admissionPrincipal) callerScopes.set(draft, tag("cache-debug:caller-scope", admissionPrincipal));
@@ -287,6 +311,7 @@ export function observeInbound(
  */
 export function rebindCacheDiagnosticBodyAlias(body: unknown, draft: CacheDiagnosticDraft | undefined): void {
   if (!isCacheDiagnosticEnabled() || !draft) return;
+  if (staleDraft(draft)) return;
   if (body && typeof body === "object") bodyDrafts.set(body, draft);
 }
 
@@ -300,7 +325,7 @@ export function observeOutbound(
   try {
     if (!inboundBody || typeof inboundBody !== "object") return;
     const draft = bodyDrafts.get(inboundBody);
-    if (!draft) return;
+    if (!draft || staleDraft(draft)) return;
     const record = outboundBody && typeof outboundBody === "object" && !Array.isArray(outboundBody)
       ? outboundBody as Record<string, unknown> : {};
     const outbound = taggedPresence(record.prompt_cache_key, "cache-debug:prompt-cache-key", source);
@@ -334,6 +359,10 @@ function trimRollingFile(path: string): void {
 
 export function appendFinalCacheDiagnostic(facts: CacheDiagnosticFinalFacts): void {
   if (!isCacheDiagnosticEnabled()) return;
+  if (staleDraft(facts.draft)) {
+    drafts.delete(facts.requestId);
+    return;
+  }
   try {
     const draft = facts.draft ? observe(facts.requestId, facts.draft) : drafts.get(facts.requestId) ?? {};
     drafts.delete(facts.requestId);

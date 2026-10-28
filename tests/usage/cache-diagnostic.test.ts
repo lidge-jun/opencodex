@@ -245,6 +245,20 @@ describe("cache diagnostic", () => {
     expect(same.continuation.outbound).toEqual({ status: "equal" });
   });
 
+  test("turning diagnostics off forgets continuation history and drops drafts from before the change", () => {
+    process.env.OPENCODEX_CACHE_DEBUG = "1";
+    turn({ input: [message("a")] });
+    const pending = observeInbound({ input: [message("pending")] }, new Headers({ session_id: "test-session" }), "caller", TEST_PRINCIPAL);
+    process.env.OPENCODEX_CACHE_DEBUG = "0";
+    expect(observeInbound({ input: [message("a")] }, new Headers({ session_id: "test-session" }), "caller", TEST_PRINCIPAL)).toEqual({});
+    process.env.OPENCODEX_CACHE_DEBUG = "1";
+    append("stale-draft", pending);
+    turn({ input: [message("a")] });
+    const all = diagnosticRecords();
+    expect(all.map(record => record.requestId)).toEqual(["turn-0", "turn-1"]);
+    expect(all[1]!.continuation.inbound).toEqual({ status: "first" });
+  });
+
   test("seven wire-shaped turns remain append-only when skill and permission updates append input roles", () => {
     process.env.OPENCODEX_CACHE_DEBUG = "1";
     const content = (text: string) => [{ type: "input_text", text }];
