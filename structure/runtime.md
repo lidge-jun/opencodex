@@ -342,7 +342,7 @@ The server exposes read-only authenticated `GET /api/stop` with `schema: "ocx-st
 
 ## Remote Hub hardening ownership
 
-`src/cli/connect.ts` resolves only through the first valid local Codex runtime for catalog
+Windows client/Desktop lifecycle acquisition retains its stable per-user lock namespace and verifies an already-private runtime-directory ACL before repeating inheritable mutations across retained lock files. Failed verification still requires hardening before the callback can run; the database file is hardened independently. The scoped directory-owner policy and identity/deadline checks are documented in [Background Service And Sidecars](ops/service-and-sidecars.md). `src/cli/connect.ts` resolves only through the first valid local Codex runtime for catalog
 readiness, then reads that runtime's effort ladder without persisting its selection. Rejected
 preferred candidates still fall back in priority order. General `ocx status` retains full runtime
 discovery and passes its resolved command into readiness, avoiding a second version probe without adding cache state. `ocx connect` also prints a secret-free Codex shim readiness line from `src/cli/codex-shim-readiness.ts`: ready when the healthy shim is active on PATH, unhealthy when wrapper/native validation fails, missing/not active with the source command for a runnable inactive overlay, or unverified when the PATH scan throws. `ocx status`, `ocx codex-shim status`, and `ocx doctor` skip shim auto-repair; doctor retains unset-token warnings and recommends activation for inactive overlays rather than reinstalling them.
