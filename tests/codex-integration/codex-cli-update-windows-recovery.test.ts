@@ -46,11 +46,22 @@ test("recovery proof retries a thrown probe before accepting a terminal guardian
   expect(calls).toBe(2);
 });
 test("recovery proof times out with the observer error instead of accepting missing guardian", async () => {
-  const clock = spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(90_000);
-  try {
-    await expect(waitForWindowsRecovery(() => ({ entered: true, recovery: { error: "native_query_failed" } })))
-      .rejects.toThrow('native_recovery_proof_timeout: {"entered":true,"recovery":{"error":"native_query_failed"}}');
-  } finally { clock.mockRestore(); }
+  let clock = 0;
+  await expect(waitForWindowsRecovery(() => { clock = 90_000; return { entered: true, recovery: { error: "native_query_failed" } }; },
+    () => clock)).rejects.toThrow('native_recovery_proof_timeout: {"entered":true,"recovery":{"error":"native_query_failed"}}');
+});
+test("a retry near the deadline gets only the remaining time and late proof is refused", async () => {
+  const terminal: WindowsRecoveryProbe = { entered: true, recovery: {
+    guardian: { state: "exited" }, job: { state: "absent", error: 2 }, record: {}, receipt: { phase: "terminal" },
+  } };
+  let clock = 0;
+  const budgets: number[] = [];
+  await expect(waitForWindowsRecovery(timeoutMs => {
+    budgets.push(timeoutMs);
+    if (budgets.length === 1) { clock = 89_990; throw new Error("fixture_probe_failed"); }
+    clock = 90_001; return terminal;
+  }, () => clock)).rejects.toThrow("native_recovery_proof_timeout: " + JSON.stringify(terminal));
+  expect(budgets).toEqual([90_000, 10]);
 });
 test("recovery proof accepts missing guardian only with explicit evidence native startup never began", async () => {
   const probe: WindowsRecoveryProbe = { entered: true, guardianStarted: false, recovery: { error: "identity_missing" } };
@@ -75,13 +86,13 @@ test("owner timeout stops the wrapper and drains recovery before reporting the t
 test("owner timeout keeps a failed recovery drain visible and tracked", async () => {
   const events: string[] = [], failure = new Error("fixture_probe_failed");
   const owner = { exited: new Promise<number>(() => {}), kill() { events.push("kill"); } };
-  const clock = spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(89_999).mockReturnValue(90_000);
-  try {
-    await expect(drainWindowsRestartRecovery(owner, () => {
-      events.push("probe"); throw events.length === 2 ? new Error("first_probe_failed") : failure;
-    }, () => { events.push("settled"); }, 0)).rejects.toThrow("native_recovery_proof_timeout: Error: fixture_probe_failed");
-    expect(events).toEqual(["kill", "probe", "probe"]);
-  } finally { clock.mockRestore(); }
+  let clock = 0;
+  await expect(drainWindowsRestartRecovery(owner, () => {
+    events.push("probe");
+    if (events.length === 2) { clock = 89_999; throw new Error("first_probe_failed"); }
+    clock = 90_000; throw failure;
+  }, () => { events.push("settled"); }, 0, () => clock)).rejects.toThrow("native_recovery_proof_timeout: Error: fixture_probe_failed");
+  expect(events).toEqual(["kill", "probe", "probe"]);
 });
 for (const kind of ["recovery", "pending", "readback"] as const) native(`Windows ${kind} publication hardens canonical paths beyond MAX_PATH`, async () => {
   const root = createCodexCliTestRoot("ocx-long-store-");
@@ -267,7 +278,7 @@ for (const descendant of [false, true]) native(`restarted Windows admission fenc
     expect(probe()).toBe(false);
     expect(probe(alias)).toBe(false);
     writeFileSync(join(root, "stop"), "stop");
-    const recovered = await waitForWindowsRecovery(() => observe());
+    const recovered = await waitForWindowsRecovery(timeoutMs => observe(config, timeoutMs));
     expect(recovered.entered).toBe(true);
     expect(["absent", "reused", "exited"]).toContain("guardian" in recovered.recovery ? recovered.recovery.guardian.state : null);
     expect(recovered.recovery).toMatchObject({ receipt: { token: record.token, phase: "terminal", pgid: null,
