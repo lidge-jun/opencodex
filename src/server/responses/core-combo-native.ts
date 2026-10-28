@@ -48,6 +48,20 @@ import { chatCompletionsErrorResponse } from "../../chat/outbound";
 import { anthropicErrorResponse } from "../../claude/outbound";
 import { hasNativeOnlyTool } from "../../claude/inbound-content-options";
 import { nativeMessagesInlineToolNames } from "../messages-native-tool-guard";
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+/**
+ * An inline definition without a usable name cannot be withdrawn by a tool_reference, so it stays in
+ * force; nativeMessagesInlineToolNames tracks only named, callable tools and skips it.
+ */
+function hasUnnamedInlineToolDefinition(body: Record<string, unknown>): boolean {
+  return Array.isArray(body.messages) && body.messages.some(message => isRecord(message) && message.role === "system"
+    && Array.isArray(message.content) && message.content.some(block => isRecord(block) && block.type === "tool_addition"
+      && isRecord(block.tool) && block.tool.type === "tool_definition"
+      && !(isRecord(block.tool.definition) && typeof block.tool.definition.name === "string" && block.tool.definition.name.length > 0)));
+}
 import { isRequestExecutionBudget } from "../../lib/request-execution-budget";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 import { redactSecretString } from "../../lib/redact";
@@ -185,7 +199,7 @@ export function createComboProtocolLanes(input: {
   // The bridge keeps only text from system messages, so an active inline tool_addition definition
   // has no translated equivalent either; fail closed like a top-level native-only tool.
   const declaresNativeOnlyTool = (body: Record<string, unknown>) =>
-    hasNativeOnlyTool(body) || nativeMessagesInlineToolNames(body).size > 0;
+    hasNativeOnlyTool(body) || nativeMessagesInlineToolNames(body).size > 0 || hasUnnamedInlineToolDefinition(body);
   const judge = (target: ComboTarget): CandidateVerdict => {
     const key = selector(target);
     const cached = verdicts.get(key);

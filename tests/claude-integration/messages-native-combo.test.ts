@@ -198,8 +198,8 @@ describe("native Messages candidates in a combo", () => {
       expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(portable ? ["api.anthropic.com", "backup.fixture.invalid"] : ["api.anthropic.com"]);
     });
   }
-  test("an inline system-message tool declaration never falls back to a translated child", async () => {
-    const definition = { type: "advisor_20260301", name: "advisor", model: "claude-haiku-4-5" };
+  for (const name of ["advisor", undefined, "", 42]) test(`an inline system-message tool declaration (name ${JSON.stringify(name)}) never falls back to a translated child`, async () => {
+    const definition = { type: "advisor_20260301", ...(name === undefined ? {} : { name }), model: "claude-haiku-4-5" };
     const addition = { role: "system", content: [{ type: "tool_addition", tool: { type: "tool_definition", definition } }] };
     answer = () => stream(prelude + refusal);
     const { text } = await send({ messages: [addition, ...source.messages] });
