@@ -73,14 +73,21 @@ test("retention fixture accepts a normal nested temp child and rejects unsafe ro
 
 const native = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const roots = new Map<string, WindowsApplyAcquisition[]>();
+// Acquisitions whose native close failed stay strongly reachable for diagnosis; they are
+// never revisited by a later afterEach.
+const failedCleanup: { root: string; owners: WindowsApplyAcquisition[] }[] = [];
 afterEach(() => {
   acl.setWindowsOwnerAclAsyncRunnerForTests(null);
+  const failedRoots: string[] = [];
   for (const [root, owners] of roots) {
-    // No installer is created here. A failed native close still withholds root
-    // deletion; keep the acquisition strongly reachable for diagnosis.
-    expect(owners.every(owner => owner.releaseIfClean()), "fixture pins must close before root removal").toBe(true);
-    removeTreeWithRetry(root); roots.delete(root);
+    roots.delete(root);
+    // No installer is created here. Evaluate every owner; a failed native close
+    // withholds root deletion and is reported once below.
+    const failed = owners.filter(owner => !owner.releaseIfClean());
+    if (failed.length === 0) removeTreeWithRetry(root);
+    else { failedCleanup.push({ root, owners: failed }); failedRoots.push(root); }
   }
+  expect(failedRoots, "fixture pins must close before root removal").toEqual([]);
 });
 async function authorityFixture() {
   const root = createCodexCliTestRoot("ocx-release-review-"), owners: WindowsApplyAcquisition[] = [];
