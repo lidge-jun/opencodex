@@ -137,7 +137,8 @@ test.skipIf(process.platform !== "win32")("Windows discovery selects Desktop bef
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(code).toBe(0); expect(stderr).toBe("");
-    expect(stdout.trim().split(/\r?\n/u)).toEqual([realpathSync(expected), "fixture-key-stdin"]);
+    // The child reports its long path; the runner's temp root is an 8.3 short name.
+    expect(stdout.trim().split(/\r?\n/u)).toEqual([realpathSync.native(expected), "fixture-key-stdin"]);
     if (expected === managed) rmSync(join(prefix, "current"));
     else rmSync(expected);
   }
