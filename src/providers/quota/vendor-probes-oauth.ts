@@ -23,6 +23,7 @@ import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TI
 import { providerCodexAccountMode } from "../registry";
 import {
   accountReportCurrent,
+  AUTHORITATIVE_EMPTY_QUOTA,
   TERMINAL_QUOTA_FAILURE,
   providerLabel,
   providerQuotaFromCodexQuota,
@@ -436,12 +437,13 @@ export async function fetchPassiveProviderQuota(provider: string): Promise<Provi
  * before a launch. A forced quota refresh re-reads this snapshot, not the upstream. `updatedAt`
  * stays the observation time, which is the age the quota card renders.
  */
-export function fetchClaudeCliObservedQuota(provider: string): ProviderQuotaReport | null {
+export function fetchClaudeCliObservedQuota(provider: string): ProviderQuotaProbeResult {
   const observation = peekClaudeUsageObservation();
-  if (!observation?.quota) return null;
+  if (!observation) return null;
+  if (!observation.quota) return AUTHORITATIVE_EMPTY_QUOTA;
   const built = report(provider, `${provider}:subscription-observation`, observation.quota);
   // Tagged here rather than inside report(), which every probed path shares.
-  return built ? { ...built, observed: true } : null;
+  return built ? { ...built, observed: true } : AUTHORITATIVE_EMPTY_QUOTA;
 }
 
 // ---------------------------------------------------------------------------

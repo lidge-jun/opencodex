@@ -704,8 +704,9 @@ measurements are diagnostic; an absent model window does not establish that the 
 
 For a row using the `claude-cli` adapter, the report is the last recorded Claude subscription
 observation (`observed: true`) rather than an active probe. `refresh=1` re-reads that local
-snapshot; no provider-quota read spawns the CLI or calls Anthropic, and the row is absent until a
-usage check has recorded something.
+snapshot. Fetching this Claude CLI report never spawns the CLI or calls Anthropic; other configured
+providers can still run their normal quota probes. The row is absent until a usage check records
+quota windows, and a newer observation without windows clears the previous report.
 
 With `quota=1`, an Anthropic or Antigravity account row whose probe returned no quota carries
 `quotaUnavailable: true` and, when the cause is known, a closed `quotaFailure` code:

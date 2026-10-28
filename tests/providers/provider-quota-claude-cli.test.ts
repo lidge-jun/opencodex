@@ -9,6 +9,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../src/providers/quota";
+import { saveClaudeUsageSnapshot } from "../../src/providers/claude-cli-usage-state";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
 
@@ -96,5 +97,36 @@ test("keeps an observation past the last-good bound instead of deleting it", asy
 test("reports nothing and probes nothing without an admission snapshot", async () => {
   const response = await fetchProviderQuotaReports(config());
 
+  expect(response.reports.some(report => report.provider === "claude-cli")).toBe(false);
+});
+
+test("forced refresh publishes newer percentages and their observation time", async () => {
+  const observedAt = Date.now() - 60_000;
+  seedObservation(observedAt);
+  await fetchProviderQuotaReports(config());
+  const updatedAt = observedAt + 30_000;
+  saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), {
+    identity: "a".repeat(64), checkedAt: updatedAt,
+    quota: { fiveHourPercent: 23, weeklyPercent: 64, updatedAt },
+  });
+
+  const row = (await fetchProviderQuotaReports(config(), true)).reports
+    .find(report => report.provider === "claude-cli");
+  expect(row?.quota.fiveHourPercent).toBe(23);
+  expect(row?.quota.weeklyPercent).toBe(64);
+  expect(row?.updatedAt).toBe(updatedAt);
+});
+
+test.each([false, true])("forced refresh clears the prior account's quota when the new snapshot has no windows (%s)", async emptyQuota => {
+  const observedAt = Date.now() - 60_000;
+  seedObservation(observedAt);
+  expect((await fetchProviderQuotaReports(config())).reports).toHaveLength(1);
+  const checkedAt = observedAt + 30_000;
+  saveClaudeUsageSnapshot(join(home, "claude-usage-admission.json"), {
+    identity: "b".repeat(64), checkedAt,
+    ...(emptyQuota ? { quota: { updatedAt: checkedAt } } : {}),
+  });
+
+  const response = await fetchProviderQuotaReports(config(), true);
   expect(response.reports.some(report => report.provider === "claude-cli")).toBe(false);
 });
