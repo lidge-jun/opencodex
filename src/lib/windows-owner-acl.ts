@@ -85,7 +85,9 @@ try {
   [Console]::WriteLine(('U|{0}|{1}|{2}' -f $identity.User.Value,$identity.Owner.Value,$enabled))
   $sections=[System.Security.AccessControl.AccessControlSections]'Owner,Group,Access'
   for ($i=0; $i -lt $count; $i++) {
-    $path=[Environment]::GetEnvironmentVariable(('OCX_ACL_PATH_{0}' -f $i))
+    if ([Environment]::GetEnvironmentVariable('OCX_ACL_STDIN') -eq '1') {
+      $path=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::ReadLine()))
+    } else { $path=[Environment]::GetEnvironmentVariable(('OCX_ACL_PATH_{0}' -f $i)) }
     if ([string]::IsNullOrEmpty($path)) { throw 'path' }
     if ([System.IO.Directory]::Exists($path)) { $acl=[System.Security.AccessControl.DirectorySecurity]::new($path, $sections) }
     else { $acl=[System.Security.AccessControl.FileSecurity]::new($path, $sections) }
@@ -113,7 +115,7 @@ try {
 const ENCODED_ACL_SCRIPT = Buffer.from(ACL_SCRIPT, "utf16le").toString("base64");
 
 function defaultWindowsOwnerAclRunner(entries: readonly WindowsPrivateEntry[], timeoutMs: number): WindowsOwnerAclResult {
-  const env: Record<string, string | undefined> = { ...process.env, OCX_ACL_COUNT: String(entries.length) };
+  const env: Record<string, string | undefined> = { ...process.env, OCX_ACL_COUNT: String(entries.length), OCX_ACL_STDIN: "0" };
   for (let i = 0; i < entries.length; i++) env[`OCX_ACL_PATH_${i}`] = entries[i]!.path;
   const result = Bun.spawnSync([
     resolveTrustedWindowsPowerShellExe(), "-NoLogo", "-NoProfile", "-NonInteractive",
@@ -311,15 +313,17 @@ async function defaultWindowsOwnerAclAsyncRunner(
   entries: readonly WindowsAclEntry[],
   timeoutMs: number,
 ): Promise<WindowsOwnerAclResult> {
-  const env: Record<string, string | undefined> = { ...process.env, OCX_ACL_COUNT: String(entries.length) };
-  for (let i = 0; i < entries.length; i++) env["OCX_ACL_PATH_" + i] = entries[i]!.path;
+  // Whole-tree batches must not overflow Windows' environment block with paths.
+  // Base64 lines are data on stdin; no candidate text is PowerShell source.
+  const env: Record<string, string | undefined> = { ...process.env, OCX_ACL_COUNT: String(entries.length), OCX_ACL_STDIN: "1" };
+  const input = Buffer.from(entries.map(entry => Buffer.from(entry.path, "utf8").toString("base64")).join("\n") + "\n");
   let proc;
   try {
     proc = Bun.spawn([
       resolveTrustedWindowsPowerShellExe(), "-NoLogo", "-NoProfile", "-NonInteractive",
       "-ExecutionPolicy", "Bypass", "-EncodedCommand", ENCODED_ACL_SCRIPT,
     ], {
-      env, stdin: "ignore", stdout: "pipe", stderr: "ignore", windowsHide: true,
+      env, stdin: input, stdout: "pipe", stderr: "ignore", windowsHide: true,
     });
   } catch {
     return { success: false, timedOut: false, stdout: new Uint8Array() };
@@ -333,10 +337,11 @@ async function defaultWindowsOwnerAclAsyncRunner(
   // unbounded caller stall — the verdict stays timedOut, the late result is never
   // read, and the runner fails closed. windows-user-principal.ts opts out the
   // same way for its read-only lookup.
+  // Drain while the verifier runs. A whole npm tree can fill the pipe before
+  // exit; waiting for exit first turns a valid batch into an artificial timeout.
+  const reading = proc.stdout ? new Response(proc.stdout).text().catch(() => "") : Promise.resolve("");
   const { exitCode, timedOut } = await waitForSubprocessExit(proc, timeoutMs, 0);
-  const stdout = !timedOut && proc.stdout
-    ? await new Response(proc.stdout).text().catch(() => "")
-    : "";
+  const stdout = !timedOut ? await reading : "";
   return { success: !timedOut && exitCode === 0, timedOut, stdout };
 }
 let ownerAclAsyncRunner: WindowsOwnerAclAsyncRunner = defaultWindowsOwnerAclAsyncRunner;
@@ -353,8 +358,16 @@ export async function verifyWindowsEntriesAclAsync(entries: readonly WindowsAclE
     return result.success && !result.timedOut && windowsEntriesAclMatches(result.stdout, entries);
   } catch { return false; }
 }
-
 /** Async private-only verification for hardening paths that must yield; every entry uses the "private" policy. */
 export async function verifyWindowsPrivateEntriesAsync(entries: readonly WindowsPrivateEntry[], timeoutMs: number): Promise<boolean> {
   return verifyWindowsEntriesAclAsync(entries.map(({ path, directory }) => ({ path, directory, policy: "private" as const })), timeoutMs);
+}
+
+/** Synchronous admission/commit boundaries use the identical mixed-policy parser. */
+export function verifyWindowsEntriesAcl(entries: readonly WindowsAclEntry[], timeoutMs: number): boolean {
+  if (entries.length === 0 || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return false;
+  try {
+    const result = ownerAclRunner(entries, Math.max(1, Math.min(WINDOWS_OWNER_ACL_TIMEOUT_MS, Math.floor(timeoutMs))));
+    return result.success && !result.timedOut && windowsEntriesAclMatches(result.stdout, entries);
+  } catch { return false; }
 }

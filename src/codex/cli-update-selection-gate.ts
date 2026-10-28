@@ -31,6 +31,7 @@
  */
 
 import { codexCliUpdateRecoveryBlocksAdmission } from "./cli-update-recovery";
+import type { CodexCliUpdateNativeChildIdentity, CodexCliUpdateNativeRecoveryProof } from "./cli-update-recovery";
 
 export const CODEX_CLI_UPDATE_FENCE_PREPARING = 0;
 export const CODEX_CLI_UPDATE_FENCE_CANCELLED = 1;
@@ -140,8 +141,8 @@ export interface CodexCliUpdateCommitWindow {
   tryEnter(): boolean;
   waitEnter(): Promise<boolean>;
   commit(): boolean;
-  childStarting?(): void;
-  childStarted?(pid: number): void;
+  childStarting?(jobName?: string): CodexCliUpdateNativeRecoveryProof | void;
+  childStarted?(pid: number, identity?: CodexCliUpdateNativeChildIdentity): void;
   exit(): void;
 }
 
@@ -149,7 +150,7 @@ export function createWorkerCommitWindow(options: {
   readonly gate: SharedArrayBuffer;
   readonly fence: SharedArrayBuffer;
   readonly owner?: number;
-  readonly recovery?: { arm(): void; child(pid: number): void; terminal(): void };
+  readonly recovery?: { arm(jobName?: string): CodexCliUpdateNativeRecoveryProof | void; child(pid: number, identity?: CodexCliUpdateNativeChildIdentity): void; terminal(): void };
   readonly deadlineMs?: number;
   /** Test seam: observe/back-off without real sleeps. */
   readonly sleep?: (ms: number) => Promise<void>;
@@ -200,19 +201,25 @@ export function createWorkerCommitWindow(options: {
       return Atomics.compareExchange(fence, 0, CODEX_CLI_UPDATE_FENCE_PREPARING, CODEX_CLI_UPDATE_FENCE_COMMITTED)
         === CODEX_CLI_UPDATE_FENCE_PREPARING;
     },
-    childStarting() {
+    childStarting(jobName?: string) {
       Atomics.store(fence, 1, 0);
       // Publish uncertainty BEFORE competing with parent recovery's seal.
       // A close notification may precede full thread exit; no next child can
       // start after the parent has sealed COMMITTED for recovery.
       if (Atomics.compareExchange(fence, 0, CODEX_CLI_UPDATE_FENCE_COMMITTED, CODEX_CLI_UPDATE_FENCE_COMMITTED)
         !== CODEX_CLI_UPDATE_FENCE_COMMITTED) throw new Error("cli_update_owner_recovering");
-      options.recovery?.arm();
+      const proof = options.recovery?.arm(jobName);
+      // Close may seal RECOVERING while durable arming is in progress. No native
+      // successor may start after that seal, even if arming observed a marker.
+      if (Atomics.load(fence, 0) !== CODEX_CLI_UPDATE_FENCE_COMMITTED || Atomics.load(gate, 0) !== owner) {
+        throw new Error("cli_update_owner_recovering");
+      }
+      return proof;
     },
-    childStarted(pid: number) {
+    childStarted(pid: number, identity?: CodexCliUpdateNativeChildIdentity) {
       // Publication follows spawn in the same turn. Death in the gap stays unknown.
+      options.recovery?.child(pid, identity);
       Atomics.store(fence, 1, pid);
-      options.recovery?.child(pid);
     },
     exit() {
       if (!held) return;

@@ -54,21 +54,21 @@
  * behavior is unverified: the DACL policy is the enforcement claim, not an
  * empirical cross-user proof.
  */
-import { randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, join, resolve, toNamespacedPath } from "node:path";
 import type { Library, Symbols } from "bun:ffi";
-import { getConfigDir } from "../config";
+import * as recoveryFfi from "bun:ffi";
+import { getConfigDir } from "../config/paths";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
-import { forgetEphemeralSecretPath, hardenSecretDirAsync, hardenSecretPathAsync } from "../lib/windows-secret-acl";
-import { verifyWindowsEntriesAclAsync, type WindowsAclEntry } from "../lib/windows-owner-acl";
+import { forgetEphemeralSecretPath, hardenSecretDir, hardenSecretPath, hardenSecretDirAsync, hardenSecretPathAsync } from "../lib/windows-secret-acl";
+import { verifyWindowsEntriesAcl, verifyWindowsEntriesAclAsync, type WindowsAclEntry } from "../lib/windows-owner-acl";
 import { retryWindowsFileOperation } from "../lib/windows-atomic-replace";
 import {
   CODEX_CLI_JOB_STORE_DIR, CODEX_CLI_JOB_STORE_FILE, CODEX_CLI_JOB_STORE_LOCK,
   CODEX_CLI_JOB_STORE_MAX_BYTES, CodexCliJobStoreBusyError,
 } from "./cli-update-job-execution";
 import { windowsCanonicalPathMatches } from "./windows-installation-files";
-import { toNamespacedPath } from "node:path";
 
 const KERNEL_SYMBOLS = {
   GetDriveTypeW: { args: ["ptr"], returns: "u32" },
@@ -143,6 +143,7 @@ function loadNative(): Promise<Native> {
 const unsafe = (): Error => new Error("unsafe_store");
 const enoent = (): NodeJS.ErrnoException => Object.assign(new Error("ENOENT"), { code: "ENOENT" });
 
+// General ledger callers retain their existing best-effort close contract.
 class PinSet {
   private readonly handles: bigint[] = [];
   keep(handle: bigint): bigint { this.handles.push(handle); return handle; }
@@ -155,6 +156,47 @@ class PinSet {
     for (const handle of this.handles.splice(0).reverse()) kernel.symbols.CloseHandle(handle);
   }
 }
+
+/** Strict disposal is scoped to apply authority, not ordinary ledger/status I/O. */
+export class WindowsApplyAuthorityPins extends PinSet {
+  private readonly authorityHandles: bigint[] = [];
+  private readonly failedCloses = new Set<bigint>();
+  get remaining(): number { return this.authorityHandles.length; }
+  override keep(handle: bigint): bigint { this.authorityHandles.push(handle); return handle; }
+  override release(handle: bigint, kernel: Library<typeof KERNEL_SYMBOLS>): boolean {
+    const index = this.authorityHandles.lastIndexOf(handle);
+    if (index < 0) return true; // Already released; never close a reused native handle.
+    try {
+      if (!kernel.symbols.CloseHandle(handle)) { this.failedCloses.add(handle); return false; }
+    } catch { this.failedCloses.add(handle); return false; }
+    this.authorityHandles.splice(index, 1);
+    this.failedCloses.delete(handle);
+    return true;
+  }
+  override closeAll(kernel: Library<typeof KERNEL_SYMBOLS>): void {
+    // One attempt per disposal. A failed explicit release must not be retried
+    // invisibly by a later finally/closeAll in the same ownership lifecycle.
+    for (const handle of [...this.authorityHandles].reverse()) {
+      if (!this.failedCloses.has(handle)) this.release(handle, kernel);
+    }
+  }
+}
+
+/** Internal acquisition root; never serialized into job/HTTP DTOs. */
+export class WindowsApplyAcquisition {
+  constructor(readonly resources: object, private readonly pins: WindowsApplyAuthorityPins) {}
+  releaseIfClean(token?: { release(): void }): boolean {
+    if (this.pins.remaining !== 0) return false;
+    token?.release();
+    return true;
+  }
+}
+
+export class WindowsCliToolchainCleanupError extends Error {
+  constructor(readonly acquisition: WindowsApplyAcquisition) { super("toolchain_cleanup_unverified"); }
+}
+// Failed native closes remain strongly owned even when acquisition rejects.
+const retainedToolchains = new Set<WindowsApplyAcquisition>();
 
 interface Prepared {
   readonly config: string;
@@ -182,6 +224,9 @@ interface Ctx {
 }
 
 const wide = (text: string): Buffer => Buffer.from(text + "\0", "utf16le");
+// OBJECT_ATTRIBUTES contains unmanaged pointers to UNICODE_STRING and its text.
+// Root every backing buffer through NtCreateFile, including across GC/JIT pressure.
+const activeRelativeOpenBuffers = new Set<Buffer>();
 
 function keep(ctx: Ctx, handle: bigint): bigint {
   if (handle === 0n || handle === INVALID_HANDLE) throw unsafe();
@@ -234,25 +279,29 @@ function relOpen(
 ): bigint {
   const name = wide(component);
   const unicode = Buffer.alloc(16);
+  const attributes = Buffer.alloc(48);
+  const output = Buffer.alloc(8);
+  const status = Buffer.alloc(16);
+  const borrowed = [name, unicode, attributes, output, status];
+  for (const buffer of borrowed) activeRelativeOpenBuffers.add(buffer);
+  try {
   unicode.writeUInt16LE(name.length - 2, 0);
   unicode.writeUInt16LE(name.length, 2);
   unicode.writeBigUInt64LE(BigInt(ctx.ffi.ptr(name)), 8);
-  const attributes = Buffer.alloc(48);
   attributes.writeUInt32LE(48, 0);
   attributes.writeBigUInt64LE(parent, 8);
   attributes.writeBigUInt64LE(BigInt(ctx.ffi.ptr(unicode)), 16);
   attributes.writeUInt32LE(0x40, 24); // OBJ_CASE_INSENSITIVE; one component only.
-  const output = Buffer.alloc(8);
-  const status = Buffer.alloc(16);
   const result = ctx.nt.symbols.NtCreateFile!(ctx.ffi.ptr(output), access, ctx.ffi.ptr(attributes),
     ctx.ffi.ptr(status), null, 0, share, FILE_OPEN, directory ? DIR_OPTIONS : FILE_OPTIONS, null, 0);
   if (result < 0) {
     const status32 = result >>> 0;
     if (status32 === 0xc0000034 || status32 === 0xc000003a) throw enoent(); // object/path not found
-    throw unsafe();
+    throw new Error("unsafe_store", { cause: { nativeStatus: status32 } });
   }
   const handle = keep(ctx, output.readBigUInt64LE(0));
   return handle;
+  } finally { for (const buffer of borrowed) activeRelativeOpenBuffers.delete(buffer); }
 }
 
 /** Volume root via the strict GUID mount path; remote or absent volumes refuse. */
@@ -342,7 +391,8 @@ async function verifyAcl(entries: readonly WindowsAclEntry[]): Promise<void> {
   if (!await verifyWindowsEntriesAclAsync(aclTargets(entries), ACL_VERIFY_TIMEOUT_MS)) throw unsafe();
 }
 
-// External descriptor readers need extended-length targets for long paths.
+// External ACL tools need extended-length names even though native pins and
+// canonical/alias checks continue to use the original normalized long DOS paths.
 function aclTargets(entries: readonly WindowsAclEntry[]): WindowsAclEntry[] {
   return entries.map(entry => ({ ...entry, path: toNamespacedPath(entry.path) }));
 }
@@ -571,7 +621,7 @@ async function acquireLock(ctx: Ctx, prepared: Prepared): Promise<HeldLock> {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new CodexCliJobStoreBusyError();
     throw error;
   }
-  const lockDir = relOpen(ctx, prepared.jobdir, CODEX_CLI_JOB_STORE_LOCK, true,
+  const lockDir = relOpen(ctx, prepared.jobdir, prepared.lock.slice(prepared.dir.length + 1), true,
     ACCESS_DIR_WRITE, SHARE_DIR);
   const lockIdentity = inspect(ctx, lockDir, true);
   const ownerPath = join(prepared.lock, "owner.json");
@@ -623,11 +673,264 @@ function releaseLock(ctx: Ctx, held: HeldLock): void {
   ctx.pins.release(held.dir, ctx.kernel);
 }
 
+export interface WindowsCliRecoveryIo {
+  readonly dir: string;
+  names(): string[];
+  read(name: string): string;
+  withProofHandle<T>(name: string, run: (handle: bigint) => T): T;
+  write(name: string, pendingName: string, body: string): void;
+}
+/** The shared recovery protocol uses the ledger's native ancestry, no-reparse,
+ * identity, private-DACL and rename primitives at synchronous gate boundaries.
+ * Only this process's exact token may replace its bounded pending publication.
+ */
+export function withWindowsCliRecoveryStore<T>(config: string, create: boolean, run: (io: WindowsCliRecoveryIo) => T): T {
+  if (process.platform !== "win32" || process.arch !== "x64") throw unsafe();
+  assertNotRealHomeUnderTest(config);
+  const kernel = recoveryFfi.dlopen("kernel32.dll", KERNEL_SYMBOLS);
+  const nt = recoveryFfi.dlopen("ntdll.dll", NT_SYMBOLS);
+  const ctx: Ctx = { ffi: recoveryFfi, kernel, nt, pins: new PinSet() };
+  const verify = (entries: readonly WindowsAclEntry[]) => {
+    if (!verifyWindowsEntriesAcl(aclTargets(entries), ACL_VERIFY_TIMEOUT_MS)) throw unsafe();
+  };
+  try {
+    const chain = pinChain(ctx, config, ACCESS_DIR_PIN);
+    verify(chain.map((entry, i) => ({ path: entry.path, directory: true,
+      policy: i >= chain.length - 2 ? "write-private" : "trusted-ancestry" })));
+    const configPin = chain.at(-1);
+    if (!configPin) throw unsafe();
+    const dir = join(config, "codex-cli-update-recovery");
+    try {
+      if (create) { mkdirSync(dir); hardenSecretDir(toNamespacedPath(dir), { required: true }); }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+    const directoryPin = relOpen(ctx, configPin.handle, "codex-cli-update-recovery", true,
+      create ? ACCESS_DIR_PIN : ACCESS_READ, SHARE_DIR);
+    inspect(ctx, directoryPin, true); assertCanonicalPath(ctx, directoryPin, dir);
+    verify([{ path: dir, directory: true, policy: "private" }]);
+    if (create) flushDir(ctx, configPin.handle);
+    const leaf = (name: string, access = ACCESS_READ, sharing = SHARE_LEAF_VERIFY) => {
+      if (!/^[0-9a-f-]{36}(?:\.(?:terminal|proof))?(?:\.pending|\.json|\.terminal|\.proof)$/.test(name)) throw unsafe();
+      const handle = relOpen(ctx, directoryPin, name, false, access, sharing);
+      const stat = inspect(ctx, handle, false);
+      if (stat.links !== 1 || stat.size > 1024) throw unsafe();
+      verify([{ path: join(dir, name), directory: false, policy: "private" }]);
+      return { handle, stat };
+    };
+    return run({ dir,
+      names: () => readdirSync(dir),
+      read(name) {
+        const file = leaf(name);
+        try { return readAll(ctx, file.handle, file.stat.size).toString("utf8"); }
+        finally { ctx.pins.release(file.handle, kernel); }
+      },
+      withProofHandle(name, use) {
+        if (!/^[0-9a-f-]{36}\.proof$/.test(name)) throw unsafe();
+        const file = leaf(name, 0x40100080, 7);
+        try { return use(file.handle); } finally { ctx.pins.release(file.handle, kernel); }
+      },
+      write(name, pendingName, body) {
+        if (!create || Buffer.byteLength(body) > 1024 || !/^[0-9a-f-]{36}(?:\.terminal|\.proof)?$/.test(name.replace(/\.json$/, ""))
+          || pendingName !== name.replace(/\.json$/, "") + ".pending") throw unsafe();
+        // A previous failed publication is removed only through its verified pin.
+        try {
+          const old = leaf(pendingName, ACCESS_LEAF, SHARE_LEAF);
+          markDelete(ctx, old.handle); ctx.pins.release(old.handle, kernel);
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        const temp = join(dir, pendingName), destination = join(dir, name);
+        const fd = openSync(temp, "wx", 0o600);
+        try { writeFileSync(fd, body); fsyncSync(fd); } finally { closeSync(fd); }
+        hardenSecretPath(toNamespacedPath(temp), { required: true });
+        const file = leaf(pendingName, ACCESS_LEAF, SHARE_LEAF);
+        try {
+          if (!readAll(ctx, file.handle, file.stat.size).equals(Buffer.from(body))) throw unsafe();
+          renamePinned(ctx, file.handle, destination);
+          const published = leaf(name);
+          try { if (!sameIdentity(file.stat, published.stat)) throw unsafe(); }
+          finally { ctx.pins.release(published.handle, kernel); }
+          flushDir(ctx, directoryPin);
+        } finally { ctx.pins.release(file.handle, kernel); forgetEphemeralSecretPath(toNamespacedPath(temp)); }
+      },
+    });
+  } finally { ctx.pins.closeAll(kernel); nt.close(); kernel.close(); }
+}
+
 export interface WindowsJobStoreIo {
   /** Ledger body text; null when the file is absent. */
   readStore(): Promise<string | null>;
   /** Atomically publish a replacement ledger body. */
   writeStore(body: string): Promise<void>;
+}
+
+/** Separate installation authority. It does not use the job ledger or repair existing ACLs.
+ * Directory pins allow npm's writes but deny replacement of the prefix/ancestry.
+ * The serving account and kernel-equivalent principals remain inside the trust boundary.
+ */
+export async function openWindowsCliApplyAuthority(prefix: string, acquire: boolean,
+  onAcquiring?: (owner: WindowsApplyAcquisition) => void) {
+  assertNotRealHomeUnderTest(prefix);
+  const { ffi, kernel, nt } = await loadNative();
+  const pins = new WindowsApplyAuthorityPins();
+  const ctx: Ctx = { ffi, kernel, nt, pins };
+  let held: HeldLock | undefined;
+  let transferred = false;
+  let closed = false;
+  try {
+    // Publish the context before the first pin/open or async verification can fail.
+    // The caller already holds its Worker token; failed cleanup remains rooted there.
+    onAcquiring?.(new WindowsApplyAcquisition(ctx, pins));
+    // The prefix is an ancestry pin, not a writable store directory. A write-access
+    // pin would prevent the ordinary deny-write installation snapshot from opening
+    // it, even though npm's child-file writes do not require that access on our pin.
+    const chain = pinChain(ctx, prefix, ACCESS_READ);
+    if (chain.length < 2) throw unsafe();
+    const prefixDepth = chain.length, prefixPin = chain.at(-1)!;
+    let parent = prefixPin.handle, path = prefix;
+    for (const component of ["node_modules", "@openai"]) {
+      path = join(path, component);
+      const handle = relOpen(ctx, parent, component, true, ACCESS_READ, SHARE_DIR);
+      chain.push({ path, handle, inspection: inspect(ctx, handle, true) });
+      parent = handle;
+    }
+    const entries: WindowsAclEntry[] = chain.map((entry, index) => ({ path: entry.path, directory: true,
+      policy: index >= prefixDepth - 2 ? "write-private" : "trusted-ancestry" }));
+    let stage: { path: string; handle: bigint; identity: StoreInspection } | undefined;
+    const verifyIdentitySync = () => {
+      for (const entry of chain) if (!sameIdentity(entry.inspection, inspect(ctx, entry.handle, true))) throw unsafe();
+      if (held && (!sameIdentity(held.dirIdentity, inspect(ctx, held.dir, true))
+        || !sameIdentity(held.ownerIdentity, inspect(ctx, held.owner, false))
+        || !readAll(ctx, held.owner, Buffer.byteLength(held.record)).equals(Buffer.from(held.record)))) throw unsafe();
+      if (stage && !sameIdentity(stage.identity, inspect(ctx, stage.handle, true))) throw unsafe();
+    };
+    const verifyHeld = async () => {
+      verifyIdentitySync();
+      await verifyAcl(entries);
+      verifyIdentitySync();
+    };
+    const verify = async () => { if (closed) throw unsafe(); await verifyHeld(); if (closed) throw unsafe(); };
+    await verify();
+    const lock = join(prefix, ".ocx-codex-cli-apply.lock");
+    if (acquire) held = await acquireLock(ctx, { config: prefix, dir: prefix, file: "", lock,
+      jobdir: prefixPin.handle });
+    transferred = true;
+    return {
+      lock,
+      verify,
+      verifyIdentitySync() { if (closed) throw unsafe(); verifyIdentitySync(); },
+      async createStaging(): Promise<string> {
+        if (closed || !held || stage) throw unsafe();
+        await verify();
+        const path = join(lock, "stage");
+        mkdirSync(path);
+        const handle = relOpen(ctx, held.dir, "stage", true, ACCESS_READ, SHARE_DIR);
+        stage = { path, handle, identity: inspect(ctx, handle, true) };
+        await hardenSecretDirAsync(toNamespacedPath(path), { required: true });
+        await verifyAcl([{ path, directory: true, policy: "private" }]);
+        if (closed) throw unsafe();
+        return path;
+      },
+      async removeStaging(): Promise<void> {
+        if (closed || !stage) throw unsafe();
+        await verify();
+        if (!sameIdentity(stage.identity, inspect(ctx, stage.handle, true))) throw unsafe();
+        await verifyAcl([{ path: stage.path, directory: true, policy: "private" }]);
+        if (closed) throw unsafe();
+        if (!pins.release(stage.handle, kernel)) throw unsafe();
+        // Ancestors remain pinned and all writers are within the verified trust boundary.
+        rmSync(stage.path, { recursive: true });
+        stage = undefined;
+      },
+      async release(): Promise<boolean> {
+        if (closed) return false;
+        closed = true;
+        try { await verifyHeld(); if (held) releaseLock(ctx, held); }
+        finally { ctx.pins.closeAll(kernel); }
+        return pins.remaining === 0 && (!acquire || !existsSync(lock));
+      },
+    };
+  } finally { if (!transferred) ctx.pins.closeAll(kernel); }
+}
+
+export async function windowsCliApplyPrefixSupported(prefix: string): Promise<boolean> {
+  try { const guard = await openWindowsCliApplyAuthority(prefix, false); return await guard.release(); }
+  catch { return false; }
+}
+
+/** Read-only execution authority: use the same reparse-refusing relative opens and
+ * owner/DACL policy as installation authority. No existing object is rehardened.
+ * Canonical handle paths make ACL reads identical for long and 8.3 spellings.
+ */
+export async function openWindowsCliToolchainAuthority(node: string, npmRoot: string, content: boolean) {
+  const { ffi, kernel, nt } = await loadNative();
+  const pins = new WindowsApplyAuthorityPins(), ctx: Ctx = { ffi, kernel, nt, pins };
+  const acquisition = new WindowsApplyAcquisition(ctx, pins);
+  retainedToolchains.add(acquisition);
+  let transferred = false, closed = false, total = 0;
+  const entries: WindowsAclEntry[] = [], observations: unknown[] = [];
+  const canonical = (handle: bigint): string => {
+    const buffer = Buffer.alloc(32768 * 2);
+    const length = kernel.symbols.GetFinalPathNameByHandleW(handle, ffi.ptr(buffer), 32768, 0);
+    if (!length || length >= 32768) throw unsafe();
+    const path = buffer.toString("utf16le", 0, length * 2);
+    if (!/^\\\\\?\\[a-z]:\\/i.test(path)) throw unsafe();
+    return path.slice(4);
+  };
+  const add = (handle: bigint, directory: boolean, policy: WindowsAclEntry["policy"]) => {
+    const identity = inspect(ctx, handle, directory), path = canonical(handle);
+    entries.push({ path, directory, policy });
+    if (entries.length > 8192) throw unsafe();
+    if (!directory) {
+      total += identity.size;
+      if (identity.links !== 1 || identity.size > 128 * 1024 * 1024 || total > 512 * 1024 * 1024) throw unsafe();
+      observations.push([path.toLowerCase(), identity, content ? createHash("sha256").update(readAll(ctx, handle, identity.size)).digest("hex") : ""]);
+    } else observations.push([path.toLowerCase(), identity.volumeSerial, identity.fileId]);
+    return path;
+  };
+  try {
+    const nodeParent = pinChain(ctx, resolve(node, ".."), ACCESS_READ);
+    for (const entry of nodeParent) add(entry.handle, true, "trusted-ancestry");
+    const parent = nodeParent.at(-1); if (!parent) throw unsafe();
+    // Node's own directory is a module/DLL lookup directory, so broad create grants
+    // are forbidden here even when an administrator owns it.
+    entries[entries.length - 1] = { path: canonical(parent.handle), directory: true, policy: "write-private" };
+    add(relOpen(ctx, parent.handle, basename(node), false, ACCESS_READ, SHARE_LEAF), false, "write-private");
+    // Executable-local DLL search happens before the JS resolver guard starts.
+    for (const entry of readdirSync(canonical(parent.handle))) if (/\.dll$/i.test(entry)) {
+      add(relOpen(ctx, parent.handle, entry, false, ACCESS_READ, SHARE_LEAF), false, "write-private");
+    }
+    const npmChain = pinChain(ctx, npmRoot, ACCESS_READ);
+    for (const entry of npmChain) add(entry.handle, true,
+      canonical(entry.handle).length >= canonical(parent.handle).length ? "write-private" : "trusted-ancestry");
+    const walk = (handle: bigint) => {
+      const path = canonical(handle);
+      for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        // relOpen + inspect rejects reparse points and all unexpected object kinds.
+        const directory = entry.isDirectory();
+        const child = relOpen(ctx, handle, entry.name, directory, ACCESS_READ, SHARE_LEAF);
+        add(child, directory, "write-private");
+        if (directory) walk(child);
+      }
+    };
+    walk(npmChain.at(-1)!.handle);
+    // Hold each existing ancestor module lookup directory; absent names are checked
+    // again under the already pinned, ACL-confined parents on every acquisition.
+    for (const entry of npmChain.slice(0, -1)) {
+      try { add(relOpen(ctx, entry.handle, "node_modules", true, ACCESS_READ, SHARE_DIR), true, "write-private"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    }
+    for (let i = 0; i < entries.length; i += 512) await verifyAcl(entries.slice(i, i + 512));
+    const digest = createHash("sha256").update(JSON.stringify(observations)).digest("hex");
+    transferred = true;
+    return { digest, async release(): Promise<boolean> {
+      if (closed) return false; closed = true;
+      pins.closeAll(kernel);
+      if (pins.remaining) throw new WindowsCliToolchainCleanupError(acquisition);
+      retainedToolchains.delete(acquisition); return true;
+    } };
+  } finally { if (!transferred) {
+    pins.closeAll(kernel);
+    if (pins.remaining) throw new WindowsCliToolchainCleanupError(acquisition);
+    retainedToolchains.delete(acquisition);
+  } }
 }
 
 /**

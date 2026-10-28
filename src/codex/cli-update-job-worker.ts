@@ -55,6 +55,15 @@ interface LiveJobRecord {
 }
 
 const liveJobs = new Map<string, LiveJobRecord>();
+const recoveryJobs = new Map<string, () => void>();
+/** Explicit reconciliation request; only the original Worker can observe its
+ * original native Job. This never reruns apply or changes the earlier receipt.
+ */
+export function recoverCodexCliUpdateWorkerJob(jobId: string): boolean {
+  const recover = recoveryJobs.get(jobId);
+  if (!recover) return false;
+  recover(); return true;
+}
 const unjoinedWorkers = new Set<Worker>();
 let unjoinedWorkerClosedTotal = 0;
 
@@ -339,6 +348,11 @@ async function runInWorker(
       owner,
       ...(options.env ? { env: options.env } : {}),
     };
+    const recover = () => {
+      try { worker.postMessage({ type: "recover", requestId, jobId }); } catch { /* no terminal evidence */ }
+    };
+    recoveryJobs.set(jobId, recover);
+    worker.addEventListener("close", () => { if (recoveryJobs.get(jobId) === recover) recoveryJobs.delete(jobId); }, { once: true });
     return await dispatchWorker(worker, message, options, state);
   } finally {
     liveJobs.delete(jobId);

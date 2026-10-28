@@ -9,7 +9,10 @@ import { npmInvocation } from "../update/npm-invocation.mjs";
 import { CODEX_CLI_TRANSPORT_ENV_KEYS } from "../update/codex-cli-update-launch-policy.mjs";
 import { CODEX_CLI_REGISTRY, isSha512Integrity, codexCliArtifactSetAsync, codexCliArtifactSetDigest, type CodexCliArtifactSet } from "./cli-update-artifacts";
 export { CODEX_CLI_REGISTRY } from "./cli-update-artifacts";
-import { windowsCodexCliPlanEvidence, withWindowsCodexCliPlanToolchain } from "./cli-windows-plan-provenance";
+import { windowsCodexCliPlanEvidence, windowsCodexCliToolchainDigest, withWindowsCodexCliPlanToolchain } from "./cli-windows-plan-provenance";
+import { windowsCliApplyPrefixSupported } from "./cli-update-job-store-windows";
+import { windowsInstallNamespaceSupported } from "./cli-update-windows-observation";
+import { windowsNpmExecutionArgs } from "./windows-npm-execution";
 import {
   inspectCodexCliInstall,
   type CodexCliInstallKind,
@@ -156,6 +159,7 @@ export function codexCliUpdatePlanId(bound: {
   readonly targetVersion: string;
   readonly targetIntegrity: string;
   readonly targetArtifactsDigest?: string;
+  readonly toolchainDigest?: string;
 }): string {
   // Ordered pairs, not object key order: the digest must not depend on how a caller
   // happened to build the record.
@@ -174,6 +178,7 @@ export function codexCliUpdatePlanId(bound: {
   const hash = createHash("sha256");
   for (const [key, value] of fields) hash.update(`${key}=${value}\n`);
   if (bound.targetArtifactsDigest) hash.update(`targetArtifactsDigest=${bound.targetArtifactsDigest}\n`);
+  if (bound.toolchainDigest) hash.update(`toolchainDigest=${bound.toolchainDigest}\n`);
   return hash.digest("hex").slice(0, PLAN_ID_LENGTH);
 }
 
@@ -536,7 +541,7 @@ export async function resolveCodexCliUpdateArtifactTarget(channel: CodexCliUpdat
     const query = async (spec: string) => {
       const args = isolatedNpmArgs(["view", spec, "--json"], isolation!);
       const invocation = windowsToolchain
-        ? { bin: windowsToolchain.node, args: [windowsToolchain.npmCli, ...args], options: { cwd: isolation!.dir, env: isolation!.env } }
+        ? { bin: windowsToolchain.node, args: windowsNpmExecutionArgs(windowsToolchain.npmCli, args), options: { cwd: isolation!.dir, env: isolation!.env } }
         : isolatedNpmTarget(["view", spec, "--json"], isolation!);
       if (!invocation) throw new Error("npm unavailable");
       const result = await spawn(invocation.bin, invocation.args, { encoding: "utf8", timeout: REGISTRY_TIMEOUT_MS,
@@ -586,8 +591,6 @@ function refusedPlan(
 }
 
 const NOT_EVALUATED: CodexCliUpdateSession = Object.freeze({ state: "not-evaluated" as const, matches: null });
-const WINDOWS_TOOLCHAIN_CLOSURE_UNVERIFIED: CodexCliUpdateTarget = Object.freeze({
-  kind: "unresolved", reason: "Windows toolchain closure unverified" });
 
 /**
  * Build the dry-run plan. Installs nothing and mutates no application state;
@@ -639,12 +642,8 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
   const resolveTarget = deps.resolveTarget
     ?? (ch => resolveCodexCliUpdateArtifactTarget(ch, deps.spawnProcess ?? spawnCodexCliUpdateMetadata, deps.inspectionDeps?.env,
       platform, windowsEvidence?.arch ?? deps.inspectionDeps?.arch ?? process.arch, windowsEvidence ?? undefined));
-  // Holding node.exe and npm-cli.js does not cover npm's module closure or Node's
-  // executable dependencies. Until that closure is verified write-private and held,
-  // a Windows plan spawns no npm metadata child and stays unresolved.
   const target = windowsEvidence
-    ? await withWindowsCodexCliPlanToolchain(report,
-      () => deps.resolveTarget ? resolveTarget(channel) : WINDOWS_TOOLCHAIN_CLOSURE_UNVERIFIED)
+    ? await withWindowsCodexCliPlanToolchain(report, () => resolveTarget(channel))
       ?? Object.freeze({ kind: "unresolved" as const, reason: "Windows toolchain identity changed" })
     : await resolveTarget(channel);
   if (target.kind !== "resolved") {
@@ -683,12 +682,17 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
     return refusedPlan("blocked_active_session", report, channel, target, Object.freeze({ state: "active" as const, matches }));
   }
 
+  const applicable = platform !== "win32" || (!!windowsEvidence && windowsEvidence.arch === "x64"
+    && target.artifacts?.platform === "win32" && target.artifacts.arch === "x64"
+    && process.platform === "win32" && process.arch === "x64"
+    && windowsInstallNamespaceSupported(windowsEvidence.prefix)
+    && await windowsCliApplyPrefixSupported(windowsEvidence.prefix));
   return Object.freeze({
     schemaVersion: CODEX_CLI_UPDATE_SCHEMA_VERSION,
     package: CODEX_CLI_PACKAGE,
     channel,
-    applicable: platform !== "win32",
-    refusal: platform === "win32" ? "windows_apply_disabled" : null,
+    applicable,
+    refusal: applicable ? null : "windows_apply_disabled",
     planId: codexCliUpdatePlanId({
       platform,
       provenance: report.provenance,
@@ -699,6 +703,7 @@ export async function createCodexCliUpdatePlan(deps: CodexCliUpdatePlanDeps = {}
       targetVersion: target.version,
       targetIntegrity: target.integrity,
       targetArtifactsDigest: target.artifacts ? codexCliArtifactSetDigest(target.artifacts) : undefined,
+      toolchainDigest: windowsCodexCliToolchainDigest(report),
     }),
     provenance: report.provenance,
     managed: report.managed,

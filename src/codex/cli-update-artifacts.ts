@@ -5,6 +5,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parseStrictSemver } from "../lib/strict-semver";
 import { codexCliContentFileDigest, codexCliContentSetDigest, codexCliPlatformBacking } from "./cli-install-provenance";
+import { windowsArchivePathValidator, WINDOWS_CODEX_HEADER_BYTES, WINDOWS_CODEX_NATIVE_MEMBER } from "./cli-update-windows-paths";
 
 export const CODEX_CLI_REGISTRY = "https://registry.npmjs.org";
 export interface CodexCliArtifact {
@@ -90,14 +91,18 @@ export function codexCliArtifactSetDigest(set: CodexCliArtifactSet): string {
 export const MAX_CODEX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 export const MAX_CODEX_UNPACKED_BYTES = 512 * 1024 * 1024;
 export const MAX_CODEX_MEMBER_BYTES = 384 * 1024 * 1024;
-export interface CodexArchiveFile { readonly size: number; readonly mode: number; readonly digest: string; readonly bytes: Buffer | null }
+export interface CodexArchiveFile { readonly size: number; readonly mode: number; readonly digest: string; readonly bytes: Buffer | null;
+  /** Optional bounded prefix from the same integrity-verified member stream, never a second path read. */
+  readonly nativePrefix?: Buffer }
 export type CodexArchiveFiles = Map<string, CodexArchiveFile>;
 /** Stream gzip and tar. Only package.json (256 KiB) and the JS entrypoint (1 MiB)
  * are retained; native binaries and other files contribute a streaming digest.
+ * Windows x64 opt-in additionally retains at most 4 KiB of its native member.
  * Official 0.163.0 linux-x64: 162,055,867 compressed, 429,938,138 unpacked,
  * largest member 296,865,480 bytes. Limits are independent, not a heap budget.
  */
-export async function verifyCodexCliArchive(source: Buffer | string, target: CodexCliArtifact): Promise<CodexArchiveFiles> {
+export async function verifyCodexCliArchive(source: Buffer | string, target: CodexCliArtifact,
+  options: { windowsX64?: boolean } = {}): Promise<CodexArchiveFiles> {
   if (!isSha512Integrity(target.integrity)) throw new Error("artifact_integrity_mismatch");
   let fd: number | undefined;
   let before: ReturnType<typeof fstatSync> | undefined;
@@ -122,8 +127,9 @@ export async function verifyCodexCliArchive(source: Buffer | string, target: Cod
   const header = Buffer.alloc(512);
   const files: CodexArchiveFiles = new Map();
   const names = new Set<string>();
+  const windowsName = options.windowsX64 ? windowsArchivePathValidator() : undefined;
   let current: { name: string; size: number; mode: number; remaining: number; keep: boolean;
-    chunks: Buffer[]; hash: ReturnType<typeof createHash> } | undefined;
+    chunks: Buffer[]; prefix?: Buffer; hash: ReturnType<typeof createHash> } | undefined;
   let tracker: Transform | undefined, gunzip: ReturnType<typeof createGunzip> | undefined, pumping: Promise<void> | undefined;
   let verified = false;
   try {
@@ -152,10 +158,13 @@ export async function verifyCodexCliArchive(source: Buffer | string, target: Cod
           const bytes = chunk.subarray(position, position + take);
           current.hash.update(bytes);
           if (current.keep) current.chunks.push(Buffer.from(bytes));
+          const offset = current.size - current.remaining;
+          if (current.prefix && offset < current.prefix.length) bytes.copy(current.prefix, offset, 0, current.prefix.length - offset);
           current.remaining -= take; position += take;
           if (!current.remaining) {
             files.set(current.name, { size: current.size, mode: current.mode, digest: current.hash.digest("hex"),
-              bytes: current.keep ? Buffer.concat(current.chunks) : null });
+              bytes: current.keep ? Buffer.concat(current.chunks) : null,
+              ...(current.prefix ? { nativePrefix: current.prefix } : {}) });
             padding = (512 - current.size % 512) % 512; current = undefined;
           }
           continue;
@@ -181,11 +190,14 @@ export async function verifyCodexCliArchive(source: Buffer | string, target: Cod
           || !["", "0", "5"].includes(type) || (type === "5" && size !== 0)
           || (type !== "5" && name.endsWith("/")) || size > MAX_CODEX_MEMBER_BYTES) throw new Error("artifact_tar_invalid");
         names.add(name);
+        windowsName?.(name, type === "5");
         if (type === "5") continue;
         const relative = name.slice(8);
         const keep = relative === "package.json" || relative === "bin/codex.js";
         if (keep && size > (relative === "package.json" ? 256 * 1024 : 1024 * 1024)) throw new Error("artifact_metadata_limit");
         current = { name: relative, size, mode, remaining: size, keep, chunks: [],
+          ...(options.windowsX64 && relative === WINDOWS_CODEX_NATIVE_MEMBER
+            ? { prefix: Buffer.alloc(Math.min(size, WINDOWS_CODEX_HEADER_BYTES)) } : {}),
           hash: createHash("sha256").update("codex-cli-observed-file-v1\0") };
         if (!size) {
           files.set(relative, { size, mode, digest: current.hash.digest("hex"), bytes: keep ? Buffer.alloc(0) : null }); current = undefined;

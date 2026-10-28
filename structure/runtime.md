@@ -313,8 +313,8 @@ package-registry request and reads bounded provenance evidence for the configure
 package metadata, and shim binding. The proof-bound launcher snapshot does not attest successful Codex execution;
 POSIX selection is attested when the runtime resolver selects the same canonical environment candidate without executing it. A linked npm-global manifest can then establish managed ownership; persisted candidates stay unattested.
 A manifest-owned POSIX npm-global install can also report an opt-in bounded content digest over the manifest, declared entrypoint, and the platform backing files at the layout's modeled locations; it is an observation claim, not execution proof.
-On Windows x64, a proof-captured absolute standard npm `codex.cmd` with prefix-local Node/npm and verified in-prefix
-platform backing is inspected under reparse-refusing held handles; the opt-in content digest stays null here.
+On Windows x64, proof-captured absolute standard npm `codex.cmd` inspection follows the
+[Windows plan predicate](codex-cli-update.md#windows-read-only-plan-predicate), including its held Node/npm metadata toolchain; a bare check leaves the content digest null.
 Other layouts keep the earlier fail-closed shape: only proof-captured absolute environment candidates receive
 lexical app-bundle/version-manager reporting. A run with no captured candidate reports `windows_inspection_deferred`
 (persisted selection is never consulted, so it cannot claim no Codex CLI exists); an ineligible captured path reports

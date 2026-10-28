@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
 import { toNamespacedPath } from "node:path";
 import { readWindowsJobStore, withWindowsJobStoreLock } from "../../src/codex/cli-update-job-store-windows";
-import { trustWindowsTempFixtureAncestry } from "../helpers/windows-job-store-temp-ancestry";
+import { trustWindowsTempFixtureAncestry } from "../helpers/windows-temp-ancestry";
 import { admitCodexCliUpdateJob, finishCodexCliUpdateJob, readCodexCliUpdateJob, runCodexCliUpdateJob } from "../../src/codex/cli-update-job";
 import { codexCliUpdateUnjoinedWorkerCount, runCodexCliUpdateApplyInWorker } from "../../src/codex/cli-update-job-worker";
 import { FIXTURE_CONTROL_WORDS, FIXTURE_RELEASE } from "../helpers/cli-update-fixture-worker";
@@ -264,8 +264,8 @@ describe("Windows CLI update job store backend", () => {
         expect(JSON.parse(lines[0]!)).toMatchObject({ jobId: accepted.job.jobId, status: "running" });
       } finally { log.mockRestore(); }
     } finally { release(); await pending.catch(() => {}); }
-    expect(await pending).toMatchObject({ status: "refused", outcome: "refused", reason: "windows_apply_disabled", ownerState: "finished" });
-    // The real production entry refuses before inspection/lease/installer on Windows.
+    expect(await pending).toMatchObject({ status: "refused", outcome: "refused", reason: "mutation_evidence_unverified", ownerState: "finished" });
+    // A null proof-bound snapshot cannot authorize installation in this enabled Windows lane.
     expect(engineCalls).toBe(1); expect(workerStarts).toBe(1);
     expect(await readCodexCliUpdateJob(accepted.job.jobId, configDir)).toMatchObject({ status: "refused", ownerState: "finished" });
     const ledger = JSON.parse(readFileSync(join(configDir, "codex-cli-update-jobs", "jobs.json"), "utf8")) as { jobs: { revision: number }[] };
@@ -426,7 +426,7 @@ describe("Windows CLI update job store backend", () => {
     mkdirSync(configDir);
     const modulePath = new URL("../../src/codex/cli-update-job.ts", import.meta.url).href;
     const accepted = await admitCodexCliUpdateJob({ requestId: "win-two-proc-01", planId: result.planId, confirmed: true, configDir });
-    const script = `import { trustWindowsTempFixtureAncestry } from ${JSON.stringify(new URL("../helpers/windows-job-store-temp-ancestry.ts", import.meta.url).href)};
+    const script = `import { trustWindowsTempFixtureAncestry } from ${JSON.stringify(new URL("../helpers/windows-temp-ancestry.ts", import.meta.url).href)};
       trustWindowsTempFixtureAncestry(${JSON.stringify(outer)});
       import { admitCodexCliUpdateJob } from ${JSON.stringify(modulePath)};
       const planId = process.argv.at(-1);
@@ -525,7 +525,7 @@ describe("Windows CLI update job store backend", () => {
         : null;
       expect(observed).toMatchObject({ status: "running", ownerState: "active" });
       const modulePath = new URL("../../src/codex/cli-update-job.ts", import.meta.url).href;
-      const script = `import { trustWindowsTempFixtureAncestry } from ${JSON.stringify(new URL("../helpers/windows-job-store-temp-ancestry.ts", import.meta.url).href)};
+      const script = `import { trustWindowsTempFixtureAncestry } from ${JSON.stringify(new URL("../helpers/windows-temp-ancestry.ts", import.meta.url).href)};
         trustWindowsTempFixtureAncestry(${JSON.stringify(outer)});
         import { readCodexCliUpdateJob } from ${JSON.stringify(modulePath)};
         console.log(JSON.stringify(await readCodexCliUpdateJob(${JSON.stringify(accepted.job.jobId)})));`;

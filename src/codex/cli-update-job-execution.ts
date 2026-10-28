@@ -4,11 +4,11 @@ import type { CodexCliUpdateJobDto } from "./cli-update-job";
 export const CODEX_CLI_JOB_REASONS: ReadonlySet<string> = new Set(["invalid_plan_id", "windows_inspection_deferred", "windows_apply_disabled", "cancelled", "mutation_evidence_unverified",
   "installation_prefix_changed", "installation_prefix_unsupported", "installation_lease_unavailable", "installation_busy", "plan_refused", "plan_changed", "target_artifacts_unverified",
   "installation_changed", "installation_paths_untrusted", "staging_path_untrusted", "npm_unavailable", "blocked_process_state_unknown", "blocked_active_session",
-  "installer_state_unknown", "version_process_state_unknown", "version_readback_unverified", "verified_target",
+  "installer_state_unknown", "version_process_state_unknown", "child_cleanup_unverified", "version_readback_unverified", "verified_target",
   "original_install_unchanged", "installation_readback_unverified", "installer_or_readback_error",
   "preparation_failed", "job_result_unknown", "not_managed", "installed_version_unverified",
   "install_content_unverified", "target_unresolved", "already_current", "target_not_newer"]);
-export const CODEX_CLI_JOB_CLEANUP_ERRORS: ReadonlySet<string> = new Set(["lease_release_unverified", "lease_release_exception", "staging_cleanup_failed"]);
+export const CODEX_CLI_JOB_CLEANUP_ERRORS: ReadonlySet<string> = new Set(["lease_release_unverified", "lease_release_exception", "staging_cleanup_failed", "child_cleanup_failed"]);
 
 export class CodexCliJobStoreBusyError extends Error {
   constructor() { super("job_store_busy"); }

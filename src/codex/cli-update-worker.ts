@@ -26,6 +26,8 @@ import {
   type CodexCliUpdateInspectionSnapshot,
 } from "./cli-update-inspection-context";
 import { codexCliUpdateIsCancelled, createWorkerCommitWindow } from "./cli-update-selection-gate";
+import { recoverWindowsCodexCliInstallations } from "./cli-update-windows-apply";
+import { WindowsCliToolchainCleanupError } from "./cli-update-job-store-windows";
 import { createCodexCliUpdateRecovery } from "./cli-update-recovery";
 
 export interface CodexCliUpdateWorkerRunMessage {
@@ -44,6 +46,12 @@ export interface CodexCliUpdateWorkerRunMessage {
   readonly owner?: number;
   /** Env snapshot: a Worker may not observe parent mutations on every platform. */
   readonly env?: { readonly CODEX_HOME?: string; readonly OPENCODEX_HOME?: string };
+}
+/** Same generation/recovery binding for each production worker execution. */
+export function createCodexCliWorkerCommitWindow(message: Pick<CodexCliUpdateWorkerRunMessage,
+  "gate" | "fence" | "owner" | "requestId">) {
+  return createWorkerCommitWindow({ gate: message.gate, fence: message.fence, owner: message.owner,
+    recovery: createCodexCliUpdateRecovery(message.requestId) });
 }
 
 /** Async half of cancellation; the fence CAS is the synchronous half. */
@@ -90,12 +98,39 @@ declare const self: Worker;
 // apply at its first checkpoint via signal.aborted.
 const applyAbort = new AbortController();
 let ran = false;
+let runIdentity: { requestId: string; jobId: string } | undefined;
+// A raw Win32 handle is not a Bun event-loop reference. Keep the run-once
+// handler AND exact resource roots until their terminal cleanup releases them.
+export function createCodexCliWorkerLifetime(detach: () => void) {
+  let executionFinished = false;
+  let detached = false;
+  const retainedExecutions = new Set<object>();
+  const maybeDetach = () => {
+    if (executionFinished && !detached && retainedExecutions.size === 0) { detached = true; detach(); }
+  };
+  return {
+    retain(owner: object): { release(): void } {
+      const token = { owner };
+      retainedExecutions.add(token);
+      return { release() { if (retainedExecutions.delete(token)) maybeDetach(); } };
+    },
+    finish() { executionFinished = true; maybeDetach(); },
+  };
+}
+const lifetime = createCodexCliWorkerLifetime(() => { self.onmessage = null; });
 
 // Guarded so the module can be imported directly by tests without a Worker host.
 if (typeof Bun !== "undefined" && Bun.isMainThread === false
   && typeof self !== "undefined" && typeof self.postMessage === "function") {
   self.onmessage = async (event: MessageEvent<unknown>) => {
     const data = event.data;
+    if (data && typeof data === "object" && !Array.isArray(data)
+      && (data as { type?: unknown }).type === "recover"
+      && runIdentity && (data as { requestId?: unknown }).requestId === runIdentity.requestId
+      && (data as { jobId?: unknown }).jobId === runIdentity.jobId) {
+      await recoverWindowsCodexCliInstallations();
+      return;
+    }
     if (data && typeof data === "object" && !Array.isArray(data)
       && (data as CodexCliUpdateWorkerCancelMessage).type === "cancel") {
       applyAbort.abort();
@@ -104,6 +139,7 @@ if (typeof Bun !== "undefined" && Bun.isMainThread === false
     if (ran || !isRunMessage(data)) return;
     ran = true;
     const message = data;
+    runIdentity = { requestId: message.requestId, jobId: message.jobId };
     try {
       // Home overrides apply before anything resolves a home-derived path in
       // this realm; they are transport for the job, never snapshot fields.
@@ -125,8 +161,8 @@ if (typeof Bun !== "undefined" && Bun.isMainThread === false
           inspectionDeps,
           signal: applyAbort.signal,
           isCancelled: codexCliUpdateIsCancelled(message.fence),
-          commitWindow: createWorkerCommitWindow({ gate: message.gate, fence: message.fence, owner: message.owner,
-            recovery: process.platform === "win32" ? undefined : createCodexCliUpdateRecovery(message.requestId) }),
+          commitWindow: createCodexCliWorkerCommitWindow(message),
+          retainExecution: owner => lifetime.retain(owner),
         });
         self.postMessage({
           type: "done", requestId: message.requestId, jobId: message.jobId,
@@ -134,15 +170,16 @@ if (typeof Bun !== "undefined" && Bun.isMainThread === false
         } satisfies CodexCliUpdateWorkerReply);
       }
     } catch (error) {
+      if (error instanceof WindowsCliToolchainCleanupError) lifetime.retain(error.acquisition);
       self.postMessage({
         type: "error", requestId: message.requestId, jobId: message.jobId,
         message: error instanceof Error ? error.message : "cli_update_worker_failed",
       } satisfies CodexCliUpdateWorkerReply);
     } finally {
-      // Bun 1.4.4 has no self.close(). Remove this realm's message keepalive;
-      // pending referenced child/I/O work must drain before natural termination.
+      // Bun 1.4.4 has no self.close(). Drop the handler only when native owners
+      // have released every token; referenced child/I/O work must also drain.
       // The parent's close event is not proof that every OS descendant exited.
-      self.onmessage = null;
+      lifetime.finish();
     }
   };
 }

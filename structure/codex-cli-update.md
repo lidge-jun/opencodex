@@ -66,13 +66,15 @@ an existing Codex session. Windows enumeration/installation limits remain unchan
 
 `src/codex/cli-windows-plan-provenance.ts` admits only a proof-captured, drive-absolute
 `CODEX_CLI_PATH` naming the exact standard npm `codex.cmd` grammar. The global npm
-package prefix comes from the shim directory and its `node_modules` tree. This plan
-currently requires prefix-local `node.exe` and npm. Derivation may propose a PATH Node only
-when the local Node probe proves `not-found`; a refused/reparse probe never counts as absent.
-The production plan still refuses that external candidate: a standard npm cmd-shim runs bare
-`node` when its local Node is absent, and CMD can prefer the invocation working directory.
-The proof-bound launcher snapshot has PATH/PATHEXT but no target-shim invocation
-cwd/search-result evidence, so a separate Node cannot be selected safely yet. The production runtime resolver confirms the explicit Codex override's
+package prefix comes from the shim directory and its `node_modules` tree. A prefix-local
+`node.exe` and npm bind as the shim's own interpreter toolchain. When the local probe
+proves `not-found`, the captured PATH's Node/npm pair binds instead as the updater's
+metadata toolchain; a refused or reparse probe never counts as absent, and a separate
+toolchain without the launcher arch anchor stays refused because its arch could not be
+tied to the selection at all. The bound Node is never claimed to be the interpreter a
+later `codex.cmd` invocation resolves: the shim's bare `node` falls through to the
+ambient invocation working directory — CMD prefers the current directory over PATH —
+and no launcher snapshot can carry that per-invocation property. The production runtime resolver confirms the explicit Codex override's
 priority without saved-state reads or probes. A PE header binds Node's architecture;
 the package manifest/bin, npm manifest/bin, Node and the first in-prefix platform
 package plus native backing are observed together. Backing lookup follows the
@@ -88,7 +90,7 @@ plan path sets it, so the plan-bound `installContentDigest` is preserved; a bare
 same files open and identity-checked, reading only bounded manifests, shim bytes and the Node PE header;
 entrypoint, npm CLI, native and full Node digest streams stay unread, with a null `installContentDigest`.
 
-PATH-only or separate-prefix Node selection, autostart wrappers, global/vendor fallback,
+PATH-only candidate selection, autostart wrappers, global/vendor fallback,
 app/Store/MSIX bundles and version-manager ownership remain unverified and unmanaged.
 The explicit `attest` report stays observation-only. Only the production plan predicate
 creates private plan evidence; copying a public report cannot enable Windows planning.
@@ -96,12 +98,130 @@ This observes linkage and content, not publisher authenticity or a whole-tree gu
 The fresh-source Worker case in `tests/codex-integration/codex-cli-windows-plan.test.ts`
 rebuilds private evidence through the native inspector inside that realm before resolving
 owned fixture metadata. It does not establish compiled-worker or Windows ARM64 support.
-Holding `node.exe` and `npm-cli.js` does not verify npm's module closure or Node's executable
-dependencies, so the default Windows plan spawns no npm metadata child and reports
-`target_unresolved` until that closure is verified write-private and held. No installer runs.
-A completed Windows read-only plan has a deterministic ID and `applicable: false`,
-`refusal: windows_apply_disabled`; active/unknown sessions still refuse earlier.
-The independent Windows apply entrypoint remains refused before inspection or lease creation.
+Metadata queries use the observed Node/npm paths under freshly matching held handles,
+the existing isolated npm configuration/cache, and the pinned registry. No installer runs.
+Before metadata executes, `openWindowsCliToolchainAuthority` in `src/codex/cli-update-job-store-windows.ts`
+opens the complete npm package tree with reparse-refusing relative handles and verifies every owner
+and ACL under the prefix's write-private policy. Node and module lookup directories are held too.
+ACL reads use handle-normalized long paths, including for 8.3 input spellings. A bounded whole-tree
+content/identity digest enters the plan ID; post-approval module drift changes that ID. Apply retains
+the execution authority through pack, install and version verification, including unknown lifetimes.
+The bounds are 8,192 entries, 128 MiB per file and 512 MiB total; unsupported authority refuses execution.
+`src/codex/windows-npm-execution.ts` installs an argv-bound synchronous Node resolution hook before
+npm's entrypoint. Both CommonJS and ESM may load only builtins and files within the held npm tree;
+ancestor/global fallback, including a later-created volume-root node_modules, refuses before module
+execution. Node versions without synchronous hooks fail closed. Executable-local DLLs are pinned too.
+A completed Windows plan has a deterministic ID. Only the bounded x64 prefix predicate below
+may set `applicable: true`; other observed layouts retain `windows_apply_disabled`.
+Active/unknown sessions still refuse earlier. Apply never overrides a refused plan.
+
+## Independent Windows child lifetime primitive
+
+`src/codex/windows-cli-child.ts` supplies an opt-in Windows x64 child owner, with native ABI/handle
+ownership in `src/codex/windows-cli-child-native.ts` and overlapped output in
+`src/codex/windows-cli-child-pipe.ts`. Windows apply consumes it for pack, installer and version
+children. ARM64 is unsupported.
+
+It starts only an explicit drive-absolute `.exe` plus argv: `CreateProcessW(CREATE_SUSPENDED)`,
+assignment to a non-inheritable Job, then `ResumeThread`. Installer/verifier Jobs have a random
+global name and protected current-user DACL for durable read-only recovery; other Jobs stay unnamed.
+An existing named object refuses creation. Normal execution uses original handles; no PID reopen,
+shell, breakaway fallback, process-count limit or kill-on-close limit. Assignment/resume failures
+reap the original suspended primary before user code; failed termination retains an unknown owner.
+`STARTUPINFOEXW` and an explicitly rooted attribute buffer whitelist exactly the three owned,
+inheritable stdio handles with `bInheritHandles=TRUE`. Parent read/event/Job/process/thread handles
+are not inheritable, and parent copies of the stdio ends close before any await. This is forward
+isolation from unrelated inheritable handles, not reverse protection from a foreign unrestricted
+`CreateProcess(TRUE)` while those stdio handles are temporarily inheritable.
+
+The output pipe uses an unpredictable name, a protected current-token-user DACL, remote-client
+rejection, and a real overlapped read buffer/event. Cancellation retains that memory until native
+completion settles; neither `PeekNamedPipe` nor a Worker script URL is used. Captured bytes are
+decoded together as UTF-8. Installer output is discarded; pack captures 1 MiB and continues draining
+excess without termination. Neither policy adds an overall deadline or running-abort kill. Version
+alone has the existing 16 KiB, 8 second deadline and 1 second reap policy and may terminate its Job.
+A termination acknowledgment, timeout, I/O error, failed wait/query or PID absence is not terminal.
+The original primary handle must signal and a successful Job accounting query must report zero
+active processes; exit code 259 is valid once that handle signals. Output still drains after Job
+emptiness. Normal `CreateProcess` descendants are covered; WMI-created processes are not claimed.
+`cleanupComplete` separately establishes disposal: terminal plus EOF can still leave failed-close
+handles owned. Such owners and lease/staging remain retained with `child_cleanup_failed`; the job
+projects the child as terminal and the lease as retained, without claiming successful cleanup.
+Unknown results retain the owner and all lease/staging obligations. Setup failures with no process
+use `cleanupUnstartedWindowsChild` to settle any connect operation and release only owned handles.
+
+The Windows transaction adopts lifetime and lease/staging retention before every child start,
+including pack. Its strong owner registry keeps unknown children and their toolchain pins alive.
+The npm `--fetch-timeout=120000` remains a separate fetch policy, not a process lifetime deadline.
+`tests/codex-integration/codex-cli-windows-child.test.ts` exercises actual owned native fixtures,
+including overlapping whitelist isolation, stdout-free descendants, incompatible nested Jobs,
+pre-user-code failures, byte caps, cancellation settlement, wait/query failures and version reaping.
+
+## Independent Windows archive layout
+
+The independent `src/codex/cli-update-windows-layout.ts` verifies Windows x64 archives and
+returns only prefix-relative expected files, sizes and content digests; `applicable` and
+`mutationAuthority` remain false. The Windows transaction consumes this content contract only
+after obtaining separate selection and installation authority.
+The main root is `node_modules/@openai/codex`; the explicit sibling backing is
+`node_modules/@openai/codex-win32-x64`, with `vendor/x86_64-pc-windows-msvc/bin/codex.exe`.
+Exact direct-version and npm-alias references retain the archive verifier's metadata/linkage rules.
+An opt-in Windows archive mode uses `src/codex/cli-update-windows-paths.ts` to reject ASCII case
+and file/directory collisions, ADS, device names, trailing dots/spaces and unknown non-ASCII paths,
+including directory records. Embedded node_modules files cannot shadow the modeled backing.
+The full native member still streams into its digest; at most 4 KiB from that same stream is retained
+for the AMD64 PE32+ header check. This does not prove a complete valid image, signature or execution.
+Native members remain unbuffered and Windows does not use POSIX executable-bit admission.
+The exact codex/codex.cmd/codex.ps1 size/hash expectations model npm cmd-shim 8.0.0's node-shebang
+output; tests/fixtures/codex-windows-npm-shims.json records the official npm tarball URL/integrity,
+raw archive source-file hashes and actual exported-function generation with intercepted filesystem
+calls. All three generated strings matched the retained bytes. No npm installation or lifecycle
+script ran; the offline fixture test checks byte consistency, not registry provenance afresh.
+Other shim grammars remain unsupported. All archive auxiliary files enter the expected set and digest, and
+readback comparison requires the complete set. The consumer separately proves live held
+file identities, package lookup, selected Node/shim and write authority; a matching DTO grants none.
+Coverage: `tests/codex-integration/codex-cli-update-windows-layout.test.ts` uses only synthetic
+archives and captured shim bytes, with no npm installation or native executable invocation.
+
+## Explicit Windows x64 apply
+
+`src/codex/cli-update-windows-apply.ts` implements the Windows transaction behind the existing
+confirmed CLI/HTTP admission and planId contract. `src/codex/cli-update-windows-observation.ts`
+admits bounded shared global prefixes. The two Codex package trees and three shims are targets;
+all other prefix entries, including `node_modules/.package-lock.json`, are preservation obligations.
+Observation is capped at 4,096 entries, 512 MiB total and 384 MiB per file, including unrelated
+packages. Oversized namespaces, unsupported ACL ancestry and ARM64 refuse without repair.
+Actual ACL evidence decides profile-path support; an unsafe AppData ancestor on one host does
+not establish that every profile is unsafe. No existing ancestor is rehardened.
+The job-store native primitives provide a separate `.ocx-codex-cli-apply.lock` lease. Prefix,
+parent and package-scope directory pins deny rename/delete; ACLs are verified before creation
+and before/after execution. Only newly created lock/staging objects are hardened. The current
+account and kernel-equivalent administrators remain inside the trust boundary; other-SID and
+filtered-token behavior is not claimed as empirically tested. Reparse paths fail closed.
+
+The observed Node/npm pair stays pinned across awaited work. Private staging owns npm configs,
+caches, Windows temp/profile variables and version state. Exact tarballs are verified before
+the final fresh plan, selected command, preimage, authority and session checks. Pack and install
+have no overall process deadline or cancellation kill. Unknown child state retains child handles,
+toolchain pins, lease and staging; it is never converted to terminal by PID absence.
+
+Readback enumerates both package trees (including auxiliary files), three shims, empty directories,
+the hidden lock, absence of the new backing, and unrelated prefix entries. Unrelated bytes, file
+identities and directory identities must stay equal; added entries make the result ambiguous.
+Only the separately held transaction lock/staging is excluded. It rejects unexpected target entries,
+links, unsupported Windows names, unreadable/oversized observations and untrusted ACLs. The native
+reader's optional installation-domain SHA-256 uses the same held stream, retaining raw SHA-256 as
+the default. `not_applied` requires identical scoped preimage and selection, not merely an old
+version; it is not a claim that npm performed no I/O. A complete target is classified by readback,
+not npm's exit code. Version uses the pinned Node with the verified JS entrypoint in private cwd,
+then repeats selection/content observation; it does not attest arbitrary future CMD lookup.
+Cleanup errors remain separate from the result. The existing job execution layer retries result
+persistence without repeating installation. No automatic rollback or stale-lock recovery exists.
+`tests/codex-integration/codex-cli-update-windows-apply.test.ts` covers real offline npm in private
+shared fixtures, unrelated package/shim preservation, terminal close failure, partial mutations,
+absence, selection, unknown retention, async pins and persistence retry. One JS launcher executes
+a compiled CLR x64 backing fixture that verifies Job membership and returns the version. This is
+executable-fixture evidence, not a run of the vendor Codex product.
 
 ## Explicit POSIX apply
 
@@ -166,7 +286,7 @@ is `not_applied` even after exit zero. Partial, unreadable or uncertain results 
 Cleanup failures are path-free `cleanupErrors` alongside the computed outcome. A failed or thrown
 lease release marks retention unverified without preventing staging cleanup; cleanup does not replace
 the readback outcome. Uncertain live installer/version children still retain both lease and staging.
-Windows apply remains refused. Shims and non-npm managers remain unsupported.
+The POSIX path refuses Windows; Windows uses the separate transaction above. Non-npm managers remain unsupported.
 
 ## Worker realm and the selection commit window
 
@@ -183,7 +303,7 @@ the worker derives its own fresh selected-command evidence; the installer inspec
 WeakMap is per-realm, which is exactly why the whole job — not just its hashing — must run there.
 
 A job is one fresh Worker, one unique requestId and the parent ledger generation; no wire generation
-exists. The worker runs one message, replies and closes itself; a second message is ignored, so a stale
+exists. The worker runs one message, replies and drains; a second run is ignored, so a stale
 or duplicate delivery cannot attach new work to a dying realm. Settlement requires BOTH a valid reply
 and the worker's own close — a done payload alone is never terminal evidence because a legitimate
 result may still report installer_state_unknown or version_process_state_unknown with a retained lease
@@ -196,18 +316,43 @@ code provably ran. Ledger completion writes keep their existing bounded retry.
 
 Entry installation is limited to `Bun.isMainThread === false`; importing either entry or its
 test fixture in the main realm must not replace that realm's message handler. Bun 1.4.4 does not
-provide `self.close()`: completion removes the worker's message handler and lets referenced work
+provide `self.close()`: terminal completion removes the worker's message handler and lets referenced work
 drain naturally, without `process.exit()` or parent termination. A real Bun-subprocess regression
 keeps the worker alive after handler removal until that exact child exits. This establishes the
 referenced Bun-child path only, not arbitrary native handles or all OS descendants. Bun's close
 event marks worker termination and can precede full thread exit; it is not independent proof that
 every installer descendant or retained native owner has finished.
 
+Windows native ownership acquires an internal execution-retention token before authority acquisition.
+The token roots the acquisition anchor, then the registered Owner, across registration exceptions.
+The authority publishes its context to that anchor before opening pins or awaiting ACL checks.
+If acquisition rejects, its finally attempts cleanup before the caller checks the published pin set;
+only an empty set releases the token. Failed pins keep the context/realm rooted and report ambiguous
+ownership even though no successful Authority object was returned. Native-load failure before a
+context exists holds no such pins. This internal callback never crosses a job/HTTP DTO boundary.
+Raw FFI handles alone are not considered Worker keepalive: unresolved process/Job/pipe or cleanup
+keeps the run-once handler installed. Only successful terminal cleanup removes the Owner and releases
+its token. No polling, automatic retry/reap or termination follows from retention; a retained realm
+can remain resident until separately authorized recovery. A crash still loses in-memory ownership
+and leaves durable state unknown. The pure lifetime test is not native disposal evidence.
+Authority release succeeds only when lock disposal is verified and its pin set is empty.
+A failed CloseHandle stays in the apply-only `WindowsApplyAuthorityPins` set; its closeAll skips
+failed closes instead of retrying or forgetting them, preserving Owner/token with `lease_release_unverified`.
+The ordinary ledger/status PinSet keeps its pre-existing best-effort disposal contract; this change
+does not claim to repair or prove all native cleanup in those shared job-store callers.
+The direct authority regression registers fixture ownership before setup/acquisition, observes
+the acquisition's initially empty pins, and requires release success, absent lock and empty pins
+before reacquiring. An uncertain release retains its fixture and background producer for teardown;
+it does not retry CloseHandle or convert namespace absence into pin-clean evidence.
+Fixture teardown needs both a correlated non-retained, cleanup-confirmed result and Worker join;
+the entire message stream must be well-formed and correlated with exactly one result. Worker close
+alone, any foreign/error/malformed traffic, missing reply or retained owner never permits root removal.
+
 Cancellation crosses realms through shared memory, not a message: the parent CASes the job fence
 PREPARING-to-CANCELLED, the worker's `isCancelled` checkpoints read that word during its synchronous
 sections, and the worker's own PREPARING-to-COMMITTED CAS immediately before the installer spawn is the
-commit decision. COMMITTED is deliberately not "cancelled" — once it lands the installer is a live
-child whose close must be observed. Because a plain AbortSignal message could not interrupt a
+irrevocable start decision, not proof of successful CreateProcess/ResumeThread. COMMITTED is not
+"cancelled" — later cancellation defers to actual child/readback evidence. A plain signal cannot interrupt a
 synchronous worker section, signal-based cancellation alone is not equivalent and is not used as the
 worker path's only channel.
 
@@ -215,7 +360,7 @@ The worker's final window is also serialized against the parent's own selection 
 process-wide gate cell. The gate covers exactly seven parent operations: `persistCodexRuntime` and
 `clearPersistedCodexRuntime` in `src/codex/runtime.ts` (busy refusal — the
 `codex_cli_selection_busy` error — before mkdir, cache invalidation or the swallowing unlink catch),
-the three shim overlay boundaries in `src/codex/shim-overlay.ts` (install, auto-restore, uninstall —
+the three public shim boundaries (`src/codex/shim-overlay.ts` on POSIX, `src/codex/shim.ts` on Windows; install, auto-restore, uninstall —
 busy in their existing failure/deferred/removed:false shapes before namespace creation, the restore
 lock and journal mutation), the remote-workspace app-server `Bun.spawn` in
 `src/remote-control/workspace-codex-runtime.ts` (busy refuses after running the same bridge/isolation
@@ -223,7 +368,22 @@ cleanup a spawn throw runs, so a rejected bridge stop cannot skip isolation remo
 `src/codex/desktop-app-restart.ts` (busy returns the new `selection_mutation_busy` skipped reason
 before the restart lock, package discovery, any app quit and the handoff, so a queued relaunch — and
 its own lock-acquisition failure — cannot slip inside the window). Writers never wait: the commit
-window spans the worker's final process scan through installer termination and post-install readback. A synchronous
+window spans the final process scan through terminal installer evidence and readback. Windows also
+renews full authority ACL/identity, inspector and full scoped preimage after acquisition, then performs
+the final process scan, synchronous held-identity/selection/cancellation checks, CAS and synchronous
+native Create/Assign/Resume with no intervening await. Windows retains the gate through native Job
+settlement, post-install readback and version verification. Unknown child lifetime keeps exclusion.
+The process-wide gate carries an owner generation; stale release cannot free a later owner.
+Observed Worker close seals PREPARING to CANCELLED before recovering that generation.
+Committed Worker death, PID absence and timeout alone cannot establish installer termination.
+Explicit `recoverWindowsCodexCliInstallations` uses retained original process/Job handles, then
+readback before releasing exclusion; terminal proof survives a transient readback failure for retry.
+Failed toolchain pin disposal remains strongly retained and surfaces cleanup uncertainty.
+Handle-relative opens root every backing buffer reachable through OBJECT_ATTRIBUTES until
+NtCreateFile returns, including its nested Unicode string and text, across allocation/GC pressure.
+Windows ACL/content observations can take substantial
+time; neither a short held window nor a hard I/O deadline is claimed. Acquisition's 30s deadline does
+not bound time held. A synchronous
 parent writer must not park the event loop behind it, so a held gate is an immediate busy. The gate is
 one cell for the whole process rather than per-configDir because alias, junction and case spellings of
 the same target must not split the exclusion; a writer on a different configDir can also see busy.
@@ -242,7 +402,24 @@ failures cannot consume admission capacity with one new partial file per retry.
 
 `src/codex/cli-update-recovery.ts` persists a private, token-scoped recovery record under the config root
 before commit/spawn, publishes each child group after spawn, and records terminal cleanup before gate
-release. Starting the verifier first resets the child publication and durable record to armed, so an old
+release. On Windows the same protocol uses the native job-store backend's pinned canonical ancestry,
+private DACLs, bounded regular-file reads, file flush and handle-bound publication. Uncertainty is
+durable before commit; each installer/verifier Job name is armed before native creation. Its primary
+PID and native creation FILETIME are published after start. `src/codex/windows-cli-recovery.ts`
+opens only that random global Job for query and verifies the original process lifetime is terminal.
+`src/codex/windows-cli-recovery-guardian.ts` starts a separate observer after Job assignment and
+before primary resume. It inherits only a query-only Job handle and a pre-opened private proof file;
+it cannot terminate the installer. Only zero Job members permits its flushed terminal proof. This
+proof is also required after restart: name disappearance alone cannot prove descendant termination.
+Observer failure leaves armed evidence fenced. Normal settlement also joins the observer before
+staging cleanup. Its HOME/profile/AppData, compiler temp and PowerShell analysis-cache paths all
+resolve inside that private staging root. Access/query failure, missing identity and
+armed or partial publication remain fenced. Parent admission additionally requires owner-process
+absence; same-process closed-worker recovery first seals its exact generation against another spawn.
+No recovery probe signals an installer. Terminal markers release only the proven token; alias homes
+read the same canonical store. The native-child restart regressions live in
+`tests/codex-integration/codex-cli-update-windows-recovery.test.ts`.
+Starting the verifier first resets the child publication and durable record to armed, so an old
 installer group's exit cannot clear a new verifier. Parent admission checks these records after restart:
 terminal records permit admission; child records require both parent-process absence and whole-group
 absence. Parent recovery creates a missing store under the same trusted ancestry/private-permission
@@ -289,9 +466,9 @@ cleanup permanently for the invocation, including failures during published-name
 The store checks the held ancestors and config root against the normalized DOS long name with
 the same comparison used by `src/codex/windows-installation-files.ts`; 8.3 aliases refuse before
 ledger access, and a missing config root is created only beneath an already canonical held parent.
-
-Ledger hardening and long-path ACL descriptor reads use extended-length command targets.
-Native pins and canonical DOS-path comparisons retain the alias refusal policy.
+ACL hardening and descriptor reads use extended-length command targets, including recovery
+publication, ledger temps, admission locks and apply leases. Native pinning and alias comparisons
+retain canonical long DOS paths; command spelling does not admit an aliased mutation root.
 
 An ACL-query timeout fails closed without accepting a late result. Its PowerShell child may still
 hold transient handles while termination settles, so lock cleanup may fail and retain a busy mutex;
@@ -301,7 +478,7 @@ The async Windows ledger stays in the parent realm: CLI/HTTP await admission and
 and one generation-fenced callback dispatches the Worker. The store/Worker regressions in
 `tests/windows/windows-codex-cli-job-store.test.ts` cover stale completion refusal and an unknown
 still-live fixture Worker whose persisted child/lease state remains unknown. The production-entry
-case retains Windows apply-disabled behavior; neither case claims a successful Windows installation.
+case refuses the null proof-bound snapshot in the enabled Windows lane; neither store case claims a successful Windows installation.
 
 The ledger retains at most 64 jobs, including terminal jobs, and never prunes request IDs automatically.
 At capacity it refuses new request IDs with `store_full`; existing matching retries still return the same job.

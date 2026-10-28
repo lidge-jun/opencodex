@@ -2,8 +2,7 @@ import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { verifyInstalledCodexVersion } from "../../src/codex/cli-update-apply";
 import { runCodexCliUpdateApplyInWorker } from "../../src/codex/cli-update-job-worker";
@@ -12,6 +11,8 @@ import * as gate from "../../src/codex/cli-update-selection-gate";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
+import { trustWindowsTempFixtureAncestry } from "../helpers/windows-temp-ancestry";
 import { createCodexCliRecoveryTestHome } from "../helpers/codex-cli-recovery-home";
 
 let recoveryHome: string, savedHome: string | undefined;
@@ -72,11 +73,17 @@ test.each([
   expect({ code, output }).toMatchObject({ code: 0 });
 });
 
-test("precommit recovery atomically prevents a late commit during publication", () => {
+test("precommit recovery atomically prevents a late commit during publication", async () => {
+  const root = createCodexCliTestRoot("ocx-precommit-publication-"), configDir = join(root, "config");
+  mkdirSync(configDir, { mode: 0o700 });
+  if (process.platform === "win32") {
+    await hardenSecretDirAsync(root, { required: true }); await hardenSecretDirAsync(configDir, { required: true });
+    trustWindowsTempFixtureAncestry(root);
+  }
   const buffer = gate.codexCliUpdateSelectionGate(), fence = gate.createCodexCliUpdateFence();
   const owner = gate.allocateCodexCliUpdateGateOwner(buffer);
   const window = gate.createWorkerCommitWindow({ gate: buffer, fence, owner, recovery: {
-    arm() { recoverClosedCodexCliUpdateWorker(buffer, fence, owner, "a".repeat(36)); },
+    arm() { recoverClosedCodexCliUpdateWorker(buffer, fence, owner, "a".repeat(36), configDir); },
     child() {}, terminal() {},
   } });
   expect(window.tryEnter()).toBe(true);
@@ -162,10 +169,17 @@ test("late verifier close after reap uncertainty releases only its admission own
 });
 
 test.each([false, true])("worker close recovers precommit only (committed=%s)", async committed => {
+  const root = createCodexCliTestRoot("ocx-worker-close-"), configDir = join(root, "config");
+  mkdirSync(configDir, { mode: 0o700 });
+  if (process.platform === "win32") {
+    await hardenSecretDirAsync(root, { required: true }); await hardenSecretDirAsync(configDir, { required: true });
+    trustWindowsTempFixtureAncestry(root);
+  }
   const worker = new Worker(new URL("../helpers/cli-update-recovery-worker.ts", import.meta.url));
   const post = worker.postMessage.bind(worker);
   worker.postMessage = (message => post({ ...message, fixtureCommitted: committed })) as Worker["postMessage"];
-  const result = await runCodexCliUpdateApplyInWorker("a".repeat(32), { snapshot: null, spawnWorkerFn: () => worker });
+  const result = await runCodexCliUpdateApplyInWorker("a".repeat(32), { snapshot: null,
+    env: { OPENCODEX_HOME: configDir }, spawnWorkerFn: () => worker });
   expect(result.outcome).toBe("ambiguous");
   const writer = gate.beginCodexCliSelectionParentWrite();
   try { expect(writer.entered).toBe(!committed); } finally { writer.exit(); }

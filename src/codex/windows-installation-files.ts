@@ -25,6 +25,8 @@ export interface WindowsInstallationFileRequest {
   readonly metadataOnly?: boolean;
   /** Read at most maxBytes from the start instead of refusing an oversized file. */
   readonly prefixOnly?: boolean;
+  /** Same held stream, domain-separated archive/readback comparison. Default remains raw SHA-256. */
+  readonly installationDigest?: boolean;
   /** Hold a directory rather than a file; requires metadataOnly. */
   readonly directory?: boolean;
   /** Refuse aliases unless the held object's normalized DOS name matches the input. */
@@ -113,6 +115,7 @@ export async function inspectWindowsInstallationFiles(
       || (request.hashOnly !== undefined && typeof request.hashOnly !== "boolean")
       || (request.metadataOnly !== undefined && typeof request.metadataOnly !== "boolean")
       || (request.prefixOnly !== undefined && typeof request.prefixOnly !== "boolean")
+      || (request.installationDigest !== undefined && typeof request.installationDigest !== "boolean")
       || (request.directory !== undefined && typeof request.directory !== "boolean")
       || (request.requireCanonicalPath !== undefined && typeof request.requireCanonicalPath !== "boolean")
       || (request.directory && !request.metadataOnly)
@@ -243,6 +246,7 @@ export async function inspectWindowsInstallationFiles(
     openedForTests?.();
     const observed = files.map(({ request, handle, identity }) => {
       const hash = createHash("sha256");
+      if (request.installationDigest) hash.update("codex-cli-observed-file-v1\0");
       if (request.metadataOnly) {
         readForTests?.(request.path, 0);
         return { path: request.path, identity, bytes: new Uint8Array(), digest: "" };

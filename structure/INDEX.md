@@ -28,7 +28,7 @@ Persisted config, the Codex home it writes into, and the model catalog it publis
 | [`codex-provider-routing.md`](codex-provider-routing.md) | Explicit provider-ID routing consent, URL-only publication and recovery. |
 | [`codex-home.md`](codex-home.md) | CODEX_HOME resolution, the files opencodex manages there, and Codex-home diagnostics. |
 | [`codex-prompts.md`](codex-prompts.md) | Prompt-layer repair, base import previews and bounded text-probe sources. |
-| [`codex-cli-update.md`](codex-cli-update.md) | Content-bound planning and explicit POSIX apply with isolated npm, artifact validation, installation leases and readback. |
+| [`codex-cli-update.md`](codex-cli-update.md) | Content-bound planning and explicit POSIX/Windows x64 apply with isolated npm, artifact validation, installation leases and readback. |
 | [`catalog.md`](catalog.md) | Shared Codex catalog assembly, account namespaces, pool rotation, and effort ladders. |
 | [`catalog-vendor-context.md`](catalog-vendor-context.md) | Bundled model-ID window fallback, ambiguity handling, and inferred-capacity provenance. |
 | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) | Persisted effort-clamp observation identity and idempotent sync notices. |
@@ -264,12 +264,22 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/cli-update-plan.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-recovery.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-selection-gate.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-windows-apply.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-windows-layout.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-windows-observation.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/cli-update-windows-paths.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-worker-recovery.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/cli-update-worker.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/quota.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
 | `src/codex/runtime.ts` | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) |
+| `src/codex/shim.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/signed-in-identity.ts` | [`providers/openai-signed-in-preservation.md`](providers/openai-signed-in-preservation.md) |
+| `src/codex/windows-cli-child-native.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-cli-child-pipe.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-cli-child.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-cli-recovery-guardian.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
+| `src/codex/windows-cli-recovery.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/combos/` | [`runtime.md`](runtime.md)<br>[`providers-and-adapters.md`](providers-and-adapters.md)<br>[`providers/jev-decision.md`](providers/jev-decision.md)<br>[`fallback-policy.md`](fallback-policy.md) |
 | `src/companion/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`companion.md`](companion.md) |
 | `src/compatibility/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) |

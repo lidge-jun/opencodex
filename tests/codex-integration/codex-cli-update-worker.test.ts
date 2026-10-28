@@ -8,8 +8,7 @@ import { createCodexCliTestRoot } from "../helpers/codex-cli-fixture-root";
  * operations have their own regression cases elsewhere.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CodexCliApplyDeps } from "../../src/codex/cli-update-apply";
 import type { TrustedNodeLaunchContext } from "../../src/cli/launcher-context";
@@ -22,11 +21,17 @@ import {
   createCodexCliUpdateFence, cancelCodexCliUpdateFence, codexCliUpdateIsCancelled,
   codexCliUpdateSelectionGate, beginCodexCliSelectionParentWrite,
   createWorkerCommitWindow, resetCodexCliSelectionGatesForTests,
+  allocateCodexCliUpdateGateOwner,
 } from "../../src/codex/cli-update-selection-gate";
+import { recoverClosedCodexCliUpdateWorker } from "../../src/codex/cli-update-worker-recovery";
+import { hardenSecretDirAsync } from "../../src/lib/windows-secret-acl";
+import { trustWindowsTempFixtureAncestry } from "../helpers/windows-temp-ancestry";
 import { codexCliUpdateInspectionDepsFromSnapshot } from "../../src/codex/cli-update-inspection-context";
 import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { spawnTestChild } from "../helpers/spawn-test-child";
 import { repoRoot } from "../helpers/repo-root";
+import { createCodexCliWorkerLifetime } from "../../src/codex/cli-update-worker";
+import { WindowsApplyAcquisition, WindowsApplyAuthorityPins } from "../../src/codex/cli-update-job-store-windows";
 import {
   FIXTURE_ENTERED, FIXTURE_RELEASE, FIXTURE_RUNS, FIXTURE_FINISHED,
   FIXTURE_CONTROL_WORDS, type FixtureConfiguration,
@@ -171,6 +176,95 @@ afterEach(async () => {
   if (firstError !== undefined) throw firstError;
 });
 describe("process-wide selection commit gate and cancellation fence", () => {
+  test("only the dead pre-spawn owner's generation can recover installation admission", async () => {
+    const root = createCodexCliTestRoot("ocx-generation-close-"), configDir = join(root, "config");
+    roots.push(root); mkdirSync(configDir, { mode: 0o700 });
+    if (process.platform === "win32") {
+      await hardenSecretDirAsync(root, { required: true });
+      await hardenSecretDirAsync(configDir, { required: true }); trustWindowsTempFixtureAncestry(root);
+    }
+    const gate = codexCliUpdateSelectionGate(), fence = createCodexCliUpdateFence();
+    const generation = allocateCodexCliUpdateGateOwner(gate);
+    const old = createWorkerCommitWindow({ gate, fence, owner: generation });
+    expect(old.tryEnter()).toBe(true);
+    recoverClosedCodexCliUpdateWorker(gate, createCodexCliUpdateFence(), generation + 1, crypto.randomUUID(), configDir);
+    expect(Atomics.load(new Int32Array(gate), 0)).toBe(generation);
+    recoverClosedCodexCliUpdateWorker(gate, fence, generation, crypto.randomUUID(), configDir);
+    expect(old.commit()).toBe(false);
+    const nextFence = createCodexCliUpdateFence();
+    const next = createWorkerCommitWindow({ gate, fence: nextFence });
+    expect(next.tryEnter()).toBe(true);
+    old.exit(); // A stale worker cannot release the new installation owner.
+    expect(beginCodexCliSelectionParentWrite().entered).toBe(false);
+    expect(next.commit()).toBe(true);
+    recoverClosedCodexCliUpdateWorker(gate, nextFence, Atomics.load(new Int32Array(gate), 0), crypto.randomUUID(), configDir);
+    expect(beginCodexCliSelectionParentWrite().entered).toBe(false);
+    next.exit(); // Native terminal + readback path owns release after COMMITTED.
+    const writer = beginCodexCliSelectionParentWrite();
+    expect(writer.entered).toBe(true); writer.exit();
+  });
+  test("a rejected authority acquisition roots failed pins before any returned authority exists", () => {
+    const pins = new WindowsApplyAuthorityPins();
+    let fault = true, closes = 0, detached = 0;
+    const kernel = { symbols: { CloseHandle: () => { closes++; return fault ? 0 : 1; } } } as unknown as Parameters<WindowsApplyAuthorityPins["release"]>[1];
+    const lifetime = createCodexCliWorkerLifetime(() => { detached++; });
+    const anchor: { acquisition?: WindowsApplyAcquisition } = {};
+    const token = lifetime.retain(anchor);
+    // Model the actual callback order: ctx publication -> pin creation -> failure -> finally.
+    anchor.acquisition = new WindowsApplyAcquisition({ fixtureContext: true }, pins);
+    const exactPin = pins.keep(456n);
+    try { throw new Error("fixture acquisition rejected"); }
+    catch { pins.closeAll(kernel); }
+    expect(anchor.acquisition.releaseIfClean(token)).toBe(false);
+    lifetime.finish();
+    expect(detached).toBe(0);
+    expect(pins.remaining).toBe(1); expect(closes).toBe(1);
+    pins.closeAll(kernel); expect(closes).toBe(1);
+    // Only explicit fixture recovery retries the exact fake handle; not an automatic policy.
+    fault = false;
+    expect(pins.release(exactPin, kernel)).toBe(true);
+    expect(anchor.acquisition.releaseIfClean(token)).toBe(true);
+    expect(detached).toBe(1);
+    const cleanAnchor = new WindowsApplyAcquisition({}, new WindowsApplyAuthorityPins());
+    let released = 0;
+    expect(cleanAnchor.releaseIfClean({ release() { released++; } })).toBe(true);
+    expect(released).toBe(1);
+  });
+  test("a failed pin close keeps its lifetime token without an automatic close retry", () => {
+    const pins = new WindowsApplyAuthorityPins(), handle = pins.keep(123n);
+    let attempts = 0, fault = true, detached = 0;
+    const kernel = { symbols: { CloseHandle: () => { attempts++; return fault ? 0 : 1; } } } as unknown as Parameters<WindowsApplyAuthorityPins["release"]>[1];
+    const lifetime = createCodexCliWorkerLifetime(() => { detached++; });
+    const token = lifetime.retain(pins);
+    expect(pins.release(handle, kernel)).toBe(false);
+    pins.closeAll(kernel);
+    expect(attempts).toBe(1);
+    expect(pins.remaining).toBe(1);
+    lifetime.finish();
+    expect(detached).toBe(0);
+    // Explicit fixture-only recovery of the same recorded handle, not production retry.
+    fault = false;
+    expect(pins.release(handle, kernel)).toBe(true);
+    expect(pins.remaining).toBe(0);
+    token.release();
+    expect(detached).toBe(1);
+    expect(pins.release(handle, kernel)).toBe(true);
+    expect(attempts).toBe(2); // Already released never closes a potentially reused handle.
+  });
+  test("execution retention roots survive completion until every exact owner releases", () => {
+    let detached = 0;
+    const lifetime = createCodexCliWorkerLifetime(() => { detached++; });
+    const first = lifetime.retain({ native: "authority-acquisition-anchor" });
+    const second = lifetime.retain({ native: "unresolved-overlapped-owner" });
+    first.release();
+    expect(detached).toBe(0);
+    lifetime.finish();
+    expect(detached).toBe(0);
+    first.release();
+    expect(detached).toBe(0);
+    second.release(); lifetime.finish(); second.release();
+    expect(detached).toBe(1);
+  });
   test("parent write is nonblocking busy; release restores admission", async () => {
     const first = beginCodexCliSelectionParentWrite();
     expect(first.entered).toBe(true);

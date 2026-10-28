@@ -1,12 +1,18 @@
 import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync,
   readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { assertTrustedCodexCliAncestry } from "./cli-update-paths";
+import { withWindowsCliRecoveryStore } from "./cli-update-job-store-windows";
+import { windowsCodexCliChildGone } from "./windows-cli-recovery";
+
+export interface CodexCliUpdateNativeChildIdentity { jobName: string; creationTime: string }
+export interface CodexCliUpdateNativeRecoveryProof { path: string; terminal: string }
 
 interface RecoveryRecord {
   version: 1; token: string; parentPid: number;
   phase: "armed" | "child" | "terminal"; pgid: number | null;
+  windows?: { jobName: string | null; creationTime: string | null };
 }
 /** ESRCH on the entire owned group is proof; EPERM and PID-only death are not. */
 export function codexCliUpdateGroupGone(pgid: number): boolean {
@@ -23,6 +29,7 @@ function syncDirectory(dir: string): void {
   try { fsyncSync(fd); } finally { closeSync(fd); }
 }
 function directory(configDir: string, create: boolean): string {
+  if (process.platform === "win32") return withWindowsCliRecoveryStore(configDir, create, io => io.dir);
   assertTrustedCodexCliAncestry(configDir);
   const dir = join(configDir, "codex-cli-update-recovery");
   if (create) {
@@ -38,6 +45,11 @@ function directory(configDir: string, create: boolean): string {
 }
 function read(dir: string, token: string, suffix = ".json"): RecoveryRecord {
   if (!/^[0-9a-f-]{36}$/.test(token)) throw new Error("invalid_recovery_owner");
+  if (process.platform === "win32") {
+    const record = withWindowsCliRecoveryStore(dirname(dir), false, io => JSON.parse(io.read(token + suffix))) as RecoveryRecord;
+    if (!validRecord(record, token)) throw new Error("invalid_recovery_owner");
+    return record;
+  }
   const path = join(dir, token + suffix);
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
@@ -47,11 +59,32 @@ function read(dir: string, token: string, suffix = ".json"): RecoveryRecord {
       throw new Error("unsafe_recovery_store");
     }
     const record = JSON.parse(readFileSync(fd, "utf8")) as RecoveryRecord;
-    if (record.version !== 1 || record.token !== token || !Number.isSafeInteger(record.parentPid) || record.parentPid <= 0
-      || !["armed", "child", "terminal"].includes(record.phase)
-      || (record.pgid !== null && (!Number.isSafeInteger(record.pgid) || record.pgid <= 0))) throw new Error("invalid_recovery_owner");
+    if (!validRecord(record, token)) throw new Error("invalid_recovery_owner");
     return record;
   } finally { closeSync(fd); }
+}
+function validRecord(record: RecoveryRecord, token: string): boolean {
+  return !!record && record.version === 1 && record.token === token && Number.isSafeInteger(record.parentPid) && record.parentPid > 0
+    && ["armed", "child", "terminal"].includes(record.phase)
+    && (record.pgid === null || (Number.isSafeInteger(record.pgid) && record.pgid > 0))
+    && (record.windows === undefined || (!!record.windows
+      && (record.windows.jobName === null || (typeof record.windows.jobName === "string" && /^Global\\ocx-cli-[0-9a-f-]{36}$/.test(record.windows.jobName)))
+      && (record.windows.creationTime === null || (typeof record.windows.creationTime === "string" && /^[1-9][0-9]{0,19}$/.test(record.windows.creationTime)))));
+}
+function childGone(record: RecoveryRecord, proof?: (token: string) => RecoveryRecord): boolean {
+  if (record.pgid === null) return false;
+  if (process.platform !== "win32") return codexCliUpdateGroupGone(record.pgid);
+  if (!record.windows?.jobName || !record.windows.creationTime || !proof) return false;
+  const terminal = proof(record.token);
+  return terminal.phase === "terminal" && terminal.pgid === null && terminal.parentPid === record.parentPid
+    && terminal.windows?.jobName === record.windows.jobName
+    && windowsCodexCliChildGone(record.pgid, record.windows.creationTime, record.windows.jobName);
+}
+/** Called only after this generation's fence was sealed against another spawn. */
+export function closedWindowsCodexCliUpdateChildGone(token: string, configDir = getConfigDir(), expectedPid?: number): boolean {
+  try { const dir = directory(configDir, false), record = read(dir, token);
+    return record.phase === "child" && record.pgid === expectedPid && childGone(record, token => read(dir, token, ".proof")); }
+  catch { return false; }
 }
 function pending(path: string): number {
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
@@ -63,6 +96,10 @@ function pending(path: string): number {
   } catch (error) { closeSync(fd); throw error; }
 }
 function write(dir: string, record: RecoveryRecord): void {
+  if (process.platform === "win32") {
+    withWindowsCliRecoveryStore(dirname(dir), true, io => io.write(record.token + ".json", record.token + ".pending", JSON.stringify(record)));
+    return;
+  }
   const temp = join(dir, record.token + ".pending");
   const fd = pending(temp);
   try { writeFileSync(fd, JSON.stringify(record)); fsyncSync(fd); } finally { closeSync(fd); }
@@ -74,21 +111,33 @@ export function createCodexCliUpdateRecovery(token: string, configDir = getConfi
   let dir: string | undefined;
   let record: RecoveryRecord = { version: 1, token, parentPid: process.pid, phase: "armed", pgid: null };
   return {
-    arm() {
+    arm(jobName?: string): CodexCliUpdateNativeRecoveryProof | undefined {
       dir ??= directory(configDir, true);
       try {
         if (read(dir, token, ".terminal").phase !== "terminal") throw new Error("invalid_recovery_owner");
         return; // Parent recovery already ended this exact token.
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-      record = { ...record, phase: "armed", pgid: null }; write(dir, record);
+      record = { ...record, phase: "armed", pgid: null,
+        ...(process.platform === "win32" ? { windows: { jobName: jobName ?? null, creationTime: null } } : {}) }; write(dir, record);
+      if (process.platform === "win32" && jobName) {
+        withWindowsCliRecoveryStore(configDir, true, io => io.write(token + ".proof", token + ".proof.pending", JSON.stringify(record)));
+        return { path: join(dir, token + ".proof"), terminal: JSON.stringify({ ...record, phase: "terminal" }) };
+      }
     },
-    child(pgid: number) { if (dir) { record = { ...record, phase: "child", pgid }; write(dir, record); } },
+    child(pgid: number, identity?: CodexCliUpdateNativeChildIdentity) {
+      if (dir) { record = { ...record, phase: "child", pgid, ...(identity ? { windows: identity } : {}) }; write(dir, record); }
+    },
     terminal() { if (dir) { record = { ...record, phase: "terminal", pgid: null }; write(dir, record); } },
   };
 }
 /** Parent recovery owns this exact run token, never another generation's record. */
 export function finishClosedCodexCliUpdateRecovery(token: string, configDir = getConfigDir()): void {
   const dir = directory(configDir, true);
+  if (process.platform === "win32") {
+    withWindowsCliRecoveryStore(configDir, true, io => io.write(token + ".terminal", token + ".terminal.pending",
+      JSON.stringify({ version: 1, token, parentPid: process.pid, phase: "terminal", pgid: null })));
+    return;
+  }
   // An independent terminal marker cannot be overwritten by an interrupted
   // worker finishing its old armed-record rename after the close notification.
   const marker = join(dir, token + ".terminal");
@@ -101,7 +150,6 @@ export function finishClosedCodexCliUpdateRecovery(token: string, configDir = ge
 }
 /** No mutation on a read. Old ambiguous job receipts remain ambiguous after recovery. */
 export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()): boolean {
-  if (process.platform === "win32") return false; // POSIX apply only
   // Ordinary callers can use a home alias without any updater history. Probe
   // lexically first: a dangling store link is existing, unsafe evidence too.
   try { lstatSync(join(configDir, "codex-cli-update-recovery")); }
@@ -109,31 +157,51 @@ export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()
   try {
     // Resolve only the supported home alias, never a linked recovery store.
     // Mutation eligibility still requires the original canonical ancestry.
-    const dir = directory(realpathSync.native(configDir), false);
-    const files = readdirSync(dir);
+    const canonical = realpathSync.native(configDir);
+    if (process.platform === "win32") return withWindowsCliRecoveryStore(canonical, false, io =>
+      inspectRecoveryFiles(io.names(), (token, suffix = ".json") => {
+        const record = JSON.parse(io.read(token + suffix)) as RecoveryRecord;
+        if (!validRecord(record, token)) throw new Error("invalid_recovery_owner");
+        return record;
+      }));
+    const dir = directory(canonical, false);
+    return inspectRecoveryFiles(readdirSync(dir), (token, suffix) => read(dir, token, suffix));
+  } catch { return true; } // Existing evidence that disappears/is unreadable stays fenced.
+}
+
+function inspectRecoveryFiles(files: string[], readRecord: (token: string, suffix?: string) => RecoveryRecord): boolean {
     if (new Set(files.map(file => file.slice(0, 36))).size > 256) return true;
     const terminal = new Set<string>();
     const active = new Map<string, RecoveryRecord>();
     for (const file of files.filter(file => file.endsWith(".terminal"))) {
-      const record = read(dir, file.slice(0, -9), ".terminal");
+      const record = readRecord(file.slice(0, -9), ".terminal");
       if (record.phase !== "terminal") return true;
       terminal.add(record.token);
     }
     for (const file of files.filter(file => file.endsWith(".json"))) {
       if (terminal.has(file.slice(0, -5))) continue;
-      const record = read(dir, file.slice(0, -5));
+      const record = readRecord(file.slice(0, -5));
       if (record.phase === "terminal") { terminal.add(record.token); continue; }
       active.set(record.token, record);
     }
     const reconciled = new Map<string, RecoveryRecord>();
     for (const file of files.filter(file => !file.endsWith(".json") && !file.endsWith(".terminal"))) {
+      if (process.platform === "win32" && /^[0-9a-f-]{36}\.proof\.pending$/.test(file)) {
+        if (terminal.has(file.slice(0, 36))) continue;
+        return true;
+      }
+      if (process.platform === "win32" && /^[0-9a-f-]{36}\.proof$/.test(file)) {
+        const token = file.slice(0, 36);
+        if (terminal.has(token) || active.get(token)?.windows?.jobName) continue;
+        return true;
+      }
       const partial = /^([0-9a-f-]{36})(?:\.(?:terminal|[0-9a-f-]{36}))?\.pending$/.exec(file);
       if (!partial) return true;
       const token = partial[1]!;
       if (terminal.has(token)) continue; // Published terminal authority shadows late writes.
       const suffix = file.slice(token.length);
       if (suffix !== ".pending" && suffix !== ".terminal.pending") return true;
-      const record = read(dir, token, suffix);
+      const record = readRecord(token, suffix);
       const previous = active.get(token) ?? reconciled.get(token);
       // A complete cleanup write can survive a crash before rename. Recognize
       // only this owner's terminal evidence, with fresh lifetime proofs. Never
@@ -141,7 +209,7 @@ export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()
       if (record.phase !== "terminal" || record.pgid !== null || !processGone(record.parentPid)
         || (previous && previous.parentPid !== record.parentPid)) return true;
       if (previous?.phase === "child"
-        && (previous.pgid === null || !codexCliUpdateGroupGone(previous.pgid))) return true;
+        && !childGone(previous, token => readRecord(token, ".proof"))) return true;
       reconciled.set(token, record);
     }
     for (const record of active.values()) {
@@ -149,9 +217,8 @@ export function codexCliUpdateRecoveryBlocksAdmission(configDir = getConfigDir()
       // Re-probe on every admission attempt, including after a restart. A live
       // or inaccessible group stays fenced until the whole group proves absent.
       if (record.phase === "child" && record.pgid !== null
-        && processGone(record.parentPid) && codexCliUpdateGroupGone(record.pgid)) continue;
+        && processGone(record.parentPid) && childGone(record, token => readRecord(token, ".proof"))) continue;
       return true;
     }
     return false;
-  } catch { return true; } // Existing evidence that disappears/is unreadable stays fenced.
 }

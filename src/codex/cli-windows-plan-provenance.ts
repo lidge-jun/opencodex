@@ -25,31 +25,79 @@ async function withCanonicalExclusionRoots<R>(roots: readonly string[], run: () 
   return observed.kind === "observed" ? result : null;
 }
 
+import { openWindowsCliToolchainAuthority, WindowsCliToolchainCleanupError } from "./cli-update-job-store-windows";
+
 /** Private plan evidence. Explicit `attest` observations never enter this map. */
 interface WindowsPlanEvidence { readonly node: string; readonly npmCli: string; readonly arch: "x64" | "arm64";
+  readonly prefix: string; readonly launcher: string; readonly backingRoot: string;
+  readonly envPath: string | undefined; readonly envPathExt: string | undefined;
   readonly nodeEvidence: string; readonly npmEvidence: string; readonly exclusionRoots: readonly string[] }
 const evidence = new WeakMap<CodexCliInstallReport, WindowsPlanEvidence>();
+const toolchainDigests = new WeakMap<CodexCliInstallReport, string>();
+export const windowsCodexCliToolchainDigest = (report: CodexCliInstallReport): string | undefined => toolchainDigests.get(report);
 export const windowsCodexCliPlanEvidence = (report: CodexCliInstallReport): WindowsPlanEvidence | null => evidence.get(report) ?? null;
 const hash = (value: string): string => createHash("sha256").update(value).digest("hex");
 type File = Extract<WindowsInstallationFilesResult, { kind: "observed" }>["files"][number];
 const id = (file: File): string => JSON.stringify([file.path, file.identity, file.digest]);
 const sameWindowsPath = (left: string, right: string): boolean => win32.resolve(left).toLowerCase() === win32.resolve(right).toLowerCase();
+function selectedWindowsOverride(candidate: string, env: NodeJS.ProcessEnv, configDir?: string): boolean {
+  return env.CODEX_CLI_PATH?.trim() === candidate && resolveCodexRuntime({ platform: "win32", env, configDir,
+    probeVersion: false, discoverAlternatives: false, existsSync: path => path === candidate,
+    readFileSync: () => { throw new Error("state not required for explicit override"); },
+    readdirSync: () => [], statSync: () => { throw new Error("discovery disabled"); },
+  }).runtime.command === candidate;
+}
+/** Synchronous selection fence after the last awaited authority check, before native start. */
+export function windowsCodexCliSelectionMatches(report: CodexCliInstallReport, deps: CodexCliInstallProvenanceDeps): boolean {
+  const captured = evidence.get(report), env = deps.env;
+  return !!captured && !!env && deps.selectionAttested === true && env.PATH === captured.envPath
+    && env.PATHEXT === captured.envPathExt && selectedWindowsOverride(captured.launcher, env, deps.configDir);
+}
 /** Metadata queries execute only while the observed Node/npm and ancestors deny replacement. */
 export async function withWindowsCodexCliPlanToolchain<R>(report: CodexCliInstallReport,
   run: () => R): Promise<Awaited<R> | null> {
   const toolchain = evidence.get(report);
   if (!toolchain) return null;
   return withCanonicalExclusionRoots(toolchain.exclusionRoots, async () => {
-    let result: Awaited<R> | null = null;
-    const observed = await inspectWindowsInstallationFiles([
-      { path: toolchain.node, maxBytes: 128 * 1024 * 1024, hashOnly: true },
-      { path: toolchain.npmCli, maxBytes: 256 * 1024 },
-    ], async files => {
-      if (id(files[0]!) !== toolchain.nodeEvidence || id(files[1]!) !== toolchain.npmEvidence) return false;
-      result = await run(); return true;
-    });
-    return observed.kind === "observed" ? result : null;
+  let authority;
+  try { authority = await openWindowsCliToolchainAuthority(toolchain.node, win32.dirname(win32.dirname(toolchain.npmCli)), true); }
+  catch (error) { if (error instanceof WindowsCliToolchainCleanupError) throw error; return null; }
+  let result: Awaited<R> | null = null;
+  try { const observed = await inspectWindowsInstallationFiles([
+    { path: toolchain.node, maxBytes: 128 * 1024 * 1024, hashOnly: true },
+    { path: toolchain.npmCli, maxBytes: 256 * 1024 },
+  ], async files => {
+    if (id(files[0]!) !== toolchain.nodeEvidence || id(files[1]!) !== toolchain.npmEvidence) return false;
+    toolchainDigests.set(report, authority.digest);
+    result = await run(); return true;
   });
+  return observed.kind === "observed" ? result : null;
+  } finally { if (!await authority.release()) throw new Error("toolchain_release_unverified"); }
+  });
+}
+
+/** Transfer a held toolchain observation to a transaction, including unknown child lifetimes. */
+export async function holdWindowsCodexCliPlanToolchain(report: CodexCliInstallReport) {
+  const toolchain = evidence.get(report);
+  if (!toolchain) return null;
+  let authority;
+  try { authority = await openWindowsCliToolchainAuthority(toolchain.node, win32.dirname(win32.dirname(toolchain.npmCli)), true); }
+  catch (error) { if (error instanceof WindowsCliToolchainCleanupError) throw error; return null; }
+  const admitted = Promise.withResolvers<boolean>();
+  const release = Promise.withResolvers<void>();
+  const observing = withCanonicalExclusionRoots(toolchain.exclusionRoots, () => inspectWindowsInstallationFiles([
+    { path: toolchain.node, maxBytes: 128 * 1024 * 1024, hashOnly: true },
+    { path: toolchain.npmCli, maxBytes: 256 * 1024 },
+  ], async files => {
+    if (id(files[0]!) !== toolchain.nodeEvidence || id(files[1]!) !== toolchain.npmEvidence) return false;
+    admitted.resolve(true);
+    await release.promise;
+    return true;
+  }));
+  void observing.then(() => admitted.resolve(false), () => admitted.resolve(false));
+  if (!await admitted.promise) { await authority.release(); return null; }
+  return { async release() { release.resolve(); const observed = await observing;
+    return await authority.release() && observed?.kind === "observed"; } };
 }
 const json = (file: File): Record<string, unknown> | null => {
   try { const item = JSON.parse(Buffer.from(file.bytes).toString("utf8"));
@@ -68,9 +116,14 @@ function peArch(bytes: Uint8Array): "x64" | "arm64" | null {
 
 /**
  * Read-only supported subset: a proof-captured absolute standard npm cmd-shim
- * override, its global-prefix package, prefix-local Node/npm, and the prefix-local
- * optional backing. PATH-only Node selection remains refused until the snapshot
- * proves the target cmd-shim's cwd and search policy.
+ * override, its global-prefix package, a held-bound Node/npm toolchain, and the
+ * in-prefix optional backing. When the prefix has no node.exe, the toolchain is
+ * the npm pair the captured PATH resolves — the updater's own metadata vehicle,
+ * never a claim about which interpreter a later codex.cmd invocation resolves:
+ * the shim's bare `node` falls through to the ambient invocation working
+ * directory, which no launcher snapshot can prove. A separate toolchain
+ * therefore also requires the launcher arch anchor, keeping the backing lane
+ * tied to the selection instead of to an arbitrary PATH hit.
  */
 export async function inspectWindowsCodexCliPlanInstall(
   deps: CodexCliInstallProvenanceDeps, fallback: CodexCliInstallReport, excluded: (path: string) => boolean,
@@ -109,7 +162,11 @@ export async function inspectWindowsCodexCliPlanInstall(
   const npmCli = derivation.input.npmCli;
   const npmRoot = win32.dirname(win32.dirname(npmCli));
   const pathNode = !sameWindowsPath(node, localNodePath);
-  if (pathNode) return fallback;
+  // A prefix-local node.exe is provably the shim's own interpreter; a PATH-resolved
+  // separate toolchain is bound as the updater's metadata vehicle only. Without the
+  // launcher arch the toolchain's arch cannot be tied to the selection at all, so a
+  // separate toolchain stays refused rather than claim an unanchored backing lane.
+  if (pathNode && !deps.arch) return fallback;
   const root = win32.join(prefix, "node_modules", "@openai", "codex");
   const manifest = win32.join(root, "package.json");
   const npmManifest = win32.join(npmRoot, "package.json");
@@ -118,11 +175,7 @@ export async function inspectWindowsCodexCliPlanInstall(
   if (prefix === win32.parse(prefix).root || paths.some(excluded)) return fallback;
   // Only already handle-observed files can pass the real resolver's existence
   // predicate. The explicit override wins before saved-state/shim/PATH candidates.
-  const selected = () => resolveCodexRuntime({ platform: "win32", env, configDir: deps.configDir,
-    probeVersion: false, discoverAlternatives: false, existsSync: path => path === candidate,
-    readFileSync: () => { throw new Error("state not required for explicit override"); },
-    readdirSync: () => [], statSync: () => { throw new Error("discovery disabled"); },
-  }).runtime.command === candidate && env.CODEX_CLI_PATH?.trim() === candidate;
+  const selected = () => selectedWindowsOverride(candidate, env, deps.configDir);
   try {
     const first = await inspectWindowsInstallationFiles([
       { path: manifest, maxBytes: 256 * 1024 }, { path: npmManifest, maxBytes: 256 * 1024 },
@@ -180,7 +233,7 @@ export async function inspectWindowsCodexCliPlanInstall(
     const backing = json(files.get(backingManifest)!);
     if (!backing || "exports" in backing || ![pkg, "@openai/codex"].includes(String(backing.name))
       || ![main.version, `${main.version}-win32-${arch}`].includes(String(backing.version))) return fallback;
-    const content = observe ? hash(JSON.stringify(["windows-npm-read-only-plan-v2", arch, prefix, candidate, node, npmCli,
+    const content = observe ? hash(JSON.stringify(["windows-npm-read-only-plan-v3", arch, prefix, candidate, node, npmCli,
       ...final.files.map(file => [file.path, file.identity, file.digest])])) : null;
     const report: CodexCliInstallReport = Object.freeze({ ...fallback, managed: true, selectionAttested: true,
       provenance: "npm-global", reason: "managed_npm_global", packageVersion: main.version,
@@ -189,7 +242,9 @@ export async function inspectWindowsCodexCliPlanInstall(
       evidence: Object.freeze(["package_manifest", "package_manifest_digest",
         ...(content ? ["install_content_digest" as const] : []), "global_npm_layout"] as const),
     });
-    evidence.set(report, Object.freeze({ node, npmCli, arch, nodeEvidence: id(files.get(node)!), npmEvidence: id(files.get(npmCli)!), exclusionRoots: Object.freeze([]) }));
+    evidence.set(report, Object.freeze({ node, npmCli, arch, prefix, launcher: candidate,
+      envPath: selectedPath, envPathExt: selectedPathExt,
+      backingRoot: win32.dirname(backingManifest), nodeEvidence: id(files.get(node)!), npmEvidence: id(files.get(npmCli)!), exclusionRoots: Object.freeze([]) }));
     return report;
   } catch { return fallback; }
 }

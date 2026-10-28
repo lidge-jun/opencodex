@@ -1,4 +1,4 @@
-import { codexCliUpdateGroupGone, finishClosedCodexCliUpdateRecovery } from "./cli-update-recovery";
+import { codexCliUpdateGroupGone, closedWindowsCodexCliUpdateChildGone, finishClosedCodexCliUpdateRecovery } from "./cli-update-recovery";
 import { CODEX_CLI_UPDATE_FENCE_COMMITTED, CODEX_CLI_UPDATE_FENCE_RECOVERING,
   CODEX_CLI_UPDATE_FENCE_CANCELLED, cancelCodexCliUpdateFence, releaseCodexCliUpdateGateOwner } from "./cli-update-selection-gate";
 
@@ -14,8 +14,10 @@ export function recoverClosedCodexCliUpdateWorker(gate: SharedArrayBuffer, fence
   const recover = () => {
     if (Atomics.load(new Int32Array(gate), 0) !== owner) return true;
     if (Atomics.load(view, 0) === CODEX_CLI_UPDATE_FENCE_CANCELLED
-      || Atomics.load(view, 2) === 1 || codexCliUpdateGroupGone(Atomics.load(view, 1))) {
-      try { if (process.platform !== "win32") finishClosedCodexCliUpdateRecovery(token, configDir); }
+      || Atomics.load(view, 2) === 1 || codexCliUpdateGroupGone(Atomics.load(view, 1))
+      || (process.platform === "win32" && Atomics.load(view, 1) > 0
+        && closedWindowsCodexCliUpdateChildGone(token, configDir, Atomics.load(view, 1)))) {
+      try { finishClosedCodexCliUpdateRecovery(token, configDir); }
       catch { return false; }
       releaseCodexCliUpdateGateOwner(gate, owner);
       return true;

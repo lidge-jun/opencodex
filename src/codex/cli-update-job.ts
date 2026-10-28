@@ -226,7 +226,7 @@ export function projectCodexCliUpdateJobLifecycle(job: LifecycleInput): Lifecycl
     error === "lease_release_unverified" || error === "lease_release_exception");
   const retainedWithEvidence = job.leaseRetained && !leaseReleaseUnconfirmed
     && (job.reason === "installer_state_unknown" || job.reason === "version_process_state_unknown"
-      || job.reason === "installer_or_readback_error");
+      || job.reason === "installer_or_readback_error" || job.reason === "child_cleanup_unverified");
   const childUnknown = ownerUnknown || job.reason === "job_result_unknown"
     || job.reason === "installer_state_unknown" || job.reason === "version_process_state_unknown"
     || (job.reason === "installer_or_readback_error" && job.leaseRetained);
