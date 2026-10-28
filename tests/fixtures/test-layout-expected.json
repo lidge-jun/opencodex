@@ -1466,6 +1466,7 @@
   "combo-replay-refusal-attribution.test.ts": "responses",
   "ws-upstream.test.ts": "responses",
   "xai-additional-tools.test.ts": "providers/xai",
+  "xai-replay-provenance.test.ts": "providers/xai",
   "xai-client.test.ts": "images",
   "xai-empty-catalog-tool-choice.test.ts": "providers/xai",
   "xai-no-stop.test.ts": "providers/xai",

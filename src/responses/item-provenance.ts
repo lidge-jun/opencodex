@@ -36,6 +36,14 @@ export function hasItemProvenance(item: unknown): boolean {
     && typeof (item as Record<string | symbol, unknown>)[REPLAY_HISTORICAL_ITEM] === "boolean";
 }
 
+/** Replacement and synthesized items inherit the source's historical or live tag. */
+export function copyItemProvenance<T extends object>(source: unknown, target: T): T {
+  if (hasItemProvenance(source)) {
+    Object.assign(target, { [REPLAY_HISTORICAL_ITEM]: isHistoricalItem(source) });
+  }
+  return target;
+}
+
 /**
  * Tag both historical and live items so an empty replay prefix remains distinguishable
  * from an input that has never been tagged.

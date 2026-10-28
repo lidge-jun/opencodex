@@ -208,7 +208,7 @@ rejecting non-ResponseItem input types—including official xAI endpoints (`api.
 `cli-chat-proxy.grok.com`), OpenCode Go, and custom providers opting in with
 `promoteAdditionalTools: true`—promote declarations to top-level `tools` and strip the wrapper
 from `input`. `src/responses/item-provenance.ts` tags historical and live input objects with JSON-invisible symbols before replay repair;
-boundaries survive removals, insertions and adjacency rewrites, including removal of every historical item.
+Historical/live tags survive replacements, synthesized outputs and bridge restoration; transformed-input consumers read each tag, never a recalculated prefix.
 Historical wrappers retain call-rewriting context with separate rewrite plans and declaration sets; loaded search tools join the live catalog or top-level tools.
 
 Only the ROOT rejects a union, so exclusivity is preserved by moving it down rather than widening it:

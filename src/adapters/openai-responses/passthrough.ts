@@ -48,7 +48,7 @@ import { usageFromResponsesPayload } from "./usage";
 import { normalizeToolSchemas, promoteClientLoadedTools, stripUnsupportedHostedTools } from "./tool-schema";
 import { annotateEmptyResponsesToolOutputs, backfillWebSearchQueries, normalizeResponsesToolResultAdjacency, repairOrphanedInputItems, repairOversizedReplayCallIds, repairUnidentifiedToolOutputItems, restoreBridgedWebSearchCalls } from "./tool-output-recovery";
 import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-cache";
-import { computeReplayPrefixLength, tagHistoricalInputItems } from "../../responses/item-provenance";
+import { tagHistoricalInputItems } from "../../responses/item-provenance";
 import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuationEnvelope, normalizeCanonicalForwardPromptEnvelope, stripCanonicalForwardSamplingParams, stripPreviousResponseId, stripStatefulResponsesParams, stripUnsupportedForwardParams } from "./canonical-forward";
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
@@ -175,7 +175,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let plaintextV2AgentMessageAliasedToolNames: ReadonlySet<string> | undefined;
       let convertedMuseToolNameAliases: Map<string, string> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
-      let replayPrefixLen = parsed._replayPrefixLen;
+      const replayPrefixLen = parsed._replayPrefixLen;
       let outBody = parsed._rawBody;
       // Clone and tag before any input rewrite can remove, replace, or reorder replay items.
       if (
@@ -243,21 +243,12 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           synthesizeMissingCallOutputs,
           repairOrphanOutputs,
         );
-        if (isPlainObject(outBody) && Array.isArray(outBody.input)) {
-          replayPrefixLen = computeReplayPrefixLength(outBody.input, replayPrefixLen);
-        }
       }
       if (provider.dropResponsesReasoningItems === true) {
         outBody = dropResponsesReasoningInputItems(outBody);
-        if (isPlainObject(outBody) && Array.isArray(outBody.input)) {
-          replayPrefixLen = computeReplayPrefixLength(outBody.input, replayPrefixLen);
-        }
       }
       if (adjacentToolResults) {
         outBody = normalizeResponsesToolResultAdjacency(outBody);
-        if (isPlainObject(outBody) && Array.isArray(outBody.input)) {
-          replayPrefixLen = computeReplayPrefixLength(outBody.input, replayPrefixLen);
-        }
       }
       const hostedToolSubstitutions: NonNullable<AdapterRequest["hostedToolSubstitutions"]>[number][] = [];
       if (forward) {
@@ -331,11 +322,8 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           if (parsed._compactionRequest !== true && isPlainObject(outBody)) outBody = frameCompactionHistory(outBody);
           outBody = stripCanonicalOnlyTopLevelFields(outBody);
           outBody = stripCanonicalOnlyInputItems(outBody);
-          if (isPlainObject(outBody) && Array.isArray(outBody.input)) {
-            replayPrefixLen = computeReplayPrefixLength(outBody.input, replayPrefixLen);
-          }
         }
-        outBody = promoteClientLoadedTools(outBody, replayPrefixLen);
+        outBody = promoteClientLoadedTools(outBody);
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         const rewritten = rewriteRoutedCustomToolsForUpstream(
@@ -357,14 +345,14 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // Codex 0.147 emits private namespace tool groups, while public/third-party Responses
         // gateways accept only flat tool variants. Run after custom/tool-search lowering so
         // namespace children already carry their final public kind before they are promoted.
-        const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody, convertedRoutedCustomToolNames, replayPrefixLen);
+        const rewritten = rewriteRoutedNamespaceToolsForUpstream(outBody, convertedRoutedCustomToolNames);
         outBody = rewritten.body;
         convertedRoutedNamespaceToolAliases = rewritten.aliases;
         // Preserve xAI's cached-only fail-closed semantics and image-search mapping before the
         // generic capability fallback removes the private OpenAI fields. Grok relayed through
         // OpenCode Go speaks the same dialect, which the final model id and URL identify.
         outBody = normalizeXaiResponsesWebSearch(outBody, provider, { modelId: parsed.modelId, responseUrl: url });
-        outBody = injectXaiResponsesXSearch(outBody, provider, replayPrefixLen);
+        outBody = injectXaiResponsesXSearch(outBody, provider);
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
         // extensions. Keep them for OpenAI API-key traffic and unclassified gateways.
         if (provider.supportsOpenAiWebSearchToolFields === false) {
@@ -390,7 +378,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
           || isXaiResponsesUrl(url)
         ))
       ) {
-        outBody = promoteResponsesAdditionalTools(outBody, replayPrefixLen);
+        outBody = promoteResponsesAdditionalTools(outBody);
       }
       // Same native-v2/portable predicate as the routedCompaction gate in handleResponses():
       // neither forward auth nor native v1 endpoint support implies trigger support. The

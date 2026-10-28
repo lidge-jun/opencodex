@@ -3,7 +3,7 @@ import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../
 import { isPlainObject } from "./internal";
 import { peekBridgeSearchReplay } from "../../responses/bridge-search-replay-cache";
 import { externalTaskInputResponsesContent } from "../../responses/task-input";
-import { isHistoricalItem, markHistoricalItem } from "../../responses/item-provenance";
+import { copyItemProvenance } from "../../responses/item-provenance";
 
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
 
@@ -351,10 +351,8 @@ export function restoreBridgedWebSearchCalls(body: unknown, destinationScope: st
           call_id: memo.callId,
           output: memo.output,
         };
-        if (isHistoricalItem(item)) {
-          markHistoricalItem(fnCall);
-          markHistoricalItem(fnOutput);
-        }
+        copyItemProvenance(item, fnCall);
+        copyItemProvenance(item, fnOutput);
         restored.push(fnCall);
         restored.push(fnOutput);
         continue;
@@ -408,7 +406,7 @@ export function repairOrphanedInputItems(
       const taskInput = isFnOutput && !hasStringCallId ? externalTaskInputResponsesContent(item) : undefined;
       if (taskInput) {
         changed = true;
-        repaired.push({ type: "message", role: "user", content: taskInput });
+        repaired.push(copyItemProvenance(item, { type: "message", role: "user", content: taskInput }));
         continue;
       }
       const callId = typeof item.call_id === "string" ? item.call_id : "";
@@ -425,9 +423,7 @@ export function repairOrphanedInputItems(
           role: "user",
           content: orphanedToolOutputContent(item.output, callId),
         };
-        if (isHistoricalItem(item)) {
-          markHistoricalItem(msg);
-        }
+        copyItemProvenance(item, msg);
         repaired.push(msg);
         continue;
       }
@@ -447,9 +443,7 @@ export function repairOrphanedInputItems(
           const synthetic: Record<string, unknown> = isFnCall
             ? { type: "function_call_output", call_id: callId, output: text }
             : { type: "custom_tool_call_output", call_id: callId, output: text };
-          if (isHistoricalItem(item)) {
-            markHistoricalItem(synthetic);
-          }
+          copyItemProvenance(item, synthetic);
           pendingSyntheticOutputs.push(synthetic);
         }
       }

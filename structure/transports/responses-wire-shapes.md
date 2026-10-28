@@ -157,7 +157,7 @@ policy.
 Explicitly selected Codex Lite ordinary unreferenced hosted-history lowering follows [the hosted-search continuation boundary](../providers-and-adapters.md#hosted-search-continuation-binding); non-Lite/unknown requests, native compact and public API retain structural history; portable compaction keeps its existing trigger and default projection. Go's non-forward Responses request path moves valid `additional_tools` wrappers into top-level
 `tools` through `src/adapters/opencode-go-additional-tools.ts`. Placement runs after existing
 custom/search/namespace lowering and before code-mode, compaction and final hosted-tool pruning.
-It does not recalculate wire identities or response aliases. The matcher reads the constructed
+It reads per-item replay provenance without recalculating wire identities or response aliases. The matcher reads the constructed
 send URL, resolving it with URL semantics, and requires HTTPS `opencode.ai`, the standard port
 and exact `/zen/go/v1/responses`. Normal and endpoint-inclusive bases or split `responsesPath`
 configurations agree; a custom path resolving to Zen or elsewhere does not acquire Go placement.
