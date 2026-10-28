@@ -10,6 +10,7 @@ import type { ProxyRestartStartOutcome } from "./tray-proxy";
  * never needs to import the entry module back (no cycle).
  */
 import { CLI_COMMANDS } from "./registry";
+import { runCliAction } from "./runtime-api";
 import { uninstallArgsError, type CliHead } from "./root";
 import type { ReadyArgs } from "./ready";
 import type { LivenessIo, LiveProxy } from "../server/proxy-liveness";
@@ -870,12 +871,12 @@ const commandRunners: Record<string, CommandRunner> = {
     // Reset first, like the service runner below: reading process.exitCode only
     // reports THIS command's outcome if nothing earlier in the process set it.
     process.exitCode = 0;
-    await handleProviderCommand(deps.args.slice(1));
+    const code = await runCliAction(() => handleProviderCommand(deps.args.slice(1)));
     // handleProviderCommand reports failure through process.exitCode, which it sets
     // from handleProviderRuntimeCommand. Returning a literal 0 here made index.ts
     // call process.exit(0) and erase it, so `ocx provider quota` against a stopped
     // proxy printed an error and still exited 0 (#2697).
-    return Number(process.exitCode ?? 0);
+    return code || Number(process.exitCode ?? 0);
   },
   account: async deps => {
     const { cmdAccount } = await import("./account");
@@ -884,10 +885,10 @@ const commandRunners: Record<string, CommandRunner> = {
   models: async deps => {
     const { handleModels } = await import("./models");
     process.exitCode = 0;
-    await handleModels(deps.args.slice(1));
+    const code = await runCliAction(() => handleModels(deps.args.slice(1)));
     // Same as the provider runner above: handleModels sets process.exitCode from
     // handleModelsRuntimeCommand, and a literal 0 discarded it (#2697).
-    return Number(process.exitCode ?? 0);
+    return code || Number(process.exitCode ?? 0);
   },
   alias: async deps => {
     const { handleAliasCommand } = await import("./alias");

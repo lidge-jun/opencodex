@@ -15,12 +15,14 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { desktopFirstPartyTarget } from "../../src/claude/desktop-first-party";
+import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 
 // Full-suite Windows load: startServer + multi-PUT management flows often exceed bun's
 // default 5s per-test budget (same flake class as 810fa115 / kiro-oauth).
 setDefaultTimeout(30_000);
 
 let testDir = "";
+let lifecycleLock: ReturnType<typeof isolateClientLifecycleLock>;
 let previousHome: string | undefined;
 let previousClaudeConfigDir: string | undefined;
 let previousDesktopConfigDir: string | undefined;
@@ -45,6 +47,7 @@ beforeEach(() => {
   previousDesktopConfigDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   isolatedCodexHome = installIsolatedCodexHome("ocx-claude-mgmt-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-claude-mgmt-"));
+  lifecycleLock = isolateClientLifecycleLock(testDir);
   process.env.OPENCODEX_HOME = testDir;
   // These API tests intentionally toggle agent injection off. Never let that
   // prune the developer's real ~/.claude/agents directory.
@@ -60,6 +63,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  lifecycleLock.restore();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;

@@ -19,6 +19,7 @@ The server composition root registers it synchronously at startup; a successful 
 updates activation, including enable after startup and disable/reset. The runtime is loaded only
 when an active factory is used, so its process-local ledger is not constructed by an inactive
 install. `sidecar-execution.ts` reads the core-owned slot, not Advisor settings or runtime.
+Advisor settings admit the complete synchronous candidate/read/patch/save/activation phase through the [config admission contract](config.md). Production uses the current disk candidate when present, preserving unrelated disk edits during admission. Successful saves adopt the committed Advisor subtree and its field-scoped live baseline together, including known absence after reset, without advancing unrelated pending live edits. Fallback or error-bearing diagnostics are refused before mutation. Deadline refusal leaves live and durable settings untouched and retains the existing `write_failed` response. Successful receipts are serialized in that callback before another settings mutation can run.
 Management loads `advisor-routes.ts` only for the Advisor namespace. The guard is attached through
 `_advisorGuard`. `tests/advisor/advisor-core-boundary.test.ts` enforces the transitive load-time
 boundary from router, lifecycle, Responses core and management API, including direct dynamic imports.
