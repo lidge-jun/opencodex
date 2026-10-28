@@ -774,6 +774,7 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
   let held: HeldLock | undefined;
   let transferred = false;
   let closed = false;
+  let resourcesReleased = false;
   try {
     // Publish the context before the first pin/open or async verification can fail.
     // The caller already holds its Worker token; failed cleanup remains rooted there.
@@ -815,6 +816,8 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
     return {
       lock,
       verify,
+      /** Disposal proof is independent of the ACL diagnostic returned by release(). */
+      get resourcesReleased() { return resourcesReleased; },
       verifyIdentitySync() { if (closed) throw unsafe(); verifyIdentitySync(); },
       async createStaging(): Promise<string> {
         if (closed || !held || stage) throw unsafe();
@@ -853,7 +856,8 @@ export async function openWindowsCliApplyAuthority(prefix: string, acquire: bool
           if (held) releaseLock(ctx, held);
         }
         finally { ctx.pins.closeAll(kernel); }
-        return aclVerified && pins.remaining === 0 && (!acquire || !existsSync(lock));
+        resourcesReleased = pins.remaining === 0 && !stage && (!acquire || !existsSync(lock));
+        return aclVerified && resourcesReleased;
       },
     };
   } finally { if (!transferred) ctx.pins.closeAll(kernel); }

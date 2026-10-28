@@ -96,6 +96,7 @@ native("ACL-only release failure deletes only its owned lock and permits a later
   acl.setWindowsOwnerAclAsyncRunnerForTests(async () => ({ success: false, timedOut: true, stdout: "" }));
   try { expect(await guard.release()).toBe(false); }
   finally { acl.setWindowsOwnerAclAsyncRunnerForTests(null); }
+  expect(guard.resourcesReleased).toBe(true);
   expect(f.owners[0]!.releaseIfClean()).toBe(true);
   expect(fs.existsSync(guard.lock)).toBe(false);
   const next = await f.acquire();
@@ -121,6 +122,7 @@ for (const when of ["before ACL", "during ACL"] as const) native(`identity failu
   });
   try { await expect(guard.release()).rejects.toThrow("unsafe_store"); }
   finally { ctx.kernel.symbols.GetFileInformationByHandleEx = inspect; acl.setWindowsOwnerAclAsyncRunnerForTests(null); }
+  expect(guard.resourcesReleased).toBe(false);
   expect(f.owners[0]!.releaseIfClean()).toBe(true);
   expect(fs.existsSync(join(guard.lock, "owner.json"))).toBe(true);
   expect(await guard.release()).toBe(false);

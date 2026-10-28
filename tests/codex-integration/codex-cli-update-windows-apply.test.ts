@@ -35,7 +35,8 @@ const WINDOWS_APPLY_CHILD_BUDGET_MS = 2 * SPAWN_BUDGET_MS;
 const roots: string[] = [];
 const liveFixtureRoots = new Set<string>();
 type WorkerFixtureReply = { type: string; requestId?: string; cleanupConfirmed?: boolean; result?: import("../../src/codex/cli-update-apply").CodexCliApplyResult };
-function fixtureCleanupProven(messages: readonly unknown[], requestId: string, closed: boolean, errored: boolean): boolean {
+function fixtureCleanupProven(messages: readonly unknown[], requestId: string, closed: boolean, errored: boolean,
+  expectedErrors: readonly string[] = []): boolean {
   if (!closed || errored) return false;
   const replies: WorkerFixtureReply[] = [];
   for (const value of messages) {
@@ -61,7 +62,8 @@ function fixtureCleanupProven(messages: readonly unknown[], requestId: string, c
   const results = replies.filter(message => message.type === "result");
   return results.length === 1
     && results[0]!.cleanupConfirmed === true && results[0]!.result?.leaseRetained === false
-    && Array.isArray(results[0]!.result?.cleanupErrors) && results[0]!.result!.cleanupErrors.length === 0;
+    && Array.isArray(results[0]!.result?.cleanupErrors)
+    && JSON.stringify(results[0]!.result!.cleanupErrors) === JSON.stringify(expectedErrors);
 }
 test("Worker close alone never authorizes removing a native fixture", () => {
   const result: import("../../src/codex/cli-update-apply").CodexCliApplyResult = {
@@ -324,9 +326,11 @@ native("Windows npm execution refuses ancestor CommonJS and ESM modules outside 
   }
 }, WINDOWS_APPLY_BUDGET_MS);
 
-native("a fresh Worker runs real offline Windows FFI install and closes only after native settlement", async () => {
+native.each([false, true])("a fresh Worker closes after offline Windows apply, ACL release failure=%s", async aclReleaseFailure => {
   let root: string | undefined, closed = false, errored = false, worker: Worker | undefined;
+  let followupClean = !aclReleaseFailure;
   const requestId = crypto.randomUUID(), messages: WorkerFixtureReply[] = [];
+  const cleanupErrors = aclReleaseFailure ? ["lease_release_unverified"] : [];
   try {
     const f = await fixture(undefined, created => { root = created; liveFixtureRoots.add(created); });
     const id = await approved(f);
@@ -337,20 +341,43 @@ native("a fresh Worker runs real offline Windows FFI install and closes only aft
       worker!.addEventListener("error", () => { errored = true; reject(new Error("offline Worker failed")); }, { once: true });
       worker!.addEventListener("close", () => { closed = true; resolve(); }, { once: true });
     });
+    const replied = new Promise<WorkerFixtureReply>(resolve => {
+      worker!.addEventListener("message", event => {
+        if (["result", "fixture-error"].includes(event.data?.type)) resolve(event.data);
+      });
+    });
     const gate = new SharedArrayBuffer(8), fence = createCodexCliUpdateFence();
-    worker.postMessage({ requestId, planId: id, inspectionDeps: f.deps.inspectionDeps, target: f.target, gate, fence });
+    worker.postMessage({ requestId, planId: id, inspectionDeps: f.deps.inspectionDeps, target: f.target, gate, fence, aclReleaseFailure });
+    // Assert the result before joining: the old bug keeps the Worker's handler alive.
+    const reply = await Promise.race([replied, joined.then(() => { throw new Error("Worker closed without fixture result"); })]);
+    expect(reply.result).toMatchObject({ outcome: "applied", reason: "verified_target", leaseRetained: false, cleanupErrors });
     await joined;
     expect(messages.filter(m => m.type === "native-start")).toHaveLength(1);
     expect(messages.filter(m => m.type === "fixture-error")).toHaveLength(0);
     const results = messages.filter(m => m.type === "result");
     expect(results).toHaveLength(1);
-    expect(results[0]!.result).toMatchObject({ outcome: "applied", reason: "verified_target", leaseRetained: false, cleanupErrors: [] });
-    expect(fixtureCleanupProven(messages, requestId, closed, errored)).toBe(true);
+    expect(results[0]!.result).toMatchObject({ outcome: "applied", reason: "verified_target", leaseRetained: false, cleanupErrors });
+    expect(fixtureCleanupProven(messages, requestId, closed, errored, cleanupErrors)).toBe(true);
     expect(Atomics.load(new Int32Array(gate), 0)).toBe(0);
     expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+    if (aclReleaseFailure) {
+      const next = artifacts("1.2.0");
+      const deps = { ...f.deps,
+        resolveTarget: () => ({ kind: "resolved" as const, version: "1.2.0", integrity: next.set.main.integrity, artifacts: next.set }),
+        fetchArtifact: async (artifact: typeof next.set.main) => artifact.installName === "@openai/codex" ? next.main : next.backing };
+      const plan = await createCodexCliUpdatePlan(deps);
+      expect(plan.applicable).toBe(true);
+      const result = await applyCodexCliUpdate(plan.planId!, deps);
+      followupClean = !result.leaseRetained && result.cleanupErrors.length === 0;
+      expect(result).toMatchObject({ outcome: "applied", reason: "verified_target",
+        installedVersion: "1.2.0", leaseRetained: false, cleanupErrors: [] });
+      expect(existsSync(join(f.prefix, ".ocx-codex-cli-apply.lock"))).toBe(false);
+    }
   } finally {
     // A still-live native Worker keeps its exact fixture; never terminate to fake settlement.
-    if (root && fixtureCleanupProven(messages, requestId, closed, errored)) liveFixtureRoots.delete(root);
+    if (root && followupClean && fixtureCleanupProven(messages, requestId, closed, errored, cleanupErrors)) liveFixtureRoots.delete(root);
+    // A failing regression must preserve its fixture without keeping the test host alive.
+    if (!closed) worker?.unref();
   }
 }, WINDOWS_APPLY_BUDGET_MS);
 

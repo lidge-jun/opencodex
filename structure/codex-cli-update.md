@@ -335,7 +335,10 @@ keeps the run-once handler installed. Only successful terminal cleanup removes t
 its token. No polling, automatic retry/reap or termination follows from retention; a retained realm
 can remain resident until separately authorized recovery. A crash still loses in-memory ownership
 and leaves durable state unknown. The pure lifetime test is not native disposal evidence.
-Authority release succeeds only when lock disposal is verified and its pin set is empty.
+Authority disposal is proved only after identity/token-fenced lock removal, absent staging and
+an empty pin set. Its `resourcesReleased` evidence is separate from release's ACL diagnostic.
+Apply preserves that diagnostic in cleanup errors, but releases the execution token once staging,
+toolchain and authority disposal are all proved, including during terminal recovery.
 A failed CloseHandle stays in the apply-only `WindowsApplyAuthorityPins` set; its closeAll skips
 failed closes instead of retrying or forgetting them, preserving Owner/token with `lease_release_unverified`.
 The ordinary ledger/status PinSet keeps its pre-existing best-effort disposal contract; this change
@@ -457,6 +460,7 @@ On Windows, `src/codex/cli-update-job-store-windows.ts` maps the same ledger con
 
 Apply-authority release checks held identity before and after its ACL read. An ACL-only failure
 still attempts deletion through the original token-fenced pins and reports a failed release verdict.
+That verdict alone does not retain the Worker: proved resource disposal permits closure and a later apply.
 Identity failure preserves the lock while closing pins. Repeated release cannot affect a later owner.
 
 Each successful handle-relative `relOpen` registers its handle exactly once before returning it;

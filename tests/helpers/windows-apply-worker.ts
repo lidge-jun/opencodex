@@ -3,6 +3,8 @@ import { applyCodexCliUpdate } from "../../src/codex/cli-update-apply";
 import { createCodexCliWorkerLifetime } from "../../src/codex/cli-update-worker";
 import { allocateCodexCliUpdateGateOwner, createWorkerCommitWindow, codexCliUpdateIsCancelled } from "../../src/codex/cli-update-selection-gate";
 import { startWindowsCliChild } from "../../src/codex/windows-cli-child";
+import { setWindowsOwnerAclAsyncRunnerForTests } from "../../src/lib/windows-owner-acl";
+import type { openWindowsCliApplyAuthority } from "../../src/codex/cli-update-job-store-windows";
 
 declare const self: Worker;
 if (Bun.isMainThread === false) {
@@ -11,7 +13,8 @@ if (Bun.isMainThread === false) {
   self.onmessage = async event => {
     if (ran) return;
     ran = true;
-    const { requestId, planId, inspectionDeps, target, gate, fence } = event.data;
+    const { requestId, planId, inspectionDeps, target, gate, fence, aclReleaseFailure } = event.data;
+    let anchor: { owner?: { authority: Awaited<ReturnType<typeof openWindowsCliApplyAuthority>> } } | undefined;
     const nativeSettlements: { terminal: boolean; cleanupComplete: boolean }[] = [];
     const abort = new AbortController();
     const view = new Int32Array(gate), word = new Int32Array(fence);
@@ -21,8 +24,8 @@ if (Bun.isMainThread === false) {
         platform: "win32", inspectionDeps, signal: abort.signal,
         isCancelled: codexCliUpdateIsCancelled(fence),
         commitWindow: createWorkerCommitWindow({ gate, fence, owner }),
-        retainExecution: owner => lifetime.retain(owner),
-        resolveTarget: () => ({ kind: "resolved", version: "1.1.0",
+        retainExecution: owner => { anchor = owner; return lifetime.retain(owner); },
+        resolveTarget: () => ({ kind: "resolved", version: target.set.main.version,
           integrity: target.set.main.integrity, artifacts: target.set }),
         // The installer and metadata are offline owned fixtures; no host session controls.
         scanProcesses: () => ({ kind: "observed", processes: [] }),
@@ -32,6 +35,13 @@ if (Bun.isMainThread === false) {
         },
         startWindowsChild: invocation => {
           const installing = invocation.policy === "installer";
+          if (installing && aclReleaseFailure) {
+            const authority = anchor!.owner!.authority, release = authority.release.bind(authority);
+            authority.release = async () => {
+              setWindowsOwnerAclAsyncRunnerForTests(async () => ({ success: false, timedOut: false, stdout: "" }));
+              try { return await release(); } finally { setWindowsOwnerAclAsyncRunnerForTests(null); }
+            };
+          }
           if (installing && (Atomics.load(view, 0) !== owner || Atomics.load(word, 0) !== 2)) throw new Error("native start outside commit");
           const child = startWindowsCliChild(invocation), wait = child.wait.bind(child);
           child.wait = async () => {
