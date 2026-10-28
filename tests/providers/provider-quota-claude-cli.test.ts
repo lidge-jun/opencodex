@@ -8,14 +8,17 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../src/providers/quota";
+import { clearProviderQuotaCache, fetchProviderQuotaReports, flushProviderQuotaObservationsForTests } from "../../src/providers/quota";
 import { saveClaudeUsageSnapshot } from "../../src/providers/claude-cli-usage-state";
+import { setQuotaResetSink } from "../../src/quota/reset-observer";
+import { resetQuotaResetStoreForTests } from "../../src/quota/reset-seen-store";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
 
 const originalHome = process.env.OPENCODEX_HOME;
 const originalFetch = globalThis.fetch;
 let home: string;
+let fetchCalls: number;
 
 function config(): OcxConfig {
   return {
@@ -49,18 +52,25 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-claude-cli-quota-"));
   process.env.OPENCODEX_HOME = home;
   clearProviderQuotaCache();
+  resetQuotaResetStoreForTests();
+  fetchCalls = 0;
   // The row is cache-only: a fetch here is itself the failure.
   globalThis.fetch = (async () => {
+    fetchCalls++;
     throw new Error("no upstream call may be made for a claude-cli quota row");
   }) as typeof globalThis.fetch;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await flushProviderQuotaObservationsForTests();
+  setQuotaResetSink(null);
+  resetQuotaResetStoreForTests();
   globalThis.fetch = originalFetch;
   clearProviderQuotaCache();
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
   removeTreeWithRetry(home);
+  expect(fetchCalls).toBe(0);
 });
 
 test("publishes the admission's subscription windows as an observed row", async () => {
@@ -129,4 +139,25 @@ test.each([false, true])("forced refresh clears the prior account's quota when t
 
   const response = await fetchProviderQuotaReports(config(), true);
   expect(response.reports.some(report => report.provider === "claude-cli")).toBe(false);
+});
+
+test.each(["a", "b"])("display-only Claude CLI snapshots never trigger resets across identity %s", async identity => {
+  const resets: unknown[] = [];
+  setQuotaResetSink(event => resets.push(event));
+  const checkedAt = Date.now();
+  const statePath = join(home, "claude-usage-admission.json");
+  saveClaudeUsageSnapshot(statePath, {
+    identity: "a".repeat(64), checkedAt,
+    quota: { fiveHourPercent: 90, fiveHourResetAt: checkedAt + 3_600_000, updatedAt: checkedAt },
+  });
+  await fetchProviderQuotaReports(config(), true);
+  await flushProviderQuotaObservationsForTests();
+  saveClaudeUsageSnapshot(statePath, {
+    identity: identity.repeat(64), checkedAt: checkedAt + 1000,
+    quota: { fiveHourPercent: 10, fiveHourResetAt: checkedAt + 3_600_000, updatedAt: checkedAt + 1000 },
+  });
+  const response = await fetchProviderQuotaReports(config(), true);
+  await flushProviderQuotaObservationsForTests();
+  expect(response.reports[0]?.quota.fiveHourPercent).toBe(10);
+  expect(resets).toEqual([]);
 });

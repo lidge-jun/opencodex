@@ -205,11 +205,13 @@ function notifyProviderQuotaSnapshot(
   if (reports.length === 0) return;
   // Resolved here, synchronously, while the identity is still the one that produced these
   // reports.
-  const observations = reports.map(report => ({
+  // Claude CLI rows are historical display evidence, not account-bound reset observations.
+  const observations = reports.filter(report => config.providers[report.provider]?.adapter !== "claude-cli").map(report => ({
     scope: report.provider,
     accountKey: providerObservationAccountKey(report.provider, config),
     quota: report.quota,
   }));
+  if (observations.length === 0) return;
   pendingProviderObservation = pendingProviderObservation
     .then(async () => {
       const observer = await import("../quota/reset-observer");
