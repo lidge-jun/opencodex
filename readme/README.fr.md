@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="../assets/banner.png" alt="opencodex — proxy universel de fournisseurs pour Codex, Claude Code, Claude Desktop et Grok Build" width="100%">
+  <img src="../assets/banner.png" alt="opencodex — une passerelle locale pour Codex, Claude Code, Claude Desktop, Grok Build et plus" width="100%">
 </p>
 
-<h3 align="center">make codex open!</h3>
-<p align="center"><b>Proxy universel de fournisseurs pour OpenAI Codex, Claude Code, Claude Desktop &amp; Grok Build</b><br>
-Deux commandes suffisent pour que chacun d'eux exécute le LLM de votre choix.</p>
+<h3 align="center">Une passerelle locale pour vos outils de programmation IA et vos modèles.</h3>
+<p align="center"><b>Utilisez les modèles de votre choix avec Codex, Claude Code, Claude Desktop et Grok Build,<br>et connectez OpenCode, Pi, Qoder, WorkBuddy, Kilo, Cline, T3 Code et d’autres outils grâce aux configurations gérées.</b><br>
+<a href="https://opencodex.me/fr/reference/client-support/">Voir tous les outils pris en charge →</a></p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="Suivre @claudeebum sur X"></a>
@@ -80,13 +80,7 @@ Sol pilote la session et appelle un sous-agent Kimi K3.
   <a href="../README.md">English</a> · <b>Français</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/fr/"><b>Documentation complète →</b></a>
 </p>
 
-opencodex est un proxy local léger qui traduit l'API Responses de Codex vers le protocole utilisé
-par votre fournisseur — streaming, appels d'outils, jetons de raisonnement, images, dans les deux
-sens. Utilisez Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama ou tout autre LLM avec Codex,
-Claude Code, Claude Desktop et Grok Build. Il peut également gérer un **groupe de comptes ChatGPT**
-pour l'authentification Codex : ajoutez des comptes, actualisez leurs quotas dans le tableau de bord
-et laissez les nouvelles sessions être automatiquement routées vers le compte opérationnel le moins utilisé,
-tandis que les fils existants restent associés au compte qui les a démarrés.
+opencodex est une passerelle locale légère entre vos outils de programmation et vos fournisseurs de modèles. Elle accepte les API Responses, Chat Completions et Anthropic Messages et traduit chaque requête pour votre fournisseur, en prenant en charge le streaming, les appels d’outils, le raisonnement et les images lorsque le client, le modèle et le fournisseur le permettent. Utilisez Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama et d’autres fournisseurs avec Codex, Claude Code, Claude Desktop, Grok Build et les outils de la [page des clients pris en charge](https://opencodex.me/fr/reference/client-support/). Elle peut aussi gérer un **pool de comptes ChatGPT** pour l’authentification Codex : ajoutez des comptes et actualisez leurs quotas dans le tableau de bord ; les nouvelles sessions sont dirigées vers le compte sain le moins utilisé, tandis que les conversations existantes restent liées à leur compte initial.
 
 ## Démarrage rapide
 
@@ -103,6 +97,21 @@ Ouvrez **http://localhost:10100** et configurez tout dans le tableau de bord web
 fournisseurs (plus de 40 intégrés, ou n'importe quel point de terminaison compatible OpenAI),
 choisissez les modèles, gérez les comptes. `ocx gui`
 rouvre le tableau de bord à tout moment.
+
+### Connectez votre outil
+
+Ajoutez d’abord un fournisseur, puis connectez l’outil que vous utilisez :
+
+| Outil | Connexion |
+|---|---|
+| Codex | Exécutez `ocx init` et acceptez l’invite Codex. Sur une écoute locale, cela dirige le fournisseur intégré de Codex vers le proxy ; lancez ensuite `codex` comme d’habitude. Déjà configuré ? Le commutateur Codex de la page **Connect** du tableau de bord active ou désactive le routage. |
+| Claude Code | Avec le CLI `claude` installé, exécutez `ocx claude`. Il démarre le proxy si nécessaire et lance Claude Code à travers celui-ci. |
+| Claude Desktop | Exécutez `ocx claude desktop`. Par défaut, le profil de passerelle est installé pour toute l’application ; consultez le [guide Claude Code](https://opencodex.me/fr/guides/claude-code/) pour le mode first-party. |
+| Grok Build | Sur une écoute locale, `ocx start` enregistre les modèles si `~/.grok` existe ; choisissez un modèle `ocx-*` dans Grok Build. Configurations distantes : consultez le [guide Grok Build](https://opencodex.me/fr/guides/grok-build/). |
+| Outils avec intégration gérée | Utilisez la page **Connect** du tableau de bord ou `ocx integration client enable --client <id>`. |
+| Tout autre outil | Définissez l’URL de base compatible OpenAI `http://localhost:10100/v1` ou l’URL de base Anthropic `http://localhost:10100`. |
+
+La [page des clients pris en charge](https://opencodex.me/fr/reference/client-support/) indique la méthode de connexion et le protocole de chaque outil.
 
 <details>
 <summary><b>Application de bureau (bêta)</b></summary>
