@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { OPENAI_TEAM_ID, untrustedChatgptBundleReason, type BundleTrustDeps } from "../../src/chatgpt/app-server-shim/bundle-trust";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -26,7 +26,7 @@ const executable = (dir: string, name: string, body: string) => {
   return path;
 };
 function withDir(run: (dir: string) => void) {
-  const dir = mkdtempSync(join(tmpdir(), "ocx-shim-test-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "ocx-shim-test-")));
   try { run(dir); } finally { removeTreeWithRetry(dir); }
 }
 const internalArgs = ["internal", "chatgpt-app-server-filter"];

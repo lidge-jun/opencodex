@@ -3,6 +3,8 @@ import { randomBytes } from "node:crypto";
 import { join, posix } from "node:path";
 import { getConfigDir } from "../../config/paths";
 import { selfLaunchArgv } from "../../lib/self-launch-argv";
+import { defaultBundleTrustDeps } from "./bundle-trust";
+import { untrustedLauncherFilesystemReason, type BundleTrustDeps } from "./bundle-trust-policy";
 
 export const CHATGPT_APP_CODEX_BINARY = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex";
 
@@ -57,11 +59,12 @@ export function buildChatgptShimLauncher(
   argv: readonly string[],
   real = CHATGPT_APP_CODEX_BINARY,
   validator: readonly string[] = [process.execPath, ...selfLaunchArgv(["internal", "codex-exec-target"])],
+  bundleRoot = /^(.*?\.app)\/Contents\//i.exec(real)?.[1],
 ): string {
   return `#!/bin/bash
 # opencodex (experimental): ChatGPT app-server stdout passes through the quota-gate filter.
 REAL=${shellQuote(real)}
-FILTER=(${argv.map(shellQuote).join(" ")})
+${bundleRoot === undefined ? "" : `BUNDLE_ROOT=${shellQuote(bundleRoot)}\n`}FILTER=(${argv.map(shellQuote).join(" ")})
 VALIDATE=(${validator.map(shellQuote).join(" ")})
 if [ ! -x "$REAL" ]; then
   echo "opencodex (experimental): the bundled app-server is no longer at $REAL; run 'ocx chatgpt launch' again or 'ocx chatgpt restore'." >&2
@@ -69,7 +72,7 @@ if [ ! -x "$REAL" ]; then
 fi
 validate_real() {
   local target
-  if [ ! -x "\${VALIDATE[0]}" ] || ! target=$("\${VALIDATE[@]}" -- "$REAL") || [ -z "$target" ]; then
+  if [ ! -x "\${VALIDATE[0]}" ] || ! target=$("\${VALIDATE[@]}" ${bundleRoot === undefined ? "" : '--bundle-root "$BUNDLE_ROOT" '}-- "$REAL") || [ -z "$target" ]; then
     echo "opencodex: app-server execution verification failed; run 'ocx chatgpt launch' again or 'ocx chatgpt restore'." >&2
     return 126
   fi
@@ -90,17 +93,32 @@ exec "$REAL" "$@"
  * launcher, so an existing symbolic link is replaced rather than followed and a respawn during
  * the write never runs a half-written script.
  */
-export function writeChatgptShimLauncher(configDir = getConfigDir(), real = CHATGPT_APP_CODEX_BINARY): string {
+export function writeChatgptShimLauncher(
+  configDir = getConfigDir(), real = CHATGPT_APP_CODEX_BINARY,
+  bundleRoot = /^(.*?\.app)\/Contents\//i.exec(real)?.[1],
+  filesystem: Pick<BundleTrustDeps, "uid" | "stat" | "adminGroupId"> | undefined = process.platform === "darwin" ? defaultBundleTrustDeps() : undefined,
+): string {
+  if (!bundleRoot || !posix.isAbsolute(bundleRoot) || !real.startsWith(bundleRoot + "/Contents/")) {
+    throw new Error("the app-server launcher requires its discovered bundle root");
+  }
   mkdirSync(configDir, { recursive: true });
   const path = chatgptShimLauncherPath(configDir);
   const argv = [process.execPath, ...selfLaunchArgv(["internal", "chatgpt-app-server-filter"])];
   const temp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  let created = false;
+  const assertFilesystem = (file: string, existing: boolean) => {
+    const reason = filesystem && untrustedLauncherFilesystemReason(file, filesystem, existing);
+    if (reason) throw new Error(`unsafe app-server launcher: ${reason}`);
+  };
   try {
-    writeFileSync(temp, buildChatgptShimLauncher(argv, real), { mode: 0o755, flag: "wx" });
+    assertFilesystem(temp, false);
+    writeFileSync(temp, buildChatgptShimLauncher(argv, real, undefined, bundleRoot), { mode: 0o755, flag: "wx" });
+    created = true;
     chmodSync(temp, 0o755);
+    assertFilesystem(temp, true);
     renameSync(temp, path);
   } catch (error) {
-    try { unlinkSync(temp); } catch { /* the temp file was never created */ }
+    if (created) { try { unlinkSync(temp); } catch { /* preserve the publication error */ } }
     throw error;
   }
   return path;

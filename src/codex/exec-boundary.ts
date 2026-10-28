@@ -53,6 +53,8 @@ export interface CodexExecBoundaryDeps {
   executable?: (path: string) => boolean;
   /** Canonicalizer; returns null when the path cannot be resolved. */
   realpath?: (path: string) => string | null;
+  /** Discovered Desktop bundle identity, retained by its generated launcher across respawns. */
+  expectedBundleRoot?: string;
   macBundleTrustReason?: (bundleRoot: string, binary: string) => string | null;
 }
 
@@ -120,7 +122,10 @@ function resolveDarwinExecPath(command: string, deps: CodexExecBoundaryDeps): { 
  */
 function darwinBundleTarget(resolved: string, deps: CodexExecBoundaryDeps): { bundle: string; binary: string } | null {
   const realpath = deps.realpath ?? realpathOrNull;
-  const bundle = macCodexAppBundleFor(resolved, { env: deps.env, platform: deps.platform, realpath });
+  if (deps.expectedBundleRoot !== undefined && !posix.isAbsolute(deps.expectedBundleRoot)) {
+    throw new CodexExecTrustError("the recorded app bundle must be an absolute path");
+  }
+  const bundle = deps.expectedBundleRoot ?? macCodexAppBundleFor(resolved, { env: deps.env, platform: deps.platform, realpath });
   if (!bundle) return null;
   const binary = realpath(resolved);
   if (binary === null) throw new CodexExecTrustError("cannot canonicalize the app-bundle exec target");
@@ -144,6 +149,7 @@ export function validatedCodexExecTarget(
   deps: CodexExecBoundaryDeps = {},
 ): ValidatedCodexExecTarget {
   if ((deps.platform ?? process.platform) !== "darwin") {
+    if (deps.expectedBundleRoot !== undefined) throw new CodexExecTrustError("recorded app bundles require macOS verification");
     return { invocation: codexExecInvocation(command, args, deps.platform ?? process.platform, { env: deps.env, exists: deps.exists }), macAppBundle: false };
   }
   const resolved = resolveDarwinExecPath(command, deps);
@@ -164,6 +170,7 @@ export async function validatedCodexExecTargetAsync(
 ): Promise<ValidatedCodexExecTarget> {
   deps.signal?.throwIfAborted();
   if ((deps.platform ?? process.platform) !== "darwin") {
+    if (deps.expectedBundleRoot !== undefined) throw new CodexExecTrustError("recorded app bundles require macOS verification");
     return { invocation: codexExecInvocation(command, args, deps.platform ?? process.platform, { env: deps.env, exists: deps.exists }), macAppBundle: false };
   }
   const resolved = resolveDarwinExecPath(command, deps);

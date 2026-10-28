@@ -18,7 +18,7 @@
  */
 import type { CodexExecBoundaryAsyncDeps } from "../codex/exec-boundary";
 
-const USAGE = "Usage: ocx internal desktop-restart-handoff --plan <path> | chatgpt-app-server-filter [--self-test] | codex-exec-target -- <path>";
+const USAGE = "Usage: ocx internal desktop-restart-handoff --plan <path> | chatgpt-app-server-filter [--self-test] | codex-exec-target [--bundle-root <path>] -- <path>";
 
 function optionValue(args: readonly string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -32,13 +32,18 @@ function optionValue(args: readonly string[], name: string): string | undefined 
 export async function handleInternalCommand(args: readonly string[], execBoundary: CodexExecBoundaryAsyncDeps = {}): Promise<number> {
   const sub = args[0];
   if (sub === "codex-exec-target") {
-    if (args.length !== 3 || args[1] !== "--" || !args[2] || /[\r\n]/.test(args[2])) {
+    const bundled = args[1] === "--bundle-root";
+    const root = bundled ? args[2] : undefined;
+    const separator = bundled ? 3 : 1;
+    const command = args[separator + 1];
+    if (args.length !== separator + 2 || args[separator] !== "--" || !command || /[\r\n\0]/.test(command)
+      || (bundled && (!root || !root.startsWith("/") || /[\r\n\0]/.test(root)))) {
       console.error(USAGE);
       return 2;
     }
     try {
       const { assertCodexExecTargetTrustedAsync } = await import("../codex/exec-boundary");
-      const target = await assertCodexExecTargetTrustedAsync(args[2], execBoundary);
+      const target = await assertCodexExecTargetTrustedAsync(command, bundled ? { ...execBoundary, expectedBundleRoot: root } : execBoundary);
       if (!target || /[\r\n]/.test(target)) throw new Error("invalid executable path");
       console.log(target);
       return 0;

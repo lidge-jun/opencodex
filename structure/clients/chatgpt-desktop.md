@@ -14,8 +14,9 @@ internal command arguments.
 
 The launcher uses macOS and a successful filter self-test to select stdout filtering.
 Every invocation, including a Desktop respawn and the unfiltered branch, re-enters
-`internal codex-exec-target -- <path>` immediately before shell exec. The helper applies
-the execution trust contract below and returns the exact target to execute; the shell
+`internal codex-exec-target --bundle-root <root> -- <path>` immediately before shell exec. The helper applies
+the execution trust contract below to the recorded discovered root, regardless of its name,
+and returns the exact target to execute; the shell
 does not use `uname` as execution authority. Only stdout
 passes through the filter. Stdin, stderr, process identity and the real server's
 exit status retain the direct app/server relationship.
@@ -63,6 +64,14 @@ OpenAI's. It writes the mode-0755 executable through an exclusive temp file and 
 rename (never through a symbolic link), quits the bundle by id, waits for this user's
 instance to exit, then opens the same bundle path with the launcher in CODEX_CLI_PATH.
 The launcher itself exits 127 with a stderr hint when the recorded binary is gone.
+The discovered root is a quoted literal in the launcher itself, with no metadata sidecar.
+Before publication, the writer checks its parent/ancestor replacement permissions and the
+new file's ownership, type and permissions using the shared POSIX filesystem policy.
+An unsafe path refuses publication. The strict helper mode refuses a missing or empty root,
+failed canonicalization or a target outside the recorded root's canonical `Contents/`.
+It always verifies that root and binary, even if the bundle is renamed or its identifier changes.
+Same-user processes, the installed CLI/runtime and the launcher code remain trusted; these
+checks do not attest extended ACLs or make verification and exec an atomic operation.
 Restore uses the same trust policy for the bundle and its main app executable before
 quit or open. Both relaunch paths check ancestor ownership and POSIX replacement permissions
 through the filesystem root. Ancestors must be owned by this user or root; group/other write
@@ -113,6 +122,7 @@ canonical output is refused. Ordinary CLI and
 third-party app paths retain their existing policy. Conventional automatic discovery remains
 limited to the two ChatGPT installation roots. Regression coverage is in
 `tests/codex-integration/exec-known-app-bundles.test.ts`,
-`tests/codex-integration/exec-launcher-boundary.test.ts` and
+`tests/codex-integration/exec-launcher-boundary.test.ts`,
+`tests/codex-integration/exec-renamed-app-bundle.test.ts` and
 `tests/clients/desktop-app-server-exec-boundary.test.ts`. Portable injected-verifier and
 shell tests do not establish native macOS signature or real Desktop respawn acceptance.
