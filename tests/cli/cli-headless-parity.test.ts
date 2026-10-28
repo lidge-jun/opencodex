@@ -584,6 +584,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/keys/rotate/commit", "ocx access key rotate commit"],
       ["/api/machine", "ocx connect/status/sync/disconnect"],
       ["/api/session/logout", "(none — GUI current-session logout)"],
+      ["/api/session/remember", "(none — GUI remembered-device exchange; the CLI holds no browser cookie jar)"],
       ["/api/logs", "ocx observe"],
       ["/api/lab", "ocx lab"],
       ["/api/config", "ocx config"],

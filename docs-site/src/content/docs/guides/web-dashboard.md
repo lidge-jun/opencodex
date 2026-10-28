@@ -37,6 +37,14 @@ password manager can offer to save and autofill it. The dashboard itself still k
 in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
 
+**Remember this device** is off by default. On a direct HTTPS dashboard (or local loopback), it exchanges the admin token for a server-issued HttpOnly, SameSite=Strict device cookie plus a separate device proof stored in this site's localStorage. HTTPS cookies are Secure and host-only. Neither the cookie nor the proof is the admin token, and neither works alone. Cookies are shared across ports of the same hostname; the origin-scoped proof binds the remembered device to this dashboard origin. Still prefer a dedicated hostname. The admin token is never written to localStorage or sessionStorage. If browser storage is unavailable or cannot save the proof, Remember reports unavailable.
+
+The private dashboard-sessions.json stores hashes of the cookie, proof, admin credential and browser identity, the server origin and a fixed 30-day expiry. Relaunching the Safari home-screen app resumes a short-lived GUI session while that device record is valid. Remembered sessions cannot approve consent actions: GitHub stars, reset-credit consumption, prompt-layer edits, Meta Muse sign-in, desktop compatibility changes or quota validation. Use a fresh local or paired session for those actions. Cross-origin/relayed dashboards and remote plaintext HTTP do not support Remember. Expiry, a browser identity change, or rotating the admin token and restarting the server requires sign-in again.
+
+Successful **Forget this device** in the sidebar or mobile action bar (and session logout) immediately revokes the record and all sessions resumed from it, and removes the browser proof. Failed logout keeps the proof so you can retry. The server syncs the record contents before publishing the change; directory-entry durability after a crash is best effort. Older remembered bearer-token keys are removed without being read or migrated. Use only on a device you trust. This does not make Safari offer password AutoFill.
+
+An already-issued session that is otherwise valid can still **Forget this device** after a browser User-Agent change; ordinary access and resumption continue to require the original browser identity.
+
 ### Finding the admin token
 
 You only need this on a non-loopback bind. A local dashboard never asks, and if a local one

@@ -548,7 +548,8 @@ export async function handleManagementAPI(
     const { ConfigMutationLockError } = await import("../config");
     const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");
     try {
-      return await handleCodexAuthAPI(req, url, config, convergeCodexCatalog, principal);
+      // Remembered sessions retain admin-token consent authority for account refresh.
+      return await handleCodexAuthAPI(req, url, config, convergeCodexCatalog, ctx.guiSessionIssuance === "remembered-admin" ? "admin-token" : principal);
     } catch (error) {
       // Credential writers remap ConfigMutationLockError to CodexCredentialRefreshLockTimeoutError;
       // treat both as the same retryable busy response.

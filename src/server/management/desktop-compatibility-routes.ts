@@ -10,6 +10,8 @@ let service: DesktopCertificateService | undefined;
 export async function handleDesktopCompatibilityRoutes(ctx: ManagementContext): Promise<Response | null> {
   if (ctx.url.pathname !== PATH) return null;
   if (ctx.req.method !== "GET" && ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
+  // A local dashboard confirmation precedes any persisted key or CurrentUser Root mutation.
+  // This is caller provenance, not protection against an arbitrary same-user process.
   if (ctx.req.method === "POST" && !isAuthorizedDesktopCompatibilityMutation(ctx)) {
     return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
   }

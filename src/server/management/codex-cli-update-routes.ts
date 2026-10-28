@@ -4,6 +4,7 @@ import { jsonResponse } from "../auth-cors";
 import { trackBackgroundWork } from "../../lib/background-work";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
+import { hasHumanDashboardSession } from "./consent-session";
 
 const STATUS = /^\/api\/codex\/cli-update\/jobs\/([0-9a-f-]{36})$/;
 
@@ -24,7 +25,7 @@ export async function handleCodexCliUpdateRoutes(ctx: ManagementContext): Promis
   }
   if (ctx.url.pathname !== "/api/codex/cli-update/apply") return null;
   if (ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405, ctx.req, ctx.config);
-  if (ctx.principal !== "gui-session" || !ctx.trustedLoopbackIngress) {
+  if (!hasHumanDashboardSession(ctx) || !ctx.trustedLoopbackIngress) {
     return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403, ctx.req, ctx.config);
   }
   let body: unknown;
