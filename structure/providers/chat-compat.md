@@ -47,6 +47,13 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Reasoning and tool-result compatibility
 
+`src/adapters/openai-chat/tensorfold-tool-rejections.ts` consumes TensorFold's explicit nonempty
+`tensorfold.tool_call_rejections` diagnostic on tool-enabled translated Chat requests. Rejected names
+produce a non-retryable `upstream_tool_call_rejected` terminal with usage preserved, including a final
+stats-only SSE chunk. The combo preflight does not replay that verdict. Names and arguments are not
+copied into the error; literal markup without the diagnostic remains text. Native passthrough is unchanged.
+Tests: `tests/adapters/openai/openai-chat-tensorfold-tool-rejections.test.ts`.
+
 For `api.mistral.ai`, `src/adapters/openai-chat/response-events.ts` preserves typed text/thinking arrays in both response paths and rejects unsupported blocks. Inline-tag parsing crosses adjacent text blocks but resets at typed reasoning. It adds no signature replay.
 On that same host, `src/adapters/openai-chat/messages.ts` reconstructs historical thinking as native `content` chunks before assistant text, for every hosted model family. An explicit `preserveReasoningContentModels` list, including `[]`, still controls enrollment; the default preserves supplied thinking. The shared prompt projection counts that thinking. Replay can recover actual text from the existing scoped tool-call cache, but never invents placeholders or forwards generic IR signatures. Original chunk metadata and exact chunk boundaries are not retained by this text-only reconstruction. Native Chat passthrough and other destinations retain their existing behavior.
 Tests: `tests/adapters/openai/openai-chat-mistral-content.test.ts`; byte budgets retain their existing limits.

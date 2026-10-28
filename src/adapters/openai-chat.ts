@@ -1,4 +1,5 @@
 import { withRequiredChatToolResult } from "./openai-chat/required-tool-result";
+import { tensorfoldToolRejectionEvent } from "./openai-chat/tensorfold-tool-rejections";
 import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
 import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary-budget";
 import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
@@ -91,6 +92,7 @@ function canSerializeOpenAIChatServiceTier(
 
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
   let lastRequestedModelId: string | undefined;
+  let toolsEnabled = false;
   let freeformTools = new Map<string, FreeformToolIdentity>();
   return withRequiredChatToolResult(withOpenAIChatToolNames(toolNames => ({
     name: "openai-chat",
@@ -99,6 +101,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
     buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       lastRequestedModelId = parsed.modelId;
+      toolsEnabled = parsed.options.toolChoice !== "none" && !!parsed.context.tools?.length;
       const completedToolBlocks = incoming?.completedToolBlocks === true;
       const { url, headers, hasCredential } = openAIChatTransport(provider);
       if (!completedToolBlocks) {
@@ -407,6 +410,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
 
         if (chunk.usage) pendingUsage = usageFromOpenAIChat(chunk.usage as Record<string, unknown>);
+        const rejection = tensorfoldToolRejectionEvent(chunk, toolsEnabled, pendingUsage);
+        if (rejection) return yield* terminateWithError(rejection);
 
         const choices = chunk.choices;
         if (choices === undefined) return "continue";
@@ -720,6 +725,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           }];
         }
         if (payload.error !== undefined && payload.error !== null) return [upstreamErrorEvent(payload.error, usage)];
+        const rejection = tensorfoldToolRejectionEvent(payload, toolsEnabled, usage);
+        if (rejection) return [rejection];
 
         const events: AdapterEvent[] = [];
         const choices = payload.choices as {
@@ -737,22 +744,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const choice = rawChoice;
         if (choice.finish_reason === "error") return [upstreamErrorEvent(choice.error, usage)];
         if (!choice.message) return [{ type: "error", message: "upstream response contained no choices", ...(usage ? { usage } : {}) }];
-        // `!choice.message` splits this input class on TRUTHINESS, not on shape: `null` and `0` fail
-        // closed here, while `"text"`, `true` and `[{...}]` pass and every property read below yields
-        // `undefined` — so a choice claiming an assistant message completed as a SUCCESSFUL EMPTY
-        // turn, stranding any tool call it claimed. The one line above already validates the choice
-        // container this way; its message was left on a truthiness test.
-        //
-        // Every non-record is rejected, arrays included. The google adapter does carve out `[]` for
-        // `content`, but that carve-out is specific to a protobuf-derived wire where a repeated
-        // field can spell an empty message — and `content` is genuinely an ARRAY of blocks there.
-        // `message` is a record on a plain-JSON wire that already has `{}`, so importing the
-        // exception would be an analogy rather than evidence. `[{"content":"…"}]` is the case that
-        // matters: it discards a complete answer, #2232's `content: [{ parts: [...] }]` one adapter over.
-        //
-        // Read through `unknown` rather than the declared type: `choices` is a cast over wire data,
-        // so its `message?: Record<string, unknown>` is an assertion the upstream never made, and
-        // narrowing against it is what let the missing check look type-safe.
+        // Truthiness does not prove a message is a record: primitives and arrays would complete
+        // as empty successes and strand their calls. Validate the actual wire value through unknown.
         const rawMessage: unknown = choice.message;
         if (!isRecord(rawMessage)) {
           return [invalidChoicesEvent(usage)];

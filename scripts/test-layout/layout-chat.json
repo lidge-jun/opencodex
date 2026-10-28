@@ -4,5 +4,6 @@
   "chat-raw-reasoning-delivery.test.ts": "responses",
   "chat-incomplete-length-reason.test.ts": "responses",
   "openai-chat-required-tool.test.ts": "adapters/openai",
+  "openai-chat-tensorfold-tool-rejections.test.ts": "adapters/openai",
   "responses-required-chat-tool.test.ts": "responses"
 }

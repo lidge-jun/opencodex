@@ -94,6 +94,12 @@ transport; it does not infer subscription attribution from the inbound protocol.
   and input. A doubled `input` is reduced to one copy, joined either directly or by one newline,
   and only when the arguments object holds no key besides `input`. Trailing whitespace after the
   pair is suppressed; mismatched or example markup remains visible.
+- When TensorFold reports rejected tool names through its explicit
+  `tensorfold.tool_call_rejections` diagnostic, tool-enabled translated requests fail with
+  `upstream_tool_call_rejected` instead of completing successfully. Usage is preserved, including
+  diagnostics in the last streaming statistics event. OpenCodex does not execute the rejected
+  markup or automatically replay the request. TensorFold must have its diagnostic feature enabled
+  (`TF_GLM_TOOL_DIAGNOSTICS=1`); literal markup without the diagnostic keeps its existing behavior.
 - ClinePass uses the live-verified gateway format `reasoning: { enabled: true, effort }` (or
   `{ enabled: false }` when reasoning is disabled); its public API docs do not currently specify
   this request shape. The adapter preserves requested `low`, `medium`, `high`, `xhigh`, and `max`

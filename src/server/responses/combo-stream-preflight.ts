@@ -36,7 +36,7 @@ const TERMINAL_EVENTS = new Set([
 
 // A failed terminal carrying one of these codes is a contract verdict, not a transient
 // upstream failure: another target would spend a request the adapter already refused.
-const NON_REPLAYABLE_FAILED_CODES = new Set(["required_tool_not_called"]);
+const NON_REPLAYABLE_FAILED_CODES = new Set(["required_tool_not_called", "upstream_tool_call_rejected"]);
 
 const RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS = new Set([
   "adapter_eof",
