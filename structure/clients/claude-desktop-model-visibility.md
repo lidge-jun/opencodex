@@ -44,8 +44,9 @@ selection again inside that mutation; a concurrent visibility edit during discov
 An omitted selection preserves the latest persisted value. `GET /api/claude-desktop` (`buildClaudeDesktopState` in
 `src/server/management/shared.ts`) returns the selection,
 a per-model `visible` flag, and `listed`, the rows the next apply writes. `GET
-/api/claude-desktop/status` returns `appliedModels`, the names and labels Desktop runs now, read
-through the verified library reader. The dashboard derives its selected, available and applied
+/api/claude-desktop/status` returns `appliedModels`, the selected profile's on-disk names and labels,
+read through the verified library reader. This nullable list does not prove which models the
+Desktop process has loaded; a restart or managed policy can affect that. The dashboard derives its selected, available and applied
 counts and its added/removed preview from these fields. `listed` includes the writer's full-list
 fallback when every selected model is unavailable, without changing the saved selection or default.
 When the saved selection differs from the applied list, the status bar reports a pending apply even

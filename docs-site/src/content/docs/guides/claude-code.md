@@ -289,7 +289,8 @@ reported reason includes both failures; reconcile the profile and metadata befor
 #### Choose which models Claude Desktop lists
 
 **Connect → Claude Desktop → Desktop model list** has a checkbox for each model. Search by name or
-filter by provider, then use **Select shown** or **Clear shown** to change many rows at once. Click
+filter by provider, then use **Select all matching** or **Clear all matching** to change every match,
+including rows behind **Show more**. Click
 **Save & apply** to write the list to Desktop. Only Claude Desktop's list changes: provider model
 settings, Claude Code, Codex and other clients keep every model.
 
@@ -300,9 +301,13 @@ reapplies. Tier families under **Advanced** stay optional and do not affect whic
 A hidden model keeps its Desktop id, so a conversation that is already using it keeps working.
 
 The card shows the selected, available and applied counts separately. A selected model that is no
-longer available is counted on its own and is not written. Before you apply, the card previews the
-models Desktop will gain and lose. The status bar shows **Saved — apply to update Desktop** until
-the saved list reaches Desktop. Applying replaces the model list in OpenCodex's Desktop profile,
+longer available is counted on its own and is not written. If the selection leaves no available
+models, the writer falls back to every available model, including normally hidden routes. Update
+the selection and apply again to narrow it. Before you apply, the card previews the model IDs the
+selected profile file will gain and lose. Its applied count reads that file; it does not verify
+which models the Desktop process has loaded. The status bar shows **Saved — apply to update Desktop**
+until the saved list reaches the profile. Restart Desktop to load profile changes.
+Applying replaces the model list in OpenCodex's Desktop profile,
 including a list edited there by hand. Discovery-only mode (`--discovery-only`) writes no list, so
 it does not use this selection. The dashboard will not save a selection that hides every
 available model.

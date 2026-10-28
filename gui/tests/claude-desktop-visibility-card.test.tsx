@@ -149,7 +149,7 @@ test("a saved selection Desktop has not received yet reads as pending apply, not
 
 test("clearing every shown model blocks saving", async () => {
   await mount();
-  await act(async () => { button("Clear shown").click(); });
+  await act(async () => { button("Clear all matching").click(); });
   expect(container.textContent).toContain("Select at least one available model.");
   expect(button("Save").disabled).toBe(true);
 });
@@ -186,4 +186,22 @@ test("saving a new family default without applying does not claim external file 
   expect(container.querySelector(".claude-dirty")?.textContent).toBe("All changes saved");
   expect(container.querySelector(".claude-status-bar")?.textContent)
     .toContain("Desktop configuration is out of date — re-apply");
+});
+
+test("bulk labels disclose that matching rows beyond Show more are included", async () => {
+  await mount();
+  const actions = container.querySelectorAll<HTMLButtonElement>(".claude-visibility-filters button");
+  expect(container.querySelectorAll(".claude-desktop-list-row")).toHaveLength(6);
+  await act(async () => { actions[1]!.click(); });
+  expect(container.querySelector(".claude-visibility-counts")?.textContent).toContain("0 selected");
+  await act(async () => { actions[0]!.click(); });
+  expect(container.querySelector(".claude-visibility-counts")?.textContent).toContain("8 selected");
+  expect(actions[0]!.textContent).toBe("Select all matching");
+  expect(actions[1]!.textContent).toBe("Clear all matching");
+});
+
+test("an equal preview describes the profile file and asks Desktop to reload it", async () => {
+  await mount();
+  expect(container.querySelector(".claude-visibility-preview")?.textContent)
+    .toContain("The profile contains the same model IDs. Restart Desktop to load profile changes.");
 });

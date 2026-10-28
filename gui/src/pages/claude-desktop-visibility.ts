@@ -24,7 +24,7 @@ export interface ListedDesktopModel {
   label: string;
 }
 
-/** A row Desktop runs now (`appliedModels` on GET /api/claude-desktop/status). */
+/** An on-disk selected-profile row (`appliedModels` on GET /api/claude-desktop/status). */
 export interface AppliedDesktopModel {
   name: string;
   label: string;
