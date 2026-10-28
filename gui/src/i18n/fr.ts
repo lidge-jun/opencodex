@@ -3556,7 +3556,7 @@ export const fr: Record<TKey, string> = {
   "claudeDesktop.moveTo": "Déplacer vers",
   "claudeDesktop.move": "Déplacer",
   "claudeDesktop.status.applied": "Appliqué à Desktop",
-  "claudeDesktop.status.stale": "Le fichier de configuration de Desktop a été modifié hors d'OpenCodex — appliquer de nouveau",
+  "claudeDesktop.status.stale": "La configuration de Desktop n’est pas à jour — appliquer de nouveau",
   "claudeDesktop.status.notApplied": "Non appliqué",
   "claudeDesktop.status.notActiveProfile": "Desktop utilise un autre profil — appliquer de nouveau",
   "claudeDesktop.status.disabled": "L’intégration Claude Desktop est désactivée. Quittez complètement Desktop et rouvrez-le après l’avoir activée.",

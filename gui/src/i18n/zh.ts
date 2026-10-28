@@ -3549,7 +3549,7 @@ export const zh: Record<TKey, string> = {
   "claudeDesktop.moveTo": "移动到",
   "claudeDesktop.move": "移动",
   "claudeDesktop.status.applied": "已应用到 Desktop",
-  "claudeDesktop.status.stale": "Desktop 配置文件在 OpenCodex 之外被修改 — 需重新应用",
+  "claudeDesktop.status.stale": "Desktop 配置尚未更新 — 需重新应用",
   "claudeDesktop.status.notApplied": "未应用",
   "claudeDesktop.status.notActiveProfile": "Desktop 正在使用其他配置 — 请重新应用",
   "claudeDesktop.status.disabled": "Claude Desktop 集成已关闭。开启后请完全退出并重新打开 Desktop。",

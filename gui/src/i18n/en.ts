@@ -3643,7 +3643,7 @@ export const en = {
   "claudeDesktop.moveTo": "Move to",
   "claudeDesktop.move": "Move",
   "claudeDesktop.status.applied": "Applied to Desktop",
-  "claudeDesktop.status.stale": "Desktop's config file changed outside OpenCodex — re-apply",
+  "claudeDesktop.status.stale": "Desktop configuration is out of date — re-apply",
   "claudeDesktop.status.notApplied": "Not applied",
   "claudeDesktop.status.notActiveProfile": "Desktop is serving another profile — re-apply",
   "claudeDesktop.status.disabled": "Claude Desktop integration is off. Fully quit and reopen Desktop after enabling it.",

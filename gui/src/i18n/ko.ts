@@ -3576,7 +3576,7 @@ export const ko: Record<TKey, string> = {
   "claudeDesktop.moveTo": "이동 위치",
   "claudeDesktop.move": "이동",
   "claudeDesktop.status.applied": "Desktop에 적용됨",
-  "claudeDesktop.status.stale": "Desktop 설정 파일이 OpenCodex 밖에서 변경됨 — 재적용 필요",
+  "claudeDesktop.status.stale": "Desktop 설정이 최신 상태가 아님 — 재적용 필요",
   "claudeDesktop.status.notApplied": "미적용",
   "claudeDesktop.status.notActiveProfile": "Desktop이 다른 프로필을 사용 중 — 재적용 필요",
   "claudeDesktop.status.disabled": "Claude Desktop 통합이 꺼져 있습니다. 켠 뒤 Desktop을 완전히 종료하고 다시 여세요.",

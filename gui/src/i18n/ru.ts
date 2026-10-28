@@ -3328,7 +3328,7 @@ export const ru: Record<TKey, string> = {
   "claudeDesktop.moveTo": "Переместить в",
   "claudeDesktop.move": "Переместить",
   "claudeDesktop.status.applied": "Применено к Desktop",
-  "claudeDesktop.status.stale": "Файл конфигурации Desktop изменён вне OpenCodex — примените заново",
+  "claudeDesktop.status.stale": "Конфигурация Desktop устарела — примените заново",
   "claudeDesktop.status.notApplied": "Не применено",
   "claudeDesktop.status.notActiveProfile": "Desktop использует другой профиль — примените заново",
   "claudeDesktop.status.disabled": "Интеграция Claude Desktop отключена. После включения полностью закройте и снова откройте Desktop.",

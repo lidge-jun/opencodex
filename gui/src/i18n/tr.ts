@@ -3579,7 +3579,7 @@ export const tr: Record<TKey, string> = {
   "claudeDesktop.moveTo": "Şuraya taşı",
   "claudeDesktop.move": "Taşı",
   "claudeDesktop.status.applied": "Desktop'a Uygulandı",
-  "claudeDesktop.status.stale": "Desktop yapılandırma dosyası OpenCodex dışında değişti — tekrar uygulayın",
+  "claudeDesktop.status.stale": "Desktop yapılandırması güncel değil — tekrar uygulayın",
   "claudeDesktop.status.notApplied": "Uygulanmadı",
   "claudeDesktop.status.notActiveProfile": "Desktop başka bir profil kullanıyor",
   "claudeDesktop.status.disabled": "Claude Desktop entegrasyonu kapalı.",

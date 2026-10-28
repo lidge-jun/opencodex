@@ -2728,7 +2728,7 @@ export const zhTW: Record<TKey, string> = {
   "claudeDesktop.moveTo": "移動到",
   "claudeDesktop.move": "移動",
   "claudeDesktop.status.applied": "已套用到 Desktop",
-  "claudeDesktop.status.stale": "Desktop 設定檔在 OpenCodex 之外被修改 — 需重新套用",
+  "claudeDesktop.status.stale": "Desktop 設定尚未更新 — 需重新套用",
   "claudeDesktop.status.notApplied": "未套用",
   "claudeDesktop.status.notActiveProfile": "Desktop 正在使用其他配置 — 請重新套用",
   "claudeDesktop.health.lastRequest": "最後請求",

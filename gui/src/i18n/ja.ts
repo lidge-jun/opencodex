@@ -3238,7 +3238,7 @@ export const ja: Record<TKey, string> = {
   "claudeDesktop.moveTo": "移動先",
   "claudeDesktop.move": "移動",
   "claudeDesktop.status.applied": "Desktop に適用済み",
-  "claudeDesktop.status.stale": "Desktop の設定ファイルが OpenCodex 外で変更されました — 再適用してください",
+  "claudeDesktop.status.stale": "Desktop の設定が最新ではありません — 再適用してください",
   "claudeDesktop.status.notApplied": "未適用",
   "claudeDesktop.status.notActiveProfile": "Desktop は別のプロファイルを使用中 — 再適用してください",
   "claudeDesktop.status.disabled": "Claude Desktop 連携はオフです。有効にした後、Desktop を完全に終了して再起動してください。",

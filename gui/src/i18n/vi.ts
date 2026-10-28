@@ -3567,7 +3567,7 @@ export const vi: Record<TKey, string> = {
   "claudeDesktop.moveTo": "Chuyển đến",
   "claudeDesktop.move": "Di chuyển",
   "claudeDesktop.status.applied": "Đã áp dụng cho Desktop",
-  "claudeDesktop.status.stale": "Tệp cấu hình của Desktop đã đổi bên ngoài OpenCodex — hãy áp dụng lại",
+  "claudeDesktop.status.stale": "Cấu hình Desktop chưa cập nhật — hãy áp dụng lại",
   "claudeDesktop.status.notApplied": "Chưa được áp dụng",
   "claudeDesktop.status.notActiveProfile": "Desktop đang phục vụ một hồ sơ khác — hãy áp dụng lại",
   "claudeDesktop.status.disabled": "Tiện ích tích hợp Claude Desktop đang tắt. Hãy thoát hoàn toàn và mở lại Desktop sau khi bật nó.",

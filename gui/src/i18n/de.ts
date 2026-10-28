@@ -3529,7 +3529,7 @@ export const de: Record<TKey, string> = {
   "claudeDesktop.moveTo": "Verschieben nach",
   "claudeDesktop.move": "Verschieben",
   "claudeDesktop.status.applied": "Auf Desktop angewendet",
-  "claudeDesktop.status.stale": "Desktop-Konfigurationsdatei wurde außerhalb von OpenCodex geändert — erneut anwenden",
+  "claudeDesktop.status.stale": "Desktop-Konfiguration ist nicht aktuell — erneut anwenden",
   "claudeDesktop.status.notApplied": "Nicht angewendet",
   "claudeDesktop.status.notActiveProfile": "Desktop nutzt ein anderes Profil — erneut anwenden",
   "claudeDesktop.status.disabled": "Die Claude-Desktop-Integration ist deaktiviert. Beende Desktop nach dem Aktivieren vollständig und öffne es erneut.",

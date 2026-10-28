@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import ClaudeDesktop from "../src/pages/ClaudeDesktop";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
+import { preserveDesktopAppliedState, type DesktopProfile } from "../../src/claude/desktop-profile";
 
 /**
  * #7702: the Desktop model list is a per-model selection. Mounted, because the contract is
@@ -34,12 +35,13 @@ let withStaleDefault = false;
 let puts: Array<Record<string, unknown>> = [];
 // Desktop currently runs every model, so a saved narrower selection is pending apply.
 let appliedModels: Array<{ name: string; label: string }> = [];
+let savedProfile: DesktopProfile | null = null;
 
 function payload() {
   const models = withStaleDefault ? [...MODELS, model(STALE_ROUTE, STALE_ROUTE, "opus", false)] : MODELS;
   return {
-    profile: {
-      version: 1,
+    profile: savedProfile ?? {
+      version: 1 as const,
       assignments: Object.fromEntries(models.map(m => [m.route, m.assignment])),
       defaults: { opus: withStaleDefault ? STALE_ROUTE : "prov/opus-0", fable: null, sonnet: "prov/only-sonnet", haiku: null },
     },
@@ -56,6 +58,7 @@ beforeEach(() => {
   withStaleDefault = false;
   puts = [];
   savedVisibility = null;
+  savedProfile = null;
   appliedModels = MODELS.map(m => ({ name: `claude-${m.route.replace(/\W/g, "-")}`, label: m.label }));
   clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(k => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
@@ -72,9 +75,13 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") puts.push(JSON.parse(String(init.body)));
+      if (init?.method === "PUT") {
+        const request = JSON.parse(String(init.body));
+        puts.push(request);
+        if (savedProfile) savedProfile = preserveDesktopAppliedState(savedProfile, request.profile);
+      }
       const body = String(url).includes("/status")
-        ? { desiredEnabled: true, applied: true, appliedAt: null, stale: false, appliedModels, health: { lastRequestAt: null, requestCount: 0, errorCount: 0 } }
+        ? { desiredEnabled: true, applied: true, appliedAt: null, stale: savedProfile !== null && !savedProfile.appliedFingerprint, appliedModels, health: { lastRequestAt: null, requestCount: 0, errorCount: 0 } }
         : payload();
       return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response;
     },
@@ -153,4 +160,30 @@ test("editing a draft keeps a newer saved selection pending apply", async () => 
   await act(async () => { checkbox("Opus Model 1").click(); });
   expect(container.querySelector(".claude-dirty")?.textContent).toBe("Unsaved changes");
   expect(container.querySelector(".claude-status-bar")?.textContent).toContain("Saved — apply to update Desktop");
+});
+
+test("saving a new family default without applying does not claim external file edits", async () => {
+  savedProfile = { ...payload().profile, appliedFingerprint: "unchanged-desktop-bytes" } as DesktopProfile;
+  const desktopModels = structuredClone(appliedModels);
+  await mount();
+  const family = container.querySelector("#claude-lane-opus button") as unknown as HTMLButtonElement;
+  if (family.getAttribute("aria-expanded") === "false") await act(async () => { family.click(); });
+  const radio = container.querySelector('input[type="radio"][name="default-opus"]') as unknown as HTMLInputElement;
+  expect(radio).not.toBeNull();
+  // The first model is already the default; open a second model and choose it instead.
+  const summary = Array.from(container.querySelectorAll("button.claude-model-summary"))
+    .find(node => node.textContent?.includes("Opus Model 1")) as unknown as HTMLButtonElement;
+  await act(async () => { summary.click(); });
+  const secondDefault = container.querySelectorAll('input[type="radio"][name="default-opus"]')[1] as unknown as HTMLInputElement;
+  await act(async () => { secondDefault.click(); });
+  expect(button("Save").disabled).toBe(false);
+  await act(async () => { button("Save").click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(puts).toHaveLength(1);
+  expect(savedProfile!.defaults.opus).toBe("prov/opus-1");
+  expect(savedProfile!.appliedFingerprint).toBeUndefined();
+  expect(appliedModels).toEqual(desktopModels);
+  expect(container.querySelector(".claude-dirty")?.textContent).toBe("All changes saved");
+  expect(container.querySelector(".claude-status-bar")?.textContent)
+    .toContain("Desktop configuration is out of date — re-apply");
 });
