@@ -525,8 +525,12 @@ default model of the provider, one request at a time, after a single confirmatio
 states how many requests it sends. **Stop** cancels the in-flight request and sends no
 more. Each model is reported as passed, failed (the upstream answered with an error or
 timed out) or not tested (the management API refused the request, for example a
-concurrent test). An applicability refusal is a provider-level result, so the run stops
-after the first one. When any model failed, **Disable failed models** asks a second
+concurrent test, missing or changed credentials, or a refused destination). An unsupported
+effective adapter marks only that model as not tested and continues, because one provider
+can use different wires for different models. Provider-wide applicability refusals, such as
+OAuth authentication or unsupported transport settings, stop the run. When any model failed, **Disable failed models** asks a second
 confirmation and then hides only those models from clients through the same visibility
 setting as the **Models** page, where they can be re-enabled. Models are never disabled
-without that confirmation.
+without that confirmation. Leaving the page or changing the provider connection withdraws
+pending disable consent and aborts its request. A new batch waits until disable consent or
+the visibility write has settled, so an older response cannot hide the newer batch's action.

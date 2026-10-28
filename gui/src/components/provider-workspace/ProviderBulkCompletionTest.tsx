@@ -29,7 +29,11 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
   const [notice, setNotice] = useState<string | null>(null);
   const [disable, setDisable] = useState<DisableState>({ kind: "idle" });
   const flight = useRef<AbortController | null>(null);
-  useEffect(() => () => { flight.current?.abort(); flight.current = null; }, []);
+  const disableFlight = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    flight.current?.abort(); flight.current = null;
+    disableFlight.current?.abort(); disableFlight.current = null;
+  }, []);
 
   async function testOne(model: string, signal: AbortSignal): Promise<Row | { stop: string }> {
     try {
@@ -39,10 +43,16 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
       });
       const value = await readJsonOrThrow<CompletionTestResult>(response, t("pws.completion.failed"));
       if (!value) return { model, outcome: "skipped", detail: t("pws.completion.failed") };
-      // Every inapplicable reason describes the provider, not the model, so the rest would refuse too.
-      if (!value.applicable) return { stop: `${t("pws.completion.notApplicable")}: ${t(`pws.completion.${value.reason}`)}` };
+      if (!value.applicable) {
+        const detail = `${t("pws.completion.notApplicable")}: ${t(`pws.completion.${value.reason}`)}`;
+        // Effective wire is resolved per model; a mixed-wire provider can still test later rows.
+        return value.reason === "unsupported_adapter" ? { model, outcome: "skipped", detail } : { stop: detail };
+      }
       if (value.ok) return { model, outcome: "ok", latencyMs: value.totalLatencyMs };
-      if (value.termination === "aborted") return { model, outcome: "skipped", detail: value.error?.code ?? "aborted" };
+      // Admission refusals happen before upstream send and cannot establish a model failure.
+      if (value.termination === "aborted" || ["credential_missing", "credential_changed", "destination_refused"].includes(value.error?.code ?? "")) {
+        return { model, outcome: "skipped", detail: value.error?.code ?? "aborted" };
+      }
       const detail = value.error
         ? `${value.error.code}${value.error.status !== undefined ? ` (${value.error.status})` : ""}`
         : value.termination;
@@ -53,7 +63,7 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
   }
 
   async function run() {
-    if (models.length === 0 || flight.current) return;
+    if (models.length === 0 || flight.current || disableFlight.current) return;
     const controller = new AbortController();
     flight.current = controller;
     setRunning(true);
@@ -91,18 +101,30 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
 
   async function disableFailed() {
     const failed = failedModelIds(rows);
-    if (failed.length === 0 || disable.kind === "busy") return;
-    if (!await confirmAction({
-      message: t("pws.completion.disableConfirm", { count: String(failed.length), provider }),
-      confirmLabel: t("pws.completion.disableFailed", { count: String(failed.length) }), tone: "danger", locale,
-    })) return;
+    if (failed.length === 0 || flight.current || disableFlight.current) return;
+    const controller = new AbortController();
+    disableFlight.current = controller;
     setDisable({ kind: "busy" });
+    let confirmed = false;
     try {
-      const response = await putModelVisibility(apiBase, "models", provider, failed.map(id => ({ id })), false);
+      confirmed = await confirmAction({
+        message: t("pws.completion.disableConfirm", { count: String(failed.length), provider }),
+        confirmLabel: t("pws.completion.disableFailed", { count: String(failed.length) }),
+        tone: "danger", locale, signal: controller.signal,
+      });
+      if (!confirmed || controller.signal.aborted || disableFlight.current !== controller) return;
+      const response = await putModelVisibility(apiBase, "models", provider, failed.map(id => ({ id })), false, fetch, controller.signal);
       await readJsonOrThrow(response, t("pws.completion.disableError"));
-      setDisable({ kind: "done", count: failed.length });
+      if (!controller.signal.aborted && disableFlight.current === controller) setDisable({ kind: "done", count: failed.length });
     } catch (cause) {
-      setDisable({ kind: "error", message: cause instanceof Error ? cause.message : t("pws.completion.disableError") });
+      if (!controller.signal.aborted && disableFlight.current === controller) {
+        setDisable({ kind: "error", message: cause instanceof Error ? cause.message : t("pws.completion.disableError") });
+      }
+    } finally {
+      if (disableFlight.current === controller) {
+        disableFlight.current = null;
+        if (!confirmed) setDisable({ kind: "idle" });
+      }
     }
   }
 
@@ -114,7 +136,7 @@ export default function ProviderBulkCompletionTest({ apiBase, provider, models }
   return (
     <div className="pws-completion-bulk">
       <div className="row pws-completion-bulk-actions">
-        <button type="button" className="btn btn-ghost btn-sm" disabled={models.length === 0 || running} onClick={() => void run()}>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={models.length === 0 || running || disable.kind === "busy"} onClick={() => void run()}>
           {running ? t("pws.completion.progress", { done: String(rows.length), total: String(models.length) }) : t("pws.completion.runAll")}
         </button>
         {running && <button type="button" className="btn btn-ghost btn-sm" onClick={stop}>{t("pws.completion.stop")}</button>}

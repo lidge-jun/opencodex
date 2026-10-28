@@ -23,6 +23,7 @@ const success: Extract<CompletionTestResult, { applicable: true }> = {
   ttftMs: 12, totalLatencyMs: 45, outputTokenCap: 32, termination: "completed", error: null,
 };
 let answers: Record<string, () => Response | Promise<Response>>;
+let visibilityAnswer: () => Response | Promise<Response>;
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)]));
@@ -34,6 +35,7 @@ beforeEach(() => {
   }
   host = document.createElement("div"); document.body.append(host);
   requests = [];
+  visibilityAnswer = () => Response.json({ ok: true });
   answers = {
     good: () => Response.json(success),
     bad: () => Response.json({ ...success, ok: false, termination: "failed", ttftMs: null,
@@ -42,7 +44,7 @@ beforeEach(() => {
   };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     requests.push({ url: String(input), init: init! });
-    if (String(input).includes("/api/model-visibility")) return Response.json({ ok: true });
+    if (String(input).includes("/api/model-visibility")) return visibilityAnswer();
     return answers[JSON.parse(String(init!.body)).model as string]!();
   }) as typeof fetch;
 });
@@ -52,11 +54,11 @@ afterEach(async () => {
   win.close();
   for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: previous[key] });
 });
-async function render() {
-  const { createRoot } = await import("react-dom/client"); root = createRoot(host);
+async function render(connectionIdentity = "credential") {
+  const { createRoot } = await import("react-dom/client"); root ??= createRoot(host);
   await act(async () => {
     root!.render(<LanguageProvider><ProviderOverview item={item} apiBase="http://localhost"
-      connectionIdentity="credential" availableModels={["good"]} /></LanguageProvider>);
+      connectionIdentity={connectionIdentity} availableModels={["good"]} /></LanguageProvider>);
   });
 }
 function button(text: string | RegExp) {
@@ -165,4 +167,78 @@ test("stopped run cleanup preserves the restarted run and its Stop control", asy
   expect(button("Stop")).toBeUndefined();
   expect(button("Test all models")!.disabled).toBe(false);
   expect(host.textContent).toContain("Stopped after 1 of 3 models");
+});
+
+test.each(["credential_missing", "credential_changed", "destination_refused"])(
+  "%s is not evidence that a model failed", async code => {
+    answers.good = () => Response.json({ ...success, ok: false, termination: "failed",
+      error: { code, message: "provider admission refused" } });
+    answers.bad = answers.good!;
+    await render(); await runAll();
+    expect(outcomes()).toEqual([["good", "skipped"], ["bad", "skipped"], ["busy", "skipped"]]);
+    expect(host.textContent).toContain("0 passed, 0 failed, 3 not tested");
+    expect(host.textContent).toContain(code);
+    expect(button(/^Disable/)).toBeUndefined();
+  },
+);
+
+test("an unsupported model wire does not stop later supported models", async () => {
+  answers.good = () => Response.json({ applicable: false, reason: "unsupported_adapter", adapter: "anthropic" });
+  answers.bad = () => Response.json(success);
+  await render(); await runAll();
+  expect(requests).toHaveLength(3);
+  expect(outcomes()).toEqual([["good", "skipped"], ["bad", "ok"], ["busy", "skipped"]]);
+  expect(host.textContent).toContain("1 passed, 0 failed, 2 not tested");
+  expect(button(/^Disable/)).toBeUndefined();
+});
+
+test.each(["unmount", "credential change"])("%s withdraws stale disable consent", async change => {
+  await render(); await runAll();
+  await act(async () => { button("Disable 1 failed models")!.click(); });
+  expect(actionDialogOpen(document)).toBe(true);
+  const oldAccept = document.querySelector("dialog button[type=submit]") as HTMLButtonElement;
+  if (change === "unmount") {
+    await act(async () => { root!.unmount(); }); root = undefined;
+  } else await render("replacement-credential");
+  const stillOpen = actionDialogOpen(document);
+  // Even a queued click on the retired dialog must not issue the mutation.
+  await act(async () => { oldAccept.click(); });
+  expect(requests.filter(request => request.url.includes("model-visibility"))).toHaveLength(0);
+  expect(stillOpen).toBe(false);
+});
+
+test("a pending disable is serialized before a new model-test batch", async () => {
+  let release!: (response: Response) => void;
+  visibilityAnswer = () => new Promise<Response>(resolve => { release = resolve; });
+  await render(); await runAll();
+  await act(async () => { button("Disable 1 failed models")!.click(); });
+  expect(button("Test all models")!.disabled).toBe(true);
+  await act(async () => { acceptActionDialog(document); });
+  expect(requests.filter(request => request.url.includes("model-visibility"))).toHaveLength(1);
+  expect(button("Test all models")!.disabled).toBe(true);
+  await act(async () => { button("Test all models")!.click(); });
+  expect(actionDialogOpen(document)).toBe(false);
+  expect(requests).toHaveLength(4);
+  await act(async () => { release(Response.json({ ok: true })); });
+  expect(button("Test all models")!.disabled).toBe(false);
+  await runAll();
+  expect(outcomes()).toEqual([["good", "ok"], ["bad", "failed"], ["busy", "skipped"]]);
+  expect(button("Disable 1 failed models")!.disabled).toBe(false);
+  expect(host.textContent).not.toContain("Disabled 1 models");
+});
+
+test("a credential change aborts a pending disable write and ignores its late result", async () => {
+  let release!: (response: Response) => void;
+  visibilityAnswer = () => new Promise<Response>(resolve => { release = resolve; });
+  await render(); await runAll();
+  await act(async () => { button("Disable 1 failed models")!.click(); });
+  await act(async () => { acceptActionDialog(document); });
+  const mutation = requests.find(request => request.url.includes("model-visibility"))!;
+  expect(mutation.init.signal?.aborted).toBe(false);
+  await render("replacement-credential");
+  expect(mutation.init.signal?.aborted).toBe(true);
+  await runAll();
+  await act(async () => { release(Response.json({ ok: true })); });
+  expect(button("Disable 1 failed models")!.disabled).toBe(false);
+  expect(host.textContent).not.toContain("Disabled 1 models");
 });
