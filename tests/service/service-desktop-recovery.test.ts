@@ -2,13 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { ptr, toArrayBuffer } from "bun:ffi";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { inspectDesktopRecovery, parseRecoveryAnswer, recoveryHomeIdentity,
   type DesktopRecoveryIo } from "../../src/service/desktop-recovery";
 import { linuxRecoveryBirth, linuxRecoveryListeners, linuxRecoverySocket, macRecoveryPaths, macRecoveryRequirement,
   parseMacRecoveryPath, recoveryImageCandidate, recoverySibling, verifyMacRecoveryImage } from "../../src/service/desktop-recovery-process";
 import { repoPath } from "../helpers/repo-root";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 
 const instance = "a".repeat(32);
 const endpoint = { pid: 123, port: 12345 };
@@ -329,10 +330,18 @@ std::thread::park(); }`;
 import { runDesktopColdStart, productionDesktopColdStartDeps } from ${JSON.stringify(repoPath("src", "cli", "ensure-desktop-cold-start.ts"))};
 const evidence = await inspectDesktopRecovery(); const result = await runDesktopColdStart({ ...productionDesktopColdStartDeps(async () => ({ fixture: true })), desktopRecovery: async () => evidence, info: () => {} });
 console.log(JSON.stringify({ evidence, result }));`);
-  const rustBuild = Bun.spawnSync([Bun.which("rustc")!, "--edition=2021", nativeSource, "-o", app], { stdout: "pipe", stderr: "pipe", timeout: 30_000 });
-  expect(rustBuild.exitCode).toBe(0);
+  // The preload sandboxes HOME; rustup must still find the installed toolchain (#7884).
+  const realHome = process.env.OCX_REAL_HOME?.trim() || userInfo().homedir;
+  const rustEnv = { ...process.env,
+    RUSTUP_HOME: process.env.RUSTUP_HOME || join(realHome, ".rustup"),
+    CARGO_HOME: process.env.CARGO_HOME || join(realHome, ".cargo"),
+  };
+  // Hosted runs killed rustc at 30s while other heads passed. Keep a bounded
+  // real-child budget and report the compiler's output rather than only a null/1 exit.
+  const rustBuild = Bun.spawnSync([Bun.which("rustc")!, "--edition=2021", nativeSource, "-o", app], { env: rustEnv, stdout: "pipe", stderr: "pipe", timeout: SPAWN_BUDGET_MS });
+  expect(rustBuild.exitCode, `rustc (signal=${rustBuild.signal}):\n${rustBuild.stderr.toString()}${rustBuild.stdout.toString()}`).toBe(0);
   const build = Bun.spawnSync([process.execPath, "build", "--compile", entry, "--outfile", cli], { stdout: "pipe", stderr: "pipe", timeout: 30_000 });
-  expect(build.exitCode).toBe(0);
+  expect(build.exitCode, `bun build (signal=${build.signal}):\n${build.stderr.toString()}${build.stdout.toString()}`).toBe(0);
   const env = { ...process.env, XDG_CONFIG_HOME: join(root, "xdg"), OPENCODEX_HOME: config };
   let child: ReturnType<typeof Bun.spawn> | undefined;
   const foreignSockets: Socket[] = [];
@@ -403,4 +412,4 @@ console.log(JSON.stringify({ evidence, result }));`);
     await new Promise<void>(resolve => foreign.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
   }
-}, 60_000);
+}, SPAWN_BUDGET_MS + 30_000);
