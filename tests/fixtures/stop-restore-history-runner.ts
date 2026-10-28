@@ -83,7 +83,8 @@ writeFileSync(backup, JSON.stringify({ version: 1, stateDbPath: canonicalDb, ent
 const lockChecks: { phase: string; config: boolean; history: boolean }[] = [];
 if (mode === "sync" && ownership === "standalone") {
   const identity = await import("../../src/codex/user-identity");
-  const historyLockPath = identity.resolveCodexHistorySerializationDatabasePath(identity.resolveEffectiveUserIdentity(), codex, canonicalDb);
+  // Production locks the canonical CODEX_HOME spelling; macOS temp aliases (/var vs /private/var) hash differently.
+  const historyLockPath = identity.resolveCodexHistorySerializationDatabasePath(identity.resolveEffectiveUserIdentity(), realpathSync.native(codex), canonicalDb);
   function held(path: string): boolean {
     const probe = new Database(path);
     try { probe.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE; ROLLBACK"); return false; }
