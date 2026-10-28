@@ -123,7 +123,7 @@ any other event returns to the ordinary combo failure classifier; any content bl
 a tool start), unknown/malformed payload, terminal or byte/chunk cap commits conservatively.
 Buffered bytes replay unchanged. A collected failure after that commitment is non-replayable.
 Preflight retention is charged to the translator budget and released on delivery/cancellation.
-The same native executor binds the accepted stream to the parent's held lease, carries observed
+Native plans enforce the captured caller model scope, including internal calls with broad host admission. The same native executor binds the accepted stream to the parent's held lease, carries observed
 usage on cancellation, and reports terminal errors without treating them as successful rows.
 
 HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the

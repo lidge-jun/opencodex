@@ -16,6 +16,10 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
+import type { DataPlaneAdmission } from "../../src/server/auth-cors";
+import { handleResponses } from "../../src/server/responses/core";
+import { createProtocolEnvelope } from "../../src/protocols/envelope";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 
 type Rec = Record<string, unknown>;
 const source = {
@@ -86,12 +90,12 @@ function config(on = true): OcxConfig {
   }, combos: { waterfall: { strategy: "failover", targets: [{ provider: "anth", model: "claude-sonnet-4-6" }, { provider: "backup", model: "fallback" }] } },
   protocols: { rollout: { managedMessagesNative: on } } };
 }
-async function send(options: { stream?: boolean; config?: OcxConfig; messages?: unknown; tools?: unknown } = {}) {
+async function send(options: { stream?: boolean; config?: OcxConfig; messages?: unknown; tools?: unknown; admission?: DataPlaneAdmission } = {}) {
   const requestId = `native-combo-${crypto.randomUUID()}`;
   const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
     method: "POST", headers: { "content-type": "application/json", authorization: "Bearer fixture-admission", "x-api-key": "fixture-caller" },
     body: JSON.stringify({ ...source, stream: options.stream ?? true, ...(options.messages ? { messages: options.messages } : {}), ...(options.tools ? { tools: options.tools } : {}) }),
-  }), options.config ?? config(), { model: "", provider: "" }, { requestId, start: Date.now() });
+  }), options.config ?? config(), { model: "", provider: "" }, { requestId, start: Date.now(), admission: options.admission });
   const text = await response.text();
   return { response, text, rows: getRequestLogEntries().filter(row => row.requestId === requestId) };
 }
@@ -131,6 +135,50 @@ describe("native Messages candidates in a combo", () => {
     expect(rows[0]!.attempts).toHaveLength(2);
     expect(rows[0]!.attempts![0]!.usage).toMatchObject({ cacheReadInputTokens: 9 });
     expect(rows[0]!.spend).toMatchObject({ sends: 2, unresolved: 0 });
+    expect(seen[1]!.headers.get("authorization")).toBe("Bearer fixture-backup-key");
+    expect(seen[1]!.headers.get("x-api-key")).toBeNull();
+  });
+  for (const allowedModels of [[], ["anth/claude-sonnet-4-6"], ["anth/claude-sonnet-4-6", "anth/claude-haiku-4-5"]]) {
+    test(`native failover enforces the caller model scope with ${allowedModels.length} allowed destinations`, async () => {
+      const settings = config();
+      settings.providers.anth!.models!.push("claude-haiku-4-5");
+      settings.combos!.waterfall!.targets[1] = { provider: "anth", model: "claude-haiku-4-5" };
+      settings.apiKeys = [{ id: "caller", name: "fixture", key: "ocx_data_" + "c".repeat(40),
+        createdAt: "2026-01-01T00:00:00.000Z", allowedProviders: allowedModels.length ? ["anth"] : ["backup"], allowedModels }];
+      answer = body => body.model === "claude-sonnet-4-6" ? stream(prelude + refusal) : Response.json(message);
+      const { response, text } = await send({ config: settings, stream: false,
+        admission: { kind: "configured", keyId: "caller", source: "dedicated" } });
+      expect(response.status).toBe(allowedModels.length === 2 ? 200 : 403);
+      expect(seen).toHaveLength(allowedModels.length);
+      if (allowedModels.length < 2) expect(text).toContain("not allowed for this API key");
+      for (const child of seen) expect(child.body.top_k).toBe(source.top_k);
+      if (allowedModels.length === 2) {
+        expect(seen[1]!.body).toEqual({ ...source, model: "claude-haiku-4-5", stream: false });
+        expect(seen[1]!.body.system).toEqual(seen[0]!.body.system);
+      }
+    });
+  }
+  test("captured scope overrides broad host admission for a native Messages sibling", async () => {
+    const { createNativeMessagesComboSource } = await import("../../src/server/messages-native");
+    const settings = config();
+    settings.providers.anth!.models!.push("claude-haiku-4-5");
+    settings.combos!.waterfall!.targets[1] = { provider: "anth", model: "claude-haiku-4-5" };
+    settings.apiKeys = [{ id: "host", name: "host", key: "ocx_data_" + "h".repeat(40), createdAt: "2026-01-01T00:00:00.000Z" }];
+    const admissionScope = { providers: ["anth"], models: ["anth/claude-sonnet-4-6"] };
+    const translatorBudget = createTranslatorBudget();
+    const req = new Request("http://localhost/v1/messages", { method: "POST", body: JSON.stringify({ ...source, stream: false }) });
+    const logCtx = { model: source.model, provider: "combo" };
+    const protocolSource = createNativeMessagesComboSource({ req, config: settings, logCtx,
+      envelope: createProtocolEnvelope({ inbound: "messages", body: { ...source, stream: false }, translatorBudget }),
+      requestedModel: source.model, translatorBudget, modelScope: admissionScope });
+    answer = () => stream(prelude + refusal);
+    const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST",
+      headers: { "content-type": "application/json" }, body: JSON.stringify({ model: source.model, input: "fixture question", stream: false }) }),
+    settings, logCtx, { protocolSource, admissionScope, admission: { kind: "configured", keyId: "host", source: "dedicated" }, inboundWire: "anthropic" });
+    expect(response.status).toBe(403);
+    expect(await response.text()).toContain("not allowed for this API key");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.body.top_k).toBe(source.top_k);
   });
   for (const committed of [textStart + textDelta, frame("content_block_start", { index: 0, content_block: { type: "tool_use", id: "tool_fixture", name: "lookup", input: {} } })]) {
     test(`never replays after ${committed.includes("tool_use") ? "tool" : "text"} commitment`, async () => {

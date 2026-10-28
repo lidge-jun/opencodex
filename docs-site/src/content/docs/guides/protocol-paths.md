@@ -141,7 +141,8 @@ These paths still use the internal Responses bridge or are not covered:
   source Messages envelope, preserving system/messages/tools/cache breakpoints under the existing
   native allowlist and credential rules. Without explicit operator retention, TTL-less combo
   breakpoints stay TTL-less. Pre-output retryable errors may fall back; any content/tool block
-  commits the child and forbids replay. Preserved prefixes do not prove live cache hits.
+  commits the child and forbids replay. Every child enforces the caller's model/provider scope.
+  Preserved prefixes do not prove live cache hits.
 - Direct encoding (`directEncoders`) covers only a concrete, non-Responses route in streaming
   delivery. Combo and policy children, routed compaction, run-turn adapters (Cursor, Devin,
   coding-agent CLIs, CodeBuddy), and sidecar turns keep the bridge.
