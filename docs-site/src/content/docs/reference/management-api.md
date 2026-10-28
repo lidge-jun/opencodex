@@ -253,7 +253,7 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/codex-prompt` | Read the prompt-layer snapshot: layers, base variants, selection, and drift state | — |
-| `GET /api/codex-prompt/text` | Probe the model-visible prompt text via `codex debug prompt-input` | Fail-soft: an unavailable probe degrades to a status in the body, not an HTTP error |
+| `GET /api/codex-prompt/text` | Probe the model-visible prompt text via `codex debug prompt-input`; one caller budget includes metadata, shared wait and execution; synchronous metadata is checked for expiry after it returns | Fail-soft: an unavailable probe degrades to a status in the body, not an HTTP error; timeout preserves locally read base instructions; earlier external cancellation stays cancelled |
 | `PUT /api/codex-prompt/toggle` | Enable or disable one toggleable layer | 400 invalid body or unknown layer; 409 `stale_revision`, `layer_not_toggleable` |
 | `PUT /api/codex-prompt/custom` | Replace the custom-layer set | 400 invalid body, `invalid_characters`, `body_too_large` when a normalized UTF-8 layer exceeds 65,536 bytes, `composed_too_large` over 131,072 bytes; 409 `stale_revision` |
 | `PUT /api/codex-prompt/base/select` | Select the default base prompt or one stored variant | 400 invalid body, `unknown_layer` for an id matching no stored variant; 409 `stale_revision`, `developer_instructions_not_owned` when the current base is external |

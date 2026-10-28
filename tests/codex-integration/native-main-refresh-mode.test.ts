@@ -36,6 +36,7 @@ import { withNativeMainSharedClaim } from "../../src/codex/native-main-claim";
 import { resolveNativeProfileContext } from "../../src/codex/native-profile-store";
 import type { OcxConfig } from "../../src/types";
 import type { ResolveCodexRuntimeResult } from "../../src/codex/runtime";
+import type { CodexExecBoundaryAsyncDeps } from "../../src/codex/exec-boundary";
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -221,6 +222,55 @@ describe.skipIf(process.platform === "win32")("codex app-server getAuthStatus cl
 
     expect(await getValidMainAccountToken()).toEqual({ accessToken: fresh, chatgptAccountId: "acct-main" });
     expect(readFileSync(join(home, "auth.json"), "utf8")).toBe(original);
+  });
+});
+
+describe("codex app-server exec boundary abort", () => {
+  test("an abort during the deferred bundle trust check rethrows the signal reason", async () => {
+    const controller = new AbortController();
+    const reason = new Error("refresh aborted while the trust check was pending");
+    let enteredResolve!: () => void;
+    const entered = new Promise<void>(resolvePromise => { enteredResolve = resolvePromise; });
+    let forwardedSignal: AbortSignal | undefined;
+    let trustChecks = 0;
+    let rejectTrust = (_reason: unknown) => {};
+    // The deferred check honors the forwarded signal and settles with its reason; the
+    // validation catch must rethrow that exact reason, not wrap it in CodexAuthStatusError.
+    const execDeps: CodexExecBoundaryAsyncDeps = {
+      platform: "darwin",
+      env: { HOME: "/home/tester", PATH: "" },
+      exists: () => true,
+      executable: () => true,
+      realpath: path => path,
+      macBundleTrustReasonAsync: (_bundle, _binary, signal) => new Promise((_resolve, reject) => {
+        trustChecks += 1;
+        forwardedSignal = signal;
+        const stop = () => rejectTrust(signal?.reason);
+        rejectTrust = cause => {
+          signal?.removeEventListener("abort", stop);
+          reject(cause);
+        };
+        signal?.addEventListener("abort", stop, { once: true });
+        enteredResolve();
+        if (signal?.aborted) stop();
+      }),
+    };
+    const pending = requestCodexAuthStatus(
+      "/home/tester/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+      { refresh: true, signal: controller.signal, execDeps },
+    );
+    try {
+      await Promise.race([entered, pending.then(() => { throw new Error("auth status settled before entering trust validation"); })]);
+      expect(forwardedSignal).toBe(controller.signal);
+      expect(trustChecks).toBe(1);
+      controller.abort(reason);
+      await expect(pending).rejects.toBe(reason);
+      expect(trustChecks).toBe(1);
+    } finally {
+      controller.abort(reason);
+      rejectTrust(reason);
+      await pending.catch(() => {});
+    }
   });
 });
 
