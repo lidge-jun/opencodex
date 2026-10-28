@@ -17,7 +17,8 @@ or incomplete shape. Raw `max_tokens`, `length` and `max_output_tokens` stops qu
 `pause_turn` and context-window exhaustion remain incomplete even though the general
 truncation classifier maps them to the same public incomplete reason.
 
-The eligible terminal becomes `completed` and omits `incomplete_details`. The model's text
+The builders in `src/bridge/sse.ts` and `src/bridge/response-json.ts` turn an eligible
+terminal into `completed` and omit `incomplete_details`. The model's text
 is unchanged, including earlier messages, open Markdown and valid empty fenced blocks.
 Usage, `end_turn` and provider continuation state survive both buffered and streamed delivery.
 Compaction retains its existing history and retention-commit rules, without placeholders.
