@@ -45,7 +45,7 @@ describe.skipIf(process.platform === "win32")("bun-install-frozen.sh retry polic
   afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
   /** A fake bun whose Nth invocation behaves as listed: "hang", "ok" or an exit code. */
-  function run(plan: string[]) {
+  function run(plan: string[], options: { dirs?: number; env?: Record<string, string> } = {}) {
     const root = mkdtempSync(join(tmpdir(), "ocx-bun-install-"));
     roots.push(root);
     const count = join(root, "count"), fake = join(root, "fake-bun");
@@ -58,11 +58,15 @@ describe.skipIf(process.platform === "win32")("bun-install-frozen.sh retry polic
       'case "$step" in hang) exec sleep 30 ;; ok) exit 0 ;; *) exit "$step" ;; esac',
     ].join("\n"));
     chmodSync(fake, 0o755);
-    const result = spawnSync("bash", [script, root], {
+    const dirs = Array.from({ length: options.dirs ?? 1 }, () => root);
+    const started = Date.now();
+    const result = spawnSync("bash", [script, ...dirs], {
       encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, BUN_INSTALL_BIN: fake, BUN_INSTALL_ATTEMPT_SECONDS: "1", BUN_INSTALL_KILL_GRACE_SECONDS: "1" },
+      env: { ...process.env, BUN_INSTALL_BIN: fake, BUN_INSTALL_ATTEMPT_SECONDS: "1", BUN_INSTALL_KILL_GRACE_SECONDS: "1",
+        BUN_INSTALL_MIN_ATTEMPT_SECONDS: "1", ...options.env },
     });
-    return { status: result.status, out: result.stdout + result.stderr, calls: existsSync(count) ? Number(readFileSync(count, "utf8")) : 0 };
+    return { status: result.status, out: result.stdout + result.stderr, elapsedMs: Date.now() - started,
+      calls: existsSync(count) ? Number(readFileSync(count, "utf8")) : 0 };
   }
 
   test("an attempt killed by its deadline is retried and the next success passes", () => {
@@ -90,5 +94,14 @@ describe.skipIf(process.platform === "win32")("bun-install-frozen.sh retry polic
     const result = run(["ok"]);
     expect(result.status, result.out).toBe(0);
     expect(result.out).toContain("fake bun install --frozen-lockfile");
+  });
+
+  test("root and GUI stalls share one total budget instead of three attempts each", () => {
+    // Per-directory retries alone would allow 6 attempts of 2 s plus grace; the 4 s total ends after 2.
+    const result = run(Array(8).fill("hang"), { dirs: 2, env: { BUN_INSTALL_ATTEMPT_SECONDS: "2", BUN_INSTALL_TOTAL_SECONDS: "4" } });
+    expect(result.status, result.out).toBe(124);
+    expect(result.calls).toBe(2);
+    expect(result.elapsedMs).toBeLessThan(7_000);
+    expect(result.out).toContain("budget");
   });
 });
