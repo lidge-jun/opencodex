@@ -84,10 +84,18 @@ ocx start --socks5-off
 
 Stop the running proxy (by PID), remove the PID file, and restore native Codex for standalone owners. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
-On a connected client (a Remote Link Child or a hub client), `ocx stop` leaves Codex routing, its
+On a connected hub client, `ocx stop` leaves Codex routing, its
 model catalog and the Grok config as they are, including after a successful API stop: the connection
 owns them, and `ocx start` serves them again without re-injecting routing. Use `ocx disconnect` to hand Codex back to its own account. If Codex on a connected
 client already reads native routing, `ocx status` names `ocx sync --restart-codex` to point it back.
+An explicit stop on a Remote Link Child restores native Codex routing, catalog and backed-up
+resume-history metadata and removes the managed Grok configuration when shared restoration succeeds.
+The saved Home connection is kept; `ocx disconnect` removes it. To use Home from Codex again,
+start the Child with `ocx start` (or `ocx service start` for an installed service), then run
+`ocx sync --restart-codex`. Starting alone does not reapply routing; sync does not recreate the Grok block.
+If connection ownership cannot be confirmed before service stop, the stop API returns HTTP 409 with
+`sharedTeardown: "refused"` and keeps the proxy and service manager running. Let any pending
+connect or disconnect finish, then retry.
 A connected stop verifies the listener against the protected local runtime record before changing
 its service. Both client-role listeners and ordinary proxies must prove that identity; an ordinary
 proxy must also advertise preservation across API, signal and service shutdown in an authenticated

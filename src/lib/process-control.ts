@@ -42,6 +42,18 @@ export interface GracefulStopIo {
    */
   deferSharedTeardownNonce?: string;
   /**
+   * Whether a `sharedTeardown: "not-owned"` answer confirms this stop's teardown.
+   *
+   * A sibling's `not-owned` is a truthful final answer: it owns no shared teardown, so
+   * nothing is left for this caller either. `ocx stop` of a connected Link Child sets this
+   * false — only an old build answers `not-owned` for a link connection, and it says so
+   * while preserving the loopback route this caller must restore itself. The caller decides
+   * from the connection state read at the POST: a connect or disconnect committed mid-stop
+   * changes what the answer means for it. Defaults to true; the option only narrows a stop
+   * that sent no deferral nonce.
+   */
+  acceptNotOwnedTeardown?: boolean;
+  /**
    * Endpoint the caller already resolved for this pid.
    *
    * `ocx stop` records this same snapshot in its pending-teardown receipt. Re-reading the
@@ -204,7 +216,7 @@ export async function stopProxyGracefully(pid: number, io: GracefulStopIo = {}):
  */
 type StopRefusal = { message: string | null; code: string | null };
 
-async function stopRequestFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+export async function stopRequestFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
   let status: number | undefined;
   try {
     return await directLocalHttpFetch(input, init, { onResponseStatus: value => { status = value; } });
@@ -275,12 +287,16 @@ async function stopProxyGracefullyDetailed(
     const expectedTeardown = io.deferSharedTeardownNonce ? "deferred" : "performed";
     // A sibling instance answers `not-owned`: it has no shared teardown to perform, so there is
     // nothing left over for this caller either. A deferral it was sent is still not confirmed.
+    // A connected Link Child's stop refuses the same answer: only an old build sends it for a
+    // link connection, and it preserves the route this caller must restore.
     sharedTeardownConfirmed = body !== null
       && typeof body === "object"
       && !Array.isArray(body)
       && "success" in body && body.success === true
       && "sharedTeardown" in body && (body.sharedTeardown === expectedTeardown
-        || (!io.deferSharedTeardownNonce && body.sharedTeardown === "not-owned"));
+        || (!io.deferSharedTeardownNonce
+          && (io.acceptNotOwnedTeardown ?? true)
+          && body.sharedTeardown === "not-owned"));
   } catch {
     return done(false);
   }

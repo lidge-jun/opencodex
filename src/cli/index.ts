@@ -71,7 +71,6 @@ import {
 } from "../config/process-state";
 import {
   claimPendingTeardown,
-  clearPendingTeardown,
   isPendingTeardownAbandoned,
   listPendingTeardowns,
   pendingTeardownPathFor,
@@ -163,7 +162,8 @@ import { removeOwnedConfigAfterDesktopCleanup } from "./uninstall-client-state";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { assertConnectedClientStopSupported, connectedClientStopSkipLine, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreSharedClientStateAfterStop } from "./stop-restore";
+import { assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary } from "./stop-restore";
+import { stopRestoreWriteGuard } from "./stop-restore-guard";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
@@ -657,6 +657,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
     // process expects Codex/Grok/env fences to still be in place. A sibling owns none of them.
     const teardown = preserveConnectedClientRoutingOnExit(decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE }));
+    const restoreGuard = stopRestoreWriteGuard();
     if (teardown.revertSystemEnv) {
       try { revertSystemEnv(); } catch { /* best-effort */ }
     }
@@ -665,15 +666,17 @@ async function handleStart(options: { block?: boolean } = {}) {
     if (teardown.restoreNativeCodex) {
       try {
         if (!codexHomeIsAbsent(getCodexHome())) {
-          const restored = restoreNativeCodex();
+          const restored = restoreNativeCodex({ withWriteGuard: restoreGuard.run });
           if (!restored.success) {
             cleanupSucceeded = false;
             console.error(`⚠️  Native Codex restore failed during shutdown: ${restored.message}`);
           }
         }
       } catch (error) {
-        cleanupSucceeded = false;
-        console.error(`⚠️  Native Codex restore failed during shutdown: ${error instanceof Error ? error.message : String(error)}`);
+        if (restoreGuard.boundary() !== "hub-owned") {
+          cleanupSucceeded = false;
+          console.error(`⚠️  Native Codex restore failed during shutdown: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
     // Same ownership rule as `ocx stop`: if the installed service belongs to another home, the
@@ -681,7 +684,8 @@ async function handleStart(options: { block?: boolean } = {}) {
     // left pointing nowhere. This guard also covers signal-driven exits, which is the path that
     // would otherwise bypass handleStop's gate entirely.
     if (teardown.stripGrokConfig && serviceEnvironmentOwnedHere()) {
-      try { stripGrokConfig(); } catch { /* best-effort restore */ }
+      try { restoreGuard.run(() => stripGrokConfig()); }
+      catch { if (restoreGuard.boundary() !== "hub-owned") cleanupSucceeded = false; }
     }
     return cleanupSucceeded;
   };
@@ -708,7 +712,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     void (async () => {
       let shutdownSucceeded = false;
       try {
-        shutdownSucceeded = await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000);
+        shutdownSucceeded = await drainAndShutdown(server, config.shutdownTimeoutMs ?? 5000, () => { syncCleanup(); return undefined; });
       } finally {
         const restored = syncCleanup(); // idempotent (cleaned-guard); also re-run by process.on("exit")
         process.exit(restored && shutdownSucceeded ? handledSignalExitCode(signal) : 1);
@@ -1159,6 +1163,11 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     claimTeardown(exact ?? configuredEndpoint(), exact ? "exact" : "guessed");
     const graceful = await stopProxy(pid, {
       deferSharedTeardownNonce: teardownNonce,
+      // "not-owned" is refused only for a positively identified Link connection, read at the
+      // POST: an old build answers it while preserving the loopback route this stop must
+      // restore. A connect committed mid-stop can make this a hub client whose answer is
+      // truthful, so the entry-time skip snapshot cannot stand in for this check.
+      acceptNotOwnedTeardown: notOwnedTeardownIsAcceptable(readClientConnectionState(), stoppingSibling),
       // Only an exact endpoint may direct the request; the configured fallback is a guess
       // good enough to record an obligation against, not to POST a stop to.
       runtimeEndpoint: exact ?? undefined,
@@ -1436,44 +1445,30 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;
   const handedOver = stopHandsTeardownOver({ requested: handoverRequested, restoreBlocked, nonce: teardownNonce,
     stopFailed, recoveredCount: recoveredNonces.length, proxy: record.proxy, service: record.service, deferralHonored: deferralHonoredByProxy });
+  // Ownership can change while the stop awaits; only the state at the restore boundary decides (#7736).
+  const boundary = restoreBlocked || handedOver ? "restore" : restoreBoundaryOwnership();
+  if (boundary !== "restore") stopFailed = settleUnrestoredStopBoundary(boundary, record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces) || stopFailed;
   if (handedOver) announceStopHandover();
-  else if (!restoreBlocked) {
+  else if (!restoreBlocked && boundary === "restore") {
     if (recoveredNonces.length > 0) {
       // A previous deferred stop died before restoring, and the probe says its endpoint is
       // not answering. That is the whole point of leaving the receipt behind.
       console.log("↩️  Finishing a shared teardown left unfinished by an earlier stop.");
     }
     const restore = await restoreSharedClientStateAfterStop(reportRetainedCodexProviderTable);
-    record.sharedTeardown = restore.historyDeferred ? "refused" : restore.other ? "failed" : "restored";
-    if (restore.other) stopFailed = true;
-    else if (restore.historyDeferred) historyDeferredNonces = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
-    else if (restore.historyOnly) historyOnlyFailure = true;
-    // The obligation is discharged whether or not history metadata finalized: config and
-    // catalog are what a client reads, and `restore.other` already fails the stop.
-    //
-    // Each nonce names its own file, so a clear can only ever remove the obligation it
-    // names — never one a concurrent stop wrote. Both this run's claim and every inherited
-    // receipt it proved discharged are released together.
-    //
-    // A history-preflight refusal is the exception: it restored nothing, so there is
-    // nothing to discharge. Clearing here would drop a real obligation on the floor and
-    // leave the client config pointing at a proxy that is gone, with nothing on disk
-    // saying so — which is the whole failure the receipt exists to prevent (#4718).
-    if (restore.historyDeferred) {
-      console.error("   The shared teardown was refused before it changed anything, so it is still owed.");
-      console.error("   Its receipt is preserved; run 'ocx stop' again once Codex is closed to retry the restore.");
-    }
-    if (!restore.other && !restore.historyDeferred) {
-      const discharged = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
-      for (const nonce of discharged) {
-        // A receipt that survives its discharge re-triggers recovery forever, so a failed
-        // removal is surfaced rather than swallowed.
-        if (!clearPendingTeardown(nonce)) {
-          stopFailed = true;
-          record.receiptClearFailed = true;
-          console.error(`❌ The shared teardown finished, but its receipt could not be removed: ${pendingTeardownPathFor(nonce)}`);
-          console.error("   Remove it manually; otherwise every later stop and update will try to recover it again.");
-        }
+    if (restore.boundary) stopFailed = settleUnrestoredStopBoundary(restore.boundary, record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces) || stopFailed;
+    else {
+      record.sharedTeardown = restore.historyDeferred ? "refused" : restore.other ? "failed" : "restored";
+      if (restore.other) stopFailed = true;
+      else if (restore.historyDeferred) historyDeferredNonces = teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces;
+      else if (restore.historyOnly) historyOnlyFailure = true;
+      // A history preflight refusal restored nothing, so the obligation survives (#4718).
+      if (restore.historyDeferred) {
+        console.error("   The shared teardown was refused before it changed anything, so it is still owed.");
+        console.error("   Its receipt is preserved; run 'ocx stop' again once Codex is closed to retry the restore.");
+      }
+      if (!restore.other && !restore.historyDeferred) {
+        stopFailed = clearRestoredStopReceipts(record, teardownNonce ? [teardownNonce, ...recoveredNonces] : recoveredNonces) || stopFailed;
       }
     }
   }

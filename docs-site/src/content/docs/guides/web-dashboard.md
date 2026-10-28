@@ -453,6 +453,8 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `GET` / `PUT /api/subagent-models` | Read or set the five featured `spawn_agent` override models. |
 | `POST /api/stop` | Stop the proxy/service, restore native Codex, and exit. Refused with `respawnable_service` on the Windows Task Scheduler backend, with `self_unload_service` when this proxy is itself the installed launchd/systemd job, and with `service_state_unknown` when the Task Scheduler state cannot be read; nothing is changed in any of those cases. A dashboard session is also refused, with `desktop_supervised`, while the OpenCodex desktop app runs the proxy. |
 
+Stop rechecks connection ownership before restoring configuration. A new hub connection keeps its routing, catalog and Grok configuration. If ownership is still changing or cannot be confirmed, the API returns HTTP 409 with `sharedTeardown: "refused"` and keeps serving; finish the connection operation and retry. See the [Remote Link stop workflow](/guides/remote-link/).
+
 :::tip
 Adding **Ollama Cloud** or another catalog provider from the dashboard copies its text-versus-vision
 classification into the saved provider config, so the [vision sidecar](/guides/sidecars/)

@@ -342,7 +342,7 @@ keeps the hard refusal and the compensating rollback.
 Unattended sync, `POST /api/sync`, and every other config or ownership refusal keep the hard
 failure above.
 The real injection still revalidates under its normal write boundary after catalog convergence;
-the preflight is an early no-write guard, not an authorization token for a later write.
+the preflight is an early no-write guard, not an authorization token for a later write. Stop history writes follow the [lifecycle ownership boundary](runtime.md). Synchronous H lock unavailability is a history artifact failure, using the same outcome formatter as the Worker path; it does not latch connection ownership or prevent separately guarded Grok cleanup.
 
 > Decision record: [ADR-0019](decisions/ADR-0019-config-injection.md)
 
@@ -459,7 +459,7 @@ config facade in a fresh process, so an earlier schema import cannot mask an ini
 ## Restore
 
 `ocx stop`, `ocx restore` / `ocx eject`, `ocx service stop`, and `ocx service uninstall` must strip
-opencodex config and routed catalog entries without damaging native Codex state. Catalog restoration
+opencodex config and routed catalog entries without damaging native Codex state; parent stop also enforces [connection ownership at each write](runtime.md#remote-hub-hardening-ownership). Catalog restoration
 omits retired bare/account-qualified native rows even when they occur in a pristine backup;
 the backup itself is not rewritten. See the [catalog contract](catalog.md#shared-catalog).
 

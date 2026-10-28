@@ -516,6 +516,8 @@ endpoint can never restart. Focused coverage is `tests/update/update-stop-classi
 
 ## Restart handoff
 
+Ordinary signal shutdown passes the CLI's idempotent exit cleanup to `drainAndShutdown` in `src/server/lifecycle.ts`: its drain-finally block calls the synchronous-only `() => undefined` hook before listener stop. Promise-returning hooks are outside this contract; there is no asynchronous cleanup wait. Listener stop and startup-lifecycle release still run if cleanup throws. Restart callers omit that hook and retain their existing routing-preservation decisions; receipt-backed stop deferral remains owned by the stopping client. After verifying a matching receipt, `performStopTeardown` records a dedicated process-lifetime exit deferral; exit cleanup consults it before restoring native Codex/Grok, including when the API's own drain ends in `process.exit`. A query flag or connected-client capability does not set it. API and signal restoration repeat the [connection ownership guard at each write](../runtime.md#remote-hub-hardening-ownership); an unproven API boundary returns 409 before scheduling shutdown, and signal cleanup reports failure while preserving shared configuration. `tests/fixtures/api-stop-exit-runner.ts`, exercised by `tests/service/stop-deferred-teardown.test.ts`, runs the actual API handler, listener drain and process-exit cleanup in one child. `tests/service/shutdown-drain.test.ts` covers the hook with a real loopback listener and the CLI signal handler.
+
 During drain, `src/server/index.ts` rejects new data-plane work with HTTP 503 and `src/service/linux-linger.ts` observes boot lingering without changing it; enabled, disabled and unknown states receive distinct install advice. Desktop startup distinguishes enabled next-login registration from current loaded state, preserving identity/disabled/supervisor checks. `src/cli/hub-disable.ts` changes persisted hub settings only, prints Desktop/service/manual restart guidance and reminds the operator to review external publishing to old ports.
 an explicit JSON envelope: `error.type` is `server_error`, `error.code` is
 `server_restarting`, and `error.message` is "OpenCodex is restarting; retry this request."
@@ -528,10 +530,8 @@ clients do not retry it at all. `server_restarting` falls through to retryable
 response bypasses the shared provider-overload mapping in `src/lib/errors.ts`.
 `tests/codex-integration/issue-452-empty-503.test.ts` pins its body and both listeners' CORS.
 
-`src/server/management/system-routes.ts` accepts an optional JSON `drainGraceMs` on the authenticated
-restart API: an integer from 1 to 60000, with omission retaining the 60-second default. Invalid
-input starts no drain. `src/server/management/system-restart.ts` fixes the selected grace at first
-acceptance; repeated requests cannot shorten it. The response-flush delay stays 200ms for every
+`src/server/management/system-routes.ts` accepts an optional JSON `drainGraceMs` on the authenticated restart API: an integer from 1 to 60000, with omission retaining the 60-second default. Invalid
+input starts no drain. `src/server/management/system-restart.ts` fixes the selected grace at first acceptance; repeated requests cannot shorten it. The response-flush delay stays 200ms for every
 caller. A grace shorter than 200ms cancels and releases active turns at the accepted deadline via
 a separate timer, cancelled by a pending restart veto. Cleanup, listener stop and process exit
 still wait for the response-flush delay; grace of at least 200ms arms no extra timer. The cleanup
